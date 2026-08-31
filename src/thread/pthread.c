@@ -133,6 +133,13 @@ static void finish(struct __pthread *self, void *result)
 	}
 }
 
+/* argument required: aliased straight into self and dereferenced
+ * unconditionally (`self->start(...)`) once __pthread_adopt_current()
+ * returns, on every call -- its one real call site
+ * (__plat_thread_spawn() in pthread_create()) always passes the
+ * freshly allocated, already null-checked struct __pthread. */
+static unsigned __PLAT_APC_CALL thread_entry(void *argument)
+    __attribute__((nonnull(1)));
 static unsigned __PLAT_APC_CALL thread_entry(void *argument)
 {
 	struct __pthread *self = argument;

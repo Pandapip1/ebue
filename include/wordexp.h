@@ -118,7 +118,20 @@ typedef struct {
 #define WRDE_NOSPACE	4
 #define WRDE_SYNTAX	5
 
-int wordexp(const char *__restrict, wordexp_t *__restrict, int);
+/* pwordexp is required: src/wordexp/wordexp.c's own body dereferences
+ * it unconditionally on every return path (either the success path's
+ * `pwordexp->we_wordv = v;`, or the immediate-syntax-failure path's
+ * `pwordexp->we_wordc = 0; pwordexp->we_wordv = 0;`). words is
+ * deliberately NOT marked -- wordexp() itself never dereferences it
+ * directly, only forwards it into validate_words()/expand_impl()
+ * (both already required there), the same "nothing left in this
+ * function's own body to describe" reasoning 9be895e's own
+ * feholdexcept/feupdateenv established. wordfree() is NOT marked
+ * either: it has a real, load-bearing defensive check of its own
+ * (`if (!pwordexp || !pwordexp->we_wordv) return;`), matching the
+ * setenv/unsetenv precedent for a genuinely optional pointer. */
+int wordexp(const char *__restrict, wordexp_t *__restrict, int)
+    __attribute__((nonnull(2)));
 void wordfree(wordexp_t *);
 
 #ifdef __cplusplus

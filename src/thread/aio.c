@@ -79,6 +79,11 @@ static int worker_started NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static int worker_synchronous NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static struct aio_waiter *waiters NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 
+/* request required: dereferenced unconditionally (`request->cb`) in
+ * the loop's own comparison, and every real call site passes a
+ * pointer into the file-static `requests[]` table, never NULL. */
+static void wake_waiters_locked(const struct aio_request *request)
+    __attribute__((nonnull(1)));
 static void wake_waiters_locked(const struct aio_request *request)
 {
 	struct aio_waiter *waiter;
@@ -93,6 +98,12 @@ static void wake_waiters_locked(const struct aio_request *request)
 	}
 }
 
+/* argument required: cast to notice and dereferenced unconditionally
+ * (`notice->function`); its one real call site (__plat_thread_spawn()
+ * in notify() above) always passes a freshly malloc()'d, already
+ * null-checked `notice`. */
+static unsigned __PLAT_APC_CALL notice_thread(void *argument)
+    __attribute__((nonnull(1)));
 static unsigned __PLAT_APC_CALL notice_thread(void *argument)
 {
 	struct thread_notice *notice = argument;
@@ -135,6 +146,17 @@ static void notify(const struct sigevent *event)
 /* Complete one member while the queue lock is held.  The caller sends the
  * copied notifications only after unlocking: a handler is allowed to call
  * aio_return(), which can immediately release and reuse this request slot. */
+/* request/individual/have_individual/have_list are all required:
+ * request->error, individual, *have_individual and *have_list are all
+ * written unconditionally at the top of this function, before the one
+ * conditional branch that may additionally touch `list`. `list` itself
+ * is deliberately NOT marked -- `*list = request->group->event;` only
+ * happens inside that branch (`request->group && request->group->active
+ * && ...`), not on every call. */
+static void finish_locked(struct aio_request *request, int error, ssize_t result,
+	struct sigevent *individual, int *have_individual,
+	struct sigevent *list, int *have_list)
+    __attribute__((nonnull(1, 4, 5, 7)));
 static void finish_locked(struct aio_request *request, int error, ssize_t result,
 	struct sigevent *individual, int *have_individual,
 	struct sigevent *list, int *have_list)
@@ -155,6 +177,11 @@ static void finish_locked(struct aio_request *request, int error, ssize_t result
 	}
 }
 
+/* request required (dereferenced immediately, `request->cb`); error
+ * required (`*error = ...;` unconditional at the very end -- this
+ * function has no early-return path that skips it). */
+static ssize_t perform(struct aio_request *request, int *error)
+    __attribute__((nonnull(1, 2)));
 static ssize_t perform(struct aio_request *request, int *error)
 {
 	struct aiocb *cb = request->cb;
@@ -385,6 +412,12 @@ static int timeout_valid(const struct timespec *timeout)
 /* Called with the queue lock held. Invalid request identities have already
  * ceased being outstanding and therefore satisfy aio_suspend() just like a
  * request another thread completed and collected with aio_return(). */
+/* list/any both required: *any = 0 is written unconditionally at
+ * entry, and list is subscripted directly (`list[i]`) whenever
+ * count >= 1 -- every real call site (aio_suspend()) forwards its own
+ * list argument, which is itself required by POSIX. */
+static int suspend_list_ready(const struct aiocb *const list[], int count,
+	int *any) __attribute__((nonnull(1, 3)));
 static int suspend_list_ready(const struct aiocb *const list[], int count,
 	int *any)
 {
@@ -498,6 +531,17 @@ int aio_suspend(const struct aiocb *const list[], int count,
 	}
 }
 
+/* cb is deliberately NOT required: aio_cancel.html DESCRIPTION -- "If
+ * the aiocbp argument is NULL, then all outstanding cancelable I/O
+ * operations shall be canceled" -- and `(cb && request->cb != cb)`
+ * below is exactly that real, load-bearing check, not decoration.
+ * (This function's own flagged finding, `request->cb->aio_fildes`, is
+ * a different, unrelated fact regardless -- request is always
+ * `&requests[i]`, a file-static table entry, so it is request->cb, a
+ * FIELD of that global, whose own liveness is in question, not
+ * anything expressible on aio_cancel()'s own parameters; same
+ * "global's own invariant, not a parameter" residual class as
+ * src/env/setenv.c's is_putenv() from 242ed40.) */
 int aio_cancel(int fd, struct aiocb *cb)
 {
 	struct sigevent notifications[AIO_MAX * 2];

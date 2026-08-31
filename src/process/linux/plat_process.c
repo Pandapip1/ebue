@@ -289,6 +289,11 @@ struct raw_rusage {
 	unsigned char reserved[144 - 32];
 };
 
+/* tv required: dereferenced unconditionally (`tv->tv_sec`) as the very
+ * first thing this function does; its only real call sites pass
+ * &ru.ru_stime/&ru.ru_utime, addresses of a local, never NULL. */
+static unsigned long long tv_to_100ns(struct raw_timeval *tv)
+    __attribute__((nonnull(1)));
 static unsigned long long tv_to_100ns(struct raw_timeval *tv)
 {
 	return (unsigned long long)tv->tv_sec * 10000000ULL +

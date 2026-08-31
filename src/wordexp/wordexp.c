@@ -59,6 +59,11 @@ struct fbuf {
 	size_t n, cap;
 };
 
+/* b is required at every call site in this file -- always the address
+ * of a real, stack-local struct fbuf, never NULL, and dereferenced
+ * unconditionally here (`b->n == b->cap`) before anything else. */
+static int fbuf_push(struct fbuf *b, char c, int literal)
+    __attribute__((nonnull(1)));
 static int fbuf_push(struct fbuf *b, char c, int literal)
 {
 	if (b->n == b->cap) {
@@ -80,6 +85,7 @@ static int fbuf_push(struct fbuf *b, char c, int literal)
 	return 0;
 }
 
+static void fbuf_free(struct fbuf *b) __attribute__((nonnull(1)));
 static void fbuf_free(struct fbuf *b)
 {
 	__free(b->data);
@@ -89,6 +95,13 @@ static void fbuf_free(struct fbuf *b)
 	b->n = b->cap = 0;
 }
 
+/* s is dereferenced unconditionally in the loop condition, even on an
+ * empty string; b is deliberately NOT marked -- this function never
+ * dereferences it itself, only forwards it into fbuf_push() (already
+ * required there), the same "nothing left in this function's own body
+ * to describe" reasoning 9be895e's own feholdexcept/feupdateenv used. */
+static int fbuf_push_str(struct fbuf *b, const char *s, int literal)
+    __attribute__((nonnull(2)));
 static int fbuf_push_str(struct fbuf *b, const char *s, int literal)
 {
 	for (; *s; s++)
@@ -104,6 +117,13 @@ struct pv {
 	size_t n, cap;
 };
 
+/* p is required (dereferenced unconditionally once past the s check
+ * below, and every real call site passes &out, never NULL); s is
+ * deliberately NOT marked -- the `if (!s) return -1;` right below is a
+ * real, load-bearing check, not decoration: every caller passes it a
+ * fresh xstrdup()/malloc() result that can genuinely be NULL on OOM,
+ * and this is precisely how that failure propagates. */
+static int pv_push(struct pv *p, char *s) __attribute__((nonnull(1)));
 static int pv_push(struct pv *p, char *s)
 {
 	if (!s) return -1;
@@ -122,6 +142,12 @@ static int pv_push(struct pv *p, char *s)
 	return 0;
 }
 
+/* p required, same shape as pv_push()/pv_free_from()/pv_pack() below --
+ * dereferenced unconditionally, no NULL ever passed. (This particular
+ * helper currently has no real call site anywhere in this tree -- every
+ * cleanup path here uses pv_free_from() instead -- so it is dead code;
+ * marked anyway since the fact is still true and costs nothing.) */
+static void pv_free_all(struct pv *p) __attribute__((nonnull(1)));
 static void pv_free_all(struct pv *p)
 {
 	size_t i;
@@ -135,6 +161,7 @@ static void pv_free_all(struct pv *p)
  * used when [0, from) still belongs to a WRDE_APPEND caller's
  * untouched pwordexp), plus the array wrapper itself, which is always
  * this call's own allocation regardless of from. */
+static void pv_free_from(struct pv *p, size_t from) __attribute__((nonnull(1)));
 static void pv_free_from(struct pv *p, size_t from)
 {
 	size_t i;
@@ -148,6 +175,7 @@ static void pv_free_from(struct pv *p, size_t from)
  * entries into it.  offs is caller-controlled under WRDE_DOOFFS, so
  * validate both additions and the final conversion to bytes before
  * allocating or filling the reserved slots. */
+static char **pv_pack(struct pv *p, size_t offs) __attribute__((nonnull(1)));
 static char **pv_pack(struct pv *p, size_t offs)
 {
 	size_t i, total;
@@ -166,6 +194,7 @@ static char **pv_pack(struct pv *p, size_t offs)
 	return v;
 }
 
+static char *xstrdup(const char *s) __attribute__((nonnull(1)));
 static char *xstrdup(const char *s)
 {
 	size_t n = strlen(s) + 1;
@@ -194,10 +223,32 @@ struct assignment {
 
 struct assign_ctx { struct assignment *head; };
 
-static int expand_impl(const char *, wordexp_t *, int, int, struct assign_ctx *);
+/* words/pwordexp both required: words is dereferenced unconditionally
+ * by the main scan loop (`while (*p)`, p == words), and pwordexp is
+ * dereferenced on every return path (either the success path's
+ * `pwordexp->we_wordv = v;`, or a failure path's
+ * `pwordexp->we_wordc = 0; pwordexp->we_wordv = 0;`). ctx is left
+ * unmarked -- forwarded to expand_param()/assign_param() only, never
+ * dereferenced directly here. */
+static int expand_impl(const char *, wordexp_t *, int, int, struct assign_ctx *)
+    __attribute__((nonnull(1, 2)));
+/* start/result required: start is passed to memcpy() unconditionally
+ * (this tree's own established convention -- see 242ed40's own
+ * str/mem doctrine -- treats that as a genuine use regardless of
+ * length), and *result = 0 is written unconditionally at entry. ctx is
+ * left unmarked, forwarded to expand_param() only. */
 static int expand_trim_pattern(const char *, size_t, int, int,
-                               struct assign_ctx *, char **);
+                               struct assign_ctx *, char **)
+    __attribute__((nonnull(1, 6)));
 
+/* ctx/name both required -- ctx->head is read unconditionally, and
+ * name is dereferenced on every path (via strcmp() in the scan loop
+ * when ctx->head is non-empty, or via xstrdup() below when it is not).
+ * value is deliberately NOT marked: this function only ever forwards
+ * it into setenv(), which itself does not require it either (see
+ * assign_var()'s own comment in arith.c for the identical case). */
+static int assign_param(struct assign_ctx *ctx, const char *name, const char *value)
+    __attribute__((nonnull(1, 2)));
 static int assign_param(struct assign_ctx *ctx, const char *name, const char *value)
 {
 	struct assignment *a;
@@ -239,6 +290,7 @@ static void finish_assignments(struct assign_ctx *ctx, int restore)
 /* Find the closing brace of a ${parameter-word} expansion.  Nested
  * parameter expansions belong to word and therefore do not close the
  * outer expansion.  Escaped braces and braces in quotes are data. */
+static const char *param_word_end(const char *p) __attribute__((nonnull(1)));
 static const char *param_word_end(const char *p)
 {
 	int depth = 0;
@@ -283,6 +335,13 @@ static const char *param_word_end(const char *p)
  * parameter expansion operates.  A multi-field result is joined with
  * the first IFS byte, as shell "$*" is; the caller performs the final
  * field splitting when the outer expansion is unquoted. */
+/* start/result required, same reasoning as expand_trim_pattern() above
+ * (start feeds memcpy() unconditionally; *result = 0 is written at
+ * entry regardless of outcome). ctx is left unmarked, forwarded to
+ * expand_impl() only. */
+static int expand_param_word(const char *start, size_t input_len, int flags,
+                             int sh, int quoted, struct assign_ctx *ctx,
+                             char **result) __attribute__((nonnull(1, 7)));
 static int expand_param_word(const char *start, size_t input_len, int flags,
                              int sh, int quoted, struct assign_ctx *ctx,
                              char **result)
@@ -351,6 +410,12 @@ static int expand_param_word(const char *start, size_t input_len, int flags,
  * single field of decimal digits and nothing about it depends on
  * quoting.  2.5.2's '@' and '*' are NOT here: they can produce more
  * than one field, which only the caller's scan can express. */
+/* pp is dereferenced immediately (`p = *pp + 1`); b/ctx are left
+ * unmarked -- both are only ever forwarded into fbuf_push()/
+ * fbuf_push_str()/assign_param(), never dereferenced directly here. */
+static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
+                        int quoted, struct assign_ctx *ctx)
+    __attribute__((nonnull(1)));
 static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
                         int quoted, struct assign_ctx *ctx)
 {
@@ -624,6 +689,10 @@ static int expand_trim_pattern(const char *start, size_t len, int flags,
  * results are not re-scanned for pathname expansion) to b. If the
  * user is unknown, '~'/"~user" is left unexpanded, matching every
  * shell's fallback. */
+/* pp dereferenced immediately; b left unmarked, forward-only into
+ * fbuf_push()/fbuf_push_str(). */
+static int expand_tilde(const char **pp, struct fbuf *b)
+    __attribute__((nonnull(1)));
 static int expand_tilde(const char **pp, struct fbuf *b)
 {
 	const char *p = *pp + 1;
@@ -679,6 +748,9 @@ static int fbuf_push_long(struct fbuf *b, long v)
 
 /* POSIX.1-2024 dollar-single-quotes.  The result is quoted data, so
  * neither field splitting nor pathname expansion sees these bytes. */
+/* pp dereferenced immediately; b left unmarked, forward-only. */
+static int expand_dollar_single(const char **pp, struct fbuf *b)
+    __attribute__((nonnull(1)));
 static int expand_dollar_single(const char **pp, struct fbuf *b)
 {
 	const char *p = *pp + 2;
@@ -739,6 +811,10 @@ static int expand_dollar_single(const char **pp, struct fbuf *b)
  * as an arithmetic expansion" -- arithmetic wins whenever the text
  * parses as one, which is exactly what wordexp.c's caller already
  * guarantees by only reaching here when p[1]/p[2] are both '('. */
+/* pp dereferenced immediately (`p = *pp + 3`); b/ctx left unmarked --
+ * forward-only into fbuf_push_long()/__wordexp_arith()/expand_param(). */
+static int expand_arith(const char **pp, struct fbuf *b, int flags, int sh,
+                        struct assign_ctx *ctx) __attribute__((nonnull(1)));
 static int expand_arith(const char **pp, struct fbuf *b, int flags, int sh,
                         struct assign_ctx *ctx)
 {
@@ -851,6 +927,11 @@ arithmetic_done:
  * returns the command text between them, freshly __malloc'd, or NULL on
  * an unterminated substitution or OOM (*syntax distinguishes the two).
  */
+/* Both required: *syntax = 0 is written unconditionally at entry
+ * (before any error path), and *pp is dereferenced immediately
+ * (`p = *pp + 2`). */
+static char *cmdsub_dollar_text(const char **pp, int *syntax)
+    __attribute__((nonnull(1, 2)));
 static char *cmdsub_dollar_text(const char **pp, int *syntax)
 {
 	const char *p = *pp + 2;
@@ -897,6 +978,9 @@ static char *cmdsub_dollar_text(const char **pp, int *syntax)
  * kept together with the character it precedes), freshly __malloc'd, or
  * NULL on an unterminated substitution or OOM (*syntax distinguishes
  * the two). */
+/* Same shape and same reasoning as cmdsub_dollar_text() just above. */
+static char *cmdsub_backquote_text(const char **pp, int *syntax)
+    __attribute__((nonnull(1, 2)));
 static char *cmdsub_backquote_text(const char **pp, int *syntax)
 {
 	const char *p = *pp + 1;
@@ -932,6 +1016,11 @@ static char *cmdsub_backquote_text(const char **pp, int *syntax)
  * standard output (trailing newlines already stripped by __sh_cmdsub()
  * per 2.6.3) in *out, __malloc'd and owned by the caller. Returns 0, or
  * a WRDE_* code. */
+/* out is written unconditionally at entry (`*out = 0;`, before the
+ * WRDE_NOCMD check even runs); pp is dereferenced via `**pp` once
+ * program is resolved. */
+static int run_cmdsub(const char **pp, int flags, char **out)
+    __attribute__((nonnull(1, 3)));
 static int run_cmdsub(const char **pp, int flags, char **out)
 {
 	char *program;
@@ -966,6 +1055,8 @@ static int run_cmdsub(const char **pp, int flags, char **out)
  * cheaper than unwinding a partial result, this gives shell syntax and
  * WRDE_NOCMD the precedence required over WRDE_UNDEF when a malformed
  * construct occurs later in the input. */
+static int validate_words(const char *words, int flags)
+    __attribute__((nonnull(1)));
 static int validate_words(const char *words, int flags)
 {
 	const char *p = words;
@@ -1051,6 +1142,12 @@ static int validate_words(const char *words, int flags)
  * for bytes that must stay literal) into one or more output words,
  * pushing them onto out. Live '*'/'?'/'[' bytes trigger glob(); no live
  * metacharacters means the field is used exactly as scanned. */
+/* b required (b->n read unconditionally at the top); out is
+ * deliberately NOT marked -- the very first failure path
+ * (`plain = __malloc(...); if (!plain) return WRDE_NOSPACE;`) returns
+ * without ever touching it, and every other use is only as an argument
+ * to pv_push()/globfree(), never dereferenced by this function itself. */
+static int emit_field(struct fbuf *b, struct pv *out) __attribute__((nonnull(1)));
 static int emit_field(struct fbuf *b, struct pv *out)
 {
 	size_t i;
@@ -1106,6 +1203,13 @@ nospace:
 /* Field-split the live bytes appended by an unquoted expansion.  Input
  * syntax whitespace is handled by the main scanner; IFS applies here,
  * to expansion results. */
+/* b required (`n = b->n - before` reads it unconditionally at entry,
+ * before the `if (!n) return 0;` early-out even runs); out/active are
+ * only ever forwarded into emit_field()/dereferenced inside the
+ * `is_split_char` branch of the loop, not unconditionally, so they are
+ * left unmarked. */
+static int split_appended(struct fbuf *b, struct pv *out, int *active,
+                          size_t before) __attribute__((nonnull(1)));
 static int split_appended(struct fbuf *b, struct pv *out, int *active,
                           size_t before)
 {
@@ -1143,6 +1247,11 @@ static int split_appended(struct fbuf *b, struct pv *out, int *active,
  * returns 0 and leaves *end alone.  Only the bare and fully-braced
  * spellings: "${@:-x}" and friends are other expansions this does not
  * implement, and must not be mistaken for this one. */
+/* p is dereferenced unconditionally (`q = p + 1` then `*q`); end is
+ * deliberately NOT marked -- it is only written on the two matching
+ * returns, never on the "no match" return, so there is no path on
+ * which every call writes it. */
+static int at_or_star(const char *p, const char **end) __attribute__((nonnull(1)));
 static int at_or_star(const char *p, const char **end)
 {
 	const char *q = p + 1;
@@ -1187,6 +1296,13 @@ static int at_or_star(const char *p, const char **end)
  * An empty parameter mid-list is kept as an empty field when quoted (a
  * quoted null is a field, 2.6) and dropped when not (2.5.2: "any empty
  * fields may be discarded"), which is what `quoted ||` below says. */
+/* b/active required: `before = b->n` and `*active = 0`/`*active = 1`
+ * are genuine direct dereferences in this function's own body (not
+ * merely forwarded), and every real call site passes &field/&active,
+ * never NULL. out is left unmarked -- only ever forwarded into
+ * emit_field(), never dereferenced by push_params() itself. */
+static int push_params(struct fbuf *b, struct pv *out, int *active, int star, int quoted)
+    __attribute__((nonnull(1, 3)));
 static int push_params(struct fbuf *b, struct pv *out, int *active, int star, int quoted)
 {
 	int n = __sh_param_count(), i, rc;

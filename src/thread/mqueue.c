@@ -121,6 +121,16 @@ static char *mq_path(const char *name)
 	return path;
 }
 
+/* path is required: passed to strdup() unconditionally at entry. Its
+ * own flagged finding here (`*slash`) is a different, NOT-fixable-here
+ * fact -- slash is strrchr()'s own return value, a local the checker
+ * cannot prove nonnull without knowing this file's own mq_path() always
+ * embeds a literal "/ntlibc-mq/" component before ever calling this
+ * (verified by hand: both of this function's real call sites pass a
+ * path built by mq_path(), whose own body memcpy()s that literal in
+ * unconditionally), so strrchr() can never actually return NULL here.
+ * Not a bug, and not expressible as a parameter contract. */
+static int ensure_dir(const char *path) __attribute__((nonnull(1)));
 static int ensure_dir(const char *path)
 {
 	char *copy = strdup(path), *slash;
@@ -137,6 +147,10 @@ static int ensure_dir(const char *path)
 
 /* FNV-1a is defined by multiplication modulo 2^64.  The wrap is the hash
  * operation, not an exceptional arithmetic result. */
+/* s required: dereferenced unconditionally in the loop condition
+ * (`while (*s)`), even for an empty string. */
+__wraps static unsigned long long path_hash(const char *s)
+    __attribute__((nonnull(1)));
 __wraps static unsigned long long path_hash(const char *s)
 {
 	unsigned long long h = 1469598103934665603ULL;

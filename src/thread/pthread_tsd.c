@@ -167,6 +167,9 @@ static void remove_once_waiter_locked(struct once_waiter *waiter)
 	if (*link) *link = waiter->next;
 }
 
+/* argument required: aliased into cleanup and dereferenced
+ * unconditionally (`*cleanup->control = ...`) right after the lock. */
+static void reset_once(void *argument) __attribute__((nonnull(1)));
 static void reset_once(void *argument)
 {
 	struct once_cleanup *cleanup = argument;

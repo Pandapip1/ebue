@@ -61,7 +61,11 @@ struct __plat_fork_result {
  * created, both sides of RTL_CLONE_PROCESS_FLAGS_INHERIT_HANDLES's
  * caller-side handle marking are the front door's job before and after
  * this call either way (src/process/fork.c), not this interface's. */
-int __plat_process_fork(struct __plat_fork_result *out);
+/* out required: both real implementations (linux/plat_process.c,
+ * nt/plat_process.c) write `out->process = ...;`/`out->pid = ...;` on
+ * their parent-success return path, with no NULL check of out itself
+ * anywhere in either body. */
+int __plat_process_fork(struct __plat_fork_result *out) __attribute__((nonnull(1)));
 
 /* Resume a thread this backend handed back suspended -- fork()'s cloned
  * thread and spawn()'s new process's initial thread alike.  The result
@@ -90,7 +94,11 @@ int __plat_process_wait(__plat_handle_t h, int mode);
 
 /* The exit code of a process __plat_process_wait() has already reported
  * as signalled.  0/-1(errno); *code is set only on success. */
-int __plat_process_exit_code(__plat_handle_t h, int *code);
+/* code required: both real implementations write `*code = ...;`
+ * (only on the success path -- see this comment's own "set only on
+ * success" note above -- but with no NULL check of code itself, so a
+ * genuine success call with code == NULL would still crash). */
+int __plat_process_exit_code(__plat_handle_t h, int *code) __attribute__((nonnull(2)));
 
 /* Kernel/user CPU time a process has consumed so far, in 100ns NT ticks
  * -- the only granularity NT offers and the one src/process/wait.c and
@@ -98,7 +106,11 @@ int __plat_process_exit_code(__plat_handle_t h, int *code);
  * 0/-1(errno); the outputs are left untouched on failure so a best-
  * effort caller can leave an already-zeroed struct rusage alone (see
  * wait.c's fill_child_rusage()). */
-int __plat_process_times(__plat_handle_t h, unsigned long long *ktime100ns, unsigned long long *utime100ns);
+/* ktime100ns/utime100ns required, same "written only on success, but
+ * with no NULL check" shape as __plat_process_exit_code()'s own code
+ * argument just above. */
+int __plat_process_times(__plat_handle_t h, unsigned long long *ktime100ns, unsigned long long *utime100ns)
+    __attribute__((nonnull(2, 3)));
 
 /* Resume a process this library previously suspended through kill()'s
  * job-control path (src/signal/signal.c, out of this interface's

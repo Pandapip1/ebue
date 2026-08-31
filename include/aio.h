@@ -52,7 +52,14 @@ int aio_read(struct aiocb *);
 ssize_t aio_return(struct aiocb *);
 int aio_suspend(const struct aiocb *const [], int, const struct timespec *);
 int aio_write(struct aiocb *);
-int lio_listio(int, struct aiocb *const [], int, struct sigevent *);
+/* list is required: src/thread/aio.c's own lio_listio() subscripts it
+ * directly (`list[i]`) whenever count >= 1, with no NULL check of its
+ * own. event is left unmarked -- it is genuinely optional per
+ * lio_listio.html ("If sig is NULL, then no signal is queued"), and
+ * `(event && !valid_event(event))` there is a real, load-bearing check
+ * of exactly that. */
+int lio_listio(int, struct aiocb *const [], int, struct sigevent *)
+    __attribute__((nonnull(2)));
 
 #ifdef __cplusplus
 }

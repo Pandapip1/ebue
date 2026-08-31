@@ -27,7 +27,17 @@
  * why no dedicated WRDE_ code exists for "bad arithmetic" so WRDE_SYNTAX
  * does double duty). flags is the flags wordexp() itself was called
  * with -- only WRDE_UNDEF is consulted (an undefined variable inside
- * the expression is worth 0 unless the caller asked to be told). */
-int __wordexp_arith(const char *expr, long *result, int flags);
+ * the expression is worth 0 unless the caller asked to be told).
+ *
+ * result is required: `*result = arith_comma(&a);` in arith.c's own
+ * body runs before any error check, on every call, regardless of
+ * whether evaluation ultimately succeeds. expr is NOT marked: this
+ * function only ever assigns it into struct arith's own `p` field
+ * (`a.p = expr;`), never dereferences it directly itself -- every
+ * actual dereference happens through that field, inside arith.c's own
+ * recursive-descent functions, which is where that requirement is
+ * expressed instead (see arith.c's own struct arith *a parameters). */
+int __wordexp_arith(const char *expr, long *result, int flags)
+    __attribute__((nonnull(2)));
 
 #endif
