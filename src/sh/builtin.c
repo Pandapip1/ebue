@@ -172,6 +172,39 @@ static int bi_false(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== rm / cp / mv (XCU rm(1p), cp(1p), mv(1p)) ========================
+ *
+ * Same reason as test/true/false above for staying registered here even
+ * though obj/bin/rm.exe, obj/bin/cp.exe and obj/bin/mv.exe also exist
+ * now (src/util/rm.c, src/util/cp.c, src/util/mv.c, all declared in
+ * src/internal/util.h): a builtin runs in this process, unconditionally,
+ * without depending on __find_program()/__spawn() succeeding.  None of
+ * the three change anything XCU 2.12 lists as part of the shell
+ * execution environment (not the working directory, not a shell
+ * variable, not the positional parameters), so `env_effect` is 0 for
+ * all three -- a pipeline stage that runs one is free to do so in its
+ * own subshell environment exactly like `test` above. */
+static int bi_rm(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_rm(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_rm_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_cp(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_cp(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_cp_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_mv(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_mv(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_mv_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* XCU 2.14: "exit [n] -- ... shall cause the shell to exit with the
  * exit status specified by the unsigned decimal integer n.  If n is
  * specified, but its value is not between 0 and 255 inclusively, the
@@ -504,6 +537,9 @@ static const struct sh_builtin builtins[] = {
 	{ "pwd",      0, 0, bi_pwd },
 	{ "readlink", 0, 0, bi_readlink },
 	{ "realpath", 0, 0, bi_realpath },
+	{ "rm",    0, 0, bi_rm },
+	{ "cp",    0, 0, bi_cp },
+	{ "mv",    0, 0, bi_mv },
 	{ 0, 0, 0, 0 }
 };
 

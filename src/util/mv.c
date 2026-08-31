@@ -1,0 +1,159 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * mv(1p). Two SYNOPSIS forms are implemented:
+ *   mv [-f] source target
+ *   mv [-f] source... target_dir
+ *
+ * mv(1p)'s DESCRIPTION describes the effect ("rename" when possible),
+ * not a mechanism, so the mechanism here is: try rename() first --
+ * atomic, and POSIX's own preferred primitive whenever it applies (it
+ * already carries all of mv(1p)'s "existing dest_file is unlinked
+ * first"/"existing empty dest directory is replaced" behaviour, because
+ * that behaviour comes from the platform's rename semantics, which
+ * src/stdio/misc.c's rename() documents).  Only when rename() fails
+ * specifically because the two paths are on different volumes --
+ * reported as EXDEV; src/stdio/misc.c's renameat() sets exactly that
+ * errno from NT's STATUS_NOT_SAME_DEVICE, so this is a real, observed
+ * mapping, not a guess -- does this fall back to a copy of the source
+ * followed by removing it, reusing src/util/cp.c's file/tree copy and
+ * src/util/rm.c's tree removal rather than duplicating either.  Any
+ * other rename() failure is a real diagnostic and a nonzero exit, with
+ * no fallback attempted: guessing that some other errno also means
+ * "try copying instead" risks silently doing something very different
+ * from what the user asked for.
+ *
+ * target_dir form: identical "target/basename(source)" construction as
+ * cp(1p)'s, via the same __util_join_basename() (src/util/cp.c).
+ *
+ * Deliberately out of scope, refused loudly rather than silently
+ * ignored -- same reasoning as src/util/rm.c's and src/util/cp.c's:
+ *   -i  interactive overwrite confirmation.
+ * `-f` is accepted, but is a genuine no-op here rather than a silently
+ * *different* no-op: mv(1p)'s -f means "do not prompt", and this build
+ * never prompts (no -i), so there is nothing left for -f to change --
+ * unlike a refused option, accepting -f does not misrepresent what the
+ * utility does.
+ *
+ * The EXDEV fallback does not attempt to move a symbolic link across
+ * volumes: doing so correctly means recreating the link itself
+ * (readlink() + symlink()) rather than copying file *contents*, which
+ * is not implemented here, and copying the link's *referent* instead
+ * would silently change what the moved entry means. Refused with a
+ * diagnostic instead -- the same policy src/util/cp.c applies to a
+ * symlink found inside a -R tree, for the same reason. Within one
+ * volume this limitation does not apply at all: rename() moves a
+ * symbolic link correctly and is always tried first.
+ */
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include "util.h"
+
+static int mv_one(const char *src, const char *dst)
+{
+	struct stat sst;
+
+	if (rename(src, dst) == 0) return 0;
+	if (errno != EXDEV) {
+		fprintf(stderr, "mv: cannot move '%s' to '%s': %s\n", src, dst, strerror(errno));
+		return -1;
+	}
+
+	/* Cross-volume: rename() cannot do this atomically, so copy the
+	 * source and then remove it -- see this file's header. */
+	if (lstat(src, &sst) < 0) {
+		fprintf(stderr, "mv: cannot stat '%s': %s\n", src, strerror(errno));
+		return -1;
+	}
+
+	if (S_ISLNK(sst.st_mode)) {
+		fprintf(stderr, "mv: '%s': moving a symbolic link across filesystems "
+		                "is not supported by this build (see src/util/mv.c)\n", src);
+		return -1;
+	}
+
+	if (S_ISDIR(sst.st_mode)) {
+		if (__util_copy_tree(src, dst, 0) < 0) return -1;
+		if (__util_remove_tree(src) < 0) {
+			fprintf(stderr, "mv: '%s' was copied to '%s' but the original could "
+			                "not be fully removed -- manual cleanup is needed\n",
+			                src, dst);
+			return -1;
+		}
+		return 0;
+	}
+
+	if (__util_copy_regular_file(src, dst, 0) < 0) return -1;
+	if (unlink(src) < 0) {
+		fprintf(stderr, "mv: '%s' was copied to '%s' but the original could not "
+		                "be removed: %s\n", src, dst, strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+int __util_mv_main(int argc, char **argv)
+{
+	int i = 1;
+	int nsrc, had_error = 0;
+	const char *target;
+	struct stat tst;
+	int target_is_dir;
+
+	for (; i < argc; i++) {
+		char *a = argv[i];
+		char *p;
+
+		if (a[0] != '-' || a[1] == 0) break;
+		if (!strcmp(a, "--")) { i++; break; }
+
+		for (p = a + 1; *p; p++) {
+			if (*p == 'f') continue;   /* genuine no-op -- see header */
+			if (*p == 'i') {
+				fprintf(stderr, "mv: -i: interactive confirmation is not "
+				                "supported by this build; refusing rather "
+				                "than moving without prompting\n");
+				return 2;
+			}
+			fprintf(stderr, "mv: invalid option -- '%c'\n", *p);
+			return 2;
+		}
+	}
+
+	nsrc = argc - 1 - i;
+	if (nsrc < 1) {
+		fprintf(stderr, "mv: missing %s\n", nsrc < 0 ? "operand" : "destination operand");
+		return 2;
+	}
+
+	target = argv[argc - 1];
+	target_is_dir = stat(target, &tst) == 0 && S_ISDIR(tst.st_mode);
+
+	if (nsrc > 1 && !target_is_dir) {
+		fprintf(stderr, "mv: target '%s' is not a directory\n", target);
+		return 2;
+	}
+
+	for (; i < argc - 1; i++) {
+		const char *src = argv[i];
+
+		if (target_is_dir) {
+			char *dst = __util_join_basename(target, src);
+			if (!dst) {
+				fprintf(stderr, "mv: %s: %s\n", src, strerror(ENOMEM));
+				had_error = 1;
+				continue;
+			}
+			if (mv_one(src, dst) < 0) had_error = 1;
+			free(dst);
+		} else {
+			if (mv_one(src, target) < 0) had_error = 1;
+		}
+	}
+
+	return had_error ? 1 : 0;
+}
