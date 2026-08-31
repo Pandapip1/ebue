@@ -61,10 +61,11 @@ void *memset (void *, int, size_t) __attribute__((nonnull(1)));
 int memcmp (const void *, const void *, size_t) __attribute__((nonnull(1, 2), __pure__));
 void *memchr (const void *, int, size_t) __attribute__((nonnull(1), __pure__));
 
-char *strcpy (char *__restrict, const char *__restrict);
+char *strcpy (char *__restrict, const char *__restrict __NTLIBC_STRING);
 char *strncpy (char *__restrict, const char *__restrict, size_t);
 
-char *strcat (char *__restrict, const char *__restrict);
+char *strcat (char *__restrict __NTLIBC_STRING,
+              const char *__restrict __NTLIBC_STRING);
 /* strncat's d is required (its own body's first statement, `d +=
  * strlen(d);`, dereferences it via strlen() with no check); s is
  * required the same way despite the `while (n && *s) ...` short
@@ -81,7 +82,8 @@ char *strncat (char *__restrict, const char *__restrict, size_t) __attribute__((
 /* strcmp reads through l/r only (src/string/strcmp.c), same __pure__
  * reasoning as memcmp above -- matching glibc's real strcmp
  * declaration, __attribute__((pure, nonnull(1, 2))). */
-int strcmp (const char *, const char *) __attribute__((nonnull(1, 2), __pure__));
+int strcmp (const char * __NTLIBC_STRING, const char * __NTLIBC_STRING)
+    __attribute__((nonnull(1, 2), __pure__));
 /* strncmp's loop condition (`*l && *r && n && *l == *r`) DOES short
  * circuit r's dereference on l's, but the unconditional `return *l -
  * *r;` after the loop dereferences both regardless of how the loop
@@ -99,7 +101,8 @@ int strncmp (const char *, const char *, size_t) __attribute__((nonnull(1, 2), _
  * orthogonal, unrelated proof obligation -- __pure__ only needs "no
  * side effects, deterministic in the arguments", which holds
  * regardless of whether l/r's own nullness has been proven. */
-int strcoll (const char *, const char *) __attribute__((__pure__));
+int strcoll (const char * __NTLIBC_STRING, const char * __NTLIBC_STRING)
+    __attribute__((__pure__));
 size_t strxfrm (char *__restrict, const char *__restrict, size_t);
 
 /* src/string/strchr.c forwards to strchrnul(s, c) unconditionally and
@@ -108,10 +111,11 @@ size_t strxfrm (char *__restrict, const char *__restrict, size_t);
  * too, via strchrnul's own `returns_nonnull` (see its comment below),
  * not anything expressible on strchr's own signature. Reads only,
  * matching glibc's real strchr __attribute__((pure)). */
-char *strchr (const char *, int) __attribute__((nonnull(1), __pure__));
+char *strchr (const char * __NTLIBC_STRING, int)
+    __attribute__((nonnull(1), __pure__));
 /* strrchr (src/string/strrchr.c) forwards into memrchr(s, c,
  * strlen(s)+1) -- reads only, same __pure__ reasoning. */
-char *strrchr (const char *, int) __attribute__((__pure__));
+char *strrchr (const char * __NTLIBC_STRING, int) __attribute__((__pure__));
 
 /* strcspn/strspn both require s and c: `if (!c[0] || !c[1])` (strcspn)
  * and `if (!c[0]) return 0;` (strspn) test c's CONTENT, not c's own
@@ -142,7 +146,8 @@ char *strtok (char *__restrict, const char *__restrict);
  * NUL, no writes, no errno, no globals -- matching glibc's own strlen
  * declaration, __attribute__((pure, nonnull(1))), cited as this
  * project's own precedent for the whole family. */
-size_t strlen (const char *) __attribute__((nonnull(1), __pure__));
+size_t strlen (const char * __NTLIBC_STRING)
+    __attribute__((nonnull(1), __pure__));
 
 /* strerror (src/string/strerror.c) returns a pointer into a fixed,
  * compile-time-initialized `static const char *const __errmsgs[]`
@@ -189,7 +194,8 @@ char *stpncpy(char *__restrict, const char *__restrict, size_t) __attribute__((n
  * against the ownership sweep's own proof obligation), an unrelated,
  * orthogonal claim from __pure__. */
 size_t strnlen (const char *, size_t) __attribute__((__pure__));
-char *strdup (const char *) __NTLIBC_RETURNS_OWNERSHIP(malloc);
+char *strdup (const char * __NTLIBC_STRING)
+    __NTLIBC_RETURNS_OWNERSHIP(malloc);
 char *strndup (const char *, size_t) __NTLIBC_RETURNS_OWNERSHIP(malloc);
 /* strsignal (src/string/strsignal.c): same fixed-static-table shape as
  * strerror() above, indexed by sig -- __pure__ for the same reason. */

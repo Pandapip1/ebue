@@ -11,6 +11,41 @@ size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 char *strdup(const char *);
 
+#define STRING_CONTRACT __attribute__((annotate("ntlibc.string")))
+#define SPAN_CONTRACT(size_parameter) \
+	__attribute__((annotate("ntlibc.span:" #size_parameter)))
+
+/* Contracted callees are analyzed with their checked preconditions. */
+size_t contracted_length(const char *text STRING_CONTRACT)
+{
+	return strlen(text);
+}
+
+void contracted_copy(char *out SPAN_CONTRACT(3),
+	const char *in SPAN_CONTRACT(3), size_t length)
+{
+	memcpy(out, in, length);
+}
+
+void satisfy_contracts(void)
+{
+	char source[8], destination[8];
+	(void)contracted_length("known string");
+	contracted_copy(destination, source, sizeof source);
+}
+
+/* A user function that merely shares a recognized libc name must not make
+ * BeginFunction index nonexistent builtin-contract parameters. */
+static int send(void)
+{
+	return 0;
+}
+
+int call_shadow_send(void)
+{
+	return send();
+}
+
 void bounded_operations(int fd)
 {
 	char source[16], destination[16];
@@ -32,6 +67,7 @@ void bounded_operations(int fd)
 char *dup_prefix(const char *s, size_t n)
 {
 	size_t l = strnlen(s, n);
+	if (l == (size_t)-1) return 0;
 	char *d = __malloc(l + 1);
 	if (!d) return 0;
 	memcpy(d, s, l);

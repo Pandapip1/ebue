@@ -10,6 +10,35 @@ size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 int strcmp(const char *, const char *);
 
+#define STRING_CONTRACT __attribute__((annotate("ntlibc.string")))
+#define SPAN_CONTRACT(size_parameter) \
+	__attribute__((annotate("ntlibc.span:" #size_parameter)))
+
+size_t contracted_length(const char *text STRING_CONTRACT);
+void contracted_copy(char *out SPAN_CONTRACT(3),
+	const char *in SPAN_CONTRACT(3), size_t length);
+
+static void contracted_fill(char *out SPAN_CONTRACT(2), size_t length)
+{
+	memset(out, 0, length);
+}
+
+void violate_contracts(char *text)
+{
+	char source[4], destination[4];
+	(void)contracted_length(text); /* memory-contract-expect */
+	contracted_copy(destination, source, 8); /* memory-contract-expect */
+}
+
+/* Only this caller violates the contract.  Once diagnosed, the assumed
+ * exact-region span must prevent a duplicate report in contracted_fill's
+ * inlined body, even though destination + 2 is an interior region. */
+void violate_inline_contract(void)
+{
+	char destination[4];
+	contracted_fill(destination + 2, 3); /* memory-contract-expect */
+}
+
 /* The first call must report the unproved sentinel.  If it returns
  * normally, that call itself establishes the same pointer's string
  * postcondition, so repeating the identical obligation would be noise. */
@@ -56,6 +85,16 @@ void too_small_heap_allocation(const char *s)
 {
 	char *d = __malloc(4);
 	memcpy(d, s, 8); /* memory-contract-expect */
+}
+
+/* Sharing an affine root does not prove the larger expression is larger:
+ * unsigned addition wraps, so n == SIZE_MAX allocates zero bytes here. */
+void wrapped_allocator_extent(size_t n)
+{
+	if (n != (size_t)-1) return;
+	char *d = __malloc(n + 1);
+	if (!d) return;
+	memset(d, 0, n); /* memory-contract-expect */
 }
 
 /* strnlen(s, n)'s contract is looser than strlen(s)'s: if it walked all

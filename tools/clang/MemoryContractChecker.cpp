@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "clang/AST/Expr.h"
+#include "clang/AST/Attr.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
@@ -13,6 +14,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 
 #include <cctype>
 #include <memory>
@@ -41,11 +43,58 @@ using namespace ento;
 REGISTER_MAP_WITH_PROGRAMSTATE(StrlenSource, SymbolRef, const MemRegion *)
 REGISTER_MAP_WITH_PROGRAMSTATE(StrnlenSource, SymbolRef, const MemRegion *)
 REGISTER_SET_WITH_PROGRAMSTATE(KnownStringRegion, const MemRegion *)
+/* A checked annotated call establishes a span from the exact pointer value,
+ * which may be an interior ElementRegion.  DynamicExtent is rooted at the
+ * allocation's base and therefore cannot represent two independent
+ * contracted suffixes without either losing the offset or overwriting the
+ * base's real extent. */
+REGISTER_MAP_WITH_PROGRAMSTATE(AssumedSpanExtent, const MemRegion *,
+                               DefinedOrUnknownSVal)
 
 namespace {
 
+static bool parameterHasAnnotation(const FunctionDecl *Function,
+                                   unsigned Index, StringRef Annotation) {
+  if (!Function)
+    return false;
+  for (const FunctionDecl *Redeclaration : Function->redecls()) {
+    if (Index >= Redeclaration->getNumParams())
+      continue;
+    for (const AnnotateAttr *Attribute :
+         Redeclaration->getParamDecl(Index)->specific_attrs<AnnotateAttr>())
+      if (Attribute->getAnnotation() == Annotation)
+        return true;
+  }
+  return false;
+}
+
+static void spanParameters(
+    const FunctionDecl *Function,
+    SmallVectorImpl<std::pair<unsigned, unsigned>> &Parameters) {
+  if (!Function)
+    return;
+  for (const FunctionDecl *Redeclaration : Function->redecls()) {
+    for (unsigned Pointer = 0; Pointer < Redeclaration->getNumParams();
+         ++Pointer) {
+      for (const AnnotateAttr *Attribute : Redeclaration->getParamDecl(Pointer)
+                                               ->specific_attrs<AnnotateAttr>()) {
+        StringRef Annotation = Attribute->getAnnotation();
+        if (!Annotation.consume_front("ntlibc.span:"))
+          continue;
+        unsigned OneBasedLength;
+        if (Annotation.getAsInteger(10, OneBasedLength) || !OneBasedLength ||
+            OneBasedLength > Redeclaration->getNumParams())
+          continue;
+        std::pair<unsigned, unsigned> Contract{Pointer, OneBasedLength - 1};
+        if (llvm::find(Parameters, Contract) == Parameters.end())
+          Parameters.push_back(Contract);
+      }
+    }
+  }
+}
+
 class MemoryContractChecker
-    : public Checker<check::PreCall, check::PostCall> {
+    : public Checker<check::PreCall, check::PostCall, check::BeginFunction> {
   mutable std::unique_ptr<BugType> SpanBT;
   mutable std::unique_ptr<BugType> OverlapBT;
 
@@ -56,8 +105,7 @@ class MemoryContractChecker
     bool NoOverlap;
   };
 
-  static std::optional<Contract> contractFor(const CallEvent &Call) {
-    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+  static std::optional<Contract> contractFor(const FunctionDecl *Function) {
     if (!Function || !Function->getIdentifier())
       return std::nullopt;
     StringRef Name = Function->getName();
@@ -71,6 +119,10 @@ class MemoryContractChecker
         Name == "pwrite" || Name == "recv" || Name == "send")
       return Contract{1, std::nullopt, 2, false};
     return std::nullopt;
+  }
+
+  static std::optional<Contract> contractFor(const CallEvent &Call) {
+    return contractFor(dyn_cast_or_null<FunctionDecl>(Call.getDecl()));
   }
 
   static bool hasName(const CallEvent &Call, StringRef Wanted) {
@@ -134,22 +186,29 @@ class MemoryContractChecker
 
   // Decompose an SVal into (root symbol, constant offset), i.e. treat it
   // as "root + offset" for a bare symbol (offset 0) or a `root + K`
-  // SymIntExpr (offset K). Two SVals built from the same root symbol can
-  // then be compared by plain integer arithmetic on their offsets alone,
-  // with no solver help needed -- clang's range-based constraint solver
-  // does not fold "(S + K) >= S" down to "always true (for K >= 0)" for
-  // two separately-built compound expressions that merely happen to
-  // share a root symbol, confirmed empirically by 8a56a66's identical
-  // finding for the sibling ValidPointerChecker's index-in-bounds proof.
+  // SymIntExpr (offset K). Clang's range-based constraint solver does not
+  // fold "(S + K) >= S" for separately-built compound expressions, so the
+  // decomposition exposes their common root.  Offset ordering alone is not
+  // a proof, however: sameSymbolSpanProven also asks the solver to exclude
+  // wrap before using it.
   static bool decomposeAffine(SVal V, SymbolRef &Base, int64_t &Offset) {
-    SymbolRef Sym = stripCasts(V.getAsSymbol());
-    if (!Sym)
+    SymbolRef Original = V.getAsSymbol();
+    SymbolRef Sym = stripCasts(Original);
+    if (!Sym || Sym != Original)
       return false;
     if (const auto *IntExpr = dyn_cast<SymIntExpr>(Sym)) {
       if (IntExpr->getOpcode() != BO_Add)
         return false;
-      Base = stripCasts(IntExpr->getLHS());
-      Offset = IntExpr->getRHS().getExtValue();
+      const llvm::APSInt &Constant = IntExpr->getRHS();
+      /* Negative offsets need a corresponding lower-bound/underflow proof,
+       * and constants outside int64_t cannot be ordered by Offset below.
+       * Neither case occurs in the size expressions this lemma targets. */
+      if (Constant.isNegative() || Constant.getActiveBits() > 63)
+        return false;
+      Base = IntExpr->getLHS();
+      if (isa<SymbolCast>(Base))
+        return false;
+      Offset = static_cast<int64_t>(Constant.getZExtValue());
       return true;
     }
     Base = Sym;
@@ -171,17 +230,44 @@ class MemoryContractChecker
   // narrower version of this function) does not recognize it: it only
   // ever looked at the LENGTH side as a bare symbol, never decomposed a
   // compound length into its own root+offset. Decomposing both sides the
-  // same way and comparing their offsets once the roots match subsumes
-  // that narrower case (offset 0 on the length side) while also covering
-  // this one (equal, nonzero offsets on both sides).
-  static bool sameSymbolSpanProven(SVal Extent, SVal Length) {
+  // same way subsumes that narrower case (offset 0 on the length side)
+  // while also covering this one (equal, nonzero offsets on both sides),
+  // subject to the solver-backed no-wrap proof below.
+  static bool sameSymbolSpanProven(SVal Extent, SVal Length,
+                                   ProgramStateRef State,
+                                   CheckerContext &C) {
+    SymbolRef ExtentSymbol = Extent.getAsSymbol();
+    SymbolRef LengthSymbol = Length.getAsSymbol();
+    /* Identical symbolic values compare equal even if their common
+     * expression wrapped before reaching this point. */
+    if (ExtentSymbol && ExtentSymbol == LengthSymbol)
+      return true;
     SymbolRef ExtentBase, LengthBase;
     int64_t ExtentOffset, LengthOffset;
     if (!decomposeAffine(Extent, ExtentBase, ExtentOffset))
       return false;
     if (!decomposeAffine(Length, LengthBase, LengthOffset))
       return false;
-    return ExtentBase == LengthBase && ExtentOffset >= LengthOffset;
+    if (ExtentBase != LengthBase || ExtentOffset < LengthOffset)
+      return false;
+    QualType BaseType = ExtentBase->getType();
+    if (!BaseType->isIntegerType())
+      return false;
+    if (ExtentOffset == LengthOffset)
+      return true;
+
+    /* Offset ordering is valid only when the larger addition cannot wrap.
+     * Ask the path solver to prove base <= TYPE_MAX - ExtentOffset; a
+     * syntactic shared base alone is not enough for unsigned size_t (for
+     * example SIZE_MAX + 1 wraps to zero). */
+    llvm::APSInt Limit =
+        C.getSValBuilder().getBasicValueFactory().getMaxValue(BaseType);
+    llvm::APSInt Delta(llvm::APInt(Limit.getBitWidth(), ExtentOffset),
+                       Limit.isUnsigned());
+    Limit -= Delta;
+    const llvm::APSInt *Maximum = C.getSValBuilder().getMaxValue(
+        State, C.getSValBuilder().makeSymbolVal(ExtentBase));
+    return Maximum && *Maximum <= Limit;
   }
 
   // The allocator-extent lemma above only ever closes the DESTINATION
@@ -307,18 +393,31 @@ public:
                   CheckerContext &C) const {
     if (State->isNull(Length).isConstrainedTrue())
       return true;
+    auto ExtentProvesLength = [&](SVal Extent) {
+      if (Extent.isUnknownOrUndef() || Length.isUnknownOrUndef())
+        return false;
+      if (sameSymbolSpanProven(Extent, Length, State, C))
+        return true;
+      SVal Enough = C.getSValBuilder().evalBinOp(
+          State, BO_GE, Extent, Length,
+          C.getSValBuilder().getConditionType());
+      std::optional<DefinedOrUnknownSVal> Condition =
+          Enough.getAs<DefinedOrUnknownSVal>();
+      return Condition && !State->assume(*Condition, false);
+    };
+    if (const MemRegion *Region = Pointer.getAsRegion())
+      if (const DefinedOrUnknownSVal *Assumed =
+              State->get<AssumedSpanExtent>(Region))
+        if (ExtentProvesLength(*Assumed))
+          return true;
     SVal Extent = getDynamicExtentWithOffset(State, Pointer);
     if (Extent.isUnknownOrUndef() || Length.isUnknownOrUndef())
       return false;
-    if (sameSymbolSpanProven(Extent, Length))
+    if (sameSymbolSpanProven(Extent, Length, State, C))
       return true;
     if (stringLengthSourceSpanProven(Pointer, Length, State))
       return true;
-    SVal Enough = C.getSValBuilder().evalBinOp(
-        State, BO_GE, Extent, Length, C.getSValBuilder().getConditionType());
-    std::optional<DefinedOrUnknownSVal> Condition =
-        Enough.getAs<DefinedOrUnknownSVal>();
-    return Condition && !State->assume(*Condition, false);
+    return ExtentProvesLength(Extent);
   }
 
   bool overlapProven(SVal First, SVal Second, SVal Length,
@@ -349,7 +448,84 @@ public:
   }
 
 public:
+  void checkBeginFunction(CheckerContext &C) const {
+    const auto *Function =
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
+    SmallVector<std::pair<unsigned, unsigned>, 2> Spans;
+    spanParameters(Function, Spans);
+    ProgramStateRef State = C.getState();
+    for (auto [Pointer, Length] : Spans) {
+      const ParmVarDecl *PointerParameter = Function->getParamDecl(Pointer);
+      const ParmVarDecl *LengthParameter = Function->getParamDecl(Length);
+      SVal PointerValue = State->getSVal(
+          State->getLValue(PointerParameter, C.getLocationContext()));
+      SVal LengthValue = State->getSVal(
+          State->getLValue(LengthParameter, C.getLocationContext()));
+      const MemRegion *Region = PointerValue.getAsRegion();
+      std::optional<DefinedOrUnknownSVal> DefinedLength =
+          LengthValue.getAs<DefinedOrUnknownSVal>();
+      if (Region && DefinedLength)
+        State = State->set<AssumedSpanExtent>(Region, *DefinedLength);
+    }
+    if (std::optional<Contract> Builtin = contractFor(Function)) {
+      if (Builtin->Length < Function->getNumParams() &&
+          Builtin->First < Function->getNumParams() &&
+          (!Builtin->Second ||
+           *Builtin->Second < Function->getNumParams())) {
+        const ParmVarDecl *LengthParameter =
+            Function->getParamDecl(Builtin->Length);
+        SVal LengthValue = State->getSVal(
+            State->getLValue(LengthParameter, C.getLocationContext()));
+        std::optional<DefinedOrUnknownSVal> DefinedLength =
+            LengthValue.getAs<DefinedOrUnknownSVal>();
+        auto Seed = [&](unsigned Index) {
+          const ParmVarDecl *Parameter = Function->getParamDecl(Index);
+          SVal PointerValue = State->getSVal(
+              State->getLValue(Parameter, C.getLocationContext()));
+          if (const MemRegion *Region = PointerValue.getAsRegion())
+            if (DefinedLength)
+              State = setDynamicExtent(State, Region, *DefinedLength,
+                                       C.getSValBuilder());
+        };
+        Seed(Builtin->First);
+        if (Builtin->Second)
+          Seed(*Builtin->Second);
+      }
+    }
+    if (State != C.getState())
+      C.addTransition(State);
+  }
+
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    SmallVector<std::pair<unsigned, unsigned>, 2> Spans;
+    spanParameters(Function, Spans);
+    ProgramStateRef ContractState = C.getState();
+    for (auto [Pointer, Length] : Spans) {
+      if (Pointer >= Call.getNumArgs() || Length >= Call.getNumArgs())
+        continue;
+      const MemRegion *Region = Call.getArgSVal(Pointer).getAsRegion();
+      std::optional<DefinedOrUnknownSVal> DefinedLength =
+          Call.getArgSVal(Length).getAs<DefinedOrUnknownSVal>();
+      if (Region && DefinedLength)
+        ContractState =
+            ContractState->set<AssumedSpanExtent>(Region, *DefinedLength);
+    }
+    for (auto [Pointer, Length] : Spans) {
+      if (Pointer >= Call.getNumArgs() || Length >= Call.getNumArgs())
+        continue;
+      if (!spanProven(Call.getArgSVal(Pointer), Call.getArgSVal(Length),
+                      C.getState(), C)) {
+        BugType *Type = SpanBT.get();
+        report("memory operation span is not proven valid", Type, Call,
+               ContractState, C);
+        if (!SpanBT && Type)
+          SpanBT.reset(Type);
+        break;
+      }
+    }
+    if (!Spans.empty() && ContractState != C.getState())
+      C.addTransition(ContractState);
     std::optional<Contract> Contract = contractFor(Call);
     if (!Contract || Contract->Length >= Call.getNumArgs() ||
         Contract->First >= Call.getNumArgs())
@@ -425,7 +601,7 @@ public:
 };
 
 class StringSentinelChecker
-    : public Checker<check::PreCall, check::PostCall> {
+    : public Checker<check::PreCall, check::PostCall, check::BeginFunction> {
   mutable std::unique_ptr<BugType> BT;
 
   static void requiredArguments(const CallEvent &Call,
@@ -434,18 +610,25 @@ class StringSentinelChecker
     if (!Function || !Function->getIdentifier())
       return;
     StringRef Name = Function->getName();
+    auto Add = [&](unsigned Index) {
+      if (llvm::find(Arguments, Index) == Arguments.end())
+        Arguments.push_back(Index);
+    };
+    for (unsigned Index = 0; Index < Function->getNumParams(); ++Index)
+      if (parameterHasAnnotation(Function, Index, "ntlibc.string"))
+        Add(Index);
     if (Name == "strlen" || Name == "strchr" || Name == "strrchr" ||
         Name == "strdup" || Name == "puts")
-      Arguments.push_back(0);
+      Add(0);
     else if (Name == "strcmp" || Name == "strcasecmp" || Name == "strcoll" ||
              Name == "fopen") {
-      Arguments.push_back(0);
-      Arguments.push_back(1);
+      Add(0);
+      Add(1);
     } else if (Name == "strcpy")
-      Arguments.push_back(1);
+      Add(1);
     else if (Name == "strcat") {
-      Arguments.push_back(0);
-      Arguments.push_back(1);
+      Add(0);
+      Add(1);
     }
   }
 
@@ -489,36 +672,64 @@ class StringSentinelChecker
   }
 
 public:
+  void checkBeginFunction(CheckerContext &C) const {
+    const auto *Function =
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
+    if (!Function)
+      return;
+    ProgramStateRef State = C.getState();
+    for (unsigned Index = 0; Index < Function->getNumParams(); ++Index) {
+      if (!parameterHasAnnotation(Function, Index, "ntlibc.string"))
+        continue;
+      const ParmVarDecl *Parameter = Function->getParamDecl(Index);
+      SVal Value = State->getSVal(
+          State->getLValue(Parameter, C.getLocationContext()));
+      if (const MemRegion *Region = Value.getAsRegion())
+        State = State->add<KnownStringRegion>(Region);
+    }
+    if (State != C.getState())
+      C.addTransition(State);
+  }
+
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
     SmallVector<unsigned, 2> Arguments;
     requiredArguments(Call, Arguments);
+    ProgramStateRef State = C.getState();
+    bool Reported = false;
+    for (unsigned Argument : Arguments)
+      if (Argument < Call.getNumArgs())
+        if (const MemRegion *Region = Call.getArgSVal(Argument).getAsRegion())
+          State = State->add<KnownStringRegion>(Region);
     for (unsigned Argument : Arguments) {
-      if (Argument >= Call.getNumArgs() ||
-          sentinelProven(Call.getArgSVal(Argument), C.getState()))
-        continue;
-      const Stmt *Statement = Call.getOriginExpr();
-      if (!Statement)
-        return;
-      ExplodedNode *Node = C.generateNonFatalErrorNode();
-      if (!Node)
-        return;
-      if (!BT)
-        BT = std::make_unique<BugType>(this, "Unproven string sentinel",
-                                       categories::MemoryError);
-      const SourceManager &SM = C.getSourceManager();
-      std::string Message =
-          (StringRef("string argument is not proven NUL-terminated; origin '") +
-           SM.getFilename(SM.getExpansionLoc(Statement->getBeginLoc())) +
-           "'; context '" + MemoryContractChecker::context(C) +
-           "'; expression '" + MemoryContractChecker::text(Statement, C) +
-           "'; site '" + MemoryContractChecker::site(Statement, C) + "'")
-              .str();
-      auto Report =
-          std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
-      Report->addRange(Statement->getSourceRange());
-      C.emitReport(std::move(Report));
-      return;
+      if (Argument < Call.getNumArgs() &&
+          !sentinelProven(Call.getArgSVal(Argument), C.getState()) &&
+          !Reported) {
+        const Stmt *Statement = Call.getOriginExpr();
+        if (!Statement)
+          return;
+        ExplodedNode *Node = C.generateNonFatalErrorNode(State);
+        if (!Node)
+          return;
+        if (!BT)
+          BT = std::make_unique<BugType>(this, "Unproven string sentinel",
+                                         categories::MemoryError);
+        const SourceManager &SM = C.getSourceManager();
+        std::string Message =
+            (StringRef("string argument is not proven NUL-terminated; origin '") +
+             SM.getFilename(SM.getExpansionLoc(Statement->getBeginLoc())) +
+             "'; context '" + MemoryContractChecker::context(C) +
+             "'; expression '" + MemoryContractChecker::text(Statement, C) +
+             "'; site '" + MemoryContractChecker::site(Statement, C) + "'")
+                .str();
+        auto Report =
+            std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
+        Report->addRange(Statement->getSourceRange());
+        C.emitReport(std::move(Report));
+        Reported = true;
+      }
     }
+    if (!Arguments.empty() && State != C.getState())
+      C.addTransition(State);
   }
 
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {

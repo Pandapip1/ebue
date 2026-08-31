@@ -1268,7 +1268,8 @@ stage_memcontracts() {
 	for fixture in tools/lint-memory-contract-fixtures/*.c; do
 		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
 			-Xclang -analyzer-checker=ntlibc.MemoryContract,ntlibc.StringSentinel \
-			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
+			-Xclang -analyzer-output=text \
+			-DNTLIBC_MEMORY_CONTRACT_ANALYSIS "$fixture" -o /dev/null \
 			>> "$fixture_log" 2>&1 || any=1
 	done
 	tools/lint-memory-contracts.py --fixtures "$fixture_log" || any=1
@@ -1287,7 +1288,8 @@ stage_memcontracts() {
 			# shellcheck disable=SC2086
 			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
 				-Xclang -analyzer-checker=ntlibc.MemoryContract,ntlibc.StringSentinel \
-				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
+				-Xclang -analyzer-output=text \
+				-DNTLIBC_MEMORY_CONTRACT_ANALYSIS "$@" "$f" -o /dev/null \
 				> "'"$pardir"'/$id.log" 2>&1
 		' _ {} clang-18 "$plugin" "$target" $flags
 		runrc=$?; nlog=$(find "$pardir" -name '*.log' | grep -c . || true)

@@ -47,7 +47,9 @@ int ffsll (long long) __attribute__((__pure__));
  * tolower(*r);` after it dereferences both regardless of how the loop
  * ended -- there is no early-return path in this function that skips
  * it, unlike strncasecmp's n == 0 case below. */
-int strcasecmp (const char *, const char *) __attribute__((nonnull(1, 2), __pure__));
+int strcasecmp (const char * __NTLIBC_STRING,
+                const char * __NTLIBC_STRING)
+    __attribute__((nonnull(1, 2), __pure__));
 /* strncasecmp's `if (!n) return 0;` is a real, structural escape (n ==
  * 0 skips both pointers entirely, the same mem*-style convention);
  * once n >= 1, the same unconditional post-loop `return tolower(*l) -
