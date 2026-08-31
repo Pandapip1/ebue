@@ -178,6 +178,16 @@ void *dlopen(const char *file, int mode)
 	return ntlibc_rpath_load(file);
 }
 
+/* entry->DllBase below is a disclosed, deliberately unmarked residual:
+ * entry is not a parameter of this function at all -- it is
+ * CONTAINING_RECORD-computed from `link`, a pointer-arithmetic offset
+ * off a live circular list walk -- the same "struct/local-derived
+ * pointer, not a parameter" class crt/delayload2.c's own
+ * find_mapped_module() comment already established for the identical
+ * PEB_LDR_DATA walk shape (InMemoryOrderModuleList there,
+ * InLoadOrderModuleList here). Verified sound by hand regardless, for
+ * the same reason: PEB_LDR_DATA's own lists are genuinely circular
+ * and always populated for any live NT process. */
 void *dlsym(void *__restrict handle, const char *__restrict name)
 {
 	if (handle == MAIN_IMAGE_HANDLE && __peb->Ldr) {

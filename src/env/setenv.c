@@ -18,6 +18,12 @@ static size_t nputenv;
  * __env_find's return, which is only ever a slot this file's own
  * name_eq-driven search already found truthy (`*e`, i.e. non-null). */
 static int is_putenv(char *s) __attribute__((nonnull(1)));
+/* putenv_strings[i] is a disclosed, deliberately unmarked residual:
+ * putenv_strings is a file-static global, not a parameter of this
+ * function at all (is_putenv() takes only s, already required above)
+ * -- the same "global-array residual, not expressible via nonnull"
+ * class d24fe86's own commit already established for this exact
+ * array (and src/thread/{children,fork,wait}.c's __children[i]). */
 static int is_putenv(char *s)
 {
 	size_t i;

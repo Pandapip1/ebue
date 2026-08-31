@@ -145,7 +145,21 @@ static int leading(const char *start, const char *s, int flags)
  * already-empty pattern, the final `return *s ? ... : 0;`. start is
  * left unmarked, the same "only ever compared, never dereferenced"
  * reasoning as leading() above (it is forwarded into leading() itself,
- * which only compares it too). */
+ * which only compares it too).
+ *
+ * A residual remains on `while (*pat)` past nonnull(1) regardless: the
+ * '[' branch's own `pat = probe;` (after `bracket_match(&probe, c)`
+ * succeeds) reassigns pat from an out-parameter write this checker
+ * cannot describe as nonnull on ANY signature -- `nonnull` only ever
+ * asserts that an argument passed IN is required, never that a value
+ * written back OUT through it is itself nonnull, so pat's own entry-
+ * established nonnull fact is lost on any loop iteration reached via
+ * that path. Verified sound by hand regardless: bracket_match()'s own
+ * `*pp = p;` (this file's own body) only ever assigns p, a value
+ * derived from `*pp + 1` by forward-only pointer arithmetic with no
+ * reset to NULL anywhere in its body -- probe can only ever advance
+ * within the same NUL-terminated pattern string pat itself already
+ * required nonnull. */
 static int fnm_match(const char *pat, const char *s, const char *start, int flags)
     __attribute__((nonnull(1, 2)));
 static int fnm_match(const char *pat, const char *s, const char *start, int flags)

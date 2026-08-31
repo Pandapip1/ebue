@@ -81,7 +81,21 @@ void _start(void *arg0, void *arg1);
 /* Looked up by this exact name and called by the linker-generated
  * per-DLL tail-merge stub a -Wl,--delay-all build emits (tinycc's
  * pe_emit_delay_tailmerge(), tccpe.c) -- never by name from any C
- * source file, the same as _start/__libc_start_main above. */
-void *__delayLoadHelper2(void *descr, void **piat);
+ * source file, the same as _start/__libc_start_main above. descr is
+ * required: crt/delayload2.c's own body dereferences it unconditionally
+ * (`descr->ModuleHandleRVA` etc, right after the aliasing cast with no
+ * intervening computation) with no NULL check of its own -- the file's
+ * own comment on that guard already says as much ("not a real runtime
+ * possibility"). Its one real caller is not anything in this tree but
+ * the linker-generated stub itself, which always passes the address of
+ * a real, statically-emitted IMAGE_DELAYLOAD_DESCRIPTOR (PE/COFF spec
+ * 4.3) -- the same "external, non-in-tree caller with a documented
+ * platform contract" class as src/signal/signal.c's own
+ * exception_handler(). piat is left unmarked: its own dereference
+ * (`*piat >= rstart`) is reached only inside a short-circuited `&&`
+ * chain gated on `dll` and a successful ntlibc_pe_dll_range() call, a
+ * genuinely conditional path, not an unconditional one. */
+void *__delayLoadHelper2(void *descr, void **piat)
+    __attribute__((nonnull(1)));
 
 #endif

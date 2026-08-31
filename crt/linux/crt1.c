@@ -156,6 +156,16 @@ struct auxv_entry {
  * below is aarch64-only pending that port, matching this whole
  * platform pilot's own declared scope elsewhere in the tree.
  */
+/* auxv is required: the `for (; auxv[0] != AT_NULL; ...)` loop
+ * condition itself dereferences auxv[0] unconditionally, on the very
+ * first iteration check, with no NULL check anywhere in this
+ * function. Its one real caller, __linux_start_main() below, always
+ * passes a pointer walked forward from its own now-required sp (see
+ * that function's own comment) by advancing past envp's own NULL
+ * terminator -- still real, kernel-mapped stack memory, per the same
+ * System V ABI contract, never NULL. */
+static void linux_setup_tls(long *auxv)
+    __attribute__((nonnull(1)));
 static void linux_setup_tls(long *auxv)
 {
 	unsigned long phdr = 0, phent = 0, phnum = 0;
@@ -172,6 +182,21 @@ static void linux_setup_tls(long *auxv)
 	}
 	if (!phdr || !phent || !phnum) return; /* no auxv -- nothing to set up */
 
+	/* ph->p_type below is a disclosed, deliberately unmarked residual,
+	 * surfaced only after auxv's own nonnull mark let this checker
+	 * explore further into this function than before (the "deeper
+	 * exploration unlocked" effect prior sweeps in this tree already
+	 * measured, not a regression): ph is `(struct elf64_phdr *)(phdr +
+	 * i * phent)`, a local computed from phdr -- itself not a
+	 * parameter, but a VALUE read out of the kernel-supplied auxiliary
+	 * vector's own AT_PHDR entry a few lines above, guarded by `if
+	 * (!phdr || ...) return;` before this loop is ever reached.
+	 * `nonnull` has no parameter to describe either fact on. Verified
+	 * sound by hand regardless: the Linux kernel's own ELF auxiliary
+	 * vector contract guarantees AT_PHDR points to the running image's
+	 * real, mapped program headers table whenever it is present at
+	 * all -- the same "external, non-in-tree, documented platform
+	 * contract" class as auxv/sp themselves. */
 	for (i = 0; i < phnum; i++) {
 		struct elf64_phdr *ph = (struct elf64_phdr *)(phdr + i * phent);
 		if (ph->p_type == PT_TLS) { tls = ph; break; }
@@ -207,6 +232,17 @@ static void linux_setup_tls(long *auxv)
 	}
 }
 
+/* sp is required: `long argc = sp[0];` below is this function's very
+ * first statement, dereferencing sp unconditionally with no guard.
+ * Its one real caller is not anything in this tree but the kernel
+ * itself: crt/linux/aarch64/start.S's own _start does `mov x0, sp` and
+ * `bl __linux_start_main`, so sp is always the live initial stack
+ * pointer the kernel set up for this process per the System V ABI's
+ * own process-startup contract -- an external, non-in-tree caller with
+ * a documented platform contract, the same class as this file's own
+ * NT-side sibling crt/crt1.c's exception_handler() precedent. */
+_Noreturn void __linux_start_main(long *sp)
+    __attribute__((nonnull(1)));
 _Noreturn void __linux_start_main(long *sp)
 {
 	long argc = sp[0];
@@ -239,6 +275,16 @@ _Noreturn void __linux_start_main(long *sp)
 		__plat_terminate(111);
 	}
 
+	/* *auxv below is a disclosed, deliberately unmarked residual,
+	 * surfaced only after sp's own nonnull mark let this checker
+	 * explore further into this function than before: auxv is a local
+	 * (`(long *)envp`, itself `argv + argc + 1`, itself `(char **)(sp
+	 * + 1)`), not sp itself, so nonnull has no parameter left to
+	 * describe this on. Verified sound by hand regardless, by the same
+	 * System V ABI contract sp's own comment above already establishes
+	 * (see __linux_start_main's own comment below): this whole chain
+	 * of pointer arithmetic stays within the same kernel-provided
+	 * initial stack block sp already points into. */
 	while (*auxv) auxv++;
 	auxv++; /* skip envp's own NULL terminator -- auxv starts right after */
 

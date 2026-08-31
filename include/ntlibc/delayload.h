@@ -159,8 +159,19 @@ typedef struct ntlibc_delay_descr {
  * address and returns it. Never returns NULL: a failure at either step
  * is fatal, reported through ntlibc_rpath_fail(). Called by
  * NTLIBC_DELAY_STUB; exposed directly only for a caller that wants to
- * drive the mechanism without going through the stub macros. */
-void *ntlibc_delayLoadHelper2(ntlibc_delay_descr_t *descr, ntlibc_delay_thunk_t *piat);
+ * drive the mechanism without going through the stub macros.
+ *
+ * Both required: descr->iat/descr->modhandle/descr->dllname/
+ * descr->nametable and piat->function are all dereferenced
+ * unconditionally in src/internal/delayload.c's own body, with no
+ * NULL check of descr or piat themselves anywhere in it. Every real
+ * call site is NTLIBC_DELAY_STUB's own macro expansion (this header,
+ * below), which always passes `&ntlibc_delay_descr_##dllvar` (a
+ * file-static struct's address) and `&ntlibc_delay_iat_##dllvar[index]`
+ * (a file-static array element's address) -- neither can ever be NULL,
+ * and no other call site exists anywhere in this tree. */
+void *ntlibc_delayLoadHelper2(ntlibc_delay_descr_t *descr, ntlibc_delay_thunk_t *piat)
+    __attribute__((nonnull(1, 2)));
 
 /* NTLIBC_DELAY_NAME(s) -- one INT entry naming import `s`; use inside
  * NTLIBC_DELAY_DLL's trailing argument list, one per import, in the same

@@ -152,6 +152,26 @@ typedef struct _IMAGE_DELAYLOAD_DESCRIPTOR {
  * C string against a UTF-16 buffer of known length `wn`, with no
  * conversion or allocation of any kind: deliberately, since this runs
  * inside the delay-load resolution path itself (see below). */
+/* ascii is required: the post-loop `return ascii[wn] == 0;` reads
+ * ascii[wn] unconditionally on every path, including wn == 0 (the
+ * loop body itself never runs then, but the final statement always
+ * does). This function's one real caller, find_mapped_module()
+ * below, always forwards its own now-required dllname (see that
+ * function's own comment).
+ *
+ * w is required too, despite w[i] only ever being read inside the
+ * loop, guarded by `i < wn`: this function's one real call site
+ * always passes `e->BaseDllName.Buffer, e->BaseDllName.Length /
+ * sizeof(WCHAR)` for (w, wn) -- BaseDllName is LDR_DATA_TABLE_ENTRY's
+ * own UNICODE_STRING (populated by the NT loader for every loaded
+ * module at LdrpAllocateDataTableEntry time), and a valid
+ * UNICODE_STRING's own invariant (NT itself, not this tree) is that
+ * Buffer is never NULL for a populated entry -- the same "genuine
+ * invariant established by the real caller, not derivable from a
+ * bound check alone" reasoning crt/crt1.c's own split_cmdline
+ * already relies on for its own p. */
+static int name_eq_ci(const char *ascii, const WCHAR *w, size_t wn)
+    __attribute__((nonnull(1, 2)));
 static int name_eq_ci(const char *ascii, const WCHAR *w, size_t wn)
 {
 	size_t i;
@@ -185,6 +205,18 @@ static int name_eq_ci(const char *ascii, const WCHAR *w, size_t wn)
  * the thread's stack is exhausted. Comparing without allocating
  * breaks that cycle: resolving ntdll's own exports (this function's
  * entire job) never itself needs anything resolved. */
+/* e->BaseDllName below is a disclosed, deliberately unmarked residual:
+ * e is not a parameter of this function at all (it is CONTAINING_
+ * RECORD-computed from `cur`, a pointer-arithmetic offset off a live
+ * circular list walk), so there is no signature for `nonnull` to
+ * describe this on -- the same "struct/local-derived-pointer, not a
+ * parameter" class this tree's own d24fe86 commit already established
+ * for wait.c's discover_self_stops() and friends. Verified sound by
+ * hand regardless: PEB_LDR_DATA's own InMemoryOrderModuleList is a
+ * genuinely circular, always-populated list for any live NT process
+ * (ntdll.dll and the executable's own module are always entries), an
+ * OS loader invariant, not something any guard in this function's own
+ * body could add. */
 static void *find_mapped_module(const char *dllname)
 {
 	PLIST_ENTRY head, cur;
@@ -235,7 +267,22 @@ void *__delayLoadHelper2(void *vdescr, void **piat)
 	index = (unsigned long)(piat - iat);
 	/* Each name-table entry is an RVA to a 2-byte "hint" (unused, always
 	 * 0 here -- tccpe.c never fills it in) followed by the NUL-terminated
-	 * import name; skip the hint the same way the real loader does. */
+	 * import name; skip the hint the same way the real loader does.
+	 *
+	 * nametable[index] below is a disclosed, deliberately unmarked
+	 * residual, surfaced only after vdescr's own nonnull mark let this
+	 * checker explore further into this function than before (the same
+	 * "deeper exploration unlocked" effect prior sweeps in this tree
+	 * already measured, not a regression): nametable is `base +
+	 * descr->ImportNameTableRVA`, a local computed by pointer
+	 * arithmetic, not a parameter of this function -- the same
+	 * "struct/local-derived pointer, not a parameter" class this
+	 * file's own find_mapped_module() comment already established.
+	 * Verified sound by hand regardless: base is always __peb-derived
+	 * and descr is now required (see above), and a real,
+	 * linker-emitted IMAGE_DELAYLOAD_DESCRIPTOR's own
+	 * ImportNameTableRVA always lands inside the same mapped image
+	 * (PE/COFF spec 4.3), never NULL. */
 	name = (const char *)(base + nametable[index]) + sizeof(USHORT);
 
 	dll = *modhandle;

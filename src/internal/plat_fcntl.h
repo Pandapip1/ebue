@@ -56,9 +56,31 @@
  *
  * On success, *out and *typeout are filled (*typeout is __FD_DIR when the
  * result is a directory, 0 otherwise) and 0 is returned.  On failure,
- * -1/errno. */
+ * -1/errno.
+ *
+ * out/typeout/vfsout/vfsnativeout are all required. Both real
+ * backends (src/fcntl/{nt,linux}/plat_fcntl.c) dereference typeout
+ * and out unconditionally along every real success-return path (NT:
+ * lines like `*typeout = __FD_DIR; ...; return 0;`; Linux: the
+ * statx-derived `*typeout = ...` switch and `*out = ...` before its
+ * own `return 0;`), with no NULL check of either pointer anywhere.
+ * vfsout/vfsnativeout are dereferenced unconditionally by the NT
+ * backend along its own VFS-overlay branches, and left entirely
+ * untouched -- not dereferenced at all -- by the Linux backend (see
+ * that file's own `(void)vfsout; (void)vfsnativeout;`, since no VFS
+ * overlay exists there); either way, no backend ever requires them to
+ * be NULL. This function's one real call site, src/fcntl/open.c's own
+ * __open_handle(), forwards exactly these four pointers unmodified
+ * (`return __plat_open(dirfd, path, flags, mode, out, typeout, vfsout,
+ * vfsnativeout);`), and __open_handle() itself already requires all
+ * four of its own (see that function's own comment) -- so nothing
+ * NULL can ever reach here. path is deliberately left unmarked: it is
+ * the one argument __open_handle() explicitly, defensively checks
+ * before ever reaching this call (`if (!path) { errno = EFAULT;
+ * return -1; }`), a real, load-bearing guard, not decoration. */
 int __plat_open(int dirfd, const char *path, int flags, unsigned mode,
-                 __plat_handle_t *out, int *typeout, int *vfsout, int *vfsnativeout);
+                 __plat_handle_t *out, int *typeout, int *vfsout, int *vfsnativeout)
+    __attribute__((nonnull(5, 6, 7, 8)));
 
 /* fcntl(F_GETLK): does a lock of the given range/exclusivity conflict
  * with anything already held?  NT has no separate "would this
@@ -68,8 +90,18 @@ int __plat_open(int dirfd, const char *path, int flags, unsigned mode,
  * F_UNLCK); 0 with *conflicting=1 means NT refused with a lock-
  * conflict status (the caller reports l_pid=-1: NT does not expose an
  * owning process for a byte-range lock); -1/errno is a genuine
- * failure, neither of the above. */
-int __plat_lock_probe(__plat_handle_t h, long long off, long long len, int exclusive, int *conflicting);
+ * failure, neither of the above.
+ *
+ * conflicting is required: both backends (src/fcntl/{nt,linux}/
+ * plat_fcntl.c) write through it unconditionally on every success
+ * path (NT: `*conflicting = 0;` as the very first statement, then
+ * possibly `*conflicting = 1;` further down; Linux: `*conflicting =
+ * fl.l_type != F_UNLCK_LX;` right after the syscall succeeds), with
+ * no NULL check of the pointer itself. Its one real call site,
+ * src/fcntl/fcntl.c's own F_GETLK handling inside fcntl() itself,
+ * always passes `&conflicting`, a real local's address, never NULL. */
+int __plat_lock_probe(__plat_handle_t h, long long off, long long len, int exclusive, int *conflicting)
+    __attribute__((nonnull(5)));
 
 /* fcntl(F_SETLK/F_SETLKW): places a byte-range lock over [off,off+len).
  * `wait` nonzero selects F_SETLKW's blocking behaviour. 0/-1(errno). */
@@ -91,8 +123,18 @@ long long __plat_volume_max_file_size(__plat_handle_t h);
  * for `h` (FileStandardInformation), which the front door compares
  * against the requested extent to decide what (if anything) needs
  * growing -- see fadvise.c's own comment on why the two are checked
- * separately rather than just against the request. 0/-1(errno). */
-int __plat_file_extent(__plat_handle_t h, long long *alloc_size, long long *eof);
+ * separately rather than just against the request. 0/-1(errno).
+ *
+ * alloc_size/eof are both required: both backends (src/fcntl/{nt,
+ * linux}/plat_fcntl.c) write through both unconditionally, back to
+ * back, right after their own success check (NT: `*alloc_size =
+ * si.AllocationSize; *eof = si.EndOfFile;`; Linux: `*alloc_size =
+ * ... stx_blocks ...; *eof = ... stx_size;`), with no NULL check of
+ * either pointer. Its one real call site, src/fcntl/fadvise.c's
+ * posix_fallocate(), always passes `&alloc_size, &eof`, two real
+ * locals' addresses, never NULL. */
+int __plat_file_extent(__plat_handle_t h, long long *alloc_size, long long *eof)
+    __attribute__((nonnull(2, 3)));
 
 /* posix_fallocate()'s two-step storage reservation for an extent ending
  * at `want`: first the allocation size (only when `grow_alloc` is

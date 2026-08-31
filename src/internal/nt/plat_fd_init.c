@@ -149,6 +149,15 @@ static void install_std(int fd, HANDLE h)
 	__fd_install_at(fd, h, fd == 0 ? O_RDONLY : O_WRONLY, 0);
 }
 
+/* pp's own dereferences below (pp->StandardInput and friends) are a
+ * disclosed, deliberately unmarked residual, the same class crt/
+ * crt1.c's own __libc_start_main() comment already established: pp is
+ * a plain local, __peb->ProcessParameters -- a struct FIELD's own
+ * value, distinct from __peb itself -- and __fd_init() takes no
+ * parameters at all, so there is no signature for `nonnull` to
+ * describe this on. See crt1.c's own comment for why this is verified
+ * sound by hand regardless (RTL_USER_PROCESS_PARAMETERS is populated
+ * by the NT loader before any user-mode instruction runs). */
 void __fd_init(void)
 {
 	PRTL_USER_PROCESS_PARAMETERS pp = __peb->ProcessParameters;

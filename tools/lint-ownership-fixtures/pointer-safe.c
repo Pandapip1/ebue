@@ -230,3 +230,27 @@ char **element_width_is_peeled(char **environ, size_t n, char *s)
 	ne[n + 1] = 0;
 	return ne;
 }
+
+/* GCC/Clang's `returns_nonnull` attribute is the return-value
+ * counterpart of `nonnull` on a parameter -- the standard way a
+ * function states "this never returns NULL" as part of its own real
+ * contract. Trusting it here (OwnershipChecker::isAlwaysNonNull, the
+ * same mechanism __errno_location/__teb/localeconv already use by
+ * name) means a call result dereferenced with no in-function guard is
+ * no longer unconditionally flagged once its own header truthfully
+ * states the contract -- src/string/strchr.c's real
+ * `char *r = strchrnul(s, c); return *(unsigned char *)r == ...;` is
+ * the motivating case (strchrnul is marked returns_nonnull for
+ * exactly this reason). */
+char *always_nonnull_helper(const char *s, int c) __attribute__((returns_nonnull));
+char *always_nonnull_helper(const char *s, int c)
+{
+	(void)c;
+	return (char *)s;
+}
+
+char *returns_nonnull_attribute_is_trusted(const char *s, int c)
+{
+	char *r = always_nonnull_helper(s, c);
+	return *r ? r : 0;
+}

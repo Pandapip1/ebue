@@ -72,7 +72,20 @@ int            dirfd(DIR *) __attribute__((nonnull(1)));
  * list;` is unconditional on the success path with no check -- while
  * path/filter/compar are left unmarked: path is only forwarded to
  * opendir() without being dereferenced here, and filter/compar are
- * explicitly optional (`if (filter...)`/`if (compar)` guard each use). */
+ * explicitly optional (`if (filter...)`/`if (compar)` guard each use).
+ *
+ * A residual remains past nonnull(1, 2) on both: `(*a)->d_name` and
+ * `(*b)->d_name` are about the VALUE *a/*b point to (a struct dirent*
+ * one level further in), not about a/b themselves -- a fact `nonnull`
+ * cannot describe on any signature, since it only ever asserts that
+ * the parameter's own pointer value is non-NULL, not what a double
+ * pointer points to. Verified sound by hand regardless: qsort_r's own
+ * contract never invokes a comparator outside the array it was given,
+ * and scandir()'s own `list` is built entirely from `__malloc()`
+ * results checked for failure (`copy = __malloc(...); if (!copy) goto
+ * fail;`) before ever being stored into it, so every element qsort_r
+ * could ever hand alphasort/versionsort is already a genuinely
+ * non-NULL struct dirent* by construction. */
 int alphasort(const struct dirent **, const struct dirent **)
     __attribute__((nonnull(1, 2)));
 int scandir(const char *, struct dirent ***, int (*)(const struct dirent *), int (*)(const struct dirent **, const struct dirent **))

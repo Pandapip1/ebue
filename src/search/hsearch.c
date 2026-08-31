@@ -86,6 +86,18 @@ void hdestroy(void)
 	table_size = 0;
 }
 
+/* table[i] below is a disclosed, deliberately unmarked residual, not
+ * an oversight: table is a file-static global, not a parameter of
+ * this function at all (hsearch() takes item by value and action, no
+ * pointer parameter table could describe) -- the same "global-array
+ * residual, not expressible via nonnull" class d24fe86's own commit
+ * already established for src/env/setenv.c's putenv_strings[i] and
+ * src/thread/{children,fork,wait}.c's __children[i]. `if (!table)
+ * return NULL;` right above IS the real guard; the intervening
+ * hash_str() call between it and this loop's own table[i] access is
+ * enough for a conservative interprocedural analysis to no longer
+ * trust that a global's value survived an opaque call, which is a
+ * different, structural limitation from an actual missing check. */
 ENTRY *hsearch(ENTRY item, ACTION action)
 {
 	unsigned long h;

@@ -23,7 +23,20 @@
 
 /* Shared by ntlibc_pe_find_export() and ntlibc_pe_dll_range(): validates
  * the DOS/NT headers and returns a pointer to IMAGE_NT_HEADERS, or NULL
- * if `base` is not a valid PE image. */
+ * if `base` is not a valid PE image.
+ *
+ * nt->Signature below is a disclosed, deliberately unmarked residual:
+ * nt is `b + dos->e_lfanew`, a local computed by pointer arithmetic,
+ * not a parameter of this function -- b itself is already guarded
+ * (`if (!b) return 0;`) and there is no signature for `nonnull` to
+ * describe a further-derived local on, the same "struct/local-derived
+ * pointer, not a parameter" class this tree's own crt/delayload2.c
+ * find_mapped_module() comment already established. Verified sound by
+ * hand regardless: b is always a real, already-mapped PE image's base
+ * address here (this file's own two real callers pass __peb-derived
+ * or loader-walked module bases, never an arbitrary offset), and
+ * dos->e_lfanew for any genuine PE image is a small, sane header
+ * offset -- nt lands well inside the same mapped image, never NULL. */
 static IMAGE_NT_HEADERS *pe_nt_headers(unsigned char *b)
 {
 	IMAGE_DOS_HEADER *dos;

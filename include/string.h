@@ -99,8 +99,10 @@ size_t strxfrm (char *__restrict, const char *__restrict, size_t);
 
 /* src/string/strchr.c forwards to strchrnul(s, c) unconditionally and
  * dereferences its result; s is required (see strchrnul below), c is
- * an int value, not a pointer. Reads only, matching glibc's real
- * strchr __attribute__((pure)). */
+ * an int value, not a pointer. The result itself is proven nonnull
+ * too, via strchrnul's own `returns_nonnull` (see its comment below),
+ * not anything expressible on strchr's own signature. Reads only,
+ * matching glibc's real strchr __attribute__((pure)). */
 char *strchr (const char *, int) __attribute__((nonnull(1), __pure__));
 /* strrchr (src/string/strrchr.c) forwards into memrchr(s, c,
  * strlen(s)+1) -- reads only, same __pure__ reasoning. */
@@ -223,8 +225,17 @@ void explicit_bzero (void *, size_t) __attribute__((nonnull(1)));
 int strverscmp (const char *, const char *) __attribute__((nonnull(1, 2), __pure__));
 /* strchrnul dereferences s unconditionally: `if (!c) return s +
  * strlen(s);` calls strlen(s) when c == 0, and the loop below
- * dereferences *s at least once otherwise. Reads only. */
-char *strchrnul(const char *, int) __attribute__((nonnull(1), __pure__));
+ * dereferences *s at least once otherwise. Reads only. Also
+ * genuinely returns_nonnull: every one of its own two return
+ * statements (`(char *)s + strlen(s)` and the loop's own `(char
+ * *)s`) is s itself plus pointer arithmetic that only ever advances
+ * forward within the same NUL-terminated string -- never NULL as
+ * long as s is (already required above). src/string/strchr.c's own
+ * `char *r = strchrnul(s, c); ... *(unsigned char *)r ...` is what
+ * this unblocks: OwnershipChecker.cpp's own isAlwaysNonNull now
+ * honors `returns_nonnull` the same way checkBeginFunction already
+ * honors `nonnull` on parameters. */
+char *strchrnul(const char *, int) __attribute__((nonnull(1), __pure__, returns_nonnull));
 /* strcasestr: h is dereferenced in its own loop condition (`for (;
  * *h; h++)`, evaluated at least once); n is dereferenced first via
  * `strlen(n)`, unconditionally, before h is ever touched. Reads only

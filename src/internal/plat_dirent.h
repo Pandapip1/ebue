@@ -70,11 +70,23 @@ struct __dirent_raw {
 /* pos is required: both backends' own bodies (src/dirent/linux/
  * plat_dirent.c, src/dirent/nt/plat_dirent.c) dereference it
  * unconditionally, first statement (`if (*pos >= buflen) return 0;`).
- * buf/out are only actually touched once that check passes -- a real,
- * content-driven escape (buflen, not either pointer's own nullness),
- * so they are left for a future, separately-verified pass rather than
- * guessed at here. */
+ *
+ * buf and out are now verified required too (the earlier, separate
+ * pass this comment used to defer them to): once the `*pos >= buflen`
+ * check passes, both backends unconditionally `memset(out, 0, sizeof
+ * *out)` and then dereference a record pointer computed from `buf +
+ * *pos` (`d->d_ino`/`fi->FileId`), with no further guard of either
+ * pointer's own nullness. Both real call sites, in both callers, pass
+ * an always-valid pointer: src/dirent/readdir.c's __dirstream_next()
+ * passes dp->buf (checked once, for real, at allocation time --
+ * src/dirent/opendir.c's alloc_dir(): `dp->buf = __malloc(...); if
+ * (!dp->buf) { ...; return 0; }` -- so any DIR handle that ever
+ * reaches a public call is one whose buf survived that check) and its
+ * own out parameter (itself already required, nonnull(2) above);
+ * src/dirent/getdents.c passes a fixed-size on-stack array (`unsigned
+ * char buf[8192]`, whose address can never be NULL) and `&r`, a local
+ * struct's address. */
 int __plat_dir_decode_one(const void *buf, size_t buflen, size_t *pos, struct __dirent_raw *out)
-    __attribute__((nonnull(3)));
+    __attribute__((nonnull(1, 3, 4)));
 
 #endif

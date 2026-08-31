@@ -145,6 +145,19 @@ static int reject_if_not_dir(struct __ntpath *out)
  * that is not of that shape -- "\??\NUL", a UNC name ("\??\UNC\server\
  * share\..."), whose leading components are not files at all -- has no
  * prefix this can say anything about, and is reported as having none. */
+/* b[0] below is a disclosed, deliberately unmarked residual: b is
+ * `nt->Buffer`, a struct FIELD's own value, distinct from nt itself
+ * (already required on this function's one real caller,
+ * __nt_prefix_not_dir(), see src/internal/libc.h's own comment) --
+ * `nonnull` can only describe nt_prefix_root's own nt parameter, not
+ * a field reached through it, the same class of gap this tree's own
+ * crt/crt1.c __libc_start_main() comment already established for
+ * __peb->ProcessParameters. Verified sound by hand regardless: every
+ * access here is short-circuit-guarded by `n < 7` first (a valid
+ * UNICODE_STRING's own invariant -- NT itself, not this tree -- being
+ * that Buffer is non-NULL whenever Length > 0), the same "real
+ * invariant established by the type itself, not derivable from a
+ * bound check alone" reasoning as crt/crt1.c's own split_cmdline. */
 static size_t nt_prefix_root(const UNICODE_STRING *nt)
 {
 	const WCHAR *b = nt->Buffer;
@@ -219,6 +232,18 @@ int __nt_prefix_not_dir(const UNICODE_STRING *nt, HANDLE root)
 	InitializeObjectAttributes(&oa, &cut, OBJ_CASE_INSENSITIVE, root, 0);
 	while (i > floor) {
 		NTSTATUS st;
+		/* nt->Buffer[--i] is a disclosed, deliberately unmarked
+		 * residual: nt->Buffer is a struct FIELD's own value,
+		 * distinct from nt itself (already required above), and
+		 * `nonnull` cannot describe a field reached through a
+		 * parameter, only the parameter itself -- the same class
+		 * nt_prefix_root()'s own b[0] comment (above) already
+		 * established for the identical field on the identical
+		 * type. Verified sound by hand the same way: this loop only
+		 * ever reaches this line when i > floor >= 0, i.e. i started
+		 * >= 1, i.e. nt->Length >= sizeof(WCHAR) -- a valid
+		 * UNICODE_STRING's own invariant (NT itself) is that Buffer
+		 * is non-NULL whenever Length > 0. */
 		if (nt->Buffer[--i] != '\\') continue;
 		/* `i` starts at nt->Length / sizeof(WCHAR) and only decreases. */
 		cut.Length = (USHORT)(i * sizeof(WCHAR));

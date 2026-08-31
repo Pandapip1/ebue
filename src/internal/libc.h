@@ -141,16 +141,39 @@ void __ntpath_free(struct __ntpath *);
  * RootDirectory the path is relative to, or 0.  Returns 1 for the
  * ENOTDIR case, 0 otherwise, and leaves errno alone.  __ntpath() and
  * __ntpath_at() apply it themselves; chdir(), which builds its own NT
- * path, calls it directly. */
-int __nt_prefix_not_dir(const UNICODE_STRING *nt, HANDLE root);
+ * path, calls it directly.
+ *
+ * nt is required: src/internal/nt/path.c's own body dereferences it
+ * unconditionally, starting with its very first statement
+ * (`UNICODE_STRING cut = *nt;`), with no NULL check anywhere. Both
+ * real call sites -- that same file's reject_if_prefix_not_dir()
+ * (`&out->nt`, a struct field's address) and src/unistd/nt/
+ * plat_unistd.c's own call (`&nt`, a local's address) -- always pass
+ * the address of a real object, never NULL. */
+int __nt_prefix_not_dir(const UNICODE_STRING *nt, HANDLE root)
+    __attribute__((nonnull(1)));
 /* The DOS-form absolute path of a handle, UTF-8, malloc'd. */
 char *__handle_path(HANDLE);
 
 /* The guts of open()/openat(): resolve and open, handing back the raw
  * handle and its __FD_* classification without installing a descriptor.
- * Returns 0, or -1 with errno. */
+ * Returns 0, or -1 with errno.
+ *
+ * out/typeout/vfsout/vfsnativeout are all required: src/fcntl/open.c's
+ * own body writes through vfsout/vfsnativeout unconditionally as its
+ * very first two statements (`*vfsout = __VFS_NONE; *vfsnativeout =
+ * 0;`), and through out/typeout unconditionally along every real
+ * success-return path (the /dev/std* special case, or forwarded into
+ * __plat_open() -- see src/internal/plat_fcntl.h's own comment on
+ * that function's identical contract), with no NULL check of any of
+ * the four anywhere. Its one real call site, that same file's own
+ * openat(), always passes `&h, &type, &vfs, &vfs_native`, four real
+ * locals' addresses, never NULL. path is deliberately left unmarked:
+ * `if (!path) { errno = EFAULT; return -1; }` is a real, load-bearing
+ * check of it, not decoration. */
 int __open_handle(int dirfd, const char *path, int flags, unsigned mode,
-                  HANDLE *out, int *typeout, int *vfsout, int *vfsnativeout);
+                  HANDLE *out, int *typeout, int *vfsout, int *vfsnativeout)
+    __attribute__((nonnull(5, 6, 7, 8)));
 /* The current umask (src/stat/chmod.c owns umask_value), as plain
  * unsigned rather than mode_t so this header does not need mode_t
  * defined -- not every includer has pulled in <sys/stat.h>/<fcntl.h>
@@ -241,7 +264,15 @@ int __fd_install(HANDLE, unsigned flags, int type);    /* alloc + fill; -1 with 
 int __fd_install_at(int fd, HANDLE, unsigned flags, int type);
 struct __fd *__fd_get(int fd);               /* NULL with errno=EBADF */
 HANDLE __fd_handle(int fd);                  /* NULL with errno=EBADF */
-int __fd_pos_save(HANDLE, long long *pos);   /* FilePositionInformation; -1 with errno */
+/* pos is required: both real bodies (src/internal/nt/fdpos.c's
+ * `*pos = pi.CurrentByteOffset;` on the NT_SUCCESS path,
+ * src/internal/linux/fdpos.c's unconditional `*pos = 0;`) write
+ * through it with no NULL check of pos itself -- only the NT side's
+ * *value* is conditional on the query succeeding, not the pointer's
+ * own nullness. Every real call site (src/unistd/read.c, write.c,
+ * src/stat/nt/plat_stat.c) always passes `&saved`, a real local's
+ * address, never NULL. */
+int __fd_pos_save(HANDLE, long long *pos) __attribute__((nonnull(2)));   /* FilePositionInformation; -1 with errno */
 void __fd_pos_restore(HANDLE, long long pos);/* put it back after positioned I/O */
 int __handle_type(HANDLE);                   /* classify by device type */
 int __fd_close_all_cloexec(void);
