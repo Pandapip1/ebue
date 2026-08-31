@@ -98,13 +98,15 @@ static int mv_one(const char *src, const char *dst)
 
 int __util_mv_main(int argc, char **argv)
 {
-	int i = 1;
-	int nsrc, had_error = 0;
+	size_t i = 1;
+	size_t nargs = argc > 0 ? (size_t)argc : 0;
+	size_t noperands;
+	int had_error = 0;
 	const char *target;
 	struct stat tst;
 	int target_is_dir;
 
-	for (; i < argc; i++) {
+	for (; i < nargs; i++) {
 		char *a = argv[i];
 		char *p;
 
@@ -124,21 +126,22 @@ int __util_mv_main(int argc, char **argv)
 		}
 	}
 
-	nsrc = argc - 1 - i;
-	if (nsrc < 1) {
-		__util_diagf("mv: missing %s\n", nsrc < 0 ? "operand" : "destination operand");
+	noperands = i < nargs ? nargs - i : 0;
+	if (noperands < 2) {
+		__util_diagf("mv: missing %s\n",
+			noperands == 0 ? "operand" : "destination operand");
 		return 2;
 	}
 
-	target = argv[argc - 1];
+	target = argv[nargs - 1];
 	target_is_dir = stat(target, &tst) == 0 && S_ISDIR(tst.st_mode);
 
-	if (nsrc > 1 && !target_is_dir) {
+	if (noperands > 2 && !target_is_dir) {
 		__util_diagf("mv: target '%s' is not a directory\n", target);
 		return 2;
 	}
 
-	for (; i < argc - 1; i++) {
+	for (; i < nargs - 1; i++) {
 		const char *src = argv[i];
 
 		if (target_is_dir) {

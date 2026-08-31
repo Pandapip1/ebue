@@ -356,13 +356,15 @@ static int cp_one(const char *src, const char *dst, int recursive, int force) //
 int __util_cp_main(int argc, char **argv)
 {
 	int recursive = 0, force = 0;
-	int i = 1;
-	int nsrc, had_error = 0;
+	size_t i = 1;
+	size_t nargs = argc > 0 ? (size_t)argc : 0;
+	size_t noperands;
+	int had_error = 0;
 	const char *target;
 	struct stat tst;
 	int target_is_dir;
 
-	for (; i < argc; i++) {
+	for (; i < nargs; i++) {
 		char *a = argv[i];
 		char *p;
 
@@ -383,16 +385,17 @@ int __util_cp_main(int argc, char **argv)
 		}
 	}
 
-	nsrc = argc - 1 - i;
-	if (nsrc < 1) {
-		__util_diagf("cp: missing %s\n", nsrc < 0 ? "operand" : "destination operand");
+	noperands = i < nargs ? nargs - i : 0;
+	if (noperands < 2) {
+		__util_diagf("cp: missing %s\n",
+			noperands == 0 ? "operand" : "destination operand");
 		return 2;
 	}
 
-	target = argv[argc - 1];
+	target = argv[nargs - 1];
 	target_is_dir = stat(target, &tst) == 0 && S_ISDIR(tst.st_mode);
 
-	if (nsrc > 1 && !target_is_dir) {
+	if (noperands > 2 && !target_is_dir) {
 		/* cp(1p) OPERANDS: "It shall be an error if ... target does
 		 * not name a directory" once more than one source_file is
 		 * given. */
@@ -400,7 +403,7 @@ int __util_cp_main(int argc, char **argv)
 		return 2;
 	}
 
-	for (; i < argc - 1; i++) {
+	for (; i < nargs - 1; i++) {
 		const char *src = argv[i];
 
 		if (target_is_dir) {

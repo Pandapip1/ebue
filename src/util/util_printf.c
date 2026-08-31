@@ -296,7 +296,11 @@ static const char *parse_spec(const char *p, struct spec *sp)
 	if (*p >= '0' && *p <= '9') {
 		int w = 0;
 		while (*p >= '0' && *p <= '9') {
-			if (w < SPEC_MAX) w = w * 10 + (*p - '0');
+			int digit = *p - '0';
+			if (w <= (SPEC_MAX - digit) / 10)
+				w = w * 10 + digit;
+			else
+				w = SPEC_MAX;
 			p++;
 		}
 		sp->width = w;
@@ -305,7 +309,11 @@ static const char *parse_spec(const char *p, struct spec *sp)
 		int pr = 0;
 		p++;
 		while (*p >= '0' && *p <= '9') {
-			if (pr < SPEC_MAX) pr = pr * 10 + (*p - '0');
+			int digit = *p - '0';
+			if (pr <= (SPEC_MAX - digit) / 10)
+				pr = pr * 10 + digit;
+			else
+				pr = SPEC_MAX;
 			p++;
 		}
 		sp->prec = pr;
@@ -343,7 +351,7 @@ static void emit_padded(const char *sign, const char *body, const struct spec *s
 }
 
 /* Sized for SPEC_MAX (parse_spec()'s clamp): a precision up to
- * SPEC_MAX-1 zero-pads the digit buffer out to that many characters, so
+ * SPEC_MAX zero-pads the digit buffer out to that many characters, so
  * the buffer has to be at least that big, not just big enough for a
  * 64-bit value's own ~20 digits. */
 #define DIGBUF_MAX (SPEC_MAX + 32)
