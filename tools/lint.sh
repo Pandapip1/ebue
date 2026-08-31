@@ -101,6 +101,14 @@
 #             close()), and only after some call or direct assignment on
 #             that path could actually have set it (no trusting leftover
 #             errno state from function entry).
+#   purity    currently opt-in while its initial proof backlog is triaged.
+#             A Clang 18 AST plugin walks every function's whole body and
+#             reachable in-TU call graph and proves __attribute__((pure))
+#             eligibility (no errno, no writes through a pointer or global,
+#             no I/O, no reads of mutable global/static state, no locking,
+#             every callee itself pure) -- and, symmetrically, disproves the
+#             claim for any function already marked pure that fails it,
+#             which is a real correctness bug rather than a style nit.
 #   undefined tools/lint-undefined.sh: a public header declaring a
 #             function nothing defines.  No tool needed.
 #   unreferenced
@@ -1714,6 +1722,61 @@ stage_reentrancy() {
 	return $any
 }
 
+stage_purity() {
+	hdr "__attribute__((pure)) eligibility and false-claim proof obligations"
+	any=0
+	require_tool clang-18 || return $missing
+	require_tool clang++-18 || return $missing
+	require_tool llvm-config-18 || return $missing
+	libdir=$(llvm-config-18 --libdir)
+	clang_cpp=$(find "$libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' -print 2>/dev/null | sort | head -n 1)
+	[ -n "$clang_cpp" ] || { report_missing "Clang 18 development libraries are required for purity proofs."; return $missing; }
+	plugin=$builddir/ntlibc-purity-checker.so
+	# shellcheck disable=SC2046
+	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
+		tools/clang/PurityChecker.cpp -o "$plugin" "$clang_cpp" \
+		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
+	fixture_log=$builddir/purity-fixtures.log
+	: > "$fixture_log"
+	for fixture in tools/lint-purity-fixtures/*.c; do
+		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
+			-Xclang -analyzer-checker=ntlibc.Purity \
+			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
+			>> "$fixture_log" 2>&1 || any=1
+	done
+	tools/lint-purity.py --fixtures "$fixture_log" || any=1
+	analyzed=0
+	for arch in $LINT_ARCHS; do
+		gen_alltypes "$arch" || { any=1; continue; }
+		flags=$(cppflags_for "$arch"); target=$(pick_target "$arch")
+		nsrc=$(sources_for "$arch" | grep -c . || true)
+		out=$builddir/$arch.purity.log
+		report=$builddir/$arch.purity.report
+		pardir=$(mktemp -d "$builddir/purity.XXXXXX") || return 1
+		# shellcheck disable=SC2086,SC2016
+		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
+			f=$1; clang=$2; plugin=$3; target=$4; shift 4
+			id=$(printf %s "$f" | tr / _)
+			# shellcheck disable=SC2086
+			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
+				-Xclang -analyzer-checker=ntlibc.Purity \
+				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
+				> "'"$pardir"'/$id.log" 2>&1
+		' _ {} clang-18 "$plugin" "$target" $flags
+		runrc=$?; nlog=$(find "$pardir" -name '*.log' | grep -c . || true)
+		: > "$out"; ls "$pardir"/*.log >/dev/null 2>&1 && cat "$pardir"/*.log > "$out"; rm -rf "$pardir"
+		if [ "$runrc" -ne 0 ] || [ "$nlog" -ne "$nsrc" ]; then any=1; show_findings "$out"; continue; fi
+		analyzed=$((analyzed + 1))
+		if tools/lint-purity.py --fixtures "$fixture_log" "$out" > "$report" 2>&1; then
+			note "purity proofs [$arch]: proved -> $report"
+		else
+			note "purity proofs [$arch]: findings -> $report"; show_findings "$report"; any=1
+		fi
+	done
+	[ "$analyzed" -gt 0 ] || return 1
+	return $any
+}
+
 stages=${*:-warn analyze cppcheck shell sizearith locks provenance reentrancy signals undefined unreferenced widthmod}
 mkdir -p "$builddir" || exit 1
 
@@ -1755,6 +1818,7 @@ for s in $stages; do
 		variadic)   stage_variadic ;;
 		signals)    stage_signals ;;
 		errno)      stage_errno ;;
+		purity)     stage_purity ;;
 		widthmod)  tools/lint-widthmod.sh ;;
 		unreferenced) tools/lint-unreferenced.sh ;;
 		undefined) tools/lint-undefined.sh ;;
