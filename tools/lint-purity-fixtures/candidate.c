@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John */
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Every function below is genuinely pure but NOT yet annotated -- each
  * should be reported as a pure candidate, matching the sched.c precedent

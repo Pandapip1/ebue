@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John */
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Every function below is wrongly marked __attribute__((pure)) -- each
  * documents one real violation class from the checklist a genuine pure
