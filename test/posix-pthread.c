@@ -961,9 +961,18 @@ static void *defer_cancel_start(void *arg)
 {
 	enum defer_cancel_mode mode = (enum defer_cancel_mode)(long long)arg;
 
-	if (mode == DEFER_CANCEL_ENABLE)
+	if (mode == DEFER_CANCEL_ENABLE) {
+		/* Both auto-delivery checks below (pthread_setcancelstate()'s own
+		 * and __pthread_cancel_defer_leave()'s) require ASYNCHRONOUS
+		 * type; without setting it here the state stayed DEFERRED (the
+		 * thread's default), so a pending request could never be
+		 * delivered anywhere in this function -- there is no explicit
+		 * cancellation point after the re-enable below -- and this
+		 * mode's CHECK(0 && "...") was unreachable-in-reverse: always
+		 * hit, regardless of any library behavior. */
+		CHECK(pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL) == 0);
 		CHECK(pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL) == 0);
-	else if (mode == DEFER_CANCEL_TYPE)
+	} else if (mode == DEFER_CANCEL_TYPE)
 		CHECK(pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL) == 0);
 	else
 		CHECK(pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL) == 0);
