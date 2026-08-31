@@ -236,6 +236,19 @@ static int append_prog(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 		// __array_next_capacity's initial-capacity floor (32 above) makes nc >= 32 > 0
 		// whenever *cap starts at 0, so nc != *cap is always true on that path and the
 		// realloc always runs first; it cannot reason through that arithmetic.
+		//
+		// The NOLINTs above suppress clang-tidy's own bundled checks; this
+		// project's own ownership stage (tools/clang/OwnershipChecker.cpp,
+		// a separate --analyze pass with no NOLINT support) still reports
+		// this same site as "pointer dereference is not proven nonnull in
+		// append_prog: (*buf)[(*len)++]" for the identical reason -- it is
+		// about *buf (this function's own buf is already required, see
+		// this function's forward declaration above), a value the
+		// realloc-and-reassign pattern sets, not a parameter, so nonnull
+		// cannot describe it. Left as a disclosed residual rather than a
+		// checker lemma fix: this is the only site in this file the
+		// pattern applies to, and the arithmetic argument above already
+		// makes the proof by hand.
 	memcpy(*buf + *len, arg, n * sizeof(WCHAR)); // NOLINT(clang-analyzer-unix.cstring.NullArg) -- same reachability the note above rules out
 	*len += n;
 	if (need_quote) (*buf)[(*len)++] = '"';
@@ -405,7 +418,15 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 	 * for the measurements behind closed_placeholder() and why a
 	 * close-on-exec standard descriptor never reaches here (the front
 	 * door already turned it into __PLAT_HANDLE_NULL before calling
-	 * this). */
+	 * this).
+	 *
+	 * pp->StandardInput: not expressible via nonnull -- pp is a LOCAL
+	 * (`RTL_USER_PROCESS_PARAMETERS *pp = 0;` above), not a parameter of
+	 * __plat_process_spawn(), and is already dereferenced safely at this
+	 * point only because RtlCreateProcessParametersEx() just succeeded
+	 * (the `if (!NT_SUCCESS(st)) {...goto out;}` immediately above sets
+	 * *pp on success, per RtlCreateProcessParametersEx's own contract) --
+	 * a fact this function's own signature has no way to restate. */
 	pp->StandardInput = std[0] ? std[0] : closed_placeholder(&ph[0]);
 	pp->StandardOutput = std[1] ? std[1] : closed_placeholder(&ph[1]);
 	pp->StandardError = std[2] ? std[2] : closed_placeholder(&ph[2]);

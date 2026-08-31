@@ -132,6 +132,20 @@ struct mapping {
 static struct mapping maps[MMAP_MAX];
 static int lock_future;
 
+/* A residual worth stating once rather than at each site below: mmap()/
+ * munmap()/msync()/lock_range()/mlockall()/munlockall() all flag on
+ * `m->live[...]`/`m->locked[...]` where m is a LOCAL, `struct mapping *m
+ * = &maps[k];` (or the MAP_FIXED arm's `m = find_containing(...)`,
+ * already null-checked there). None of those functions takes a struct
+ * mapping * as its own parameter -- m is always the address of a
+ * fixed-size static table entry or an already-verified result -- so
+ * nonnull has nothing on any of their signatures to describe; the same
+ * class of "not expressible via nonnull, not a parameter" residual
+ * d24fe86's own commit documents for src/process/children.c's
+ * __children[i] findings. drop_if_dead() just below is the one function
+ * in this family where m genuinely IS a parameter, and is marked
+ * accordingly. */
+
 static size_t pground(size_t n) { return (n + MMAP_PAGE - 1) & ~(size_t)(MMAP_PAGE - 1); }
 static int pgaligned(const void *p) { return ((uintptr_t)p & (MMAP_PAGE - 1)) == 0; }
 
@@ -198,10 +212,26 @@ static int alloc_page_state(struct mapping *m, size_t npages)
  * view is not memory a reservation-release call owns.  The section
  * handle itself was already closed at map time (the view holds its own
  * reference -- see mmap()); writable shared views also close the
- * independent writeback handle retained for msync(). */
+ * independent writeback handle retained for msync().
+ *
+ * m required: the loop condition (`m->npages`) and every field write
+ * below it are unconditional. Every real call site passes either `m`
+ * where it was already dereferenced (mmap()'s MAP_FIXED arm, guarded by
+ * its own earlier `if (!m) { errno = ENOMEM; return MAP_FAILED; }`) or
+ * `&maps[k]`/`&maps[i]`, the address of a fixed-size table entry --
+ * never NULL either way. */
+static void drop_if_dead(struct mapping *m) __attribute__((nonnull(1)));
 static void drop_if_dead(struct mapping *m)
 {
 	size_t i;
+	/* m->live[i]: not expressible via nonnull on m itself (already
+	 * marked above) -- a fact about one of m's FIELDS, not m. It is
+	 * never NULL in practice: every real call site dereferences
+	 * m->live directly, in the same scope, moments before calling this
+	 * function (mmap()'s and munmap()'s own `m->live[first + i] = 0;`
+	 * loops just above their own drop_if_dead(m) calls), which already
+	 * proves it by hand at the point each call is made -- a fact this
+	 * function's own signature has no way to restate. */
 	for (i = 0; i < m->npages; i++) if (m->live[i]) return;
 	if (m->filebacked) __plat_mem_unmap_view(m->base, m->npages * MMAP_PAGE);
 	else __plat_mem_release(m->base, m->npages * MMAP_PAGE);

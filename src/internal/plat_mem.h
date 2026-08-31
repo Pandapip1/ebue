@@ -28,8 +28,14 @@
 /* Reserve and commit `len` bytes of fresh anonymous memory.
  * *base_inout is a hint on entry (NULL for "anywhere"); the actual base
  * on success.  Corresponds to NT's MEM_RESERVE|MEM_COMMIT in one call
- * -- mmap()'s anonymous path never reserves without also committing. */
-int __plat_mem_reserve(void **base_inout, size_t len, int prot);
+ * -- mmap()'s anonymous path never reserves without also committing.
+ * base_inout itself is required (note: what it POINTS TO may be NULL,
+ * meaning "anywhere" -- it is base_inout, not *base_inout, this
+ * attribute describes): both real implementations
+ * (linux/plat_mem.c, nt/plat_mem.c) read `*base_inout` unconditionally
+ * as their very first statement, and mman.c's one real call site always
+ * passes `&base`, the address of its own local, never NULL. */
+int __plat_mem_reserve(void **base_inout, size_t len, int prot) __attribute__((nonnull(1)));
 
 /* MAP_FIXED against memory this process already reserved: discard
  * [base, base+len) and commit it again with `prot`, so old contents
@@ -72,8 +78,12 @@ int __plat_mem_unlock(void *addr, size_t len);
  * door.  On failure this sets errno to exactly ENOMEM or ENOTSUP
  * (mmap.html has no broader vocabulary for a failed file-backed
  * mapping), not whatever a generic status-to-errno table would say. */
+/* base_inout required for the same reason __plat_mem_reserve()'s own
+ * is: both real implementations read `*base_inout` unconditionally as
+ * their first statement, and mman.c's two real call sites always pass
+ * `&base`, never NULL. */
 int __plat_mem_map_file(__plat_handle_t fh, int prot, int flags, off_t off,
-                        size_t viewbytes, void **base_inout);
+                        size_t viewbytes, void **base_inout) __attribute__((nonnull(6)));
 
 /* Remove a view `__plat_mem_map_file` created.  `len` is the view's own
  * size in bytes, for the same reason __plat_mem_release() above takes

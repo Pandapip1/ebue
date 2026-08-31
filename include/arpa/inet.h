@@ -30,7 +30,14 @@ uint16_t ntohs(uint16_t);
 
 in_addr_t inet_addr(const char *);
 char *inet_ntoa(struct in_addr);
-const char *inet_ntop(int, const void *__restrict, char *__restrict, socklen_t);
+/* src/dst required: src/socket/inet.c's own inet_ntop() casts src to
+ * `const unsigned char *b` and subscripts it (b[0]..b[15]) unconditionally
+ * whenever af names a supported family, and memcpy(dst, ...) on the
+ * success path, with no NULL check of either anywhere in its body.
+ * Every real call site (test/posix-socket.c) passes a real address
+ * object and a real output buffer, never NULL. */
+const char *inet_ntop(int, const void *__restrict, char *__restrict, socklen_t)
+    __attribute__((nonnull(2, 3)));
 int inet_pton(int, const char *__restrict, void *__restrict);
 
 #ifdef __cplusplus

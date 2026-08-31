@@ -53,6 +53,12 @@ int accept(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict len)
 
 	newfd = __fd_install(newh, 0, __FD_SOCKET);
 	if (newfd < 0) { __plat_close(newh); return -1; }
+	/* __fd_get(newfd) is not expressible via nonnull on any parameter of
+	 * this function -- newfd is not a pointer, and __fd_get()'s return
+	 * value is a local, not a parameter this signature could describe.
+	 * It is never NULL in practice: newfd just came back from a
+	 * successful __fd_install() moments above, with nothing in between
+	 * that could remove it. */
 	__fd_get(newfd)->pad = __SOCK_ST_BOUND | __SOCK_ST_CONNECTED;
 	memcpy(__fd_get(newfd)->peer, &peer, sizeof peer);
 	__fd_get(newfd)->peer_len = sizeof peer;

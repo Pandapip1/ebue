@@ -304,8 +304,20 @@ void __vfs_cwd_set(int kind);
  * nothing in this library blocks a read or write to them past the
  * syscall itself.  Callers must route by *probeability*, not by a
  * single named type: routing only __FD_PIPE here once left sockets
- * silently reporting ready unconditionally. */
-void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup);
+ * silently reporting ready unconditionally.
+ *
+ * All four pointers are required. f->type is read unconditionally by
+ * the switch itself; *hup = 0 is the very first statement in the body.
+ * canread/canwrite are written directly on every one of the three
+ * branches that touch them at all (__FD_PIPE, __FD_CONSOLE, the
+ * always-ready default) and forwarded, still required there, to
+ * __plat_socket_probe() on the fourth (__FD_SOCKET) -- no branch of
+ * this exhaustive switch leaves either untouched. Every real call site
+ * (src/select/select.c's poll_pass(), src/select/poll.c's own loop)
+ * passes `f` fresh from an already-checked __fd_get(d) and &cr/&cw/&hup,
+ * the addresses of its own locals -- never NULL. */
+void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
+    __attribute__((nonnull(1, 2, 3, 4)));
 
 /* src/unistd/pipe.c: the raw handle pair behind pipe2(), without any fd
  * table involvement.  The read end is the pipe's server end, the write
@@ -318,7 +330,15 @@ NTSTATUS __pipe_handles(HANDLE *rp, HANDLE *wp, int inherit);
  * or indefinitely if `infinite` is non-zero (wait_ticks is then
  * ignored).  Used as the sleep between __fd_probe() polls of pipes --
  * see the caller for how the interval is chosen. */
-void __fd_wait_or_delay(__plat_handle_t *console_handles, int ncons, long long wait_ticks, int infinite);
+/* console_handles required: subscripted unconditionally
+ * (`console_handles[i]`) whenever ncons >= 1, with no NULL check
+ * anywhere in this function's body. Both real call sites
+ * (src/select/select.c's select_core(), src/select/poll.c's own loop)
+ * always pass console_h, the address of their own fixed-size local
+ * array, never NULL -- ncons can be 0, but the pointer itself is never
+ * absent. */
+void __fd_wait_or_delay(__plat_handle_t *console_handles, int ncons, long long wait_ticks, int infinite)
+    __attribute__((nonnull(1)));
 
 /* ---- children ---------------------------------------------------------- */
 /* The size of the statically allocated part of the child table.  It is
@@ -366,7 +386,14 @@ extern struct __child *__children;   /* __child_cap entries, pid==0 is free */
 extern int __child_cap;
 int __child_add(int pid, __plat_handle_t);
 struct __child *__child_find(int pid);
-void __child_remove(struct __child *);
+/* c required: src/process/children.c's own __child_remove() dereferences
+ * c->h unconditionally at entry, with no NULL check anywhere in its
+ * body. Every real call site (src/process/wait.c's do_waitpid(), three
+ * of them) only reaches it from inside a branch that has already
+ * dereferenced c itself moments earlier (c->done, c->status, c->pid) --
+ * c is always either __child_find()'s already-checked result or
+ * &__children[i] from a live loop index, never NULL. */
+void __child_remove(struct __child *) __attribute__((nonnull(1)));
 /* Resume every child this process left stopped, and forget the stop.
  * Called on the way out of exit()/_exit() (src/exit/exit.c) -- see
  * children.c for the exit.html clause it stands in for. */
@@ -379,7 +406,13 @@ void __child_forget_stops(void);
  * reaped child's ProcessTimes into, read out by getrusage()
  * (src/misc/resource.c). */
 struct rusage;
-void __rusage_children(struct rusage *);
+/* ru required: src/process/wait.c's own __rusage_children() calls
+ * memset(ru, 0, sizeof *ru) unconditionally as its first statement, with
+ * no NULL check anywhere in its body. Both real call sites
+ * (src/misc/resource.c's getrusage(), which already null-checks its own
+ * ru before forwarding it; src/misc/times.c's times(), which passes
+ * &cru, a local) are never NULL. */
+void __rusage_children(struct rusage *) __attribute__((nonnull(1)));
 /* Zero that running total.  fork()'s child-side only: fork.html
  * requires the child's tms_cutime/tms_cstime be 0, and the clone
  * arrives with the parent's accumulators in its copied address

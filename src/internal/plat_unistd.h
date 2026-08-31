@@ -97,7 +97,13 @@ int __plat_fsync(__plat_handle_t h);
 /* pipe()/pipe2(): create the two ends of a fresh anonymous pipe.
  * `inheritable` requests that both handles be inheritable by a child
  * process (i.e. O_CLOEXEC was not requested). */
-int __plat_pipe(__plat_handle_t *rp, __plat_handle_t *wp, int inheritable);
+/* rp/wp required: both real implementations (linux/plat_unistd.c,
+ * nt/plat_unistd.c) write `*rp = ...`/`*wp = ...` unconditionally on
+ * the success path, with no NULL check of either anywhere. pipe.c's one
+ * real call site always passes `&r, &w`, the addresses of its own
+ * locals, never NULL. */
+int __plat_pipe(__plat_handle_t *rp, __plat_handle_t *wp, int inheritable)
+    __attribute__((nonnull(1, 2)));
 
 /* ---- src/unistd/sysconf.c ------------------------------------------------ */
 
@@ -146,7 +152,16 @@ int __plat_unlink(int dirfd, const char *path, int isdir);
  * front door can hand it to __vfs_cwd_set(), portable process-wide
  * bookkeeping that stays in the front door -- see chdir.c) -- __VFS_NONE
  * for a backend with no overlay concept, always. */
-int __plat_chdir(const char *path, int *vfsout);
+/* vfsout required: both real implementations write `*vfsout = ...`
+ * unconditionally on the success path, with no NULL check of vfsout
+ * itself anywhere. chdir.c's one real call site always passes `&vfs`,
+ * the address of its own local, never NULL. path is NOT marked here:
+ * neither backend dereferences it directly in this function's own body
+ * (linux forwards it straight into a syscall; NT forwards it into
+ * __name_too_long()/__utf8_to_utf16(), which already carry their own
+ * contracts), so there is nothing at this level for the attribute to
+ * describe. */
+int __plat_chdir(const char *path, int *vfsout) __attribute__((nonnull(2)));
 
 /* ---- src/unistd/link.c ------------------------------------------------------ */
 
@@ -171,8 +186,18 @@ int __plat_link(int olddirfd, const char *oldpath, int newdirfd, const char *new
 ssize_t __plat_readlink(int dirfd, const char *path, char *buf, size_t bufsz);
 
 /* symlinkat(): create a new symbolic link `linkpath` (relative to
- * `newdirfd`) whose contents are `target`, verbatim (not resolved). */
-int __plat_symlink(const char *target, int newdirfd, const char *linkpath);
+ * `newdirfd`) whose contents are `target`, verbatim (not resolved).
+ *
+ * target required: the NT backend's own __plat_symlink() reads
+ * `target[0]` unconditionally as its very first statement (deciding
+ * `relative`), with no NULL check anywhere in its body; every real call
+ * site (src/unistd/link.c's symlinkat()) forwards its own target
+ * straight through with no check of its own either -- symlink()'s
+ * target has no POSIX NULL-tolerance clause, and no real caller in this
+ * tree (test/posix-unistd.c, test/posix-statvfs.c, test/posix-tail.c)
+ * ever passes anything but a real string literal. */
+int __plat_symlink(const char *target, int newdirfd, const char *linkpath)
+    __attribute__((nonnull(1)));
 
 /* ---- src/unistd/ids.c ------------------------------------------------------- */
 

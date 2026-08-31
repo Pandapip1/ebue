@@ -54,7 +54,14 @@ long long __plat_seek_query(__plat_handle_t h, int at_eof);
 int __plat_seek_set(__plat_handle_t h, long long target);
 
 /* Duplicate `h`; the new handle is inheritable by a child process iff
- * `inheritable` is nonzero.  0/-1(errno) via *out. */
-int __plat_dup(__plat_handle_t h, int inheritable, __plat_handle_t *out);
+ * `inheritable` is nonzero.  0/-1(errno) via *out.
+ *
+ * out required: both real implementations write `*out = ...`
+ * unconditionally on the success path, with no NULL check of out
+ * itself anywhere. Every real call site (src/unistd/dup.c, src/mman/
+ * mman.c, src/process/fork.c, src/process/posix_spawn.c) always passes
+ * the address of its own local, never NULL. */
+int __plat_dup(__plat_handle_t h, int inheritable, __plat_handle_t *out)
+    __attribute__((nonnull(3)));
 
 #endif

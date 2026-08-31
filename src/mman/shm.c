@@ -83,6 +83,24 @@ static char *shm_path(const char *name)
 	return path;
 }
 
+/* path required: forwarded to strdup(path) unconditionally, which
+ * itself calls strlen(path) before anything else; both real call sites
+ * (shm_open(), shm_mode_write()) already null-check their own
+ * shm_path()/shm_mode_path() result before calling this, so path is
+ * never NULL here.
+ *
+ * The `*slash` this function's own body dereferences a few lines down
+ * is NOT expressible via this attribute: `slash` is strrchr(dir, '/')'s
+ * result, a local derived value, not path itself. It is never NULL in
+ * practice -- both real callers only ever pass a path shm_path()/
+ * shm_mode_path() built by concatenating "/ntlibc-shm(-mode)/" onto a
+ * directory, so a '/' always exists -- but that is an invariant of this
+ * function's only two callers, not a fact about the `path` parameter
+ * nonnull can state. Left as a disclosed residual rather than force-fit
+ * to an unrelated mechanism, the same class of case 9be895e's/d24fe86's
+ * own commits already established for a checker finding on a value
+ * derived from, rather than equal to, a parameter. */
+static int ensure_namespace(const char *path) __attribute__((nonnull(1)));
 static int ensure_namespace(const char *path)
 {
 	char *slash;
@@ -155,6 +173,16 @@ static int shm_mode_write(const char *path, mode_t mode)
 	return result;
 }
 
+/* mode required: `*mode = ...` is written whenever the read succeeds,
+ * with no NULL check of mode itself anywhere in this function; its one
+ * real call site (shm_open()) always passes `&stored`, the address of
+ * its own local, never NULL. path is not marked: shm_mode_path(path)
+ * is the only use, and that function already tolerates whatever path
+ * shm_mode_read()'s own two possible callers could pass (there is only
+ * one, shm_open(), which already checked its own shm_path() result
+ * nonnull before reaching here, but path itself is never dereferenced
+ * DIRECTLY in this function's own body, only forwarded). */
+static int shm_mode_read(const char *path, mode_t *mode) __attribute__((nonnull(2)));
 static int shm_mode_read(const char *path, mode_t *mode)
 {
 	char *modepath = shm_mode_path(path);

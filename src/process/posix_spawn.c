@@ -357,6 +357,19 @@ static int spawn_common(pid_t *pid, const char *path,
 	 * how the second case is told from the first. */
 	if (!full) { rc = errno ? errno : ENOMEM; goto out; }
 
+	/* fa->__actions[i] just below is not expressible via nonnull on
+	 * spawn_common()'s own fa parameter: fa is already real-NULL-
+	 * tolerant here (POSIX allows file_actions to be a null pointer, and
+	 * this `if (fa && ...)` is that, not decoration), and the actual
+	 * fact making the subscript safe once inside the branch is a field
+	 * invariant of posix_spawn_file_actions_t itself, established in
+	 * src/process/spawn_file_actions.c's own fa_push(): fa->__cap only
+	 * ever grows via a checked realloc that assigns fa->__actions before
+	 * fa->__len can exceed the old capacity, so fa->__len > 0 implies
+	 * fa->__actions != NULL by construction -- a fact about a struct
+	 * FIELD's value, not about fa itself, the same class of residual
+	 * d24fe86's own pthread_rwlock unlink_waiter() comment already
+	 * established. */
 	if (fa && fa->__len) {
 		cap = fa->__len;
 		sv = malloc((size_t)cap * sizeof *sv);

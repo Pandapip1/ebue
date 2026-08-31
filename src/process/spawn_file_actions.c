@@ -50,6 +50,14 @@ static struct __spawn_action *fa_push(posix_spawn_file_actions_t *fa)
 		fa->__actions = n;
 		fa->__cap = cap;
 	}
+	/* fa->__actions is non-NULL here either way: either the growth
+	 * branch above just set it (realloc succeeded, checked above), or
+	 * fa->__len != fa->__cap already meant fa->__cap > 0, which by this
+	 * function's own invariant only ever holds after an earlier
+	 * successful growth already set fa->__actions. Not expressible via
+	 * nonnull on fa itself (already marked, and this is a fact about one
+	 * of fa's FIELDS, not fa) -- a local proof the checker cannot follow
+	 * through the conditional reassignment. */
 	n = &fa->__actions[fa->__len++];
 	memset(n, 0, sizeof *n);
 	errno = e;
@@ -72,6 +80,10 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *fa)
 int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *fa)
 {
 	int i, e = errno;
+	/* fa->__actions[i]: same fa->__len > 0 implies fa->__actions != NULL
+	 * field invariant as fa_push()'s own comment above establishes; not
+	 * expressible via nonnull on fa (already marked in spawn.h) since
+	 * this is about one of fa's fields, not fa itself. */
 	for (i = 0; i < fa->__len; i++) free(fa->__actions[i].path);
 	free(fa->__actions);
 	fa->__actions = 0;

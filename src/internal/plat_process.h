@@ -140,8 +140,25 @@ int __plat_process_resume(__plat_handle_t h);
  * *out_process receives the new process's handle on success -- NOT yet
  * added to the pid/child table, since that bookkeeping is the front
  * door's, same as __plat_mem_map_file() leaves mman.c's reservation
- * table alone.  Returns the new pid, or -1 with errno set. */
+ * table alone.  Returns the new pid, or -1 with errno set.
+ *
+ * std/out_process required: both real implementations
+ * (linux/plat_process.c, nt/plat_process.c) subscript std[0..2]
+ * unconditionally (the child-side fd-redirect loop / the
+ * StandardInput/Output/Error assignments) and write `*out_process = ...`
+ * unconditionally on their success path, with no NULL check of either
+ * pointer anywhere. spawn.c's __spawn() is the one real call site: std
+ * is always `__plat_handle_t std[3];`, the address of its own local
+ * array, and out_process is always `&process`, the address of its own
+ * local -- neither is ever NULL. path/argv/envp are NOT marked here:
+ * this function never dereferences any of them directly itself, only
+ * forwards them into functions that already carry their own contracts
+ * (build_cmdline()'s own argv, __utf8_to_utf16()'s own path, both
+ * required there; build_env_block()'s own envp, deliberately optional
+ * there via its own `for (i = 0; envp && envp[i]; ...)` check, matching
+ * __spawn()'s own `envp ? envp : __environ` one level up). */
 int __plat_process_spawn(const char *path, char *const argv[], char *const envp[],
-                          const __plat_handle_t std[3], __plat_handle_t *out_process);
+                          const __plat_handle_t std[3], __plat_handle_t *out_process)
+    __attribute__((nonnull(4, 5)));
 
 #endif

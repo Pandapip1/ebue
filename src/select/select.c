@@ -426,6 +426,26 @@ void __fd_wait_or_delay(__plat_handle_t *console_handles, int ncons, long long w
  * remaining timeout or must cap it at POLL_INTERVAL_TICKS -- neither
  * shape has a waitable NT object behind it, so both are re-probed on
  * that timer rather than waited on. */
+/* out_r/out_w/have_poll/ncons required: FD_ZERO(out_r)/FD_ZERO(out_w)
+ * are the first two statements in this function's body (dereferenced
+ * through the fd_set macros in include/sys/select.h), and
+ * *have_poll = hp / *ncons = n are both written unconditionally just
+ * before returning, on every path through the function. in_r/in_w/in_e
+ * are deliberately NOT required: each is only ever touched behind its
+ * own `in_r &&`/`in_w &&`/`in_e &&` guard, matching select_core()'s own
+ * `if (rfds) in_r = *rfds;` shape one level up -- select()/pselect()'s
+ * rfds/wfds/efds are genuinely optional per POSIX, and that optionality
+ * is threaded all the way through rather than defended against only at
+ * the top. console_h/console_fd are also not required: both are only
+ * ever written inside `if (wantr)`/read inside a loop bounded by `n`,
+ * which can legitimately be 0 -- never unconditional the way out_r/
+ * out_w/have_poll/ncons are, even though every real call site (this
+ * file's select_core()) happens to pass real fixed-size local arrays
+ * for them too. */
+static int poll_pass(int nfds, const fd_set *in_r, const fd_set *in_w, const fd_set *in_e,
+                      fd_set *out_r, fd_set *out_w, int *have_poll,
+                      __plat_handle_t *console_h, int *console_fd, int *ncons)
+    __attribute__((nonnull(5, 6, 7, 10)));
 static int poll_pass(int nfds, const fd_set *in_r, const fd_set *in_w, const fd_set *in_e,
                       fd_set *out_r, fd_set *out_w, int *have_poll,
                       __plat_handle_t *console_h, int *console_fd, int *ncons)
