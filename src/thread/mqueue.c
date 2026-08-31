@@ -98,7 +98,7 @@ static int name_char(unsigned char c)
 	       (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
 }
 
-static char *mq_path(const char *name)
+static char *mq_path(const char *name) NTLIBC_RETURNS_OWNERSHIP(malloc)
 {
 	const char *component, *dir;
 	size_t n, d, i;
