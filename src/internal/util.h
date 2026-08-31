@@ -19,6 +19,12 @@
  *    see that file's own header comment for why this matters for early
  *    bootstrap, not just convenience.
  *
+ * (Tier 2's six -- cut/paste/tr/expand/unexpand/fold -- have no ar
+ * member-name collision of their own: `find src -name '<name>.c'` turns
+ * up nothing else named cut.c, paste.c, tr.c, expand.c, unexpand.c or
+ * fold.c anywhere in this tree, so all six live at the plain
+ * src/util/<name>.c this comment describes as the default.)
+ *
  * Every __util_<name>_main() takes the same shape argc/argv `main()`
  * does (argv[0] is the utility's own name, matching XCU 2.9.1's "first
  * word" and this platform's PATH-search convention) and returns a real
@@ -139,6 +145,20 @@ int __util_join_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_sort_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_tsort_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_uniq_main(int argc, char **argv) __attribute__((nonnull(2)));
+
+/* Tier 2 continued: text-formatting utilities (XCU cut(1p), paste(1p),
+ * tr(1p), expand(1p), unexpand(1p), fold(1p)).  None is __pure__: all
+ * six read standard input or a file operand and write to standard
+ * output, so a repeated call is not guaranteed to see the same bytes
+ * twice (a pipe, a file another process is still writing, etc.) even
+ * though none of them ever writes anything back to the filesystem the
+ * way the mkdir/rmdir/mkfifo/ln/chmod/touch block above does. */
+int __util_cut_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_expand_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_fold_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_paste_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_tr_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_unexpand_main(int argc, char **argv) __attribute__((nonnull(2)));
 
 /* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
  * src/util/rm.c -----------------------------------------------------
