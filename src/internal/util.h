@@ -3,11 +3,12 @@
  *
  * Entry points for ntlibc's own POSIX.1-2017 (XCU) standard utilities.
  * Each `__util_<name>_main()` is the whole of utility <name>'s logic,
- * implemented once in src/util/<name>.c (mkdir and chmod are the two
- * exceptions -- src/util/mkdir_util.c and src/util/chmod_util.c, to
- * avoid colliding with the ar member names src/stat/mkdir.c and
- * src/stat/chmod.c already own; see either file's own header comment)
- * and shared by two callers:
+ * implemented once in src/util/<name>.c (mkdir, chmod and printf are the
+ * three exceptions -- src/util/mkdir_util.c, src/util/chmod_util.c and
+ * src/util/util_printf.c, to avoid colliding with the ar member names
+ * src/stat/mkdir.c, src/stat/chmod.c and, for printf, this library's own
+ * enormous and heavily-used src/stdio/printf.c already own; see each
+ * file's own header comment) and shared by two callers:
  *
  *  - bin/<name>.c, a thin main() building the standalone obj/bin/<name>.exe
  *    -- the same "entry point out here, logic in the library" split
@@ -107,6 +108,22 @@ int __util_df_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_du_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_uudecode_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_uuencode_main(int argc, char **argv) __attribute__((nonnull(2)));
+
+/* Tier 2 continued: text-formatting/file-splitting utilities (XCU
+ * printf(1p), od(1p), pr(1p), tabs(1p), split(1p), csplit(1p)).
+ * Alphabetical, same as the tiers above.  None is __pure__:
+ * printf/od/pr/tabs write to stdout unconditionally as their whole
+ * purpose, and split/csplit do real filesystem I/O creating the piece
+ * files.  Each gets nonnull(2) for the same reason as the tiers above:
+ * a real argv from a real caller is never NULL, and each function's
+ * own usage-error path formats argv[0] into a diagnostic before any
+ * argc check could matter. */
+int __util_csplit_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_od_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_pr_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_printf_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_split_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_tabs_main(int argc, char **argv) __attribute__((nonnull(2)));
 
 /* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
  * src/util/rm.c -----------------------------------------------------
