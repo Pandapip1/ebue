@@ -62,6 +62,7 @@
 /* aarch64 Linux syscall numbers (confirmed via a throwaway host program
  * printing the SYS_* macros from <sys/syscall.h>, the same oracle
  * technique src/mman/linux/plat_mem.c's banner describes). */
+#if defined(__aarch64__)
 #define SYS_sched_yield       124
 #define SYS_kill              129
 #define SYS_setpriority       140
@@ -71,6 +72,19 @@
 #define SYS_prlimit64         261
 #define SYS_pidfd_open        434
 #define SYS_pidfd_send_signal 424
+#elif defined(__x86_64__)
+#define SYS_sched_yield       24
+#define SYS_kill              62
+#define SYS_setpriority       141
+#define SYS_getpriority       140
+#define SYS_getrusage         98
+#define SYS_lseek             8
+#define SYS_prlimit64         302
+#define SYS_pidfd_open        434
+#define SYS_pidfd_send_signal 424
+#else
+#error "plat_misc.c: unsupported architecture"
+#endif
 
 /* A genuine raw syscall trampoline, NOT a call through the host's own
  * glibc syscall(2) wrapper -- discovered necessary, not assumed, while
@@ -110,6 +124,7 @@
  * glibc's own hand-written assembly implementation instead of a C
  * va_arg reimplementation. */
 #include <stdarg.h>
+#if defined(__aarch64__)
 static long syscall(long number, ...)
 {
 	va_list ap;
@@ -134,6 +149,37 @@ static long syscall(long number, ...)
 	                 : "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+/* Same variadic-capture trick as the aarch64 version above, just this
+ * arch's own `syscall` register convention (see crt/linux/crt1.c's own
+ * raw_syscall() banner for the fuller per-arch calling-convention
+ * rationale): the x86-64 SysV ABI's own variadic-function contract
+ * (a register save area a callee's own prologue spills into before
+ * va_start ever runs) makes reading six va_arg(long)s here just as
+ * sound as it is on aarch64, regardless of how many a given call site
+ * actually supplied. */
+static long syscall(long number, ...)
+{
+	va_list ap;
+	long a1, a2, a3, a4, a5, a6;
+	long ret;
+	register long r10 __asm__("r10");
+	register long r8  __asm__("r8");
+	register long r9  __asm__("r9");
+
+	va_start(ap, number);
+	a1 = va_arg(ap, long); a2 = va_arg(ap, long); a3 = va_arg(ap, long);
+	a4 = va_arg(ap, long); a5 = va_arg(ap, long); a6 = va_arg(ap, long);
+	va_end(ap);
+
+	r10 = a4; r8 = a5; r9 = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(number), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#endif
 
 static int is_sys_error(long ret)
 {

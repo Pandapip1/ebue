@@ -46,13 +46,21 @@
  * WHAT THIS PASS IMPLEMENTS, PRECISELY
  * ============================================================
  *
- *   - ELF64, ELFCLASS64/ELFDATA2LSB, EM_AARCH64 only. aarch64 is the
- *     only Linux arch this whole platform pilot has proven (crt/linux/
- *     crt1.c's own banner); x86_64 needs its own relocation-type table
- *     (R_X86_64_RELATIVE etc. have different numeric values) and TLS
- *     model (variant II, negative tp-relative offsets) before this
- *     file could support it -- out of scope here, matching the rest of
- *     this pilot's own stated scope.
+ *   - ELF64, ELFCLASS64/ELFDATA2LSB, EM_AARCH64 or EM_X86_64. Both
+ *     arches' relocation-type tables are implemented (R_AARCH64_* and
+ *     R_X86_64_* have different numeric values -- see apply_one_reloc()
+ *     below, arch-guarded per this file's own EM_MACHINE check at
+ *     dlopen() time). i386 is NOT implemented: this file's whole data
+ *     model is ELF64/DT_RELA (explicit addends), and i386's real ABI is
+ *     ELF32/DT_REL (addends implicit in the relocated instruction/word
+ *     itself, read-modify-write rather than a plain store) -- a
+ *     genuinely different loader shape, not a same-shape relocation-
+ *     type-table swap the way x86_64 was from aarch64. Out of scope for
+ *     this pass; crt/linux/i386/start.S's own CRT bring-up is
+ *     unaffected (dlopen() and process startup are independent).
+ *     Neither arch's per-library TLS model (see "TLS / PER-LIBRARY
+ *     THREAD DESCRIPTORS" below) is implemented, matching aarch64's own
+ *     pre-existing scope line.
  *   - Only ET_DYN (shared object) input. A dlopen()'d PIE executable
  *     (also ET_DYN under the modern convention) would load the same
  *     way in principle but is not a case this pass tests or claims.
@@ -448,6 +456,18 @@ static unsigned long pgup(unsigned long v) { unsigned long p = real_page_size();
  * instead of across a header boundary, because a full plat_dlfcn-level
  * mmap seam would be its own separate, larger piece of work for no
  * benefit this file needs today. */
+/* One body per arch's own calling convention -- see crt/linux/crt1.c's
+ * own raw_syscall() banner for the fuller per-arch rationale.
+ * Duplicated here, not shared, per this tree's own "own syscall table
+ * per file" discipline every src/.../linux/plat_*.c backend already
+ * follows. i386 is NOT implemented here (this file's own EM_AARCH64/
+ * EM_X86_64-only banner above): plat_dlfcn.c's whole ELF64/RELA data
+ * model (Elf64_* structs, DT_RELA, no-addend-implicit-in-instruction
+ * REL) does not carry over to i386's real ABI (ELF32, DT_REL, implicit
+ * addends) by just adding a syscall trampoline and a relocation-type
+ * table -- seebelow's own banner update for exactly what a real i386
+ * loader port would additionally need. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
 {
 	register long x8 __asm__("x8") = nr;
@@ -466,6 +486,25 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 #define SYS_mmap     222
 #define SYS_munmap   215
 #define SYS_mprotect 226
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#define SYS_mmap     9
+#define SYS_munmap   11
+#define SYS_mprotect 10
+#else
+#error "plat_dlfcn.c: unsupported architecture (expected __aarch64__ or __x86_64__ -- see this file's own banner for why i386 is not yet implemented)"
+#endif
 
 static int is_sys_error(long ret) { return (unsigned long)ret >= (unsigned long)-4095L; }
 
@@ -548,6 +587,7 @@ typedef struct {
 #define ELFCLASS64 2
 #define ELFDATA2LSB 1
 #define EM_AARCH64 183
+#define EM_X86_64  62
 #define ET_DYN 3
 
 #define PT_LOAD    1
@@ -588,6 +628,20 @@ typedef struct {
 #define R_AARCH64_GLOB_DAT   1025
 #define R_AARCH64_JUMP_SLOT  1026
 #define R_AARCH64_RELATIVE   1027
+
+/* x86_64 psABI relocation type numbers -- confirmed against the real
+ * x86-64 psABI spec, NOT assumed identical to aarch64's despite the
+ * same conceptual role each plays (see apply_one_reloc()'s own banner
+ * for exactly where these get used): R_X86_64_64 is the ABS64
+ * equivalent (a full 64-bit symbol+addend store, the same job
+ * R_AARCH64_ABS64 does), R_X86_64_GLOB_DAT/JUMP_SLOT resolve a GOT/PLT
+ * slot to a symbol's address with no addend, and R_X86_64_RELATIVE is
+ * a load-bias-only fixup needing no symbol at all -- same four
+ * semantic roles as the aarch64 set above, different numeric values. */
+#define R_X86_64_64          1
+#define R_X86_64_GLOB_DAT    6
+#define R_X86_64_JUMP_SLOT   7
+#define R_X86_64_RELATIVE    8
 
 /* ---- sticky error state, single instance for this whole backend ----- */
 static char err_buf[256];
@@ -785,6 +839,7 @@ static int apply_one_reloc(struct dlobj *obj, const Elf64_Rela *r,
 	loc = ADDR(obj, r->r_offset);
 
 	switch (type) {
+#if defined(__aarch64__)
 	case R_AARCH64_RELATIVE:
 		*loc = obj->bias + (uint64_t)r->r_addend;
 		return 0;
@@ -802,6 +857,33 @@ static int apply_one_reloc(struct dlobj *obj, const Elf64_Rela *r,
 		*loc = sym_addr + (type == R_AARCH64_ABS64 ? (uint64_t)r->r_addend : 0);
 		return 0;
 	}
+#elif defined(__x86_64__)
+	case R_X86_64_RELATIVE:
+		*loc = obj->bias + (uint64_t)r->r_addend;
+		return 0;
+	case R_X86_64_64:
+	case R_X86_64_GLOB_DAT:
+	case R_X86_64_JUMP_SLOT: {
+		uint64_t sym_addr;
+		uint32_t symidx = ELF64_R_SYM(r->r_info);
+		if (!resolve_symref(obj, symidx, &sym_addr)) {
+			const char *name = (symidx && symidx < obj->dynsym_count) ?
+				obj->dynstr + obj->dynsym[symidx].st_name : "?";
+			seterr("dlopen: undefined symbol: %s", name);
+			return -1;
+		}
+		/* Unlike aarch64's ABS64 vs. GLOB_DAT/JUMP_SLOT split above,
+		 * x86_64's own psABI defines R_X86_64_GLOB_DAT/JUMP_SLOT as
+		 * addend-less by CONVENTION (the addend field is simply always
+		 * 0 for these two in practice), not by a rule this loader must
+		 * itself enforce -- adding r_addend unconditionally here is
+		 * therefore correct for all three types, not just R_X86_64_64,
+		 * since it is 0 for the other two anyway on any real linker's
+		 * output. */
+		*loc = sym_addr + (uint64_t)r->r_addend;
+		return 0;
+	}
+#endif
 	default:
 		/* Includes every TLS relocation type -- see this file's own
 		 * "TLS / per-library thread descriptors" banner: refusing a
@@ -860,11 +942,19 @@ void *__plat_dlopen(const char *file, int mode)
 		errno = ENOEXEC;
 		goto fail;
 	}
+#if defined(__aarch64__)
 	if (eh.e_machine != EM_AARCH64) {
 		seterr("dlopen: %s: wrong machine type (this build only supports EM_AARCH64=%d, see this file's own banner)", file, EM_AARCH64);
 		errno = ENOEXEC;
 		goto fail;
 	}
+#elif defined(__x86_64__)
+	if (eh.e_machine != EM_X86_64) {
+		seterr("dlopen: %s: wrong machine type (this build only supports EM_X86_64=%d, see this file's own banner)", file, EM_X86_64);
+		errno = ENOEXEC;
+		goto fail;
+	}
+#endif
 	if (eh.e_type != ET_DYN) {
 		seterr("dlopen: %s: not ET_DYN (only shared objects are supported)", file);
 		errno = ENOEXEC;

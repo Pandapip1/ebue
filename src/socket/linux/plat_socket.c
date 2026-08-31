@@ -64,6 +64,7 @@
  * ABI" Linux port) has no separate SYS_recv/SYS_send at all -- glibc's
  * own recv()/send() are thin wrappers over these same two syscalls with
  * a NULL address argument, which is exactly what this file does too. */
+#if defined(__aarch64__)
 #define SYS_recvfrom   207
 #define SYS_sendto     206
 #define SYS_socket     198
@@ -72,6 +73,18 @@
 #define SYS_connect    203
 #define SYS_setsockopt 208
 #define SYS_accept4    242
+#elif defined(__x86_64__)
+#define SYS_recvfrom   45
+#define SYS_sendto     44
+#define SYS_socket     41
+#define SYS_bind       49
+#define SYS_listen     50
+#define SYS_connect    42
+#define SYS_setsockopt 54
+#define SYS_accept4    288
+#else
+#error "plat_socket.c: unsupported architecture"
+#endif
 
 /* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
  * the call path at all. NOT `extern long syscall(long, ...)`: that
@@ -89,6 +102,7 @@
  * hit the identical bug and is this fix's model. aarch64's syscall
  * calling convention: x8 = syscall number, x0..x5 = up to 6 arguments,
  * result (or -errno in [-4095,-1]) in x0. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
 {
 	register long x8 __asm__("x8") = nr;
@@ -104,6 +118,20 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 		: "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#endif
 
 /* A raw Linux syscall returns the result on success, or -errno (as an
  * unsigned value in [-4095, -1]) on failure -- see plat_mem.c's own
