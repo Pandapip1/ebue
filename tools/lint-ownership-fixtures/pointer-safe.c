@@ -4,6 +4,7 @@
 typedef __SIZE_TYPE__ size_t;
 void *malloc(size_t);
 void free(void *);
+void *__malloc(size_t);
 
 int local_object(void)
 {
@@ -149,4 +150,46 @@ int nonnull_attribute_is_trusted(int *pointer) __attribute__((nonnull(1)));
 int nonnull_attribute_is_trusted(int *pointer)
 {
 	return *pointer;
+}
+
+/* clang's own dynamic-extent tracking for an allocator's return value only
+ * fires for a handful of literally-named standard functions -- confirmed
+ * empirically: `malloc(n)` gets a real, usable dynamic extent, but
+ * `__malloc(n)` -- the name every allocation inside this tree's OWN code
+ * actually goes through -- does not, leaving ValidPointerChecker with
+ * nothing but an unconstrained SymbolExtent placeholder for every buffer
+ * this codebase allocates through its own internal entry point.
+ * OwnershipChecker::allocationSizeInBytes fixes this by setting the real
+ * extent itself, straight from the real size argument, for its own whole
+ * allocator family. A concrete, fixed offset into a concrete-sized
+ * allocation (not the same-symbol pattern below) pins that this checker's
+ * OWN extent-setting is what makes this provable now, not the pointer's
+ * static type or any other pre-existing relaxation. */
+char *heap_allocation_extent_is_trusted(void)
+{
+	char *buffer = __malloc(8);
+	if (!buffer) return 0;
+	buffer[3] = 'x';
+	return buffer;
+}
+
+/* The single most common "allocate len+1, write the terminator at len"
+ * idiom throughout this tree (src/string/strndup.c's real body is the
+ * concrete case this mirrors: `d = malloc(l+1); ...; d[l] = 0;`). The
+ * generic byte-extent machinery computes extent_of_d (itself `l + 1`, a
+ * compound expression once __malloc's real size argument is tracked, see
+ * heap_allocation_extent_is_trusted above) MINUS the access offset (`l`),
+ * but clang's range-based constraint solver does not fold "(S + 1) - S"
+ * down to the literal 1 for two separately-built compound expressions
+ * that merely happen to share a root symbol -- confirmed empirically
+ * while developing sameSymbolExtentProvenInBounds: even an explicit
+ * evalBinOp + assume() on that exact subtraction cannot refute "too
+ * small". This is the shape that function exists to prove directly,
+ * bypassing the solver's own inability to cancel it. */
+char *same_symbol_extent_cancels(size_t n)
+{
+	char *d = __malloc(n + 1);
+	if (!d) return 0;
+	d[n] = 0;
+	return d;
 }

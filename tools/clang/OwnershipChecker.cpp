@@ -134,6 +134,56 @@ class OwnershipChecker
     return hasName(Call, "realloc") || hasName(Call, "reallocarray");
   }
 
+  // Clang's own dynamic-extent tracking for an allocator's return value
+  // only fires for a handful of literally-named standard functions
+  // (confirmed empirically against clang 18: `malloc(n)` gets a real,
+  // usable dynamic extent; `__malloc(n)` -- the name every allocation
+  // inside this tree's OWN code actually goes through, since `malloc`
+  // itself is just this codebase's own public wrapper around it -- does
+  // not, leaving ValidPointerChecker with nothing but an unconstrained
+  // SymbolExtent placeholder for every buffer this codebase allocates
+  // through its own internal entry point). isAllocator() above already
+  // recognizes this whole family for ownership-tracking purposes and
+  // already has the real call in hand, so it can set the region's real
+  // dynamic extent itself, straight from the real size argument(s) --
+  // exactly the fact clang's own builtin modeling would have recorded had
+  // the function been literally named "malloc"/"calloc"/etc. This is not
+  // a new assumption layered on top of what the program does: it is the
+  // exact byte count the allocator itself is about to hand back, read
+  // directly off the arguments of the call that produced it.
+  //
+  // strdup/strndup are deliberately left alone: their real size depends
+  // on the *content* of a string argument (strlen, or a strnlen capped by
+  // a second argument), not a value already sitting in a register at the
+  // call site the way every other allocator's size is, so there is no
+  // argument SVal here that IS the answer the way there is for the rest
+  // of this family.
+  static std::optional<SVal> allocationSizeInBytes(const CallEvent &Call,
+                                                    CheckerContext &C) {
+    SValBuilder &Builder = C.getSValBuilder();
+    QualType SizeTy = C.getASTContext().getSizeType();
+    unsigned NumArgs = Call.getNumArgs();
+    auto Arg = [&](unsigned Index) -> SVal {
+      return Index < NumArgs ? Call.getArgSVal(Index) : UnknownVal();
+    };
+    if (hasName(Call, "malloc") || hasName(Call, "__malloc") ||
+        hasName(Call, "valloc"))
+      return NumArgs >= 1 ? std::optional<SVal>(Arg(0)) : std::nullopt;
+    if (hasName(Call, "calloc"))
+      return NumArgs >= 2 ? std::optional<SVal>(Builder.evalBinOp(
+                                C.getState(), BO_Mul, Arg(0), Arg(1), SizeTy))
+                          : std::nullopt;
+    if (hasName(Call, "realloc"))
+      return NumArgs >= 2 ? std::optional<SVal>(Arg(1)) : std::nullopt;
+    if (hasName(Call, "reallocarray"))
+      return NumArgs >= 3 ? std::optional<SVal>(Builder.evalBinOp(
+                                C.getState(), BO_Mul, Arg(1), Arg(2), SizeTy))
+                          : std::nullopt;
+    if (hasName(Call, "aligned_alloc") || hasName(Call, "memalign"))
+      return NumArgs >= 2 ? std::optional<SVal>(Arg(1)) : std::nullopt;
+    return std::nullopt;
+  }
+
   static bool insideOwnershipConsumer(CheckerContext &C) {
     const auto *Function =
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
@@ -253,6 +303,14 @@ public:
     if (!Symbol)
       return;
     State = State->set<OwnershipMap>(Symbol, OwnershipKind::Owned);
+    if (std::optional<SVal> SizeInBytes = allocationSizeInBytes(Call, C)) {
+      if (std::optional<DefinedOrUnknownSVal> DefinedSize =
+              SizeInBytes->getAs<DefinedOrUnknownSVal>()) {
+        if (const MemRegion *Region = ReturnValue.getAsRegion())
+          State = setDynamicExtent(State, Region->getBaseRegion(),
+                                   *DefinedSize, C.getSValBuilder());
+      }
+    }
     C.addTransition(State);
   }
 
@@ -777,6 +835,86 @@ class ValidPointerChecker
     return true;
   }
 
+  // For `buf[i]` into a HEAP-allocated buffer (a SymbolicRegion, so no
+  // compile-time ConstantArrayType exists for arrayIndexProvenInBounds
+  // above to use) whose real dynamic extent was set -- by this checker
+  // itself, see OwnershipChecker::allocationSizeInBytes -- directly from
+  // an allocation call's own size ARGUMENT expression (e.g. `malloc(n +
+  // 1)`), prove `buf[i]` in-bounds when `i` is EXACTLY that same
+  // argument expression's own root symbol: `buf[n]`, the single most
+  // common "allocate len+1, write the terminator at len" idiom
+  // throughout this tree (strndup.c's `d = malloc(l+1); ...; d[l] = 0;`
+  // is the concrete case this was developed against, and clears
+  // completely with this fix). The generic byte-extent machinery below
+  // computes this exact same relationship -- extent_of_buf (itself
+  // `n + 1`, already a compound expression) MINUS the access offset
+  // (`n`) -- but clang's range-based constraint solver does not fold
+  // "(S + K) - S" down to the literal K for two separately-built
+  // compound expressions that merely happen to share a root symbol; it
+  // proves a single symbol's own affine range well (arrayIndexProvenInBounds
+  // above already exploits exactly that), but not this kind of
+  // cross-expression cancellation. Confirmed empirically while
+  // developing this fix: SValBuilder::evalBinOp leaves the subtraction
+  // unsimplified (still a compound SymSymExpr), and even an explicit
+  // follow-up assume() on the resulting comparison cannot refute the
+  // "too small" case -- the solver is not merely missing an
+  // optimization here, it structurally cannot correlate two affine
+  // expressions built from the same symbol without recognizing the
+  // syntactic identity itself, which is exactly what this function does
+  // instead, with plain integer arithmetic that needs no solver help at
+  // all once the two expressions are known to share a root symbol.
+  // Deliberately narrow: only a byte-stride (`char`) element type is
+  // handled, since that is the only case where the index and the
+  // allocation's own size argument are expressed in the same units
+  // without a further multiplication this function does not attempt to
+  // peel through (a `wchar_t` buffer sized as `(n+1)*sizeof(WCHAR)`
+  // falls through to the existing machinery, unchanged); only a `+`
+  // between the size argument's root symbol and a literal is handled,
+  // not `-` (a shrinking relationship between an allocation and its own
+  // size argument is not a shape this pattern is meant to bless, and
+  // returning false here just falls through to the real proof attempt
+  // below, exactly as for every other case this cannot establish); and
+  // only the exact same symbol is recognized, not a provably-equal-but-
+  // differently-derived one -- src/internal/linux/handle_path.c's
+  // `r = __malloc((size_t)n + 1); if (n) memcpy(...); r[n] = 0;` still
+  // reports on its `n == 0` branch (where the index is concretized to
+  // the literal 0 rather than staying the symbol `n`), a real remaining
+  // gap this function does not close; see the ownership-lemma commit
+  // message for why that narrower residual was left rather than chased
+  // further. A plain, unchecked width/signedness conversion (`(size_t)n`
+  // at the allocation call vs. the raw `long n` used again as the index,
+  // also from handle_path.c) wraps the same underlying symbol in a
+  // SymbolCast, which is a genuinely different SymExpr object from the
+  // bare symbol -- so a pointer-identity comparison between the two
+  // sides needs to see through any such casts on either side to
+  // recognize they still name the same value (this part of that file's
+  // shape IS handled, by stripCasts below).
+  static SymbolRef stripCasts(SymbolRef Symbol) {
+    while (const auto *Cast = dyn_cast_or_null<SymbolCast>(Symbol))
+      Symbol = Cast->getOperand();
+    return Symbol;
+  }
+
+  static bool sameSymbolExtentProvenInBounds(const ElementRegion *Element,
+                                             SVal BaseExtent, CharUnits Width,
+                                             CheckerContext &C) {
+    SymbolRef ExtentSym = BaseExtent.getAsSymbol();
+    const auto *IntExpr = dyn_cast_or_null<SymIntExpr>(ExtentSym);
+    if (!IntExpr || IntExpr->getOpcode() != BO_Add)
+      return false;
+    CharUnits ElemWidth =
+        C.getASTContext().getTypeSizeInChars(Element->getElementType());
+    if (ElemWidth.getQuantity() != 1)
+      return false;
+    SVal Index = Element->getIndex();
+    SymbolRef IndexSym = Index.getAsSymbol();
+    if (!IndexSym || stripCasts(IntExpr->getLHS()) != stripCasts(IndexSym))
+      return false;
+    const llvm::APSInt &RemainingBytes = IntExpr->getRHS();
+    return RemainingBytes.isNonNegative() &&
+           RemainingBytes.getExtValue() >= Width.getQuantity();
+  }
+
   static bool alignmentProven(const MemRegion *Region, QualType Type,
                               ASTContext &Ctx) {
     if (Type.isNull() || Type->isIncompleteType())
@@ -997,6 +1135,16 @@ public:
     bool NoRealExtentInfo =
         BaseExtent.isUnknownOrUndef() ||
         isa_and_nonnull<SymbolExtent>(BaseExtent.getAsSymbol());
+    if (!NoRealExtentInfo) {
+      if (const auto *Element = dyn_cast<ElementRegion>(Region)) {
+        if (sameSymbolExtentProvenInBounds(Element, BaseExtent, Width, C)) {
+          if (!alignmentProven(Region, Type, C.getASTContext()))
+            report("dereference alignment is not proven valid", Statement,
+                   State, C);
+          return;
+        }
+      }
+    }
     if (NoRealExtentInfo) {
       // With no real extent to compare against, fall back to the same
       // "trust the type" reasoning as the liveness fix: a *fixed*,
@@ -1024,16 +1172,58 @@ public:
                             Builder.getConditionType());
       std::optional<DefinedOrUnknownSVal> Condition =
           Enough.getAs<DefinedOrUnknownSVal>();
+      // A *fixed*, compile-time-known offset (a plain single dereference,
+      // or a struct field reached through one) gets the same "trust the
+      // type" leniency here as the NoRealExtentInfo branch above, once
+      // OwnershipChecker::allocationSizeInBytes started giving this
+      // checker's own allocator family (__malloc, calloc, realloc, ...)
+      // real tracked extents rather than leaving them as placeholders:
+      // a real extent is very often *itself* a compound, data-dependent
+      // expression (`sizeof(struct foo) + extra`, `n * width`, ...), and
+      // the fixed-offset access's "Remaining >= Width" comparison
+      // inherits that same compound-subtraction shape
+      // sameSymbolExtentProvenInBounds exists to work around for the
+      // matching-symbol case above -- but a plain fixed field offset
+      // essentially never matches that narrow pattern, so before this
+      // adjustment, giving __malloc-family allocations real extents
+      // regressed every fixed-offset access into one from "trusted by
+      // type" (no real extent existed to contradict it) to "unprovable,
+      // so reported" (a real, compound extent now exists, but the
+      // solver can't relate it to the fixed offset) -- confirmed
+      // empirically while developing this fix: src/internal/nt/path.c's
+      // `*p`/`b[0..6]`-style fixed-offset accesses into `__malloc`'d
+      // buffers newly regressed from proven to reported the moment
+      // real extent tracking was added, with no code change of their
+      // own. The fix is asymmetric on purpose, matching 0402bed's own
+      // reasoning for the placeholder case: only report a fixed-offset
+      // access when the real tracked extent makes sufficiency PROVABLY
+      // IMPOSSIBLE (`assume(Enough, true)` itself refuted) -- not merely
+      // when sufficiency isn't provable -- so a genuinely too-small
+      // allocation reached through a fixed field offset (0402bed's own
+      // "malloc(4) accessed through an 8-byte field" shape, where the
+      // extent's real value is concrete or otherwise fully resolvable)
+      // is still caught, exactly as before.
+      RegionOffset Offset = Region->getAsOffset();
+      bool FixedOffset = Offset.isValid() && !Offset.hasSymbolicOffset();
       if (!Condition) {
-        report("dereference extent is not proven sufficient", Statement,
-               State, C);
-        return;
-      }
-      ProgramStateRef TooSmall = State->assume(*Condition, false);
-      if (TooSmall) {
-        report("dereference extent is not proven sufficient", Statement,
-               TooSmall, C);
-        return;
+        if (!FixedOffset) {
+          report("dereference extent is not proven sufficient", Statement,
+                 State, C);
+          return;
+        }
+      } else if (FixedOffset) {
+        if (!State->assume(*Condition, true)) {
+          report("dereference extent is not proven sufficient", Statement,
+                 State, C);
+          return;
+        }
+      } else {
+        ProgramStateRef TooSmall = State->assume(*Condition, false);
+        if (TooSmall) {
+          report("dereference extent is not proven sufficient", Statement,
+                 TooSmall, C);
+          return;
+        }
       }
     }
     if (!alignmentProven(Region, Type, C.getASTContext()))
