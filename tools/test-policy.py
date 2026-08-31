@@ -488,13 +488,42 @@ def execution_profile(command: str, explicit: list[str]) -> dict[str, str]:
     return profile
 
 
-def resolve_defaults(path: Path, suite: str, profile: dict[str, str]) -> int:
+def resolve_defaults(path: Path, suite: str, profile: dict[str, str],
+                     cases_file: Path | None = None) -> int:
+    """Resolve every real case of `suite` to a disposition.
+
+    `path` is a defaults file. It needs a row for every real case UNLESS it
+    declares its own baseline via a wildcard row -- case "*", the same
+    spelling parse_selector() already gives "*" for "match any profile"
+    (e.g. `*\t*\tPASS\tno more specific rule matched`, which is exactly
+    what test/posix-opts-expected.txt now ends with, having a real case
+    only when it needs to deviate from that PASS baseline). testlib.resolve()
+    is what actually applies the wildcard, falling back to it only once a
+    case-specific search comes up empty; this function just enumerates
+    which cases to ask it about. test/libc-test-expected.txt carries no such
+    row, by design -- its own header documents that a case with no line is
+    a hard error, not a default-to-ignored -- so nothing here treats a
+    missing wildcard as an error in itself; it only changes what resolve()
+    does with a case that has no row of its own.
+
+    Which cases are "real" is independent of what happens to be listed in
+    `path`: without `cases_file`, it falls back to exactly the cases named
+    by `path`'s own rows, so a from-scratch-required ledger like libc-test's
+    keeps working exactly as before -- a missing row there simply never
+    appears rather than silently passing by default. With `cases_file`
+    (one case name per line, e.g. built by posix-opts.py from its own
+    IFACES.rglob("*.c") discovery), the real case set comes from that
+    independent enumeration instead, so trimming `path` down to only its
+    exceptions cannot make any real case vanish from adjudication --
+    unlisted cases still get resolved, just via the wildcard row rather
+    than an explicit one.
+    """
     rules, errors = load_manifest(PROFILE_MANIFEST)
     if errors:
         for error in errors:
             print(f"test-policy: {error}", file=sys.stderr)
         return 1
-    cases: set[str] = set()
+    file_cases: set[str] = set()
     local_keys: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line or line.startswith("#"):
@@ -525,8 +554,26 @@ def resolve_defaults(path: Path, suite: str, profile: dict[str, str]) -> int:
                   file=sys.stderr)
             return 1
         local_keys.add(key)
-        cases.add(case)
+        file_cases.add(case)
         rules.append(Rule(suite, case, selector, disposition, reason, line_number))
+
+    if cases_file is not None:
+        cases = {
+            line.strip()
+            for line in cases_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+        # "*" is the wildcard row's case name, not a real case -- it never
+        # belongs in the real case set and must not be flagged as stale.
+        stale = sorted(file_cases - cases - {"*"})
+        if stale:
+            print(f"test-policy: {path}: row(s) name case(s) not in the real "
+                  f"{suite} suite (per {cases_file}): " + ", ".join(stale),
+                  file=sys.stderr)
+            return 1
+    else:
+        cases = file_cases
+
     for case in sorted(cases):
         try:
             selected = resolve(rules, suite, case, profile)
@@ -534,7 +581,7 @@ def resolve_defaults(path: Path, suite: str, profile: dict[str, str]) -> int:
             print(f"test-policy: {error}", file=sys.stderr)
             return 1
         print(f"{case}\t{selected.disposition}\t{selected.reason}")
-    unknown = sorted({rule.case for rule in rules if rule.suite == suite} - cases)
+    unknown = sorted({rule.case for rule in rules if rule.suite == suite} - cases - {"*"})
     if unknown:
         print(f"test-policy: profile override(s) name unknown {suite} cases: "
               + ", ".join(unknown), file=sys.stderr)
@@ -566,6 +613,9 @@ def main() -> int:
     parser.add_argument("--profile", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument("--suite")
     parser.add_argument("--defaults", type=Path)
+    parser.add_argument("--cases-file", type=Path,
+                        help="newline-separated real case names, independent "
+                             "of --defaults' own rows (see resolve_defaults)")
     args = parser.parse_args()
     if args.command == "selftest":
         return selftest()
@@ -576,7 +626,8 @@ def main() -> int:
             profile = execution_profile(args.command, args.profile)
         except ValueError as error:
             parser.error(str(error))
-        return resolve_defaults(args.defaults, args.suite, profile)
+        return resolve_defaults(args.defaults, args.suite, profile,
+                                cases_file=args.cases_file)
     fences, errors = inventory()
     rules, manifest_errors = load_manifest(PROFILE_MANIFEST)
     errors.extend(manifest_errors)

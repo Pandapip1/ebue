@@ -184,6 +184,21 @@ def resolve(rules: list[Rule], suite: str, case: str,
         if rule.suite == suite and rule.case == case and rule.matches(profile)
     ]
     if not candidates:
+        # No rule names this case specifically. Fall back to a suite-wide
+        # wildcard rule -- case == "*", the same spelling parse_selector()
+        # already gives "*" for "match any profile" -- rather than only the
+        # `default` argument below. A manifest can then declare its own
+        # baseline disposition as one real, visible row (e.g.
+        # `*\t*\tPASS\tno more specific rule matched`) instead of that
+        # baseline living only as a hidden code-level default. An explicit
+        # per-case rule always wins regardless of its selector's
+        # specificity, because it is only ever considered here, after a
+        # case-specific search has already come up empty.
+        candidates = [
+            rule for rule in rules
+            if rule.suite == suite and rule.case == "*" and rule.matches(profile)
+        ]
+    if not candidates:
         if default is None:
             raise ValueError(f"no disposition for {suite}/{case}")
         if default not in DISPOSITIONS:

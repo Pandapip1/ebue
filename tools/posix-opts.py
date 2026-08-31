@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 
-from testlib import policy_accepts, run_captured
+from testlib import DISPOSITIONS, policy_accepts, run_captured
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -178,15 +178,32 @@ def profile(cfg: dict[str, str], runtime: str, supplied: list[str]) -> list[str]
     return [f"{key}={value}" for key, value in sorted(values.items())]
 
 
-def resolved_policy(profile_terms: list[str]) -> dict[str, tuple[str, str]]:
-    command = [
-        sys.executable, str(ROOT / "tools" / "test-policy.py"), "resolve",
-        "--suite", "posix-opts", "--defaults", str(EXPECTED),
-    ]
-    for term in profile_terms:
-        command.extend(("--profile", term))
-    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, check=False)
+def resolved_policy(profile_terms: list[str],
+                    cases: list[str]) -> dict[str, tuple[str, str]]:
+    # test/posix-opts-expected.txt lists only exceptions (BUG/UNIMPL/NA/
+    # FLAKY) plus one trailing wildcard row (case "*") that declares PASS
+    # as the suite's own baseline for everything else -- testlib.resolve()
+    # applies that row itself once a case-specific search comes up empty,
+    # so the PASS default is visible data in the ledger, not a hidden
+    # argument here. `cases` -- this module's own IFACES.rglob("*.c")
+    # discovery, the same list `main()` builds and builds/runs every entry
+    # of -- is handed to test-policy.py explicitly so that "which cases are
+    # real" never depends on what the (now much shorter) defaults file
+    # happens to mention. Passed via a temp file rather than one argument
+    # per case: 1610 --profile-sized argv entries would risk the
+    # platform's command-line length limit.
+    with tempfile.TemporaryDirectory(prefix="ntlibc-posix-opts-cases.") as name:
+        cases_path = Path(name) / "cases.txt"
+        cases_path.write_text("\n".join(cases) + "\n", encoding="utf-8")
+        command = [
+            sys.executable, str(ROOT / "tools" / "test-policy.py"), "resolve",
+            "--suite", "posix-opts", "--defaults", str(EXPECTED),
+            "--cases-file", str(cases_path),
+        ]
+        for term in profile_terms:
+            command.extend(("--profile", term))
+        result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, check=False)
     if result.returncode:
         raise RuntimeError(result.stdout.strip())
     policy: dict[str, tuple[str, str]] = {}
@@ -194,6 +211,24 @@ def resolved_policy(profile_terms: list[str]) -> dict[str, tuple[str, str]]:
         case, disposition, reason = line.split("\t", 2)
         policy[case] = (disposition, reason)
     return policy
+
+
+def parse_counts_header(text: str) -> dict[str, int] | None:
+    """Pull the `# COUNTS ...` line's disposition tally out of EXPECTED.
+
+    Purely a cross-check against what gets resolved for the full, real case
+    list (see resolved_policy()) -- nothing downstream depends on this
+    value, it exists so a hand-edited header can never silently drift from
+    what the file actually implies once defaulting is applied.
+    """
+    for line in text.splitlines():
+        if line.startswith("# COUNTS"):
+            counts: dict[str, int] = {}
+            for term in line.split()[2:]:
+                key, _, value = term.partition("=")
+                counts[key] = int(value)
+            return counts
+    return None
 
 
 def compile_command(cfg: dict[str, str], source: Path, output: Path) -> list[str]:
@@ -399,10 +434,14 @@ def main() -> int:
     if not (ROOT / "lib" / "libc.a").is_file():
         raise RuntimeError("lib/libc.a is missing; run make first")
     profile_terms = profile(cfg, args.runtime, args.profile)
-    policy = resolved_policy(profile_terms)
+    # Enumerate the real cases FIRST, independent of test/posix-opts-expected.txt
+    # (which now lists only exceptions): resolved_policy() needs this list to
+    # know which unlisted cases should default to PASS rather than silently
+    # never being adjudicated at all.
     discovered = sorted(
         str(path.relative_to(IFACES)) for path in IFACES.rglob("*.c")
     )
+    policy = resolved_policy(profile_terms, discovered)
     if len(discovered) != CENSUS or set(discovered) != set(policy):
         missing = sorted(set(discovered) - set(policy))
         stale = sorted(set(policy) - set(discovered))
@@ -410,6 +449,19 @@ def main() -> int:
             f"census/policy mismatch: {len(discovered)} sources; "
             f"unannotated={missing[:8]}, stale={stale[:8]}"
         )
+    header_counts = parse_counts_header(EXPECTED.read_text(encoding="utf-8"))
+    if header_counts is not None:
+        actual_counts: dict[str, int] = {disposition: 0 for disposition in DISPOSITIONS}
+        for disposition, _reason in policy.values():
+            actual_counts[disposition] = actual_counts.get(disposition, 0) + 1
+        compare_header = {disposition: header_counts.get(disposition, 0)
+                          for disposition in DISPOSITIONS}
+        if actual_counts != compare_header:
+            raise RuntimeError(
+                f"{EXPECTED}'s '# COUNTS' header ({header_counts}) does not "
+                f"match what actually resolves ({actual_counts}) once "
+                f"unlisted cases default to PASS; update the header"
+            )
     runner = shlex.split(args.runner, posix=os.name != "nt")
     # "windows": a real-Windows leg runs the built .exe directly, no
     # Wine prefix. "linux": the same shape, for a native PLATFORM=linux
