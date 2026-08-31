@@ -69,7 +69,8 @@ void *__plat_dlopen(const char *file, int mode);
  * which dlsym.html itself says to resolve with dlerror(), the same
  * ambiguity every backend here inherits rather than resolves
  * differently. */
-void *__plat_dlsym(void *__restrict handle, const char *__restrict name);
+void *__plat_dlsym(void *__restrict handle,
+                   const char *__restrict name __NTLIBC_STRING);
 
 /* dlclose(): release `handle`. 0 on success; nonzero and
  * __plat_dlerror() describes why on failure. */

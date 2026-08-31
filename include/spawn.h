@@ -121,7 +121,8 @@ int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *) __attribute__
 int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t *, int);
 int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *, int, int);
 int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t *__restrict,
-	int, const char *__restrict, int, mode_t) __attribute__((nonnull(3)));
+	int, const char *__restrict __NTLIBC_STRING, int, mode_t)
+	__attribute__((nonnull(3)));
 
 /* Every one of these (destroy() excepted) unconditionally dereferences
  * its posix_spawnattr_t *a -- a plain read/write of one of a's own

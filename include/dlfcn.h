@@ -63,7 +63,7 @@ extern "C" {
 #define RTLD_LOCAL  8
 
 void *dlopen(const char *, int);
-void *dlsym(void *__restrict, const char *__restrict);
+void *dlsym(void *__restrict, const char *__restrict __NTLIBC_STRING);
 int   dlclose(void *);
 char *dlerror(void);
 
