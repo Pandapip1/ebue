@@ -55,6 +55,10 @@ intToPointerCast:src/signal/signal.c
 # system() passes SIG_IGN to signal() while it runs the child, same
 # integer-literal-to-pointer cast as above.
 intToPointerCast:src/stdlib/system.c
+# tee(1p) -i passes SIG_IGN to signal() to ignore SIGINT for the
+# duration of the copy (XCU tee(1p): "Ignore the SIGINT signal"), same
+# integer-literal-to-pointer cast as above.
+intToPointerCast:src/util/tee.c
 
 # CLIENT_ID.UniqueProcess/UniqueThread are declared HANDLE by NT but hold
 # small integer ids, which is what a pid_t is; the cast back is the
