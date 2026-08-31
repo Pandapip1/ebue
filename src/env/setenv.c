@@ -26,8 +26,8 @@ static int is_putenv(char *s) __attribute__((nonnull(1)));
  * array (and src/thread/{children,fork,wait}.c's __children[i]). */
 static int is_putenv(char *s)
 {
-	size_t i;
-	for (i = 0; i < nputenv; i++) if (putenv_strings[i] == s) return 1;
+	size_t i, count = nputenv;
+	for (i = 0; i < count; i++) if (putenv_strings[i] == s) return 1;
 	return 0;
 }
 
@@ -92,15 +92,21 @@ int putenv(char *s)
 
 int unsetenv(const char *name)
 {
-	size_t l;
-	char **e;
+	size_t l, remaining;
 	if (!name) { errno = EINVAL; return -1; }
 	l = strcspn(name, "=");
 	if (!l || name[l]) { errno = EINVAL; return -1; }
-	while ((e = __env_find(name, l))) {
-		char **p = e;
-		if (!is_putenv(*e)) free(*e);
-		do p[0] = p[1]; while (*p++);
+	/* Each pass removes one entry, so the initial environment size is an
+	 * exact upper bound even when an inherited environment contains the
+	 * same name more than once. */
+	for (remaining = env_count(); remaining > 0; remaining--) {
+		char **p = __env_find(name, l);
+		if (!p) break;
+		if (!is_putenv(*p)) free(*p);
+		do {
+			p[0] = p[1];
+			p++;
+		} while (*p);
 	}
 	return 0;
 }
