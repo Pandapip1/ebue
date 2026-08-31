@@ -6,11 +6,12 @@
 #define _Reg long long
 
 #define __BYTE_ORDER 1234
-/* Unlike arch/x86_64/bits (Windows x86_64, LLP64: `long` stays 32-bit),
- * this arch is a real Linux/LP64 target -- `long` is genuinely 64-bit
- * here, so __LONG_MAX must say so; leaving it at the LLP64 value would
- * silently mis-derive every DSL-generated `long`-typed MIN/MAX pair. */
+/* Linux/aarch64 is LP64, while Windows/aarch64 is LLP64. */
+#ifdef _WIN32
+#define __LONG_MAX 0x7fffffffL
+#else
 #define __LONG_MAX 0x7fffffffffffffffL
+#endif
 
 #ifndef __cplusplus
 #if defined(__NEED_wchar_t) && !defined(__DEFINED_wchar_t)
