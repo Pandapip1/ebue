@@ -205,6 +205,59 @@ static int bi_mv(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== the Tier-1 filesystem utilities ==================================
+ *
+ * mkdir(1p), rmdir(1p), mkfifo(1p), ln(1p), chmod(1p), touch(1p): same
+ * reasoning as test/true/false above -- each also exists as a real
+ * standalone obj/bin/<name>.exe (src/util/<name>.c, declared in
+ * src/internal/util.h), and stays registered here too so a script run
+ * before PATH lookup or __spawn() can be trusted still has them.  None
+ * of these six is a 2.14 special built-in and none has any effect on the
+ * shell execution environment itself (2.12's list -- working directory,
+ * shell variables, open files, and so on) the way `cd` does, so
+ * `env_effect` is 0 for all six, same as `test`/`true`/`false` above. */
+static int bi_mkdir(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_mkdir(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_mkdir_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_rmdir(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_rmdir(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_rmdir_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_mkfifo(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_mkfifo(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_mkfifo_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_ln(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_ln(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_ln_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_chmod(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_chmod(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_chmod_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_touch(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_touch(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_touch_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* XCU 2.14: "exit [n] -- ... shall cause the shell to exit with the
  * exit status specified by the unsigned decimal integer n.  If n is
  * specified, but its value is not between 0 and 255 inclusively, the
@@ -540,6 +593,12 @@ static const struct sh_builtin builtins[] = {
 	{ "rm",    0, 0, bi_rm },
 	{ "cp",    0, 0, bi_cp },
 	{ "mv",    0, 0, bi_mv },
+	{ "mkdir",  0, 0, bi_mkdir },
+	{ "rmdir",  0, 0, bi_rmdir },
+	{ "mkfifo", 0, 0, bi_mkfifo },
+	{ "ln",     0, 0, bi_ln },
+	{ "chmod",  0, 0, bi_chmod },
+	{ "touch",  0, 0, bi_touch },
 	{ 0, 0, 0, 0 }
 };
 

@@ -1,0 +1,75 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * mkfifo(1p): `mkfifo [-m mode] file...`
+ *
+ * OPTIONS:
+ *  -m mode  "Set the file permission bits of the newly-created FIFO to
+ *            the specified mode value.  The mode option-argument shall
+ *            be the same as the mode operand defined for the chmod
+ *            utility.  In the symbolic_mode strings, the op characters
+ *            '+' and '-' shall be interpreted relative to an assumed
+ *            initial mode of a=rw." -- note a=rw, not mkdir(1p)'s a=rwx:
+ *            a FIFO is not executable by default.
+ *
+ * EXIT STATUS: "0 All the specified FIFO special files were created
+ * successfully." ">0 An error occurred." -- diagnose-and-continue, same
+ * shape as src/util/mkdir_util.c and src/util/rmdir.c.
+ *
+ * This tree's mkfifo() (src/stat/chmod.c) is a real ENOSYS stub: NT has
+ * no native named-pipe object that maps onto POSIX FIFO semantics the
+ * way NTFS reparse points map onto symlinks, so every operand here fails
+ * with a real "Function not implemented" diagnostic rather than a
+ * silent, fake success -- exactly the "propagate the stub honestly"
+ * requirement this utility exists to prove, not an oversight.  -m's
+ * mode string is still parsed and validated before that call, so a
+ * malformed -m argument is reported as such (a usage error) rather than
+ * being swallowed by the ENOSYS from mkfifo() itself.
+ */
+#include <string.h>
+#include <stdio.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include "libc.h"
+#include "util.h"
+#include "modeparse.h"
+
+int __util_mkfifo_main(int argc, char **argv)
+{
+	int i, fail = 0;
+	const char *mode_spec = 0;
+	mode_t mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
+
+	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
+		if (!strcmp(argv[i], "--")) { i++; break; }
+		if (!strcmp(argv[i], "-m")) {
+			if (i + 1 >= argc) {
+				fprintf(stderr, "mkfifo: -m: option requires an argument\n");
+				return 1;
+			}
+			mode_spec = argv[++i];
+			continue;
+		}
+		fprintf(stderr, "mkfifo: %s: invalid option\n", argv[i]);
+		return 1;
+	}
+	if (i >= argc) {
+		fprintf(stderr, "mkfifo: missing operand\n");
+		return 1;
+	}
+
+	if (mode_spec) {
+		/* "-m mode ... relative to an assumed initial mode of a=rw" */
+		if (__util_parse_mode("mkfifo", mode_spec, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH,
+		                      (mode_t)__umask_get(), &mode) < 0)
+			return 1;
+	}
+
+	for (; i < argc; i++) {
+		if (mkfifo(argv[i], mode) != 0) {
+			fprintf(stderr, "mkfifo: %s: %s\n", argv[i], strerror(errno));
+			fail = 1;
+		}
+	}
+	return fail;
+}

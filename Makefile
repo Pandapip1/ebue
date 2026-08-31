@@ -551,6 +551,12 @@ obj/test/util-pathnames.exe: obj/bin/basename.exe obj/bin/dirname.exe obj/bin/pa
 # as real processes and needs all four to exist first.
 obj/test/util-fileops.exe: obj/bin/rm.exe obj/bin/cp.exe obj/bin/mv.exe $(SH_EXE)
 
+# test/util-fsops.c is the same idea, for the filesystem-mutating tier:
+# mkdir(1p)/rmdir(1p)/mkfifo(1p)/ln(1p)/chmod(1p)/touch(1p), each spawned
+# as obj/bin/<name>.exe and exercised as a shell built-in via
+# obj/sh/sh.exe -c, so all six .exes plus the shell need to exist first.
+obj/test/util-fsops.exe: obj/bin/mkdir.exe obj/bin/rmdir.exe obj/bin/mkfifo.exe obj/bin/ln.exe obj/bin/chmod.exe obj/bin/touch.exe $(SH_EXE)
+
 # test/delayall.c and its plugin DLL: proof that an *unmodified* program
 # (plain extern, ordinary call, no ntlibc-specific macro at the call
 # site) gets $ORIGIN delay loading through -Wl,--delay-all and
