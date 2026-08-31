@@ -239,8 +239,8 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 		if (rp == (unsigned long)-1) {
 			/* "If a right precision is not included, a default
 			 * specified by the current locale is used." */
-			char fd = (char)(intl ? lc->int_frac_digits : lc->frac_digits);
-			rp = (fd >= 0 && fd < CHAR_MAX) ? (unsigned long)fd : 2;
+			unsigned char fd = (unsigned char)(intl ? lc->int_frac_digits : lc->frac_digits);
+			rp = fd < (unsigned char)CHAR_MAX ? (unsigned long)fd : 2;
 		}
 
 		sym = nosym ? "" : (intl ? lc->int_curr_symbol : lc->currency_symbol);

@@ -108,7 +108,7 @@
  * not. */
 
 #define NTLIBC_MALLOC_PAGE_SIZE 4096u
-#define NTLIBC_MALLOC_SLAB_BYTES (64u * 1024u)
+#define NTLIBC_MALLOC_SLAB_BYTES ((size_t)64 * 1024u)
 #define NTLIBC_MALLOC_HDR_SIZE 16u
 #define NTLIBC_MALLOC_NUM_CLASSES 12 /* 16, 32, 64, ..., 16 << 11 = 32768 */
 

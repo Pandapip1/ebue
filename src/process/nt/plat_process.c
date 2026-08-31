@@ -231,25 +231,12 @@ static int append_prog(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 		if (!nb) { errno = ENOMEM; return -1; }
 		*buf = nb; *cap = nc;
 	}
-	if (need_quote) (*buf)[(*len)++] = '"'; // NOLINT(clang-analyzer-core.NullDereference) -- the analyzer
-		// considers *buf == NULL reachable here without the realloc above having run, but
-		// __array_next_capacity's initial-capacity floor (32 above) makes nc >= 32 > 0
-		// whenever *cap starts at 0, so nc != *cap is always true on that path and the
-		// realloc always runs first; it cannot reason through that arithmetic.
-		//
-		// The NOLINTs above suppress clang-tidy's own bundled checks; this
-		// project's own ownership stage (tools/clang/OwnershipChecker.cpp,
-		// a separate --analyze pass with no NOLINT support) still reports
-		// this same site as "pointer dereference is not proven nonnull in
-		// append_prog: (*buf)[(*len)++]" for the identical reason -- it is
-		// about *buf (this function's own buf is already required, see
-		// this function's forward declaration above), a value the
-		// realloc-and-reassign pattern sets, not a parameter, so nonnull
-		// cannot describe it. Left as a disclosed residual rather than a
-		// checker lemma fix: this is the only site in this file the
-		// pattern applies to, and the arithmetic argument above already
-		// makes the proof by hand.
-	memcpy(*buf + *len, arg, n * sizeof(WCHAR)); // NOLINT(clang-analyzer-unix.cstring.NullArg) -- same reachability the note above rules out
+	/* The growth helper guarantees allocation from the initial zero-capacity
+	 * state. Keep that invariant explicit at the use site as a defensive
+	 * fallback if its contract ever changes. */
+	if (!*buf) { errno = ENOMEM; return -1; }
+	if (need_quote) (*buf)[(*len)++] = '"';
+	memcpy(*buf + *len, arg, n * sizeof(WCHAR));
 	*len += n;
 	if (need_quote) (*buf)[(*len)++] = '"';
 	return 0;

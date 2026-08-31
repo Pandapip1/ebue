@@ -174,10 +174,10 @@ int __util_tsort_main(int argc, char **argv)
 			size_t newcap;
 			char **g;
 			if (!__util_array_capacity(tokcap, ntok, 1, 64, sizeof *tok, &newcap)) {
-				fprintf(stderr, "tsort: out of memory\n"); free(buf); return 1;
+				fprintf(stderr, "tsort: out of memory\n"); free(tok); free(buf); return 1;
 			}
 			g = __util_reallocarray(tok, newcap, sizeof *tok);
-			if (!g) { fprintf(stderr, "tsort: out of memory\n"); free(buf); return 1; }
+			if (!g) { fprintf(stderr, "tsort: out of memory\n"); free(tok); free(buf); return 1; }
 			tok = g;
 			tokcap = newcap;
 		}

@@ -157,7 +157,7 @@ static const char *parse(const char *s, const char *f, struct tm *tm,
 				/* %C already ran (in either order relative to %y): the
 				 * century it set wins, %y only supplies the low two
 				 * digits. */
-				tm->tm_year = (int)(*century * 100 + v - 1900);
+				tm->tm_year = (int)((long)*century * 100 + v - 1900);
 			} else {
 				/* No %C in this format: fall back to the traditional
 				 * "%y-alone" pivot -- 69..99 is 1969..1999, 00..68 is

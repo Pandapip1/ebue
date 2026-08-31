@@ -199,7 +199,7 @@ static int read_all(const char *path, struct jline **out, size_t *nout, int have
 
 static const char *field_ptr(const struct jline *l, int field1based, size_t *outlen)
 {
-	if (field1based < 1 || (size_t)(field1based - 1) >= l->nfields) { *outlen = 0; return ""; }
+	if (!l || field1based < 1 || (size_t)(field1based - 1) >= l->nfields) { *outlen = 0; return ""; }
 	{
 		struct field fl = l->fields[field1based - 1];
 		*outlen = fl.end - fl.start;
