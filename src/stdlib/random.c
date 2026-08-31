@@ -17,7 +17,7 @@ static uint32_t init_state[32];   /* 31 words of state + 1 slot */
 static uint32_t *x = init_state + 1;
 static int n = 31, i = 3, j = 0;
 
-static long random_step(void);
+__wraps static long random_step(void);
 
 /* Both LCGs are meant to overflow -- that is the generator, taken
  * modulo 2**32/2**64 by construction, used only to seed the additive
@@ -84,7 +84,7 @@ char *setstate(char *state)
  * x[i-3] + x[i-31] mod 2**32) -- the overflow is the point, not a bug,
  * and matches glibc/musl's sequence exactly because they rely on the
  * same wraparound. */
-static long random_step(void)
+__wraps static long random_step(void)
 {
 	uint32_t k;
 	if (n == 0) { x[0] = lcg31(x[0]); return (long)x[0]; }

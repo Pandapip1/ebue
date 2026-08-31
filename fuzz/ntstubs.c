@@ -4973,14 +4973,6 @@ NTSTATUS NTAPI NtReleaseSemaphore(HANDLE handle, LONG release,
 	file->sem->count += release;
 	return STATUS_SUCCESS;
 }
-/* src/signal/signal.c's segv_code() calls this to tell SEGV_MAPERR from
- * SEGV_ACCERR, but only from inside exception_handler(), which this
- * file's RtlAddVectoredExceptionHandler() (below) never actually
- * invokes -- a native build has no real NT exception to forward (see
- * this file's header comment and test/posix-signal.c's
- * NATIVE_NO_FAULT_BRIDGE). Needed only so the link succeeds. */
-NOTIMPL(NtQueryVirtualMemory, (HANDLE a, PVOID b, MEMORY_INFORMATION_CLASS c, PVOID d, SIZE_T e, SIZE_T *f))
-
 /* ---- virtual memory, backed by the host's real mappings ----------
  *
  * src/mman/mman.c is the first thing in this library to use the
@@ -5047,8 +5039,17 @@ NOTIMPL(NtQueryVirtualMemory, (HANDLE a, PVOID b, MEMORY_INFORMATION_CLASS c, PV
 #define H_MAP_FIXED     0x10
 #define H_MAP_ANONYMOUS 0x20
 
-#define NTSTUB_VM_MAX 256
-static struct { void *base; size_t size; } ntstub_vm[NTSTUB_VM_MAX];
+/* The production mapping registry grows dynamically; keep the native shim's
+ * substrate comfortably above the 320-live-mapping regression probe so the
+ * shim does not reintroduce the old implementation limit being tested. */
+#define NTSTUB_VM_MAX 512
+static struct {
+	void *base;
+	size_t size;
+	ULONG state;
+	ULONG prot;
+	int fresh;
+} ntstub_vm[NTSTUB_VM_MAX];
 
 /* Tracked file-backed section views (NtMapViewOfSection, below), needed
  * here too: NtFreeVirtualMemory's MEM_DECOMMIT has to refuse a range
@@ -5060,6 +5061,80 @@ static struct { void *base; size_t size; } ntstub_vm[NTSTUB_VM_MAX];
 #define NTSTUB_VIEW_MAX 64
 struct ntstub_view { void *base; size_t size; struct vnode *v; long long off; int writable_shared; };
 static struct ntstub_view ntstub_views[NTSTUB_VIEW_MAX];
+
+/* Answer the MemoryBasicInformation queries made by the NT mman backend.
+ * Anonymous reservations and section views are already tracked above, so
+ * exposing that bookkeeping is both more faithful and less fragile than the
+ * old STATUS_NOT_IMPLEMENTED link stub.  The first query after a reservation
+ * is the backend's allocation-size validation, before mman.c has published
+ * the mapping in its own registry; subsequent queries use that registry's
+ * page liveness so a partially unmapped range is reported as reserved rather
+ * than committed. */
+NTSTATUS NTAPI NtQueryVirtualMemory(HANDLE proc, PVOID addr,
+                                    MEMORY_INFORMATION_CLASS cls, PVOID out,
+                                    SIZE_T len, SIZE_T *got)
+{
+	MEMORY_BASIC_INFORMATION *mbi = out;
+	uintptr_t q = (uintptr_t)addr;
+	int i;
+
+	if (got) *got = sizeof *mbi;
+	if (proc != NtCurrentProcess() || cls != MemoryBasicInformation ||
+	    !out || len < sizeof *mbi)
+		return STATUS_INFO_LENGTH_MISMATCH;
+
+	for (i = 0; i < NTSTUB_VM_MAX; i++) {
+		uintptr_t lo, off;
+		size_t region;
+		if (!ntstub_vm[i].base) continue;
+		lo = (uintptr_t)ntstub_vm[i].base;
+		if (q < lo) continue;
+		off = q - lo;
+		if (off >= ntstub_vm[i].size) continue;
+		memset(mbi, 0, sizeof *mbi);
+		mbi->AllocationBase = ntstub_vm[i].base;
+		mbi->AllocationProtect = ntstub_vm[i].prot;
+		mbi->Protect = ntstub_vm[i].prot;
+		if (ntstub_vm[i].fresh) {
+			mbi->BaseAddress = ntstub_vm[i].base;
+			mbi->RegionSize = ntstub_vm[i].size;
+			mbi->State = ntstub_vm[i].state;
+			ntstub_vm[i].fresh = 0;
+		} else {
+			uintptr_t page = q & ~(uintptr_t)4095;
+			region = ntstub_vm[i].size - (size_t)(page - lo);
+			if (region > 4096) region = 4096;
+			mbi->BaseAddress = (void *)page;
+			mbi->RegionSize = region;
+			mbi->State = __mman_address_is_live((void *)page) ?
+			             MEM_COMMIT : MEM_RESERVE;
+		}
+		return STATUS_SUCCESS;
+	}
+
+	for (i = 0; i < NTSTUB_VIEW_MAX; i++) {
+		uintptr_t lo, off, page;
+		size_t region;
+		if (!ntstub_views[i].base) continue;
+		lo = (uintptr_t)ntstub_views[i].base;
+		if (q < lo) continue;
+		off = q - lo;
+		if (off >= ntstub_views[i].size) continue;
+		page = q & ~(uintptr_t)4095;
+		region = ntstub_views[i].size - (size_t)(page - lo);
+		if (region > 4096) region = 4096;
+		memset(mbi, 0, sizeof *mbi);
+		mbi->BaseAddress = (void *)page;
+		mbi->AllocationBase = ntstub_views[i].base;
+		mbi->AllocationProtect = PAGE_READWRITE;
+		mbi->RegionSize = region;
+		mbi->State = __mman_address_is_live((void *)page) ?
+		             MEM_COMMIT : MEM_RESERVE;
+		mbi->Protect = PAGE_READWRITE;
+		return STATUS_SUCCESS;
+	}
+	return STATUS_INVALID_PARAMETER;
+}
 
 /* Whether [base, base+size) overlaps any tracked section view. */
 static int ntstub_view_overlaps(void *base, size_t size)
@@ -5109,6 +5184,9 @@ NTSTATUS NTAPI NtAllocateVirtualMemory(HANDLE proc, PVOID *base, ULONG_PTR zb,
 			if (ntstub_vm[i].base) continue;
 			ntstub_vm[i].base = (void *)r;
 			ntstub_vm[i].size = *size;
+			ntstub_vm[i].state = (type & MEM_COMMIT) ? MEM_COMMIT : MEM_RESERVE;
+			ntstub_vm[i].prot = prot;
+			ntstub_vm[i].fresh = 1;
 			*base = (void *)r;
 			return STATUS_SUCCESS;
 		}
@@ -5138,6 +5216,9 @@ NTSTATUS NTAPI NtFreeVirtualMemory(HANDLE proc, PVOID *base, SIZE_T *size, ULONG
 			syscall(SYS_munmap, (long)ntstub_vm[i].base, (long)ntstub_vm[i].size);
 			ntstub_vm[i].base = NULL;
 			ntstub_vm[i].size = 0;
+			ntstub_vm[i].state = 0;
+			ntstub_vm[i].prot = 0;
+			ntstub_vm[i].fresh = 0;
 			return STATUS_SUCCESS;
 		}
 		return STATUS_INVALID_PARAMETER;
