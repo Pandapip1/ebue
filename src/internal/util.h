@@ -75,6 +75,24 @@ int __util_test_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_touch_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_true_main(int argc, char **argv) __attribute__((__pure__));
 
+/* Tier 2: the data-copying/reporting tier (dd(1p), df(1p), du(1p),
+ * cksum(1p)) plus the two uuencoding utilities (uuencode(1p),
+ * uudecode(1p)) -- see each src/util/<name>.c for its own XCU citations
+ * and documented scope narrowings (df's "no operands" case, dd's conv=
+ * coverage, du's -r reading).  None is __pure__: dd/uuencode/uudecode
+ * read real files (or stdin) and dd/uudecode write them, df/du query
+ * and walk the real filesystem, and cksum reads real files -- every one
+ * genuinely depends on outside state a repeated call could see change.
+ * Each still gets nonnull(2) for the same reason the Tier 1 block above
+ * does: a real argv from a real caller is never NULL, and a usage-error
+ * path taken with argc==1 still needs argv[0] for its own diagnostic. */
+int __util_cksum_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_dd_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_df_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_du_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_uudecode_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_uuencode_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 /* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
  * src/util/rm.c -----------------------------------------------------
  *

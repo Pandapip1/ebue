@@ -258,6 +258,64 @@ static int bi_touch(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== the data-copying/reporting tier ===================================
+ *
+ * dd(1p), df(1p), du(1p), cksum(1p), uuencode(1p), uudecode(1p): same
+ * reasoning as the Tier 1 filesystem utilities above -- each also exists
+ * as a real standalone obj/bin/<name>.exe (src/util/<name>.c, declared in
+ * src/internal/util.h), and stays registered here too so a script run
+ * before PATH lookup or __spawn() can be trusted still has them.  None of
+ * these six is a 2.14 special built-in and none has any effect on the
+ * shell execution environment itself (2.12's list), so `env_effect` is 0
+ * for all six, same as every other regular built-in above.  dd(1p)'s own
+ * SIGINT handling (src/util/dd.c's header comment) is written to be safe
+ * running in-process exactly like this: it never calls exit()/_exit()
+ * from its handler, only sets a flag its own copy loop polls, and it
+ * restores the previous SIGINT disposition before returning -- so
+ * running `dd` as a built-in never leaves this shell process with a
+ * stale signal handler or gets torn down by one. */
+static int bi_dd(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_dd(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_dd_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_df(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_df(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_df_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_du(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_du(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_du_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_cksum(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_cksum(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_cksum_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_uuencode(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_uuencode(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_uuencode_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_uudecode(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_uudecode(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_uudecode_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* XCU 2.14: "exit [n] -- ... shall cause the shell to exit with the
  * exit status specified by the unsigned decimal integer n.  If n is
  * specified, but its value is not between 0 and 255 inclusively, the
@@ -599,6 +657,12 @@ static const struct sh_builtin builtins[] = {
 	{ "ln",     0, 0, bi_ln },
 	{ "chmod",  0, 0, bi_chmod },
 	{ "touch",  0, 0, bi_touch },
+	{ "dd",       0, 0, bi_dd },
+	{ "df",       0, 0, bi_df },
+	{ "du",       0, 0, bi_du },
+	{ "cksum",    0, 0, bi_cksum },
+	{ "uuencode", 0, 0, bi_uuencode },
+	{ "uudecode", 0, 0, bi_uudecode },
 	{ 0, 0, 0, 0 }
 };
 
