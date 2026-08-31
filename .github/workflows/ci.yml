@@ -301,6 +301,9 @@ jobs:
           - { stage: cppcheck, packages: cppcheck }
           - { stage: shell, packages: shellcheck }
           - { stage: sizearith, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: abizeroinit, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: initproof, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: errno, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: undefined, packages: "" }
           - { stage: unreferenced, packages: clang }
           - { stage: widthmod, packages: "" }
