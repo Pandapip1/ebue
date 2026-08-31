@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: (C) 2026 Gavin John
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# ntlibc
+# ebue (Easy Bootstrap Unix Environment)
 
 A from-scratch C standard library for Windows NT that talks to the system
 directly through ntdll, rather than kernel32 or any other DLL layered on

@@ -125,6 +125,21 @@ int __util_printf_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_split_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_tabs_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* Tier 2 continued: sorting/set-operation utilities (XCU sort(1p),
+ * uniq(1p), comm(1p), join(1p), tsort(1p)) -- none is __pure__: all
+ * read a real file or stdin (or, for sort -o/uniq's second operand,
+ * write one), so a repeated call with the same argv is not guaranteed
+ * to answer the same way twice (a changed input file, a different
+ * stdin stream). Each has its whole logic in src/util/<name>.c, no
+ * basename collision with any existing src/ file (checked before
+ * naming these -- see this header's own comment above for why that
+ * check matters). */
+int __util_comm_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_join_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_sort_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_tsort_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_uniq_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 /* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
  * src/util/rm.c -----------------------------------------------------
  *

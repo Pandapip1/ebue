@@ -1,0 +1,241 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * tsort(1p): `tsort [file]`.  "The standard input (or a single file
+ * operand) shall consist of pairs of items (non-empty strings)
+ * separated by <blank> characters ... Pairs of different items
+ * indicate ordering.  Pairs of identical items indicate presence, but
+ * not ordering."  Output: "a totally ordered list of items consistent
+ * with [that] partial ordering", one item per line.
+ *
+ * An odd number of whitespace-separated tokens is malformed input (the
+ * pairs don't close) and is refused with a diagnostic and a nonzero
+ * exit rather than silently dropping the trailing token.
+ *
+ * ALGORITHM: Kahn's algorithm (repeatedly output any node with no
+ * remaining unsatisfied predecessor, then drop its outgoing edges) --
+ * chosen specifically because it makes cycle detection fall out for
+ * free: standard textbook proof is that Kahn's algorithm empties the
+ * whole graph if and only if the graph is acyclic, so "nodes remain but
+ * none has indegree zero" *is* "there is a cycle", not a heuristic
+ * approximation of one.  XCU does not constrain which valid ordering to
+ * pick when more than one exists (nothing in tsort(1p) says so, and
+ * nothing here claims to match any particular real implementation's tie
+ * -break) -- this file breaks ties by node-discovery order (the order
+ * each name was first seen in the input), which is simply whichever
+ * deterministic choice Kahn's algorithm's ready-queue naturally makes
+ * with a FIFO, not a claim that this is *the* required order.
+ *
+ * CYCLE DIAGNOSTIC: real XCU tsort(1p) text is silent on the exact
+ * wording (its own EXTENDED DESCRIPTION only requires that "The
+ * standard error shall be used only for diagnostic messages"), but a
+ * cycle is unambiguously an error case per plain reading of "totally
+ * ordered list ... consistent with a partial ordering" -- an input with
+ * a cycle has no such ordering to produce.  This file stops Kahn's
+ * algorithm the moment it stalls (rather than looping forever waiting
+ * for a zero-indegree node that will never appear), reports every
+ * still-unresolved node by name on stderr, and exits nonzero; whatever
+ * prefix was already validly ordered has already been written to
+ * stdout by that point and is left there rather than un-written, since
+ * it is a real, correct partial answer and not part of the cycle.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <errno.h>
+#include "util.h"
+
+struct node {
+	char *name;
+	int indeg;
+	int *succ;
+	size_t nsucc, cap;
+	int done;
+};
+
+static struct node *nodes;
+static size_t nnodes, nodecap;
+
+static int find_node(const char *name)
+{
+	size_t i;
+	for (i = 0; i < nnodes; i++)
+		if (!strcmp(nodes[i].name, name)) return (int)i;
+	return -1;
+}
+
+static int get_or_add(const char *name)
+{
+	int idx = find_node(name);
+	if (idx >= 0) return idx;
+
+	if (nnodes >= nodecap) {
+		size_t newcap = nodecap ? nodecap * 2 : 64;
+		struct node *g = realloc(nodes, newcap * sizeof *nodes);
+		if (!g) return -1;
+		nodes = g;
+		nodecap = newcap;
+	}
+	nodes[nnodes].name = strdup(name);
+	nodes[nnodes].indeg = 0;
+	nodes[nnodes].succ = 0;
+	nodes[nnodes].nsucc = 0;
+	nodes[nnodes].cap = 0;
+	nodes[nnodes].done = 0;
+	return (int)nnodes++;
+}
+
+static void add_edge(int a, int b)
+{
+	if (nodes[a].nsucc >= nodes[a].cap) {
+		size_t newcap = nodes[a].cap ? nodes[a].cap * 2 : 8;
+		int *g = realloc(nodes[a].succ, newcap * sizeof *nodes[a].succ);
+		if (!g) return;
+		nodes[a].succ = g;
+		nodes[a].cap = newcap;
+	}
+	nodes[a].succ[nodes[a].nsucc++] = b;
+	nodes[b].indeg++;
+}
+
+static char *slurp(FILE *f, size_t *outlen)
+{
+	size_t cap = 65536, len = 0;
+	char *buf = malloc(cap);
+	size_t got;
+
+	if (!buf) return 0;
+	for (;;) {
+		if (len == cap) {
+			cap *= 2;
+			{
+				char *g = realloc(buf, cap);
+				if (!g) { free(buf); return 0; }
+				buf = g;
+			}
+		}
+		got = fread(buf + len, 1, cap - len, f);
+		len += got;
+		if (got == 0) break;
+	}
+	*outlen = len;
+	return buf;
+}
+
+int __util_tsort_main(int argc, char **argv)
+{
+	FILE *f = stdin;
+	int have_file = 0;
+	char *buf;
+	size_t len, pos = 0;
+	char **tok = 0;
+	size_t ntok = 0, tokcap = 0;
+	size_t i;
+	int cycle;
+	size_t queue_head, ready_count;
+
+	if (argc > 2) {
+		fprintf(stderr, "tsort: too many operands\n");
+		return 1;
+	}
+	if (argc == 2) {
+		if (!strcmp(argv[1], "-")) {
+			f = stdin;
+		} else {
+			f = fopen(argv[1], "r");
+			if (!f) { fprintf(stderr, "tsort: %s: %s\n", argv[1], strerror(errno)); return 1; }
+			have_file = 1;
+		}
+	}
+
+	buf = slurp(f, &len);
+	if (have_file) fclose(f);
+	if (!buf) { fprintf(stderr, "tsort: out of memory\n"); return 1; }
+
+	/* Tokenize on runs of whitespace. */
+	while (pos < len) {
+		size_t start;
+		while (pos < len && isspace((unsigned char)buf[pos])) pos++;
+		if (pos >= len) break;
+		start = pos;
+		while (pos < len && !isspace((unsigned char)buf[pos])) pos++;
+		if (ntok >= tokcap) {
+			size_t newcap = tokcap ? tokcap * 2 : 64;
+			char **g = realloc(tok, newcap * sizeof *tok);
+			if (!g) { fprintf(stderr, "tsort: out of memory\n"); free(buf); return 1; }
+			tok = g;
+			tokcap = newcap;
+		}
+		buf[pos] = 0; /* pos < len guaranteed unless pos==len already, in which
+		                 case writing the NUL at buf[len] is one past real
+		                 content but still inside the allocation (slurp()'s
+		                 cap is always > len when the loop exits via EOF, see
+		                 its own "len == cap" growth check running before the
+		                 next fread), so this is never an out-of-bounds write. */
+		tok[ntok++] = buf + start;
+		pos++;
+	}
+
+	if (ntok % 2) {
+		fprintf(stderr, "tsort: odd number of tokens (%lu) -- input is not pairs\n", (unsigned long)ntok);
+		free(tok);
+		free(buf);
+		return 1;
+	}
+
+	for (i = 0; i < ntok; i += 2) {
+		int a = get_or_add(tok[i]);
+		int b = get_or_add(tok[i + 1]);
+		if (a < 0 || b < 0) { fprintf(stderr, "tsort: out of memory\n"); free(tok); free(buf); return 1; }
+		if (a != b) add_edge(a, b);
+	}
+	free(tok);
+	free(buf);
+
+	{
+		int *queue = malloc((nnodes ? nnodes : 1) * sizeof *queue);
+		size_t qtail = 0;
+		size_t n;
+
+		if (!queue && nnodes) { fprintf(stderr, "tsort: out of memory\n"); return 1; }
+
+		for (n = 0; n < nnodes; n++)
+			if (nodes[n].indeg == 0) queue[qtail++] = (int)n;
+
+		queue_head = 0;
+		ready_count = 0;
+		while (queue_head < qtail) {
+			int cur = queue[queue_head++];
+			size_t s;
+			ready_count++;
+			nodes[cur].done = 1;
+			printf("%s\n", nodes[cur].name);
+			for (s = 0; s < nodes[cur].nsucc; s++) {
+				int nb = nodes[cur].succ[s];
+				/* Each node's indegree reaches exactly zero at most
+				 * once, so it is pushed onto queue[] at most once --
+				 * qtail can never exceed nnodes here. */
+				if (--nodes[nb].indeg == 0) queue[qtail++] = nb;
+			}
+		}
+		free(queue);
+	}
+
+	cycle = ready_count < nnodes;
+	if (cycle) {
+		size_t n;
+		fprintf(stderr, "tsort: cycle in input; unresolved:");
+		for (n = 0; n < nnodes; n++)
+			if (!nodes[n].done) fprintf(stderr, " %s", nodes[n].name);
+		fprintf(stderr, "\n");
+	}
+
+	for (i = 0; i < nnodes; i++) {
+		free(nodes[i].name);
+		free(nodes[i].succ);
+	}
+	free(nodes);
+
+	return cycle ? 1 : 0;
+}
