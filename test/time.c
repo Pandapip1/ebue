@@ -305,6 +305,26 @@ int main(void)
 		n = strftime(buf, sizeof buf, "%3333333333Y", &tm);
 		CHECK(n == 0);
 
+		/* Fuzz run 33134496955, crash-222e7b9f782287564a38cfa4871a9b1dd2075cff:
+		 * the same unbounded-field-width overflow as the pair above, but
+		 * found again through a conversion (%X) that never even looks at
+		 * the parsed width -- the int overflow happens while *parsing* the
+		 * 102-digit run, in the width accumulator itself, before the
+		 * switch on the conversion letter ever runs, so a specifier that
+		 * discards its width is no protection against it. */
+		n = strftime(buf, sizeof buf,
+			"%X%111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111X%r",
+			&tm);
+		CHECK(n == 36 && !strcmp(buf, "-08:-16:-08-08:-16:-08-08:-16:-08 AM"));
+
+		/* Fuzz run 33134256900, crash-0960a3fcb3369734eb77a4b2fe91551c9b963a70:
+		 * same width-accumulator overflow, found through %r instead of %X. */
+		memset(&tm, 0, sizeof tm);
+		tm.tm_sec = 35; tm.tm_min = 5; tm.tm_hour = -7;
+		n = strftime(buf, sizeof buf,
+			"%r+%222222222222222222222222222222222222222r", &tm);
+		CHECK(n == 25 && !strcmp(buf, "-07:05:35 AM+-07:05:35 AM"));
+
 		/* Sunday: %u is 7, %w is 0; single-digit %e is space padded */
 		t = 1078012800;   /* Sun 2004-02-29 */
 		gmtime_r(&t, &tm);
