@@ -45,6 +45,7 @@
 #include <string.h>
 #include <ctype.h>
 #include "awk_priv.h"
+#include "ownership_stubs.h"
 
 struct kw { const char *name; enum awk_toktype type; };
 static const struct kw keywords[] = {
@@ -79,6 +80,7 @@ int awk_is_builtin_name(const char *s)
 
 void awk_lex_init(struct awk_lexer *lx, const char *src)
 {
+	__ownership_writable_span(lx, sizeof *lx);
 	memset(lx, 0, sizeof *lx);
 	lx->src = src;
 	lx->len = strlen(src);
@@ -117,6 +119,8 @@ static char *dupn(const char *s, size_t n)
 {
 	char *r = malloc(n + 1);
 	if (!r) return NULL;
+	__ownership_writable_span(r, n);
+	__ownership_readable_span(s, n);
 	memcpy(r, s, n);
 	r[n] = 0;
 	return r;
@@ -164,6 +168,8 @@ static int scan_number(struct awk_lexer *lx, struct awk_token *out)
 	}
 	n = lx->pos - start;
 	if (n >= sizeof small) n = sizeof small - 1;
+	__ownership_writable_span(small, n);
+	__ownership_readable_span(lx->src + start, n);
 	memcpy(small, lx->src + start, n);
 	small[n] = 0;
 	out->type = T_NUMBER;
@@ -274,6 +280,7 @@ int awk_lex_next(struct awk_lexer *lx, struct awk_token *out)
 {
 	int c;
 
+	__ownership_writable_span(out, sizeof *out);
 	memset(out, 0, sizeof *out);
 	skip_filler(lx);
 
