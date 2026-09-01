@@ -189,15 +189,15 @@ int pthread_condattr_setclock(pthread_condattr_t * handle(pthread_condattr), clo
 int pthread_condattr_getpshared(const pthread_condattr_t *__restrict handle(pthread_condattr), int *__restrict);
 int pthread_condattr_setpshared(pthread_condattr_t * handle(pthread_condattr), int);
 
-int pthread_rwlock_init(pthread_rwlock_t *__restrict construct(pthread_rwlock) static_handle(pthread_rwlock), const pthread_rwlockattr_t *__restrict handle(pthread_rwlockattr));
-int pthread_rwlock_destroy(pthread_rwlock_t * destroy(pthread_rwlock) static_handle(pthread_rwlock));
-int pthread_rwlock_rdlock(pthread_rwlock_t * handle(pthread_rwlock) static_handle(pthread_rwlock));
-int pthread_rwlock_tryrdlock(pthread_rwlock_t * handle(pthread_rwlock) static_handle(pthread_rwlock));
-int pthread_rwlock_timedrdlock(pthread_rwlock_t *__restrict handle(pthread_rwlock) static_handle(pthread_rwlock), const struct timespec *__restrict);
-int pthread_rwlock_wrlock(pthread_rwlock_t * handle(pthread_rwlock) static_handle(pthread_rwlock));
-int pthread_rwlock_trywrlock(pthread_rwlock_t * handle(pthread_rwlock) static_handle(pthread_rwlock));
-int pthread_rwlock_timedwrlock(pthread_rwlock_t *__restrict handle(pthread_rwlock) static_handle(pthread_rwlock), const struct timespec *__restrict);
-int pthread_rwlock_unlock(pthread_rwlock_t * handle(pthread_rwlock) static_handle(pthread_rwlock));
+int pthread_rwlock_init(pthread_rwlock_t *__restrict construct(pthread_rwlock) static_handle(pthread_rwlock) grant(pthread_rwlock_unlocked), const pthread_rwlockattr_t *__restrict handle(pthread_rwlockattr));
+int pthread_rwlock_destroy(pthread_rwlock_t * destroy(pthread_rwlock) static_handle(pthread_rwlock) consume(pthread_rwlock_unlocked));
+int pthread_rwlock_rdlock(pthread_rwlock_t * handle(pthread_rwlock) static_handle(pthread_rwlock) consume_any(pthread_rwlock_unlocked) consume_any(pthread_rwlock_shared) grant(pthread_rwlock_shared));
+int pthread_rwlock_tryrdlock(pthread_rwlock_t * handle(pthread_rwlock) static_handle(pthread_rwlock) consume_any(pthread_rwlock_unlocked) consume_any(pthread_rwlock_shared) grant(pthread_rwlock_shared));
+int pthread_rwlock_timedrdlock(pthread_rwlock_t *__restrict handle(pthread_rwlock) static_handle(pthread_rwlock) consume_any(pthread_rwlock_unlocked) consume_any(pthread_rwlock_shared) grant(pthread_rwlock_shared), const struct timespec *__restrict);
+int pthread_rwlock_wrlock(pthread_rwlock_t * handle(pthread_rwlock) static_handle(pthread_rwlock) consume(pthread_rwlock_unlocked) grant(pthread_rwlock_exclusive));
+int pthread_rwlock_trywrlock(pthread_rwlock_t * handle(pthread_rwlock) static_handle(pthread_rwlock) consume(pthread_rwlock_unlocked) grant(pthread_rwlock_exclusive));
+int pthread_rwlock_timedwrlock(pthread_rwlock_t *__restrict handle(pthread_rwlock) static_handle(pthread_rwlock) consume(pthread_rwlock_unlocked) grant(pthread_rwlock_exclusive), const struct timespec *__restrict);
+int pthread_rwlock_unlock(pthread_rwlock_t * handle(pthread_rwlock) static_handle(pthread_rwlock) consume_any(pthread_rwlock_shared) consume_any(pthread_rwlock_exclusive) grant(pthread_rwlock_unlocked));
 int pthread_rwlockattr_init(pthread_rwlockattr_t * construct(pthread_rwlockattr));
 int pthread_rwlockattr_destroy(pthread_rwlockattr_t * destroy(pthread_rwlockattr));
 int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *__restrict handle(pthread_rwlockattr), int *__restrict);

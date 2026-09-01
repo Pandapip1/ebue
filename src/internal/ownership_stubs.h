@@ -23,6 +23,18 @@ void __ownership_pthread_spin_locked(void * consume(pthread_spin_unlocked) grant
 void __ownership_pthread_spin_unlocked(void * consume(pthread_spin_locked) grant(pthread_spin_unlocked));
 void __ownership_pthread_spin_destroyed(void * consume(pthread_spin_unlocked));
 
+void __ownership_pthread_rwlock_initialized(void * grant(pthread_rwlock_unlocked));
+void __ownership_pthread_rwlock_read_locked(void *
+	consume_any(pthread_rwlock_unlocked) consume_any(pthread_rwlock_shared)
+	grant(pthread_rwlock_shared));
+void __ownership_pthread_rwlock_write_locked(void *
+	consume(pthread_rwlock_unlocked) grant(pthread_rwlock_exclusive));
+void __ownership_pthread_rwlock_unlocked(void *
+	consume_any(pthread_rwlock_shared) consume_any(pthread_rwlock_exclusive)
+	grant(pthread_rwlock_unlocked));
+void __ownership_pthread_rwlock_destroyed(void *
+	consume(pthread_rwlock_unlocked));
+
 #else
 
 #define __ownership_pthread_mutex_initialized(object) ((void)0)
@@ -33,6 +45,11 @@ void __ownership_pthread_spin_destroyed(void * consume(pthread_spin_unlocked));
 #define __ownership_pthread_spin_locked(object) ((void)0)
 #define __ownership_pthread_spin_unlocked(object) ((void)0)
 #define __ownership_pthread_spin_destroyed(object) ((void)0)
+#define __ownership_pthread_rwlock_initialized(object) ((void)0)
+#define __ownership_pthread_rwlock_read_locked(object) ((void)0)
+#define __ownership_pthread_rwlock_write_locked(object) ((void)0)
+#define __ownership_pthread_rwlock_unlocked(object) ((void)0)
+#define __ownership_pthread_rwlock_destroyed(object) ((void)0)
 
 #endif
 #endif

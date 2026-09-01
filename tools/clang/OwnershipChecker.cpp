@@ -1579,6 +1579,25 @@ class CapabilityTokenChecker
                                     const CallEvent &Call,
                                     ArrayRef<CapabilityProtocol> Protocols,
                                     CheckerContext &C) {
+    llvm::SmallVector<unsigned, 4> ConsumedArguments;
+    for (const CapabilityProtocol &Alternative : Protocols) {
+      if (Alternative.Operation != CapabilityOperation::ConsumeAny ||
+          llvm::is_contained(ConsumedArguments, Alternative.Argument))
+        continue;
+      ConsumedArguments.push_back(Alternative.Argument);
+      for (const CapabilityProtocol &Candidate : Protocols)
+        if (Candidate.Operation == CapabilityOperation::ConsumeAny &&
+            Candidate.Argument == Alternative.Argument) {
+          SVal Value = Call.getArgSVal(Candidate.Argument);
+          const MemRegion *Carrier =
+              carrierRegion(Call.getArgExpr(Candidate.Argument), C);
+          if (capabilityFor(State, Carrier, Value, Candidate.Family).Kind) {
+            State =
+                removeOperationToken(State, Carrier, Value, Candidate.Family);
+            break;
+          }
+        }
+    }
     for (const CapabilityProtocol &Protocol : Protocols) {
       if (Protocol.Argument >= Call.getNumArgs())
         continue;
@@ -1604,25 +1623,6 @@ class CapabilityTokenChecker
         break;
       }
     }
-    llvm::SmallVector<unsigned, 4> ConsumedArguments;
-    for (const CapabilityProtocol &Alternative : Protocols) {
-      if (Alternative.Operation != CapabilityOperation::ConsumeAny ||
-          llvm::is_contained(ConsumedArguments, Alternative.Argument))
-        continue;
-      ConsumedArguments.push_back(Alternative.Argument);
-      for (const CapabilityProtocol &Candidate : Protocols)
-        if (Candidate.Operation == CapabilityOperation::ConsumeAny &&
-            Candidate.Argument == Alternative.Argument) {
-          SVal Value = Call.getArgSVal(Candidate.Argument);
-          const MemRegion *Carrier =
-              carrierRegion(Call.getArgExpr(Candidate.Argument), C);
-          if (capabilityFor(State, Carrier, Value, Candidate.Family).Kind) {
-            State =
-                removeOperationToken(State, Carrier, Value, Candidate.Family);
-            break;
-          }
-        }
-    }
     return State;
   }
 
@@ -1642,8 +1642,12 @@ public:
       const MemRegion *Carrier = State->getLValue(Parameter, LC).getAsRegion();
       if (Protocol.Operation == CapabilityOperation::Require ||
           Protocol.Operation == CapabilityOperation::Consume) {
+        CapabilityKind Kind = dialectTokenKind(
+                                  Function->getASTContext(),
+                                  Protocol.Family->getName())
+                                  .value_or(CapabilityKind::Linear);
         State = setOperationToken(State, Carrier, Value, Protocol.Family,
-                                  CapabilityKind::Linear);
+                                  Kind);
         Changed = true;
       } else if ((Protocol.Operation == CapabilityOperation::GrantLinear ||
                   Protocol.Operation == CapabilityOperation::GrantDuplicable) &&
@@ -1652,8 +1656,37 @@ public:
         Changed = true;
       }
     }
+    llvm::SmallVector<ProgramStateRef, 4> Alternatives{State};
+    llvm::SmallVector<unsigned, 4> ExpandedArguments;
+    for (const CapabilityProtocol &Protocol : Protocols) {
+      if (Protocol.Operation != CapabilityOperation::ConsumeAny ||
+          llvm::is_contained(ExpandedArguments, Protocol.Argument))
+        continue;
+      ExpandedArguments.push_back(Protocol.Argument);
+      const ParmVarDecl *Parameter =
+          Function->getParamDecl(Protocol.Argument);
+      SVal Value = State->getSVal(State->getLValue(Parameter, LC));
+      const MemRegion *Carrier =
+          State->getLValue(Parameter, LC).getAsRegion();
+      llvm::SmallVector<ProgramStateRef, 4> Expanded;
+      for (ProgramStateRef Alternative : Alternatives)
+        for (const CapabilityProtocol &Candidate : Protocols) {
+          if (Candidate.Operation != CapabilityOperation::ConsumeAny ||
+              Candidate.Argument != Protocol.Argument)
+            continue;
+          CapabilityKind Kind = dialectTokenKind(
+                                    Function->getASTContext(),
+                                    Candidate.Family->getName())
+                                    .value_or(CapabilityKind::Linear);
+          Expanded.push_back(setOperationToken(
+              Alternative, Carrier, Value, Candidate.Family, Kind));
+        }
+      Alternatives = std::move(Expanded);
+      Changed = true;
+    }
     if (Changed)
-      C.addTransition(State);
+      for (ProgramStateRef Alternative : Alternatives)
+        C.addTransition(Alternative);
   }
 
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
@@ -1720,9 +1753,17 @@ public:
       SVal Value = State->getSVal(Location);
       CapabilityPresence Present =
           capabilityFor(State, Location.getAsRegion(), Value, Protocol.Family);
+      bool Regranted = llvm::any_of(
+          protocolsFor(Function), [&](const CapabilityProtocol &Output) {
+            return Output.Argument == Protocol.Argument &&
+                   Output.Family == Protocol.Family &&
+                   (Output.Operation == CapabilityOperation::GrantLinear ||
+                    Output.Operation ==
+                        CapabilityOperation::GrantDuplicable);
+          });
       if ((Protocol.Operation == CapabilityOperation::Consume ||
            Protocol.Operation == CapabilityOperation::ConsumeAny) &&
-          Present.Kind) {
+          Present.Kind && !Regranted) {
         report("declared ownership token drop is not proven by function body",
                Site, State, C);
         return;
