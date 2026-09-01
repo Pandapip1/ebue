@@ -15,6 +15,7 @@ extern "C" {
 
 #include <features.h>
 #include <ownership.h>
+#include <memory_tokens.h>
 
 tokdef directory_stream_open
 	dynamic_storage;
@@ -120,7 +121,7 @@ long           telldir(DIR *) __attribute__((nonnull(1)));
 #define DT_WHT 14
 #define IFTODT(x) ((x)>>12 & 017)
 #define DTTOIF(x) ((x)<<12)
-int getdents(int, struct dirent *, size_t);
+int getdents(int, struct dirent * withtok(writable_span(size)), size_t size);
 #endif
 
 #ifdef _GNU_SOURCE
