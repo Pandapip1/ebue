@@ -7,7 +7,8 @@
 // NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 
-char *strncpy(char *__restrict d, const char *__restrict s, size_t n)
+char *strncpy(char *__restrict d withtok(writable_span(n)),
+	const char *__restrict s, size_t n)
 {
 	stpncpy(d, s, n);
 	return d;

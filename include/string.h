@@ -76,7 +76,8 @@ void *memchr (const void *, int, size_t) __attribute__((nonnull(1), __pure__));
 withtok(null_terminated)
 char *strcpy (char *__restrict grant(null_terminated),
               const char *__restrict withtok(null_terminated));
-char *strncpy (char *__restrict, const char *__restrict, size_t);
+char *strncpy (char *__restrict d withtok(writable_span(n)),
+              const char *__restrict, size_t n);
 
 withtok(null_terminated)
 char *strcat (char *__restrict withtok(null_terminated) grant(null_terminated),
@@ -213,7 +214,8 @@ int strerror_r (int err, char *buf withtok(writable_span(buflen)),
  * case (matching glibc's real stpncpy nonnull(1, 2)), not a genuine
  * "s need not be valid" reading. */
 char *stpcpy(char *__restrict, const char *__restrict) __attribute__((nonnull(1, 2)));
-char *stpncpy(char *__restrict, const char *__restrict, size_t) __attribute__((nonnull(1, 2)));
+char *stpncpy(char *__restrict d withtok(writable_span(n)),
+	const char *__restrict, size_t n) __attribute__((nonnull(1, 2)));
 /* strnlen (src/string/strnlen.c) is memchr(s, 0, n) plus arithmetic --
  * reads only, no writes, no errno, no globals; matching glibc's real
  * strnlen __attribute__((pure)). Left without nonnull here (matching
