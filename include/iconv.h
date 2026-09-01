@@ -48,13 +48,9 @@ extern "C" {
 
 typedef void *iconv_t;
 
-#ifndef tokdef
-#define tokdef __token_type
-#endif
 tokdef iconv_opened
 	dynamic_storage
 	sentinel_exclude(-1);
-#undef tokdef
 
 withtok(iconv_opened)
 iconv_t iconv_open(const char *, const char *);

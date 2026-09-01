@@ -52,6 +52,7 @@ extern "C" {
 #endif
 
 #include <features.h>
+#include <ownership.h>
 
 #define __NEED_nl_catd
 #define __NEED_nl_item
@@ -61,8 +62,13 @@ extern "C" {
 #define NL_SETD 1
 #define NL_CAT_LOCALE 1
 
-int      catclose(nl_catd);
-char    *catgets(nl_catd, int, int, const char *);
+tokdef catalog_opened
+	dynamic_storage
+	sentinel_exclude(-1);
+
+int      catclose(nl_catd consume(catalog_opened));
+char    *catgets(nl_catd withtok(catalog_opened), int, int, const char *);
+withtok(catalog_opened)
 nl_catd  catopen(const char * __NTLIBC_STRING, int);
 
 #ifdef __cplusplus

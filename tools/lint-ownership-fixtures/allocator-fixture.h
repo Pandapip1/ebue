@@ -6,7 +6,6 @@
 typedef __SIZE_TYPE__ size_t;
 
 tokdef heap_allocated dynamic_storage;
-#undef tokdef
 
 withtok(heap_allocated)
 void *malloc(size_t);

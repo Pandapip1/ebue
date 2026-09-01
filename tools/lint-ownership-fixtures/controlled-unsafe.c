@@ -5,7 +5,6 @@
 
 tokdef guarded_unlocked implicit_drop;
 tokdef guarded_access l_unlimited implicit_drop;
-#undef tokdef
 
 typedef struct { void *opaque[8]; } guarded_t;
 

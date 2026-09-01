@@ -5,7 +5,6 @@
 
 tokdef dialect_mutex_unlocked;
 tokdef dialect_mutex_locked l_unlimited;
-#undef tokdef
 
 typedef struct { void *opaque[8]; } dialect_mutex_t;
 

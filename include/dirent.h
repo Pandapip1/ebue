@@ -16,12 +16,8 @@ extern "C" {
 #include <features.h>
 #include <ownership.h>
 
-#ifndef tokdef
-#define tokdef __token_type
-#endif
 tokdef directory_stream_open
 	dynamic_storage;
-#undef tokdef
 
 #define __NEED_ino_t
 #define __NEED_off_t

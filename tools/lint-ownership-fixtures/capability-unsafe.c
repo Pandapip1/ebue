@@ -9,7 +9,6 @@ tokdef rwlock_unlocked implicit_drop;
 tokdef rwlock_shared l_unlimited implicit_drop;
 tokdef rwlock_exclusive implicit_drop;
 tokdef allocation implicit_drop;
-#undef tokdef
 
 typedef struct { void *opaque[8]; } mutex_t;
 typedef struct { void *opaque[12]; } rwlock_t;
