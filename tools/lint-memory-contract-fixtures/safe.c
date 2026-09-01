@@ -153,6 +153,14 @@ void bounded_operations(int fd)
 	read(fd, destination, sizeof destination);
 }
 
+void copy_restrict_parameters(
+	char *restrict destination withtok(fixture_writable_span(length)),
+	const char *restrict source withtok(fixture_readable_span(length)),
+	size_t length)
+{
+	memcpy(destination, source, length);
+}
+
 void clear_typed_member(struct fixture_record *record)
 {
 	memset(&record->second, 0, sizeof record->second);

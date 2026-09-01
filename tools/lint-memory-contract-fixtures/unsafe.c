@@ -79,6 +79,13 @@ void insufficient_contracted_suffix(
 		memset(out + offset, 0, length); /* memory-contract-expect */
 }
 
+void copy_unrestricted_parameters(
+	char *destination withtok(fixture_writable_span(length)),
+	const char *source withtok(fixture_readable_span(length)), size_t length)
+{
+	memcpy(destination, source, length); /* memory-contract-expect */
+}
+
 struct fixture_record {
 	int first;
 	int second;
