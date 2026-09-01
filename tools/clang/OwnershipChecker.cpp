@@ -72,8 +72,19 @@ static const MemRegion *carrierRegion(const Expr *Expression,
       return C.getState()
           ->getLValue(Variable, C.getLocationContext())
           .getAsRegion();
-  if (isa<MemberExpr>(Core))
-    return C.getSVal(Core).getAsRegion();
+  if (const auto *Member = dyn_cast<MemberExpr>(Core)) {
+    const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl());
+    if (!Field)
+      return C.getSVal(Core).getAsRegion();
+    SVal Base = C.getSVal(Member->getBase());
+    if (!Member->isArrow()) {
+      const MemRegion *BaseRegion = carrierRegion(Member->getBase(), C);
+      if (!BaseRegion)
+        return C.getSVal(Core).getAsRegion();
+      Base = loc::MemRegionVal(BaseRegion);
+    }
+    return C.getState()->getLValue(Field, Base).getAsRegion();
+  }
   if (const auto *Unary = dyn_cast<UnaryOperator>(Core))
     if (Unary->getOpcode() == UO_AddrOf)
       return C.getSVal(Expression).getAsRegion();
@@ -1133,6 +1144,39 @@ class CapabilityTokenChecker
     return &Function->getASTContext().Idents.get(Text);
   }
 
+  static const ValueDecl *declarationFor(const Expr *Expression) {
+    if (!Expression)
+      return nullptr;
+    Expression = Expression->IgnoreParenImpCasts();
+    if (const auto *Reference = dyn_cast<DeclRefExpr>(Expression))
+      return dyn_cast<ValueDecl>(Reference->getDecl());
+    if (const auto *Member = dyn_cast<MemberExpr>(Expression))
+      return Member->getMemberDecl();
+    if (const auto *Unary = dyn_cast<UnaryOperator>(Expression))
+      if (Unary->getOpcode() == UO_AddrOf)
+        return declarationFor(Unary->getSubExpr());
+    return nullptr;
+  }
+
+  static std::optional<CapabilityKind>
+  declaredTokenFor(const Expr *Expression, const IdentifierInfo *Family) {
+    const ValueDecl *Declaration = declarationFor(Expression);
+    if (!Declaration)
+      return std::nullopt;
+    for (const AnnotateAttr *Attr :
+         Declaration->specific_attrs<AnnotateAttr>()) {
+      StringRef Text = Attr->getAnnotation();
+      if (Text.consume_front("ownership_holds_token:") &&
+          Text == Family->getName())
+        return CapabilityKind::Linear;
+      Text = Attr->getAnnotation();
+      if (Text.consume_front("ownership_holds_duplicable_token:") &&
+          Text == Family->getName())
+        return CapabilityKind::Duplicable;
+    }
+    return std::nullopt;
+  }
+
   static llvm::SmallVector<CapabilityProtocol, 6>
   protocolsFor(const FunctionDecl *Function) {
     llvm::SmallVector<CapabilityProtocol, 6> Protocols;
@@ -1253,6 +1297,10 @@ class CapabilityTokenChecker
       CapabilityPresence Existing = capabilityFor(
           State, carrierRegion(Call.getArgExpr(Protocol.Argument), C), Value,
           Protocol.Family);
+      if (!Existing.Known && !Existing.Kind)
+        Existing.Kind =
+            declaredTokenFor(Call.getArgExpr(Protocol.Argument),
+                             Protocol.Family);
       if (!Existing.Kind &&
           hasStaticInitialToken(Function, Call, Protocol.Argument, Existing))
         Existing.Kind = CapabilityKind::Linear;
@@ -1300,6 +1348,10 @@ class CapabilityTokenChecker
           CapabilityPresence Existing = capabilityFor(
               State, carrierRegion(Call.getArgExpr(Candidate.Argument), C),
               Call.getArgSVal(Candidate.Argument), Candidate.Family);
+          if (!Existing.Known && !Existing.Kind)
+            Existing.Kind =
+                declaredTokenFor(Call.getArgExpr(Candidate.Argument),
+                                 Candidate.Family);
           if (!Existing.Kind &&
               hasStaticInitialToken(Function, Call, Candidate.Argument,
                                     Existing))
@@ -1617,13 +1669,6 @@ class OwnershipTypeChecker
     });
   }
 
-  static bool sourceProvides(ArrayRef<OwnershipTypeEntry> Destination,
-                             ArrayRef<OwnershipTypeEntry> Source) {
-    return llvm::all_of(Destination, [&](const OwnershipTypeEntry &Entry) {
-      return contains(Source, Entry);
-    });
-  }
-
   void report(StringRef Reason, const Stmt *Statement, ProgramStateRef State,
               CheckerContext &C) const {
     ExplodedNode *Node = C.generateNonFatalErrorNode(State);
@@ -1642,12 +1687,37 @@ class OwnershipTypeChecker
                          const Stmt *Statement, CheckerContext &C) const {
     if (!Statement)
       return;
+    if (Source->isNullPointerConstant(
+            C.getASTContext(), Expr::NPC_ValueDependentIsNotNull))
+      return;
     llvm::SmallVector<OwnershipTypeEntry, 4> DestinationBundle =
         bundleFor(Destination);
     llvm::SmallVector<OwnershipTypeEntry, 4> SourceBundle = bundleFor(Source);
-    if (!sourceProvides(DestinationBundle, SourceBundle))
-      report("source ownership type does not provide destination token bundle",
-             Statement, C.getState(), C);
+    ProgramStateRef State = C.getState();
+    const MemRegion *SourceCarrier = carrierRegion(Source, C);
+    SVal SourceValue = C.getSVal(Source);
+    for (const OwnershipTypeEntry &Entry : DestinationBundle) {
+      if (Entry.Member == OwnershipTypeMember::Handle)
+        continue;
+      CapabilityPresence Present =
+          capabilityFor(State, SourceCarrier, SourceValue, Entry.Family);
+      if (!Present.Kind) {
+        report(contains(SourceBundle, Entry)
+                   ? "source ownership token has already moved"
+                   : "source ownership type does not provide destination "
+                     "token bundle",
+               Statement, State, C);
+        return;
+      }
+      CapabilityKind Required = Entry.Member == OwnershipTypeMember::LinearToken
+                                    ? CapabilityKind::Linear
+                                    : CapabilityKind::Duplicable;
+      if (*Present.Kind != Required) {
+        report("ownership token duplication class does not match", Statement,
+               State, C);
+        return;
+      }
+    }
   }
 
   static SVal valueForExpression(const Expr *Expression, CheckerContext &C) {
@@ -1689,6 +1759,14 @@ class OwnershipTypeChecker
     const MemRegion *SourceCarrier = carrierRegion(Source, C);
     SVal SourceValue = C.getSVal(Source);
 
+    if (Source->isNullPointerConstant(
+            C.getASTContext(), Expr::NPC_ValueDependentIsNotNull)) {
+      for (const OwnershipTypeEntry &Entry : DestinationBundle)
+        if (Entry.Member != OwnershipTypeMember::Handle)
+          State = removeCarrierToken(State, DestinationCarrier, Entry.Family);
+      return State;
+    }
+
     for (const OwnershipTypeEntry &Entry : SourceBundle) {
       if (Entry.Member == OwnershipTypeMember::Handle ||
           contains(DestinationBundle, Entry))
@@ -1699,20 +1777,14 @@ class OwnershipTypeChecker
     for (const OwnershipTypeEntry &Entry : DestinationBundle) {
       if (Entry.Member == OwnershipTypeMember::Handle)
         continue;
-      if (!contains(SourceBundle, Entry))
-        continue;
       CapabilityPresence SourceToken =
           capabilityFor(State, SourceCarrier, SourceValue, Entry.Family);
+      if (!SourceToken.Kind)
+        continue;
       CapabilityKind Required = Entry.Member == OwnershipTypeMember::LinearToken
                                     ? CapabilityKind::Linear
                                     : CapabilityKind::Duplicable;
-      if (!SourceToken.Kind) {
-        report("source ownership token has already moved", Statement, State, C);
-        continue;
-      }
       if (*SourceToken.Kind != Required) {
-        report("ownership token duplication class does not match", Statement,
-               State, C);
         continue;
       }
       State =
@@ -1819,7 +1891,7 @@ public:
     if (Statement->isAssignmentOp()) {
       const ValueDecl *Destination = declarationFor(Statement->getLHS());
       const MemRegion *DestinationCarrier =
-          C.getSVal(Statement->getLHS()->IgnoreParenImpCasts()).getAsRegion();
+          carrierRegion(Statement->getLHS(), C);
       ProgramStateRef State =
           transferTokens(Destination, DestinationCarrier, Statement->getRHS(),
                          Statement, C.getState(), C);

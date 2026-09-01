@@ -3,6 +3,11 @@
 
 typedef struct { void *opaque[8]; } guarded_t;
 
+struct guarded_slot {
+	guarded_t *value [[ownership_holds_handle(guarded),
+	                  ownership_holds_token(guarded_unlocked)]];
+};
+
 int guarded_init(guarded_t *object
     [[ownership_constructs(guarded),
       ownership_adds_token(guarded_unlocked)]]);
@@ -41,4 +46,16 @@ void explicit_handle_and_lock_authority(void)
 			return;
 	}
 	guarded_destroy(&object);
+}
+
+void dynamic_token_follows_destination_type(void)
+{
+	guarded_t object;
+	struct guarded_slot slot;
+	if (guarded_init(&object) != 0)
+		return;
+	slot.value = &object;
+	if (guarded_lock(slot.value) == 0 && guarded_unlock(slot.value) != 0)
+		return;
+	guarded_destroy(slot.value);
 }

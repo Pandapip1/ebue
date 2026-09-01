@@ -43,7 +43,9 @@ struct condattr_data {
 struct cond_cleanup {
 	struct cond_data *cond;
 	struct cond_waiter *waiter;
-	pthread_mutex_t *mutex;
+	pthread_mutex_t *mutex
+		__attribute__((ownership_holds_handle(pthread_mutex),
+			ownership_holds_token(pthread_mutex_unlocked)));
 	int mutex_held;
 };
 
@@ -197,7 +199,6 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	}
 	cleanup.cond = data;
 	cleanup.waiter = waiter;
-	cleanup.mutex = mutex;
 	cleanup.mutex_held = 0;
 	pthread_cleanup_push(cond_wait_cleanup, &cleanup);
 	__plat_fast_lock();
@@ -209,7 +210,7 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	if (error) {
 		unlink_waiter(data, waiter);
 		cleanup.mutex_held = 1;
-	}
+	} else cleanup.mutex = mutex;
 	__plat_fast_unlock();
 	while (!error) {
 		int status;
@@ -250,7 +251,7 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	}
 	if (!error) {
 		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &old_state);
-		lock_error = pthread_mutex_lock(mutex);
+		lock_error = pthread_mutex_lock(cleanup.mutex);
 		cleanup.mutex_held = lock_error == 0;
 		pthread_setcancelstate(old_state, 0);
 	}

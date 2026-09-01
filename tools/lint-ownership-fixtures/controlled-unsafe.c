@@ -3,6 +3,11 @@
 
 typedef struct { void *opaque[8]; } guarded_t;
 
+struct guarded_slot {
+	guarded_t *value [[ownership_holds_handle(guarded),
+	                  ownership_holds_token(guarded_unlocked)]];
+};
+
 int guarded_init(guarded_t *object
     [[ownership_constructs(guarded),
       ownership_adds_token(guarded_unlocked)]]);
@@ -53,4 +58,11 @@ void unlock_without_lock_authority(void)
 	guarded_t object;
 	if (guarded_init(&object) == 0)
 		guarded_unlock(&object); /* ownership-expect: controlled-unlock */
+}
+
+void destination_cannot_manufacture_dynamic_token(void)
+{
+	guarded_t object;
+	struct guarded_slot slot;
+	slot.value = &object; /* ownership-expect: dynamic-manufacture */
 }
