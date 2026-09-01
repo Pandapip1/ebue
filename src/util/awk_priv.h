@@ -77,31 +77,53 @@ struct awk_hnode *awk_hiter_next(struct awk_hiter *it) __attribute__((nonnull(1)
 /* ==== scalar/array cell (the one storage cell every variable, array
  * element, and function parameter is) ====================================
  *
- * A cell starts out untyped (is_array==0, flags==0): the "uninitialized
- * value" XCU awk(1p) defines as simultaneously numeric 0 and string ""
- * and which compares numerically against a numeric operand. It commits
- * to being a scalar the first time a number or string is stored into
- * it (flags gains AWK_HAS_NUM and/or AWK_HAS_STR), or to being an array
- * the first time it is subscripted, iterated with `for (k in x)`,
- * handed to split()'s array argument, or named in `delete x[...]` --
- * see awk_run.c's promote-to-array helper. AWK_STRNUM additionally
- * marks a scalar as a "numeric string" per XCU's own defined term
- * (field variables, split() results, getline-assigned variables,
- * ARGV/ENVIRON elements, and command-line var=value operands, and only
- * those, per that section's own enumeration) -- awk_run.c's comparison
- * code is the one reader of this bit that actually changes behavior
- * (src/util/awk.c's header quotes the exact comparison rule this bit
- * implements). */
-#define AWK_HAS_NUM 0x1
-#define AWK_HAS_STR 0x2
-#define AWK_STRNUM  0x4
+ * `kind` is the value's TRUE, immutable type tag, set once at
+ * construction and never touched afterward -- deliberately kept
+ * separate from num/str's own lazy cross-conversion caching
+ * (numcached/strcached below) so that caching one representation from
+ * the other (awk_run.c's v_num()/v_str()) can never itself change
+ * comparison behavior. An earlier version of this design used a single
+ * "flags" bitset doing both jobs (AWK_HAS_NUM/AWK_HAS_STR marking
+ * which representation was valid) and that is exactly the bug it had:
+ * v_str() caching a display string for a pure number would have set
+ * the same bit real string values set, silently turning a numeric
+ * comparison into a string one the moment anything printed the value
+ * first. Splitting "what kind of value is this" from "what have we
+ * computed and cached so far" removes that trap entirely.
+ *
+ * VK_UNINIT: the "uninitialized value" XCU awk(1p) defines as
+ * simultaneously numeric 0 and string "" -- and which counts as
+ * numeric for the comparison rule below.
+ * VK_NUM: constructed from a numeric literal or an arithmetic result.
+ * Always numeric for comparison.
+ * VK_STR: constructed from a string literal, concatenation, or a
+ * string-returning built-in/sub/gsub/etc. result -- i.e. every
+ * *construction* the grammar has that is not one of the few origins
+ * VK_STRNUM lists below. Never numeric for comparison, even if the
+ * text happens to look like a number ("10.0" == 10 is a STRING
+ * comparison and therefore false -- a well-known, deliberate awk
+ * surprise, not a bug).
+ * VK_STRNUM: XCU awk(1p)'s own "numeric string" -- a value that both
+ * originates from field splitting, split()'s own result array,
+ * getline's assigned variable, an ARGV/ENVIRON element, or a
+ * command-line var=value operand, AND whose text passes
+ * awk_run.c's looks_numeric() (an input string that does not look
+ * like a number classifies as plain VK_STR instead, per that same
+ * section). Numeric for comparison.
+ *
+ * A cell starts out is_array==0, kind==VK_UNINIT. It commits to being
+ * an array the first time it is subscripted, iterated with
+ * `for (k in x)`, handed to split()'s array argument, or named in
+ * `delete x[...]` -- see awk_run.c's promote-to-array helper. */
+enum awk_valkind { VK_UNINIT, VK_NUM, VK_STR, VK_STRNUM };
 
 struct awk_cell {
 	unsigned char is_array;
-	unsigned char flags;
+	unsigned char kind;       /* enum awk_valkind */
+	unsigned char numcached, strcached; /* lazy cross-conversion validity */
 	double num;
-	char *str;          /* owned, NUL-terminated; valid iff flags&AWK_HAS_STR */
-	struct awk_htab *arr; /* non-NULL iff is_array */
+	char *str;                 /* owned, NUL-terminated; valid iff strcached */
+	struct awk_htab *arr;       /* non-NULL iff is_array */
 };
 
 /* ==== lexer ==============================================================
@@ -154,6 +176,14 @@ struct awk_token {
 struct awk_lexer {
 	const char *src;
 	size_t pos, len;
+	enum awk_toktype prevtype; /* disambiguates '/' (division vs. an ERE
+	                            * literal's opening delimiter): division
+	                            * only right after a token that can end a
+	                            * value (NUMBER/STRING/NAME/BUILTIN_NAME/
+	                            * ')'/']'/++/--/ERE); an ERE literal
+	                            * everywhere else, including at the very
+	                            * start of the program -- the same rule
+	                            * every real awk lexer applies. */
 	int err;
 	char errmsg[256];
 };
@@ -164,6 +194,13 @@ void awk_lex_init(struct awk_lexer *lx, const char *src) __attribute__((nonnull(
  * call allocates its own). Returns 0 on success, -1 on a lexical error
  * (message in lx->errmsg). */
 int awk_lex_next(struct awk_lexer *lx, struct awk_token *out) __attribute__((nonnull(1, 2)));
+/* Is `s` one of XCU awk(1p)'s BUILTIN_FUNC_NAME identifiers (the ones
+ * awk_parse.c dispatches to a fixed set of interpreter primitives
+ * rather than a user function lookup)? Shared with awk_parse.c so a
+ * program cannot `function length(...)` shadow one of these -- XCU
+ * awk(1p) reserves the whole BUILTIN_FUNC_NAME lexical class, not just
+ * the call syntax. */
+int awk_is_builtin_name(const char *s) __attribute__((nonnull(1)));
 
 /* ==== AST ================================================================ */
 
@@ -172,9 +209,19 @@ enum awk_ntype {
 	N_ASSIGN, N_TERNARY, N_OR, N_AND, N_IN, N_MATCH, N_RELOP, N_CONCAT,
 	N_BINOP, N_UMINUS, N_UPLUS, N_NOT,
 	N_PREINCR, N_PREDECR, N_POSTINCR, N_POSTDECR,
-	N_CALL, N_GETLINE, N_GROUP,
+	N_CALL, N_GETLINE,
+	/* A parenthesized, comma-separated list, `(e1, e2, ...)` -- only
+	 * meaningful in the two grammar positions XCU awk(1p) actually
+	 * defines for it: immediately before `in` (a multi-dimensional
+	 * array membership test, awk_parse.c's parse_in()) and as print/
+	 * printf's whole argument list (awk_parse.c's parse_print_args()
+	 * unwraps a lone one). A single-element `(e)` is never wrapped in
+	 * this -- parse_primary() just returns e itself, since parenthesized
+	 * grouping has no separate runtime meaning once precedence is
+	 * already baked into the tree shape. */
+	N_ELIST,
 	N_PRINT, N_PRINTF, N_IF, N_WHILE, N_DOWHILE, N_FOR, N_FORIN,
-	N_BREAK, N_CONTINUE, N_NEXT, N_EXIT, N_RETURN, N_DELETE, N_DELETE_ALL,
+	N_BREAK, N_CONTINUE, N_NEXT, N_EXIT, N_RETURN, N_DELETE,
 	N_BLOCK, N_EXPRSTMT
 };
 
@@ -190,7 +237,8 @@ struct awk_node {
 	enum awk_ntype type;
 	int op;                 /* operator/assign-op/relop kind, node-specific */
 	double num;              /* N_NUM literal */
-	char *str;                /* N_STR/N_VAR/N_CALL(name)/N_REGEX(source) literal text */
+	char *str;                /* N_STR/N_VAR/N_CALL(name)/N_REGEX(source)/N_ARRIDX,N_DELETE(array name)/N_FORIN(loop var) literal text */
+	char *str2;                /* N_FORIN: array name (str is the loop variable) */
 	regex_t *re;               /* N_REGEX: compiled once at parse time */
 	struct awk_node *a, *b, *c, *d; /* generic children, meaning is per-type */
 	struct awk_node **list;   /* generic child list (args, subscripts, stmts) */
@@ -224,10 +272,16 @@ struct awk_program {
 
 struct awk_parser {
 	struct awk_lexer lx;
-	struct awk_token tok;   /* one token of lookahead */
+	struct awk_token tok;   /* current token */
+	struct awk_token tok2;  /* one further token of lookahead, lazily filled */
+	int has_tok2;
 	int err;
 	char errmsg[256];
 	struct awk_program *prog; /* being built; funcs/rules grown as parsed */
+	int suppress_gt;        /* inside a print/printf argument list, outside
+	                         * any nested parentheses: a bare '>' is output
+	                         * redirection, not the relational operator --
+	                         * see awk_parse.c's parse_print_stmt(). */
 };
 
 /* Parses the whole program text in src into a fresh struct awk_program.
@@ -253,6 +307,15 @@ struct awk_frame {
 	int nparams;
 };
 
+/* Statement execution's control-flow signal, threaded back up through
+ * exec_stmt() instead of setjmp/longjmp -- see awk_run.c's header for
+ * why: it is a small, finite set of "unwind to the nearest handler"
+ * targets (loop body -> break/continue, whole rule -> next, whole
+ * program -> exit, function call -> return), and every one of those
+ * handlers already sits on the C call stack at exactly the point that
+ * needs to catch it, so an ordinary return value does the whole job. */
+enum awk_sig { SIG_NONE, SIG_BREAK, SIG_CONTINUE, SIG_NEXT, SIG_EXIT, SIG_RETURN };
+
 struct awk_interp {
 	struct awk_program *prog;
 	struct awk_htab globals;   /* name -> struct awk_cell * */
@@ -277,19 +340,32 @@ struct awk_interp {
 
 	int exit_status;
 	int exiting;                /* exit statement reached: run END (once) then stop */
-	int range_reentrancy_guard;
+	enum awk_sig unwind;        /* set by next/exit so a signal can cross an
+	                             * eval()->call_user_func() boundary, which
+	                             * has no room in its own return type for
+	                             * one -- see awk_run.c's header. */
 
 	const char *diag_prefix;    /* "awk" -- argv[0] is not necessarily that */
 };
 
-/* Statement execution's control-flow signal, threaded back up through
- * exec_stmt() instead of setjmp/longjmp -- see awk_run.c's header for
- * why: it is a small, finite set of "unwind to the nearest handler"
- * targets (loop body -> break/continue, whole rule -> next, whole
- * program -> exit, function call -> return), and every one of those
- * handlers already sits on the C call stack at exactly the point that
- * needs to catch it, so an ordinary return value does the whole job. */
-enum awk_sig { SIG_NONE, SIG_BREAK, SIG_CONTINUE, SIG_NEXT, SIG_EXIT, SIG_RETURN };
+/* ==== awk_run.c's entry points, used by awk.c's __util_awk_main() ======= */
+
+void awk_interp_init(struct awk_interp *ip, struct awk_program *prog) __attribute__((nonnull(1, 2)));
+/* Sets a global variable from program-startup text (a -v assignment or
+ * a command-line var=value operand) -- ere_input selects VK_STRNUM vs.
+ * VK_STR the same way a field or split() result would (XCU awk(1p)'s
+ * own "numeric string" origin list includes these operands). */
+void awk_interp_set_str(struct awk_interp *ip, const char *name, const char *val) __attribute__((nonnull(1, 2, 3)));
+/* Builds the ARGV array (ARGV[0]==prog_name, ARGV[1..]==operands) and
+ * ARGC. Every element is a numeric string subject to the same
+ * classification, per XCU's own ARGV/ENVIRON callout. */
+void awk_interp_setup_argv(struct awk_interp *ip, const char *prog_name, int nargs, char **args) __attribute__((nonnull(1, 2)));
+void awk_interp_setup_environ(struct awk_interp *ip, char **envp) __attribute__((nonnull(1)));
+/* Runs BEGIN, the main input loop (consuming ARGV, applying var=value
+ * operands as they are reached -- see src/util/awk.c's header), and
+ * END; returns the process exit status XCU awk(1p) defines. */
+int awk_interp_run(struct awk_interp *ip) __attribute__((nonnull(1)));
+void awk_interp_free(struct awk_interp *ip) __attribute__((nonnull(1)));
 
 int __util_awk_main(int argc, char **argv) __attribute__((nonnull(2)));
 
