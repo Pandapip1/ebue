@@ -42,7 +42,6 @@ using namespace ento;
 // this exact shape.
 REGISTER_MAP_WITH_PROGRAMSTATE(StrlenSource, SymbolRef, const MemRegion *)
 REGISTER_MAP_WITH_PROGRAMSTATE(StrnlenSource, SymbolRef, const MemRegion *)
-REGISTER_SET_WITH_PROGRAMSTATE(KnownStringRegion, const MemRegion *)
 /* A checked annotated call establishes a span from the exact pointer value,
  * which may be an interior ElementRegion.  DynamicExtent is rooted at the
  * allocation's base and therefore cannot represent two independent
@@ -142,9 +141,9 @@ class MemoryContractChecker
   // through its own internal entry point. This is the identical gap
   // OwnershipChecker::allocationSizeInBytes fixes for the sibling
   // ValidPointerChecker (see 8a56a66's own extensive writeup); this
-  // checker needs its own copy since only ntlibc.MemoryContract and
-  // ntlibc.StringSentinel run during the memcontracts stage -- the state
-  // ntlibc.Ownership's checkPostCall would set is never produced. Setting
+  // checker needs its own copy since the memcontracts stage does not run
+  // ntlibc.Ownership, whose checkPostCall would otherwise set the state.
+  // Setting
   // the region's real dynamic extent straight from the real size
   // argument(s) is not a new assumption layered on top of what the
   // program does: it is the exact byte count the allocator itself is
@@ -600,186 +599,6 @@ public:
   }
 };
 
-class StringSentinelChecker
-    : public Checker<check::PreCall, check::PostCall, check::BeginFunction> {
-  mutable std::unique_ptr<BugType> BT;
-
-  static void requiredArguments(const CallEvent &Call,
-                                SmallVectorImpl<unsigned> &Arguments) {
-    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
-    if (!Function || !Function->getIdentifier())
-      return;
-    StringRef Name = Function->getName();
-    auto Add = [&](unsigned Index) {
-      if (llvm::find(Arguments, Index) == Arguments.end())
-        Arguments.push_back(Index);
-    };
-    for (unsigned Index = 0; Index < Function->getNumParams(); ++Index)
-      if (parameterHasAnnotation(Function, Index, "ntlibc.string"))
-        Add(Index);
-    if (Name == "strlen" || Name == "strchr" || Name == "strrchr" ||
-        Name == "strdup" || Name == "puts")
-      Add(0);
-    else if (Name == "strcmp" || Name == "strcasecmp" || Name == "strcoll" ||
-             Name == "fopen") {
-      Add(0);
-      Add(1);
-    } else if (Name == "strcpy")
-      Add(1);
-    else if (Name == "strcat") {
-      Add(0);
-      Add(1);
-    }
-  }
-
-  static bool initializedByString(const VarRegion *Variable) {
-    const Expr *Initializer = Variable->getDecl()->getInit();
-    if (!Initializer)
-      return false;
-    Initializer = Initializer->IgnoreParenImpCasts();
-    if (isa<StringLiteral>(Initializer))
-      return true;
-    if (const auto *List = dyn_cast<InitListExpr>(Initializer))
-      return List->getNumInits() == 1 &&
-             isa<StringLiteral>(List->getInit(0)->IgnoreParenImpCasts());
-    return false;
-  }
-
-  static bool sentinelProven(SVal Pointer, ProgramStateRef State) {
-    const MemRegion *Region = Pointer.getAsRegion();
-    if (!Region)
-      return false;
-    if (State->contains<KnownStringRegion>(Region))
-      return true;
-    const MemRegion *Base = Region->getBaseRegion();
-    if (isa<StringRegion>(Base))
-      return true;
-    if (const auto *Variable = dyn_cast<VarRegion>(Base))
-      return initializedByString(Variable);
-    return false;
-  }
-
-  static bool returnsString(const CallEvent &Call) {
-    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
-    if (!Function || !Function->getIdentifier())
-      return false;
-    StringRef Name = Function->getName();
-    // These APIs promise that every nonnull result points at a reachable
-    // NUL: either at their own string storage, or at a suffix of an input
-    // string whose sentinel check has already run in checkPreCall.
-    return Name == "getenv" || Name == "strerror" || Name == "strdup" ||
-           Name == "strchr" || Name == "strrchr";
-  }
-
-public:
-  void checkBeginFunction(CheckerContext &C) const {
-    const auto *Function =
-        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
-    if (!Function)
-      return;
-    ProgramStateRef State = C.getState();
-    for (unsigned Index = 0; Index < Function->getNumParams(); ++Index) {
-      if (!parameterHasAnnotation(Function, Index, "ntlibc.string"))
-        continue;
-      const ParmVarDecl *Parameter = Function->getParamDecl(Index);
-      SVal Value = State->getSVal(
-          State->getLValue(Parameter, C.getLocationContext()));
-      if (const MemRegion *Region = Value.getAsRegion())
-        State = State->add<KnownStringRegion>(Region);
-    }
-    if (State != C.getState())
-      C.addTransition(State);
-  }
-
-  void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
-    SmallVector<unsigned, 2> Arguments;
-    requiredArguments(Call, Arguments);
-    ProgramStateRef State = C.getState();
-    bool Reported = false;
-    for (unsigned Argument : Arguments)
-      if (Argument < Call.getNumArgs())
-        if (const MemRegion *Region = Call.getArgSVal(Argument).getAsRegion())
-          State = State->add<KnownStringRegion>(Region);
-    for (unsigned Argument : Arguments) {
-      if (Argument < Call.getNumArgs() &&
-          !sentinelProven(Call.getArgSVal(Argument), C.getState()) &&
-          !Reported) {
-        const Stmt *Statement = Call.getOriginExpr();
-        if (!Statement)
-          return;
-        ExplodedNode *Node = C.generateNonFatalErrorNode(State);
-        if (!Node)
-          return;
-        if (!BT)
-          BT = std::make_unique<BugType>(this, "Unproven string sentinel",
-                                         categories::MemoryError);
-        const SourceManager &SM = C.getSourceManager();
-        std::string Message =
-            (StringRef("string argument is not proven NUL-terminated; origin '") +
-             SM.getFilename(SM.getExpansionLoc(Statement->getBeginLoc())) +
-             "'; context '" + MemoryContractChecker::context(C) +
-             "'; expression '" + MemoryContractChecker::text(Statement, C) +
-             "'; site '" + MemoryContractChecker::site(Statement, C) + "'")
-                .str();
-        auto Report =
-            std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
-        Report->addRange(Statement->getSourceRange());
-        C.emitReport(std::move(Report));
-        Reported = true;
-      }
-    }
-    if (!Arguments.empty() && State != C.getState())
-      C.addTransition(State);
-  }
-
-  void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
-    ProgramStateRef State = C.getState();
-    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
-    if (!Function || !Function->getIdentifier())
-      return;
-    StringRef Name = Function->getName();
-
-    // A normal return from a string-consuming API establishes that every
-    // string argument it traversed had a reachable NUL.  checkPreCall has
-    // already emitted the proof obligation when that fact was unavailable
-    // before the call; retaining the call's postcondition prevents every
-    // later use of the identical pointer from repeating the same obligation.
-    // Keep the exact argument region, just like string-producing returns
-    // below: proving a suffix says nothing about bytes before that suffix.
-    SmallVector<unsigned, 2> Required;
-    requiredArguments(Call, Required);
-    for (unsigned Argument : Required) {
-      if (Argument >= Call.getNumArgs())
-        continue;
-      if (const MemRegion *ArgumentRegion =
-              Call.getArgSVal(Argument).getAsRegion())
-        State = State->add<KnownStringRegion>(ArgumentRegion);
-    }
-
-    const MemRegion *Region = nullptr;
-    if (returnsString(Call)) {
-      Region = Call.getReturnValue().getAsRegion();
-    } else if ((Name == "strcpy" || Name == "strcat") &&
-               Call.getNumArgs() >= 2 &&
-               sentinelProven(Call.getArgSVal(1), State)) {
-      // A successful strcpy/strcat leaves its destination terminated.
-      // strcat's destination was independently required to be terminated
-      // by checkPreCall before the append began.
-      Region = Call.getArgSVal(0).getAsRegion();
-    }
-    if (!Region) {
-      if (State != C.getState())
-        C.addTransition(State);
-      return;
-    }
-    // Keep the exact start address, not merely its allocation's base:
-    // strcpy(buf + 4, "x") proves a sentinel reachable from buf + 4,
-    // but says nothing about whether one is reachable from buf itself.
-    State = State->add<KnownStringRegion>(Region);
-    C.addTransition(State);
-  }
-};
-
 } // namespace
 
 extern "C" const char clang_analyzerAPIVersionString[] =
@@ -789,7 +608,4 @@ extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
   Registry.addChecker<MemoryContractChecker>(
       "ntlibc.MemoryContract",
       "Proves memory spans and memcpy non-overlap contracts", "");
-  Registry.addChecker<StringSentinelChecker>(
-      "ntlibc.StringSentinel",
-      "Proves string API arguments have reachable NUL sentinels", "");
 }

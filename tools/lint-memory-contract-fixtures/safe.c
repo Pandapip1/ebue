@@ -9,17 +9,8 @@ long read(int, void *, size_t);
 void *__malloc(size_t);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
-char *strdup(const char *);
-
-#define STRING_CONTRACT __attribute__((annotate("ntlibc.string")))
 #define SPAN_CONTRACT(size_parameter) \
 	__attribute__((annotate("ntlibc.span:" #size_parameter)))
-
-/* Contracted callees are analyzed with their checked preconditions. */
-size_t contracted_length(const char *text STRING_CONTRACT)
-{
-	return strlen(text);
-}
 
 void contracted_copy(char *out SPAN_CONTRACT(3),
 	const char *in SPAN_CONTRACT(3), size_t length)
@@ -30,7 +21,6 @@ void contracted_copy(char *out SPAN_CONTRACT(3),
 void satisfy_contracts(void)
 {
 	char source[8], destination[8];
-	(void)contracted_length("known string");
 	contracted_copy(destination, source, sizeof source);
 }
 
@@ -83,8 +73,7 @@ char *dup_prefix(const char *s, size_t n)
  * byte-count contract guarantees `s` has at least strlen(s) bytes plus
  * its terminator -- exactly `n` bytes. `s` is a string literal, not a
  * parameter, so this stays focused on the MemoryContract span lemma:
- * a bare `const char *` parameter's own strlen() argument is a separate,
- * unrelated ntlibc.StringSentinel obligation this fixture is not about. */
+ * a string literal. */
 char *dup_all(void)
 {
 	const char *s = "example";
@@ -93,12 +82,4 @@ char *dup_all(void)
 	if (!p) return 0;
 	memcpy(p, s, n);
 	return p;
-}
-
-/* A string-producing API's result retains the API's sentinel contract.
- * The second strlen must not forget what strdup established. */
-size_t duplicated_length(void)
-{
-	char *s = strdup("example");
-	return s ? strlen(s) : 0;
 }

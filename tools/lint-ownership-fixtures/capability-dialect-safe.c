@@ -43,6 +43,8 @@ void pointer_success_grants_evidence(void)
 {
 	char text[8];
 	char *result = dialect_copy_string(text);
-	if (result)
+	if (result) {
 		dialect_use_string(text);
+		dialect_use_string(result);
+	}
 }

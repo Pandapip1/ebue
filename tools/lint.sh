@@ -49,8 +49,8 @@
 #             alias for this merged stage.
 #   memcontracts
 #             currently opt-in; proves spans for memory and I/O operations and
-#             proves memcpy ranges do not overlap and string API arguments have
-#             reachable NUL sentinels.
+#             proves memcpy ranges do not overlap. String termination is part
+#             of the ownership token stage above.
 #   initproof on by default; path-sensitively proves that scalar and field
 #             loads do not read definitely uninitialized storage.
 #   fallible  on by default; rejects discarded results from known fallible
@@ -1272,7 +1272,7 @@ stage_memcontracts() {
 	: > "$fixture_log"
 	for fixture in tools/lint-memory-contract-fixtures/*.c; do
 		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
-			-Xclang -analyzer-checker=ntlibc.MemoryContract,ntlibc.StringSentinel \
+			-Xclang -analyzer-checker=ntlibc.MemoryContract \
 			-Xclang -analyzer-output=text \
 			-DNTLIBC_MEMORY_CONTRACT_ANALYSIS "$fixture" -o /dev/null \
 			>> "$fixture_log" 2>&1 || any=1
@@ -1292,7 +1292,7 @@ stage_memcontracts() {
 			id=$(printf %s "$f" | tr / _)
 			# shellcheck disable=SC2086
 			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
-				-Xclang -analyzer-checker=ntlibc.MemoryContract,ntlibc.StringSentinel \
+				-Xclang -analyzer-checker=ntlibc.MemoryContract \
 				-Xclang -analyzer-output=text \
 				-DNTLIBC_MEMORY_CONTRACT_ANALYSIS "$@" "$f" -o /dev/null \
 				> "'"$pardir"'/$id.log" 2>&1

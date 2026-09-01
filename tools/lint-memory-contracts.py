@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: (C) 2026 Gavin John
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Check memory-operation spans, overlap, and string sentinels."""
+"""Check memory-operation spans and overlap."""
 
 from __future__ import annotations
 
@@ -16,10 +16,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tools/lint-memory-contract-fixtures"
 DIAGNOSTIC = re.compile(
     r"^(.*?):(\d+):(\d+): warning: "
-    r"(memory operation span is not proven valid|memcpy ranges are not proven nonoverlapping|"
-    r"string argument is not proven NUL-terminated); "
+    r"(memory operation span is not proven valid|memcpy ranges are not proven nonoverlapping); "
     r"origin '(.*)'; context '(.*)'; expression '(.*)'; site '(.*)' "
-    r"\[ntlibc\.(MemoryContract|StringSentinel)\]$"
+    r"\[ntlibc\.MemoryContract\]$"
 )
 
 
@@ -88,8 +87,7 @@ def main() -> int:
         spans = sum(f.reason.startswith("memory operation span") for f in findings.values())
         overlaps = sum(f.reason.startswith("memcpy ranges") for f in findings.values())
         print(f"lint-memory-contracts: {spans} unproved span(s), "
-              f"{overlaps} unproved overlap(s), "
-              f"{len(findings) - spans - overlaps} unproved sentinel(s)")
+              f"{overlaps} unproved overlap(s)")
         return 1
     print("lint-memory-contracts: no findings (fixtures passed)")
     return 0

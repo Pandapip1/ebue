@@ -23,6 +23,13 @@ void use_string_after_invalidation(void)
 	dialect_use_string(text); /* ownership-expect: dialect-string-dropped */
 }
 
+void terminated_suffix_does_not_prove_prefix(void)
+{
+	char text[8];
+	dialect_mark_terminated(text + 4);
+	dialect_use_string(text); /* ownership-expect: dialect-string-exact-region */
+}
+
 void dialect_bad_clear_string(char *text drop(dialect_terminated))
 {
 	(void)text;
