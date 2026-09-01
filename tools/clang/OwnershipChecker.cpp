@@ -1908,6 +1908,22 @@ class OwnershipTypeChecker
     return Traits;
   }
 
+  static llvm::SmallVector<SentinelTrait, 2>
+  dialectSentinelTraits(const ValueDecl *Declaration) {
+    llvm::SmallVector<SentinelTrait, 2> Traits;
+    if (!Declaration)
+      return Traits;
+    for (const OwnershipTypeEntry &Entry : bundleFor(Declaration)) {
+      if (Entry.Member == OwnershipTypeMember::Handle)
+        continue;
+      const TypedefNameDecl *Token =
+          dialectToken(Declaration->getASTContext(), Entry.Family->getName());
+      if (std::optional<int64_t> Sentinel = dialectExcludedSentinel(Token))
+        Traits.push_back({Entry.Family, *Sentinel});
+    }
+    return Traits;
+  }
+
   static llvm::SmallVector<const IdentifierInfo *, 2>
   familyTraits(const ValueDecl *Declaration, StringRef Prefix) {
     llvm::SmallVector<const IdentifierInfo *, 2> Traits;
@@ -2043,6 +2059,19 @@ class OwnershipTypeChecker
     if (Carrier && State->contains<ExpiredStrictLoanSet>(Carrier)) {
       report("borrow accesses a consumed owner", Statement, State, C);
       return;
+    }
+    for (const OwnershipTypeEntry &Entry : bundleFor(declarationFor(Pointer))) {
+      if (Entry.Member == OwnershipTypeMember::Handle)
+        continue;
+      const TypedefNameDecl *Token =
+          dialectToken(C.getASTContext(), Entry.Family->getName());
+      if (hasDialectQualifier(Token, "qual:blocks_dereference") &&
+          capabilityFor(State, Carrier, Value, Entry.Family).Kind) {
+        report("pointer operation is blocked while unchecked ownership token "
+               "is held",
+               Statement, State, C);
+        return;
+      }
     }
     for (const IdentifierInfo *Family : familyTraits(
              declarationFor(Pointer), "ownership_token_blocks_dereference:"))
@@ -2204,9 +2233,12 @@ public:
     SVal Value = C.getSVal(ValueExpression);
     const MemRegion *Carrier = carrierRegion(ValueExpression, C);
     bool Changed = false;
-    for (const SentinelTrait &Trait :
-         sentinelTraits(declarationFor(ValueExpression),
-                        "ownership_token_consumed_by_equal:")) {
+    llvm::SmallVector<SentinelTrait, 4> Traits = sentinelTraits(
+        declarationFor(ValueExpression),
+        "ownership_token_consumed_by_equal:");
+    llvm::append_range(Traits,
+                       dialectSentinelTraits(declarationFor(ValueExpression)));
+    for (const SentinelTrait &Trait : Traits) {
       if (Trait.Value != *Sentinel ||
           !capabilityFor(State, Carrier, Value, Trait.Family).Kind)
         continue;
@@ -2244,9 +2276,11 @@ public:
     SVal Value = valueForExpression(Condition, C);
     const MemRegion *Carrier = carrierRegion(Condition, C);
     bool Changed = false;
-    for (const SentinelTrait &Trait :
-         sentinelTraits(declarationFor(Condition),
-                        "ownership_token_consumed_by_switch:")) {
+    llvm::SmallVector<SentinelTrait, 4> Traits = sentinelTraits(
+        declarationFor(Condition), "ownership_token_consumed_by_switch:");
+    llvm::append_range(Traits,
+                       dialectSentinelTraits(declarationFor(Condition)));
+    for (const SentinelTrait &Trait : Traits) {
       bool HasSentinelCase = false;
       for (const SwitchCase *Case = Statement->getSwitchCaseList(); Case;
            Case = Case->getNextSwitchCase()) {

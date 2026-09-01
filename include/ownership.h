@@ -17,6 +17,8 @@
 #define dynamic_storage __attribute__((annotate("qual:dynamic_storage")))
 #define sentinel_exclude(value) \
 	__attribute__((annotate("qual:sentinel_exclude=" #value)))
+#define blocks_dereference \
+	__attribute__((annotate("qual:blocks_dereference")))
 #define withtok(token_name) \
 	__attribute__((annotate("withtok:" #token_name)))
 #define withhandle(handle_name) \
