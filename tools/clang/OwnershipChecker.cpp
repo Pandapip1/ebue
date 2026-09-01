@@ -967,7 +967,10 @@ class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
     static constexpr OperationAnnotation Operations[] = {
         {"ownership_constructs:", ConstructOperation::Construct},
         {"ownership_destroys:", ConstructOperation::Destroy},
-        {"ownership_requires_handle:", ConstructOperation::Use}};
+        {"ownership_requires_handle:", ConstructOperation::Use},
+        {"construct:", ConstructOperation::Construct},
+        {"destroy:", ConstructOperation::Destroy},
+        {"handle:", ConstructOperation::Use}};
     for (const AnnotateAttr *Attr : Function->specific_attrs<AnnotateAttr>())
       for (const OperationAnnotation &Candidate : Operations)
         if (std::optional<FamilyArgument> Parsed =
@@ -985,7 +988,9 @@ class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
             Protocols.push_back(
                 {Candidate.Operation, Family, Argument,
                  hasParameterAnnotation(Function, Parameter,
-                                        "ownership_static:", Family)});
+                                        "ownership_static:", Family) ||
+                     hasParameterAnnotation(Function, Parameter,
+                                            "static_handle:", Family)});
       ++Argument;
     }
     return Protocols;
@@ -1139,15 +1144,33 @@ public:
     llvm::SmallVector<ConstructCall, 4> Protocols = protocolsFor(Call);
     if (Protocols.empty())
       return;
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    if (!Function)
+      return;
+    if (Function->getReturnType()->isVoidType()) {
+      ProgramStateRef State = C.getState();
+      for (const ConstructCall &Protocol : Protocols) {
+        if (Protocol.Operation == ConstructOperation::Use)
+          continue;
+        const MemRegion *Region = argumentRegion(Call, Protocol.Argument);
+        if (!Region)
+          continue;
+        State = State->set<ConstructMap>(
+            Region, Protocol.Operation == ConstructOperation::Construct
+                        ? ConstructKind::Live
+                        : ConstructKind::Destroyed);
+        if (Protocol.Operation == ConstructOperation::Construct)
+          State = State->set<ConstructFamilyMap>(Region, Protocol.Family);
+      }
+      C.addTransition(State);
+      return;
+    }
     SVal Return = Call.getReturnValue();
     if (Return.isUnknownOrUndef())
       return;
     std::optional<DefinedOrUnknownSVal> DefinedReturn =
         Return.getAs<DefinedOrUnknownSVal>();
     if (!DefinedReturn)
-      return;
-    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
-    if (!Function)
       return;
     SValBuilder &Builder = C.getSValBuilder();
     DefinedOrUnknownSVal Success =
@@ -1213,8 +1236,15 @@ class OwnershipContractChecker : public Checker<check::ASTDecl<FunctionDecl>> {
   static bool isOwnershipContract(StringRef Annotation) {
     return Annotation.starts_with("ownership_") ||
            Annotation.starts_with("withtok:") ||
+           Annotation.starts_with("withouttok:") ||
            Annotation.starts_with("consume:") ||
-           Annotation.starts_with("consume_if_nonnull_return:");
+           Annotation.starts_with("consume_any:") ||
+           Annotation.starts_with("grant:") ||
+           Annotation.starts_with("consume_if_nonnull_return:") ||
+           Annotation.starts_with("construct:") ||
+           Annotation.starts_with("destroy:") ||
+           Annotation.starts_with("handle:") ||
+           Annotation.starts_with("static_handle:");
   }
 
 public:
@@ -1340,7 +1370,11 @@ class CapabilityTokenChecker
         {"ownership_adds_token:", CapabilityOperation::GrantLinear},
         {"ownership_adds_duplicable_token:",
          CapabilityOperation::GrantDuplicable},
-        {"consume:", CapabilityOperation::Consume}};
+        {"withtok:", CapabilityOperation::Require},
+        {"withouttok:", CapabilityOperation::RequireAbsent},
+        {"consume:", CapabilityOperation::Consume},
+        {"consume_any:", CapabilityOperation::ConsumeAny},
+        {"grant:", CapabilityOperation::GrantLinear}};
     for (const AnnotateAttr *Attr : Function->specific_attrs<AnnotateAttr>())
       for (const OperationAnnotation &Candidate : Operations)
         if (std::optional<FamilyArgument> Parsed =
@@ -1353,12 +1387,20 @@ class CapabilityTokenChecker
         for (const OperationAnnotation &Candidate : Operations)
           if (const IdentifierInfo *Family =
                   parameterAnnotation(Function, Attr, Candidate.Prefix)) {
-            if (Candidate.Operation == CapabilityOperation::Consume &&
+            if ((Candidate.Operation == CapabilityOperation::Require ||
+                 Candidate.Operation == CapabilityOperation::Consume) &&
                 hasDialectQualifier(
                     dialectToken(Function->getASTContext(), Family->getName()),
                     "qual:dynamic_storage"))
               continue;
-            Protocols.push_back({Candidate.Operation, Family, Argument});
+            CapabilityOperation Operation = Candidate.Operation;
+            if (Candidate.Prefix == "grant:") {
+              std::optional<CapabilityKind> Kind = dialectTokenKind(
+                  Function->getASTContext(), Family->getName());
+              if (Kind && *Kind == CapabilityKind::Duplicable)
+                Operation = CapabilityOperation::GrantDuplicable;
+            }
+            Protocols.push_back({Operation, Family, Argument});
           }
       ++Argument;
     }
@@ -1385,6 +1427,15 @@ class CapabilityTokenChecker
               annotationArgument(Function, Attr, "ownership_static:"))
         if (Parsed->Argument == Argument)
           return true;
+    if (Argument >= Function->getNumParams())
+      return false;
+    const ParmVarDecl *Parameter = Function->getParamDecl(Argument);
+    for (const AnnotateAttr *Attr : Parameter->specific_attrs<AnnotateAttr>()) {
+      StringRef Text = Attr->getAnnotation();
+      if (Text.consume_front("static_handle:") && !Text.empty() &&
+          !Text.contains(':'))
+        return true;
+    }
     return false;
   }
 

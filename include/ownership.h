@@ -15,9 +15,23 @@
 	__attribute__((annotate("qual:sentinel_exclude=" #value)))
 #define withtok(token_name) \
 	__attribute__((annotate("withtok:" #token_name)))
+#define withouttok(token_name) \
+	__attribute__((annotate("withouttok:" #token_name)))
 #define consume(token_name) \
 	__attribute__((annotate("consume:" #token_name)))
+#define consume_any(token_name) \
+	__attribute__((annotate("consume_any:" #token_name)))
+#define grant(token_name) \
+	__attribute__((annotate("grant:" #token_name)))
 #define consume_if_nonnull_return(token_name) \
 	__attribute__((annotate("consume_if_nonnull_return:" #token_name)))
+#define construct(handle_name) \
+	__attribute__((annotate("construct:" #handle_name)))
+#define destroy(handle_name) \
+	__attribute__((annotate("destroy:" #handle_name)))
+#define handle(handle_name) \
+	__attribute__((annotate("handle:" #handle_name)))
+#define static_handle(handle_name) \
+	__attribute__((annotate("static_handle:" #handle_name)))
 
 #endif
