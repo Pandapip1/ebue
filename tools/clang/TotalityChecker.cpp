@@ -384,9 +384,13 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
          (Variable->getType()->isSignedIntegerType() &&
           positiveInteger(Binary->getRHS())) ||
          (Variable->getType()->isPointerType() &&
-          strictlyPositive(Binary->getRHS()))))
-      return makeProgress(Variable, ProgressKind::Up, Base, Binary->getLHS(),
-                          nullptr, false, unitInteger(Binary->getRHS()));
+          strictlyPositive(Binary->getRHS())) ||
+         DynamicIntegerStep))
+      return makeProgress(
+          Variable, ProgressKind::Up, Base, Binary->getLHS(),
+          DynamicIntegerStep ? Binary->getRHS() : nullptr,
+          false, unitInteger(Binary->getRHS()),
+          DynamicIntegerStep ? DynamicStep : nullptr);
     if (Binary->getOpcode() == BO_SubAssign &&
         (unitInteger(Binary->getRHS()) ||
          (Variable->getType()->isSignedIntegerType() &&
@@ -432,10 +436,13 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
              (Variable->getType()->isSignedIntegerType() &&
               positiveInteger(Operation->getRHS())) ||
              (Variable->getType()->isPointerType() &&
-              strictlyPositive(Operation->getRHS()))))
-          return makeProgress(Variable, ProgressKind::Up, Base,
-                              Binary->getLHS(), nullptr, false,
-                              unitInteger(Operation->getRHS()));
+              strictlyPositive(Operation->getRHS())) ||
+             DynamicAssignedStep))
+          return makeProgress(
+              Variable, ProgressKind::Up, Base, Binary->getLHS(),
+              DynamicAssignedStep ? Operation->getRHS() : nullptr,
+              false, unitInteger(Operation->getRHS()),
+              DynamicAssignedStep ? AssignedStep : nullptr);
         if (Operation->getOpcode() == BO_Sub &&
             (unitInteger(Operation->getRHS()) ||
              (Variable->getType()->isSignedIntegerType() &&
@@ -1353,7 +1360,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   bool strictComparison(const Expr *Condition, const Progress &Change,
                         const Stmt *Body, const Expr *Increment,
                         bool DirectRank = false) const {
-    if (Change.RequiresNonzeroCondition)
+    if (Change.RequiresNonzeroCondition || Change.DynamicStep)
       return false;
     Condition = ignore(Condition);
     if (const auto *Logical = dyn_cast_or_null<BinaryOperator>(Condition)) {
@@ -1538,6 +1545,87 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     StepAtMostRank = 8,
   };
 
+  static bool sameScalarAccess(const Expr *Left, const Expr *Right) {
+    Left = ignore(Left);
+    Right = ignore(Right);
+    const auto *LeftMember = dyn_cast_or_null<MemberExpr>(Left);
+    const auto *RightMember = dyn_cast_or_null<MemberExpr>(Right);
+    if (LeftMember || RightMember)
+      return LeftMember && RightMember &&
+             LeftMember->getMemberDecl() == RightMember->getMemberDecl() &&
+             value(LeftMember->getBase()) == value(RightMember->getBase());
+    return value(Left) && value(Left) == value(Right);
+  }
+
+  static const Expr *strictAscentBound(const Expr *Condition,
+                                       const Progress &Rank) {
+    const auto *Comparison = dyn_cast_or_null<BinaryOperator>(
+        ignore(Condition));
+    if (!Comparison)
+      return nullptr;
+    if (Comparison->getOpcode() == BO_LT &&
+        rankAccess(Comparison->getLHS(), Rank))
+      return Comparison->getRHS();
+    if (Comparison->getOpcode() == BO_GT &&
+        rankAccess(Comparison->getRHS(), Rank))
+      return Comparison->getLHS();
+    return nullptr;
+  }
+
+  static bool distanceFromRank(const Expr *Expression, const Expr *Bound,
+                               const Progress &Rank) {
+    const auto *Difference = dyn_cast_or_null<BinaryOperator>(
+        ignore(Expression));
+    return Difference && Difference->getOpcode() == BO_Sub &&
+           sameScalarAccess(Difference->getLHS(), Bound) &&
+           rankAccess(Difference->getRHS(), Rank);
+  }
+
+  static unsigned distanceFacts(const Expr *Condition, bool Truth,
+                                const Expr *Bound, const Progress &Rank,
+                                const ValueDecl *Step) {
+    Condition = ignore(Condition);
+    if (!Condition)
+      return 0;
+    if (const auto *Unary = dyn_cast<UnaryOperator>(Condition))
+      if (Unary->getOpcode() == UO_LNot)
+        return distanceFacts(Unary->getSubExpr(), !Truth, Bound, Rank, Step);
+    const auto *Binary = dyn_cast<BinaryOperator>(Condition);
+    if (!Binary)
+      return 0;
+    if (Binary->getOpcode() == BO_LAnd) {
+      unsigned Left = distanceFacts(Binary->getLHS(), Truth, Bound,
+                                    Rank, Step);
+      unsigned Right = distanceFacts(Binary->getRHS(), Truth, Bound,
+                                     Rank, Step);
+      return Truth ? Left | Right : Left & Right;
+    }
+    if (Binary->getOpcode() == BO_LOr) {
+      unsigned Left = distanceFacts(Binary->getLHS(), Truth, Bound,
+                                    Rank, Step);
+      unsigned Right = distanceFacts(Binary->getRHS(), Truth, Bound,
+                                     Rank, Step);
+      return Truth ? Left & Right : Left | Right;
+    }
+    bool StepLeft = integerSource(Binary->getLHS()) == Step;
+    bool StepRight = integerSource(Binary->getRHS()) == Step;
+    if (StepLeft && distanceFromRank(Binary->getRHS(), Bound, Rank)) {
+      if ((Truth && (Binary->getOpcode() == BO_LT ||
+                     Binary->getOpcode() == BO_LE)) ||
+          (!Truth && (Binary->getOpcode() == BO_GT ||
+                      Binary->getOpcode() == BO_GE)))
+        return StepAtMostRank;
+    } else if (StepRight &&
+               distanceFromRank(Binary->getLHS(), Bound, Rank)) {
+      if ((Truth && (Binary->getOpcode() == BO_GT ||
+                     Binary->getOpcode() == BO_GE)) ||
+          (!Truth && (Binary->getOpcode() == BO_LT ||
+                      Binary->getOpcode() == BO_LE)))
+        return StepAtMostRank;
+    }
+    return 0;
+  }
+
   static unsigned descentFacts(const Expr *Condition, bool Truth,
                                const Progress &Rank,
                                const ValueDecl *Step) {
@@ -1673,6 +1761,80 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       if (const auto *Expression = dyn_cast<Expr>(Child)) {
         std::optional<Progress> Change = progress(Expression);
         if (Change && sameRank(*Change, Rank) &&
+            Change->DynamicStep == Step) {
+          bool Positive = (Facts & StepPositive) ||
+              ((Facts & StepNonzero) &&
+               (Step->getType()->isUnsignedIntegerType() ||
+                (Facts & StepNonnegative)));
+          return Positive && (Facts & StepAtMostRank);
+        }
+      }
+    }
+    return false;
+  }
+
+  bool bodyHasGuardedDynamicAscent(const Expr *Condition, const Stmt *Body,
+                                   const Expr *Increment,
+                                   const Progress &Rank) const {
+    const auto *Step = dyn_cast_or_null<VarDecl>(Rank.DynamicStep);
+    const auto *RankVariable = dyn_cast_or_null<VarDecl>(Rank.Variable);
+    const auto *Compound = dyn_cast_or_null<CompoundStmt>(Body);
+    const Expr *Bound = strictAscentBound(Condition, Rank);
+    if (!Step || !RankVariable || !Compound || !Bound ||
+        Step->getType().isVolatileQualified() ||
+        !(isa<ParmVarDecl>(Step) || Step->hasLocalStorage()) ||
+        !(isa<ParmVarDecl>(RankVariable) || RankVariable->hasLocalStorage()) ||
+        addressTaken(Current->getBody(), Step) ||
+        addressTaken(Current->getBody(), RankVariable) ||
+        writesVariable(Body, Step) || aliasedWrite(Step, Body) ||
+        !stableBound(Bound, Body, Increment))
+      return false;
+    QualType RankType = RankVariable->getType().getCanonicalType()
+                            .getUnqualifiedType();
+    QualType BoundType = Bound->getType().getCanonicalType()
+                             .getUnqualifiedType();
+    QualType StepExpressionType = Rank.GuardedStep->getType()
+                                      .getCanonicalType()
+                                      .getUnqualifiedType();
+    if (RankType != BoundType || RankType != StepExpressionType ||
+        !preservesPositiveValue(Rank.GuardedStep, Step))
+      return false;
+    bool Defined = false;
+    unsigned Facts = 0;
+    for (const Stmt *Child : Compound->body()) {
+      if (const auto *Declaration = dyn_cast<DeclStmt>(Child)) {
+        for (const Decl *Item : Declaration->decls())
+          if (Item == Step) {
+            if (!Step->getInit())
+              return false;
+            Defined = true;
+            Facts = 0;
+          }
+        continue;
+      }
+      if (!Defined)
+        continue;
+      if (const auto *Guard = dyn_cast<IfStmt>(Child)) {
+        if (Guard->getInit() || Guard->getConditionVariableDeclStmt() ||
+            containsCall(Guard->getCond()))
+          return false;
+        bool ContinuingTruth;
+        if (exitsBeforeBackedge(Guard->getThen()))
+          ContinuingTruth = false;
+        else if (Guard->getElse() &&
+                 exitsBeforeBackedge(Guard->getElse()))
+          ContinuingTruth = true;
+        else
+          continue;
+        Facts |= descentFacts(Guard->getCond(), ContinuingTruth,
+                              Rank, Step);
+        Facts |= distanceFacts(Guard->getCond(), ContinuingTruth,
+                               Bound, Rank, Step);
+      }
+      if (const auto *Expression = dyn_cast<Expr>(Child)) {
+        std::optional<Progress> Change = progress(Expression);
+        if (Change && sameRank(*Change, Rank) &&
+            Change->Kind == ProgressKind::Up &&
             Change->DynamicStep == Step) {
           bool Positive = (Facts & StepPositive) ||
               ((Facts & StepNonzero) &&
@@ -1857,8 +2019,11 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         continue;
       if (strictComparison(Condition, Change, Body, Increment))
         return "strict-scalar-rank";
-      if (Change.DynamicStep &&
+      if (Change.DynamicStep && Change.Kind == ProgressKind::Down &&
           bodyHasGuardedDynamicDescent(Body, Change))
+        return "strict-scalar-rank";
+      if (Change.DynamicStep && Change.Kind == ProgressKind::Up &&
+          bodyHasGuardedDynamicAscent(Condition, Body, Increment, Change))
         return "strict-scalar-rank";
       if (!Condition && Change.UnitStep &&
           Change.Kind == ProgressKind::Down &&

@@ -261,7 +261,7 @@ char *strsep(char **, const char *) __attribute__((nonnull(1)));
  * first n bytes are searched and it may contain no NUL in that range.  Its
  * source, however, is always traversed to a NUL, including when n is zero. */
 size_t strlcat (char *, const char * withtok(null_terminated), size_t);
-size_t strlcpy (char *, const char *, size_t);
+size_t strlcpy (char *__restrict, const char *__restrict, size_t);
 void explicit_bzero (void *, size_t) __attribute__((nonnull(1)));
 #endif
 

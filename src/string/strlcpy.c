@@ -4,7 +4,7 @@
 #include <string.h>
 #include "ownership_stubs.h"
 
-size_t strlcpy(char *d, const char *s, size_t n)
+size_t strlcpy(char *restrict d, const char *restrict s, size_t n)
 {
 	size_t l = strlen(s);
 	if (n) {

@@ -62,6 +62,7 @@ REGISTER_MAP_WITH_PROGRAMSTATE(GrantedDisjointProof, DisjointParameterKey,
                                const ParmVarDecl *)
 using SymbolRelation = std::pair<SymbolRef, SymbolRef>;
 REGISTER_SET_WITH_PROGRAMSTATE(ProvenLessEqual, SymbolRelation)
+REGISTER_SET_WITH_PROGRAMSTATE(ProvenLessThan, SymbolRelation)
 
 namespace {
 
@@ -452,20 +453,51 @@ class MemoryContractChecker
      * underflow and strlen(P) - B is necessarily a readable prefix of P. */
     const auto *Difference =
         dyn_cast_or_null<SymSymExpr>(Length.getAsSymbol());
-    if (!Difference || Difference->getOpcode() != BO_Sub)
+    if (Difference && Difference->getOpcode() == BO_Sub) {
+      SymbolRef Measured = stripCasts(Difference->getLHS());
+      SymbolRef Removed = stripCasts(Difference->getRHS());
+      const MemRegion *const *Source = State->get<StrlenSource>(Measured);
+      if (Source && RelativePointerBytes(*Source) == 0) {
+        SVal NoUnderflow = C.getSValBuilder().evalBinOp(
+            State, BO_GE, C.getSValBuilder().makeSymbolVal(Measured),
+            C.getSValBuilder().makeSymbolVal(Removed),
+            C.getSValBuilder().getConditionType());
+        std::optional<DefinedOrUnknownSVal> Condition =
+            NoUnderflow.getAs<DefinedOrUnknownSVal>();
+        if (Condition && !State->assume(*Condition, false))
+          return true;
+      }
+    }
+
+    SymbolRef Bounded = stripCasts(Length.getAsSymbol());
+    if (!Bounded)
       return false;
-    SymbolRef Measured = stripCasts(Difference->getLHS());
-    SymbolRef Removed = stripCasts(Difference->getRHS());
-    const MemRegion *const *Source = State->get<StrlenSource>(Measured);
-    if (!Source || RelativePointerBytes(*Source) != 0)
-      return false;
-    SVal NoUnderflow = C.getSValBuilder().evalBinOp(
-        State, BO_GE, C.getSValBuilder().makeSymbolVal(Measured),
-        C.getSValBuilder().makeSymbolVal(Removed),
-        C.getSValBuilder().getConditionType());
-    std::optional<DefinedOrUnknownSVal> Condition =
-        NoUnderflow.getAs<DefinedOrUnknownSVal>();
-    return Condition && !State->assume(*Condition, false);
+    if (const auto *DifferenceLength = dyn_cast<SymIntExpr>(Bounded)) {
+      if (DifferenceLength->getOpcode() != BO_Sub ||
+          DifferenceLength->getRHS().isNegative())
+        return false;
+      SymbolRef Base = stripCasts(DifferenceLength->getLHS());
+      SVal NoUnderflow = C.getSValBuilder().evalBinOp(
+          State, BO_GE, C.getSValBuilder().makeSymbolVal(Base),
+          C.getSValBuilder().makeIntVal(DifferenceLength->getRHS()),
+          C.getSValBuilder().getConditionType());
+      std::optional<DefinedOrUnknownSVal> Condition =
+          NoUnderflow.getAs<DefinedOrUnknownSVal>();
+      if (!Condition || State->assume(*Condition, false))
+        return false;
+      Bounded = Base;
+    }
+    for (const SymbolRelation &Relation : State->get<ProvenLessEqual>()) {
+      if (stripCasts(Relation.first) != Bounded)
+        continue;
+      SymbolRef Bound = stripCasts(Relation.second);
+      const MemRegion *const *Strlen = State->get<StrlenSource>(Bound);
+      const MemRegion *const *Strnlen = State->get<StrnlenSource>(Bound);
+      if ((Strlen || Strnlen) &&
+          RelativePointerBytes(Strlen ? *Strlen : *Strnlen) == 0)
+        return true;
+    }
+    return false;
   }
 
   static std::optional<SVal>
@@ -511,6 +543,16 @@ public:
       State = State->add<ProvenLessEqual>({Left, Right});
     if (RightLessEqual)
       State = State->add<ProvenLessEqual>({Right, Left});
+    bool LeftLessThan =
+        (IsTrue && Comparison->getOpcode() == BO_LT) ||
+        (IsFalse && Comparison->getOpcode() == BO_GE);
+    bool RightLessThan =
+        (IsTrue && Comparison->getOpcode() == BO_GT) ||
+        (IsFalse && Comparison->getOpcode() == BO_LE);
+    if (LeftLessThan)
+      State = State->add<ProvenLessThan>({Left, Right});
+    if (RightLessThan)
+      State = State->add<ProvenLessThan>({Right, Left});
     if (State != C.getState())
       C.addTransition(State);
   }
@@ -626,6 +668,33 @@ public:
         return false;
       if (sameSymbolSpanProven(Extent, Length, State, C))
         return true;
+      SymbolRef ExtentSymbol = stripCasts(Extent.getAsSymbol());
+      SymbolRef LengthSymbol = stripCasts(Length.getAsSymbol());
+      if (ExtentSymbol && LengthSymbol) {
+        if (State->contains<ProvenLessEqual>({LengthSymbol, ExtentSymbol}))
+          return true;
+        if (const auto *OffsetLength = dyn_cast<SymIntExpr>(LengthSymbol))
+          if (OffsetLength->getOpcode() == BO_Add &&
+              !OffsetLength->getRHS().isNegative() &&
+              OffsetLength->getRHS().getLimitedValue() == 1 &&
+              State->contains<ProvenLessThan>(
+                  {stripCasts(OffsetLength->getLHS()), ExtentSymbol}))
+            return true;
+        if (const auto *Shorter = dyn_cast<SymIntExpr>(LengthSymbol))
+          if (Shorter->getOpcode() == BO_Sub &&
+              !Shorter->getRHS().isNegative() &&
+              stripCasts(Shorter->getLHS()) == ExtentSymbol) {
+            SVal NoUnderflow = C.getSValBuilder().evalBinOp(
+                State, BO_GE,
+                C.getSValBuilder().makeSymbolVal(ExtentSymbol),
+                C.getSValBuilder().makeIntVal(Shorter->getRHS()),
+                C.getSValBuilder().getConditionType());
+            std::optional<DefinedOrUnknownSVal> Condition =
+                NoUnderflow.getAs<DefinedOrUnknownSVal>();
+            if (Condition && !State->assume(*Condition, false))
+              return true;
+          }
+      }
       SVal Enough = C.getSValBuilder().evalBinOp(
           State, BO_GE, Extent, Length,
           C.getSValBuilder().getConditionType());
@@ -753,6 +822,32 @@ public:
            Bytes <= static_cast<uint64_t>(
                         C.getASTContext().getTypeSizeInChars(Second->getType())
                             .getQuantity());
+  }
+
+  static const ParmVarDecl *restrictRootParameter(const Expr *Expression) {
+    if (!Expression)
+      return nullptr;
+    Expression = Expression->IgnoreParenCasts();
+    if (const auto *Reference = dyn_cast<DeclRefExpr>(Expression))
+      if (const auto *Parameter = dyn_cast<ParmVarDecl>(Reference->getDecl()))
+        return Parameter->getType().isRestrictQualified() ? Parameter
+                                                         : nullptr;
+    if (const auto *Binary = dyn_cast<BinaryOperator>(Expression))
+      if (Binary->getOpcode() == BO_Add || Binary->getOpcode() == BO_Sub)
+        return restrictRootParameter(Binary->getLHS());
+    if (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(Expression))
+      return restrictRootParameter(Subscript->getBase());
+    if (const auto *Address = dyn_cast<UnaryOperator>(Expression))
+      if (Address->getOpcode() == UO_AddrOf)
+        return restrictRootParameter(Address->getSubExpr());
+    return nullptr;
+  }
+
+  static bool restrictDisjointSpanProven(const Expr *First,
+                                         const Expr *Second) {
+    const ParmVarDecl *A = restrictRootParameter(First);
+    const ParmVarDecl *B = restrictRootParameter(Second);
+    return A && B && A != B;
   }
 
   bool derivedContractSpanProven(SVal Pointer, SVal Length,
@@ -1227,7 +1322,9 @@ public:
       SVal First = Call.getArgSVal(Contract.First);
       SVal Second = Call.getArgSVal(Contract.Second);
       SVal Length = Call.getArgSVal(Contract.Length);
-      if (!overlapProven(First, Second, Length, C.getState(), C)) {
+      if (!restrictDisjointSpanProven(Call.getArgExpr(Contract.First),
+                                     Call.getArgExpr(Contract.Second)) &&
+          !overlapProven(First, Second, Length, C.getState(), C)) {
         BugType *Type = OverlapBT.get();
         report("memcpy ranges are not proven nonoverlapping", Type, Call,
                C.getState(), C);

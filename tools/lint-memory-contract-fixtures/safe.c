@@ -153,6 +153,14 @@ void bounded_operations(int fd)
 	read(fd, destination, sizeof destination);
 }
 
+void copy_restrict_parameters(
+	char *restrict destination withtok(fixture_writable_span(length)),
+	const char *restrict source withtok(fixture_readable_span(length)),
+	size_t length)
+{
+	memcpy(destination, source, length);
+}
+
 void clear_typed_member(struct fixture_record *record)
 {
 	memset(&record->second, 0, sizeof record->second);
@@ -200,6 +208,33 @@ void consume_guarded_strlen_difference(const char *s, const char *tail)
 	size_t removed = strlen(tail);
 	if (removed > whole) return;
 	consume_bytes(s, whole - removed);
+}
+
+void consume_strlen_bounded_prefix(const char *s, size_t requested)
+{
+	size_t available = strlen(s);
+	if (requested > available) return;
+	consume_bytes(s, requested);
+}
+
+void fill_strict_capacity(
+	char *buffer withtok(fixture_writable_span(capacity)),
+	size_t capacity, size_t used)
+{
+	if (used < capacity) memset(buffer, 0, used + 1);
+}
+
+void fill_nonzero_shorter(
+	char *buffer withtok(fixture_writable_span(capacity)), size_t capacity)
+{
+	if (capacity) memset(buffer, 0, capacity - 1);
+}
+
+void consume_shorter_bounded_prefix(const char *s, size_t requested)
+{
+	size_t available = strlen(s);
+	if (requested == 0 || requested > available) return;
+	consume_bytes(s, requested - 1);
 }
 
 /* xstrdup's own shape, duplicated across src/glob/glob.c,

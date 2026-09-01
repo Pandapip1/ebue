@@ -79,6 +79,13 @@ void insufficient_contracted_suffix(
 		memset(out + offset, 0, length); /* memory-contract-expect */
 }
 
+void copy_unrestricted_parameters(
+	char *destination withtok(fixture_writable_span(length)),
+	const char *source withtok(fixture_readable_span(length)), size_t length)
+{
+	memcpy(destination, source, length); /* memory-contract-expect */
+}
+
 struct fixture_record {
 	int first;
 	int second;
@@ -211,4 +218,31 @@ void unchecked_strlen_difference(const char *s, const char *tail)
 	size_t whole = strlen(s);
 	size_t removed = strlen(tail);
 	consume_bytes(s, whole - removed); /* memory-contract-expect */
+}
+
+void consume_unbounded_prefix(const char *s, size_t requested)
+{
+	(void)strlen(s);
+	consume_bytes(s, requested); /* memory-contract-expect */
+}
+
+void overfill_nonstrict_capacity(
+	char *buffer withtok(fixture_writable_span(capacity)),
+	size_t capacity, size_t used)
+{
+	if (used <= capacity)
+		memset(buffer, 0, used + 1); /* memory-contract-expect */
+}
+
+void subtract_without_nonzero_guard(
+	char *buffer withtok(fixture_writable_span(capacity)), size_t capacity)
+{
+	memset(buffer, 0, capacity - 1); /* memory-contract-expect */
+}
+
+void consume_wrapping_bounded_prefix(const char *s, size_t requested)
+{
+	size_t available = strlen(s);
+	if (requested > available) return;
+	consume_bytes(s, requested - 1); /* memory-contract-expect */
 }
