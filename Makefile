@@ -162,7 +162,31 @@ ifeq ($(PLATFORM),nt)
 ALL_LIBS = $(CRT_LIBS) $(STATIC_LIBS) $(EMPTY_LIBS) $(DEF_FILES)
 ALL_TOOLS = obj/ntlibc-tcc
 else
-ALL_LIBS = $(CRT_LIBS) $(STATIC_LIBS) $(EMPTY_LIBS)
+# obj/test/%.exe's own generic recipe further down links -lntdll
+# unconditionally (it has exactly one shape, shared by both platforms)
+# -- fine on PLATFORM=nt, where lib/ntdll.def satisfies it, but with
+# nothing at all named lib/libntdll.a on PLATFORM=linux until now, so
+# `make obj/test/<name>.exe` (this project's own documented native-
+# Linux verification path -- see configure's Wine-detection comment:
+# platform=linux "runs its own binaries natively" with no `check`/
+# `linkcheck` equivalent, but individual test executables are still
+# meant to build and run directly) failed at the link step for every
+# single test, not just this pass's own new ones. A real Linux binary
+# has no NTDLL to import from at all, so an EMPTY archive is exactly
+# as correct an answer to `-lntdll` here as the existing EMPTY_LIBS
+# stubs (-lm/-lrt/-lpthread/...) already are for THEIR own symbols --
+# ntlibc bakes the real implementations directly into lib/libc.a on
+# every platform; these -lX flags exist for source compatibility with
+# programs that historically link them explicitly, not because any of
+# them ever contribute real archive members here. lib/libntdll.a is
+# kept OUT of EMPTY_LIBS itself (rather than just appending "ntdll" to
+# EMPTY_LIB_NAMES) so this stays scoped to platform=linux's own ALL_LIBS
+# line and never touches the nt branch above at all -- tcc's own -lntdll
+# resolution there consumes lib/ntdll.def directly (a real .def
+# import-table search, not an ar archive), and an empty lib/libntdll.a
+# sitting in the same -L path could plausibly shadow that lookup if it
+# were built on PLATFORM=nt too; it deliberately never is.
+ALL_LIBS = $(CRT_LIBS) $(STATIC_LIBS) $(EMPTY_LIBS) lib/libntdll.a
 ALL_TOOLS =
 endif
 
@@ -247,6 +271,14 @@ lib/libc.a: $(AOBJS)
 	$(AR) rcs $@ $(AOBJS)
 
 $(EMPTY_LIBS):
+	rm -f $@
+	$(AR) rcs $@
+
+# lib/libntdll.a: PLATFORM=linux only (see this file's ALL_LIBS comment
+# above for why) -- same empty-archive shape as $(EMPTY_LIBS) above,
+# kept as its own rule rather than folded into EMPTY_LIB_NAMES so it is
+# never built, even accidentally, on PLATFORM=nt.
+lib/libntdll.a:
 	rm -f $@
 	$(AR) rcs $@
 
@@ -502,8 +534,24 @@ TEST_PROFILE ?= capability.symlink=no capability.console=no capability.overcommi
 # alternative is remembering to delete the target by hand every time.
 TEST_DEPFLAGS = -MMD -MF $(@:.exe=.d)
 
+# PLATFORM=linux's real ELF entry point (_start) lives in
+# crt/linux/$(ARCH)/start.S, compiled to lib/start.o -- lib/crt1.o
+# alone only provides __linux_start_main(), the C-level continuation
+# _start itself branches into (see that file's own header comment).
+# Without lib/start.o on the link line there is no _start symbol at
+# all: the linker warns "cannot find entry symbol _start" and silently
+# picks a bogus fallback address, producing a binary that segfaults
+# immediately rather than failing to link. PLATFORM=nt has no
+# equivalent split (crt/crt1.c is its own single-stage entry, no
+# separate start.S), so this is empty there and every existing nt test
+# link is unaffected -- see tools/gen-kaem.sh's own kaem-bootstrap
+# recipe (this Makefile's own comment a few lines above ALL_LIBS'
+# platform split) for the same "lib/crt1.o [lib/start.o]" shape
+# already established elsewhere in this build.
+TEST_CRT_START = $(if $(filter linux,$(PLATFORM)),lib/start.o)
+
 obj/test/%.exe: $(srcdir)/test/%.c $(ALL_LIBS) | obj/test
-	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) $(TEST_DEPFLAGS) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ lib/crt1.o $< -Llib -lc -lntdll
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) $(TEST_DEPFLAGS) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ lib/crt1.o $(TEST_CRT_START) $< -Llib -lc -lntdll
 
 # test/rpath.c delay-loads this DLL from its own directory ($ORIGIN)
 # to exercise the real resolution path -- it links against nothing of

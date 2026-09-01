@@ -1,6 +1,16 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
+ * NT's <pwd.h> backend. Pure relocation, zero behavior change: this
+ * file used to be the platform-SHARED src/misc/pwd.c, silently also
+ * governing native Linux's getpwnam()/getpwuid()/etc even though
+ * Linux genuinely has a queryable /etc/passwd this single-user
+ * synthesis never consulted. src/misc/linux/pwd.c (the NSS pass, see
+ * its own header) is Linux's real, file-backed sibling now; this file
+ * is unchanged apart from moving into src/misc/nt/, following this
+ * tree's existing linux/+nt/ split convention (e.g. src/dlfcn/
+ * {linux,nt}/plat_dlfcn.c).
+ *
  * <pwd.h>: NT has no /etc/passwd, but this library has exactly one
  * current uid.  getuid()/geteuid() (src/unistd/ids.c) map the process
  * token's SAM/AD SID and RID, and setuid()/seteuid() can only retain it,
