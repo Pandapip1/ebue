@@ -314,6 +314,25 @@ int __util_find_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_ls_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_xargs_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* Tier 4 continued: m4(1p) -- the POSIX macro processor, a real
+ * recursive macro-expansion engine (see src/util/m4.c's own header
+ * comment for the scanning model, the full builtin list, and the
+ * documented scope narrowings against GNU's extensions). Genuinely
+ * stateful and interactive by design (its macro table, quote/comment
+ * characters and diversion buffers), so it takes the same
+ * never-exit()/_exit()-from-inside care every other utility in this
+ * header that can run in-process as a shell builtin does -- a `q`-style
+ * early stop (m4exit) unwinds back to an ordinary `return` instead --
+ * matching the reasoning src/util/dd.c's own header comment gives for
+ * its SIGINT handler. Not __pure__: it reads real files via
+ * include/sinclude, spawns a real child via syscmd, and writes stdout
+ * unconditionally, so a repeated call is not guaranteed to answer the
+ * same way twice. nonnull(2) for the same reason every other utility in
+ * this header does: a real argv from a real caller is never NULL, and
+ * a usage-error path taken with argc==1 still needs argv[0] for its
+ * own diagnostic. */
+int __util_m4_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 /* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
  * src/util/rm.c -----------------------------------------------------
  *
