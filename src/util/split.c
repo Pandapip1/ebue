@@ -86,7 +86,7 @@ static int parse_bytecount(const char *s, long *out)
 	if (s[n - 1] == 'k') { mult = 1024; n--; }
 	else if (s[n - 1] == 'm') { mult = 1048576; n--; }
 	if (n == 0 || n >= sizeof buf) return -1;
-	memcpy(buf, s, n);
+	strncpy(buf, s, n);
 	buf[n] = 0;
 	v = strtol(buf, &end, 10);
 	if (end == buf || *end || v <= 0) return -1;
