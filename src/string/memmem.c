@@ -7,20 +7,16 @@
 void *memmem(const void *h0, size_t k, const void *n0, size_t l)
 {
 	const unsigned char *h = h0, *n = n0;
-	size_t i, remaining;
+	size_t i;
 
 	if (!l) return (void *)h;
 	if (k < l) return 0;
 	if (l == 1) return memchr(h0, *n, k);
-	remaining = k - l + 1;
-	i = 0;
-	while (remaining > 0) {
-		remaining--;
+	for (i = 0; i < k - l + 1; i++) {
 		if (h[i] == *n) {
 			__ownership_readable_span(h + i + 1, l - 1);
 			if (!memcmp(h + i + 1, n + 1, l - 1)) return (void *)(h + i);
 		}
-		i++;
 	}
 	return 0;
 }
