@@ -44,9 +44,15 @@ static int append_missing(struct __fd *f, struct dirent *out, size_t size)
 {
 	size_t used = 0;
 	int total = __vfs_mandatory_count(f->vfs);
-	while (f->vnext < total && used + sizeof(struct dirent) <= size) {
+	/* vnext is an unsigned byte and starts at zero; mandatory_count is
+	 * exactly 0, 1 or 3.  Snapshot that finite maximum independently of
+	 * the descriptor member which records progress across calls. */
+	unsigned remaining = (unsigned)total;
+	while (remaining > 0 && f->vnext < total &&
+	       used + sizeof(struct dirent) <= size) {
 		int i = f->vnext++;
 		struct dirent *d;
+		remaining--;
 		if (f->vseen & (1u << i)) continue;
 		d = (struct dirent *)((char *)out + used);
 		memset(d, 0, sizeof *d);
