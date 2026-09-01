@@ -142,12 +142,14 @@ static int has_meta(const char *s, size_t len, int flags)
 
 /* s required: subscripted unconditionally (`s[i]`) whenever len >= 1,
  * and its one real call site (do_glob()) passes pat, itself required,
- * never NULL.  On success outlen receives the number of output bytes. */
+ * never NULL. */
 withtok(internal_heap_allocated)
-static char *unescape(const char *s, size_t len, int flags, size_t *outlen)
+withtok(writable_span(len))
+static char *unescape(const char *s, size_t len, int flags)
     __attribute__((nonnull(1)));
 withtok(internal_heap_allocated)
-static char *unescape(const char *s, size_t len, int flags, size_t *outlen)
+withtok(writable_span(len))
+static char *unescape(const char *s, size_t len, int flags)
 {
 	char *buf = __malloc(len + 1);
 	size_t i = 0, j = 0, remaining = len;
@@ -161,7 +163,6 @@ static char *unescape(const char *s, size_t len, int flags, size_t *outlen)
 		remaining--;
 	}
 	buf[j] = 0;
-	*outlen = j;
 	return buf;
 }
 
@@ -181,20 +182,28 @@ static int cmpstrp(const void *a, const void *b)
  * name (namelen bytes) into out, appending a trailing '/' if
  * want_slash.  On success outlen receives the joined byte length.
  * Returns 0, or -1 if it would not fit in PATH_MAX. */
-static int join(char *out, const char *prefix, size_t preflen,
-                 const char *name, size_t namelen, int want_slash,
-                 size_t *outlen)
+static int join(char *out withtok(writable_span(outcap)), size_t outcap,
+                const char *prefix withtok(readable_span(preflen)),
+                size_t preflen,
+                const char *name withtok(readable_span(namelen)),
+                size_t namelen, int want_slash, size_t *outlen);
+static int join(char *out withtok(writable_span(outcap)), size_t outcap,
+                const char *prefix withtok(readable_span(preflen)),
+                size_t preflen,
+                const char *name withtok(readable_span(namelen)),
+                size_t namelen, int want_slash, size_t *outlen)
 {
-	size_t need;
+	size_t need, remaining;
 
 	/* Reserve the terminator first, then admit each component before
 	 * forming the corresponding sum.  Besides ordinary overlong paths,
 	 * this rejects wrapped attacker-sized lengths as the same no-match. */
-	if (preflen >= (size_t)PATH_MAX) return -1;
-	if (namelen > (size_t)PATH_MAX - 1 - preflen) return -1;
+	if (outcap == 0 || preflen >= outcap) return -1;
+	remaining = outcap - preflen;
+	if (namelen >= remaining) return -1;
 	need = preflen + namelen;
 	if (want_slash) {
-		if (need >= (size_t)PATH_MAX - 1) return -1;
+		if (need >= outcap - 1) return -1;
 		need++;
 	}
 	memcpy(out, prefix, preflen);
@@ -222,17 +231,20 @@ static int join(char *out, const char *prefix, size_t preflen,
  * entry the way pat is), so there is no single unconditional dereference
  * this attribute could describe for it. */
 // NOLINTNEXTLINE(misc-no-recursion) -- component expansion mirrors the pathname hierarchy and is pattern/path-depth bounded
-static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
+static int do_glob(char *prefix withtok(readable_span(prefixcap)),
+                    size_t prefixcap, size_t preflen, const char *pat, int flags,
                     int (*errfunc)(const char *, int), struct pv *out)
-    __attribute__((nonnull(3)));
+    __attribute__((nonnull(4)));
 // NOLINTNEXTLINE(misc-no-recursion) -- component expansion mirrors the pathname hierarchy and is pattern/path-depth bounded
-static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
+static int do_glob(char *prefix withtok(readable_span(prefixcap)),
+                    size_t prefixcap, size_t preflen, const char *pat, int flags,
                     int (*errfunc)(const char *, int), struct pv *out)
 {
 	const char *slash, *rest;
 	size_t seglen, newlen;
 	int meta, want_slash;
 	char newprefix[PATH_MAX];
+	if (preflen > prefixcap) return -1;
 
 	while (*pat == '/') pat++;
 	if (!*pat) {
@@ -298,12 +310,13 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 
 	if (!meta) {
 		size_t namelen;
-		char *name = unescape(pat, seglen, flags, &namelen);
+		char *name = unescape(pat, seglen, flags);
 		struct stat st;
 		int isdir;
 
 		if (!name) return -1;
-		if (join(newprefix, prefix, preflen, name, namelen, want_slash,
+		namelen = strlen(name);
+		if (join(newprefix, sizeof newprefix, prefix, preflen, name, namelen, want_slash,
 		         &newlen)) {
 			__free(name);
 			return 0; /* too long to ever exist; not a match, not an error */
@@ -312,7 +325,8 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 
 		if (rest) {
 			if (stat(newprefix, &st) != 0 || !S_ISDIR(st.st_mode)) return 0;
-			return do_glob(newprefix, newlen, rest, flags, errfunc, out);
+			return do_glob(newprefix, sizeof newprefix, newlen, rest, flags,
+			               errfunc, out);
 		}
 		if (stat(newprefix, &st) != 0) return 0;
 		isdir = S_ISDIR(st.st_mode);
@@ -361,13 +375,14 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 			if (fnmatch(segbuf, d->d_name, (flags & GLOB_NOESCAPE) ? FNM_NOESCAPE : 0) != 0)
 				continue;
 
-			if (join(newprefix, prefix, preflen, d->d_name, namelen,
+			if (join(newprefix, sizeof newprefix, prefix, preflen, d->d_name, namelen,
 			         want_slash, &newlen))
 				continue;
 
 			if (rest) {
 				if (stat(newprefix, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
-				rc = do_glob(newprefix, newlen, rest, flags, errfunc, out);
+				rc = do_glob(newprefix, sizeof newprefix, newlen, rest, flags,
+				             errfunc, out);
 				if (rc) break;
 			} else {
 				int isdir = 0;
@@ -487,7 +502,8 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
 	 * by this point, leaving preflen == 1 and an empty pat, which is the
 	 * legitimate exhausted case naming the root.  So the test is on the
 	 * caller's original pattern, not on pat. */
-	rc = *pattern ? do_glob(prefix, preflen, pat, flags, errfunc, &out) : 0;
+	rc = *pattern ? do_glob(prefix, sizeof prefix, preflen, pat, flags,
+	                        errfunc, &out) : 0;
 
 	if (rc == -1) {
 		/* Frees everything in out, including any entries kept alive

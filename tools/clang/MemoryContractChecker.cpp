@@ -1036,6 +1036,13 @@ public:
           C.getASTContext().getSizeType());
     SVal Remaining = C.getSValBuilder().evalBinOp(
         State, BO_Sub, *Extent, Offset, C.getASTContext().getSizeType());
+    for (const SymbolRelation &Relation : State->get<ProvenLessEqual>()) {
+      SVal Smaller = C.getSValBuilder().makeSymbolVal(Relation.first);
+      SVal Larger = C.getSValBuilder().makeSymbolVal(Relation.second);
+      if (symbolicallyEquivalent(Length, Smaller) &&
+          symbolicallyEquivalent(Remaining, Larger))
+        return true;
+    }
     SVal Enough = C.getSValBuilder().evalBinOp(
         State, BO_GE, Remaining, Length,
         C.getSValBuilder().getConditionType());

@@ -5,7 +5,6 @@
  * swapped byte by byte, or by machine words when aligned). */
 #include <stdlib.h>
 #include <stdint.h>
-#include <limits.h>
 
 typedef int (*cmp_r)(const void *, const void *, void *);
 
@@ -43,9 +42,7 @@ static void swap(unsigned char *a, unsigned char *b, size_t n)
 static void sift(unsigned char *base, size_t n, size_t i, size_t sz, cmp_r cmp, void *arg)
 {
 	size_t c;
-	unsigned levels_left = (unsigned)(sizeof i * CHAR_BIT);
-	while (levels_left > 0 && i < n / 2) {
-		levels_left--;
+	while (i < n / 2) {
 		c = 2 * i + 1;
 		if (c + 1 < n && cmp(base + c * sz, base + (c + 1) * sz, arg) < 0) c++;
 		if (cmp(base + i * sz, base + c * sz, arg) >= 0) return;

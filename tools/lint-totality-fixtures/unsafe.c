@@ -1259,3 +1259,480 @@ unsigned interval_do_while_first_iteration(unsigned lo, unsigned hi, int left)
 	} while (lo < hi);
 	return lo;
 }
+
+void mutate_affine_value(__SIZE_TYPE__ *);
+
+__SIZE_TYPE__ affine_overflow_fixed_point(__SIZE_TYPE__ i, __SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	while (i <= n) { /* totality-expect */
+		child = 2 * i + 1;
+		i = child;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ affine_without_half_guard(__SIZE_TYPE__ i, __SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	while (i < n) { /* totality-expect */
+		child = 2 * i + 1;
+		i = child;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ affine_inclusive_half_guard(__SIZE_TYPE__ i, __SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	while (i <= n / 2) { /* totality-expect */
+		child = 2 * i + 1;
+		i = child;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ affine_do_while_not_pretested(__SIZE_TYPE__ i, __SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	do { /* totality-expect */
+		child = 2 * i + 1;
+		i = child;
+	} while (i < n / 2);
+	return i;
+}
+
+__SIZE_TYPE__ affine_rank_reset(__SIZE_TYPE__ i, __SIZE_TYPE__ n, int reset)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) { /* totality-expect */
+		child = 2 * i + 1;
+		i = child;
+		if (reset)
+			i = 0;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ escaped_affine_rank(__SIZE_TYPE__ i, __SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) { /* totality-expect */
+		child = 2 * i + 1;
+		i = child;
+		mutate_affine_value(&i);
+	}
+	return i;
+}
+
+__SIZE_TYPE__ affine_child_reset(__SIZE_TYPE__ i, __SIZE_TYPE__ n,
+	int reset)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) { /* totality-expect */
+		child = 2 * i + 1;
+		if (reset)
+			child = 0;
+		i = child;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ escaped_affine_child(__SIZE_TYPE__ i, __SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) { /* totality-expect */
+		child = 2 * i + 1;
+		mutate_affine_value(&child);
+		i = child;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ mutable_affine_bound(__SIZE_TYPE__ i, __SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) { /* totality-expect */
+		child = 2 * i + 1;
+		i = child;
+		n++;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ escaped_affine_bound(__SIZE_TYPE__ i, __SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) { /* totality-expect */
+		child = 2 * i + 1;
+		i = child;
+		mutate_affine_value(&n);
+	}
+	return i;
+}
+
+__SIZE_TYPE__ callback_mutates_affine_rank(__SIZE_TYPE__ i,
+	__SIZE_TYPE__ n, void (*callback)(__SIZE_TYPE__ *))
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) { /* totality-expect */
+		child = 2 * i + 1;
+		i = child;
+		callback(&i);
+	}
+	return i;
+}
+
+__SIZE_TYPE__ alternate_affine_multiplier(__SIZE_TYPE__ i,
+	__SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) { /* totality-expect */
+		child = 3 * i + 1;
+		i = child;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ alternate_affine_addend(__SIZE_TYPE__ i, __SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) { /* totality-expect */
+		child = 2 * i + 2;
+		i = child;
+	}
+	return i;
+}
+
+unsigned short promoted_affine_type(unsigned short i, unsigned short n)
+{
+	unsigned short child;
+	while (i < n / 2) { /* totality-expect */
+		child = (unsigned short)(2 * i + 1);
+		i = child;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ repeated_affine_update(__SIZE_TYPE__ i, __SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) { /* totality-expect */
+		child = 2 * i + 1;
+		child = 2 * i + 1;
+		i = child;
+	}
+	return i;
+}
+
+long signed_affine_negative_domain(long i, long n)
+{
+	long child;
+	while (i < n / 2) { /* totality-expect */
+		child = 2 * i + 1;
+		i = child;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ affine_early_continue(__SIZE_TYPE__ i, __SIZE_TYPE__ n,
+	int skip)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) { /* totality-expect */
+		if (skip)
+			continue;
+		child = 2 * i + 1;
+		i = child;
+	}
+	return i;
+}
+
+unsigned geometric_missing_overflow_guard(unsigned initial, unsigned need)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		cap *= 2;
+	}
+	return cap;
+}
+
+unsigned geometric_guard_too_high(unsigned initial, unsigned need)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2 + 1)
+			return cap;
+		cap *= 2;
+	}
+	return cap;
+}
+
+unsigned geometric_reversed_guard(unsigned initial, unsigned need)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		if (cap <= (unsigned)-1 / 2)
+			return cap;
+		cap *= 2;
+	}
+	return cap;
+}
+
+unsigned geometric_zero_rank(unsigned need)
+{
+	unsigned cap = 0;
+	while (cap < need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		cap *= 2;
+	}
+	return cap;
+}
+
+int geometric_negative_signed_rank(int need)
+{
+	int cap = -1;
+	while (cap < need) { /* totality-expect */
+		if (cap > __INT_MAX__ / 2)
+			return cap;
+		cap *= 2;
+	}
+	return cap;
+}
+
+signed char geometric_narrow_signed_rank(signed char initial,
+	signed char need)
+{
+	signed char cap = initial;
+	if (cap < 8)
+		cap = 8;
+	while (cap < need) { /* totality-expect */
+		if (cap > __SCHAR_MAX__ / 2)
+			return cap;
+		cap *= 2;
+	}
+	return cap;
+}
+
+void geometric_change(unsigned *p);
+
+unsigned geometric_bound_callback(unsigned initial, unsigned need)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		geometric_change(&need);
+		cap *= 2;
+	}
+	return cap;
+}
+
+unsigned geometric_rank_callback(unsigned initial, unsigned need)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		geometric_change(&cap);
+		cap *= 2;
+	}
+	return cap;
+}
+
+unsigned geometric_bound_reset(unsigned initial, unsigned need, int reset)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		if (reset)
+			need = (unsigned)-1;
+		cap *= 2;
+	}
+	return cap;
+}
+
+unsigned geometric_rank_reset(unsigned initial, unsigned need, int reset)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		if (reset)
+			cap = 1;
+		cap *= 2;
+	}
+	return cap;
+}
+
+unsigned geometric_continue_bypass(unsigned initial, unsigned need, int skip)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		if (skip)
+			continue;
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		cap *= 2;
+	}
+	return cap;
+}
+
+unsigned geometric_repeated_doubling(unsigned initial, unsigned need)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		cap *= 2;
+		cap *= 2;
+	}
+	return cap;
+}
+
+unsigned geometric_saturating_formula(unsigned initial, unsigned need)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		cap = cap > (unsigned)-1 / 2 ? (unsigned)-1 : cap * 2;
+	}
+	return cap;
+}
+
+unsigned geometric_stalling_formula(unsigned initial, unsigned need)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		cap *= 1;
+	}
+	return cap;
+}
+
+unsigned geometric_guard_does_not_exit(unsigned initial, unsigned need)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			cap = 1;
+		cap *= 2;
+	}
+	return cap;
+}
+
+unsigned geometric_guard_after_doubling(unsigned initial, unsigned need)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		cap *= 2;
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+	}
+	return cap;
+}
+
+unsigned geometric_conditional_doubling(unsigned initial, unsigned need,
+	int grow)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		if (grow)
+			cap *= 2;
+	}
+	return cap;
+}
+
+unsigned geometric_nested_doubling(unsigned initial, unsigned need, int grow)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		while (grow) /* totality-expect */
+			cap *= 2;
+	}
+	return cap;
+}
+
+static unsigned geometric_global_need;
+
+unsigned geometric_global_bound_call(unsigned initial)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < geometric_global_need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		opaque_mutation();
+		cap *= 2;
+	}
+	return cap;
+}
+
+unsigned geometric_do_while(unsigned initial, unsigned need)
+{
+	unsigned cap = initial ? initial : 8;
+	do { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		cap *= 2;
+	} while (cap < need);
+	return cap;
+}
+
+unsigned geometric_truncated_initializer(unsigned initial, unsigned need,
+	unsigned long long wide)
+{
+	unsigned cap = initial ? initial : wide;
+	while (cap < need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		cap *= 2;
+	}
+	return cap;
+}
+
+unsigned geometric_volatile_initializer(volatile unsigned initial,
+	unsigned need)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		cap *= 2;
+	}
+	return cap;
+}
+
+unsigned geometric_transitive_bound_alias(unsigned initial, unsigned need,
+	int reset)
+{
+	unsigned cap = initial ? initial : 8;
+	unsigned *first = &need;
+	unsigned *second = first;
+	while (cap < need) { /* totality-expect */
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		if (reset)
+			*second = (unsigned)-1;
+		cap *= 2;
+	}
+	return cap;
+}
+
+int geometric_mixed_signed_initializer(int initial, int need)
+{
+	int cap = initial;
+	if (cap < (unsigned)-1)
+		cap = 8;
+	while (cap < need) { /* totality-expect */
+		if (cap > __INT_MAX__ / 2)
+			return cap;
+		cap *= 2;
+	}
+	return cap;
+}

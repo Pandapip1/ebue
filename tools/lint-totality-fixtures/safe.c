@@ -477,6 +477,46 @@ int signed_unit_rank_with_live_bound(int *bound)
 	return i;
 }
 
+void opaque_affine_callback(void);
+int opaque_affine_predicate(void);
+
+__SIZE_TYPE__ guarded_affine_ascent(__SIZE_TYPE__ i, __SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) {
+		child = 2 * i + 1;
+		i = child;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ guarded_affine_callback_ascent(__SIZE_TYPE__ i,
+	__SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) {
+		child = 2 * i + 1;
+		if (child + 1 < n && opaque_affine_predicate())
+			child++;
+		opaque_affine_callback();
+		i = child;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ guarded_affine_continue_after_progress(__SIZE_TYPE__ i,
+	__SIZE_TYPE__ n, int skip)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) {
+		child = 2 * i + 1;
+		i = child;
+		if (skip)
+			continue;
+	}
+	return i;
+}
+
 unsigned char promoted_byte_unit_rank(unsigned char bound)
 {
 	unsigned char i;
@@ -608,4 +648,57 @@ unsigned interval_reused_only_on_exit(unsigned lo, unsigned hi,
 			lo = mid + 1;
 	}
 	return lo;
+}
+
+__SIZE_TYPE__ geometric_unsigned_growth(__SIZE_TYPE__ initial,
+	__SIZE_TYPE__ need)
+{
+	__SIZE_TYPE__ cap = initial ? initial : 8;
+	while (cap < need) {
+		if (cap > (__SIZE_TYPE__)-1 / 2)
+			return cap;
+		cap *= 2;
+	}
+	return cap;
+}
+
+int geometric_signed_growth(int initial, int need)
+{
+	int cap = initial;
+	if (cap < 32)
+		cap = 32;
+	while (cap < need) {
+		if (cap > __INT_MAX__ / 2)
+			return cap;
+		cap *= 2;
+	}
+	return cap;
+}
+
+__SIZE_TYPE__ geometric_exit_assignment(__SIZE_TYPE__ initial,
+	__SIZE_TYPE__ need)
+{
+	__SIZE_TYPE__ cap = initial ? initial : 8;
+	while (cap < need) {
+		if (cap > (__SIZE_TYPE__)-1 / 2) {
+			cap = need;
+			break;
+		}
+		cap *= 2;
+	}
+	return cap;
+}
+
+void geometric_opaque(void);
+
+unsigned geometric_call_with_closed_locals(unsigned initial, unsigned need)
+{
+	unsigned cap = initial ? initial : 8;
+	while (cap < need) {
+		if (cap > (unsigned)-1 / 2)
+			return cap;
+		geometric_opaque();
+		cap = cap * 2;
+	}
+	return cap;
 }
