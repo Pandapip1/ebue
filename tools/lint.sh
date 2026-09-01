@@ -1154,7 +1154,7 @@ stage_ownership() {
 	: > "$fixture_log"
 	for fixture in tools/lint-ownership-fixtures/*.c; do
 		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
-			-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.OwnedConstruct,ntlibc.CapabilityToken,ntlibc.OwnershipType,ntlibc.ValidPointer,ntlibc.Resource \
+			-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.OwnedConstruct,ntlibc.OwnershipContract,ntlibc.CapabilityToken,ntlibc.OwnershipType,ntlibc.ValidPointer,ntlibc.Resource \
 			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
 			>> "$fixture_log" 2>&1 || any=1
 	done
@@ -1192,7 +1192,7 @@ stage_ownership() {
 			# exploration budget needed by ownership/lifecycle proofs.
 			# shellcheck disable=SC2086
 			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
-				-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.OwnedConstruct,ntlibc.CapabilityToken,ntlibc.OwnershipType,ntlibc.Resource \
+				-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.OwnedConstruct,ntlibc.OwnershipContract,ntlibc.CapabilityToken,ntlibc.OwnershipType,ntlibc.Resource \
 				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
 				> "$owner" 2>&1
 			owner_rc=$?

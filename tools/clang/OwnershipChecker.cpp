@@ -1045,8 +1045,63 @@ struct CapabilityProtocol {
   unsigned Argument;
 };
 
+class OwnershipContractChecker : public Checker<check::ASTDecl<FunctionDecl>> {
+  static bool isHeaderPath(StringRef Path) {
+    return Path.ends_with(".h") || Path.ends_with(".hh") ||
+           Path.ends_with(".hpp");
+  }
+
+  static void emitContract(const FunctionDecl *Function, const Attr *Attribute,
+                           StringRef Contract, StringRef Path, unsigned Line) {
+    StringRef Kind;
+    if (!Function->doesThisDeclarationHaveABody())
+      Kind = isHeaderPath(Path) ? "header-declaration" : "source-declaration";
+    else
+      Kind = Attribute->isInherited() ? "definition-inherited"
+                                      : "definition-explicit";
+    llvm::errs() << "ownership-contract: " << Kind << '\t' << Contract << '\t'
+                 << Function->getQualifiedNameAsString() << '\t' << Path << '\t'
+                 << Line << '\n';
+  }
+
+public:
+  void checkASTDecl(const FunctionDecl *Function, AnalysisManager &,
+                    BugReporter &) const {
+    if (!Function->getIdentifier())
+      return;
+    const SourceManager &SM = Function->getASTContext().getSourceManager();
+    SourceLocation Location = SM.getExpansionLoc(Function->getLocation());
+    StringRef Path = SM.getFilename(Location);
+    unsigned Line = SM.getSpellingLineNumber(Location);
+    if (Function->doesThisDeclarationHaveABody())
+      llvm::errs() << "ownership-contract: definition\t-\t"
+                   << Function->getQualifiedNameAsString() << '\t' << Path
+                   << '\t' << Line << '\n';
+    for (const AnnotateAttr *Attribute :
+         Function->specific_attrs<AnnotateAttr>()) {
+      StringRef Contract = Attribute->getAnnotation();
+      if (Contract.starts_with("ownership_"))
+        emitContract(Function, Attribute, Contract, Path, Line);
+    }
+    unsigned Argument = 1;
+    for (const ParmVarDecl *Parameter : Function->parameters()) {
+      for (const AnnotateAttr *Attribute :
+           Parameter->specific_attrs<AnnotateAttr>()) {
+        StringRef Annotation = Attribute->getAnnotation();
+        if (!Annotation.starts_with("ownership_"))
+          continue;
+        std::string Contract =
+            ("parameter:" + llvm::Twine(Argument) + ":" + Annotation).str();
+        emitContract(Function, Attribute, Contract, Path, Line);
+      }
+      ++Argument;
+    }
+  }
+};
+
 class CapabilityTokenChecker
-    : public Checker<check::BeginFunction, check::PreCall, check::PostCall> {
+    : public Checker<check::BeginFunction, check::PreCall, check::PostCall,
+                     check::EndFunction> {
   mutable std::unique_ptr<BugType> BT;
 
   struct FamilyArgument {
@@ -1112,6 +1167,17 @@ class CapabilityTokenChecker
       ++Argument;
     }
     return Protocols;
+  }
+
+  static bool hasInputProtocol(ArrayRef<CapabilityProtocol> Protocols,
+                               const CapabilityProtocol &Output) {
+    return llvm::any_of(Protocols, [&](const CapabilityProtocol &Input) {
+      return Input.Argument == Output.Argument &&
+             Input.Family == Output.Family &&
+             (Input.Operation == CapabilityOperation::Require ||
+              Input.Operation == CapabilityOperation::Consume ||
+              Input.Operation == CapabilityOperation::ConsumeAny);
+    });
   }
 
   static bool acceptsStaticInitialization(const FunctionDecl *Function,
@@ -1313,16 +1379,22 @@ public:
     ProgramStateRef State = C.getState();
     const LocationContext *LC = C.getLocationContext();
     bool Changed = false;
-    for (const CapabilityProtocol &Protocol : protocolsFor(Function)) {
-      if (Protocol.Operation != CapabilityOperation::Require &&
-          Protocol.Operation != CapabilityOperation::Consume)
-        continue;
+    llvm::SmallVector<CapabilityProtocol, 6> Protocols = protocolsFor(Function);
+    for (const CapabilityProtocol &Protocol : Protocols) {
       const ParmVarDecl *Parameter = Function->getParamDecl(Protocol.Argument);
       SVal Value = State->getSVal(State->getLValue(Parameter, LC));
       const MemRegion *Carrier = State->getLValue(Parameter, LC).getAsRegion();
-      State = setOperationToken(State, Carrier, Value, Protocol.Family,
-                                CapabilityKind::Linear);
-      Changed = true;
+      if (Protocol.Operation == CapabilityOperation::Require ||
+          Protocol.Operation == CapabilityOperation::Consume) {
+        State = setOperationToken(State, Carrier, Value, Protocol.Family,
+                                  CapabilityKind::Linear);
+        Changed = true;
+      } else if ((Protocol.Operation == CapabilityOperation::GrantLinear ||
+                  Protocol.Operation == CapabilityOperation::GrantDuplicable) &&
+                 !hasInputProtocol(Protocols, Protocol)) {
+        State = removeOperationToken(State, Carrier, Value, Protocol.Family);
+        Changed = true;
+      }
     }
     if (Changed)
       C.addTransition(State);
@@ -1359,6 +1431,60 @@ public:
       C.addTransition(transition(Succeeded, Call, Protocols, C));
     if (Failed)
       C.addTransition(Failed);
+  }
+
+  void checkEndFunction(const ReturnStmt *Return, CheckerContext &C) const {
+    const auto *Function =
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
+    if (!Function || !Function->doesThisDeclarationHaveABody())
+      return;
+    ProgramStateRef State = C.getState();
+    if (!Function->getReturnType()->isVoidType()) {
+      if (!Return || !Return->getRetValue())
+        return;
+      std::optional<DefinedOrUnknownSVal> Result =
+          C.getSVal(Return->getRetValue()).getAs<DefinedOrUnknownSVal>();
+      if (!Result)
+        return;
+      DefinedOrUnknownSVal IsSuccess = C.getSValBuilder().evalEQ(
+          State, *Result,
+          C.getSValBuilder().makeZeroVal(Function->getReturnType()));
+      State = State->assume(IsSuccess).first;
+      if (!State)
+        return;
+    }
+    const Stmt *Site =
+        Return ? static_cast<const Stmt *>(Return) : Function->getBody();
+    const LocationContext *LC = C.getLocationContext();
+    for (const CapabilityProtocol &Protocol : protocolsFor(Function)) {
+      if (Protocol.Argument >= Function->getNumParams())
+        continue;
+      const ParmVarDecl *Parameter = Function->getParamDecl(Protocol.Argument);
+      Loc Location = State->getLValue(Parameter, LC);
+      SVal Value = State->getSVal(Location);
+      CapabilityPresence Present =
+          capabilityFor(State, Location.getAsRegion(), Value, Protocol.Family);
+      if ((Protocol.Operation == CapabilityOperation::Consume ||
+           Protocol.Operation == CapabilityOperation::ConsumeAny) &&
+          Present.Kind) {
+        report("declared ownership token drop is not proven by function body",
+               Site, State, C);
+        return;
+      }
+      if (Protocol.Operation != CapabilityOperation::GrantLinear &&
+          Protocol.Operation != CapabilityOperation::GrantDuplicable)
+        continue;
+      CapabilityKind Required =
+          Protocol.Operation == CapabilityOperation::GrantLinear
+              ? CapabilityKind::Linear
+              : CapabilityKind::Duplicable;
+      if (!Present.Kind || *Present.Kind != Required) {
+        report("declared ownership token addition is not proven by function "
+               "body",
+               Site, State, C);
+        return;
+      }
+    }
   }
 };
 
@@ -3142,6 +3268,9 @@ extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
   Registry.addChecker<OwnedConstructChecker>(
       "ntlibc.OwnedConstruct",
       "Proves synchronization object construction and destruction", "");
+  Registry.addChecker<OwnershipContractChecker>(
+      "ntlibc.OwnershipContract",
+      "Requires source definitions to repeat header ownership contracts", "");
   Registry.addChecker<CapabilityTokenChecker>(
       "ntlibc.CapabilityToken",
       "Proves explicit linear and duplicable ownership-token transitions", "");

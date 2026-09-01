@@ -30,6 +30,8 @@ DIAGNOSTIC = re.compile(
     r"pointer operation is blocked while unchecked ownership token is held|"
     r"source ownership type does not provide destination token bundle|"
     r"source ownership token has already moved|"
+    r"declared ownership token drop is not proven by function body|"
+    r"declared ownership token addition is not proven by function body|"
     r"pointer dereference is not proven nonnull|"
     r"pointer target is not proven live storage|"
     r"dereference extent is not proven sufficient|"
@@ -39,6 +41,11 @@ DIAGNOSTIC = re.compile(
     r"resource family does not match operation); origin '(.*)'; context '(.*)'; "
     r"expression '(.*)'; site '(.*)' "
     r"\[ntlibc\.(Ownership|OwnedConstruct|CapabilityToken|OwnershipType|ValidPointer|Resource)\]$"
+)
+CONTRACT = re.compile(
+    r"^ownership-contract: "
+    r"(header-declaration|source-declaration|definition-explicit|"
+    r"definition-inherited|definition)\t([^\t]+)\t([^\t]+)\t(.*)$"
 )
 
 
@@ -83,6 +90,41 @@ def parse_log(path: pathlib.Path) -> list[Finding]:
     return findings
 
 
+def parse_contracts(path: pathlib.Path) -> set[tuple[str, str, str]]:
+    contracts = set()
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = CONTRACT.match(line)
+        if match:
+            kind, contract, function, _rest = match.groups()
+            contracts.add((kind, contract, function))
+    return contracts
+
+
+def validate_contracts(
+        contracts: set[tuple[str, str, str]]) -> list[str]:
+    declared: dict[str, set[str]] = {}
+    explicit: dict[str, set[str]] = {}
+    inherited: dict[str, set[str]] = {}
+    definitions = {function for kind, _contract, function in contracts
+                   if kind == "definition"}
+    for kind, contract, function in contracts:
+        if kind == "header-declaration":
+            declared.setdefault(function, set()).add(contract)
+        elif kind == "definition-explicit":
+            explicit.setdefault(function, set()).add(contract)
+        elif kind == "definition-inherited":
+            inherited.setdefault(function, set()).add(contract)
+    errors = []
+    for function in sorted(definitions):
+        required = declared.get(function, set()) | inherited.get(function, set())
+        for contract in sorted(required - explicit.get(function, set())):
+            errors.append(
+                f"definition of '{function}' does not explicitly repeat "
+                f"header contract '{contract}'"
+            )
+    return errors
+
+
 def fixture_test(path: pathlib.Path) -> None:
     expected = set()
     for source in FIXTURES.glob("*.c"):
@@ -90,10 +132,20 @@ def fixture_test(path: pathlib.Path) -> None:
             if "ownership-expect" in line:
                 expected.add((source.relative_to(ROOT).as_posix(), number))
     actual = {(finding.path, finding.line) for finding in parse_log(path)}
-    if actual != expected:
+    errors = validate_contracts(parse_contracts(path))
+    expected_contract_errors = sum(
+        "ownership-contract-expect" in line
+        for source in FIXTURES.glob("*.c")
+        for line in source.read_text(encoding="utf-8").splitlines()
+    )
+    if actual != expected or len(errors) != expected_contract_errors:
         print("lint-ownership: fixture self-test failed", file=sys.stderr)
         print(f"  expected: {sorted(expected)}", file=sys.stderr)
         print(f"  actual:   {sorted(actual)}", file=sys.stderr)
+        print(f"  expected contract errors: {expected_contract_errors}",
+              file=sys.stderr)
+        for error in errors:
+            print(f"  contract: {error}", file=sys.stderr)
         raise SystemExit(1)
 
 
@@ -106,10 +158,15 @@ def main() -> int:
 
     findings = {finding.key: finding
                 for log in arguments.logs for finding in parse_log(log)}
+    contracts = {contract for log in arguments.logs
+                 for contract in parse_contracts(log)}
+    errors = validate_contracts(contracts)
     for finding in sorted(findings.values()):
         print(f"{finding.path}:{finding.line}: {finding.reason} in "
               f"{finding.context}: {finding.expression}")
-    if findings:
+    for error in errors:
+        print(f"ownership-contract: {error}")
+    if findings or errors:
         releases = sum(finding.reason.endswith("argument is not proven owned")
                        for finding in findings.values())
         repeats = sum(finding.reason == "ownership is already consumed"
@@ -133,7 +190,8 @@ def main() -> int:
               f"{capabilities} capability token obligation(s), "
               f"{ownership_types} ownership type mismatch(es), "
               f"{pointers} pointer validity obligation(s), "
-              f"{resources} resource lifecycle obligation(s)")
+              f"{resources} resource lifecycle obligation(s), "
+              f"{len(errors)} contract mismatch(es)")
         return 1
     print("lint-ownership: no findings (fixtures passed)")
     return 0
