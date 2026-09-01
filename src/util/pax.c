@@ -709,10 +709,10 @@ static int name_is_safe(const char *name)
 	if (name[0] == '/' || name[0] == 0) return 0;
 	for (p = name; *p; ) {
 		const char *seg = p;
-		const char *slash = strchr(p, '/');
-		size_t seglen = slash ? (size_t)(slash - seg) : strlen(seg);
+		size_t seglen = strcspn(p, "/");
 		if (seglen == 2 && seg[0] == '.' && seg[1] == '.') return 0;
-		p = slash ? slash + 1 : seg + seglen;
+		p += seglen;
+		if (*p) p++;
 	}
 	return 1;
 }
