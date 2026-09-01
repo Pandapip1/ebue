@@ -60,6 +60,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <limits.h>
 #include "libc.h"
 
 struct level {
@@ -171,13 +172,18 @@ static void lru_push_tail(struct lru *lru, struct level *lv)
 	lru->tail = lv;
 }
 
-static void close_one(struct walkstate *ws, struct lru *lru, struct level *lv)
+static int close_one(struct walkstate *ws, struct lru *lru, struct level *lv)
 {
 	lv->pos = telldir(lv->dp);
 	(void)closedir(lv->dp);
 	lv->dp = NULL;
 	lru_unlink(lru, lv);
+	if (ws->open_count <= 0) {
+		errno = EOVERFLOW;
+		return -1;
+	}
 	ws->open_count--;
+	return 0;
 }
 
 /* Reopen lv if it is currently closed, evicting the LRU ancestor first
@@ -189,8 +195,13 @@ static int level_open(struct walkstate *ws, struct lru *lru, struct level *lv)
 	const char *p;
 
 	if (lv->dp) return 0;
-	if (ws->nopenfd >= 1 && ws->open_count >= ws->nopenfd && lru->head)
-		close_one(ws, lru, lru->head);
+	if (ws->nopenfd >= 1 && ws->open_count >= ws->nopenfd && lru->head) {
+		if (close_one(ws, lru, lru->head) < 0) return -1;
+	}
+	if (ws->open_count < 0 || ws->open_count >= INT_MAX) {
+		errno = EMFILE;
+		return -1;
+	}
 	/* lv->path is an accumulated walk path, so an FTW_CHDIR walk has to
 	 * resolve it too -- this reopen happens *after* the process has
 	 * chdir'd into a descendant. */
@@ -200,7 +211,7 @@ static int level_open(struct walkstate *ws, struct lru *lru, struct level *lv)
 	free(tmp);
 	if (!lv->dp) return -1;
 	if (lv->pos) seekdir(lv->dp, lv->pos);
-	ws->open_count++;
+	ws->open_count = (int)((unsigned)ws->open_count + 1U);
 	lru_push_tail(lru, lv);
 	return 0;
 }
@@ -208,7 +219,15 @@ static int level_open(struct walkstate *ws, struct lru *lru, struct level *lv)
 static int base_offset(const char *path)
 {
 	const char *slash = strrchr(path, '/');
-	return slash ? (int)(slash - path + 1) : 0;
+	size_t offset;
+
+	if (!slash) return 0;
+	offset = strlen(path) - strlen(slash + 1);
+	if (offset > INT_MAX) {
+		errno = EOVERFLOW;
+		return -1;
+	}
+	return (int)offset;
 }
 
 static int report(struct walkstate *ws, const char *path, const struct stat *st, int type, int level) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
@@ -221,6 +240,7 @@ static int report(struct walkstate *ws, const char *path, const struct stat *st,
 
 	if (ws->fn3) return ws->fn3(path, st, type);
 	f.base = base_offset(path);
+	if (f.base < 0) return -1;
 	f.level = level;
 	saved_errno = errno;
 	r = ws->fn4(path, st, type, &f);
@@ -395,7 +415,7 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 		/* Tell the level above that the cwd is no longer its own. */
 		if (ws->flags & FTW_CHDIR) ws->cwd_moved = 1;
 
-		if (lv.dp) close_one(ws, lru, &lv);
+		if (lv.dp && close_one(ws, lru, &lv) < 0 && !r) r = -1;
 		free(lv.path);
 		if (r) return r;
 	}
