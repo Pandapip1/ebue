@@ -1362,7 +1362,15 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 				if (uv == 0 && prec == 0) { /* "" for 0 with explicit precision 0 */ }
 				else {
 					unsigned long long t = uv;
-					do { digbuf[dn++] = "0123456789abcdef"[t % (unsigned)base] ; if (upper && digbuf[dn-1] > '9') digbuf[dn-1] -= 32; t /= (unsigned)base; } while (t);
+					/* base is 8, 10, or 16, so a nonzero value reaches
+					 * zero well before this one-pass-per-value-bit guard. */
+					unsigned bits_left = (unsigned)(sizeof t * CHAR_BIT);
+					do {
+						digbuf[dn++] = "0123456789abcdef"[t % (unsigned)base];
+						if (upper && digbuf[dn-1] > '9') digbuf[dn-1] -= 32;
+						t /= (unsigned)base;
+						bits_left--;
+					} while (t && bits_left > 0);
 				}
 				/* A precision is a minimum digit count with no upper
 				 * bound (C99 7.19.6.1p5), so the leading zeros it

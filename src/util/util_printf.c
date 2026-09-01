@@ -101,6 +101,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include "util.h"
 
 /* ---- argument cursor ---------------------------------------------- */
@@ -397,7 +398,14 @@ static void format_unsigned(const char *arg, const struct spec *sp, int base, in
 	if (v == 0 && sp->prec == 0) {
 		digs[0] = 0;
 	} else {
-		do { tmp[t++] = hex[v % (unsigned)base]; v /= (unsigned)base; } while (v);
+		/* All callers use base 8, 10, or 16, so a nonzero value reaches
+		 * zero well before this one-pass-per-value-bit guard. */
+		unsigned bits_left = (unsigned)(sizeof v * CHAR_BIT);
+		do {
+			tmp[t++] = hex[v % (unsigned)base];
+			v /= (unsigned)base;
+			bits_left--;
+		} while (v && bits_left > 0);
 		while (sp->prec > t) tmp[t++] = '0';
 		while (t > 0) digs[n++] = tmp[--t];
 		digs[n] = 0;
