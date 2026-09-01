@@ -52,6 +52,7 @@ REGISTER_MAP_WITH_PROGRAMSTATE(AssumedSpanExtent, const MemRegion *,
 using DisjointRegionKey = std::pair<const MemRegion *, const MemRegion *>;
 REGISTER_MAP_WITH_PROGRAMSTATE(AssumedDisjointExtent, DisjointRegionKey,
                                DefinedOrUnknownSVal)
+REGISTER_SET_WITH_PROGRAMSTATE(AllocatedBaseRegion, const MemRegion *)
 REGISTER_MAP_WITH_PROGRAMSTATE(GrantedSpanProof, const ParmVarDecl *,
                                const ParmVarDecl *)
 using DisjointParameterKey =
@@ -184,11 +185,17 @@ class MemoryContractChecker
   mutable std::unique_ptr<BugType> SpanBT;
   mutable std::unique_ptr<BugType> OverlapBT;
   mutable std::unique_ptr<BugType> TokenBT;
+  mutable std::unique_ptr<BugType> RedundantBT;
 
   static bool hasName(const CallEvent &Call, StringRef Wanted) {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
     return Function && Function->getIdentifier() &&
            Function->getName() == Wanted;
+  }
+
+  static bool isManualProofCall(const FunctionDecl *Function) {
+    return Function && Function->getIdentifier() &&
+           Function->getName().starts_with("__ownership_");
   }
 
   // Clang's own dynamic-extent tracking for an allocator's return value
@@ -428,12 +435,13 @@ public:
     if (!Node)
       return;
     if (!Type) {
+      StringRef Title = "Unproven memory overlap";
+      if (Reason == "memory operation span is not proven valid")
+        Title = "Unproven memory span";
+      else if (Reason == "manual memory proof axiom is redundant")
+        Title = "Redundant memory proof axiom";
       std::unique_ptr<BugType> New = std::make_unique<BugType>(
-          this,
-          Reason == "memory operation span is not proven valid"
-              ? "Unproven memory span"
-              : "Unproven memory overlap",
-          categories::MemoryError);
+          this, Title, categories::MemoryError);
       Type = New.release();
     }
     const SourceManager &SM = C.getSourceManager();
@@ -474,7 +482,7 @@ public:
   }
 
   bool spanProven(SVal Pointer, SVal Length, ProgramStateRef State,
-                  CheckerContext &C) const {
+                  CheckerContext &C, bool UseAssumedSpans = true) const {
     if (State->isNull(Length).isConstrainedTrue())
       return true;
     auto ExtentProvesLength = [&](SVal Extent) {
@@ -489,11 +497,12 @@ public:
           Enough.getAs<DefinedOrUnknownSVal>();
       return Condition && !State->assume(*Condition, false);
     };
-    if (const MemRegion *Region = Pointer.getAsRegion())
-      if (const DefinedOrUnknownSVal *Assumed =
-              State->get<AssumedSpanExtent>(Region))
-        if (ExtentProvesLength(*Assumed))
-          return true;
+    if (UseAssumedSpans)
+      if (const MemRegion *Region = Pointer.getAsRegion())
+        if (const DefinedOrUnknownSVal *Assumed =
+                State->get<AssumedSpanExtent>(Region))
+          if (ExtentProvesLength(*Assumed))
+            return true;
     SVal Extent = getDynamicExtentWithOffset(State, Pointer);
     if (Extent.isUnknownOrUndef() || Length.isUnknownOrUndef())
       return false;
@@ -505,29 +514,44 @@ public:
   }
 
   bool overlapProven(SVal First, SVal Second, SVal Length,
-                     ProgramStateRef State, CheckerContext &C) const {
+                     ProgramStateRef State, CheckerContext &C,
+                     bool UseAssumedSpans = true) const {
     if (State->isNull(Length).isConstrainedTrue())
       return true;
     const MemRegion *A = First.getAsRegion();
     const MemRegion *B = Second.getAsRegion();
     if (!A || !B)
       return false;
-    if (const DefinedOrUnknownSVal *Assumed =
-            State->get<AssumedDisjointExtent>({A, B})) {
-      SVal Enough = C.getSValBuilder().evalBinOp(
-          State, BO_GE, *Assumed, Length,
-          C.getSValBuilder().getConditionType());
-      if (std::optional<DefinedOrUnknownSVal> Condition =
-              Enough.getAs<DefinedOrUnknownSVal>())
-        if (!State->assume(*Condition, false))
-          return true;
-    }
+    if (UseAssumedSpans)
+      if (const DefinedOrUnknownSVal *Assumed =
+              State->get<AssumedDisjointExtent>({A, B})) {
+        SVal Enough = C.getSValBuilder().evalBinOp(
+            State, BO_GE, *Assumed, Length,
+            C.getSValBuilder().getConditionType());
+        if (std::optional<DefinedOrUnknownSVal> Condition =
+                Enough.getAs<DefinedOrUnknownSVal>())
+          if (!State->assume(*Condition, false))
+            return true;
+      }
     RegionOffset AO = A->getAsOffset();
     RegionOffset BO = B->getAsOffset();
     if (!AO.isValid() || !BO.isValid())
       return false;
-    if (AO.getRegion() != BO.getRegion())
+    if (AO.getRegion() != BO.getRegion()) {
+      /* Two symbolic pointer parameters may still alias even though Clang
+       * represents their pointees with distinct SymbolicRegions.  Distinct
+       * concrete storage objects (separate locals/globals) cannot overlap;
+       * distinct symbolic roots alone are not such a proof. */
+      if (AO.getRegion()->getMemorySpace() != BO.getRegion()->getMemorySpace())
+        return true;
+      if (State->contains<AllocatedBaseRegion>(AO.getRegion()) ||
+          State->contains<AllocatedBaseRegion>(BO.getRegion()))
+        return true;
+      if (isa<SymbolicRegion>(AO.getRegion()) ||
+          isa<SymbolicRegion>(BO.getRegion()))
+        return false;
       return true;
+    }
     if (AO.hasSymbolicOffset() || BO.hasSymbolicOffset())
       return false;
     const llvm::APSInt *KnownLength =
@@ -726,6 +750,45 @@ public:
     SmallVector<DisjointContract, 1> Disjoint;
     tokenContracts(Function, Spans, Disjoint);
     ProgramStateRef ContractState = C.getState();
+    if (isManualProofCall(Function)) {
+      bool Reported = false;
+      for (const SpanContract &Contract : Spans) {
+        if (Contract.Operation != MemoryTokenOperation::Grant ||
+            Contract.Pointer >= Call.getNumArgs() ||
+            Contract.Length >= Call.getNumArgs())
+          continue;
+        if (spanProven(Call.getArgSVal(Contract.Pointer),
+                       Call.getArgSVal(Contract.Length), C.getState(), C)) {
+          BugType *Type = RedundantBT.get();
+          report("manual memory proof axiom is redundant", Type, Call,
+                 C.getState(), C);
+          if (!RedundantBT && Type)
+            RedundantBT.reset(Type);
+          Reported = true;
+          break;
+        }
+      }
+      if (!Reported) {
+        for (const DisjointContract &Contract : Disjoint) {
+          if (Contract.Operation != MemoryTokenOperation::Grant ||
+              Contract.First >= Call.getNumArgs() ||
+              Contract.Second >= Call.getNumArgs() ||
+              Contract.Length >= Call.getNumArgs())
+            continue;
+          if (overlapProven(Call.getArgSVal(Contract.First),
+                            Call.getArgSVal(Contract.Second),
+                            Call.getArgSVal(Contract.Length), C.getState(),
+                            C)) {
+            BugType *Type = RedundantBT.get();
+            report("manual memory proof axiom is redundant", Type, Call,
+                   C.getState(), C);
+            if (!RedundantBT && Type)
+              RedundantBT.reset(Type);
+            break;
+          }
+        }
+      }
+    }
     for (const SpanContract &Contract : Spans) {
       if (Contract.Operation != MemoryTokenOperation::Require)
         continue;
@@ -797,8 +860,10 @@ public:
       if (std::optional<DefinedOrUnknownSVal> DefinedSize =
               SizeInBytes->getAs<DefinedOrUnknownSVal>()) {
         if (const MemRegion *Region = Call.getReturnValue().getAsRegion()) {
-          State = setDynamicExtent(State, Region->getBaseRegion(), *DefinedSize,
+          const MemRegion *Base = Region->getBaseRegion();
+          State = setDynamicExtent(State, Base, *DefinedSize,
                                    C.getSValBuilder());
+          State = State->add<AllocatedBaseRegion>(Base);
         }
       }
     }
@@ -891,6 +956,8 @@ public:
       SVal LengthValue = State->getSVal(State->getLValue(Length, LC));
       const MemRegion *Region = PointerValue.getAsRegion();
       bool Proven = State->isNull(LengthValue).isConstrainedTrue();
+      if (!Proven)
+        Proven = spanProven(PointerValue, LengthValue, State, C, false);
       if (Region)
         if (const ParmVarDecl *const *ProvenLength =
                 State->get<GrantedSpanProof>(Pointer)) {
