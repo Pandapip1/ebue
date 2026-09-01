@@ -617,8 +617,8 @@ static char *dup_rest_of_line(struct parser *ps)
 	size_t n;
 	skip_blank(ps);
 	start = ps->p;
-	while (*ps->p && *ps->p != '\n') ps->p++;
-	n = (size_t)(ps->p - start);
+	n = strcspn(ps->p, "\n");
+	ps->p += n;
 	while (n && (start[n - 1] == ' ' || start[n - 1] == '\t')) n--;
 	out = malloc(n + 1);
 	if (!out) return 0;
@@ -634,8 +634,8 @@ static char *dup_label(struct parser *ps)
 	size_t n;
 	skip_blank(ps);
 	start = ps->p;
-	while (*ps->p && *ps->p != '\n' && *ps->p != ';' && *ps->p != ' ' && *ps->p != '\t') ps->p++;
-	n = (size_t)(ps->p - start);
+	n = strcspn(ps->p, "\n; \t");
+	ps->p += n;
 	out = malloc(n + 1);
 	if (!out) return 0;
 	memcpy(out, start, n);
