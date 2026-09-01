@@ -101,9 +101,16 @@ static void pv_free_from(struct pv *p, size_t from)
 static const char *find_slash(const char *p, int flags) __attribute__((nonnull(1)));
 static const char *find_slash(const char *p, int flags)
 {
-	for (; *p; p++) {
-		if (!(flags & GLOB_NOESCAPE) && *p == '\\' && p[1]) { p++; continue; }
+	/* Every pass consumes at least one byte, or two for an escaped byte.
+	 * The original string extent is therefore an independent exact upper
+	 * bound on the number of iterations. */
+	size_t remaining = strlen(p);
+
+	while (remaining > 0 && *p) {
+		remaining--;
+		if (!(flags & GLOB_NOESCAPE) && *p == '\\' && p[1]) { p += 2; continue; }
 		if (*p == '/') return p;
+		p++;
 	}
 	return 0;
 }
