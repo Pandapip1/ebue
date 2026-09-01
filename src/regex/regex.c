@@ -806,7 +806,6 @@ struct mstate {
 	int nslot;
 	struct rx *rx;
 	regoff_t *progress;	/* last subject offset at each backward edge */
-	int steps;
 	struct bt *bt;		/* backtracking stack, grown on demand */
 	int nbt, capbt;
 };
@@ -838,7 +837,7 @@ struct mstate {
 /* ms required throughout the matcher: every function below ultimately
  * receives it forwarded from regexec()'s own `struct mstate ms;`
  * local, and none of them defensively checks it before touching
- * ms->capbt/ms->nbt/ms->bt/ms->steps/ms->rx/ms->end/etc. */
+ * ms->capbt/ms->nbt/ms->bt/ms->rx/ms->end/etc. */
 static int bt_grow(struct mstate *ms) __attribute__((nonnull(1)));
 static int bt_grow(struct mstate *ms)
 {
@@ -908,10 +907,10 @@ static int run(struct mstate *ms, int pc, const char *sp)
 static int run(struct mstate *ms, int pc, const char *sp)
 {
 	int found = 0;
-	for (;;) {
+	int steps_left = MAX_STEPS;
+	while (steps_left-- > 0) {
 		struct inst *in;
 
-		if (++ms->steps > MAX_STEPS) return -1;
 		if (pc < 0 || pc >= ms->rx->nprog) goto backtrack;
 		in = &ms->rx->prog[pc];
 		switch (in->op) {
@@ -1024,6 +1023,7 @@ static int run(struct mstate *ms, int pc, const char *sp)
 			break;
 		}
 	}
+	return -1;
 }
 
 int regexec(const regex_t *__restrict preg, const char *__restrict string,
@@ -1063,7 +1063,6 @@ int regexec(const regex_t *__restrict preg, const char *__restrict string,
 		for (i = 0; i < nslot; i++) slot[i] = -1;
 		for (i = 0; i < nslot; i++) best[i] = -1;
 		for (i = 0; i < rx->nprog; i++) progress[i] = -1;
-		ms.steps = 0;
 		ms.nbt = 0;		/* the buffer is reused; the contents are not */
 		r = run(&ms, 0, string + start);
 		if (r > 0) { matched = 1; break; }
