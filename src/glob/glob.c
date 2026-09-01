@@ -128,9 +128,10 @@ static int has_meta(const char *s, size_t len, int flags)
 
 /* s required: subscripted unconditionally (`s[i]`) whenever len >= 1,
  * and its one real call site (do_glob()) passes pat, itself required,
- * never NULL. */
-static char *unescape(const char *s, size_t len, int flags) __attribute__((nonnull(1)));
-static char *unescape(const char *s, size_t len, int flags)
+ * never NULL.  On success outlen receives the number of output bytes. */
+static char *unescape(const char *s, size_t len, int flags, size_t *outlen)
+    __attribute__((nonnull(1)));
+static char *unescape(const char *s, size_t len, int flags, size_t *outlen)
 {
 	char *buf = __malloc(len + 1);
 	size_t i = 0, j = 0, remaining = len;
@@ -144,6 +145,7 @@ static char *unescape(const char *s, size_t len, int flags)
 		remaining--;
 	}
 	buf[j] = 0;
+	*outlen = j;
 	return buf;
 }
 
@@ -161,16 +163,29 @@ static int cmpstrp(const void *a, const void *b)
 
 /* Join prefix (preflen bytes, already ending in '/' unless empty) with
  * name (namelen bytes) into out, appending a trailing '/' if
- * want_slash.  Returns 0, or -1 if it would not fit in PATH_MAX. */
+ * want_slash.  On success outlen receives the joined byte length.
+ * Returns 0, or -1 if it would not fit in PATH_MAX. */
 static int join(char *out, const char *prefix, size_t preflen,
-                 const char *name, size_t namelen, int want_slash)
+                 const char *name, size_t namelen, int want_slash,
+                 size_t *outlen)
 {
-	size_t need = preflen + namelen + (want_slash ? 1 : 0);
-	if (need + 1 > PATH_MAX) return -1;
+	size_t need;
+
+	/* Reserve the terminator first, then admit each component before
+	 * forming the corresponding sum.  Besides ordinary overlong paths,
+	 * this rejects wrapped attacker-sized lengths as the same no-match. */
+	if (preflen >= (size_t)PATH_MAX) return -1;
+	if (namelen > (size_t)PATH_MAX - 1 - preflen) return -1;
+	need = preflen + namelen;
+	if (want_slash) {
+		if (need >= (size_t)PATH_MAX - 1) return -1;
+		need++;
+	}
 	memcpy(out, prefix, preflen);
 	memcpy(out + preflen, name, namelen);
 	if (want_slash) out[preflen + namelen] = '/';
 	out[need] = 0;
+	*outlen = need;
 	return 0;
 }
 
@@ -199,7 +214,7 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
                     int (*errfunc)(const char *, int), struct pv *out)
 {
 	const char *slash, *rest;
-	size_t seglen;
+	size_t seglen, newlen;
 	int meta, want_slash;
 	char newprefix[PATH_MAX];
 
@@ -256,12 +271,14 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 	want_slash = rest != 0;
 
 	if (!meta) {
-		char *name = unescape(pat, seglen, flags);
+		size_t namelen;
+		char *name = unescape(pat, seglen, flags, &namelen);
 		struct stat st;
 		int isdir;
 
 		if (!name) return -1;
-		if (join(newprefix, prefix, preflen, name, strlen(name), want_slash)) {
+		if (join(newprefix, prefix, preflen, name, namelen, want_slash,
+		         &newlen)) {
 			__free(name);
 			return 0; /* too long to ever exist; not a match, not an error */
 		}
@@ -269,13 +286,15 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 
 		if (rest) {
 			if (stat(newprefix, &st) != 0 || !S_ISDIR(st.st_mode)) return 0;
-			return do_glob(newprefix, strlen(newprefix), rest, flags, errfunc, out);
+			return do_glob(newprefix, newlen, rest, flags, errfunc, out);
 		}
 		if (stat(newprefix, &st) != 0) return 0;
 		isdir = S_ISDIR(st.st_mode);
 		if ((flags & GLOB_MARK) && isdir) {
-			size_t l = strlen(newprefix);
-			if (l + 1 < PATH_MAX) { newprefix[l] = '/'; newprefix[l + 1] = 0; }
+			if (newlen + 1 < PATH_MAX) {
+				newprefix[newlen++] = '/';
+				newprefix[newlen] = 0;
+			}
 		}
 		return pv_push(out, xstrdup(newprefix)) ? -1 : 0;
 	} else {
@@ -311,19 +330,22 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 				continue;
 
 			namelen = strlen(d->d_name);
-			if (join(newprefix, prefix, preflen, d->d_name, namelen, want_slash))
+			if (join(newprefix, prefix, preflen, d->d_name, namelen,
+			         want_slash, &newlen))
 				continue;
 
 			if (rest) {
 				if (stat(newprefix, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
-				rc = do_glob(newprefix, strlen(newprefix), rest, flags, errfunc, out);
+				rc = do_glob(newprefix, newlen, rest, flags, errfunc, out);
 				if (rc) break;
 			} else {
 				int isdir = 0;
 				if ((flags & GLOB_MARK) && stat(newprefix, &st) == 0) isdir = S_ISDIR(st.st_mode);
 				if (isdir) {
-					size_t l = strlen(newprefix);
-					if (l + 1 < PATH_MAX) { newprefix[l] = '/'; newprefix[l + 1] = 0; }
+					if (newlen + 1 < PATH_MAX) {
+						newprefix[newlen++] = '/';
+						newprefix[newlen] = 0;
+					}
 				}
 				if (pv_push(out, xstrdup(newprefix))) { rc = -1; break; }
 			}
