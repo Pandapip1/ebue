@@ -340,3 +340,15 @@ void fill_checked_slack_suffix(
 	if (!buffer) return;
 	memcpy(buffer + left, source, right);
 }
+
+void fill_guarded_contracted_suffix(
+	char *restrict buffer withtok(fixture_writable_span(capacity)),
+	size_t capacity,
+	const char *source withtok(fixture_readable_span(length)), size_t offset,
+	size_t length)
+{
+	if (offset > capacity) return;
+	size_t remaining = capacity - offset;
+	if (length > remaining) return;
+	memcpy(buffer + offset, source, length);
+}

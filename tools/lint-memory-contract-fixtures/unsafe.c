@@ -234,6 +234,16 @@ void fill_wrapping_slack_suffix(
 	memcpy(buffer + left, source, right); /* memory-contract-expect */
 }
 
+void fill_unguarded_contracted_suffix(
+	char *restrict buffer withtok(fixture_writable_span(capacity)),
+	size_t capacity,
+	const char *source withtok(fixture_readable_span(length)), size_t offset,
+	size_t length)
+{
+	if (offset > capacity) return;
+	memcpy(buffer + offset, source, length); /* memory-contract-expect */
+}
+
 /* strnlen(s, n)'s contract is looser than strlen(s)'s: if it walked all
  * n bytes without finding a terminator, only those n bytes (not n + 1)
  * are known-safe to read back from s -- reading one byte past that is
