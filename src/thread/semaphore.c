@@ -11,6 +11,7 @@
  * public-header contract; transitive ABI declarations are intentional,
  * so hosted include ownership and unused-include advice do not apply. */
 // NOLINTBEGIN(misc-include-cleaner)
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- strnlen(): bound name validation before path construction
 #include <semaphore.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -64,27 +65,41 @@ __attribute__((ownership_returns(malloc)))
 static char *sem_path(const char *name)
 {
 	const char *component, *dir;
-	size_t n, d, i;
+	size_t n, d, i, maxdir;
+	const size_t prefix = sizeof "/ntlibc-sem/" - 1;
+	size_t total;
 	char *path;
 	if (!name) { errno = EINVAL; return NULL; }
 	component = *name == '/' ? name + 1 : name;
-	n = strlen(component);
+	/* A longer name has the same ENAMETOOLONG result whatever follows
+	 * NAME_MAX, so do not scan an unbounded rejected suffix. */
+	n = strnlen(component, NAME_MAX + 1);
 	if (!n) { errno = EINVAL; return NULL; }
 	if (n > NAME_MAX) { errno = ENAMETOOLONG; return NULL; }
 	for (i = 0; i < n; i++) if (!name_char((unsigned char)component[i])) {
 		errno = EINVAL;
 		return NULL;
 	}
-	dir = tmpdir(); d = strlen(dir);
-	if (d + sizeof "/ntlibc-sem/" - 1 + n >= PATH_MAX) {
+	if (n > (size_t)PATH_MAX - 1 - prefix) {
 		errno = ENAMETOOLONG;
 		return NULL;
 	}
-	path = malloc(d + sizeof "/ntlibc-sem/" - 1 + n + 1);
+	/* The preceding guard makes computing the exact remaining room
+	 * non-wrapping.  Once maxdir + 1 bytes have been examined, the
+	 * path is known to be too long and no rejected suffix needs scanning. */
+	maxdir = (size_t)PATH_MAX - 1 - prefix - n;
+	dir = tmpdir(); d = strnlen(dir, maxdir + 1);
+	if (d > maxdir) {
+		errno = ENAMETOOLONG;
+		return NULL;
+	}
+	total = d + prefix + n + 1;
+	path = malloc(total);
 	if (!path) return NULL;
 	memcpy(path, dir, d);
-	memcpy(path + d, "/ntlibc-sem/", sizeof "/ntlibc-sem/" - 1);
-	memcpy(path + d + sizeof "/ntlibc-sem/" - 1, component, n + 1);
+	memcpy(path + d, "/ntlibc-sem/", prefix);
+	memcpy(path + d + prefix, component, n);
+	path[total - 1] = 0;
 	return path;
 }
 
