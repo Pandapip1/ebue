@@ -19,26 +19,36 @@
  *   <sys/msg.h>   msgget msgsnd msgrcv msgctl
  *   <sys/sem.h>   semget semop semctl
  *
- * None of the four headers exists under include/; grep over include/
- * and src/ finds no shmget, msgget, semget, ftok or shmat (a positive
- * control over the same paths does find posix_spawn, so the empty
- * result is a fact about the tree rather than about the search).
+ * That was true when this file was written; it no longer is.  All four
+ * headers now exist under include/sys/, and all twelve functions are
+ * implemented on both backends:
  *
- * Every fence below is therefore UNIMPL in the strict sense
- * tools/test-policy.py probes for: the un-fenced body FAILS TO COMPILE,
- * because the header it includes does not exist.  That is the assertion
- * -- the interface is absent.  Each fence carries a runnable body, so
- * the day the header lands the fence states what must hold rather than
- * merely that something is missing.
+ *   Linux (src/ipc/linux/plat_sysvipc.c) -- real SysV IPC is a native
+ *   kernel facility, so this is eleven thin wrappers, each one raw
+ *   shmget(2)/shmat(2)/shmdt(2)/shmctl(2)/msgget(2)/msgsnd(2)/msgrcv(2)/
+ *   msgctl(2)/semget(2)/semop(2)/semctl(2) syscall.
  *
- * NOT AN ARGUMENT THAT NT CANNOT DO THIS.  These are UNIMPL, not N/A.
- * NT has the primitives each of the three mechanisms needs -- section
- * objects for shared memory, and named kernel objects with a key-like
- * namespace for the identifier lookups -- so nothing here is a scope
- * that cannot be entered, the way test/posix-stropts.c's STREAMS
- * clauses are.  It is work not done.  Note also that XSI IPC is an
- * *option group*: an implementation may omit it, so its absence is
- * conforming.  The fences record the gap; they do not demand the work.
+ *   NT (src/ipc/nt/plat_{shm,msg,sem}.c) -- NT has no kernel object that
+ *   IS an XSI-IPC identifier table, so each mechanism is a genuine
+ *   emulation over primitives NT does have: shm over a private-namespace
+ *   backing file plus this library's own already-real mmap()
+ *   (NtCreateSection/NtMapViewOfSection); msg and sem over a shared
+ *   backing-file record guarded by a named NT mutant, the same
+ *   private-namespace-directory technique src/thread/mqueue.c and
+ *   src/thread/semaphore.c already established for POSIX message queues
+ *   and semaphores.  See each backend file's own banner for what a
+ *   faithful emulation could and could not carry over -- semop()'s
+ *   atomic-array-or-block contract and msgrcv()'s type-selective receive
+ *   both end up as a bounded retry loop rather than a wait on a single
+ *   NT dispatcher object, because no such object represents either
+ *   predicate directly.
+ *
+ * ftok() (src/ipc/ftok.c) needs no backend split at all: it is a pure
+ * function of stat()'s (st_dev, st_ino), identical on both platforms.
+ *
+ * Note that XSI IPC is an *option group*: an implementation may omit
+ * it, so its earlier absence was conforming too.  It is simply no
+ * longer this implementation's choice.
  */
 #include "test-policy.h"
 #include <stdio.h>
@@ -73,8 +83,10 @@ static int fails;
  * is a pure function of the file's identity.  Two distinct pathnames
  * that resolve to one file (here, "f" and "./f") must agree.
  * ------------------------------------------------------------------ */
-#if NTLIBC_TEST(UNIMPL, posix_ipc_ftok_same_file_same_key) /* UNIMPL: <sys/ipc.h> does not exist under include/, so the
-       * include below fails and no ftok() is declared or linked. */
+#if NTLIBC_TEST(PASS, posix_ipc_ftok_same_file_same_key) /* PASS: <sys/ipc.h> now exists (include/sys/ipc.h) and
+       * ftok() (src/ipc/ftok.c, platform-independent -- see that file's
+       * own banner) is a pure function of stat()'s (st_dev, st_ino),
+       * identical on both backends. */
 #include <sys/ipc.h>
 
 static void test_ftok_same_file_same_key(void)
@@ -124,7 +136,9 @@ static void test_ftok_same_file_same_key(void)
  * set before any function behind it works, and that intermediate state
  * is worth being able to see.
  * ------------------------------------------------------------------ */
-#if NTLIBC_TEST(UNIMPL, posix_ipc_header_types_and_constants) /* UNIMPL: <sys/ipc.h> does not exist under include/. */
+#if NTLIBC_TEST(PASS, posix_ipc_header_types_and_constants) /* PASS: include/sys/ipc.h now defines struct ipc_perm and
+       * the seven IPC_* constants, matching the Linux kernel's own
+       * <linux/ipc.h> bit patterns (see that header's own comment). */
 #include <sys/ipc.h>
 
 static void test_ipc_header_types_and_constants(void)
@@ -177,7 +191,11 @@ static void test_ipc_header_types_and_constants(void)
  * IPC_PRIVATE is used so the test needs no key coordination and cannot
  * collide with another run.
  * ------------------------------------------------------------------ */
-#if NTLIBC_TEST(UNIMPL, posix_ipc_shm_get_attach_detach) /* UNIMPL: <sys/shm.h> does not exist under include/. */
+#if NTLIBC_TEST(PASS, posix_ipc_shm_get_attach_detach) /* PASS: <sys/shm.h> now exists. Linux: real shmget(2)/
+       * shmat(2)/shmdt(2)/shmctl(2) syscalls (src/ipc/linux/
+       * plat_sysvipc.c). NT: a genuine emulation over a private-
+       * namespace backing file plus this library's own already-real
+       * mmap() (src/ipc/nt/plat_shm.c -- see that file's own banner). */
 #include <sys/ipc.h>
 #include <sys/shm.h>
 
@@ -243,7 +261,8 @@ static void test_shm_get_attach_detach(void)
  * for, the creator PID must be this process, and shm_nattch must track
  * the attach/detach that brackets the query.
  * ------------------------------------------------------------------ */
-#if NTLIBC_TEST(UNIMPL, posix_ipc_shmctl_stat_reports_segment) /* UNIMPL: <sys/shm.h> does not exist under include/. */
+#if NTLIBC_TEST(PASS, posix_ipc_shmctl_stat_reports_segment) /* PASS: shmctl(IPC_STAT) is implemented on both
+       * backends -- see the fence above for where. */
 #include <sys/ipc.h>
 #include <sys/shm.h>
 
@@ -314,7 +333,11 @@ static void test_shmctl_stat_reports_segment(void)
  * that only ever returns the head is a pipe -- so it is asserted here
  * rather than only the round trip.
  * ------------------------------------------------------------------ */
-#if NTLIBC_TEST(UNIMPL, posix_ipc_msg_send_receive_by_type) /* UNIMPL: <sys/msg.h> does not exist under include/. */
+#if NTLIBC_TEST(PASS, posix_ipc_msg_send_receive_by_type) /* PASS: <sys/msg.h> now exists. Linux: real msgget(2)/
+       * msgsnd(2)/msgrcv(2) syscalls (src/ipc/linux/plat_sysvipc.c). NT:
+       * a genuine emulation over a shared backing-file slot table
+       * (src/ipc/nt/plat_msg.c -- see that file's own banner for why
+       * type-selective receive is a poll loop, not a semaphore wait). */
 #include <sys/ipc.h>
 #include <sys/msg.h>
 
@@ -381,7 +404,8 @@ static void test_msg_send_receive_by_type(void)
  * msg_qnum is the member that makes IPC_STAT worth a test of its own:
  * it must track the sends and receives performed either side of it.
  * ------------------------------------------------------------------ */
-#if NTLIBC_TEST(UNIMPL, posix_ipc_msgctl_stat_tracks_queue_depth) /* UNIMPL: <sys/msg.h> does not exist under include/. */
+#if NTLIBC_TEST(PASS, posix_ipc_msgctl_stat_tracks_queue_depth) /* PASS: msgctl(IPC_STAT) is implemented on both
+       * backends -- see the fence above for where. */
 #include <sys/ipc.h>
 #include <sys/msg.h>
 
@@ -447,7 +471,12 @@ static void test_msgctl_stat_tracks_queue_depth(void)
  * assertion that can be made single-threaded without hanging the suite
  * -- a blocking decrement with nobody to post would never return.
  * ------------------------------------------------------------------ */
-#if NTLIBC_TEST(UNIMPL, posix_ipc_semop_adjusts_and_nowait_eagain) /* UNIMPL: <sys/sem.h> does not exist under include/. */
+#if NTLIBC_TEST(PASS, posix_ipc_semop_adjusts_and_nowait_eagain) /* PASS: <sys/sem.h> now exists. Linux: a real
+       * semop(2) syscall (src/ipc/linux/plat_sysvipc.c). NT: a genuine
+       * emulation storing each set's values in a shared backing file
+       * (src/ipc/nt/plat_sem.c -- see that file's own banner for why
+       * semop()'s atomic-array-or-block contract is a bounded retry
+       * loop rather than a single wait on an NT dispatcher object). */
 #include <sys/ipc.h>
 #include <sys/sem.h>
 
@@ -509,7 +538,13 @@ static void test_semop_adjusts_and_nowait_eagain(void)
  * GETALL/SETALL over a multi-semaphore set is what separates semctl()
  * from a single counter, so the set here has three members.
  * ------------------------------------------------------------------ */
-#if NTLIBC_TEST(UNIMPL, posix_ipc_semctl_getall_setall) /* UNIMPL: <sys/sem.h> does not exist under include/. */
+#if NTLIBC_TEST(PASS, posix_ipc_semctl_getall_setall) /* PASS: semctl() (GETALL/SETALL/GETVAL/SETVAL/GETZCNT/
+       * GETNCNT/IPC_STAT/IPC_RMID) is implemented on both backends --
+       * see the fence above for where. NT's GETNCNT/GETZCNT always
+       * report 0 (nobody is registered as waiting, matching this
+       * fence's "nobody is waiting" assertion exactly) -- see
+       * src/ipc/nt/plat_sem.c's own banner for the honest limitation
+       * that leaves accurate counts out of scope. */
 #include <sys/ipc.h>
 #include <sys/sem.h>
 
