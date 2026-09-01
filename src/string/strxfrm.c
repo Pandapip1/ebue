@@ -8,7 +8,7 @@
 #include <string.h>
 #include <locale.h>
 
-size_t strxfrm(char *__restrict dest,
+size_t strxfrm(char *__restrict dest withtok(writable_span(n)),
 	const char *__restrict src withtok(null_terminated), size_t n)
 {
 	size_t l = strlen(src);
@@ -17,7 +17,7 @@ size_t strxfrm(char *__restrict dest,
 	return l;
 }
 
-size_t strxfrm_l(char *__restrict dest,
+size_t strxfrm_l(char *__restrict dest withtok(writable_span(n)),
 	const char *__restrict src withtok(null_terminated), size_t n, locale_t loc)
 {
 	(void)loc;

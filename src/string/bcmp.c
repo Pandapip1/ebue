@@ -4,7 +4,8 @@
 #include <strings.h>
 #include <string.h>
 
-int bcmp(const void *s1, const void *s2, size_t n)
+int bcmp(const void *s1 withtok(readable_span(n)),
+	const void *s2 withtok(readable_span(n)), size_t n)
 {
 	return memcmp(s1, s2, n);
 }

@@ -80,18 +80,6 @@
 #endif
 #endif
 
-/* Memory-operation contracts used only by tools/lint.sh's memcontracts
- * stage.  A span parameter promises at least the byte count supplied by the named,
- * one-based size parameter.  The checker verifies these preconditions at
- * every visible call and may therefore assume them when analyzing the
- * function body in isolation. */
-#if defined(__clang__) && defined(NTLIBC_MEMORY_CONTRACT_ANALYSIS)
-#define __NTLIBC_SPAN(size_parameter) \
-	__attribute__((annotate("ntlibc.span:" #size_parameter)))
-#else
-#define __NTLIBC_SPAN(size_parameter)
-#endif
-
 #define __REDIR(x,y) __typeof__(x) x __asm__(#y) // NOLINT(bugprone-macro-parentheses) -- x is the redirected declaration's identifier, where an expression-style wrapper is not applicable
 
 #endif

@@ -7,7 +7,8 @@
 #include "libc.h"
 #include "plat_fd.h"
 
-ssize_t write(int fd, const void *buf, size_t count)
+ssize_t write(int fd, const void *buf withtok(readable_span(count)),
+	size_t count)
 {
 	struct __fd *f = __fd_get(fd);
 	int append;
@@ -38,7 +39,8 @@ ssize_t write(int fd, const void *buf, size_t count)
 	return __plat_write(f->h, buf, count, append);
 }
 
-ssize_t pwrite(int fd, const void *buf, size_t count, off_t off)
+ssize_t pwrite(int fd, const void *buf withtok(readable_span(count)),
+	size_t count, off_t off)
 {
 	struct __fd *f = __fd_get(fd);
 	long long saved;

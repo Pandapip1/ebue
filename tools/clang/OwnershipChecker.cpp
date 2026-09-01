@@ -1425,12 +1425,15 @@ class CapabilityTokenChecker
             llvm::SmallVector<unsigned, 2> Parameters;
             if (parameterAnnotation(Function, Attr, Candidate.Prefix, Family,
                                     Parameters)) {
+              const TypedefNameDecl *Token =
+                  dialectToken(Function->getASTContext(), Family->getName());
+              if (hasDialectQualifier(Token, "qual:extent_at_least") ||
+                  hasDialectQualifier(Token, "qual:disjoint_extent"))
+                continue;
               if ((Candidate.Operation == CapabilityOperation::Require ||
                    Candidate.Operation == CapabilityOperation::Consume) &&
                   hasDialectQualifier(
-                      dialectToken(Function->getASTContext(),
-                                   Family->getName()),
-                      "qual:dynamic_storage"))
+                      Token, "qual:dynamic_storage"))
                 continue;
               CapabilityOperation Operation = Candidate.Operation;
               if (Candidate.Prefix == "grant:") {

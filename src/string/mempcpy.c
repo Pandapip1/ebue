@@ -3,7 +3,9 @@
 #define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <string.h>
 
-void *mempcpy(void *dest, const void *src, size_t n)
+void *mempcpy(void *dest withtok(writable_span(n))
+	withtok(disjoint_span(src, n)),
+	const void *src withtok(readable_span(n)), size_t n)
 {
 	return (char *)memcpy(dest, src, n) + n;
 }

@@ -41,6 +41,7 @@ extern "C" {
 #endif
 
 #include <features.h>
+#include <memory_tokens.h>
 
 #define __NEED_size_t
 #define __NEED_ssize_t
@@ -139,8 +140,9 @@ int accept(int, struct sockaddr *__restrict, socklen_t *__restrict);
 int connect(int, const struct sockaddr *, socklen_t);
 int getsockname(int, struct sockaddr *__restrict, socklen_t *__restrict);
 int getpeername(int, struct sockaddr *__restrict, socklen_t *__restrict);
-ssize_t send(int, const void *, size_t, int);
-ssize_t recv(int, void *, size_t, int);
+ssize_t send(int, const void *buf withtok(readable_span(len)), size_t len,
+             int flags);
+ssize_t recv(int, void *buf withtok(writable_span(len)), size_t len, int flags);
 int shutdown(int, int);
 int setsockopt(int, int, int, const void *, socklen_t);
 int getsockopt(int, int, int, void *__restrict, socklen_t *__restrict);

@@ -26,10 +26,11 @@
 #include <ctype.h>
 #include <string.h>
 
-static int class_match(const char *name __NTLIBC_SPAN(2), size_t len,
+static int class_match(const char *name withtok(readable_span(len)), size_t len,
 	unsigned char c)
 	__attribute__((pure));
-static int class_match(const char *name, size_t len, unsigned char c) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+static int class_match(const char *name withtok(readable_span(len)),
+	size_t len, unsigned char c) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 #define CLS(s) (len == sizeof(s) - 1 && !memcmp(name, s, len))
 	if (CLS("alpha")) return isalpha(c) != 0;

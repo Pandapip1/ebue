@@ -7,7 +7,7 @@
 #include "libc.h"
 #include "plat_fd.h"
 
-ssize_t read(int fd, void *buf, size_t count)
+ssize_t read(int fd, void *buf withtok(writable_span(count)), size_t count)
 {
 	struct __fd *f = __fd_get(fd);
 
@@ -27,7 +27,8 @@ ssize_t read(int fd, void *buf, size_t count)
 	return __plat_read(f->h, buf, count);
 }
 
-ssize_t pread(int fd, void *buf, size_t count, off_t off)
+ssize_t pread(int fd, void *buf withtok(writable_span(count)), size_t count,
+	off_t off)
 {
 	struct __fd *f = __fd_get(fd);
 	long long saved;

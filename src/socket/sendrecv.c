@@ -33,7 +33,8 @@
 #include "afd.h"
 #include "plat_socket.h"
 
-ssize_t recv(int fd, void *buf, size_t len, int flags)
+ssize_t recv(int fd, void *buf withtok(writable_span(len)), size_t len,
+	int flags)
 {
 	struct __fd *f = __fd_get(fd);
 
@@ -45,7 +46,8 @@ ssize_t recv(int fd, void *buf, size_t len, int flags)
 	return __plat_sock_recv(f->h, buf, len, flags);
 }
 
-ssize_t send(int fd, const void *buf, size_t len, int flags)
+ssize_t send(int fd, const void *buf withtok(readable_span(len)), size_t len,
+	int flags)
 {
 	struct __fd *f = __fd_get(fd);
 

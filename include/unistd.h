@@ -11,6 +11,7 @@
 
 #include <features.h>
 #include <stdlib.h>
+#include <memory_tokens.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,10 +60,12 @@ off_t lseek(int, off_t, int);
 int fsync(int);
 int fdatasync(int);
 
-ssize_t read(int, void *, size_t);
-ssize_t write(int, const void *, size_t);
-ssize_t pread(int, void *, size_t, off_t);
-ssize_t pwrite(int, const void *, size_t, off_t);
+ssize_t read(int, void *buffer withtok(writable_span(count)), size_t count);
+ssize_t write(int, const void *buffer withtok(readable_span(count)), size_t count);
+ssize_t pread(int, void *buffer withtok(writable_span(count)), size_t count,
+              off_t);
+ssize_t pwrite(int, const void *buffer withtok(readable_span(count)),
+               size_t count, off_t);
 
 int chown(const char *, uid_t, gid_t);
 int fchown(int, uid_t, gid_t);

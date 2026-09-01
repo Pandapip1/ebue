@@ -2,19 +2,26 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 typedef __SIZE_TYPE__ size_t;
-void *memcpy(void *, const void *, size_t);
-void *memset(void *, int, size_t);
+#include "../../include/ownership.h"
+
+tokdef fixture_readable_span l_unlimited implicit_drop extent_at_least zero_vacuous;
+tokdef fixture_writable_span l_unlimited implicit_drop extent_at_least zero_vacuous;
+tokdef fixture_disjoint_span l_unlimited implicit_drop disjoint_extent zero_vacuous;
+
+void *memcpy(void *destination withtok(fixture_writable_span(length))
+	withtok(fixture_disjoint_span(source, length)),
+	const void *source withtok(fixture_readable_span(length)), size_t length);
+void *memset(void *destination withtok(fixture_writable_span(length)), int,
+	size_t length);
 void *__malloc(size_t);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 
-#define SPAN_CONTRACT(size_parameter) \
-	__attribute__((annotate("ntlibc.span:" #size_parameter)))
+void contracted_copy(char *out withtok(fixture_writable_span(length)),
+	const char *in withtok(fixture_readable_span(length)), size_t length);
 
-void contracted_copy(char *out SPAN_CONTRACT(3),
-	const char *in SPAN_CONTRACT(3), size_t length);
-
-static void contracted_fill(char *out SPAN_CONTRACT(2), size_t length)
+static void contracted_fill(
+	char *out withtok(fixture_writable_span(length)), size_t length)
 {
 	memset(out, 0, length);
 }

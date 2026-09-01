@@ -11,6 +11,7 @@
 
 #include <features.h>
 #include <stdlib.h>
+#include <memory_tokens.h>
 #include <string_tokens.h>
 
 #ifdef __cplusplus
@@ -51,16 +52,25 @@ extern "C" {
  * ownership sweep (strtok's own findings are all bounds/extent proofs,
  * a different obligation nonnull cannot express) -- left for a future,
  * separately-verified pass rather than guessed at here. */
-void *memcpy (void *__restrict, const void *__restrict, size_t) __attribute__((nonnull(1, 2)));
-void *memmove (void *, const void *, size_t) __attribute__((nonnull(1, 2)));
-void *memset (void *, int, size_t) __attribute__((nonnull(1)));
+void *memcpy (void *__restrict dest
+                  withtok(writable_span(n))
+                  withtok(disjoint_span(src, n)),
+              const void *__restrict src withtok(readable_span(n)), size_t n)
+    __attribute__((nonnull(1, 2)));
+void *memmove (void *dest withtok(writable_span(n)),
+               const void *src withtok(readable_span(n)), size_t n)
+    __attribute__((nonnull(1, 2)));
+void *memset (void *dest withtok(writable_span(n)), int c, size_t n)
+    __attribute__((nonnull(1)));
 /* memcmp/memchr (src/string/memcmp.c, memchr.c) read their buffer
  * arguments and nothing else: no writes through either pointer, no
  * errno, no global/static state, no I/O.  Two calls with the same
  * three arguments and unchanged memory in between always agree, which
  * is exactly __pure__'s contract -- matching glibc's own memcmp/memchr
  * declarations. */
-int memcmp (const void *, const void *, size_t) __attribute__((nonnull(1, 2), __pure__));
+int memcmp (const void *vl withtok(readable_span(n)),
+            const void *vr withtok(readable_span(n)), size_t n)
+    __attribute__((nonnull(1, 2), __pure__));
 void *memchr (const void *, int, size_t) __attribute__((nonnull(1), __pure__));
 
 withtok(null_terminated)
@@ -112,8 +122,8 @@ int strncmp (const char *, const char *, size_t) __attribute__((nonnull(1, 2), _
  * regardless of whether l/r's own nullness has been proven. */
 int strcoll (const char * withtok(null_terminated), const char * withtok(null_terminated))
     __attribute__((__pure__));
-size_t strxfrm (char *__restrict __NTLIBC_SPAN(3),
-                const char *__restrict withtok(null_terminated), size_t);
+size_t strxfrm (char *__restrict dest withtok(writable_span(n)),
+                const char *__restrict withtok(null_terminated), size_t n);
 
 /* src/string/strchr.c forwards to strchrnul(s, c) unconditionally and
  * dereferences its result; s is required (see strchrnul below), c is
@@ -230,8 +240,9 @@ char *strerror_l (int, locale_t) __attribute__((__pure__));
 int strcoll_l (const char * withtok(null_terminated),
                const char * withtok(null_terminated), locale_t)
     __attribute__((__pure__));
-size_t strxfrm_l (char *__restrict __NTLIBC_SPAN(3),
-                  const char *__restrict withtok(null_terminated), size_t, locale_t);
+size_t strxfrm_l (char *__restrict dest withtok(writable_span(n)),
+                  const char *__restrict withtok(null_terminated),
+                  size_t n, locale_t);
 #endif
 
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
@@ -295,8 +306,9 @@ void *memmem(const void *, size_t, const void *, size_t) __attribute__((nonnull(
 /* Same n == 0 escape as mem*'s own family (glibc: memrchr nonnull(1)).
  * Reads only. */
 void *memrchr(const void *, int, size_t) __attribute__((nonnull(1), __pure__));
-void *mempcpy(void * __NTLIBC_SPAN(3),
-              const void * __NTLIBC_SPAN(3), size_t);
+void *mempcpy(void *dest withtok(writable_span(n))
+                  withtok(disjoint_span(src, n)),
+              const void *src withtok(readable_span(n)), size_t n);
 /* No basename here.  glibc's <string.h> declares a GNU basename that takes
  * a const char * and never modifies it, distinct from the POSIX basename in
  * <libgen.h>; musl used to paper over the difference with an unprototyped

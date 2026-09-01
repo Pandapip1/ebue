@@ -4,7 +4,8 @@
 #include <strings.h>
 #include <string.h>
 
-void bcopy(const void *s1, void *s2, size_t n)
+void bcopy(const void *s1 withtok(readable_span(n)),
+	void *s2 withtok(writable_span(n)), size_t n)
 {
 	memmove(s2, s1, n);
 }

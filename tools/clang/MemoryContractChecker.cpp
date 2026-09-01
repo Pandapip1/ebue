@@ -52,24 +52,79 @@ REGISTER_MAP_WITH_PROGRAMSTATE(AssumedSpanExtent, const MemRegion *,
 
 namespace {
 
-static bool parameterHasAnnotation(const FunctionDecl *Function,
-                                   unsigned Index, StringRef Annotation) {
-  if (!Function)
+static const TypedefNameDecl *dialectToken(ASTContext &Context,
+                                           StringRef Name) {
+  IdentifierInfo &Identifier = Context.Idents.get(Name);
+  DeclarationName Declaration(&Identifier);
+  for (NamedDecl *Candidate :
+       Context.getTranslationUnitDecl()->lookup(Declaration))
+    if (const auto *Token = dyn_cast<TypedefNameDecl>(Candidate))
+      return Token;
+  return nullptr;
+}
+
+static bool hasDialectQualifier(const TypedefNameDecl *Token,
+                                StringRef Qualifier) {
+  if (!Token)
     return false;
-  for (const FunctionDecl *Redeclaration : Function->redecls()) {
-    if (Index >= Redeclaration->getNumParams())
-      continue;
-    for (const AnnotateAttr *Attribute :
-         Redeclaration->getParamDecl(Index)->specific_attrs<AnnotateAttr>())
-      if (Attribute->getAnnotation() == Annotation)
-        return true;
-  }
+  for (const AnnotateAttr *Attribute : Token->specific_attrs<AnnotateAttr>())
+    if (Attribute->getAnnotation() == Qualifier)
+      return true;
   return false;
 }
 
-static void spanParameters(
-    const FunctionDecl *Function,
-    SmallVectorImpl<std::pair<unsigned, unsigned>> &Parameters) {
+static bool tokenApplication(const FunctionDecl *Function,
+                             StringRef Annotation, StringRef &Family,
+                             SmallVectorImpl<unsigned> &Arguments) {
+  if (!Annotation.consume_front("withtok:") ||
+      !Annotation.ends_with(")"))
+    return false;
+  size_t Open = Annotation.find('(');
+  if (Open == StringRef::npos)
+    return false;
+  Family = Annotation.take_front(Open).trim();
+  StringRef Parameters = Annotation.slice(Open + 1, Annotation.size() - 1);
+  while (!Parameters.empty()) {
+    auto [Name, Rest] = Parameters.split(',');
+    Name = Name.trim();
+    bool Found = false;
+    for (unsigned Index = 0; Index < Function->getNumParams(); ++Index)
+      if (Function->getParamDecl(Index)->getName() == Name) {
+        Arguments.push_back(Index);
+        Found = true;
+        break;
+      }
+    if (!Found)
+      return false;
+    Parameters = Rest;
+  }
+  return !Family.empty();
+}
+
+struct SpanContract {
+  unsigned Pointer;
+  unsigned Length;
+};
+
+struct DisjointContract {
+  unsigned First;
+  unsigned Second;
+  unsigned Length;
+};
+
+static bool operator==(const SpanContract &Left, const SpanContract &Right) {
+  return Left.Pointer == Right.Pointer && Left.Length == Right.Length;
+}
+
+static bool operator==(const DisjointContract &Left,
+                       const DisjointContract &Right) {
+  return Left.First == Right.First && Left.Second == Right.Second &&
+         Left.Length == Right.Length;
+}
+
+static void tokenContracts(const FunctionDecl *Function,
+                           SmallVectorImpl<SpanContract> &Spans,
+                           SmallVectorImpl<DisjointContract> &Disjoint) {
   if (!Function)
     return;
   for (const FunctionDecl *Redeclaration : Function->redecls()) {
@@ -77,16 +132,25 @@ static void spanParameters(
          ++Pointer) {
       for (const AnnotateAttr *Attribute : Redeclaration->getParamDecl(Pointer)
                                                ->specific_attrs<AnnotateAttr>()) {
-        StringRef Annotation = Attribute->getAnnotation();
-        if (!Annotation.consume_front("ntlibc.span:"))
+        StringRef Family;
+        SmallVector<unsigned, 2> Arguments;
+        if (!tokenApplication(Redeclaration, Attribute->getAnnotation(), Family,
+                              Arguments))
           continue;
-        unsigned OneBasedLength;
-        if (Annotation.getAsInteger(10, OneBasedLength) || !OneBasedLength ||
-            OneBasedLength > Redeclaration->getNumParams())
-          continue;
-        std::pair<unsigned, unsigned> Contract{Pointer, OneBasedLength - 1};
-        if (llvm::find(Parameters, Contract) == Parameters.end())
-          Parameters.push_back(Contract);
+        const TypedefNameDecl *Token =
+            dialectToken(Function->getASTContext(), Family);
+        if (hasDialectQualifier(Token, "qual:extent_at_least") &&
+            Arguments.size() == 1) {
+          SpanContract Contract{Pointer, Arguments[0]};
+          if (llvm::find(Spans, Contract) == Spans.end())
+            Spans.push_back(Contract);
+        }
+        if (hasDialectQualifier(Token, "qual:disjoint_extent") &&
+            Arguments.size() == 2) {
+          DisjointContract Contract{Pointer, Arguments[0], Arguments[1]};
+          if (llvm::find(Disjoint, Contract) == Disjoint.end())
+            Disjoint.push_back(Contract);
+        }
       }
     }
   }
@@ -96,33 +160,6 @@ class MemoryContractChecker
     : public Checker<check::PreCall, check::PostCall, check::BeginFunction> {
   mutable std::unique_ptr<BugType> SpanBT;
   mutable std::unique_ptr<BugType> OverlapBT;
-
-  struct Contract {
-    unsigned First;
-    std::optional<unsigned> Second;
-    unsigned Length;
-    bool NoOverlap;
-  };
-
-  static std::optional<Contract> contractFor(const FunctionDecl *Function) {
-    if (!Function || !Function->getIdentifier())
-      return std::nullopt;
-    StringRef Name = Function->getName();
-    if (Name == "memcpy")
-      return Contract{0, 1, 2, true};
-    if (Name == "memmove" || Name == "memcmp")
-      return Contract{0, 1, 2, false};
-    if (Name == "memset")
-      return Contract{0, std::nullopt, 2, false};
-    if (Name == "read" || Name == "write" || Name == "pread" ||
-        Name == "pwrite" || Name == "recv" || Name == "send")
-      return Contract{1, std::nullopt, 2, false};
-    return std::nullopt;
-  }
-
-  static std::optional<Contract> contractFor(const CallEvent &Call) {
-    return contractFor(dyn_cast_or_null<FunctionDecl>(Call.getDecl()));
-  }
 
   static bool hasName(const CallEvent &Call, StringRef Wanted) {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
@@ -450,12 +487,15 @@ public:
   void checkBeginFunction(CheckerContext &C) const {
     const auto *Function =
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
-    SmallVector<std::pair<unsigned, unsigned>, 2> Spans;
-    spanParameters(Function, Spans);
+    SmallVector<SpanContract, 2> Spans;
+    SmallVector<DisjointContract, 1> Disjoint;
+    tokenContracts(Function, Spans, Disjoint);
     ProgramStateRef State = C.getState();
-    for (auto [Pointer, Length] : Spans) {
-      const ParmVarDecl *PointerParameter = Function->getParamDecl(Pointer);
-      const ParmVarDecl *LengthParameter = Function->getParamDecl(Length);
+    for (const SpanContract &Contract : Spans) {
+      const ParmVarDecl *PointerParameter =
+          Function->getParamDecl(Contract.Pointer);
+      const ParmVarDecl *LengthParameter =
+          Function->getParamDecl(Contract.Length);
       SVal PointerValue = State->getSVal(
           State->getLValue(PointerParameter, C.getLocationContext()));
       SVal LengthValue = State->getSVal(
@@ -466,55 +506,34 @@ public:
       if (Region && DefinedLength)
         State = State->set<AssumedSpanExtent>(Region, *DefinedLength);
     }
-    if (std::optional<Contract> Builtin = contractFor(Function)) {
-      if (Builtin->Length < Function->getNumParams() &&
-          Builtin->First < Function->getNumParams() &&
-          (!Builtin->Second ||
-           *Builtin->Second < Function->getNumParams())) {
-        const ParmVarDecl *LengthParameter =
-            Function->getParamDecl(Builtin->Length);
-        SVal LengthValue = State->getSVal(
-            State->getLValue(LengthParameter, C.getLocationContext()));
-        std::optional<DefinedOrUnknownSVal> DefinedLength =
-            LengthValue.getAs<DefinedOrUnknownSVal>();
-        auto Seed = [&](unsigned Index) {
-          const ParmVarDecl *Parameter = Function->getParamDecl(Index);
-          SVal PointerValue = State->getSVal(
-              State->getLValue(Parameter, C.getLocationContext()));
-          if (const MemRegion *Region = PointerValue.getAsRegion())
-            if (DefinedLength)
-              State = setDynamicExtent(State, Region, *DefinedLength,
-                                       C.getSValBuilder());
-        };
-        Seed(Builtin->First);
-        if (Builtin->Second)
-          Seed(*Builtin->Second);
-      }
-    }
     if (State != C.getState())
       C.addTransition(State);
   }
 
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
-    SmallVector<std::pair<unsigned, unsigned>, 2> Spans;
-    spanParameters(Function, Spans);
+    SmallVector<SpanContract, 2> Spans;
+    SmallVector<DisjointContract, 1> Disjoint;
+    tokenContracts(Function, Spans, Disjoint);
     ProgramStateRef ContractState = C.getState();
-    for (auto [Pointer, Length] : Spans) {
-      if (Pointer >= Call.getNumArgs() || Length >= Call.getNumArgs())
+    for (const SpanContract &Contract : Spans) {
+      if (Contract.Pointer >= Call.getNumArgs() ||
+          Contract.Length >= Call.getNumArgs())
         continue;
-      const MemRegion *Region = Call.getArgSVal(Pointer).getAsRegion();
+      const MemRegion *Region =
+          Call.getArgSVal(Contract.Pointer).getAsRegion();
       std::optional<DefinedOrUnknownSVal> DefinedLength =
-          Call.getArgSVal(Length).getAs<DefinedOrUnknownSVal>();
+          Call.getArgSVal(Contract.Length).getAs<DefinedOrUnknownSVal>();
       if (Region && DefinedLength)
         ContractState =
             ContractState->set<AssumedSpanExtent>(Region, *DefinedLength);
     }
-    for (auto [Pointer, Length] : Spans) {
-      if (Pointer >= Call.getNumArgs() || Length >= Call.getNumArgs())
+    for (const SpanContract &Contract : Spans) {
+      if (Contract.Pointer >= Call.getNumArgs() ||
+          Contract.Length >= Call.getNumArgs())
         continue;
-      if (!spanProven(Call.getArgSVal(Pointer), Call.getArgSVal(Length),
-                      C.getState(), C)) {
+      if (!spanProven(Call.getArgSVal(Contract.Pointer),
+                      Call.getArgSVal(Contract.Length), C.getState(), C)) {
         BugType *Type = SpanBT.get();
         report("memory operation span is not proven valid", Type, Call,
                ContractState, C);
@@ -525,38 +544,21 @@ public:
     }
     if (!Spans.empty() && ContractState != C.getState())
       C.addTransition(ContractState);
-    std::optional<Contract> Contract = contractFor(Call);
-    if (!Contract || Contract->Length >= Call.getNumArgs() ||
-        Contract->First >= Call.getNumArgs())
-      return;
-    SVal Length = Call.getArgSVal(Contract->Length);
-    if (!spanProven(Call.getArgSVal(Contract->First), Length, C.getState(),
-                    C)) {
-      BugType *Type = SpanBT.get();
-      report("memory operation span is not proven valid", Type, Call,
-             C.getState(), C);
-      if (!SpanBT && Type)
-        SpanBT.reset(Type);
-      return;
-    }
-    if (Contract->Second && !spanProven(Call.getArgSVal(*Contract->Second),
-                                        Length, C.getState(), C)) {
-      BugType *Type = SpanBT.get();
-      report("memory operation span is not proven valid", Type, Call,
-             C.getState(), C);
-      if (!SpanBT && Type)
-        SpanBT.reset(Type);
-      return;
-    }
-    if (Contract->NoOverlap && Contract->Second &&
-        !overlapProven(Call.getArgSVal(Contract->First),
-                       Call.getArgSVal(*Contract->Second), Length, C.getState(),
-                       C)) {
+    for (const DisjointContract &Contract : Disjoint) {
+      if (Contract.First >= Call.getNumArgs() ||
+          Contract.Second >= Call.getNumArgs() ||
+          Contract.Length >= Call.getNumArgs())
+        continue;
+      if (overlapProven(Call.getArgSVal(Contract.First),
+                        Call.getArgSVal(Contract.Second),
+                        Call.getArgSVal(Contract.Length), C.getState(), C))
+        continue;
       BugType *Type = OverlapBT.get();
       report("memcpy ranges are not proven nonoverlapping", Type, Call,
              C.getState(), C);
       if (!OverlapBT && Type)
         OverlapBT.reset(Type);
+      break;
     }
   }
 

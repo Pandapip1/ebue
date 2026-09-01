@@ -10,6 +10,7 @@
 #define	_STRINGS_H
 
 #include <features.h>
+#include <memory_tokens.h>
 #include <string_tokens.h>
 
 #ifdef __cplusplus
@@ -28,11 +29,12 @@ extern "C" {
  * rindex.c) are the same one-line forwards to strchr()/strrchr(),
  * likewise already __pure__.  bcopy/bzero are real writers (they copy
  * into/zero their destination buffer) and are correctly left out. */
-int bcmp (const void * __NTLIBC_SPAN(3),
-          const void * __NTLIBC_SPAN(3), size_t) __attribute__((__pure__));
-void bcopy (const void * __NTLIBC_SPAN(3),
-            void * __NTLIBC_SPAN(3), size_t);
-void bzero (void * __NTLIBC_SPAN(2), size_t);
+int bcmp (const void *s1 withtok(readable_span(n)),
+          const void *s2 withtok(readable_span(n)), size_t n)
+    __attribute__((__pure__));
+void bcopy (const void *s1 withtok(readable_span(n)),
+            void *s2 withtok(writable_span(n)), size_t n);
+void bzero (void *s withtok(writable_span(n)), size_t n);
 withtok(null_terminated)
 char *index (const char * withtok(null_terminated), int) __attribute__((__pure__));
 withtok(null_terminated)

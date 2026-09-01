@@ -8,7 +8,9 @@
 #include <string.h>
 #include <stdint.h>
 
-void *memcpy(void *__restrict dest, const void *__restrict src, size_t n) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+void *memcpy(void *__restrict dest withtok(writable_span(n))
+	withtok(disjoint_span(src, n)),
+	const void *__restrict src withtok(readable_span(n)), size_t n) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned char *d = dest;
 	const unsigned char *s = src;
