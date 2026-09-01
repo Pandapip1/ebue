@@ -398,3 +398,37 @@ unsigned member_bound_across_internal_free(struct owned_vec *p)
 		__free(p->v[i]);
 	return i;
 }
+
+static __SIZE_TYPE__ stable_unsigned_step(__SIZE_TYPE__ remaining)
+{
+	return remaining ? 1 : 0;
+}
+
+__SIZE_TYPE__ guarded_unsigned_distance_ascent(__SIZE_TYPE__ end)
+{
+	__SIZE_TYPE__ i = 0;
+	while (i < end) {
+		__SIZE_TYPE__ step = stable_unsigned_step(end - i);
+		if (!step) return i;
+		if (step > end - i) return i;
+		i += step;
+	}
+	return i;
+}
+
+static __PTRDIFF_TYPE__ stable_signed_step(__SIZE_TYPE__ remaining)
+{
+	return remaining ? 1 : 0;
+}
+
+__SIZE_TYPE__ guarded_signed_distance_ascent(__SIZE_TYPE__ end)
+{
+	__SIZE_TYPE__ i = 0;
+	while (i < end) {
+		__PTRDIFF_TYPE__ step = stable_signed_step(end - i);
+		if (step <= 0) return i;
+		if ((__SIZE_TYPE__)step > end - i) return i;
+		i += (__SIZE_TYPE__)step;
+	}
+	return i;
+}

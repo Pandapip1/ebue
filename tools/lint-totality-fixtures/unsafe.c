@@ -230,6 +230,49 @@ unsigned member_bound_address_taken(struct vec *p)
 	return i;
 }
 
+struct ascent_alias_vec {
+	unsigned bound;
+	unsigned *alias;
+};
+
+static unsigned pointer_member_alias_step(struct ascent_alias_vec *p,
+	unsigned remaining)
+{
+	*p->alias = p->bound + 1;
+	return remaining ? 1 : 0;
+}
+
+unsigned ascent_with_pointer_member_alias(struct ascent_alias_vec *p)
+{
+	unsigned i = 0;
+	while (i < p->bound) { /* totality-expect */
+		unsigned step = pointer_member_alias_step(p, p->bound - i);
+		if (!step || step > p->bound - i) return i;
+		i += step;
+	}
+	return i;
+}
+
+unsigned ascent_allows_zero(unsigned end, unsigned step)
+{
+	unsigned i = 0;
+	while (i < end) { /* totality-expect */
+		if (step > end - i) return i;
+		i += step;
+	}
+	return i;
+}
+
+unsigned ascent_allows_oversize(unsigned end, unsigned step)
+{
+	unsigned i = 0;
+	while (i < end) { /* totality-expect */
+		if (!step) return i;
+		i += step;
+	}
+	return i;
+}
+
 unsigned member_bound_base_reseated(struct vec *p, struct vec *q)
 {
 	unsigned i;

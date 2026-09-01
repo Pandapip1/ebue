@@ -212,12 +212,11 @@ int __fflush_locked(FILE *f)
 	size_t off = 0;
 
 	if (f->writable && f->wpos) {
-		size_t remaining = f->wpos;
-		while (off < f->wpos && remaining > 0) {
-			ssize_t n = __file_write(f, f->buf + off, f->wpos - off);
-			remaining--;
+		size_t end = f->wpos;
+		while (off < end) {
+			ssize_t n = __file_write(f, f->buf + off, end - off);
 			if (n <= 0) { f->err = 1; f->wpos = 0; return -1; }
-			if ((size_t)n > f->wpos - off) { errno = EIO; f->err = 1; f->wpos = 0; return -1; }
+			if ((size_t)n > end - off) { errno = EIO; f->err = 1; f->wpos = 0; return -1; }
 			off += (size_t)n;
 		}
 	}
