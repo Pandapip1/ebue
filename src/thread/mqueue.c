@@ -200,10 +200,13 @@ static void give(__plat_handle_t h)
 static int raw_io(__plat_handle_t h, void *buf, size_t len, off_t off, int write_op) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned char *p = buf;
-	while (len) {
+	size_t remaining = len;
+	while (len && remaining > 0) {
 		ssize_t got = __plat_thread_file_io(h, p, len, off, write_op);
+		remaining--;
 		if (got < 0) return -1;
 		if (!got) { errno = EIO; return -1; }
+		if ((size_t)got > len) { errno = EIO; return -1; }
 		p += got;
 		off += got;
 		len -= (size_t)got;
