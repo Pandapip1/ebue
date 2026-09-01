@@ -1,6 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
+ * NT's <grp.h> backend. Pure relocation, zero behavior change -- see
+ * src/misc/nt/pwd.c's identical banner paragraph for why this moved
+ * out of the platform-SHARED src/misc/grp.c into src/misc/nt/;
+ * src/misc/linux/grp.c is Linux's real, file-backed sibling.
+ *
  * <grp.h>: NT has no /etc/group, but this library has exactly one gid.
  * getgid()/getegid() (src/unistd/ids.c) always report 1000 and
  * setgid()/setegid() are no-ops, so "the current group" is the only

@@ -21,6 +21,14 @@
  * therefore exercised for real by this one test binary depending on
  * which harness runs it, rather than one of them being dead code.
  */
+/* setenv()/unsetenv()/mkdtemp() are gated behind a feature-test macro
+ * in this project's own headers (Makefile's CFLAGS_ALL comment:
+ * "_ALL_SOURCE ... is for the library itself, not for programs" -- a
+ * consuming TU opts in itself, same as test/posix-time.c/test/posix-
+ * unistd.c already do); needed by this file's pre-existing NT-side
+ * setenv() use below and, now, by the Linux-side fixture tests this
+ * pass adds further down. */
+#define _GNU_SOURCE
 #include <pwd.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -31,6 +39,21 @@
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
+
+/* This whole file, up to the #else below, audits src/misc/nt/pwd.c's
+ * single-user-synthesis <pwd.h> (the file this file's own header
+ * comment already describes) -- accurate for NT, but no longer for
+ * Linux now that src/misc/linux/pwd.c gives Linux a REAL, file-backed
+ * <pwd.h> (see that file's own header for why the split happened).
+ * Every assertion below assumes "the database has at most one entry,
+ * known only through %USERNAME%/%USER%", which is simply false against
+ * a real /etc/passwd -- getuid()+1, for instance, is routinely a real
+ * second user on any real multi-account Linux host. Rather than adapt
+ * each assertion individually (most of them would stop asserting
+ * anything meaningful once the one-entry premise is gone), this is
+ * gated out entirely on Linux and replaced, in the #else branch, with
+ * a real audit of src/misc/linux/pwd.c's own actual behavior. */
+#ifndef __linux__
 
 /* Mirrors src/misc/pwd.c's current_name(): whether this process's
  * environment lets the library know who "the current user" is at
@@ -507,3 +530,261 @@ int main(void)
 	if (!fails) printf("pwd: all tests passed\n");
 	return fails != 0;
 }
+
+#else /* __linux__ */
+
+/* ====================================================================
+ * Linux: a real audit of src/misc/linux/pwd.c's file-backed <pwd.h> --
+ * getpwnam()/getpwuid()/getpwent()/setpwent()/endpwent() (and the _r
+ * forms) against a genuine /etc/passwd, gated by a genuine
+ * /etc/nsswitch.conf. Two tiers, per this pass's own task brief:
+ *
+ *   1. A handful of facts asserted against THIS HOST's real
+ *      /etc/passwd, never mutated -- the same strategy test/posix-
+ *      netdb.c's own getservbyname test already uses for /etc/
+ *      services' "http" entry: root at uid 0 is exactly as universal a
+ *      fact about a real POSIX system's user database as "http" is
+ *      about its service database, and there is no standard way to
+ *      point a real getpwnam() at anything else (glibc offers no
+ *      configurable base directory either -- see src/internal/
+ *      nss_paths.h's own banner).
+ *   2. Everything else -- multi-entry enumeration, the ERANGE
+ *      boundary, nsswitch.conf gating -- against a hermetic fixture
+ *      tree this file builds itself in a fresh mkdtemp() directory,
+ *      pointed to via this pass's own disclosed testability env-var
+ *      seam (NTLIBC_TEST_PASSWD_PATH/NTLIBC_TEST_NSSWITCH_PATH, see
+ *      src/internal/nss_paths.h), so none of it depends on this host's
+ *      real user database having any particular shape.
+ * ==================================================================== */
+
+/* fixture_write(): create/replace a small text file with exactly
+ * `content`, no fdopen()/buffering games -- these fixtures are a few
+ * lines each. */
+static void fixture_write(const char *path, const char *content)
+{
+	FILE *f = fopen(path, "w");
+	CHECK(f != NULL);
+	if (!f) return;
+	CHECK(fputs(content, f) >= 0);
+	fclose(f);
+}
+
+/* ---- tier 1: real /etc/passwd, read-only ---- */
+
+static void test_linux_root_exists_by_uid(void)
+{
+	struct passwd *pw = getpwuid(0);
+	CHECK(pw != NULL);
+	if (!pw) return;
+	CHECK(pw->pw_name != NULL && strcmp(pw->pw_name, "root") == 0);
+	CHECK(pw->pw_dir != NULL && pw->pw_dir[0] == '/');
+	CHECK(pw->pw_shell != NULL && pw->pw_shell[0] != '\0');
+}
+
+static void test_linux_root_exists_by_name(void)
+{
+	struct passwd *pw = getpwnam("root");
+	CHECK(pw != NULL);
+	if (pw) CHECK(pw->pw_uid == 0);
+}
+
+static void test_linux_absurd_lookups_not_found(void)
+{
+	errno = 12345;
+	CHECK(getpwnam("no-such-user-could-ever-be-called-this-xyz") == NULL);
+	CHECK(errno == 12345);
+	errno = 12345;
+	CHECK(getpwuid((uid_t)0x7ffffffe) == NULL);
+	CHECK(errno == 12345);
+}
+
+static void test_linux_getpwent_reaches_root(void)
+{
+	struct passwd *pw;
+	int i, saw_root = 0;
+
+	setpwent();
+	/* A real /etc/passwd is never anywhere near this long; the bound
+	 * exists only so a real bug (an enumeration that never reaches
+	 * end-of-file) fails this test instead of hanging the suite. */
+	for (i = 0; i < 100000; i++) {
+		pw = getpwent();
+		if (!pw) break;
+		if (pw->pw_uid == 0) saw_root = 1;
+	}
+	CHECK(saw_root);
+	endpwent();
+}
+
+/* ---- tier 2: a hermetic fixture tree ---- */
+
+#define FIX_PASSWD "fx-passwd"
+#define FIX_NSSWITCH "fx-nsswitch.conf"
+
+static void fixture_env_set(void)
+{
+	CHECK(setenv("NTLIBC_TEST_PASSWD_PATH", FIX_PASSWD, 1) == 0);
+	CHECK(setenv("NTLIBC_TEST_NSSWITCH_PATH", FIX_NSSWITCH, 1) == 0);
+}
+
+static void fixture_env_clear(void)
+{
+	unsetenv("NTLIBC_TEST_PASSWD_PATH");
+	unsetenv("NTLIBC_TEST_NSSWITCH_PATH");
+}
+
+/* getpwnam.html DESCRIPTION/RETURN VALUE, getpwuid.html DESCRIPTION,
+ * against a small, fully-controlled two-entry database. */
+static void test_linux_fixture_lookup(void)
+{
+	fixture_write(FIX_PASSWD,
+		"alice:x:5001:5001:Alice Example:/home/alice:/bin/ash\n"
+		"bob:x:5002:5002:Bob Example:/home/bob:/bin/bsh\n");
+	fixture_write(FIX_NSSWITCH, "passwd: files\ngroup: files\nhosts: files dns\n");
+	fixture_env_set();
+
+	{
+		struct passwd *pw = getpwnam("alice");
+		CHECK(pw != NULL);
+		if (pw) {
+			CHECK(pw->pw_uid == 5001);
+			CHECK(pw->pw_gid == 5001);
+			CHECK(strcmp(pw->pw_dir, "/home/alice") == 0);
+			CHECK(strcmp(pw->pw_shell, "/bin/ash") == 0);
+		}
+	}
+	{
+		struct passwd *pw = getpwuid(5002);
+		CHECK(pw != NULL);
+		if (pw) CHECK(strcmp(pw->pw_name, "bob") == 0);
+	}
+	CHECK(getpwnam("carol") == NULL);
+
+	fixture_env_clear();
+}
+
+/* getpwent.html sequential access against the same two-entry fixture:
+ * both entries in order, then a stable end-of-file, then a rewind. */
+static void test_linux_fixture_getpwent_sequence(void)
+{
+	struct passwd *pw;
+
+	fixture_write(FIX_PASSWD,
+		"alice:x:5001:5001:Alice Example:/home/alice:/bin/ash\n"
+		"bob:x:5002:5002:Bob Example:/home/bob:/bin/bsh\n");
+	fixture_write(FIX_NSSWITCH, "passwd: files\n");
+	fixture_env_set();
+
+	setpwent();
+	pw = getpwent();
+	CHECK(pw != NULL && strcmp(pw->pw_name, "alice") == 0);
+	pw = getpwent();
+	CHECK(pw != NULL && strcmp(pw->pw_name, "bob") == 0);
+	errno = 0;
+	pw = getpwent();
+	CHECK(pw == NULL);
+	CHECK(errno == 0);
+
+	setpwent();
+	pw = getpwent();
+	CHECK(pw != NULL && strcmp(pw->pw_name, "alice") == 0);
+	endpwent();
+
+	fixture_env_clear();
+}
+
+/* getpwnam.html ERRORS [ERANGE], boundary-pinned exactly like this
+ * project's own dlfcn/grp tests do -- one byte short of what
+ * fill_from_fields() (src/misc/linux/pwd.c) needs must fail, and
+ * exactly that many bytes must succeed. */
+static void test_linux_fixture_erange_boundary(void)
+{
+	struct passwd pw, *result;
+	char buf[512];
+	size_t need;
+
+	fixture_write(FIX_PASSWD, "carol:x:5003:5003:Carol Example:/home/carol:/bin/csh\n");
+	fixture_write(FIX_NSSWITCH, "passwd: files\n");
+	fixture_env_set();
+
+	need = strlen("carol") + 1 + strlen("/home/carol") + 1 + strlen("/bin/csh") + 1;
+
+	result = (struct passwd *)0x1;
+	CHECK(getpwnam_r("carol", &pw, buf, need - 1, &result) == ERANGE);
+	CHECK(result == NULL);
+
+	result = NULL;
+	CHECK(getpwnam_r("carol", &pw, buf, need, &result) == 0);
+	CHECK(result == &pw);
+	if (result == &pw) {
+		CHECK(pw.pw_uid == 5003);
+		CHECK(strcmp(pw.pw_shell, "/bin/csh") == 0);
+	}
+
+	fixture_env_clear();
+}
+
+/* This project's own nsswitch.conf gating: an admin who configures
+ * "passwd" with no service this library implements gets an honest
+ * "not found" for a user that genuinely IS in /etc/passwd -- the
+ * backend was turned off, not silently ignored (src/misc/linux/pwd.c's
+ * own header comment states this as the intended behavior). */
+static void test_linux_fixture_nsswitch_disables_files(void)
+{
+	struct passwd *pw;
+
+	fixture_write(FIX_PASSWD, "dave:x:5004:5004:Dave Example:/home/dave:/bin/dsh\n");
+	fixture_write(FIX_NSSWITCH, "passwd: some_unimplemented_service\n");
+	fixture_env_set();
+
+	errno = 0;
+	pw = getpwnam("dave");
+	CHECK(pw == NULL);
+	CHECK(errno == 0);
+
+	fixture_env_clear();
+}
+
+/* A missing nsswitch.conf falls back to this project's own documented
+ * default order for "passwd" -- "files" (src/internal/nsswitch.h's own
+ * banner) -- so the fixture /etc/passwd is still consulted even with
+ * no nsswitch.conf fixture in place at all. */
+static void test_linux_fixture_missing_nsswitch_defaults_to_files(void)
+{
+	struct passwd *pw;
+
+	fixture_write(FIX_PASSWD, "erin:x:5005:5005:Erin Example:/home/erin:/bin/esh\n");
+	CHECK(setenv("NTLIBC_TEST_PASSWD_PATH", FIX_PASSWD, 1) == 0);
+	CHECK(setenv("NTLIBC_TEST_NSSWITCH_PATH", "fx-nsswitch-does-not-exist", 1) == 0);
+
+	pw = getpwnam("erin");
+	CHECK(pw != NULL);
+	if (pw) CHECK(pw->pw_uid == 5005);
+
+	fixture_env_clear();
+}
+
+int main(void)
+{
+	char tmpl[] = "posixpwd-XXXXXX";
+	char *dir = mkdtemp(tmpl);
+
+	CHECK(dir == tmpl);
+	if (dir) CHECK(chdir(dir) == 0);
+
+	test_linux_root_exists_by_uid();
+	test_linux_root_exists_by_name();
+	test_linux_absurd_lookups_not_found();
+	test_linux_getpwent_reaches_root();
+
+	test_linux_fixture_lookup();
+	test_linux_fixture_getpwent_sequence();
+	test_linux_fixture_erange_boundary();
+	test_linux_fixture_nsswitch_disables_files();
+	test_linux_fixture_missing_nsswitch_defaults_to_files();
+
+	if (!fails) printf("pwd: all tests passed\n");
+	return fails != 0;
+}
+
+#endif /* __linux__ */

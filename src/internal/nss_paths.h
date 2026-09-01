@@ -1,0 +1,65 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Every real NSS-style database this pass reads (/etc/hosts,
+ * /etc/passwd, /etc/group, /etc/resolv.conf, /etc/nsswitch.conf
+ * itself) lives at a fixed system path with no configurable base
+ * directory in any real implementation -- glibc does not offer one
+ * either, so there is no "real" design this deviates from by using a
+ * #define.
+ *
+ * That is a genuine problem for hermetic testing, though: this
+ * process's actual /etc/passwd is real, host-specific system state
+ * (fine to READ and assert stable facts about, e.g. root existing at
+ * uid 0 -- test/posix-netdb.c's own getservbyname test already relies
+ * on the identical stability of /etc/services' http entry), but a
+ * fixture-driven test of, say, "an admin-configured nsswitch.conf
+ * with passwd's files service removed makes getpwnam() honestly
+ * report not-found" cannot be written against the real
+ * /etc/nsswitch.conf at all without mutating real host configuration,
+ * which this library must never do as a side effect of running its
+ * own test suite.
+ *
+ * __nss_path() is the deliberate, disclosed answer: each of the five
+ * paths above can be overridden by an ntlibc-internal, UNDOCUMENTED
+ * environment variable (never mentioned in any public header, never
+ * part of any POSIX contract) that this library's own test fixtures
+ * set and every other caller leaves unset. This is not a new idea in
+ * Unix libc history -- TZ overriding zoneinfo's own search path and
+ * HOSTALIASES overriding /etc/hosts for gethostbyname() are both real,
+ * long-standing precedents for "an env var is the sanctioned way to
+ * redirect a libc database lookup" -- this is the same shape, scoped
+ * to ntlibc's own test harness rather than end-user configuration. */
+#ifndef _NTLIBC_NSS_PATHS_H
+#define _NTLIBC_NSS_PATHS_H
+
+#include <stdlib.h>
+
+/* var/dflt required: every real call site below passes a string
+ * literal for both, never NULL, and getenv()'s own contract already
+ * tolerates any `var`; the unconditional `*p` dereference on the
+ * getenv() result is guarded by the `p &&` immediately before it, not
+ * by this attribute -- var/dflt describe this function's OWN
+ * parameters, not what it does with getenv()'s return. */
+static inline const char *__nss_path(const char *var, const char *dflt)
+    __attribute__((nonnull(1, 2)));
+static inline const char *__nss_path(const char *var, const char *dflt)
+{
+	const char *p = getenv(var);
+	return (p && *p) ? p : dflt;
+}
+
+#define __NSS_HOSTS_PATH()     __nss_path("NTLIBC_TEST_HOSTS_PATH",     "/etc/hosts")
+#define __NSS_PASSWD_PATH()    __nss_path("NTLIBC_TEST_PASSWD_PATH",    "/etc/passwd")
+#define __NSS_GROUP_PATH()     __nss_path("NTLIBC_TEST_GROUP_PATH",     "/etc/group")
+#define __NSS_RESOLV_PATH()    __nss_path("NTLIBC_TEST_RESOLV_PATH",    "/etc/resolv.conf")
+#define __NSS_NSSWITCH_PATH()  __nss_path("NTLIBC_TEST_NSSWITCH_PATH",  "/etc/nsswitch.conf")
+
+#endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

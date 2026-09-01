@@ -25,6 +25,17 @@
  * deliberately starts with an empty environ, so both branches are
  * exercised for real depending on which harness runs this file.
  */
+/* setenv()/unsetenv()/clock_gettime()/CLOCK_MONOTONIC/wait4() further
+ * down this file are all gated behind a feature-test macro in this
+ * project's own headers (see Makefile's CFLAGS_ALL comment: "_ALL_
+ * SOURCE ... is for the library itself, not for programs" -- a
+ * consuming TU must opt in itself, the same as test/posix-time.c/
+ * test/posix-unistd.c already do). A tcc/Wine build apparently never
+ * exercised this gap (tcc's own default visibility must differ from
+ * clang -std=c99's); caught only now, building this file for the
+ * first time with a native clang toolchain (this pass's own NSS
+ * verification path) rather than introduced by anything below. */
+#define _GNU_SOURCE
 #include "test-policy.h"
 #include <grp.h>
 #include <sys/utsname.h>
@@ -40,6 +51,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <time.h>
+#include <stdint.h>
 
 static int fails;
 /* Assertion groups this run could not exercise at all; see main(). */
@@ -59,6 +71,14 @@ extern char **environ;
  * <grp.h>: grp.h.html, getgrnam.html, getgrgid.html, getgrent.html,
  * mirroring test/pwd.c's audit of <pwd.h> one gid deep.
  * ================================================================== */
+
+/* Everything from here to the matching #else below audits
+ * src/misc/nt/grp.c's single-group-synthesis <grp.h> -- see test/
+ * pwd.c's own matching comment for why this no longer holds on Linux
+ * now that src/misc/linux/grp.c gives Linux a real, file-backed
+ * <grp.h>, and why this is gated out wholesale rather than adapted
+ * assertion-by-assertion. */
+#ifndef __linux__
 
 /* Mirrors src/misc/grp.c's current_name() / test/pwd.c's have_user(). */
 static int have_group(void)
@@ -460,6 +480,218 @@ static void test_getgrgid_erange_not_in_its_errno_list(void)
 	if (had_username) setenv("USERNAME", keep_username, 1); else unsetenv("USERNAME");
 	if (had_user) setenv("USER", keep_user, 1); else unsetenv("USER");
 }
+
+#else /* __linux__ */
+
+/* ====================================================================
+ * Linux: a real audit of src/misc/linux/grp.c's file-backed <grp.h> --
+ * mirrors test/pwd.c's own Linux tier-1/tier-2 split one gid deep
+ * (real, read-only facts about this host's actual /etc/group; a
+ * hermetic fixture tree for everything else). See that file's own
+ * banner for the reasoning this does not repeat.
+ * ==================================================================== */
+
+static void fixture_write(const char *path, const char *content)
+{
+	FILE *f = fopen(path, "w");
+	CHECK(f != NULL);
+	if (!f) return;
+	CHECK(fputs(content, f) >= 0);
+	fclose(f);
+}
+
+/* gid 0 is "root" (or, on a handful of real distros, an equivalent
+ * name like "wheel" for gid 0 -- but root's OWN primary group is
+ * always gid 0 on every mainstream Linux distribution, so gid 0
+ * resolving to SOME real entry is the safe, universal fact to check,
+ * the same class of check test/pwd.c's own test_linux_root_exists_by_
+ * uid() makes for uid 0). */
+static void test_linux_gid0_exists(void)
+{
+	struct group *gr = getgrgid(0);
+	CHECK(gr != NULL);
+	if (!gr) return;
+	CHECK(gr->gr_name != NULL && gr->gr_name[0] != '\0');
+	CHECK(gr->gr_mem != NULL);
+}
+
+static void test_linux_absurd_lookups_not_found(void)
+{
+	errno = 12345;
+	CHECK(getgrnam("no-such-group-could-ever-be-called-this-xyz") == NULL);
+	CHECK(errno == 12345);
+	errno = 12345;
+	CHECK(getgrgid((gid_t)0x7ffffffe) == NULL);
+	CHECK(errno == 12345);
+}
+
+static void test_linux_getgrent_reaches_gid0(void)
+{
+	struct group *gr;
+	int i, saw = 0;
+
+	setgrent();
+	for (i = 0; i < 100000; i++) {
+		gr = getgrent();
+		if (!gr) break;
+		if (gr->gr_gid == 0) saw = 1;
+	}
+	CHECK(saw);
+	endgrent();
+}
+
+#define FIX_GROUP "fx-group"
+#define FIX_NSSWITCH "fx-nsswitch.conf"
+
+static void fixture_env_set(void)
+{
+	CHECK(setenv("NTLIBC_TEST_GROUP_PATH", FIX_GROUP, 1) == 0);
+	CHECK(setenv("NTLIBC_TEST_NSSWITCH_PATH", FIX_NSSWITCH, 1) == 0);
+}
+
+static void fixture_env_clear(void)
+{
+	unsetenv("NTLIBC_TEST_GROUP_PATH");
+	unsetenv("NTLIBC_TEST_NSSWITCH_PATH");
+}
+
+/* getgrnam.html/getgrgid.html DESCRIPTION, and gr_mem's own "array of
+ * pointers ... terminated by a null pointer" shape, against a small
+ * fully-controlled fixture -- one group with two members, one with
+ * none at all (gr_mem must still be a valid {NULL} array, not NULL
+ * itself, exactly like src/misc/linux/grp.c's own header documents). */
+static void test_linux_fixture_lookup(void)
+{
+	fixture_write(FIX_GROUP,
+		"devs:x:6001:alice,bob\n"
+		"lonely:x:6002:\n");
+	fixture_write(FIX_NSSWITCH, "group: files\npasswd: files\nhosts: files dns\n");
+	fixture_env_set();
+
+	{
+		struct group *gr = getgrnam("devs");
+		CHECK(gr != NULL);
+		if (gr) {
+			CHECK(gr->gr_gid == 6001);
+			CHECK(gr->gr_mem != NULL);
+			CHECK(gr->gr_mem[0] != NULL && strcmp(gr->gr_mem[0], "alice") == 0);
+			CHECK(gr->gr_mem[1] != NULL && strcmp(gr->gr_mem[1], "bob") == 0);
+			CHECK(gr->gr_mem[2] == NULL);
+		}
+	}
+	{
+		struct group *gr = getgrgid(6002);
+		CHECK(gr != NULL);
+		if (gr) {
+			CHECK(strcmp(gr->gr_name, "lonely") == 0);
+			CHECK(gr->gr_mem != NULL);
+			CHECK(gr->gr_mem[0] == NULL);
+		}
+	}
+	CHECK(getgrnam("nope") == NULL);
+
+	fixture_env_clear();
+}
+
+static void test_linux_fixture_getgrent_sequence(void)
+{
+	struct group *gr;
+
+	fixture_write(FIX_GROUP, "devs:x:6001:alice,bob\nlonely:x:6002:\n");
+	fixture_write(FIX_NSSWITCH, "group: files\n");
+	fixture_env_set();
+
+	setgrent();
+	gr = getgrent();
+	CHECK(gr != NULL && strcmp(gr->gr_name, "devs") == 0);
+	gr = getgrent();
+	CHECK(gr != NULL && strcmp(gr->gr_name, "lonely") == 0);
+	errno = 0;
+	gr = getgrent();
+	CHECK(gr == NULL);
+	CHECK(errno == 0);
+
+	setgrent();
+	gr = getgrent();
+	CHECK(gr != NULL && strcmp(gr->gr_name, "devs") == 0);
+	endgrent();
+
+	fixture_env_clear();
+}
+
+/* getgrnam.html ERRORS [ERANGE], the same boundary-pinning style as
+ * test/pwd.c's identical test -- one byte short of what
+ * fill_from_fields() (src/misc/linux/grp.c) needs must fail, exactly
+ * that many bytes must succeed, including the member pointer array and
+ * its pointer-alignment padding. */
+static void test_linux_fixture_erange_boundary(void)
+{
+	struct group gr, *result;
+	char buf[512];
+	size_t need, namelen, pad, memberbytes;
+
+	fixture_write(FIX_GROUP, "carol:x:6003:dan,erin\n");
+	fixture_write(FIX_NSSWITCH, "group: files\n");
+	fixture_env_set();
+
+	/* Mirrors src/misc/linux/grp.c's fill_from_fields() layout
+	 * computation exactly (name, then a pointer-aligned (nmem+1)
+	 * pointer array, then the member bytes) so this test pins the
+	 * real boundary rather than a guessed one. */
+	namelen = strlen("carol") + 1;
+	pad = (sizeof(char *) - ((uintptr_t)(buf + namelen) % sizeof(char *))) % sizeof(char *);
+	memberbytes = strlen("dan,erin") + 1;
+	need = namelen + pad + 3 * sizeof(char *) + memberbytes;
+
+	result = (struct group *)0x1;
+	CHECK(getgrnam_r("carol", &gr, buf, need - 1, &result) == ERANGE);
+	CHECK(result == NULL);
+
+	result = NULL;
+	CHECK(getgrnam_r("carol", &gr, buf, need, &result) == 0);
+	CHECK(result == &gr);
+	if (result == &gr) {
+		CHECK(gr.gr_gid == 6003);
+		CHECK(gr.gr_mem[0] != NULL && strcmp(gr.gr_mem[0], "dan") == 0);
+		CHECK(gr.gr_mem[1] != NULL && strcmp(gr.gr_mem[1], "erin") == 0);
+		CHECK(gr.gr_mem[2] == NULL);
+	}
+
+	fixture_env_clear();
+}
+
+static void test_linux_fixture_nsswitch_disables_files(void)
+{
+	struct group *gr;
+
+	fixture_write(FIX_GROUP, "dave:x:6004:\n");
+	fixture_write(FIX_NSSWITCH, "group: some_unimplemented_service\n");
+	fixture_env_set();
+
+	errno = 0;
+	gr = getgrnam("dave");
+	CHECK(gr == NULL);
+	CHECK(errno == 0);
+
+	fixture_env_clear();
+}
+
+static void test_linux_fixture_missing_nsswitch_defaults_to_files(void)
+{
+	struct group *gr;
+
+	fixture_write(FIX_GROUP, "erin:x:6005:\n");
+	CHECK(setenv("NTLIBC_TEST_GROUP_PATH", FIX_GROUP, 1) == 0);
+	CHECK(setenv("NTLIBC_TEST_NSSWITCH_PATH", "fx-nsswitch-does-not-exist", 1) == 0);
+
+	gr = getgrnam("erin");
+	CHECK(gr != NULL);
+	if (gr) CHECK(gr->gr_gid == 6005);
+
+	fixture_env_clear();
+}
+
+#endif /* __linux__ */
 
 static void test_uname(void)
 {
@@ -1192,6 +1424,7 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
+#ifndef __linux__
 	printf("note: have_group() = %s\n", have_group() ? "true" : "false");
 
 	test_getgrgid_current();
@@ -1211,6 +1444,16 @@ int main(int argc, char **argv)
 	test_getgrgid_r_alignment_and_erange_boundary();
 
 	test_getgrgid_erange_not_in_its_errno_list();
+#else
+	test_linux_gid0_exists();
+	test_linux_absurd_lookups_not_found();
+	test_linux_getgrent_reaches_gid0();
+	test_linux_fixture_lookup();
+	test_linux_fixture_getgrent_sequence();
+	test_linux_fixture_erange_boundary();
+	test_linux_fixture_nsswitch_disables_files();
+	test_linux_fixture_missing_nsswitch_defaults_to_files();
+#endif
 	test_uname();
 
 	test_times_self();
