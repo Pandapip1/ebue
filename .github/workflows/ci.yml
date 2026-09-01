@@ -315,6 +315,14 @@ jobs:
         with:
           repository: ${{ env.TINYCC_REPO }}
           revision: ${{ env.TINYCC_SHA }}
+      # The declared-symbol scanner (tools/clang/DeclScanner.cpp) is a real
+      # clang AST walk, built as a clang plugin the same way tools/lint.sh
+      # builds its own -- see that script's `lint` job matrix below for the
+      # identical package list.
+      - name: Install declaration-scanner tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 libclang-18-dev llvm-18-dev
       - name: Configure
         run: ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }} --disable-kernel32
       - name: Link every declared symbol
