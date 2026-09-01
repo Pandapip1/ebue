@@ -222,6 +222,32 @@ int __util_sort_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_tsort_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_uniq_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* Tier 4: "bigger engines" -- real parsers, not line-oriented filters
+ * (XCU ed(1p), m4(1p)).  Both are genuinely interactive/stateful by
+ * design (ed's in-memory edit buffer and current line/mark/undo state,
+ * m4's macro table, quote/comment characters, and diversion buffers),
+ * so both take real, documented care to stay safe when run in-process
+ * as a shell built-in rather than as their own process: neither ever
+ * calls exit()/_exit() internally (a `q`/`Q` or `m4exit` unwinds back
+ * to an ordinary `return` from the _main() function instead, the same
+ * reasoning src/util/dd.c's own header comment gives for why its
+ * SIGINT handler never does either), and neither keeps any static or
+ * global mutable state that could leak between one builtin invocation
+ * and the next in the same shell session -- see each file's own header
+ * comment for the rest of its documented scope (ed: no non-mandatory
+ * `W`/`#`, best-effort SIGINT/SIGHUP discipline; m4: which GNU
+ * extensions -- __file__, __line__, errprint, esyscmd, and others --
+ * are deliberately not implemented because they are not XCU-mandatory).
+ * Neither is __pure__: ed touches real files via e/E/r/w/!  and m4 via
+ * include/sinclude/mkstemp/syscmd, so a repeated call is not guaranteed
+ * to answer the same way twice. Each gets nonnull(2) for the same
+ * reason every other utility in this header does: a real argv from a
+ * real caller is never NULL, and each function's own usage-error path
+ * formats argv[0] into a diagnostic before any argc check could
+ * matter. */
+int __util_ed_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_m4_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 /* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
  * src/util/rm.c -----------------------------------------------------
  *
