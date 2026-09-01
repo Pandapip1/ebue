@@ -5,7 +5,7 @@
 
 tokdef dialect_mutex_unlocked;
 tokdef dialect_mutex_locked l_unlimited;
-tokdef dialect_terminated l_unlimited implicit_drop;
+tokdef dialect_terminated l_unlimited implicit_drop string_literal;
 
 typedef struct { void *opaque[8]; } dialect_mutex_t;
 

@@ -15,6 +15,7 @@
 #define l_unlimited __attribute__((annotate("qual:l_unlimited")))
 #define implicit_drop __attribute__((annotate("qual:implicit_drop")))
 #define dynamic_storage __attribute__((annotate("qual:dynamic_storage")))
+#define string_literal __attribute__((annotate("qual:string_literal")))
 #define sentinel_exclude(value) \
 	__attribute__((annotate("qual:sentinel_exclude=" #value)))
 #define blocks_dereference \

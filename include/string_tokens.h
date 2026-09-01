@@ -11,6 +11,7 @@
  * NUL explicitly drop it; writes which establish one explicitly grant it. */
 tokdef null_terminated
 	l_unlimited
-	implicit_drop;
+	implicit_drop
+	string_literal;
 
 #endif

@@ -180,6 +180,35 @@ static bool dialectTokenPermitsCarrierCopy(const TypedefNameDecl *Token) {
          !hasDialectQualifier(Token, "qual:l_unlimited");
 }
 
+static bool initializedByStringLiteral(const ValueDecl *Declaration) {
+  const auto *Variable = dyn_cast_or_null<VarDecl>(Declaration);
+  if (!Variable || !Variable->hasInit())
+    return false;
+  const Expr *Initializer = Variable->getInit()->IgnoreParenImpCasts();
+  if (isa<StringLiteral>(Initializer))
+    return true;
+  if (const auto *List = dyn_cast<InitListExpr>(Initializer))
+    return List->getNumInits() == 1 &&
+           isa<StringLiteral>(List->getInit(0)->IgnoreParenImpCasts());
+  return false;
+}
+
+static bool expressionProvidesStringLiteralToken(
+    const Expr *Expression, const IdentifierInfo *Family, ASTContext &Context) {
+  if (!Expression || !Family)
+    return false;
+  const TypedefNameDecl *Token =
+      dialectToken(Context, Family->getName());
+  if (!hasDialectQualifier(Token, "qual:string_literal"))
+    return false;
+  const Expr *Core = Expression->IgnoreParenImpCasts();
+  if (isa<StringLiteral>(Core))
+    return true;
+  if (const auto *Reference = dyn_cast<DeclRefExpr>(Core))
+    return initializedByStringLiteral(Reference->getDecl());
+  return false;
+}
+
 static std::optional<int64_t> dialectExcludedSentinel(
     const TypedefNameDecl *Token) {
   if (!Token)
@@ -1411,6 +1440,10 @@ class CapabilityTokenChecker
         Existing.Kind =
             declaredTokenFor(Call.getArgExpr(Protocol.Argument),
                              Protocol.Family);
+      if (!Existing.Kind && expressionProvidesStringLiteralToken(
+                                Call.getArgExpr(Protocol.Argument),
+                                Protocol.Family, C.getASTContext()))
+        Existing.Kind = CapabilityKind::Duplicable;
       if (!Existing.Kind &&
           hasStaticInitialToken(Function, Call, Protocol.Argument, Existing))
         Existing.Kind = CapabilityKind::Linear;
@@ -1462,6 +1495,10 @@ class CapabilityTokenChecker
             Existing.Kind =
                 declaredTokenFor(Call.getArgExpr(Candidate.Argument),
                                  Candidate.Family);
+          if (!Existing.Kind && expressionProvidesStringLiteralToken(
+                                    Call.getArgExpr(Candidate.Argument),
+                                    Candidate.Family, C.getASTContext()))
+            Existing.Kind = CapabilityKind::Duplicable;
           if (!Existing.Kind &&
               hasStaticInitialToken(Function, Call, Candidate.Argument,
                                     Existing))
@@ -1857,6 +1894,10 @@ class OwnershipTypeChecker
         continue;
       CapabilityPresence Present =
           capabilityFor(State, SourceCarrier, SourceValue, Entry.Family);
+      if (!Present.Kind &&
+          expressionProvidesStringLiteralToken(Source, Entry.Family,
+                                               C.getASTContext()))
+        Present.Kind = CapabilityKind::Duplicable;
       if (!Present.Kind) {
         if (dialectTokenExcludes(Entry.Family, Source, C.getASTContext()))
           continue;
@@ -1989,6 +2030,10 @@ class OwnershipTypeChecker
       }
       CapabilityPresence SourceToken =
           capabilityFor(State, SourceCarrier, SourceValue, Entry.Family);
+      if (!SourceToken.Kind &&
+          expressionProvidesStringLiteralToken(Source, Entry.Family,
+                                               C.getASTContext()))
+        SourceToken.Kind = CapabilityKind::Duplicable;
       if (!SourceToken.Kind)
         continue;
       CapabilityKind Required = Entry.Member == OwnershipTypeMember::LinearToken

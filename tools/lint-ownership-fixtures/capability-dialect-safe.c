@@ -21,6 +21,13 @@ void explicit_string_evidence_cycle(void)
 	dialect_clear_string(text);
 }
 
+void string_literal_creates_evidence(void)
+{
+	char initialized[] = "initialized";
+	dialect_use_string("literal");
+	dialect_use_string(initialized);
+}
+
 void dialect_clear_string(char *text drop(dialect_terminated))
 {
 	dialect_invalidate_string(text);
