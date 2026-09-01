@@ -168,6 +168,7 @@ static void cond_wait_cleanup(void *argument)
 	cleanup->waiter = 0;
 }
 
+__attribute__((ownership_requires_token(pthread_mutex_locked, 2)))
 static int cond_wait(pthread_cond_t *__restrict cond,
 	pthread_mutex_t *__restrict mutex, const struct timespec *absolute)
 {
@@ -255,12 +256,14 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	return lock_error ? lock_error : result;
 }
 
+__attribute__((ownership_requires_token(pthread_mutex_locked, 2)))
 int pthread_cond_wait(pthread_cond_t *__restrict cond,
 	pthread_mutex_t *__restrict mutex)
 {
 	return cond_wait(cond, mutex, 0);
 }
 
+__attribute__((ownership_requires_token(pthread_mutex_locked, 2)))
 int pthread_cond_timedwait(pthread_cond_t *__restrict cond,
 	pthread_mutex_t *__restrict mutex, const struct timespec *__restrict absolute)
 {

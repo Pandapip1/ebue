@@ -1114,6 +1114,52 @@ class CapabilityTokenChecker
     return Protocols;
   }
 
+  static bool acceptsStaticInitialization(const FunctionDecl *Function,
+                                          unsigned Argument) {
+    if (!Function)
+      return false;
+    for (const AnnotateAttr *Attr : Function->specific_attrs<AnnotateAttr>())
+      if (std::optional<FamilyArgument> Parsed =
+              annotationArgument(Function, Attr, "ownership_static:"))
+        if (Parsed->Argument == Argument)
+          return true;
+    return false;
+  }
+
+  static bool isZeroInitializer(const Expr *Initializer) {
+    Initializer = Initializer->IgnoreParenImpCasts();
+    if (isa<ImplicitValueInitExpr>(Initializer))
+      return true;
+    if (const auto *Integer = dyn_cast<IntegerLiteral>(Initializer))
+      return Integer->getValue().isZero();
+    if (const auto *List = dyn_cast<InitListExpr>(Initializer)) {
+      for (const Expr *Element : List->inits())
+        if (!isZeroInitializer(Element))
+          return false;
+      const Expr *Filler = List->getArrayFiller();
+      return !Filler || isZeroInitializer(Filler);
+    }
+    if (const auto *Cast = dyn_cast<CastExpr>(Initializer))
+      return isZeroInitializer(Cast->getSubExpr());
+    return false;
+  }
+
+  static bool hasStaticInitialToken(const FunctionDecl *Function,
+                                    const CallEvent &Call, unsigned Argument,
+                                    const CapabilityPresence &Existing) {
+    if (Existing.Known || !acceptsStaticInitialization(Function, Argument) ||
+        Argument >= Call.getNumArgs())
+      return false;
+    const auto *Variable =
+        dyn_cast_or_null<VarRegion>(Call.getArgSVal(Argument).getAsRegion());
+    if (!Variable)
+      return false;
+    const VarDecl *Declaration = Variable->getDecl();
+    if (!Declaration->hasInit())
+      return Declaration->hasGlobalStorage();
+    return isZeroInitializer(Declaration->getInit());
+  }
+
   void report(StringRef Reason, const Stmt *Statement, ProgramStateRef State,
               CheckerContext &C) const {
     ExplodedNode *Node = C.generateNonFatalErrorNode(State);
@@ -1132,6 +1178,7 @@ class CapabilityTokenChecker
                          ArrayRef<CapabilityProtocol> Protocols,
                          CheckerContext &C, bool EmitDiagnostics) const {
     const Stmt *Statement = Call.getOriginExpr();
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
     bool Valid = true;
     for (const CapabilityProtocol &Protocol : Protocols) {
       if (Protocol.Argument >= Call.getNumArgs())
@@ -1140,6 +1187,9 @@ class CapabilityTokenChecker
       CapabilityPresence Existing = capabilityFor(
           State, carrierRegion(Call.getArgExpr(Protocol.Argument), C), Value,
           Protocol.Family);
+      if (!Existing.Kind &&
+          hasStaticInitialToken(Function, Call, Protocol.Argument, Existing))
+        Existing.Kind = CapabilityKind::Linear;
       if (Protocol.Operation == CapabilityOperation::ConsumeAny)
         continue;
       if ((Protocol.Operation == CapabilityOperation::Require ||
@@ -1180,11 +1230,16 @@ class CapabilityTokenChecker
       bool Held = false;
       for (const CapabilityProtocol &Candidate : Protocols)
         if (Candidate.Operation == CapabilityOperation::ConsumeAny &&
-            Candidate.Argument == Alternative.Argument &&
-            capabilityFor(State,
-                          carrierRegion(Call.getArgExpr(Candidate.Argument), C),
-                          Call.getArgSVal(Candidate.Argument), Candidate.Family)
-                .Kind) {
+            Candidate.Argument == Alternative.Argument) {
+          CapabilityPresence Existing = capabilityFor(
+              State, carrierRegion(Call.getArgExpr(Candidate.Argument), C),
+              Call.getArgSVal(Candidate.Argument), Candidate.Family);
+          if (!Existing.Kind &&
+              hasStaticInitialToken(Function, Call, Candidate.Argument,
+                                    Existing))
+            Existing.Kind = CapabilityKind::Linear;
+          if (!Existing.Kind)
+            continue;
           Held = true;
           break;
         }

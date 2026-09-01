@@ -85,6 +85,7 @@ static void alertable_yield(void)
 	sched_yield();
 }
 
+__attribute__((ownership_adds_token(pthread_spin_unlocked, 1)))
 int pthread_spin_init(pthread_spinlock_t *lock, int pshared)
 {
 	if (!lock || (pshared != PTHREAD_PROCESS_PRIVATE &&
@@ -93,6 +94,7 @@ int pthread_spin_init(pthread_spinlock_t *lock, int pshared)
 	return 0;
 }
 
+__attribute__((ownership_drops_token(pthread_spin_unlocked, 1)))
 int pthread_spin_destroy(pthread_spinlock_t *lock)
 {
 	if (!lock || lock->__value != SPIN_UNLOCKED) return EBUSY;
@@ -100,6 +102,8 @@ int pthread_spin_destroy(pthread_spinlock_t *lock)
 	return 0;
 }
 
+__attribute__((ownership_drops_token(pthread_spin_unlocked, 1),
+  ownership_adds_duplicable_token(pthread_spin_locked, 1)))
 int pthread_spin_lock(pthread_spinlock_t *lock)
 {
 	if (!lock) return EINVAL;
@@ -113,6 +117,8 @@ int pthread_spin_lock(pthread_spinlock_t *lock)
 	}
 }
 
+__attribute__((ownership_drops_token(pthread_spin_unlocked, 1),
+  ownership_adds_duplicable_token(pthread_spin_locked, 1)))
 int pthread_spin_trylock(pthread_spinlock_t *lock)
 {
 	int state;
@@ -124,6 +130,8 @@ int pthread_spin_trylock(pthread_spinlock_t *lock)
 			SPIN_LOCKED) == SPIN_UNLOCKED ? 0 : EBUSY;
 }
 
+__attribute__((ownership_drops_token(pthread_spin_locked, 1),
+  ownership_adds_token(pthread_spin_unlocked, 1)))
 int pthread_spin_unlock(pthread_spinlock_t *lock)
 {
 	if (!lock || lock->__value != SPIN_LOCKED) return EINVAL;

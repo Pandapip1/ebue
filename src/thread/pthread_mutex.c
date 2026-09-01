@@ -152,6 +152,7 @@ static int mutex_ready(pthread_mutex_t *mutex)
 	return error;
 }
 
+__attribute__((ownership_adds_token(pthread_mutex_unlocked, 1)))
 int pthread_mutex_init(pthread_mutex_t *__restrict mutex,
 	const pthread_mutexattr_t *__restrict attr)
 {
@@ -190,6 +191,7 @@ int pthread_mutex_init(pthread_mutex_t *__restrict mutex,
  * as an honest residual rather than force-fit. pthread_mutex_
  * setprioceiling() below shares the identical shape via
  * pthread_mutex_lock(), which bottoms out in the same mutex_ready(). */
+__attribute__((ownership_drops_token(pthread_mutex_unlocked, 1)))
 int pthread_mutex_destroy(pthread_mutex_t *mutex)
 {
 	struct mutex_data *data;
@@ -303,16 +305,22 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 	}
 }
 
+__attribute__((ownership_drops_token(pthread_mutex_unlocked, 1),
+  ownership_adds_duplicable_token(pthread_mutex_locked, 1)))
 int pthread_mutex_lock(pthread_mutex_t *mutex)
 {
 	return mutex_acquire(mutex, 0, 0);
 }
 
+__attribute__((ownership_drops_token(pthread_mutex_unlocked, 1),
+  ownership_adds_duplicable_token(pthread_mutex_locked, 1)))
 int pthread_mutex_trylock(pthread_mutex_t *mutex)
 {
 	return mutex_acquire(mutex, 0, 1);
 }
 
+__attribute__((ownership_drops_token(pthread_mutex_unlocked, 1),
+  ownership_adds_duplicable_token(pthread_mutex_locked, 1)))
 int pthread_mutex_timedlock(pthread_mutex_t *__restrict mutex,
 	const struct timespec *__restrict absolute)
 {
@@ -320,6 +328,8 @@ int pthread_mutex_timedlock(pthread_mutex_t *__restrict mutex,
 	return mutex_acquire(mutex, absolute, 0);
 }
 
+__attribute__((ownership_drops_token(pthread_mutex_locked, 1),
+  ownership_adds_token(pthread_mutex_unlocked, 1)))
 int pthread_mutex_unlock(pthread_mutex_t *mutex)
 {
 	struct mutex_data *data;
@@ -361,6 +371,7 @@ int pthread_mutex_getprioceiling(const pthread_mutex_t *__restrict mutex,
 	return 0;
 }
 
+__attribute__((ownership_requires_token(pthread_mutex_unlocked, 1)))
 int pthread_mutex_setprioceiling(pthread_mutex_t *__restrict mutex,
 	int ceiling, int *__restrict old_ceiling)
 {
@@ -375,6 +386,7 @@ int pthread_mutex_setprioceiling(pthread_mutex_t *__restrict mutex,
 	return pthread_mutex_unlock(mutex);
 }
 
+__attribute__((ownership_requires_token(pthread_mutex_locked, 1)))
 int pthread_mutex_consistent(pthread_mutex_t *mutex)
 {
 	struct mutex_data *data;
