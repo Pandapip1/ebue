@@ -6,14 +6,17 @@
 void *memmem(const void *h0, size_t k, const void *n0, size_t l)
 {
 	const unsigned char *h = h0, *n = n0;
-	size_t i, last;
+	size_t i, remaining;
 
 	if (!l) return (void *)h;
 	if (k < l) return 0;
 	if (l == 1) return memchr(h0, *n, k);
-	last = k - l;
-	for (i = 0; i <= last; i++) {
+	remaining = k - l + 1;
+	i = 0;
+	while (remaining > 0) {
+		remaining--;
 		if (h[i] == *n && !memcmp(h+i+1, n+1, l-1)) return (void *)(h+i);
+		i++;
 	}
 	return 0;
 }

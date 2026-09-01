@@ -326,6 +326,29 @@ static std::string diagnosticMessage(StringRef Reason, const Stmt *Statement,
       .str();
 }
 
+static bool insideDynamicStorageConsumer(CheckerContext &C) {
+  const auto *Function =
+      dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
+  if (!Function)
+    return false;
+  for (const ParmVarDecl *Parameter : Function->parameters())
+    for (const AnnotateAttr *Attribute :
+         Parameter->specific_attrs<AnnotateAttr>()) {
+      StringRef Text = Attribute->getAnnotation();
+      bool Consumer = Text.consume_front("consume:");
+      if (!Consumer) {
+        Text = Attribute->getAnnotation();
+        Consumer = Text.consume_front("consume_if_nonnull_return:");
+      }
+      if (Consumer && !Text.empty() &&
+          !Text.contains(':') &&
+          hasDialectQualifier(dialectToken(Function->getASTContext(), Text),
+                              "qual:dynamic_storage"))
+        return true;
+    }
+  return false;
+}
+
 class OwnershipChecker
     : public Checker<check::PreCall, check::PostCall, check::Location> {
   mutable std::unique_ptr<BugType> BT;
@@ -857,7 +880,8 @@ public:
     if (!Symbol)
       return;
     const OwnershipKind *Kind = C.getState()->get<OwnershipMap>(Symbol);
-    if (Kind && *Kind == OwnershipKind::Consumed)
+    if (Kind && *Kind == OwnershipKind::Consumed &&
+        !insideDynamicStorageConsumer(C))
       report("borrow accesses a consumed owner", Statement, C.getState(), C);
   }
 };
@@ -2969,7 +2993,8 @@ public:
       // this exact symbol go through free()/realloc() on this path, so a
       // later dereference really is a use-after-free. That is the only
       // liveness fact this checker can ever *establish*.
-      if (Kind && *Kind == OwnershipKind::Consumed) {
+      if (Kind && *Kind == OwnershipKind::Consumed &&
+          !insideDynamicStorageConsumer(C)) {
         report("dereference accesses consumed storage", Statement, State, C);
         return;
       }
