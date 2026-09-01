@@ -612,6 +612,13 @@ obj/test/util-sed.exe: obj/bin/sed.exe $(SH_EXE)
 # exist first.
 obj/test/util-grep.exe: obj/bin/grep.exe $(SH_EXE)
 
+# test/util-archive.c is the same idea, one tier up again: the Tier 4
+# archive/content-format utilities -- pax(1p)/ar(1p)/file(1p), each
+# spawned as obj/bin/<name>.exe and exercised as a shell built-in via
+# obj/sh/sh.exe -c, so all three .exes plus the shell need to exist
+# first.
+obj/test/util-archive.exe: obj/bin/pax.exe obj/bin/file.exe obj/bin/ar.exe $(SH_EXE)
+
 # test/delayall.c and its plugin DLL: proof that an *unmodified* program
 # (plain extern, ordinary call, no ntlibc-specific macro at the call
 # site) gets $ORIGIN delay loading through -Wl,--delay-all and

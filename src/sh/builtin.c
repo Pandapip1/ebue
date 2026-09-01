@@ -560,6 +560,37 @@ static int bi_grep(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* Tier 4 continued: pax(1p), ar(1p), file(1p) -- archive/content-format
+ * utilities.  Each also exists as a real standalone obj/bin/<name>.exe
+ * (src/util/pax.c, src/util/ar.c, src/util/util_file.c -- the last
+ * named to dodge an ar-member-name collision with this library's own
+ * src/stdio/file.c, see src/internal/util.h's own comment), declared
+ * in src/internal/util.h, and stays registered here too so a script
+ * run before PATH lookup or __spawn() can be trusted still has them.
+ * None of these three is a 2.14 special built-in and none has any
+ * effect on the shell execution environment itself (2.12's list), so
+ * `env_effect` is 0 for all three, same as every other row below. */
+static int bi_pax(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_pax(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_pax_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_ar(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_ar(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_ar_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_file(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_file(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_file_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* XCU 2.14: "exit [n] -- ... shall cause the shell to exit with the
  * exit status specified by the unsigned decimal integer n.  If n is
  * specified, but its value is not between 0 and 255 inclusively, the
@@ -939,6 +970,9 @@ static const struct sh_builtin builtins[] = {
 	{ "patch", 0, 0, bi_patch },
 	{ "sed",   0, 0, bi_sed },
 	{ "grep",  0, 0, bi_grep },
+	{ "pax",  0, 0, bi_pax },
+	{ "ar",   0, 0, bi_ar },
+	{ "file", 0, 0, bi_file },
 	{ 0, 0, 0, 0 }
 };
 

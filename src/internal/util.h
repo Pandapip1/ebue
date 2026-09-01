@@ -273,6 +273,25 @@ int __util_sed_main(int argc, char **argv) __attribute__((nonnull(2)));
  * same way twice. */
 int __util_grep_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* Tier 4 continued: real archive/content-format parsers, rather than
+ * line/field-oriented text tools (XCU pax(1p), ar(1p), file(1p)).
+ * Each has its whole logic in src/util/<name>.c EXCEPT file(1p),
+ * whose implementation is src/util/util_file.c -- not src/util/file.c
+ * -- specifically to avoid colliding with this library's own,
+ * unrelated src/stdio/file.c: tcc's `-ar` archiver (this project's own
+ * $(AR)) truncates every archive member to its basename, so two
+ * different file.c anywhere under src/ would become the same
+ * "file.o" member in lib/libc.a (see this header's own comment above,
+ * and src/util/util_file.c's, for the full story).  pax.c and ar.c
+ * have no such collision (checked with `find src -name 'pax.c'`/
+ * `find src -name 'ar.c'` before adding them).  None of the three is
+ * __pure__: pax and ar both do real archive/filesystem I/O by design,
+ * and file(1p) at minimum stat()s (and, for a regular file, opens and
+ * reads a peek of) every operand. */
+int __util_ar_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_file_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_pax_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 /* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
  * src/util/rm.c -----------------------------------------------------
  *
