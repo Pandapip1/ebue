@@ -12,7 +12,6 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <ctype.h>
-#include <string.h>
 #include <errno.h>
 #include <features.h>
 
@@ -33,9 +32,8 @@ static int parse(const char *nptr, const char **end, int base, int *neg, uintmax
     __attribute__((nonnull(1, 2, 4, 5)));
 static int parse(const char *nptr, const char **end, int base, int *neg, uintmax_t *out)
 {
-	const char *s = nptr, *start;
+	const char *s = nptr;
 	uintmax_t v = 0, cutoff;
-	size_t chars_left;
 	int any = 0, ovf = 0, cutlim, d;
 	unsigned char c;
 
@@ -51,14 +49,9 @@ static int parse(const char *nptr, const char **end, int base, int *neg, uintmax
 		if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && isxdigit((unsigned char)s[2])) s += 2;
 	}
 	if (base < 2 || base > 36) { errno = EINVAL; *end = nptr; *out = 0; return 0; }
-	start = s;
 	cutoff = UINTMAX_MAX / (unsigned)base;
 	cutlim = (int)(UINTMAX_MAX % (unsigned)base);
-	/* Include the terminating NUL in the exact readable extent: every
-	 * successful digit consumes one byte, and the first non-digit (at
-	 * latest that NUL) leaves the loop without consuming it. */
-	chars_left = strlen(s) + 1;
-	for (; chars_left > 0; s++, chars_left--) {
+	for (; *s; s++) {
 		c = (unsigned char)*s;
 		if (c >= '0' && c <= '9') d = c - '0';
 		else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
@@ -70,7 +63,6 @@ static int parse(const char *nptr, const char **end, int base, int *neg, uintmax
 		if (v > cutoff || (v == cutoff && d > cutlim)) { ovf = 1; continue; }
 		v = v * (unsigned)base + (unsigned)d;
 	}
-	(void)start;
 	*end = any ? s : nptr;
 	*out = ovf ? UINTMAX_MAX : v;
 	return ovf;

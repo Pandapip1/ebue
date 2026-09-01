@@ -31,6 +31,7 @@
 #include "libc.h"
 #include "ownership_stubs.h"
 
+static int issep(char c) __attribute__((pure));
 static int issep(char c) { return c == '/' || c == '\\'; }
 
 static int component(const char **pp, const char **start) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles

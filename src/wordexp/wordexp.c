@@ -221,6 +221,7 @@ static int is_split_char(char c)
 	return strchr(ifs, c) != 0;
 }
 static int is_namestart(char c) { return isalpha((unsigned char)c) || c == '_'; }
+static int is_namechar(char c) __attribute__((pure));
 static int is_namechar(char c) { return isalnum((unsigned char)c) || c == '_'; }
 
 static int fbuf_push_long(struct fbuf *b, long v);

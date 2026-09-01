@@ -171,6 +171,7 @@ static void skip_ws(struct arith *a)
 }
 
 static int is_namestart(char c) { return isalpha((unsigned char)c) || c == '_'; }
+static int is_namechar(char c) __attribute__((pure));
 static int is_namechar(char c) { return isalnum((unsigned char)c) || c == '_'; }
 
 /* Parses a NAME at *pp (namestart already confirmed) into buf (must be
