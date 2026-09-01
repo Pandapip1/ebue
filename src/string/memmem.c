@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <string.h>
+#include "ownership_stubs.h"
 
 void *memmem(const void *h0, size_t k, const void *n0, size_t l)
 {
@@ -15,7 +16,11 @@ void *memmem(const void *h0, size_t k, const void *n0, size_t l)
 	i = 0;
 	while (remaining > 0) {
 		remaining--;
-		if (h[i] == *n && !memcmp(h+i+1, n+1, l-1)) return (void *)(h+i);
+		if (h[i] == *n) {
+			__ownership_readable_span(h + i + 1, l - 1);
+			__ownership_readable_span(n + 1, l - 1);
+			if (!memcmp(h + i + 1, n + 1, l - 1)) return (void *)(h + i);
+		}
 		i++;
 	}
 	return 0;

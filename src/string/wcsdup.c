@@ -16,6 +16,7 @@
 #include <wchar.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ownership_stubs.h"
 
 withtok(heap_allocated)
 wchar_t *wcsdup(const wchar_t *s)
@@ -23,5 +24,7 @@ wchar_t *wcsdup(const wchar_t *s)
 	size_t n = (wcslen(s) + 1) * sizeof(wchar_t);
 	wchar_t *d = malloc(n);
 	if (!d) return 0;
+	__ownership_writable_span(d, n);
+	__ownership_readable_span(s, n);
 	return memcpy(d, s, n);
 }

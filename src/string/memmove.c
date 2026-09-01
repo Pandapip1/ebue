@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <features.h>
+#include "ownership_stubs.h"
 
 __wraps void *memmove(void *dest withtok(writable_span(n)),
 	const void *src withtok(readable_span(n)), size_t n) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
@@ -16,7 +17,12 @@ __wraps void *memmove(void *dest withtok(writable_span(n)),
 	 * relative position of s and d, not just d < s.  Not UB, and not
 	 * worth restating byte-range-overlap logic just to dodge a check
 	 * that exists to police unmarked wraparound, not this one. */
-	if ((uintptr_t)s - (uintptr_t)d - n <= -2*n) return memcpy(d, s, n);
+	if ((uintptr_t)s - (uintptr_t)d - n <= -2*n) {
+		__ownership_writable_span(d, n);
+		__ownership_readable_span(s, n);
+		__ownership_disjoint_span(d, s, n);
+		return memcpy(d, s, n);
+	}
 	/* Copy direction is a flat-address-space question, the same one the
 	 * overlap test above already answers through uintptr_t rather than
 	 * through relational pointer comparison: dest and src are two
