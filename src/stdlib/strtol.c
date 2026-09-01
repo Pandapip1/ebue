@@ -12,6 +12,7 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <ctype.h>
+#include <string.h>
 #include <errno.h>
 #include <features.h>
 
@@ -34,6 +35,7 @@ static int parse(const char *nptr, const char **end, int base, int *neg, uintmax
 {
 	const char *s = nptr, *start;
 	uintmax_t v = 0, cutoff;
+	size_t chars_left;
 	int any = 0, ovf = 0, cutlim, d;
 	unsigned char c;
 
@@ -52,7 +54,11 @@ static int parse(const char *nptr, const char **end, int base, int *neg, uintmax
 	start = s;
 	cutoff = UINTMAX_MAX / (unsigned)base;
 	cutlim = (int)(UINTMAX_MAX % (unsigned)base);
-	for (;; s++) {
+	/* Include the terminating NUL in the exact readable extent: every
+	 * successful digit consumes one byte, and the first non-digit (at
+	 * latest that NUL) leaves the loop without consuming it. */
+	chars_left = strlen(s) + 1;
+	for (; chars_left > 0; s++, chars_left--) {
 		c = (unsigned char)*s;
 		if (c >= '0' && c <= '9') d = c - '0';
 		else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
