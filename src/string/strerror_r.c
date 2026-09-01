@@ -11,11 +11,11 @@ int strerror_r(int err, char *buf, size_t buflen)
 	size_t l = strlen(msg);
 	if (l >= buflen) {
 		if (buflen) {
-			memcpy(buf, msg, buflen-1);
+			memmove(buf, msg, buflen-1);
 			buf[buflen-1] = 0;
 		}
 		return ERANGE;
 	}
-	memcpy(buf, msg, l+1);
+	memmove(buf, msg, l+1);
 	return 0;
 }

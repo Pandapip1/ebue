@@ -18,10 +18,10 @@ int gethostname(char *name, size_t len)
 	if (!h) h = "localhost";
 	n = strlen(h);
 	if (n >= len) {
-		if (len) memcpy(name, h, len);
+		if (len) memmove(name, h, len);
 		return 0;
 	}
-	memcpy(name, h, n + 1);
+	memmove(name, h, n + 1);
 	return 0;
 }
 
