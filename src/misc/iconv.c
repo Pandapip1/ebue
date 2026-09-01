@@ -265,7 +265,9 @@ size_t iconv(iconv_t cd, char **restrict inbuf, size_t *restrict inbytesleft,
 	 * all of ol -- deriving ol from op instead would truncate that. */
 	ol = op && outbytesleft ? *outbytesleft : 0;
 
-	while (il) {
+	/* Every successful conversion consumes at least one input byte. */
+	for (size_t steps_left = il; il > 0 && steps_left > 0;
+	     steps_left--) {
 		uint32_t cp;
 		size_t used, need;
 		int err = 0;
