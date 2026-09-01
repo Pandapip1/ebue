@@ -49,15 +49,17 @@
 static int rmdir_ascend(const char *dir)
 {
 	char buf[PATH_MAX];
-	size_t n = strlen(dir);
+	size_t n = strnlen(dir, sizeof buf);
 
 	if (n >= sizeof buf) return 0; /* nothing sensible to ascend from */
-	memcpy(buf, dir, n + 1);
+	memcpy(buf, dir, n);
+	buf[n] = 0;
 
 	for (;;) {
 		char prev[PATH_MAX];
 		char *parent;
-		size_t pn = strlen(buf);
+		size_t pn = strnlen(buf, sizeof buf);
+		if (pn == sizeof buf) return 0;
 		memcpy(prev, buf, pn + 1);
 
 		parent = dirname(buf); /* mutates buf in place; parent aliases it */
