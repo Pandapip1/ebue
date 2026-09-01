@@ -17,8 +17,15 @@
  * fuzz/linux_pilot_test_dlopen_lib.c is the target .so this dlopen()s
  * (see that file's own banner for exactly which relocation types this
  * exercises and why). fuzz/linux_pilot_test_dlopen_tlslib.c is a
- * second, deliberately TLS-bearing .so proving this pass's documented
- * PT_TLS refusal actually fires.
+ * second, deliberately TLS-bearing .so -- it used to prove this pass's
+ * documented PT_TLS REFUSAL fired; now that per-object TLS is
+ * implemented for aarch64 (see plat_dlfcn.c's own "TLS / per-library
+ * thread descriptors" banner), it instead proves the real thing works:
+ * a dlopen()'d object's own __thread variable is readable/writable, and
+ * two independent dlopen() instances of the SAME .so get two genuinely
+ * separate TLS blocks (own TD per library, not aliased), exactly like
+ * the non-TLS namespace-isolation proof further down already does for
+ * ordinary data.
  *
  * host_provided_value() below is what fuzz/linux_pilot_test_dlopen_
  * lib.c's use_host_value() calls through an unresolved-at-link-time
@@ -98,11 +105,35 @@ int main(void)
 	CHECK(e != NULL && strstr(e, "no-such-file.so") != NULL);
 	CHECK(dlerror() == NULL); /* single-shot: NULL immediately after */
 
-	/* ---- PT_TLS: documented, disclosed refusal, not silent mis-load */
-	bad = dlopen("./linux_pilot_test_dlopen_tlslib.so", RTLD_NOW);
-	CHECK(bad == NULL);
-	e = dlerror();
-	CHECK(e != NULL && strstr(e, "PT_TLS") != NULL);
+	/* ---- PT_TLS: real per-object TLS, not a refusal any more ------ */
+	{
+		void *t1, *t2;
+		fnptr0 bump1, bump2;
+
+		t1 = dlopen("./linux_pilot_test_dlopen_tlslib.so", RTLD_NOW);
+		if (!t1) printf("dlopen tlslib failed: %s\n", dlerror());
+		CHECK(t1 != NULL);
+		bump1 = (fnptr0)dlsym(t1, "bump_tls_counter");
+		CHECK(bump1 != NULL);
+		CHECK(bump1 && bump1() == 1);
+		CHECK(bump1 && bump1() == 2);
+		CHECK(bump1 && bump1() == 3);
+
+		/* A second, independent dlopen() of the byte-identical .so gets
+		 * its OWN TLS block (own TD per library -- see plat_dlfcn.c's
+		 * own TLS banner), not a second reference to the first's: its
+		 * counter starts back at 1 even though t1's is already at 3. */
+		t2 = dlopen("./linux_pilot_test_dlopen_tlslib.so", RTLD_NOW);
+		CHECK(t2 != NULL && t2 != t1);
+		bump2 = (fnptr0)dlsym(t2, "bump_tls_counter");
+		CHECK(bump2 != NULL);
+		CHECK(bump2 && bump2() == 1);
+		/* t1's own counter is untouched by t2's calls. */
+		CHECK(bump1 && bump1() == 4);
+
+		CHECK(dlclose(t1) == 0);
+		CHECK(dlclose(t2) == 0);
+	}
 
 	if (fails) {
 		printf("%d CHECK(S) FAILED\n", fails);
