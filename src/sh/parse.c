@@ -46,6 +46,7 @@
 #include <limits.h>
 #include "libc.h"
 #include "sh.h"
+#include "ownership_stubs.h"
 
 /* __sh_free_words()/__sh_free_redirs() live in free.c alongside
  * __sh_list_free() (which needs the same logic to free a whole parsed
@@ -58,11 +59,16 @@ static int gbuf_push(struct gbuf *b, char c) __attribute__((nonnull(1)));
 static int gbuf_push(struct gbuf *b, char c)
 {
 	if (b->n == b->cap) {
+		char *old = b->d;
 		size_t nc = b->cap ? b->cap * 2 : 32;
 		char *nd = __malloc(nc);
 		if (!nd) return -1;
-		if (b->d) memcpy(nd, b->d, b->n);
-		__free(b->d);
+		if (old) {
+			__ownership_writable_span(nd, b->n);
+			__ownership_readable_span(old, b->n);
+			memcpy(nd, old, b->n);
+		}
+		__free(old);
 		b->d = nd;
 		b->cap = nc;
 	}
@@ -86,7 +92,12 @@ static int gbuf_push_n(struct gbuf *b, const char *s, size_t n)
 static char *xstrndup(const char *s, size_t n)
 {
 	char *p = __malloc(n + 1);
-	if (p) { memcpy(p, s, n); p[n] = 0; }
+	if (p) {
+		__ownership_writable_span(p, n);
+		__ownership_readable_span(s, n);
+		memcpy(p, s, n);
+		p[n] = 0;
+	}
 	return p;
 }
 
@@ -94,7 +105,11 @@ static char *xstrdup(const char *s)
 {
 	size_t n = strlen(s) + 1;
 	char *p = __malloc(n);
-	if (p) memcpy(p, s, n);
+	if (p) {
+		__ownership_writable_span(p, n);
+		__ownership_readable_span(s, n);
+		memcpy(p, s, n);
+	}
 	return p;
 }
 
@@ -255,6 +270,8 @@ static void format_parse_error(char *dst, size_t size, const char *fmt, va_list 
 	int n = vsnprintf(dst, size, fmt, ap);
 	if (n < 0 && size) {
 		size_t copy = sizeof fallback < size ? sizeof fallback : size;
+		__ownership_writable_span(dst, copy - 1);
+		__ownership_readable_span(fallback, copy - 1);
 		memcpy(dst, fallback, copy - 1);
 		dst[copy - 1] = 0;
 	}
@@ -341,9 +358,13 @@ static int drain_heredocs(struct lexer *lx)
 			linelen = (size_t)(eol - line);
 			cmp = line; cmplen = linelen;
 			if (h->dash) while (cmplen && *cmp == '\t') { cmp++; cmplen--; }
-			if (cmplen == litlen && memcmp(cmp, lit, litlen) == 0) {
-				lx->p = (*eol == '\n') ? eol + 1 : eol;
-				break;
+			if (cmplen == litlen) {
+				__ownership_readable_span(cmp, litlen);
+				__ownership_readable_span(lit, litlen);
+				if (memcmp(cmp, lit, litlen) == 0) {
+					lx->p = (*eol == '\n') ? eol + 1 : eol;
+					break;
+				}
 			}
 			if (!*eol) {
 				lex_errf(lx, "unexpected EOF while looking for matching `%s'", lit);
@@ -1203,7 +1224,11 @@ static int parse_pipeline(struct parser *p, struct sh_pipeline *out)
 				__free(cmd);
 				goto fail;
 			}
-			if (arr) memcpy(na, arr, n * sizeof *na);
+			if (arr) {
+				__ownership_writable_span(na, n * sizeof *na);
+				__ownership_readable_span(arr, n * sizeof *na);
+				memcpy(na, arr, n * sizeof *na);
+			}
 			__free(arr);
 			arr = na; cap = nc;
 		}
@@ -1306,6 +1331,8 @@ struct sh_list *__sh_parse(const char *src, char *errbuf, size_t errbuflen)
 		if (errbuf && errbuflen) {
 			size_t n = strnlen(p.lx.errbuf, sizeof p.lx.errbuf);
 			if (n >= errbuflen) n = errbuflen - 1;
+			__ownership_writable_span(errbuf, n);
+			__ownership_readable_span(p.lx.errbuf, n);
 			memcpy(errbuf, p.lx.errbuf, n);
 			errbuf[n] = 0;
 		}
