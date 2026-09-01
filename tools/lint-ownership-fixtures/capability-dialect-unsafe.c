@@ -30,6 +30,27 @@ void terminated_suffix_does_not_prove_prefix(void)
 	dialect_use_string(text); /* ownership-expect: dialect-string-exact-region */
 }
 
+void parameterized_token_length_mismatch(void)
+{
+	char text[8];
+	dialect_mark_span(text, 4);
+	dialect_use_span(text, 8); /* ownership-expect: dialect-span-length */
+}
+
+void relational_token_pointer_mismatch(void)
+{
+	char left[8], first[8], second[8];
+	dialect_mark_disjoint(left, first, sizeof left);
+	dialect_use_disjoint(left, second, sizeof left); /* ownership-expect: dialect-span-relation */
+}
+
+void dialect_bad_clear_span(
+	void *data drop(dialect_span(length)), size_t length)
+{
+	(void)data;
+	(void)length;
+} /* ownership-expect: dialect-parameterized-drop-proof */
+
 void dialect_bad_clear_string(char *text drop(dialect_terminated))
 {
 	(void)text;

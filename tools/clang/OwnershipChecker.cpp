@@ -1205,6 +1205,7 @@ struct CapabilityProtocol {
   CapabilityOperation Operation;
   const IdentifierInfo *Family;
   unsigned Argument;
+  llvm::SmallVector<unsigned, 2> Parameters;
 };
 
 class OwnershipContractChecker : public Checker<check::ASTDecl<FunctionDecl>> {
@@ -1281,13 +1282,94 @@ class CapabilityTokenChecker
                      check::EndFunction> {
   mutable std::unique_ptr<BugType> BT;
 
-  static const IdentifierInfo *parameterAnnotation(const FunctionDecl *Function,
-                                                   const AnnotateAttr *Attr,
-                                                   StringRef Prefix) {
+  static bool parameterAnnotation(
+      const FunctionDecl *Function, const AnnotateAttr *Attr, StringRef Prefix,
+      const IdentifierInfo *&Family,
+      llvm::SmallVectorImpl<unsigned> &Parameters) {
     StringRef Text = Attr->getAnnotation();
     if (!Text.consume_front(Prefix) || Text.empty() || Text.contains(':'))
-      return nullptr;
-    return &Function->getASTContext().Idents.get(Text);
+      return false;
+    StringRef FamilyName = Text;
+    StringRef Arguments;
+    size_t Open = Text.find('(');
+    if (Open != StringRef::npos) {
+      if (!Text.ends_with(")"))
+        return false;
+      FamilyName = Text.take_front(Open).trim();
+      Arguments = Text.slice(Open + 1, Text.size() - 1);
+    }
+    if (FamilyName.empty())
+      return false;
+    Family = &Function->getASTContext().Idents.get(FamilyName);
+    while (!Arguments.empty()) {
+      auto [Name, Rest] = Arguments.split(',');
+      Name = Name.trim();
+      if (Name.empty())
+        return false;
+      bool Found = false;
+      for (unsigned Index = 0; Index < Function->getNumParams(); ++Index)
+        if (Function->getParamDecl(Index)->getName() == Name) {
+          Parameters.push_back(Index);
+          Found = true;
+          break;
+        }
+      if (!Found)
+        return false;
+      Arguments = Rest;
+    }
+    return true;
+  }
+
+  static const IdentifierInfo *instantiatedFamily(
+      const CapabilityProtocol &Protocol, ArrayRef<SVal> Values,
+      ASTContext &Context) {
+    if (Values.empty())
+      return Protocol.Family;
+    std::string Name = Protocol.Family->getName().str();
+    Name.push_back('(');
+    for (unsigned Index = 0; Index < Values.size(); ++Index) {
+      if (Index)
+        Name.push_back(',');
+      const SVal &Value = Values[Index];
+      Name += std::to_string(static_cast<unsigned>(Value.getKind()));
+      Name.push_back(':');
+      if (const MemRegion *Region = Value.getAsRegion())
+        Name += std::to_string(reinterpret_cast<uintptr_t>(Region));
+      else if (SymbolRef Symbol = Value.getAsSymbol(true))
+        Name += std::to_string(reinterpret_cast<uintptr_t>(Symbol));
+      else {
+        llvm::FoldingSetNodeID Identity;
+        Value.Profile(Identity);
+        Name += std::to_string(Identity.ComputeHash());
+      }
+    }
+    Name.push_back(')');
+    return &Context.Idents.get(Name);
+  }
+
+  static const IdentifierInfo *callFamily(const CapabilityProtocol &Protocol,
+                                          const CallEvent &Call,
+                                          CheckerContext &C) {
+    llvm::SmallVector<SVal, 2> Values;
+    for (unsigned Parameter : Protocol.Parameters) {
+      if (Parameter >= Call.getNumArgs())
+        return Protocol.Family;
+      Values.push_back(Call.getArgSVal(Parameter));
+    }
+    return instantiatedFamily(Protocol, Values, C.getASTContext());
+  }
+
+  static const IdentifierInfo *functionFamily(
+      const CapabilityProtocol &Protocol, const FunctionDecl *Function,
+      ProgramStateRef State, const LocationContext *LC) {
+    llvm::SmallVector<SVal, 2> Values;
+    for (unsigned Parameter : Protocol.Parameters) {
+      if (Parameter >= Function->getNumParams())
+        return Protocol.Family;
+      const ParmVarDecl *Declaration = Function->getParamDecl(Parameter);
+      Values.push_back(State->getSVal(State->getLValue(Declaration, LC)));
+    }
+    return instantiatedFamily(Protocol, Values, Function->getASTContext());
   }
 
   static const ValueDecl *declarationFor(const Expr *Expression) {
@@ -1338,22 +1420,28 @@ class CapabilityTokenChecker
     for (const ParmVarDecl *Parameter : Function->parameters()) {
       for (const AnnotateAttr *Attr : Parameter->specific_attrs<AnnotateAttr>())
         for (const OperationAnnotation &Candidate : Operations)
-          if (const IdentifierInfo *Family =
-                  parameterAnnotation(Function, Attr, Candidate.Prefix)) {
-            if ((Candidate.Operation == CapabilityOperation::Require ||
-                 Candidate.Operation == CapabilityOperation::Consume) &&
-                hasDialectQualifier(
-                    dialectToken(Function->getASTContext(), Family->getName()),
-                    "qual:dynamic_storage"))
-              continue;
-            CapabilityOperation Operation = Candidate.Operation;
-            if (Candidate.Prefix == "grant:") {
-              std::optional<CapabilityKind> Kind = dialectTokenKind(
-                  Function->getASTContext(), Family->getName());
-              if (Kind && *Kind == CapabilityKind::Duplicable)
-                Operation = CapabilityOperation::GrantDuplicable;
+        {
+            const IdentifierInfo *Family = nullptr;
+            llvm::SmallVector<unsigned, 2> Parameters;
+            if (parameterAnnotation(Function, Attr, Candidate.Prefix, Family,
+                                    Parameters)) {
+              if ((Candidate.Operation == CapabilityOperation::Require ||
+                   Candidate.Operation == CapabilityOperation::Consume) &&
+                  hasDialectQualifier(
+                      dialectToken(Function->getASTContext(),
+                                   Family->getName()),
+                      "qual:dynamic_storage"))
+                continue;
+              CapabilityOperation Operation = Candidate.Operation;
+              if (Candidate.Prefix == "grant:") {
+                std::optional<CapabilityKind> Kind = dialectTokenKind(
+                    Function->getASTContext(), Family->getName());
+                if (Kind && *Kind == CapabilityKind::Duplicable)
+                  Operation = CapabilityOperation::GrantDuplicable;
+              }
+              Protocols.push_back(
+                  {Operation, Family, Argument, std::move(Parameters)});
             }
-            Protocols.push_back({Operation, Family, Argument});
           }
       ++Argument;
     }
@@ -1365,6 +1453,7 @@ class CapabilityTokenChecker
     return llvm::any_of(Protocols, [&](const CapabilityProtocol &Input) {
       return Input.Argument == Output.Argument &&
              Input.Family == Output.Family &&
+             Input.Parameters == Output.Parameters &&
              (Input.Operation == CapabilityOperation::Require ||
               Input.Operation == CapabilityOperation::Consume ||
               Input.Operation == CapabilityOperation::ConsumeAny ||
@@ -1446,10 +1535,11 @@ class CapabilityTokenChecker
       if (Protocol.Argument >= Call.getNumArgs())
         continue;
       SVal Value = Call.getArgSVal(Protocol.Argument);
+      const IdentifierInfo *StateFamily = callFamily(Protocol, Call, C);
       CapabilityPresence Existing = capabilityFor(
           State, carrierRegion(Call.getArgExpr(Protocol.Argument), C), Value,
-          Protocol.Family);
-      if (!Existing.Known && !Existing.Kind)
+          StateFamily);
+      if (Protocol.Parameters.empty() && !Existing.Known && !Existing.Kind)
         Existing.Kind =
             declaredTokenFor(Call.getArgExpr(Protocol.Argument),
                              Protocol.Family);
@@ -1503,8 +1593,9 @@ class CapabilityTokenChecker
             Candidate.Argument == Alternative.Argument) {
           CapabilityPresence Existing = capabilityFor(
               State, carrierRegion(Call.getArgExpr(Candidate.Argument), C),
-              Call.getArgSVal(Candidate.Argument), Candidate.Family);
-          if (!Existing.Known && !Existing.Kind)
+              Call.getArgSVal(Candidate.Argument),
+              callFamily(Candidate, Call, C));
+          if (Candidate.Parameters.empty() && !Existing.Known && !Existing.Kind)
             Existing.Kind =
                 declaredTokenFor(Call.getArgExpr(Candidate.Argument),
                                  Candidate.Family);
@@ -1547,9 +1638,10 @@ class CapabilityTokenChecker
           SVal Value = Call.getArgSVal(Candidate.Argument);
           const MemRegion *Carrier =
               carrierRegion(Call.getArgExpr(Candidate.Argument), C);
-          if (capabilityFor(State, Carrier, Value, Candidate.Family).Kind) {
+          const IdentifierInfo *StateFamily = callFamily(Candidate, Call, C);
+          if (capabilityFor(State, Carrier, Value, StateFamily).Kind) {
             State =
-                removeOperationToken(State, Carrier, Value, Candidate.Family);
+                removeOperationToken(State, Carrier, Value, StateFamily);
             break;
           }
         }
@@ -1560,24 +1652,25 @@ class CapabilityTokenChecker
       SVal Value = Call.getArgSVal(Protocol.Argument);
       const MemRegion *Carrier =
           carrierRegion(Call.getArgExpr(Protocol.Argument), C);
+      const IdentifierInfo *StateFamily = callFamily(Protocol, Call, C);
       switch (Protocol.Operation) {
       case CapabilityOperation::Require:
       case CapabilityOperation::RequireAbsent:
         break;
       case CapabilityOperation::Consume:
-        State = removeOperationToken(State, Carrier, Value, Protocol.Family);
+        State = removeOperationToken(State, Carrier, Value, StateFamily);
         break;
       case CapabilityOperation::ConsumeAny:
         break;
       case CapabilityOperation::Drop:
-        State = removeOperationToken(State, Carrier, Value, Protocol.Family);
+        State = removeOperationToken(State, Carrier, Value, StateFamily);
         break;
       case CapabilityOperation::GrantLinear:
-        State = setOperationToken(State, Carrier, Value, Protocol.Family,
+        State = setOperationToken(State, Carrier, Value, StateFamily,
                                   CapabilityKind::Linear);
         break;
       case CapabilityOperation::GrantDuplicable:
-        State = setOperationToken(State, Carrier, Value, Protocol.Family,
+        State = setOperationToken(State, Carrier, Value, StateFamily,
                                   CapabilityKind::Duplicable);
         break;
       }
@@ -1599,6 +1692,8 @@ public:
       const ParmVarDecl *Parameter = Function->getParamDecl(Protocol.Argument);
       SVal Value = State->getSVal(State->getLValue(Parameter, LC));
       const MemRegion *Carrier = State->getLValue(Parameter, LC).getAsRegion();
+      const IdentifierInfo *StateFamily =
+          functionFamily(Protocol, Function, State, LC);
       if (Protocol.Operation == CapabilityOperation::Require ||
           Protocol.Operation == CapabilityOperation::Consume ||
           Protocol.Operation == CapabilityOperation::Drop) {
@@ -1606,13 +1701,13 @@ public:
                                   Function->getASTContext(),
                                   Protocol.Family->getName())
                                   .value_or(CapabilityKind::Linear);
-        State = setOperationToken(State, Carrier, Value, Protocol.Family,
+        State = setOperationToken(State, Carrier, Value, StateFamily,
                                   Kind);
         Changed = true;
       } else if ((Protocol.Operation == CapabilityOperation::GrantLinear ||
                   Protocol.Operation == CapabilityOperation::GrantDuplicable) &&
                  !hasInputProtocol(Protocols, Protocol)) {
-        State = removeOperationToken(State, Carrier, Value, Protocol.Family);
+        State = removeOperationToken(State, Carrier, Value, StateFamily);
         Changed = true;
       }
     }
@@ -1639,7 +1734,8 @@ public:
                                     Candidate.Family->getName())
                                     .value_or(CapabilityKind::Linear);
           Expanded.push_back(setOperationToken(
-              Alternative, Carrier, Value, Candidate.Family, Kind));
+              Alternative, Carrier, Value,
+              functionFamily(Candidate, Function, Alternative, LC), Kind));
         }
       Alternatives = std::move(Expanded);
       Changed = true;
@@ -1709,12 +1805,15 @@ public:
       const ParmVarDecl *Parameter = Function->getParamDecl(Protocol.Argument);
       Loc Location = State->getLValue(Parameter, LC);
       SVal Value = State->getSVal(Location);
+      const IdentifierInfo *StateFamily =
+          functionFamily(Protocol, Function, State, LC);
       CapabilityPresence Present =
-          capabilityFor(State, Location.getAsRegion(), Value, Protocol.Family);
+          capabilityFor(State, Location.getAsRegion(), Value, StateFamily);
       bool Regranted = llvm::any_of(
           protocolsFor(Function), [&](const CapabilityProtocol &Output) {
             return Output.Argument == Protocol.Argument &&
                    Output.Family == Protocol.Family &&
+                   Output.Parameters == Protocol.Parameters &&
                    (Output.Operation == CapabilityOperation::GrantLinear ||
                     Output.Operation ==
                         CapabilityOperation::GrantDuplicable);

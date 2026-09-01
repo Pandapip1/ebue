@@ -3,9 +3,13 @@
 
 #include "../../include/ownership.h"
 
+typedef __SIZE_TYPE__ size_t;
+
 tokdef dialect_mutex_unlocked;
 tokdef dialect_mutex_locked l_unlimited;
 tokdef dialect_terminated l_unlimited implicit_drop string_literal;
+tokdef dialect_span l_unlimited implicit_drop;
+tokdef dialect_disjoint l_unlimited implicit_drop;
 
 typedef struct { void *opaque[8]; } dialect_mutex_t;
 
@@ -28,3 +32,17 @@ void dialect_use_string(const char *text withtok(dialect_terminated));
 void dialect_clear_string(char *text drop(dialect_terminated));
 void dialect_bad_clear_string(char *text drop(dialect_terminated));
 char *dialect_copy_string(char *text grant(dialect_terminated));
+void dialect_mark_span(void *data grant(dialect_span(length)), size_t length);
+void dialect_use_span(const void *data withtok(dialect_span(length)),
+	size_t length);
+void dialect_invalidate_span(void *data drop(dialect_span(length)),
+	size_t length);
+void dialect_clear_span(void *data drop(dialect_span(length)), size_t length);
+void dialect_bad_clear_span(void *data drop(dialect_span(length)),
+	size_t length);
+void dialect_mark_disjoint(
+	void *left grant(dialect_disjoint(right, length)), const void *right,
+	size_t length);
+void dialect_use_disjoint(
+	const void *left withtok(dialect_disjoint(right, length)),
+	const void *right, size_t length);

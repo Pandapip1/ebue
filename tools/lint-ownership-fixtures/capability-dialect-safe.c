@@ -48,3 +48,17 @@ void pointer_success_grants_evidence(void)
 		dialect_use_string(result);
 	}
 }
+
+void parameterized_token_instances_match(void)
+{
+	char left[8], right[8];
+	dialect_mark_span(left, sizeof left);
+	dialect_use_span(left, sizeof left);
+	dialect_mark_disjoint(left, right, sizeof left);
+	dialect_use_disjoint(left, right, sizeof left);
+}
+
+void dialect_clear_span(void *data drop(dialect_span(length)), size_t length)
+{
+	dialect_invalidate_span(data, length);
+}
