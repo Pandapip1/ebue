@@ -97,6 +97,7 @@
 #include <string.h>
 #include <errno.h>
 #include "libc.h"
+#include "ownership_stubs.h"
 #ifdef NTLIBC_USE_KERNEL32
 #include "kernel32.h"
 #endif
@@ -200,6 +201,8 @@ int tcgetattr(int fd, struct termios *t)
 	t->c_oflag = shadow.oflag;
 	t->c_cflag = shadow.cflag;
 	t->c_lflag = shadow.lflag;
+	__ownership_writable_span(t->c_cc, sizeof shadow.cc);
+	__ownership_readable_span(shadow.cc, sizeof shadow.cc);
 	memcpy(t->c_cc, shadow.cc, sizeof shadow.cc);
 	t->c_ispeed = shadow.ispeed;
 	t->c_ospeed = shadow.ospeed;
@@ -278,6 +281,8 @@ int tcsetattr(int fd, int act, const struct termios *t) // NOLINT(bugprone-easil
 	shadow.oflag = t->c_oflag;
 	shadow.cflag = t->c_cflag;
 	shadow.lflag = t->c_lflag;
+	__ownership_writable_span(shadow.cc, sizeof shadow.cc);
+	__ownership_readable_span(t->c_cc, sizeof shadow.cc);
 	memcpy(shadow.cc, t->c_cc, sizeof shadow.cc);
 	shadow.ispeed = t->c_ispeed;
 	shadow.ospeed = t->c_ospeed;
