@@ -15,17 +15,16 @@
 
 static int final_component_is_dot(const char *path)
 {
-	const char *start, *end;
-	size_t n;
+	size_t start, end, n;
 
 	if (!path) return 0;
-	end = path + strlen(path);
-	while (end > path && (end[-1] == '/' || end[-1] == '\\')) end--;
+	end = strlen(path);
+	while (end > 0 && (path[end-1] == '/' || path[end-1] == '\\')) end--;
 	start = end;
-	while (start > path && start[-1] != '/' && start[-1] != '\\') start--;
-	n = (size_t)(end - start);
-	return (n == 1 && start[0] == '.') ||
-	       (n == 2 && start[0] == '.' && start[1] == '.');
+	while (start > 0 && path[start-1] != '/' && path[start-1] != '\\') start--;
+	n = end - start;
+	return (n == 1 && path[start] == '.') ||
+	       (n == 2 && path[start] == '.' && path[start+1] == '.');
 }
 
 int __unlink_at(int dirfd, const char *path, int isdir)
