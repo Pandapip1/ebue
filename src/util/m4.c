@@ -1645,14 +1645,14 @@ int __util_m4_main(int argc, char **argv)
 				if (++i >= argc) { __util_diagf("m4: -D: option requires an argument\n"); m4_free(&st); return 2; }
 				val = argv[i];
 			}
-			eq = strchr(val, '=');
-			namelen = eq ? (size_t)(eq - val) : strlen(val);
+			namelen = strcspn(val, "=");
+			eq = val + namelen;
 			if (!namelen || namelen >= sizeof namebuf) {
 				__util_diagf("m4: -D: %s: invalid name\n", val);
 				m4_free(&st); return 2;
 			}
 			memcpy(namebuf, val, namelen); namebuf[namelen] = 0;
-			define_macro(&st, namebuf, 0, 0, eq ? eq + 1 : "", 0);
+			define_macro(&st, namebuf, 0, 0, *eq ? eq + 1 : "", 0);
 			continue;
 		}
 
