@@ -55,6 +55,8 @@ using DisjointRegionKey = std::pair<const MemRegion *, const MemRegion *>;
 REGISTER_MAP_WITH_PROGRAMSTATE(AssumedDisjointExtent, DisjointRegionKey,
                                DefinedOrUnknownSVal)
 REGISTER_SET_WITH_PROGRAMSTATE(AllocatedBaseRegion, const MemRegion *)
+REGISTER_MAP_WITH_PROGRAMSTATE(AllocatedSpanExtent, const MemRegion *,
+                               DefinedOrUnknownSVal)
 REGISTER_MAP_WITH_PROGRAMSTATE(GrantedSpanProof, const ParmVarDecl *,
                                const ParmVarDecl *)
 using DisjointParameterKey =
@@ -799,8 +801,13 @@ public:
     if (UseAssumedSpans)
       if (const auto *Element =
               dyn_cast_or_null<ElementRegion>(Pointer.getAsRegion()))
-        if (const DefinedOrUnknownSVal *BaseExtent =
-                State->get<AssumedSpanExtent>(Element->getSuperRegion())) {
+        {
+          const DefinedOrUnknownSVal *BaseExtent =
+              State->get<AssumedSpanExtent>(Element->getSuperRegion());
+          if (!BaseExtent)
+            BaseExtent = State->get<AllocatedSpanExtent>(
+                Element->getSuperRegion()->getBaseRegion());
+          if (BaseExtent) {
           SVal ElementBytes = getElementExtent(Element->getElementType(),
                                                C.getSValBuilder());
           SVal Offset = Element->getIndex();
@@ -822,6 +829,7 @@ public:
             if (ExtentProvesLength(Remaining))
               return true;
           }
+        }
         }
     SVal Extent = getDynamicExtentWithOffset(State, Pointer);
     if (Extent.isUnknownOrUndef() || Length.isUnknownOrUndef())
@@ -1467,6 +1475,7 @@ public:
           const MemRegion *Base = Region->getBaseRegion();
           State = setDynamicExtent(State, Base, *DefinedSize,
                                    C.getSValBuilder());
+          State = State->set<AllocatedSpanExtent>(Base, *DefinedSize);
         }
       }
     // See stringLengthSourceSpanProven above: record which pointer

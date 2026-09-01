@@ -317,3 +317,14 @@ void fill_reassociated_allocation(size_t left, size_t right)
 	if (!buffer) return;
 	memset(buffer, 0, right + left);
 }
+
+void fill_checked_allocation_suffix(
+	const char *source withtok(fixture_readable_span(right)),
+	size_t left, size_t right)
+{
+	size_t total = left + right;
+	if (total < left) return;
+	char *buffer = __malloc(total);
+	if (!buffer) return;
+	memcpy(buffer + left, source, right);
+}
