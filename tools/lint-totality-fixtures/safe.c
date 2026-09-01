@@ -93,6 +93,42 @@ unsigned narrow_index_with_explicit_bound(const unsigned char *p,
 	return i;
 }
 
+int pure_byte_predicate(int) __attribute__((pure));
+int const_byte_predicate(int) __attribute__((const));
+
+size_t sentinel_index_through_pure_predicate(const unsigned char *p)
+{
+	size_t i = 0;
+	while (pure_byte_predicate(p[i]))
+		i++;
+	return i;
+}
+
+const unsigned char *sentinel_pointer_through_pure_predicate(
+	const unsigned char *p)
+{
+	while (pure_byte_predicate(*p))
+		p++;
+	return p;
+}
+
+const unsigned char *sentinel_pointer_through_const_predicate(
+	const unsigned char *p)
+{
+	while (const_byte_predicate(*p))
+		p++;
+	return p;
+}
+
+unsigned bounded_index_through_pure_predicate(const unsigned char *p,
+	unsigned n)
+{
+	unsigned i = 0;
+	while (i < n && pure_byte_predicate(p[i]))
+		i++;
+	return i;
+}
+
 unsigned countdown(unsigned n)
 {
 	while (n)

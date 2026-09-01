@@ -31,6 +31,7 @@
 /* Membership test.  Never called with c == 0: wcschr(set, 0) would
  * report a hit on the set's own terminator, which is why every loop
  * below guards on *s before asking. */
+static int inset(const wchar_t *set, wchar_t c) __attribute__((pure));
 static int inset(const wchar_t *set, wchar_t c)
 {
 	for (; *set; set++) if (*set == c) return 1;

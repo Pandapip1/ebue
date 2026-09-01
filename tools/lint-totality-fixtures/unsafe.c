@@ -344,6 +344,75 @@ unsigned narrow_sentinel_call_mutation(unsigned char *p)
 	return i;
 }
 
+int impure_byte_predicate(int);
+int pure_byte_predicate(int) __attribute__((pure));
+
+const unsigned char *sentinel_through_impure_predicate(
+	const unsigned char *p)
+{
+	while (impure_byte_predicate(*p)) { /* totality-expect */
+		p++;
+	}
+	return p;
+}
+
+unsigned pure_predicate_without_object_rank(unsigned i)
+{
+	while (pure_byte_predicate((int)i)) { /* totality-expect */
+		i++;
+	}
+	return i;
+}
+
+unsigned char narrow_sentinel_through_pure_predicate(
+	const unsigned char *p)
+{
+	unsigned char i = 0;
+	while (pure_byte_predicate(p[i])) { /* totality-expect */
+		i++;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ skipping_sentinel_through_pure_predicate(
+	const unsigned char *p)
+{
+	__SIZE_TYPE__ i = 0;
+	while (pure_byte_predicate(p[i])) { /* totality-expect */
+		i += 2;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ pure_argument_resets_rank(const unsigned char *p)
+{
+	__SIZE_TYPE__ i = 0;
+	while (pure_byte_predicate(p[i = 0])) { /* totality-expect */
+		i++;
+	}
+	return i;
+}
+
+const unsigned char *pure_sentinel_rank_reset(const unsigned char *p,
+	const unsigned char *start)
+{
+	while (pure_byte_predicate(*p)) { /* totality-expect */
+		p++;
+		p = start;
+	}
+	return p;
+}
+
+const unsigned char *pure_sentinel_continue_without_progress(
+	const unsigned char *p, int skip)
+{
+	while (pure_byte_predicate(*p)) { /* totality-expect */
+		if (skip) continue;
+		p++;
+	}
+	return p;
+}
+
 unsigned narrow_unsigned_strict_bound(unsigned long n)
 {
 	unsigned char i = 0;

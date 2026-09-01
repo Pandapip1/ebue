@@ -1568,6 +1568,26 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return false;
   }
 
+  static bool containsImpureCall(const Stmt *Statement) {
+    if (!Statement)
+      return false;
+    if (const auto *Call = dyn_cast<CallExpr>(Statement)) {
+      const FunctionDecl *Callee = Call->getDirectCallee();
+      /* A pure/const predicate cannot change a scalar rank, its bound, or
+       * the object reached by a cursor.  Its own execution is covered by
+       * the ordinary call-graph and loop obligations, so it is sound to
+       * use the caller's comparison exactly as if the predicate had been
+       * written inline.  Indirect and unannotated calls remain opaque. */
+      if (!Callee ||
+          (!Callee->hasAttr<PureAttr>() && !Callee->hasAttr<ConstAttr>()))
+        return true;
+    }
+    for (const Stmt *Child : Statement->children())
+      if (containsImpureCall(Child))
+        return true;
+    return false;
+  }
+
   static bool containsStateMutation(const Stmt *Statement) {
     if (!Statement)
       return false;
@@ -3095,7 +3115,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     /* Without an explicit total/pure call summary, a call made while
      * deciding whether to take the backedge can both fail to return and
      * mutate globally reachable rank or bound state. */
-    if (containsCall(Condition))
+    if (containsImpureCall(Condition))
       return "unproved";
     if (ConditionBeforeBody && !Increment &&
         branchCompleteIntervalDescent(Condition, Body))
