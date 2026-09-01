@@ -102,8 +102,8 @@ static int codeset(const char *name, int *out)
 	}
 	norm[n] = 0;
 
-	if (!strcmp(norm, "UTF8")) { *out = CS_UTF8; return 1; }
-	if (!strcmp(norm, "UTF16LE")) { *out = CS_UTF16LE; return 1; }
+	if (n == 4 && !memcmp(norm, "UTF8", 4)) { *out = CS_UTF8; return 1; }
+	if (n == 7 && !memcmp(norm, "UTF16LE", 7)) { *out = CS_UTF16LE; return 1; }
 	return 0;
 }
 

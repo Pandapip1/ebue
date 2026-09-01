@@ -153,7 +153,7 @@ static int read_templates(const char *path, char storage[][MAX_DATEMSK_LINE], co
 	if (!f) { getdate_err = 2; return -1; }
 
 	while (n < MAX_DATEMSK_TEMPLATES && fgets(storage[n], MAX_DATEMSK_LINE, f)) {
-		size_t l = strlen(storage[n]);
+		size_t l = strnlen(storage[n], MAX_DATEMSK_LINE);
 		while (l && (storage[n][l - 1] == '\n' || storage[n][l - 1] == '\r')) storage[n][--l] = 0;
 		if (!l) continue;   /* blank line: not a template */
 		out[n] = storage[n];

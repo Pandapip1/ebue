@@ -244,11 +244,13 @@ static int newset(struct parser *ps)
 	return rx->nsets++;
 }
 
-static const struct { const char *name; int (*fn)(int); } classes[] = {
-	{ "alpha", isalpha }, { "digit", isdigit }, { "alnum", isalnum },
-	{ "upper", isupper }, { "lower", islower }, { "space", isspace },
-	{ "blank", isblank }, { "punct", ispunct }, { "cntrl", iscntrl },
-	{ "graph", isgraph }, { "print", isprint }, { "xdigit", isxdigit },
+static const struct { const char *name; size_t len; int (*fn)(int); } classes[] = {
+#define CLASS(name, fn) { name, sizeof name - 1, fn }
+	CLASS("alpha", isalpha), CLASS("digit", isdigit), CLASS("alnum", isalnum),
+	CLASS("upper", isupper), CLASS("lower", islower), CLASS("space", isspace),
+	CLASS("blank", isblank), CLASS("punct", ispunct), CLASS("cntrl", iscntrl),
+	CLASS("graph", isgraph), CLASS("print", isprint), CLASS("xdigit", isxdigit),
+#undef CLASS
 };
 
 /* ps required, same as every parser function above. name is passed to
@@ -264,7 +266,7 @@ static int emit_class(struct parser *ps, struct bracket *bs, const char *name, s
 	size_t i;
 	int c;
 	for (i = 0; i < sizeof classes / sizeof *classes; i++)
-		if (strlen(classes[i].name) == len && !strncmp(classes[i].name, name, len)) {
+		if (classes[i].len == len && !strncmp(classes[i].name, name, len)) {
 			for (c = 0; c < 256; c++)
 				if (classes[i].fn(c)) setbit(bs, c, ps->icase);
 			return 0;
