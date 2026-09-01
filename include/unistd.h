@@ -148,7 +148,7 @@ char *getlogin(void);
  * with no NULL check of buf anywhere. Every real call site
  * (test/posix-unistd.c) passes a real local buffer, never NULL. */
 int getlogin_r(char *, size_t) __attribute__((nonnull(1)));
-int gethostname(char *, size_t);
+int gethostname(char *name withtok(writable_span(len)), size_t len);
 
 /* Same evidence as the identical declaration in include/getopt.h --
  * see that comment. */

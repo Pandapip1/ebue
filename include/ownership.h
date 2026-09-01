@@ -17,6 +17,7 @@
 #define dynamic_storage __attribute__((annotate("qual:dynamic_storage")))
 #define string_literal __attribute__((annotate("qual:string_literal")))
 #define extent_at_least __attribute__((annotate("qual:extent_at_least")))
+#define element_extent __attribute__((annotate("qual:element_extent")))
 #define disjoint_extent __attribute__((annotate("qual:disjoint_extent")))
 #define zero_vacuous __attribute__((annotate("qual:zero_vacuous")))
 #define sentinel_exclude(value) \

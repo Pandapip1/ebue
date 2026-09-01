@@ -7,6 +7,8 @@ typedef __SIZE_TYPE__ size_t;
 tokdef fixture_readable_span l_unlimited implicit_drop extent_at_least zero_vacuous;
 tokdef fixture_writable_span l_unlimited implicit_drop extent_at_least zero_vacuous;
 tokdef fixture_disjoint_span l_unlimited implicit_drop disjoint_extent zero_vacuous;
+tokdef fixture_readable_elements l_unlimited implicit_drop element_extent zero_vacuous;
+tokdef fixture_writable_elements l_unlimited implicit_drop element_extent zero_vacuous;
 tokdef fixture_allocation dynamic_storage;
 
 void *memcpy(void *destination withtok(fixture_writable_span(length))
@@ -32,6 +34,13 @@ size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 void consume_bytes(const void *source withtok(fixture_readable_span(length)),
 	size_t length);
+void copy_elements(
+	unsigned *restrict destination withtok(fixture_writable_elements(count)),
+	const unsigned *restrict source withtok(fixture_readable_elements(count)),
+	size_t count)
+{
+	memcpy(destination, source, count * sizeof *destination);
+}
 void establish_writable(
 	void *buffer grant(fixture_writable_span(length)), size_t length);
 void establish_readable(

@@ -7,6 +7,7 @@ typedef __SIZE_TYPE__ size_t;
 tokdef fixture_readable_span l_unlimited implicit_drop extent_at_least zero_vacuous;
 tokdef fixture_writable_span l_unlimited implicit_drop extent_at_least zero_vacuous;
 tokdef fixture_disjoint_span l_unlimited implicit_drop disjoint_extent zero_vacuous;
+tokdef fixture_readable_elements l_unlimited implicit_drop element_extent zero_vacuous;
 
 void *memcpy(void *destination withtok(fixture_writable_span(length))
 	withtok(fixture_disjoint_span(source, length)),
@@ -22,6 +23,15 @@ size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 void consume_bytes(const void *source withtok(fixture_readable_span(length)),
 	size_t length);
+void consume_elements(
+	const unsigned *source withtok(fixture_readable_elements(count)),
+	size_t count);
+
+void consume_too_many_elements(void)
+{
+	unsigned value;
+	consume_elements(&value, 2); /* memory-contract-expect */
+}
 void establish_writable(
 	void *buffer grant(fixture_writable_span(length)), size_t length);
 void __ownership_writable_span(

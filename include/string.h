@@ -205,7 +205,8 @@ char *strerror (int) __attribute__((__pure__));
  * and sep is dereferenced by strspn()/strcspn() on every path that
  * does not return early via the "s is NULL and *p is NULL too" case. */
 char *strtok_r (char *__restrict, const char *__restrict, char **__restrict) __attribute__((nonnull(2, 3)));
-int strerror_r (int, char *, size_t);
+int strerror_r (int err, char *buf withtok(writable_span(buflen)),
+	size_t buflen);
 /* stpcpy/stpncpy dereference both d and s unconditionally in their own
  * copy loop's condition (`(*d = *s)` / `n && (*d = *s)`) -- stpncpy's
  * `n &&` guard is the same size_t-count escape as mem*'s own n == 0
