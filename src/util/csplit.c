@@ -167,6 +167,22 @@ static int find_match(struct lines *L, int from, const char *pattern)
 	return found;
 }
 
+static int apply_offset(int base, long offset, int maximum, int *result)
+{
+	size_t sum;
+
+	if (base < 0 || maximum < base) return 0;
+	if (offset < 0) {
+		if (offset < -(long)base) return 0;
+		*result = (int)((size_t)base - (size_t)(-offset));
+		return 1;
+	}
+	if (!__util_size_add((size_t)base, (size_t)offset, &sum) ||
+	    sum > (size_t)maximum) return 0;
+	*result = (int)sum;
+	return 1;
+}
+
 struct created {
 	char **names;
 	int n, cap;
@@ -221,6 +237,16 @@ static int write_piece(struct lines *L, int from, int to, const char *prefix, in
 		return -1;
 	}
 	for (i = from; i < to; i++) {
+		size_t next_size;
+		if (!__util_size_add((size_t)size, L->len[i], &next_size) ||
+		    next_size > LONG_MAX) {
+			int saved = EFBIG;
+			(void)fclose(f);
+			(void)unlink(name);
+			errno = saved;
+			__util_diagf("csplit: %s: %s\n", name, strerror(errno));
+			return -1;
+		}
 		if (fwrite(L->text[i], 1, L->len[i], f) != L->len[i]) {
 			int saved = errno;
 			(void)fclose(f);
@@ -229,7 +255,7 @@ static int write_piece(struct lines *L, int from, int to, const char *prefix, in
 			__util_diagf("csplit: %s: %s\n", name, strerror(errno));
 			return -1;
 		}
-		size += (long)L->len[i];
+		size = (long)next_size;
 	}
 	if (fclose(f) < 0) {
 		int saved = errno;
@@ -337,8 +363,7 @@ int __util_csplit_main(int argc, char **argv)
 				had_error = 1;
 				break;
 			}
-			target = m + (int)offset;
-			if (target < cur || target > L.n) {
+			if (!apply_offset(m, offset, L.n, &target) || target < cur) {
 				__util_diagf("csplit: %s: match plus offset is out of range\n", a);
 				had_error = 1;
 				break;
