@@ -27,12 +27,12 @@
 # Method (see "why a real call, not just &func" below):
 #
 #   1. Mechanically extract every function declared in include/**/*.h
-#      (plus obj/include's generated headers) using the same
-#      comment/string-stripping, brace/paren-nesting scanner
-#      tools/lint-undefined.sh uses for its own "decl" pass, extended
-#      here to also capture each declaration's fixed argument count.
-#      Never hand-listed: add a header, add a prototype, and the next
-#      run sees it with no change to this script.
+#      (plus obj/include's generated headers) with a real clang AST walk
+#      (tools/clang/DeclScanner.cpp -- see its own header comment for the
+#      full contract), which also captures each declaration's fixed
+#      argument count and any `undefined-ok:` marker.  Never hand-listed:
+#      add a header, add a prototype, and the next run sees it with no
+#      change to this script.
 #
 #   2. For every declared name not covered by an `undefined-ok:` marker
 #      (see tools/lint-undefined.sh's header for that convention -- this
@@ -254,165 +254,105 @@ INC="-I$srcdir/arch/$ARCH -I$srcdir/arch/generic -Iobj/include -I$srcdir/include
 CFLAGS="$CFLAGS_C99FSE $CFLAGS_AUTO -D_XOPEN_SOURCE=700 -D_ALL_SOURCE $INC"
 
 # ---------------------------------------------------------------------
-# The scanner.  Same character-at-a-time comment/string-literal-stripping
-# nesting tracker as tools/lint-undefined.sh's "decl" mode (see that
-# file's header for the full rationale of each choice: why the
-# `extern "C" { ... }` wrapper is not treated as a nesting level, why a
-# one-line `{ ... }` body -- the endian.h inline bswaps -- is correctly
-# swallowed as an opaque block and never emitted, etc).  Extended here to
-# also record, per declarator, the header it came from, whether the line
-# carries an `undefined-ok:` marker, and the declaration's fixed argument
-# count.
+# The scanner: tools/clang/DeclScanner.cpp, a real clang AST walk (see
+# that file's own header comment for the full contract).  It replaced a
+# hand-rolled awk scanner that did character-at-a-time comment/string
+# stripping and treated "the first identifier immediately followed by
+# '('" as a declarator name -- a heuristic that broke on two patterns
+# that now appear throughout include/*.h: `// NOLINTBEGIN(...)` /
+# `// NOLINTEND(...)` clang-tidy suppression comments (the awk only ever
+# stripped /* */ comments, never // ones), and ownership.h's `withtok()`
+# used as a *prefix* attribute before a declaration's return type (the
+# awk's leftmost-identifier-before-"(" match landed on `withtok(` itself,
+# and silently swallowed the real declaration that followed -- not just
+# malloc()/calloc()/realloc()/etc. in stdlib.h, but every declaration
+# between that swallowed span and the next semicolon).
 #
-# Output: one line per declared function, tab-separated:
-#   name  header  fixed_argc_or_V  undefined_ok(0/1)
+# Built once, right below, the same way tools/lint.sh builds its own
+# PluginASTAction/CheckerRegistry clang plugins (see e.g. that script's
+# stage_totality()): clang++-18 against llvm-config-18's own flags, plus
+# libclang-cpp.so.18* found under llvm-config-18's libdir, which
+# FrontendPluginRegistry-based plugins need and llvm-config's own
+# --libs/--system-libs do not provide.
 #
-# fixed_argc is the count of comma-separated top-level parameter groups,
-# with a lone `void` counted as 0 and a trailing `...` dropped from the
-# count (its presence doesn't change fixed_argc, since ntlibc calls a
-# variadic function with only its required arguments).
+# Run once per header, in the same C mode ($CFLAGS, built above) every
+# real ntlibc-consuming program compiles against -- so, unlike the old
+# awk's blind text scan, a declaration hidden behind an #ifdef this
+# arch's flags do not satisfy is correctly invisible here too, the same
+# as it would be to a real caller.
+#
+# Output contract unchanged from the old scan(): one line per declared
+# function, tab-separated: name  header  fixed_argc  undefined_ok(0/1).
 # ---------------------------------------------------------------------
+declscan_plugin="$builddir/ntlibc-declscan.so"
+for declscan_tool in clang-18 clang++-18 llvm-config-18; do
+	command -v "$declscan_tool" >/dev/null 2>&1 || {
+		echo "linkcheck: FAILED -- '$declscan_tool' not found on PATH." >&2
+		echo "linkcheck: the declaration scanner (tools/clang/DeclScanner.cpp) is a real" >&2
+		echo "linkcheck: clang AST walk, built and run the same way tools/lint.sh builds its" >&2
+		echo "linkcheck: own clang plugins -- see that script's require_tool()/stage_totality()" >&2
+		echo "linkcheck: for what to install (CI: clang-18 libclang-18-dev llvm-18-dev)." >&2
+		exit 1
+	}
+done
+declscan_libdir=$(llvm-config-18 --libdir) || {
+	echo "linkcheck: FAILED -- 'llvm-config-18 --libdir' failed." >&2
+	exit 1
+}
+declscan_clang_cpp=$(find "$declscan_libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' \
+	-print 2>/dev/null | sort | head -n 1)
+if [ -z "$declscan_clang_cpp" ]; then
+	echo "linkcheck: FAILED -- Clang 18 development libraries (libclang-cpp.so.18*) not" >&2
+	echo "linkcheck: found under '$declscan_libdir'.  Install them the same way CI does" >&2
+	echo "linkcheck: (libclang-18-dev) -- see tools/lint.sh's stage_totality() for the" >&2
+	echo "linkcheck: equivalent build." >&2
+	exit 1
+fi
+# llvm-config deliberately returns shell words, not one argument.
+# shellcheck disable=SC2046
+clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
+	tools/clang/DeclScanner.cpp -o "$declscan_plugin" "$declscan_clang_cpp" \
+	$(llvm-config-18 --ldflags --libs --system-libs) || {
+	echo "linkcheck: FAILED -- could not build tools/clang/DeclScanner.cpp into a clang" >&2
+	echo "linkcheck: plugin." >&2
+	exit 1
+}
+
 scan() {
-	awk '
-		function name_and_args(text,    m) {
-			if (match(text, /\([ \t]*\*[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) {
-				m = substr(text, RSTART, RLENGTH)
-				ARGSTART = RSTART + RLENGTH
-				sub(/^\([ \t]*\*[ \t]*/, "", m)
-				sub(/[ \t]*\($/, "", m)
-				return m
-			}
-			if (match(text, /[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) {
-				m = substr(text, RSTART, RLENGTH)
-				ARGSTART = RSTART + RLENGTH
-				sub(/[ \t]*\($/, "", m)
-				return m
-			}
-			ARGSTART = 0
-			return ""
-		}
-		# Extract the raw text between the arg-list "(" (already consumed;
-		# start is the index of the first char after it) and its matching
-		# ")", honouring nested parens (function-pointer parameters).
-		function extract_args(text, start,    d, i, c, n, out) {
-			d = 1; out = ""; n = length(text)
-			for (i = start; i <= n; i++) {
-				c = substr(text, i, 1)
-				if (c == "(") d++
-				else if (c == ")") { d--; if (d == 0) break }
-				out = out c
-			}
-			return out
-		}
-		# Split argstext on top-level commas (not inside nested parens)
-		# and print the fixed argument count.
-		function argcount(argstext,    d, i, c, n, trimmed, n_fields, field, out) {
-			trimmed = argstext
-			gsub(/^[ \t]+|[ \t]+$/, "", trimmed)
-			if (trimmed == "" || trimmed == "void") return 0
-			d = 0; n_fields = 1; field = ""; n = length(trimmed)
-			for (i = 1; i <= n; i++) {
-				c = substr(trimmed, i, 1)
-				if (c == "(") d++
-				else if (c == ")") d--
-				else if (c == "," && d == 0) { n_fields++; continue }
-			}
-			# A trailing "..." is its own top-level field; it does not
-			# add to the fixed count.
-			nlast = trimmed
-			sub(/^.*,/, "", nlast)
-			gsub(/^[ \t]+|[ \t]+$/, "", nlast)
-			if (nlast == "...") n_fields--
-			return n_fields
-		}
-		FNR == 1 {
-			depth = 0; pdepth = 0; buf = ""; hasmark = 0
-			incomment = 0; instr = 0; inchr = 0; indirective = 0
-		}
-		{
-			raw = $0
-			wasdirective = indirective || (raw ~ /^[ \t]*#/)
-			indirective = wasdirective && (raw ~ /\\[ \t]*$/)
-			if (index(raw, "undefined-ok:") > 0) hasmark = 1
-			if (wasdirective) next
-
-			n = length(raw)
-			for (i = 1; i <= n; i++) {
-				ch = substr(raw, i, 1)
-				ch2 = substr(raw, i, 2)
-
-				if (incomment) {
-					if (ch2 == "*/") { incomment = 0; i++ }
-					continue
-				}
-				if (instr) {
-					if (ch == "\\") { i++ }
-					else if (ch == "\"") { instr = 0 }
-					continue
-				}
-				if (inchr) {
-					if (ch == "\\") { i++ }
-					else if (ch == "'"'"'") { inchr = 0 }
-					continue
-				}
-				if (ch2 == "/*") { incomment = 1; i++; continue }
-				if (ch == "\"") { instr = 1; continue }
-				if (ch == "'"'"'") { inchr = 1; continue }
-
-				if (depth == 0) {
-					if (ch == "(") pdepth++
-					else if (ch == ")") { if (pdepth > 0) pdepth-- }
-					else if (ch == "{" && pdepth == 0) {
-						trimmed = buf; sub(/^[ \t]+/, "", trimmed); sub(/[ \t]+$/, "", trimmed)
-						if (trimmed == "extern") { buf = ""; hasmark = 0; continue }
-						# Any other "{" at top level -- a struct/union/enum
-						# body, or a static-inline function body defined
-						# right here -- is opaque: skip it, emit nothing.
-						depth = 1; buf = ""; hasmark = 0
-						continue
-					} else if (ch == ";" && pdepth == 0) {
-						if (buf !~ /^[ \t]*typedef([ \t]|$)/) {
-							nm = name_and_args(buf)
-							if (nm != "") {
-								args = extract_args(buf, ARGSTART)
-								print nm "\t" FILENAME "\t" argcount(args) "\t" (hasmark ? 1 : 0)
-							}
-						}
-						buf = ""; hasmark = 0
-						continue
-					}
-					buf = buf ch
-				} else {
-					if (ch == "{") depth++
-					else if (ch == "}") { depth--; if (depth < 0) depth = 0 }
-				}
-			}
-			if (depth == 0) buf = buf " "
-		}
-	' "$@"
+	scan_rc=0
+	for scan_hdr in "$@"; do
+		# shellcheck disable=SC2086
+		clang-18 -std=c99 -fsyntax-only $CFLAGS \
+			-Xclang -load -Xclang "$declscan_plugin" \
+			-Xclang -add-plugin -Xclang ntlibc-declscan \
+			-Xclang -plugin-arg-ntlibc-declscan -Xclang "$scan_hdr" \
+			"$scan_hdr" 2>> "$builddir/declscan.err" || scan_rc=1
+	done
+	return $scan_rc
 }
 
 headers=$(find include obj/include -type f -name '*.h' 2>/dev/null | sort)
 nheaders=$(printf '%s\n' "$headers" | grep -c . || true)
 
 declfile="$builddir/declared"
-# An empty $headers is checked *before* scan(), not after: scan() is an
-# awk program, and awk with no file operands reads standard input --
-# so `scan` on an empty list does not return an empty result, it blocks
-# forever on the terminal `make linkcheck` was run from.  A hang is a
-# worse failure than a false pass, and this is the only place the list
-# can go empty.
+# An empty $headers is checked *before* scan(), not after, so a truly
+# empty header list is reported plainly rather than as a mysteriously
+# empty $declfile below.
 if [ -z "$headers" ]; then
 	echo "linkcheck: FAILED -- no headers found under include/ or obj/include/." >&2
 	echo "linkcheck: there is nothing to check, so this run cannot report success." >&2
 	echo "linkcheck: (obj/include/ is generated -- run 'make' first.)" >&2
 	exit 1
 fi
+: > "$builddir/declscan.err"
 # $headers is a list of file names and must word-split.
 # shellcheck disable=SC2086
 scan $headers > "$declfile" </dev/null || {
-	echo "linkcheck: FAILED -- the header scanner exited nonzero; the declared-symbol" >&2
-	echo "linkcheck: list is incomplete or empty, so nothing below can be trusted." >&2
+	echo "linkcheck: FAILED -- the header scanner (clang-18 + tools/clang/DeclScanner.cpp)" >&2
+	echo "linkcheck: exited nonzero on at least one header; the declared-symbol list is" >&2
+	echo "linkcheck: incomplete or empty, so nothing below can be trusted.  Diagnostics:" >&2
+	echo "linkcheck: $builddir/declscan.err" >&2
+	sed 's/^/linkcheck: /' "$builddir/declscan.err" >&2
 	exit 1
 }
 if [ ! -s "$declfile" ]; then
@@ -495,6 +435,21 @@ reason_for() {
 # "0 cannot convert to a struct type" compile failure, not a real link
 # problem (test/posix-socket.c calls it with a real struct in_addr and
 # it works).
+#
+# sigqueue() (include/signal.h, src/signal/signal.c) is the same shape
+# again, one argument at a different position: `int sigqueue(pid_t, int,
+# union sigval)` takes its third argument by value, so the generated
+# `sigqueue(0, 0, 0)` hits the same "0 cannot convert to a
+# struct/union type" compile failure -- not a real link problem
+# (test/posix-signal.c calls it with a real union sigval and it works).
+# The old hand-rolled awk scanner never reached this one: include/signal.h
+# is one of the headers carrying a `// NOLINTBEGIN(...)` suppression
+# comment near its top, and the awk's failure to strip `//` comments (see
+# tools/clang/DeclScanner.cpp's own header comment) swallowed an
+# unpredictable span of the file's real declarations into one bogus
+# "NOLINTBEGIN" entry -- sigqueue's declaration was silently among the
+# casualties, so this exception was never needed until the scanner
+# started seeing the whole header correctly.
 linkcheck_exception() {
 	case $1 in
 	ntlibc_rpath_load|ntlibc_rpath_sym|ntlibc_rpath_error|ntlibc_rpath_fail|ntlibc_delayLoadHelper2|ntlibc_rpath_unload|ntlibc_rpath_error_seq|dlopen|dlsym|dlclose|dlerror)
@@ -503,6 +458,8 @@ linkcheck_exception() {
 		echo "takes ENTRY by value (basedefs/search.h.html); this script's generated call site fills every argument with a literal 0, which cannot convert to a struct type -- a generator limitation, not an unlinkable symbol (see test/posix-glob.c's real ENTRY-literal call)" ;;
 	inet_ntoa)
 		echo "takes struct in_addr by value (include/arpa/inet.h); this script's generated call site fills every argument with a literal 0, which cannot convert to a struct type -- a generator limitation, not an unlinkable symbol (see test/posix-socket.c's real struct in_addr call)" ;;
+	sigqueue)
+		echo "takes union sigval by value (include/signal.h); this script's generated call site fills every argument with a literal 0, which cannot convert to a struct/union type -- a generator limitation, not an unlinkable symbol (see test/posix-signal.c's real union sigval call)" ;;
 	*) echo "" ;;
 	esac
 }
