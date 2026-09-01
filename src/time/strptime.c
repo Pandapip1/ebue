@@ -65,28 +65,29 @@ static const char *read_num(const char *s, int maxdigits, long *out)
  * candidate first isn't necessary since none is a prefix of another
  * within the same table, but abbreviations ARE prefixes of the full
  * names, so try full names before abbreviations. */
-/* full/abbr/idx are required; s is deliberately NOT marked. full is
- * indexed directly (`strlen(full[i])`) as soon as the first loop runs at
- * all (n is always 7 or 12 at this file's two real call sites -- the day
- * and month name tables -- never 0), and abbr the same way in the second
- * loop whenever no full-name candidate matched first; idx is written
- * (`*idx = i;`) on every match. Neither table nor idx is ever NULL at
- * either real call site (__ntlibc_day_name/_abbr, __ntlibc_month_name/
- * _abbr, and parse()'s own on-stack `idx`). s, by contrast, is only ever
+/* full/abbr/full_len/idx are required; s is deliberately NOT marked. The
+ * three tables are indexed as soon as their respective loops run (n is
+ * always 7 or 12 at this file's two real call sites, never 0), and idx is
+ * written (`*idx = i;`) on every match. None is ever NULL at either call
+ * site (__ntlibc_day_name/_abbr, __ntlibc_month_name/_abbr, the matching
+ * literal-derived length table, and parse()'s on-stack `idx`). s is only
  * forwarded into strncasecmp() -- never dereferenced directly by this
  * function's own body -- so it is left unmarked, the same "purely
  * forwarded, the real callee already owns the contract" reasoning as
  * time.h's own ctime_r()/clock_gettime() comments. */
-static const char *match_name(const char *s, const char *const *full, const char *const *abbr, int n, int *idx)
-    __attribute__((nonnull(2, 3, 5)));
-static const char *match_name(const char *s, const char *const *full, const char *const *abbr, int n, int *idx) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+static const char *match_name(const char *s, const char *const *full,
+    const char *const *abbr, const unsigned char *full_len, int n, int *idx)
+    __attribute__((nonnull(2, 3, 4, 6)));
+static const char *match_name(const char *s, const char *const *full,
+    const char *const *abbr, const unsigned char *full_len, int n,
+    int *idx) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	for (int i = 0; i < n; i++) {
-		size_t len = strlen(full[i]);
+		size_t len = full_len[i];
 		if (!strncasecmp(s, full[i], len)) { *idx = i; return s + len; }
 	}
 	for (int i = 0; i < n; i++) {
-		size_t len = strlen(abbr[i]);
+		size_t len = 3;
 		if (!strncasecmp(s, abbr[i], len)) { *idx = i; return s + len; }
 	}
 	return NULL;
@@ -242,16 +243,34 @@ static const char *parse(const char *s, const char *f, struct tm *tm,
 			if (!s) return NULL;
 			tm->tm_wday = (int)v;
 			break;
-		case 'a': case 'A':
-			s = match_name(s, __ntlibc_day_name, __ntlibc_day_name_abbr, 7, &idx);
+		case 'a': case 'A': {
+			static const unsigned char lengths[7] = {
+				sizeof "Sunday" - 1, sizeof "Monday" - 1,
+				sizeof "Tuesday" - 1, sizeof "Wednesday" - 1,
+				sizeof "Thursday" - 1, sizeof "Friday" - 1,
+				sizeof "Saturday" - 1
+			};
+			s = match_name(s, __ntlibc_day_name, __ntlibc_day_name_abbr,
+			               lengths, 7, &idx);
 			if (!s) return NULL;
 			tm->tm_wday = idx;
 			break;
-		case 'b': case 'B': case 'h':
-			s = match_name(s, __ntlibc_month_name, __ntlibc_month_name_abbr, 12, &idx);
+		}
+		case 'b': case 'B': case 'h': {
+			static const unsigned char lengths[12] = {
+				sizeof "January" - 1, sizeof "February" - 1,
+				sizeof "March" - 1, sizeof "April" - 1,
+				sizeof "May" - 1, sizeof "June" - 1,
+				sizeof "July" - 1, sizeof "August" - 1,
+				sizeof "September" - 1, sizeof "October" - 1,
+				sizeof "November" - 1, sizeof "December" - 1
+			};
+			s = match_name(s, __ntlibc_month_name, __ntlibc_month_name_abbr,
+			               lengths, 12, &idx);
 			if (!s) return NULL;
 			tm->tm_mon = idx;
 			break;
+		}
 		case 'p':
 			if (!strncasecmp(s, "AM", 2)) { *pm = 0; s += 2; }
 			else if (!strncasecmp(s, "PM", 2)) { *pm = 1; s += 2; }
