@@ -738,3 +738,47 @@ unsigned geometric_call_with_closed_locals(unsigned initial, unsigned need)
 	}
 	return cap;
 }
+
+unsigned constant_stride_three(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; i < bound; i += 3) {
+	}
+	return i;
+}
+
+unsigned constant_stride_reversed(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; bound > i; i += 3) {
+	}
+	return i;
+}
+
+unsigned constant_stride_multiple_bound(unsigned source)
+{
+	unsigned bound = source * 4;
+	unsigned i;
+	for (i = 0; i < bound; i += 4) {
+	}
+	return i;
+}
+
+unsigned constant_stride_literal_bound(void)
+{
+	unsigned i;
+	for (i = 0; i < 100; i += 7) {
+	}
+	return i;
+}
+
+unsigned constant_stride_for_continue(unsigned bound, int skip)
+{
+	unsigned i;
+	for (i = 0; i < bound; i += 3) {
+		if (skip)
+			continue;
+		geometric_opaque();
+	}
+	return i;
+}

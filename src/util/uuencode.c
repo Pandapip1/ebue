@@ -53,11 +53,10 @@
 
 static void emit_line(const unsigned char *buf, size_t n)
 {
-	size_t group, groups = n / 3 + (n % 3 != 0);
+	size_t i;
 
 	putchar(UUENC((unsigned)n));
-	for (group = 0; group < groups; group++) {
-		size_t i = 3 * group;
+	for (i = 0; i < n; i += 3) {
 		unsigned char b0 = buf[i];
 		unsigned char b1 = (i + 1 < n) ? buf[i + 1] : 0;
 		unsigned char b2 = (i + 2 < n) ? buf[i + 2] : 0;
