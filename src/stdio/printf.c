@@ -474,14 +474,7 @@ static void dec_exact(double v, struct dec *D)
 	D->decexp = D->nd - 1 - nfrac;
 	/* trailing zeros are implicit anyway, and dropping them keeps the
 	 * "is the discarded tail nonzero" test in dec_round short */
-	{
-		/* Keep the leading digit, so at most nd - 1 can be trimmed. */
-		int trim = D->nd - 1;
-		while (trim > 0 && D->d[D->nd - 1] == '0') {
-			D->nd--;
-			trim--;
-		}
-	}
+	while (D->nd > 1 && D->d[D->nd - 1] == '0') D->nd--;
 }
 
 /* Round D to want >= 1 significant digits, to nearest with ties to
@@ -501,11 +494,7 @@ static void dec_round(struct dec *D, int want)
 	}
 	D->nd = want;
 	if (!up) {
-		int trim = D->nd - 1;
-		while (trim > 0 && D->d[D->nd - 1] == '0') {
-			D->nd--;
-			trim--;
-		}
+		while (D->nd > 1 && D->d[D->nd - 1] == '0') D->nd--;
 		return;
 	}
 	for (i = want - 1; i >= 0; i--) {

@@ -96,10 +96,9 @@
 int __name_too_long(const char *path)
 {
 	const char *p = path;
-	size_t remaining = strlen(path);
 	size_t component = 0;
 
-	while (remaining > 0) {
+	while (*p) {
 		if (*p == '/' || *p == '\\') {
 			if (component > NAME_MAX) return 1;
 			component = 0;
@@ -107,7 +106,6 @@ int __name_too_long(const char *path)
 			component++;
 		}
 		p++;
-		remaining--;
 	}
 	return component > NAME_MAX;
 }

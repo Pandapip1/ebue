@@ -246,13 +246,10 @@ fail:
 static size_t expand(char *buf, size_t bufsz, const char *tmpl,
                      size_t tmpllen, const char *name, const char *lang) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
-	size_t i = 0, iterations_left = tmpllen;
+	size_t i = 0;
 	const char *p, *end = tmpl + tmpllen;
 
-	/* Each iteration consumes at least one template byte; a conversion
-	 * consumes two, so tmpllen is a conservative iteration bound. */
-	for (p = tmpl; p < end && iterations_left > 0;
-	     p++, iterations_left--) {
+	for (p = tmpl; p < end; p++) {
 		const char *v;
 		size_t l;
 

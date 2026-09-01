@@ -10,11 +10,9 @@
 wchar_t *wcscpy(wchar_t *__restrict d, const wchar_t *__restrict s)
 {
 	wchar_t *a = d;
-	size_t remaining = wcslen(s);
 
-	while (remaining > 0) {
+	while (*s) {
 		*d++ = *s++;
-		remaining--;
 	}
 	*d = 0;
 	return a;

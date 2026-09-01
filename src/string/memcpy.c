@@ -18,11 +18,9 @@ void *memcpy(void *__restrict dest withtok(writable_span(n))
 	if (n >= 4*sizeof(size_t) && ((uintptr_t)d & (sizeof(size_t)-1)) == ((uintptr_t)s & (sizeof(size_t)-1))) {
 		size_t align_bytes = (sizeof(size_t) -
 			((uintptr_t)d & (sizeof(size_t)-1))) & (sizeof(size_t)-1);
-		size_t words;
 		while (align_bytes > 0) { *d++ = *s++; n--; align_bytes--; }
-		/* Snapshot the exact number of complete aligned words. */
-		for (words = n / sizeof(size_t); words > 0;
-		     words--, n -= sizeof(size_t), d += sizeof(size_t), s += sizeof(size_t))
+		for (; n >= sizeof(size_t);
+		     n -= sizeof(size_t), d += sizeof(size_t), s += sizeof(size_t))
 			*(size_t *)d = *(const size_t *)s;
 	}
 	for (; n; n--) *d++ = *s++;
