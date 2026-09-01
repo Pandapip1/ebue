@@ -621,7 +621,10 @@ static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
 	if (r == (size_t)-2) return 0;          /* incomplete; more bytes needed */
 	if (assign) ws[*nn] = wc;
 	(*nn)++;
-	while (mbrtowc(&wc, &ch, 0, st) == (size_t)-3) {
+	/* mbrtowc can hold at most one queued low surrogate.  One check
+	 * drains it and the second observes the now-empty state. */
+	for (unsigned checks_left = 2; checks_left > 0; checks_left--) {
+		if (mbrtowc(&wc, &ch, 0, st) != (size_t)-3) break;
 		if (assign) ws[*nn] = wc;
 		(*nn)++;
 	}
