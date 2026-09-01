@@ -180,7 +180,14 @@ __wraps static void bn_sub(bn_t *a, const bn_t *b)
 		a->d[i] = (uint32_t)t;
 		borrow = (t >> 32) & 1;
 	}
-	while (a->n && !a->d[a->n - 1]) a->n--; // NOLINT(clang-analyzer-security.ArrayBound) -- bn_shl already clamps a->n to BN_LIMBS before any write reaches it
+	{
+		/* At most the current limb count can be trimmed. */
+		int trim = a->n;
+		while (trim > 0 && a->n && !a->d[a->n - 1]) { // NOLINT(clang-analyzer-security.ArrayBound) -- bn_shl already clamps a->n to BN_LIMBS before any write reaches it
+			a->n--;
+			trim--;
+		}
+	}
 }
 
 /* a *= 10^e (e >= 0), as 5^e followed by an exact shift. */

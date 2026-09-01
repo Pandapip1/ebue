@@ -18,7 +18,9 @@ __wraps size_t strlen(const char *s)
 {
 	const char *a = s;
 	const size_t *w;
-	for (; (uintptr_t)s % ALIGN; s++) if (!*s) return s-a;
+	/* Exact byte prefix before the next ALIGN boundary. */
+	size_t align_bytes = (ALIGN - (uintptr_t)s % ALIGN) % ALIGN;
+	for (; align_bytes > 0; s++, align_bytes--) if (!*s) return s-a;
 	for (w = (const void *)s; !HASZERO(*w); w++);
 	s = (const void *)w;
 	for (; *s; s++);
