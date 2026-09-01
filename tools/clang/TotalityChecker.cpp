@@ -1912,6 +1912,334 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
                      : atMostTypeMaximum(Bound, Change.Variable);
   }
 
+  struct DerivedAffine {
+    Progress Rank;
+    const VarDecl *Child;
+  };
+
+  static void collectDerivedAffine(const Stmt *Statement,
+                                   std::vector<DerivedAffine> &Result) {
+    if (!Statement)
+      return;
+    if (const auto *Binary = dyn_cast_or_null<BinaryOperator>(
+            ignore(dyn_cast_or_null<Expr>(Statement)))) {
+      const auto *Rank = dyn_cast_or_null<VarDecl>(value(Binary->getLHS()));
+      const auto *Child = dyn_cast_or_null<VarDecl>(value(Binary->getRHS()));
+      if (Binary->getOpcode() == BO_Assign && Rank && Child && Rank != Child &&
+          Rank->getType()->isUnsignedIntegerType() &&
+          Rank->getType().getCanonicalType().getUnqualifiedType() ==
+              Child->getType().getCanonicalType().getUnqualifiedType()) {
+        bool Seen = false;
+        for (const DerivedAffine &Existing : Result)
+          Seen |= Existing.Rank.Variable == Rank && Existing.Child == Child;
+        if (!Seen)
+          Result.push_back({makeProgress(Rank, ProgressKind::Up, nullptr,
+                                         Binary->getLHS()),
+                            Child});
+      }
+    }
+    for (const Stmt *Child : Statement->children())
+      collectDerivedAffine(Child, Result);
+  }
+
+  static const Expr *doubleProductOf(const Expr *Expression,
+                                     const ValueDecl *Rank) {
+    const auto *Product =
+        dyn_cast_or_null<BinaryOperator>(ignore(Expression));
+    if (!Product || Product->getOpcode() != BO_Mul)
+      return nullptr;
+    const Expr *RankFactor = nullptr;
+    if (const auto *Literal =
+            dyn_cast_or_null<IntegerLiteral>(ignore(Product->getLHS()));
+        Literal && Literal->getValue() == 2)
+      RankFactor = Product->getRHS();
+    else if (const auto *Literal =
+                 dyn_cast_or_null<IntegerLiteral>(ignore(Product->getRHS()));
+             Literal && Literal->getValue() == 2)
+      RankFactor = Product->getLHS();
+    return RankFactor && value(RankFactor) == Rank ? Product : nullptr;
+  }
+
+  static bool initializesDerivedChild(const Expr *Expression,
+                                      const DerivedAffine &Candidate) {
+    const auto *Assignment =
+        dyn_cast_or_null<BinaryOperator>(ignore(Expression));
+    if (!Assignment || Assignment->getOpcode() != BO_Assign ||
+        value(Assignment->getLHS()) != Candidate.Child)
+      return false;
+    const auto *Addition =
+        dyn_cast_or_null<BinaryOperator>(ignore(Assignment->getRHS()));
+    if (!Addition || Addition->getOpcode() != BO_Add)
+      return false;
+    const Expr *ProductExpression = nullptr;
+    if (unitInteger(Addition->getLHS()))
+      ProductExpression = Addition->getRHS();
+    else if (unitInteger(Addition->getRHS()))
+      ProductExpression = Addition->getLHS();
+    const Expr *Product =
+        doubleProductOf(ProductExpression, Candidate.Rank.Variable);
+    if (!Product)
+      return false;
+    QualType RankType = Candidate.Rank.Variable->getType().getCanonicalType()
+                            .getUnqualifiedType();
+    return Assignment->getLHS()->getType().getCanonicalType()
+                   .getUnqualifiedType() == RankType &&
+           Addition->getType().getCanonicalType().getUnqualifiedType() ==
+               RankType &&
+           Product->getType().getCanonicalType().getUnqualifiedType() ==
+               RankType;
+  }
+
+  static bool commitsDerivedChild(const Expr *Expression,
+                                  const DerivedAffine &Candidate) {
+    const auto *Assignment =
+        dyn_cast_or_null<BinaryOperator>(ignore(Expression));
+    return Assignment && Assignment->getOpcode() == BO_Assign &&
+           value(Assignment->getLHS()) == Candidate.Rank.Variable &&
+           value(Assignment->getRHS()) == Candidate.Child;
+  }
+
+  const Expr *strictHalfBound(const Expr *Condition,
+                              const Progress &Rank) const {
+    Condition = ignore(Condition);
+    const auto *Comparison = dyn_cast_or_null<BinaryOperator>(Condition);
+    if (!Comparison)
+      return nullptr;
+    if (Comparison->getOpcode() == BO_LAnd) {
+      if (const Expr *Bound = strictHalfBound(Comparison->getLHS(), Rank))
+        return Bound;
+      return strictHalfBound(Comparison->getRHS(), Rank);
+    }
+    const Expr *Half = nullptr;
+    if (Comparison->getOpcode() == BO_LT &&
+        rankAccess(Comparison->getLHS(), Rank))
+      Half = Comparison->getRHS();
+    else if (Comparison->getOpcode() == BO_GT &&
+             rankAccess(Comparison->getRHS(), Rank))
+      Half = Comparison->getLHS();
+    const auto *Division =
+        dyn_cast_or_null<BinaryOperator>(ignore(Half));
+    const auto *Divisor = Division
+        ? dyn_cast_or_null<IntegerLiteral>(ignore(Division->getRHS()))
+        : nullptr;
+    if (!Division || Division->getOpcode() != BO_Div || !Divisor ||
+        Divisor->getValue() != 2)
+      return nullptr;
+    QualType RankType = Rank.Variable->getType().getCanonicalType()
+                            .getUnqualifiedType();
+    if (Comparison->getLHS()->getType().getCanonicalType()
+            .getUnqualifiedType() != RankType ||
+        Comparison->getRHS()->getType().getCanonicalType()
+            .getUnqualifiedType() != RankType ||
+        Division->getType().getCanonicalType().getUnqualifiedType() !=
+            RankType ||
+        Division->getLHS()->getType().getCanonicalType()
+                .getUnqualifiedType() != RankType)
+      return nullptr;
+    return Division->getLHS();
+  }
+
+  static bool derivedPlusOne(const Expr *Expression,
+                             const DerivedAffine &Candidate) {
+    const auto *Addition =
+        dyn_cast_or_null<BinaryOperator>(ignore(Expression));
+    return Addition && Addition->getOpcode() == BO_Add &&
+           ((value(Addition->getLHS()) == Candidate.Child &&
+             unitInteger(Addition->getRHS())) ||
+            (value(Addition->getRHS()) == Candidate.Child &&
+             unitInteger(Addition->getLHS())));
+  }
+
+  bool guardedDerivedIncrement(const Expr *Condition,
+                               const DerivedAffine &Candidate,
+                               const ValueDecl *Bound) const {
+    Condition = ignore(Condition);
+    const auto *Comparison = dyn_cast_or_null<BinaryOperator>(Condition);
+    if (!Comparison)
+      return false;
+    if (Comparison->getOpcode() == BO_LAnd)
+      return guardedDerivedIncrement(Comparison->getLHS(), Candidate, Bound) ||
+             guardedDerivedIncrement(Comparison->getRHS(), Candidate, Bound);
+    const Expr *Addition = nullptr;
+    const Expr *Upper = nullptr;
+    if (Comparison->getOpcode() == BO_LT) {
+      Addition = Comparison->getLHS();
+      Upper = Comparison->getRHS();
+    } else if (Comparison->getOpcode() == BO_GT) {
+      Addition = Comparison->getRHS();
+      Upper = Comparison->getLHS();
+    } else {
+      return false;
+    }
+    QualType RankType = Candidate.Rank.Variable->getType().getCanonicalType()
+                            .getUnqualifiedType();
+    return value(Upper) == Bound && derivedPlusOne(Addition, Candidate) &&
+           Addition->getType().getCanonicalType().getUnqualifiedType() ==
+               RankType &&
+           Upper->getType().getCanonicalType().getUnqualifiedType() ==
+               RankType;
+  }
+
+  struct DerivedFlow {
+    /* Stages are empty, initialized, initialized+unit, done, unit-only,
+     * and commit-only.  The latter two retain invalid branch order until
+     * sequence composition can reject it. */
+    unsigned FallStages;
+    unsigned BackStages;
+    bool Exits;
+    bool Invalid;
+  };
+
+  static unsigned combineDerivedStages(unsigned First, unsigned Second,
+                                       bool &Invalid) {
+    unsigned Result = 0;
+    for (unsigned A = 0; A != 6; ++A)
+      if (First & (1u << A))
+        for (unsigned B = 0; B != 6; ++B)
+          if (Second & (1u << B)) {
+            unsigned Combined;
+            if (A == 0)
+              Combined = B;
+            else if (B == 0)
+              Combined = A;
+            else if (A == 1 && B == 4)
+              Combined = 2;
+            else if ((A == 1 || A == 2) && B == 5)
+              Combined = 3;
+            else {
+              Invalid = true;
+              continue;
+            }
+            Result |= 1u << Combined;
+          }
+    return Result;
+  }
+
+  static DerivedFlow derivedSequence(DerivedFlow First,
+                                     DerivedFlow Second) {
+    if (First.Invalid || Second.Invalid)
+      return {0, 0, false, true};
+    bool Invalid = false;
+    unsigned Fall = combineDerivedStages(First.FallStages,
+                                         Second.FallStages, Invalid);
+    unsigned Back = First.BackStages |
+        combineDerivedStages(First.FallStages, Second.BackStages, Invalid);
+    return {Fall, Back, First.Exits ||
+                              (First.FallStages && Second.Exits),
+            Invalid};
+  }
+
+  DerivedFlow derivedFlow(const Stmt *Statement,
+                          const DerivedAffine &Candidate,
+                          const ValueDecl *Bound,
+                          bool GuardedUnitAllowed = false) const {
+    if (!Statement)
+      return {1u, 0, false, false};
+    if (containsAsm(Statement) ||
+        containsUnevaluatedOrEmbeddedControl(Statement))
+      return {0, 0, false, true};
+    if (const auto *Compound = dyn_cast<CompoundStmt>(Statement)) {
+      DerivedFlow Result{1u, 0, false, false};
+      for (const Stmt *Child : Compound->body())
+        Result = derivedSequence(
+            Result,
+            derivedFlow(Child, Candidate, Bound, GuardedUnitAllowed));
+      return Result;
+    }
+    if (const auto *If = dyn_cast<IfStmt>(Statement)) {
+      if (writesVariable(If->getCond(), Candidate.Rank.Variable) ||
+          writesVariable(If->getCond(), Candidate.Child) ||
+          writesVariable(If->getCond(), Bound))
+        return {0, 0, false, true};
+      DerivedFlow Prefix = derivedSequence(
+          derivedFlow(If->getInit(), Candidate, Bound, GuardedUnitAllowed),
+          derivedFlow(If->getConditionVariableDeclStmt(), Candidate, Bound,
+                      GuardedUnitAllowed));
+      bool ThenAllowsUnit = GuardedUnitAllowed ||
+          guardedDerivedIncrement(If->getCond(), Candidate, Bound);
+      DerivedFlow Then =
+          derivedFlow(If->getThen(), Candidate, Bound, ThenAllowsUnit);
+      DerivedFlow Else =
+          derivedFlow(If->getElse(), Candidate, Bound, GuardedUnitAllowed);
+      DerivedFlow Arms{Then.FallStages | Else.FallStages,
+                       Then.BackStages | Else.BackStages,
+                       Then.Exits || Else.Exits,
+                       Then.Invalid || Else.Invalid};
+      return derivedSequence(Prefix, Arms);
+    }
+    if (const auto *Label = dyn_cast<LabelStmt>(Statement))
+      return derivedFlow(Label->getSubStmt(), Candidate, Bound,
+                         GuardedUnitAllowed);
+    if (isa<ContinueStmt>(Statement))
+      return {0, 1u, false, false};
+    if (isa<BreakStmt>(Statement) || isa<ReturnStmt>(Statement))
+      return {0, 0, true, false};
+    if (isa<GotoStmt>(Statement) || isa<SwitchStmt>(Statement))
+      return {0, 0, false, true};
+    if (isa<ForStmt>(Statement) || isa<WhileStmt>(Statement) ||
+        isa<DoStmt>(Statement))
+      return writesVariable(Statement, Candidate.Rank.Variable) ||
+                     writesVariable(Statement, Candidate.Child) ||
+                     writesVariable(Statement, Bound)
+                 ? DerivedFlow{0, 0, false, true}
+                 : DerivedFlow{1u, 0, false, false};
+    if (const auto *Expression = dyn_cast<Expr>(Statement)) {
+      if (initializesDerivedChild(Expression, Candidate))
+        return {1u << 1, 0, false, false};
+      if (commitsDerivedChild(Expression, Candidate))
+        return {1u << 5, 0, false, false};
+      if (std::optional<Progress> Change = progress(Expression))
+        if (Change->Variable == Candidate.Child &&
+            Change->Kind == ProgressKind::Up && Change->UnitStep)
+          return GuardedUnitAllowed
+                     ? DerivedFlow{1u << 4, 0, false, false}
+                     : DerivedFlow{0, 0, false, true};
+    }
+    return writesVariable(Statement, Candidate.Rank.Variable) ||
+                   writesVariable(Statement, Candidate.Child) ||
+                   writesVariable(Statement, Bound)
+               ? DerivedFlow{0, 0, false, true}
+               : DerivedFlow{1u, 0, false, false};
+  }
+
+  bool pretestedBody(const Stmt *Body) const {
+    if (!Body)
+      return false;
+    DynTypedNodeList Parents = Context.getParents(*Body);
+    return Parents.size() == 1 && !Parents[0].get<DoStmt>();
+  }
+
+  bool guardedDerivedAffineAscent(const Expr *Condition, const Stmt *Body,
+                                  const Expr *Increment,
+                                  const DerivedAffine &Candidate) const {
+    const auto *Rank = dyn_cast<VarDecl>(Candidate.Rank.Variable);
+    if (!Rank || Increment || !pretestedBody(Body) || !Current ||
+        Rank->getType().isVolatileQualified() ||
+        Candidate.Child->getType().isVolatileQualified() ||
+        !(isa<ParmVarDecl>(Rank) || Rank->hasLocalStorage()) ||
+        !Candidate.Child->hasLocalStorage() ||
+        containsStateMutation(Condition) ||
+        addressTaken(Current->getBody(), Rank) ||
+        addressTaken(Current->getBody(), Candidate.Child) ||
+        !validRankVariable(Candidate.Rank, Body))
+      return false;
+    const Expr *BoundExpression = strictHalfBound(Condition, Candidate.Rank);
+    const auto *Bound = dyn_cast_or_null<VarDecl>(value(BoundExpression));
+    if (!Bound || Bound == Rank || Bound == Candidate.Child ||
+        !Bound->getType()->isUnsignedIntegerType() ||
+        Bound->getType().getCanonicalType().getUnqualifiedType() !=
+            Rank->getType().getCanonicalType().getUnqualifiedType() ||
+        Bound->getType().isVolatileQualified() ||
+        !(isa<ParmVarDecl>(Bound) || Bound->hasLocalStorage()) ||
+        addressTaken(Current->getBody(), Bound) ||
+        !stableBound(BoundExpression, Body, nullptr))
+      return false;
+    DerivedFlow Result = derivedFlow(Body, Candidate, Bound);
+    unsigned BackedgeStages = Result.FallStages | Result.BackStages;
+    return !Result.Invalid && (BackedgeStages || Result.Exits) &&
+           !(BackedgeStages & ~(1u << 3));
+  }
+
   static bool sentinelRead(const Stmt *Statement, const Progress &Rank) {
     if (!Statement)
       return false;
@@ -2522,6 +2850,11 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       if (sentinelCondition(Condition, Change))
         return "sentinel-distance-rank";
     }
+    std::vector<DerivedAffine> DerivedCandidates;
+    collectDerivedAffine(Body, DerivedCandidates);
+    for (const DerivedAffine &Candidate : DerivedCandidates)
+      if (guardedDerivedAffineAscent(Condition, Body, Increment, Candidate))
+        return "strict-scalar-rank";
     std::vector<Progress> Candidates;
     collectProgress(Body, Candidates);
     for (const Progress &Change : Candidates) {

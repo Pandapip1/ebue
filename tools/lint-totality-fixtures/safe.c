@@ -477,6 +477,46 @@ int signed_unit_rank_with_live_bound(int *bound)
 	return i;
 }
 
+void opaque_affine_callback(void);
+int opaque_affine_predicate(void);
+
+__SIZE_TYPE__ guarded_affine_ascent(__SIZE_TYPE__ i, __SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) {
+		child = 2 * i + 1;
+		i = child;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ guarded_affine_callback_ascent(__SIZE_TYPE__ i,
+	__SIZE_TYPE__ n)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) {
+		child = 2 * i + 1;
+		if (child + 1 < n && opaque_affine_predicate())
+			child++;
+		opaque_affine_callback();
+		i = child;
+	}
+	return i;
+}
+
+__SIZE_TYPE__ guarded_affine_continue_after_progress(__SIZE_TYPE__ i,
+	__SIZE_TYPE__ n, int skip)
+{
+	__SIZE_TYPE__ child;
+	while (i < n / 2) {
+		child = 2 * i + 1;
+		i = child;
+		if (skip)
+			continue;
+	}
+	return i;
+}
+
 unsigned char promoted_byte_unit_rank(unsigned char bound)
 {
 	unsigned char i;
