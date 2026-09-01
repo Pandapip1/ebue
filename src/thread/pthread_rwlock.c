@@ -301,6 +301,9 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 	return result;
 }
 
+__attribute__((ownership_constructs(pthread_rwlock, 1),
+	ownership_static(pthread_rwlock, 1),
+	ownership_requires_handle(pthread_rwlockattr, 2)))
 int pthread_rwlock_init(pthread_rwlock_t *__restrict lock,
 	const pthread_rwlockattr_t *__restrict attr)
 {
@@ -318,6 +321,8 @@ int pthread_rwlock_init(pthread_rwlock_t *__restrict lock,
 	return 0;
 }
 
+__attribute__((ownership_destroys(pthread_rwlock, 1),
+	ownership_static(pthread_rwlock, 1)))
 int pthread_rwlock_destroy(pthread_rwlock_t *lock)
 {
 	struct rwlock_data *data;
@@ -336,40 +341,54 @@ int pthread_rwlock_destroy(pthread_rwlock_t *lock)
 	return error;
 }
 
+__attribute__((ownership_requires_handle(pthread_rwlock, 1),
+	ownership_static(pthread_rwlock, 1)))
 int pthread_rwlock_rdlock(pthread_rwlock_t *lock)
 {
 	struct timespec forever = {(time_t)0x7fffffff, 0};
 	return rwlock_acquire(lock, &forever, 0, 0);
 }
 
+__attribute__((ownership_requires_handle(pthread_rwlock, 1),
+	ownership_static(pthread_rwlock, 1)))
 int pthread_rwlock_tryrdlock(pthread_rwlock_t *lock)
 {
 	return rwlock_acquire(lock, 0, 1, 0);
 }
 
+__attribute__((ownership_requires_handle(pthread_rwlock, 1),
+	ownership_static(pthread_rwlock, 1)))
 int pthread_rwlock_timedrdlock(pthread_rwlock_t *__restrict lock,
 	const struct timespec *__restrict absolute)
 {
 	return rwlock_acquire(lock, absolute, 0, 0);
 }
 
+__attribute__((ownership_requires_handle(pthread_rwlock, 1),
+	ownership_static(pthread_rwlock, 1)))
 int pthread_rwlock_wrlock(pthread_rwlock_t *lock)
 {
 	struct timespec forever = {(time_t)0x7fffffff, 0};
 	return rwlock_acquire(lock, &forever, 0, 1);
 }
 
+__attribute__((ownership_requires_handle(pthread_rwlock, 1),
+	ownership_static(pthread_rwlock, 1)))
 int pthread_rwlock_trywrlock(pthread_rwlock_t *lock)
 {
 	return rwlock_acquire(lock, 0, 1, 1);
 }
 
+__attribute__((ownership_requires_handle(pthread_rwlock, 1),
+	ownership_static(pthread_rwlock, 1)))
 int pthread_rwlock_timedwrlock(pthread_rwlock_t *__restrict lock,
 	const struct timespec *__restrict absolute)
 {
 	return rwlock_acquire(lock, absolute, 0, 1);
 }
 
+__attribute__((ownership_requires_handle(pthread_rwlock, 1),
+	ownership_static(pthread_rwlock, 1)))
 int pthread_rwlock_unlock(pthread_rwlock_t *lock)
 {
 	struct rwlock_data *data;
@@ -394,6 +413,7 @@ int pthread_rwlock_unlock(pthread_rwlock_t *lock)
 	return error;
 }
 
+__attribute__((ownership_constructs(pthread_rwlockattr, 1)))
 int pthread_rwlockattr_init(pthread_rwlockattr_t *attr)
 {
 	struct rwattr_data *data;
@@ -405,6 +425,7 @@ int pthread_rwlockattr_init(pthread_rwlockattr_t *attr)
 	return 0;
 }
 
+__attribute__((ownership_destroys(pthread_rwlockattr, 1)))
 int pthread_rwlockattr_destroy(pthread_rwlockattr_t *attr)
 {
 	if (!attr || rwattr_data(attr)->magic != RWATTR_MAGIC) return EINVAL;
@@ -412,6 +433,7 @@ int pthread_rwlockattr_destroy(pthread_rwlockattr_t *attr)
 	return 0;
 }
 
+__attribute__((ownership_requires_handle(pthread_rwlockattr, 1)))
 int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *__restrict attr,
 	int *__restrict pshared)
 {
@@ -421,6 +443,7 @@ int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *__restrict attr,
 	return 0;
 }
 
+__attribute__((ownership_requires_handle(pthread_rwlockattr, 1)))
 int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *attr, int pshared)
 {
 	if (!attr || rwattr_data(attr)->magic != RWATTR_MAGIC ||
