@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <string.h>
 #include "libc.h"
+#include "ownership_stubs.h"
 #include "plat_fd.h"
 #include "plat_fcntl.h"
 
@@ -162,6 +163,9 @@ int fcntl(int fd, int cmd, ...)
 		__fds[nfd].vseen = f->vseen;
 		__fds[nfd].vnext = f->vnext;
 		__fds[nfd].peer_len = f->peer_len;
+		__ownership_writable_span(__fds[nfd].peer,
+			 sizeof __fds[nfd].peer);
+		__ownership_readable_span(f->peer, sizeof f->peer);
 		memcpy(__fds[nfd].peer, f->peer, sizeof f->peer);
 		return nfd;
 	}
