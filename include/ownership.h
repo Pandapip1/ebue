@@ -6,7 +6,8 @@
 /* An opt-in ownership dialect expressed entirely in ordinary C syntax.
  * Token policy belongs to the nominal token typedef; values and operations
  * refer to that policy by name. */
-#define token typedef struct { char _tok; }
+#define __token_type typedef struct { char _tok; }
+#define token __token_type
 #define l_unlimited __attribute__((annotate("qual:l_unlimited")))
 #define implicit_drop __attribute__((annotate("qual:implicit_drop")))
 #define dynamic_storage __attribute__((annotate("qual:dynamic_storage")))

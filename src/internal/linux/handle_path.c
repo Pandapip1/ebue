@@ -104,7 +104,7 @@ static void fd_path(int fd, char *out)
 	out[i] = 0;
 }
 
-__attribute__((ownership_returns(internal_malloc)))
+withtok(internal_heap_allocated)
 char *__handle_path(HANDLE h)
 {
 	int fd = unbox(h);

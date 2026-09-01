@@ -12,8 +12,7 @@
 #include <unistd.h>
 #include "dirent_internal.h"
 
-__attribute__((ownership_takes(dir_stream, 1)))
-int closedir(DIR *dp)
+int closedir(DIR *dp consume(directory_stream_open))
 {
 	int r = close(dp->fd);
 	__free(dp);

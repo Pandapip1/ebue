@@ -85,7 +85,7 @@
 /* __progname_full (crt1.c) is the image path as ImagePathName gave it --
  * a native, backslash-separated path.  Return a fresh string so the search
  * iteration that consumes it also has an explicit, finite lifetime. */
-__attribute__((ownership_returns(internal_malloc)))
+withtok(internal_heap_allocated)
 static char *image_dir(void)
 {
 	char *dir;
@@ -126,7 +126,7 @@ static int has_path_component(const char *p)
 }
 
 /* dir "\" tail, with every '/' normalised to '\\'. Malloc'd; NULL on OOM. */
-__attribute__((ownership_returns(internal_malloc)))
+withtok(internal_heap_allocated)
 static char *join(const char *dir, const char *tail)
 {
 	size_t dl = strlen(dir), tl = strlen(tail), i;

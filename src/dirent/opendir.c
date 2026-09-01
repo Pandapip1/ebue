@@ -24,7 +24,7 @@
 #include <errno.h>
 #include "dirent_internal.h"
 
-__attribute__((ownership_returns(dir_stream)))
+withtok(directory_stream_open)
 static DIR *alloc_dir(int fd)
 {
 	DIR *dp = __malloc(sizeof *dp + __DIRBUF_SIZE);
@@ -36,7 +36,7 @@ static DIR *alloc_dir(int fd)
 	return dp;
 }
 
-__attribute__((ownership_returns(dir_stream)))
+withtok(directory_stream_open)
 DIR *fdopendir(int fd)
 {
 	struct __fd *f = __fd_get(fd);
@@ -45,7 +45,7 @@ DIR *fdopendir(int fd)
 	return alloc_dir(fd);
 }
 
-__attribute__((ownership_returns(dir_stream)))
+withtok(directory_stream_open)
 DIR *opendir(const char *path)
 {
 	int fd;

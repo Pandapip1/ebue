@@ -12,6 +12,9 @@
 #include <features.h>
 #include <ownership.h>
 
+#ifndef token
+#define token __token_type
+#endif
 token heap_allocated
 	dynamic_storage;
 #undef token

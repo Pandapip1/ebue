@@ -30,15 +30,22 @@
 #define _NTLIBC_PLAT_MALLOC_H
 
 #include <features.h>
+#include <ownership.h>
 #include <stddef.h>
 
-__attribute__((ownership_returns(plat_heap)))
+#ifndef token
+#define token __token_type
+#endif
+token platform_heap_allocated
+	dynamic_storage;
+#undef token
+
+withtok(platform_heap_allocated)
 void *__plat_alloc(size_t n, int zero);
-__attribute__((ownership_reallocates(1), ownership_returns(plat_heap)))
-void *__plat_realloc(void *p, size_t n);
+withtok(platform_heap_allocated)
+void *__plat_realloc(void *p consume_if_nonnull_return(platform_heap_allocated), size_t n);
 size_t __plat_alloc_size(void *p);
-__attribute__((ownership_takes(plat_heap, 1)))
-void __plat_dealloc(void *p);
+void __plat_dealloc(void *p consume(platform_heap_allocated));
 
 #endif
 

@@ -25,6 +25,13 @@
 #include <stddef.h>
 #include <string.h>
 
+#ifndef token
+#define token __token_type
+#endif
+token rtl_heap_allocated
+	dynamic_storage;
+#undef token
+
 #ifdef __i386__
 #define NTAPI __attribute__((stdcall))
 #else
@@ -1510,12 +1517,11 @@ NTSTATUS NTAPI NtSetInformationJobObject(HANDLE, JOBOBJECTINFOCLASS, PVOID, ULON
 NTSTATUS NTAPI NtWow64QueryInformationProcess64(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
 NTSTATUS NTAPI NtWow64ReadVirtualMemory64(HANDLE, ULONGLONG, PVOID, ULONGLONG, ULONGLONG *);
 
-__attribute__((ownership_returns(rtl_heap)))
+withtok(rtl_heap_allocated)
 PVOID    NTAPI RtlAllocateHeap(PVOID, ULONG, SIZE_T);
-__attribute__((ownership_takes(rtl_heap, 3)))
-BOOLEAN  NTAPI RtlFreeHeap(PVOID, ULONG, PVOID);
-__attribute__((ownership_reallocates(3), ownership_returns(rtl_heap)))
-PVOID    NTAPI RtlReAllocateHeap(PVOID, ULONG, PVOID, SIZE_T);
+BOOLEAN  NTAPI RtlFreeHeap(PVOID, ULONG, PVOID consume(rtl_heap_allocated));
+withtok(rtl_heap_allocated)
+PVOID    NTAPI RtlReAllocateHeap(PVOID, ULONG, PVOID consume_if_nonnull_return(rtl_heap_allocated), SIZE_T);
 SIZE_T   NTAPI RtlSizeHeap(PVOID, ULONG, PVOID);
 PVOID    NTAPI RtlCreateHeap(ULONG, PVOID, SIZE_T, SIZE_T, PVOID, PVOID);
 PPEB     NTAPI RtlGetCurrentPeb(void);

@@ -56,10 +56,9 @@ void *realloc(void *p consume_if_nonnull_return(heap_allocated), size_t n)
 	return q;
 }
 
-__attribute__((ownership_returns(internal_malloc)))
+withtok(internal_heap_allocated)
 void *__malloc(size_t n) { return malloc(n); }
-__attribute__((ownership_takes(internal_malloc, 1)))
-void __free(void *p) { free(p); }
+void __free(void *p consume(internal_heap_allocated)) { free(p); }
 
 size_t malloc_usable_size(void *p)
 {

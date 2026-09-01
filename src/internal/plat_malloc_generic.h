@@ -203,7 +203,7 @@ static void ntlibc_malloc_refill_locked(int class)
 	}
 }
 
-__attribute__((ownership_returns(plat_heap)))
+withtok(platform_heap_allocated)
 void *__plat_alloc(size_t n, int zero) // NOLINT(bugprone-easily-swappable-parameters) -- fixed allocator-backend contract; size and zero-fill flag have distinct roles
 {
 	struct ntlibc_malloc_chunk_hdr *h;
@@ -248,8 +248,7 @@ size_t __plat_alloc_size(void *p)
 	return h->size;
 }
 
-__attribute__((ownership_takes(plat_heap, 1)))
-void __plat_dealloc(void *p)
+void __plat_dealloc(void *p consume(platform_heap_allocated))
 {
 	struct ntlibc_malloc_chunk_hdr *h;
 	if (!p) return;
@@ -271,8 +270,8 @@ void __plat_dealloc(void *p)
  * the original. Simple, and the copy is bounded by real, exact sizes
  * both ends already track precisely, so there is no scope for an
  * over-read here even though it is not the fastest possible realloc. */
-__attribute__((ownership_reallocates(1), ownership_returns(plat_heap)))
-void *__plat_realloc(void *p, size_t n)
+withtok(platform_heap_allocated)
+void *__plat_realloc(void *p consume_if_nonnull_return(platform_heap_allocated), size_t n)
 {
 	struct ntlibc_malloc_chunk_hdr *h;
 	void *q;

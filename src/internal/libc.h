@@ -22,6 +22,13 @@
 #include "thread_annotations.h"
 #include "plat_handle.h"
 
+#ifndef token
+#define token __token_type
+#endif
+token internal_heap_allocated
+	dynamic_storage;
+#undef token
+
 /* ---- lockset (Clang Thread Safety Analysis) capability tokens ---------
  * Two internal locks get a NTLIBC_CAPABILITY token here: __sig_lock()/
  * __sig_unlock() (a real function pair, acquire/release-annotated
@@ -99,10 +106,10 @@ int __errno_from_doserror(unsigned);
 /* Convert a NUL-terminated UTF-8 string into a freshly malloc'd
  * NUL-terminated UTF-16 one; NULL with errno on failure.  *wlen, if not
  * NULL, receives the length in WCHARs excluding the terminator. */
-__attribute__((ownership_returns(internal_malloc)))
+withtok(internal_heap_allocated)
 WCHAR *__utf8_to_utf16(const char *, size_t *wlen);
 /* Convert n WCHARs into a freshly malloc'd NUL-terminated UTF-8 string. */
-__attribute__((ownership_returns(internal_malloc)))
+withtok(internal_heap_allocated)
 char *__utf16_to_utf8(const WCHAR *, size_t n);
 /* Convert into a caller-supplied buffer; returns bytes written excluding
  * the terminator, or -1 with errno (ERANGE if the buffer is too small). */
@@ -168,7 +175,7 @@ void __ntpath_free(struct __ntpath *);
 int __nt_prefix_not_dir(const UNICODE_STRING *nt, HANDLE root)
     __attribute__((nonnull(1)));
 /* The DOS-form absolute path of a handle, UTF-8, malloc'd. */
-__attribute__((ownership_returns(internal_malloc)))
+withtok(internal_heap_allocated)
 char *__handle_path(HANDLE);
 
 /* The guts of open()/openat(): resolve and open, handing back the raw
@@ -558,10 +565,9 @@ const char *__sh_param_get(int n);
 int __sh_last_status(void);
 
 /* ---- heap -------------------------------------------------------------- */
-__attribute__((ownership_returns(internal_malloc)))
+withtok(internal_heap_allocated)
 void *__malloc(size_t);
-__attribute__((ownership_takes(internal_malloc, 1)))
-void __free(void *);
+void __free(void * consume(internal_heap_allocated));
 
 /* ---- time -------------------------------------------------------------- */
 #define __TICKS_PER_SEC 10000000LL

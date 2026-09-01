@@ -38,7 +38,7 @@
 NTSTATUS NTAPI NtOpenSymbolicLinkObject(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
 NTSTATUS NTAPI NtQuerySymbolicLinkObject(HANDLE, PUNICODE_STRING, PULONG);
 
-__attribute__((ownership_returns(internal_malloc)))
+withtok(internal_heap_allocated)
 char *__handle_path(HANDLE h)
 {
 	char buf[sizeof(OBJECT_NAME_INFORMATION) + 2048 * sizeof(WCHAR)];

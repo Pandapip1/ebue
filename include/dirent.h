@@ -14,6 +14,14 @@ extern "C" {
 #endif
 
 #include <features.h>
+#include <ownership.h>
+
+#ifndef token
+#define token __token_type
+#endif
+token directory_stream_open
+	dynamic_storage;
+#undef token
 
 #define __NEED_ino_t
 #define __NEED_off_t
@@ -55,11 +63,11 @@ struct dirent {
  * caller mistake at compile time; tcc (this project's other target)
  * parses and silently ignores attribute contents it does not know (see
  * include/features.h's own comment on this), so this is free there. */
-__attribute__((ownership_takes(dir_stream, 1), nonnull(1)))
-int            closedir(DIR *);
-__attribute__((ownership_returns(dir_stream)))
+__attribute__((nonnull(1)))
+int            closedir(DIR * consume(directory_stream_open));
+withtok(directory_stream_open)
 DIR           *fdopendir(int);
-__attribute__((ownership_returns(dir_stream)))
+withtok(directory_stream_open)
 DIR           *opendir(const char *);
 struct dirent *readdir(DIR *) __attribute__((nonnull(1)));
 /* entry/result are required too: src/dirent/readdir.c's readdir_r()

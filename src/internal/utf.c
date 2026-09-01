@@ -15,7 +15,7 @@
 #include <string.h>
 #include "libc.h"
 
-__attribute__((ownership_returns(internal_malloc)))
+withtok(internal_heap_allocated)
 WCHAR *__utf8_to_utf16(const char *s, size_t *wlen)
 {
 	size_t length = strlen(s), allocation;
@@ -62,7 +62,7 @@ int __utf16_to_utf8_buf(const WCHAR *w, size_t n, char *out, size_t outsz)
 	return (int)outlen;
 }
 
-__attribute__((ownership_returns(internal_malloc)))
+withtok(internal_heap_allocated)
 char *__utf16_to_utf8(const WCHAR *w, size_t n)
 {
 	/* UTF-8 is at most 3 bytes per UTF-16 code unit (4 per surrogate pair,

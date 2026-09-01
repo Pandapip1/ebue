@@ -31,17 +31,24 @@
 #define _NTLIBC_PLAT_PAGES_H
 
 #include <features.h>
+#include <ownership.h>
 #include <stddef.h>
 
+#ifndef token
+#define token __token_type
+#endif
+token platform_pages_allocated
+	dynamic_storage;
+#undef token
+
 /* Returns freshly zeroed memory, or NULL on failure. */
-__attribute__((ownership_returns(plat_pages)))
+withtok(platform_pages_allocated)
 void *__plat_pages_alloc(size_t n);
 
 /* `n` must be the exact size a matching __plat_pages_alloc() call
  * returned (or was rounded up to) -- implementations are free to
  * assume it, the same way munmap(2) itself does. */
-__attribute__((ownership_takes(plat_pages, 1)))
-void __plat_pages_free(void *p, size_t n);
+void __plat_pages_free(void *p consume(platform_pages_allocated), size_t n);
 
 #endif
 

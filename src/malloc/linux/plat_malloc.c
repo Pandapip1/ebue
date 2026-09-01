@@ -112,8 +112,7 @@ void *__plat_pages_alloc(size_t n)
 	return (void *)ret; /* MAP_ANONYMOUS is always zero-filled by the kernel */
 }
 
-__attribute__((ownership_takes(plat_pages, 1)))
-void __plat_pages_free(void *p, size_t n)
+void __plat_pages_free(void *p consume(platform_pages_allocated), size_t n)
 {
 	raw_syscall(SYS_munmap, (long)p, (long)n, 0, 0, 0, 0);
 }
