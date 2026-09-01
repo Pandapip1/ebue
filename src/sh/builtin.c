@@ -946,6 +946,35 @@ static int bi_return(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== Tier 4: "bigger engines" ==========================================
+ *
+ * ed(1p), m4(1p): same reasoning as every other batch in this file for
+ * staying registered here even though each also exists as a real
+ * standalone obj/bin/<name>.exe (src/util/<name>.c, declared in
+ * src/internal/util.h) -- a builtin runs in this process,
+ * unconditionally, without depending on __find_program()/__spawn()
+ * succeeding. Both are more stateful than most of the utilities above
+ * (ed's edit buffer, m4's macro table), so both take particular care
+ * documented in their own src/util/<name>.c header comments to never
+ * call exit()/_exit() internally and to leave no static/global state
+ * behind that could leak into a later command in this same shell
+ * session -- see src/internal/util.h's own Tier 4 comment. Neither has
+ * any effect on the shell execution environment itself (2.12's list),
+ * so `env_effect` is 0 for both, same as the rest of this table. */
+static int bi_ed(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_ed(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_ed_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_m4(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_m4(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_m4_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* ==== the dispatcher ==================================================== */
 
 /* `special` is XCU 2.14's distinction, recorded because 2.8.1 hangs
@@ -1033,6 +1062,8 @@ static const struct sh_builtin builtins[] = {
 	{ "expr",  0, 0, bi_expr },
 	{ "ls",    0, 0, bi_ls },
 	{ "awk",   0, 0, bi_awk },
+	{ "ed",    0, 0, bi_ed },
+	{ "m4",    0, 0, bi_m4 },
 	{ 0, 0, 0, 0 }
 };
 
