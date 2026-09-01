@@ -646,6 +646,28 @@ static int bi_awk(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* Tier 4 continued: diff(1p), cmp(1p) -- same reasoning as every other
+ * block above -- each also exists as a real standalone
+ * obj/bin/<name>.exe (src/util/<name>.c, declared in src/internal/
+ * util.h), and stays registered here too so a script run before PATH
+ * lookup or __spawn() can be trusted still has them.  Neither is a
+ * 2.14 special built-in and neither has any effect on the shell
+ * execution environment itself (2.12's list), so `env_effect` is 0 for
+ * both, same as the rest of this table. */
+static int bi_diff(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_diff(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_diff_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_cmp(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_cmp(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_cmp_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* XCU 2.14: "exit [n] -- ... shall cause the shell to exit with the
  * exit status specified by the unsigned decimal integer n.  If n is
  * specified, but its value is not between 0 and 255 inclusively, the
@@ -1064,6 +1086,8 @@ static const struct sh_builtin builtins[] = {
 	{ "awk",   0, 0, bi_awk },
 	{ "ed",    0, 0, bi_ed },
 	{ "m4",    0, 0, bi_m4 },
+	{ "diff",  0, 0, bi_diff },
+	{ "cmp",   0, 0, bi_cmp },
 	{ 0, 0, 0, 0 }
 };
 
