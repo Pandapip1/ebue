@@ -648,6 +648,12 @@ obj/test/util-diffcmp.exe: obj/bin/diff.exe obj/bin/cmp.exe $(SH_EXE)
 # obj/sh/sh.exe -c, so both .exes plus the shell need to exist first.
 obj/test/util-timeutil.exe: obj/bin/time.exe obj/bin/timeout.exe $(SH_EXE)
 
+# test/util-ttyctl.c is the same idea, one tier up again: the
+# terminal-control utilities stty(1p)/tty(1p), each spawned as
+# obj/bin/<name>.exe and exercised as a shell built-in via
+# obj/sh/sh.exe -c, so both .exes plus the shell need to exist first.
+obj/test/util-ttyctl.exe: obj/bin/stty.exe obj/bin/tty.exe $(SH_EXE)
+
 # test/delayall.c and its plugin DLL: proof that an *unmodified* program
 # (plain extern, ordinary call, no ntlibc-specific macro at the call
 # site) gets $ORIGIN delay loading through -Wl,--delay-all and
