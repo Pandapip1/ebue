@@ -29,6 +29,7 @@
 #include <string.h>
 #include <errno.h>
 #include "libc.h"
+#include "ownership_stubs.h"
 
 static int issep(char c) { return c == '/' || c == '\\'; }
 
@@ -47,7 +48,10 @@ static int component(const char **pp, const char **start) // NOLINT(bugprone-eas
 
 static int same(const char *s, int n, const char *word)
 {
-	return strlen(word) == (size_t)n && !memcmp(s, word, (size_t)n);
+	if (strlen(word) != (size_t)n) return 0;
+	__ownership_readable_span(s, (size_t)n);
+	__ownership_readable_span(word, (size_t)n);
+	return !memcmp(s, word, (size_t)n);
 }
 
 static int native_fallback_status(NTSTATUS status)
@@ -151,8 +155,12 @@ int __vfs_resolve_at(int dirfd, const char *path)
 			}
 			joined = __malloc(bytes);
 			if (!joined) { __free(dir); errno = ENOMEM; return -1; }
+			__ownership_writable_span(joined, dl);
+			__ownership_readable_span(dir, dl);
 			memcpy(joined, dir, dl);
 			if (dl && !issep(joined[dl - 1])) joined[dl++] = '\\';
+			__ownership_writable_span(joined + dl, pl + 1);
+			__ownership_readable_span(path, pl + 1);
 			memcpy(joined + dl, path, pl + 1);
 			__free(dir);
 			if (__ntpath_native(joined, &np, OBJ_CASE_INSENSITIVE) < 0) {
