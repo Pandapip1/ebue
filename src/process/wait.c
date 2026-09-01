@@ -37,6 +37,7 @@
 #include <string.h>
 #include "libc.h"
 #include "plat_process.h"
+#include "ownership_stubs.h"
 
 /* WIFSIGNALED, WTERMSIG == sig, plus the WCOREDUMP bit for the signals
  * whose default action on Unix is "terminate and dump core". */
@@ -103,6 +104,7 @@ static void ticks_to_timeval(unsigned long long t100ns, struct timeval *tv)
 
 void __rusage_children(struct rusage *ru)
 {
+	__ownership_writable_span(ru, sizeof *ru);
 	memset(ru, 0, sizeof *ru);
 	ticks_to_timeval(children_ktime100ns, &ru->ru_stime);
 	ticks_to_timeval(children_utime100ns, &ru->ru_utime);
@@ -138,6 +140,7 @@ static void fill_child_rusage(__plat_handle_t h, struct rusage *ru)
 {
 	unsigned long long ktime = 0, utime = 0;
 
+	__ownership_writable_span(ru, sizeof *ru);
 	memset(ru, 0, sizeof *ru);
 	if (!h) return;
 	if (__plat_process_times(h, &ktime, &utime) < 0) return;
@@ -262,7 +265,10 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 		               options & (WUNTRACED | WCONTINUED));
 		if (c) {
 			if (status) *status = c->jobstat;
-			if (ru) memset(ru, 0, sizeof *ru);
+			if (ru) {
+				__ownership_writable_span(ru, sizeof *ru);
+				memset(ru, 0, sizeof *ru);
+			}
 			if (!nowait) c->jobstat = 0;
 			return c->pid;
 		}
@@ -281,7 +287,10 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 				c = &__children[i];
 				if (status) *status = c->status;
 				pid = c->pid;
-				if (ru) memset(ru, 0, sizeof *ru);
+				if (ru) {
+					__ownership_writable_span(ru, sizeof *ru);
+					memset(ru, 0, sizeof *ru);
+				}
 				if (!nowait) __child_remove(c);
 				return pid;
 			}
@@ -335,7 +344,16 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 		errno = ECHILD;
 		return -1;
 	}
-	if (c->done) { if (status) *status = c->status; pid = c->pid; if (ru) memset(ru, 0, sizeof *ru); if (!nowait) __child_remove(c); return pid; }
+	if (c->done) {
+		if (status) *status = c->status;
+		pid = c->pid;
+		if (ru) {
+			__ownership_writable_span(ru, sizeof *ru);
+			memset(ru, 0, sizeof *ru);
+		}
+		if (!nowait) __child_remove(c);
+		return pid;
+	}
 
 	wr = __plat_process_wait(c->h, wait_mode(options));
 	if (wr == 0) {
@@ -467,7 +485,10 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options) // NOLINT(bu
 		 * what makes "nothing happened" detectable by a caller that
 		 * only has the 0 return to go on. */
 		if (pid == 0) {
-			if (infop) memset(infop, 0, sizeof *infop);
+			if (infop) {
+				__ownership_writable_span(infop, sizeof *infop);
+				memset(infop, 0, sizeof *infop);
+			}
 			return 0;
 		}
 	} else {
@@ -491,7 +512,10 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options) // NOLINT(bu
 			 * this is plainly "no status available", a 0 return;
 			 * without it, ECHILD is both terminating and true --
 			 * there is no child that can ever satisfy this request. */
-			if (infop) memset(infop, 0, sizeof *infop);
+			if (infop) {
+				__ownership_writable_span(infop, sizeof *infop);
+				memset(infop, 0, sizeof *infop);
+			}
 			if (options & WNOHANG) return 0;
 			errno = ECHILD;
 			return -1;
@@ -499,6 +523,7 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options) // NOLINT(bu
 	}
 
 	if (infop) {
+		__ownership_writable_span(infop, sizeof *infop);
 		memset(infop, 0, sizeof *infop);
 		/* "the si_signo member shall be set equal to SIGCHLD"
 		 * (DESCRIPTION). */
