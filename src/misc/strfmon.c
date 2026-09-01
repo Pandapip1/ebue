@@ -174,7 +174,7 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 		unsigned long fw = 0, lp = 0, rp;
 		const char *sym, *sign, *radix, *thousep, *grouping;
 		char num[512], field[FIELD_MAX];
-		size_t fl = 0, ndigits, nlen, align_pad = 0;
+		size_t fl = 0, ndigits, numlen, nlen, align_pad = 0;
 		char *dot;
 		double x;
 		int n;
@@ -257,9 +257,10 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 		n = snprintf(num, sizeof num, "%.*f", (int)rp,
 		             x < 0 ? -x : x);
 		if (n < 0 || (size_t)n >= sizeof num) { errno = E2BIG; return -1; }
+		numlen = (size_t)n;
 
-		dot = strchr(num, '.');
-		ndigits = dot ? (size_t)(dot - num) : (size_t)n;
+		dot = memchr(num, '.', numlen);
+		ndigits = dot ? (size_t)(dot - num) : numlen;
 
 		/* "#n ... This option causes an amount to be formatted as
 		 * if it has the number of digits specified by n. If more
@@ -345,7 +346,8 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 		 * character appears." */
 		if (dot) {
 			if (fappend(field, &fl, radix, strlen(radix)) < 0) goto e2big;
-			if (fappend(field, &fl, dot + 1, strlen(dot + 1)) < 0) goto e2big;
+			if (fappend(field, &fl, dot + 1, numlen - ndigits - 1) < 0)
+				goto e2big;
 		}
 
 		if (x < 0 && negpar)
