@@ -7,7 +7,8 @@
 // NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 
-char *strncat(char *__restrict d, const char *__restrict s, size_t n)
+char *strncat(char *__restrict d withtok(null_terminated),
+	const char *__restrict s, size_t n)
 {
 	char *a = d;
 	d += strlen(d);

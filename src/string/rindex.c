@@ -4,7 +4,8 @@
 #include <strings.h>
 #include <string.h>
 
-char *rindex(const char *s, int c)
+withtok(null_terminated)
+char *rindex(const char *s withtok(null_terminated), int c)
 {
 	return strrchr(s, c);
 }

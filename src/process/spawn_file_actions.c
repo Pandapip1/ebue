@@ -121,7 +121,7 @@ int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *fa, int fd, int
 }
 
 int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t *__restrict fa,
-                                     int fd, const char *__restrict path, int oflag, mode_t mode) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+                                     int fd, const char *__restrict path withtok(null_terminated), int oflag, mode_t mode) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __spawn_action *a;
 	char *copy;

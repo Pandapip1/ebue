@@ -283,7 +283,7 @@ static size_t expand(char *buf, size_t bufsz, const char *tmpl,
 }
 
 withtok(catalog_opened)
-nl_catd catopen(const char *name, int oflag)
+nl_catd catopen(const char *name withtok(null_terminated), int oflag)
 {
 	/* A named array rather than a second "%N" literal purely so
 	 * `sizeof dflt - 1` names its length without a magic 2: expand()

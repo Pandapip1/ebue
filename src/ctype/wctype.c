@@ -17,7 +17,7 @@ static const char *const classes[] = {
 	"lower", "print", "punct", "space", "upper", "xdigit"
 };
 
-wctype_t wctype(const char *name)
+wctype_t wctype(const char *name withtok(null_terminated))
 {
 	size_t i;
 

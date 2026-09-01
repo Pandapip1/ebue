@@ -1159,7 +1159,8 @@ fail:
 	return NULL;
 }
 
-void *__plat_dlsym(void *__restrict handle, const char *__restrict name)
+void *__plat_dlsym(void *__restrict handle,
+	const char *__restrict name withtok(null_terminated))
 {
 	struct dlobj *obj = handle;
 	size_t i;

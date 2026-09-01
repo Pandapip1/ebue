@@ -204,7 +204,8 @@ void *__plat_dlopen(const char *file, int mode)
  * InLoadOrderModuleList here). Verified sound by hand regardless, for
  * the same reason: PEB_LDR_DATA's own lists are genuinely circular
  * and always populated for any live NT process. */
-void *__plat_dlsym(void *__restrict handle, const char *__restrict name)
+void *__plat_dlsym(void *__restrict handle,
+	const char *__restrict name withtok(null_terminated))
 {
 	if (handle == MAIN_IMAGE_HANDLE && __peb->Ldr) {
 		LIST_ENTRY *head = &__peb->Ldr->InLoadOrderModuleList;

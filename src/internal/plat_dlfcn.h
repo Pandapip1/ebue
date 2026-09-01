@@ -70,7 +70,7 @@ void *__plat_dlopen(const char *file, int mode);
  * ambiguity every backend here inherits rather than resolves
  * differently. */
 void *__plat_dlsym(void *__restrict handle,
-                   const char *__restrict name __NTLIBC_STRING);
+                   const char *__restrict name withtok(null_terminated));
 
 /* dlclose(): release `handle`. 0 on success; nonzero and
  * __plat_dlerror() describes why on failure. */

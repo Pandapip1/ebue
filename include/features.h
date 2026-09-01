@@ -81,18 +81,14 @@
 #endif
 
 /* Memory-operation contracts used only by tools/lint.sh's memcontracts
- * stage.  A string parameter promises a reachable terminating NUL; a span
- * parameter promises at least the byte count supplied by the named,
+ * stage.  A span parameter promises at least the byte count supplied by the named,
  * one-based size parameter.  The checker verifies these preconditions at
  * every visible call and may therefore assume them when analyzing the
  * function body in isolation. */
 #if defined(__clang__) && defined(NTLIBC_MEMORY_CONTRACT_ANALYSIS)
-#define __NTLIBC_STRING \
-	__attribute__((annotate("ntlibc.string")))
 #define __NTLIBC_SPAN(size_parameter) \
 	__attribute__((annotate("ntlibc.span:" #size_parameter)))
 #else
-#define __NTLIBC_STRING
 #define __NTLIBC_SPAN(size_parameter)
 #endif
 

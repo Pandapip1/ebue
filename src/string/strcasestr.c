@@ -3,10 +3,16 @@
 #define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <string.h>
 #include <strings.h>
+#include "ownership_stubs.h"
 
-char *strcasestr(const char *h, const char *n)
+withtok(null_terminated)
+char *strcasestr(const char *h withtok(null_terminated),
+	const char *n withtok(null_terminated))
 {
 	size_t l = strlen(n);
-	for (; *h; h++) if (!strncasecmp(h, n, l)) return (char *)h;
+	for (; *h; h++) if (!strncasecmp(h, n, l)) {
+		__ownership_string_terminated(h);
+		return (char *)h;
+	}
 	return 0;
 }

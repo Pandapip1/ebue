@@ -11,6 +11,7 @@
 
 #include <features.h>
 #include <ownership.h>
+#include <string_tokens.h>
 
 tokdef heap_allocated
 	dynamic_storage;
@@ -71,7 +72,8 @@ _Noreturn void quick_exit (int);
  * POSIX requires), so those two are left unmarked: a nonnull attribute
  * there would tell the compiler their own `if (!name ...)` guard is dead
  * code, which is false. */
-char *getenv (const char *) __attribute__((nonnull(1)));
+withtok(null_terminated)
+char *getenv (const char * withtok(null_terminated)) __attribute__((nonnull(1)));
 
 int system (const char *);
 

@@ -7,6 +7,7 @@
 // NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <signal.h>
+#include "ownership_stubs.h"
 
 /* Indexed by signal number, 0 through SIGSYS (31). */
 static const char *const __sigmsgs[] = { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
@@ -44,11 +45,15 @@ static const char *const __sigmsgs[] = { // NOLINT(bugprone-reserved-identifier,
 	"Bad system call",
 };
 
+withtok(null_terminated)
 char *strsignal(int sig)
 {
+	char *result;
 	if (sig < 0 || (size_t)sig >= sizeof __sigmsgs / sizeof *__sigmsgs)
 		return (char *)"Unknown signal";
-	return (char *)__sigmsgs[sig];
+	result = (char *)__sigmsgs[sig];
+	__ownership_string_terminated(result);
+	return result;
 }
 
 // NOLINTEND(misc-include-cleaner)

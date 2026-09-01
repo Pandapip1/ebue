@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <locale.h>
 #include "libc.h"
+#include "ownership_stubs.h"
 
 /* Indexed by errno; the highest value in bits/errno.h is
  * ENOTRECOVERABLE (131). */
@@ -104,15 +105,19 @@ const char *__strerror_msg(int e)
 	return __errmsgs[e];
 }
 
+withtok(null_terminated)
 char *strerror(int e)
 {
-	return (char *)__strerror_msg(e);
+	char *result = (char *)__strerror_msg(e);
+	__ownership_string_terminated(result);
+	return result;
 }
 
+withtok(null_terminated)
 char *strerror_l(int e, locale_t loc)
 {
 	(void)loc;
-	return (char *)__strerror_msg(e);
+	return strerror(e);
 }
 
 // NOLINTEND(misc-include-cleaner)

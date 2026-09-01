@@ -2,11 +2,20 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <string.h>
+#include "ownership_stubs.h"
 
-char *strchrnul(const char *s, int c)
+withtok(null_terminated)
+char *strchrnul(const char *s withtok(null_terminated), int c)
 {
+	char *result;
 	c = (unsigned char)c;
-	if (!c) return (char *)s + strlen(s);
+	if (!c) {
+		result = (char *)s + strlen(s);
+		__ownership_string_terminated(result);
+		return result;
+	}
 	for (; *s && *(unsigned char *)s != c; s++);
-	return (char *)s;
+	result = (char *)s;
+	__ownership_string_terminated(result);
+	return result;
 }

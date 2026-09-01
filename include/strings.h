@@ -10,6 +10,7 @@
 #define	_STRINGS_H
 
 #include <features.h>
+#include <string_tokens.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,8 +33,10 @@ int bcmp (const void * __NTLIBC_SPAN(3),
 void bcopy (const void * __NTLIBC_SPAN(3),
             void * __NTLIBC_SPAN(3), size_t);
 void bzero (void * __NTLIBC_SPAN(2), size_t);
-char *index (const char * __NTLIBC_STRING, int) __attribute__((__pure__));
-char *rindex (const char * __NTLIBC_STRING, int) __attribute__((__pure__));
+withtok(null_terminated)
+char *index (const char * withtok(null_terminated), int) __attribute__((__pure__));
+withtok(null_terminated)
+char *rindex (const char * withtok(null_terminated), int) __attribute__((__pure__));
 #endif
 
 /* ffs/ffsl/ffsll (src/string/ffs.c, ffsl.c, ffsll.c): pure bit
@@ -49,8 +52,8 @@ int ffsll (long long) __attribute__((__pure__));
  * tolower(*r);` after it dereferences both regardless of how the loop
  * ended -- there is no early-return path in this function that skips
  * it, unlike strncasecmp's n == 0 case below. */
-int strcasecmp (const char * __NTLIBC_STRING,
-                const char * __NTLIBC_STRING)
+int strcasecmp (const char * withtok(null_terminated),
+                const char * withtok(null_terminated))
     __attribute__((nonnull(1, 2), __pure__));
 /* strncasecmp's `if (!n) return 0;` is a real, structural escape (n ==
  * 0 skips both pointers entirely, the same mem*-style convention);
@@ -65,8 +68,8 @@ int strncasecmp (const char *, const char *, size_t) __attribute__((nonnull(1, 2
  * ASCII-only C/POSIX, so there is no second behaviour to select),
  * inheriting the same requirement on their string arguments and the
  * same __pure__ reasoning. */
-int strcasecmp_l (const char * __NTLIBC_STRING,
-                  const char * __NTLIBC_STRING, locale_t)
+int strcasecmp_l (const char * withtok(null_terminated),
+                  const char * withtok(null_terminated), locale_t)
     __attribute__((nonnull(1, 2), __pure__));
 int strncasecmp_l (const char *, const char *, size_t, locale_t) __attribute__((nonnull(1, 2), __pure__));
 

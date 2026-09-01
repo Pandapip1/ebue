@@ -52,6 +52,7 @@ extern "C" {
 #endif
 
 #include <features.h>
+#include <string_tokens.h>
 #include <ownership.h>
 
 #define __NEED_nl_catd
@@ -69,7 +70,7 @@ tokdef catalog_opened
 int      catclose(nl_catd consume(catalog_opened));
 char    *catgets(nl_catd withtok(catalog_opened), int, int, const char *);
 withtok(catalog_opened)
-nl_catd  catopen(const char * __NTLIBC_STRING, int);
+nl_catd  catopen(const char * withtok(null_terminated), int);
 
 #ifdef __cplusplus
 }

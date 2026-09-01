@@ -8,12 +8,14 @@
 #include <string.h>
 #include <locale.h>
 
-int strcoll(const char *l, const char *r)
+int strcoll(const char *l withtok(null_terminated),
+	const char *r withtok(null_terminated))
 {
 	return strcmp(l, r);
 }
 
-int strcoll_l(const char *l, const char *r, locale_t loc)
+int strcoll_l(const char *l withtok(null_terminated),
+	const char *r withtok(null_terminated), locale_t loc)
 {
 	(void)loc;
 	return strcmp(l, r);

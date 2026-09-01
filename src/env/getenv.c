@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "libc.h"
+#include "ownership_stubs.h"
 
 /* Windows environment names are case-insensitive, and a program asking
  * for "PATH" must find "Path", which is how Windows spells it.
@@ -36,11 +37,15 @@ char **__env_find(const char *name, size_t l)
 	return 0;
 }
 
-char *getenv(const char *name)
+withtok(null_terminated)
+char *getenv(const char *name withtok(null_terminated))
 {
 	size_t l = strcspn(name, "=");
 	char **e;
+	char *result;
 	if (!l || name[l]) return 0;
 	e = __env_find(name, l);
-	return e ? *e + l + 1 : 0;
+	result = e ? *e + l + 1 : 0;
+	if (result) __ownership_string_terminated(result);
+	return result;
 }

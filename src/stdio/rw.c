@@ -200,7 +200,7 @@ int fputs(const char *__restrict s, FILE *__restrict f)
 	return __fwrite(s, 1, n, f) == n ? 0 : EOF;
 }
 
-int puts(const char *s)
+int puts(const char *s withtok(null_terminated))
 {
 	if (fputs(s, stdout) == EOF) return EOF;
 	if (__fputc('\n', stdout) == EOF) return EOF;

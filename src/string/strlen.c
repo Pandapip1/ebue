@@ -14,7 +14,7 @@
  * place, not a bug in it. */
 #define HASZERO(x) (((x)-ONES) & ~(x) & HIGHS)
 
-__wraps size_t strlen(const char *s)
+__wraps size_t strlen(const char *s withtok(null_terminated))
 {
 	const char *a = s;
 	const size_t *w;

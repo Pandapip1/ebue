@@ -10,6 +10,7 @@
 #define _STDIO_H
 
 #include <features.h>
+#include <string_tokens.h>
 #include <stdlib.h>
 
 #ifdef __cplusplus
@@ -70,8 +71,8 @@ extern FILE *const stderr;
 #define stdout (stdout)
 #define stderr (stderr)
 
-FILE *fopen(const char *__restrict __NTLIBC_STRING,
-            const char *__restrict __NTLIBC_STRING);
+FILE *fopen(const char *__restrict withtok(null_terminated),
+            const char *__restrict withtok(null_terminated));
 /* freopen's own stream is required: src/stdio/file.c's freopen() reads
  * `oldfd = f->fd;` right after its own `fflush(f)` (which, like plain
  * fflush() below, tolerates a null stream on its own), unconditionally,
@@ -146,7 +147,7 @@ char *gets(char *);
 /* fputs: s is dereferenced by strlen(s), unconditionally, first
  * statement; f is required the same way __fwrite() (rw.c) needs it. */
 int fputs(const char *__restrict, FILE *__restrict) __attribute__((nonnull(1, 2)));
-int puts(const char * __NTLIBC_STRING) __attribute__((nonnull(1)));
+int puts(const char * withtok(null_terminated)) __attribute__((nonnull(1)));
 
 /* fmt is required everywhere below (src/stdio/printf.c's own
  * formatter loop dereferences it unconditionally, whichever entry

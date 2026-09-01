@@ -59,7 +59,8 @@ void *dlopen(const char *file, int mode)
 	return __plat_dlopen(file, mode);
 }
 
-void *dlsym(void *__restrict handle, const char *__restrict name)
+void *dlsym(void *__restrict handle,
+	const char *__restrict name withtok(null_terminated))
 {
 	return __plat_dlsym(handle, name);
 }

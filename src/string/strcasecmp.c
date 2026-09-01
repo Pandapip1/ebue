@@ -3,7 +3,8 @@
 #include <strings.h>
 #include <ctype.h>
 
-int strcasecmp(const char *_l, const char *_r)
+int strcasecmp(const char *_l withtok(null_terminated),
+	const char *_r withtok(null_terminated))
 {
 	const unsigned char *l = (void *)_l, *r = (void *)_r;
 	int lc, rc;
@@ -14,7 +15,8 @@ int strcasecmp(const char *_l, const char *_r)
 	return lc > rc;
 }
 
-int strcasecmp_l(const char *l, const char *r, locale_t loc)
+int strcasecmp_l(const char *l withtok(null_terminated),
+	const char *r withtok(null_terminated), locale_t loc)
 {
 	(void)loc;
 	return strcasecmp(l, r);

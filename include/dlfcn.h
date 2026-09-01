@@ -52,6 +52,7 @@
 #define _DLFCN_H
 
 #include <features.h>
+#include <string_tokens.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,7 +64,7 @@ extern "C" {
 #define RTLD_LOCAL  8
 
 void *dlopen(const char *, int);
-void *dlsym(void *__restrict, const char *__restrict __NTLIBC_STRING);
+void *dlsym(void *__restrict, const char *__restrict withtok(null_terminated));
 int   dlclose(void *);
 char *dlerror(void);
 

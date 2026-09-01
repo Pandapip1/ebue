@@ -86,7 +86,8 @@ void __file_free(FILE *f)
 	free(f);
 }
 
-FILE *fopen(const char *__restrict path, const char *__restrict mode) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+FILE *fopen(const char *__restrict path withtok(null_terminated),
+	const char *__restrict mode withtok(null_terminated)) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int flags = __fmodeflags(mode);
 	int fd;
