@@ -53,7 +53,11 @@ static long double stirling(long double z)
 static long double lgamma_pos(long double x)
 {
 	long double sum = 0.0L;
-	while (x < 8.0L) {
+	/* Whenever x enters this loop it is positive and below 8, so at most
+	 * eight unit shifts can be needed to reach the Stirling range. */
+	unsigned remaining = 8;
+	while (remaining > 0 && x < 8.0L) {
+		remaining--;
 		sum += logl(x);
 		x += 1.0L;
 	}
