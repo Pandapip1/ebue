@@ -196,21 +196,21 @@ static void process_field_mode(FILE *f, const struct range *ranges, size_t nr, c
 
 		{
 			long field = 1;
-			size_t start = 0;
+			char *start = line;
+			char *end = line + ulen;
 			int wrote_any = 0;
 
 			for (;;) {
-				size_t end = start;
-
-				while (end < ulen && line[end] != delim) end++;
+				char *p = memchr(start, delim, (size_t)(end - start));
+				size_t flen = p ? (size_t)(p - start) : (size_t)(end - start);
 
 				if (is_selected(ranges, nr, field)) {
 					if (wrote_any) fputc(delim, stdout);
-					fwrite(line + start, 1, end - start, stdout);
+					fwrite(start, 1, flen, stdout);
 					wrote_any = 1;
 				}
-				if (end == ulen) break;
-				start = end + 1;
+				if (!p) break;
+				start = p + 1;
 				field++;
 			}
 			if (had_nl) fputc('\n', stdout);
