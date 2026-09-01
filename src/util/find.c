@@ -153,6 +153,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include "util.h"
+#include "find.h"
 #include "libc.h" /* __find_program()/__spawn() -- src/process/, the same primitives sh's own execute.c uses */
 
 enum ntype {
@@ -163,7 +164,8 @@ enum ntype {
 
 struct node {
 	enum ntype type;
-	struct node *a, *b;
+	struct node *a withtok(find_expression_allocated);
+	struct node *b withtok(find_expression_allocated);
 
 	const char *pat;        /* -name / -path */
 	int type_char;          /* -type */
@@ -180,7 +182,7 @@ struct node {
 	size_t exec_argc;
 	int exec_plus;             /* "{} +" form vs. "{} ;" */
 	int is_ok;                 /* -ok vs -exec */
-	char **acc;                 /* "{} +": accumulated matched pathnames */
+	char **acc withtok(heap_allocated); /* "{} +": accumulated matched pathnames */
 	size_t acc_n, acc_cap;
 };
 
@@ -194,7 +196,7 @@ struct find_global {
 	int exit_status;
 	int fatal;
 	time_t now;
-	char **pruned;
+	char **pruned withtok(heap_allocated);
 	size_t pruned_n, pruned_cap;
 };
 
@@ -202,12 +204,25 @@ static struct find_global g_find;
 
 /* ==== parsing ============================================================ */
 
+withtok(find_expression_allocated)
 static struct node *alloc_node(enum ntype t)
 {
 	struct node *n = calloc(1, sizeof *n);
 	if (!n) { __util_diagf("find: out of memory\n"); exit(2); }
 	n->type = t;
 	return n;
+}
+
+// NOLINTNEXTLINE(misc-no-recursion) -- ownership follows the argc-bounded expression tree
+static void free_node(struct node *n consume(find_expression_allocated))
+{
+	size_t i;
+	if (!n) return;
+	free_node(n->a);
+	free_node(n->b);
+	for (i = 0; i < n->acc_n; i++) free(n->acc[i]);
+	free(n->acc);
+	free(n);
 }
 
 static void ferr(struct find_ctx *c, const char *msg) __attribute__((nonnull(1, 2)));
@@ -256,12 +271,17 @@ static int parse_num(const char *tok, long *out, int *cmp)
 	return 0;
 }
 
+withtok(find_expression_allocated)
 static struct node *parse_or(struct find_ctx *c) __attribute__((nonnull(1)));
+withtok(find_expression_allocated)
 static struct node *parse_and(struct find_ctx *c) __attribute__((nonnull(1)));
+withtok(find_expression_allocated)
 static struct node *parse_not(struct find_ctx *c) __attribute__((nonnull(1)));
+withtok(find_expression_allocated)
 static struct node *parse_primary(struct find_ctx *c) __attribute__((nonnull(1)));
 
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested find-expression grouping and is argc-bounded
+withtok(find_expression_allocated)
 static struct node *parse_primary(struct find_ctx *c)
 {
 	const char *t;
@@ -425,6 +445,7 @@ static struct node *parse_primary(struct find_ctx *c)
 }
 
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested find-expression grouping and is argc-bounded
+withtok(find_expression_allocated)
 static struct node *parse_not(struct find_ctx *c)
 {
 	if (peek(c) && !strcmp(peek(c), "!")) {
@@ -437,6 +458,7 @@ static struct node *parse_not(struct find_ctx *c)
 }
 
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested find-expression grouping and is argc-bounded
+withtok(find_expression_allocated)
 static struct node *parse_and(struct find_ctx *c)
 {
 	struct node *l = parse_not(c);
@@ -457,6 +479,7 @@ static struct node *parse_and(struct find_ctx *c)
 }
 
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested find-expression grouping and is argc-bounded
+withtok(find_expression_allocated)
 static struct node *parse_or(struct find_ctx *c)
 {
 	struct node *l = parse_and(c);
@@ -544,6 +567,20 @@ static int under_pruned(const char *path)
 		if (!strncmp(path, g_find.pruned[i], pl) && path[pl] == '/') return 1;
 	}
 	return 0;
+}
+
+static void clear_pruned_from(size_t first)
+{
+	while (g_find.pruned_n > first)
+		free(g_find.pruned[--g_find.pruned_n]);
+}
+
+static void free_find_global(void)
+{
+	clear_pruned_from(0);
+	free(g_find.pruned);
+	g_find.pruned = NULL;
+	g_find.pruned_cap = 0;
 }
 
 static int spawn_and_wait(char *const argv2[]) __attribute__((nonnull(1)));
@@ -747,7 +784,7 @@ int __util_find_main(int argc, char **argv)
 	} else {
 		root = parse_or(&c);
 		if (!c.err && c.i != c.n) ferr(&c, "unexpected argument");
-		if (c.err) return 2;
+		if (c.err) { free_node(root); return 2; }
 		if (!has_action(root)) {
 			struct node *print = alloc_node(P_PRINT);
 			struct node *and_ = alloc_node(N_AND);
@@ -769,14 +806,22 @@ int __util_find_main(int argc, char **argv)
 			__util_diagf("find: %s: %s\n", paths[pi], strerror(errno));
 			g_find.exit_status = 1;
 		}
-		g_find.pruned_n = saved_pruned;
+		clear_pruned_from(saved_pruned);
 	}
 	if (g_find.fatal) {
 		__util_diagf("find: out of memory\n");
+		g_root = NULL;
+		free_find_global();
+		free_node(root);
 		return 1;
 	}
 
 	flush_plus(root);
-
-	return g_find.exit_status;
+	{
+		int status = g_find.exit_status;
+		g_root = NULL;
+		free_find_global();
+		free_node(root);
+		return status;
+	}
 }
