@@ -78,6 +78,7 @@ static inline int __util_size_mul(size_t a, size_t b, size_t *out)
 	return 1;
 }
 
+withtok(heap_allocated)
 static inline void *__util_mallocarray(size_t count, size_t element_size)
 {
 	size_t bytes;
@@ -85,7 +86,9 @@ static inline void *__util_mallocarray(size_t count, size_t element_size)
 	return malloc(bytes);
 }
 
-static inline void *__util_reallocarray(void *ptr, size_t count,
+withtok(heap_allocated)
+static inline void *__util_reallocarray(
+	void *ptr consume_if_nonnull_return(heap_allocated), size_t count,
 	size_t element_size)
 {
 	size_t bytes;

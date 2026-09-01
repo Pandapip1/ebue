@@ -36,6 +36,7 @@ struct pv {
 	size_t n, cap;
 };
 
+withtok(internal_heap_allocated)
 static char *xstrdup(const char *s)
 {
 	size_t n = strlen(s) + 1;
@@ -136,8 +137,10 @@ static int has_meta(const char *s, size_t len, int flags)
 /* s required: subscripted unconditionally (`s[i]`) whenever len >= 1,
  * and its one real call site (do_glob()) passes pat, itself required,
  * never NULL.  On success outlen receives the number of output bytes. */
+withtok(internal_heap_allocated)
 static char *unescape(const char *s, size_t len, int flags, size_t *outlen)
     __attribute__((nonnull(1)));
+withtok(internal_heap_allocated)
 static char *unescape(const char *s, size_t len, int flags, size_t *outlen)
 {
 	char *buf = __malloc(len + 1);
