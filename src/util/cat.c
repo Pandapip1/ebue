@@ -51,10 +51,12 @@ static int copy_stream(int in, const char *label)
 
 	while ((n = read(in, buf, sizeof buf)) > 0) {
 		char *p = buf;
-		ssize_t left = n;
-		while (left > 0) {
+		ssize_t left = n, remaining = n;
+		while (left > 0 && remaining > 0) {
 			ssize_t w = write(STDOUT_FILENO, p, (size_t)left);
-			if (w < 0) {
+			remaining--;
+			if (w <= 0 || w > left) {
+				if (w >= 0) errno = EIO;
 				__util_diagf("cat: %s: %s\n", label, strerror(errno));
 				return -1;
 			}
