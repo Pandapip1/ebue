@@ -89,6 +89,11 @@ void overfill_typed_object(struct fixture_record *record)
 	memset(record, 0, sizeof *record + 1); /* memory-contract-expect */
 }
 
+void overfill_typed_member(struct fixture_record *record)
+{
+	memset(&record->second, 0, sizeof record->second + 1); /* memory-contract-expect */
+}
+
 void movable_path_axiom(char *buffer, size_t length, int use_local)
 {
 	char local[8];

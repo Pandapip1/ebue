@@ -318,7 +318,6 @@ static int ntpath_impl(const char *path, struct __ntpath *out, ULONG attributes,
 	if (NT_SUCCESS(st)) {
 		out->buf = out->nt.Buffer;
 		out->dos = dos;
-		__ownership_writable_span(&out->oa, sizeof out->oa);
 		InitializeObjectAttributes(&out->oa, &out->nt, attributes, 0, 0);
 	} else if (st == STATUS_NAME_TOO_LONG &&
 	           !nt_path_over_max_path(dos, n, &trailing, out, attributes)) {
@@ -564,7 +563,6 @@ static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
 	out->nt.MaximumLength = (USHORT)(out->nt.Length + sizeof(WCHAR));
 	out->buf = 0;                   /* w is freed as ->dos */
 	out->dos = w;
-	__ownership_writable_span(&out->oa, sizeof out->oa);
 	InitializeObjectAttributes(&out->oa, &out->nt, attributes, 0, 0);
 	return 0;
 }
@@ -690,7 +688,6 @@ static int ntpath_at_impl(int dirfd, const char *path, struct __ntpath *out,
 		out->nt.MaximumLength = (USHORT)(out->nt.Length + sizeof(WCHAR));
 		out->buf = 0;      /* w is freed as dos */
 		out->dos = w;
-		__ownership_writable_span(&out->oa, sizeof out->oa);
 		InitializeObjectAttributes(&out->oa, &out->nt, attributes, f->h, 0);
 		if (trailing && reject_if_not_dir(out)) return -1;
 		/* Relative to RootDirectory: every component of this name is a

@@ -202,9 +202,7 @@ int __afd_addr_from_sockaddr(const struct sockaddr *addr, socklen_t len, TRANSPO
 	out->Address[0].AddressType = TDI_ADDRESS_TYPE_IP;
 	a = out->Address[0].Address;
 	memset(a, 0, TDI_ADDRESS_LENGTH_IP);
-	__ownership_readable_span(&sin->sin_port, sizeof(sin->sin_port));
 	memcpy(a + TDI_IP_OFF_PORT, &sin->sin_port, sizeof(sin->sin_port));
-	__ownership_readable_span(&sin->sin_addr.s_addr, sizeof(sin->sin_addr.s_addr));
 	memcpy(a + TDI_IP_OFF_ADDR, &sin->sin_addr.s_addr, sizeof(sin->sin_addr.s_addr));
 	/* sin_zero is already zeroed by the memset above. */
 	return 0;

@@ -153,6 +153,11 @@ void bounded_operations(int fd)
 	read(fd, destination, sizeof destination);
 }
 
+void clear_typed_member(struct fixture_record *record)
+{
+	memset(&record->second, 0, sizeof record->second);
+}
+
 /* strndup.c's own shape: this tree's own allocator (__malloc, not the
  * literally-named "malloc" clang's builtin modeling already knows how to
  * give a real dynamic extent) is sized as `l + 1`, and the destination

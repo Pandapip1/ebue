@@ -770,10 +770,6 @@ static int sid_in_domain(const SID *sid, const SID *domain)
 		return 0;
 	if (sid->Revision != domain->Revision)
 		return 0;
-	__ownership_readable_span(&sid->IdentifierAuthority,
-	                          sizeof sid->IdentifierAuthority);
-	__ownership_readable_span(&domain->IdentifierAuthority,
-	                          sizeof domain->IdentifierAuthority);
 	if (memcmp(&sid->IdentifierAuthority, &domain->IdentifierAuthority,
 	           sizeof sid->IdentifierAuthority) != 0)
 		return 0;

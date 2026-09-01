@@ -685,7 +685,11 @@ public:
     const Expr *Object = PointerExpression->IgnoreParenCasts();
     QualType ObjectType = Object->getType();
     QualType ExtentType;
-    if (ObjectType->isArrayType()) {
+    if (const auto *Address = dyn_cast<UnaryOperator>(Object);
+        Address && Address->getOpcode() == UO_AddrOf) {
+      Object = Address->getSubExpr()->IgnoreParenImpCasts();
+      ExtentType = Object->getType();
+    } else if (ObjectType->isArrayType()) {
       ExtentType = ObjectType;
     } else {
       if (!isa<DeclRefExpr>(Object) && !isa<MemberExpr>(Object))

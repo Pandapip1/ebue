@@ -43,12 +43,14 @@
 
 /* Big non-negative integers, base 2^32, least significant limb first.
  * n is the number of limbs in use, with no leading zero limb, so n == 0
- * means the value is zero.  The size is chosen so that nothing here can
+ * means the value is zero.  Its narrow unsigned type encodes the nonnegative
+ * domain, and every operation below keeps it at or below BN_LIMBS.  The size
+ * is chosen so that nothing here can
  * overflow it: the widest intermediate is the divisor scaled by the
  * quotient width, at most 800 digits (2658 bits) of decimal mantissa
  * plus 1074 bits of subnormal scaling plus 53 bits of quotient. */
 #define BN_LIMBS 180
-typedef struct { int n; uint32_t d[BN_LIMBS]; } bn_t;
+typedef struct { unsigned char n; uint32_t d[BN_LIMBS]; } bn_t;
 
 /* Every bn_*() function below shares the identical `const bn_t *`/
  * `bn_t *` contract, verified individually against each one's own body,
@@ -180,28 +182,16 @@ __wraps static void bn_sub(bn_t *a, const bn_t *b)
 		a->d[i] = (uint32_t)t;
 		borrow = (t >> 32) & 1;
 	}
-	{
-		/* At most the current limb count can be trimmed. */
-		int trim = a->n;
-		while (trim > 0 && a->n && !a->d[a->n - 1]) { // NOLINT(clang-analyzer-security.ArrayBound) -- bn_shl already clamps a->n to BN_LIMBS before any write reaches it
-			a->n--;
-			trim--;
-		}
-	}
+	while (a->n && !a->d[a->n - 1]) a->n--; // NOLINT(clang-analyzer-security.ArrayBound) -- bn_shl already clamps a->n to BN_LIMBS before any write reaches it
 }
 
 /* a *= 10^e (e >= 0), as 5^e followed by an exact shift. */
 static void bn_mul_pow10(bn_t *a, int e)
 {
 	int k = e;
-	/* Every caller passes a nonnegative exponent.  Snapshot the exact
-	 * number of full 5^13 chunks before bn_muladd() can obscure it. */
-	int chunks = k / 13;
-
-	while (chunks > 0) {
+	while (k >= 13) {
 		bn_muladd(a, 1220703125u, 0); /* 5^13 */
 		k -= 13;
-		chunks--;
 	}
 	if (k) {
 		uint32_t m = 1;
