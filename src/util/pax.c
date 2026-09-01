@@ -146,6 +146,7 @@
 #include <fnmatch.h>
 #include <ftw.h>
 #include <sys/stat.h>
+#include "ownership_stubs.h"
 #include "util.h"
 
 #define PAX_PATH_MAX 4096
@@ -231,7 +232,11 @@ static int ustar_split_name(const char *path, char *prefix, char *name)
 			size_t plen = i - 1;
 			size_t nlen = len - i;
 			if (plen <= 155 && nlen > 0 && nlen <= 100) {
+				__ownership_writable_span(prefix, plen);
+				__ownership_readable_span(path, plen);
 				memcpy(prefix, path, plen); prefix[plen] = 0;
+				__ownership_writable_span(name, nlen);
+				__ownership_readable_span(path + i, nlen);
 				memcpy(name, path + i, nlen); name[nlen] = 0;
 				return 0;
 			}
@@ -244,6 +249,8 @@ static void ustar_put_oct(unsigned char *field, int width, unsigned long value)
 {
 	char tmp[24];
 	snprintf(tmp, sizeof tmp, "%0*lo", width - 1, value);
+	__ownership_writable_span(field, (size_t)(width - 1));
+	__ownership_readable_span(tmp, (size_t)(width - 1));
 	memcpy(field, tmp, width - 1);
 	field[width - 1] = 0;
 }
@@ -290,7 +297,12 @@ static int write_ustar_header(FILE *out, const struct pax_member *m)
 	}
 
 	memset(block, 0, sizeof block);
-	memcpy(block, name, strlen(name));
+	{
+		size_t name_len = strlen(name);
+		__ownership_writable_span(block, name_len);
+		__ownership_readable_span(name, name_len);
+		memcpy(block, name, name_len);
+	}
 	ustar_put_oct(block + 100, 8, m->mode & 07777);
 	ustar_put_oct(block + 108, 8, 0); /* uid */
 	ustar_put_oct(block + 116, 8, 0); /* gid */
@@ -302,7 +314,12 @@ static int write_ustar_header(FILE *out, const struct pax_member *m)
 		strncpy((char *)block + 157, m->linkname, 100);
 	memcpy(block + 257, "ustar", 6);
 	memcpy(block + 263, "00", 2);
-	memcpy(block + 345, prefix, strlen(prefix));
+	{
+		size_t prefix_len = strlen(prefix);
+		__ownership_writable_span(block + 345, prefix_len);
+		__ownership_readable_span(prefix, prefix_len);
+		memcpy(block + 345, prefix, prefix_len);
+	}
 
 	sum = 0;
 	for (i = 0; i < sizeof block; i++) sum += block[i];
@@ -386,6 +403,8 @@ static int cpio_put_field(char *field, int width, unsigned long value, const cha
 		return -1;
 	}
 	snprintf(tmp, sizeof tmp, "%0*lo", width, value);
+	__ownership_writable_span(field, (size_t)width);
+	__ownership_readable_span(tmp, (size_t)width);
 	memcpy(field, tmp, width);
 	return 0;
 }
@@ -830,6 +849,7 @@ static int materialize(const struct pax_member *m, const char *destpath,
 			while ((n = read(srcfd, buf, sizeof buf)) > 0) {
 				char *p = buf; ssize_t left = n;
 				while (left > 0) {
+					__ownership_readable_span(p, (size_t)left);
 					ssize_t w = write(fd, p, (size_t)left);
 					if (w < 0) { __util_diagf("pax: %s: %s\n", destpath, strerror(errno)); close(fd); return -1; }
 					p += w; left -= w;
