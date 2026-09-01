@@ -18,16 +18,10 @@ void __ownership_pthread_mutex_unlocked(void * consume(pthread_mutex_locked) gra
 
 void __ownership_pthread_mutex_destroyed(void * consume(pthread_mutex_unlocked));
 
-__attribute__((ownership_adds_token(pthread_spin_unlocked, 1)))
-void __ownership_pthread_spin_initialized(void *);
-__attribute__((ownership_drops_token(pthread_spin_unlocked, 1),
-	ownership_adds_duplicable_token(pthread_spin_locked, 1)))
-void __ownership_pthread_spin_locked(void *);
-__attribute__((ownership_drops_token(pthread_spin_locked, 1),
-	ownership_adds_token(pthread_spin_unlocked, 1)))
-void __ownership_pthread_spin_unlocked(void *);
-__attribute__((ownership_drops_token(pthread_spin_unlocked, 1)))
-void __ownership_pthread_spin_destroyed(void *);
+void __ownership_pthread_spin_initialized(void * grant(pthread_spin_unlocked));
+void __ownership_pthread_spin_locked(void * consume(pthread_spin_unlocked) grant(pthread_spin_locked));
+void __ownership_pthread_spin_unlocked(void * consume(pthread_spin_locked) grant(pthread_spin_unlocked));
+void __ownership_pthread_spin_destroyed(void * consume(pthread_spin_unlocked));
 
 #else
 

@@ -212,11 +212,11 @@ int pthread_barrierattr_destroy(pthread_barrierattr_t * destroy(pthread_barriera
 int pthread_barrierattr_getpshared(const pthread_barrierattr_t *__restrict handle(pthread_barrierattr), int *__restrict);
 int pthread_barrierattr_setpshared(pthread_barrierattr_t * handle(pthread_barrierattr), int);
 
-int pthread_spin_init(pthread_spinlock_t *, int) __attribute__((ownership_constructs(pthread_spin, 1), ownership_adds_token(pthread_spin_unlocked, 1)));
-int pthread_spin_destroy(pthread_spinlock_t *) __attribute__((ownership_destroys(pthread_spin, 1), ownership_drops_token(pthread_spin_unlocked, 1)));
-int pthread_spin_lock(pthread_spinlock_t *) __attribute__((ownership_requires_handle(pthread_spin, 1), ownership_drops_token(pthread_spin_unlocked, 1), ownership_adds_duplicable_token(pthread_spin_locked, 1)));
-int pthread_spin_trylock(pthread_spinlock_t *) __attribute__((ownership_requires_handle(pthread_spin, 1), ownership_drops_token(pthread_spin_unlocked, 1), ownership_adds_duplicable_token(pthread_spin_locked, 1)));
-int pthread_spin_unlock(pthread_spinlock_t *) __attribute__((ownership_requires_handle(pthread_spin, 1), ownership_drops_token(pthread_spin_locked, 1), ownership_adds_token(pthread_spin_unlocked, 1)));
+int pthread_spin_init(pthread_spinlock_t * construct(pthread_spin) grant(pthread_spin_unlocked), int);
+int pthread_spin_destroy(pthread_spinlock_t * destroy(pthread_spin) consume(pthread_spin_unlocked));
+int pthread_spin_lock(pthread_spinlock_t * handle(pthread_spin) consume(pthread_spin_unlocked) grant(pthread_spin_locked));
+int pthread_spin_trylock(pthread_spinlock_t * handle(pthread_spin) consume(pthread_spin_unlocked) grant(pthread_spin_locked));
+int pthread_spin_unlock(pthread_spinlock_t * handle(pthread_spin) consume(pthread_spin_locked) grant(pthread_spin_unlocked));
 
 int pthread_atfork(void (*)(void), void (*)(void), void (*)(void));
 int pthread_kill(pthread_t, int);

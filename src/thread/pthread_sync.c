@@ -86,9 +86,7 @@ static void alertable_yield(void)
 	sched_yield();
 }
 
-__attribute__((ownership_constructs(pthread_spin, 1),
-  ownership_adds_token(pthread_spin_unlocked, 1)))
-int pthread_spin_init(pthread_spinlock_t *lock, int pshared)
+int pthread_spin_init(pthread_spinlock_t *lock construct(pthread_spin) grant(pthread_spin_unlocked), int pshared)
 {
 	if (!lock || (pshared != PTHREAD_PROCESS_PRIVATE &&
 	    pshared != PTHREAD_PROCESS_SHARED)) return EINVAL;
@@ -97,9 +95,7 @@ int pthread_spin_init(pthread_spinlock_t *lock, int pshared)
 	return 0;
 }
 
-__attribute__((ownership_destroys(pthread_spin, 1),
-  ownership_drops_token(pthread_spin_unlocked, 1)))
-int pthread_spin_destroy(pthread_spinlock_t *lock)
+int pthread_spin_destroy(pthread_spinlock_t *lock destroy(pthread_spin) consume(pthread_spin_unlocked))
 {
 	if (!lock || lock->__value != SPIN_UNLOCKED) return EBUSY;
 	lock->__value = 0;
@@ -107,10 +103,7 @@ int pthread_spin_destroy(pthread_spinlock_t *lock)
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_spin, 1),
-  ownership_drops_token(pthread_spin_unlocked, 1),
-  ownership_adds_duplicable_token(pthread_spin_locked, 1)))
-int pthread_spin_lock(pthread_spinlock_t *lock)
+int pthread_spin_lock(pthread_spinlock_t *lock handle(pthread_spin) consume(pthread_spin_unlocked) grant(pthread_spin_locked))
 {
 	if (!lock) return EINVAL;
 	for (;;) {
@@ -126,10 +119,7 @@ int pthread_spin_lock(pthread_spinlock_t *lock)
 	}
 }
 
-__attribute__((ownership_requires_handle(pthread_spin, 1),
-  ownership_drops_token(pthread_spin_unlocked, 1),
-  ownership_adds_duplicable_token(pthread_spin_locked, 1)))
-int pthread_spin_trylock(pthread_spinlock_t *lock)
+int pthread_spin_trylock(pthread_spinlock_t *lock handle(pthread_spin) consume(pthread_spin_unlocked) grant(pthread_spin_locked))
 {
 	int state;
 	if (!lock) return EINVAL;
@@ -144,10 +134,7 @@ int pthread_spin_trylock(pthread_spinlock_t *lock)
 	return EBUSY;
 }
 
-__attribute__((ownership_requires_handle(pthread_spin, 1),
-  ownership_drops_token(pthread_spin_locked, 1),
-  ownership_adds_token(pthread_spin_unlocked, 1)))
-int pthread_spin_unlock(pthread_spinlock_t *lock)
+int pthread_spin_unlock(pthread_spinlock_t *lock handle(pthread_spin) consume(pthread_spin_locked) grant(pthread_spin_unlocked))
 {
 	if (!lock || lock->__value != SPIN_LOCKED) return EINVAL;
 	__asm__ __volatile__("" : : : "memory");
