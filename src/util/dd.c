@@ -363,15 +363,16 @@ int __util_dd_main(int argc, char **argv)
 
 	for (i = 1; i < argc; i++) {
 		char *a = argv[i];
-		char *eq = strchr(a, '=');
+		char *eq;
 		size_t klen;
 		const char *val;
 
-		if (!eq) {
+		klen = strcspn(a, "=");
+		if (!a[klen]) {
 			__util_diagf("dd: %s: not an operand=value pair\n", a);
 			return 2;
 		}
-		klen = (size_t)(eq - a);
+		eq = a + klen;
 		val = eq + 1;
 
 #define KEYIS(k) (klen == strlen(k) && !strncmp(a, k, klen))

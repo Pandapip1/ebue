@@ -108,9 +108,8 @@ static int check_one(const char *path)
 		}
 		if (!*start) break;
 
-		p = start;
-		while (*p && !ISSEP(*p)) p++;
-		clen = (size_t)(p - start);
+		clen = strcspn(start, "/\\");
+		p = start + clen;
 
 		if (clen > (size_t)name_max) {
 			__util_diagf("pathchk: %s: component \"%.*s\" longer than %ld bytes\n",

@@ -47,50 +47,44 @@
 #include <sys/stat.h>
 #include "util.h"
 
-/* Reads exactly `n` decimal digits from `s` into *out; -1 on anything
- * else (a non-digit, or too few digits before the string ends since a
- * short read still leaves *out looking plausible otherwise). */
-static int read_digits(const char *s, int n, int *out)
+/* Every numeric field in -t is exactly two decimal digits. */
+static int read_two_digits(const char *s, int *out)
 {
-	int v = 0, i;
-	for (i = 0; i < n; i++) {
-		if (s[i] < '0' || s[i] > '9') return -1;
-		v = v * 10 + (s[i] - '0');
-	}
-	*out = v;
+	if (s[0] < '0' || s[0] > '9' || s[1] < '0' || s[1] > '9') return -1;
+	*out = (s[0] - '0') * 10 + (s[1] - '0');
 	return 0;
 }
 
 /* touch(1p) -t: "[[CC]YY]MMDDhhmm[.SS]". */
 static int parse_touch_t(const char *spec, struct timespec *out)
 {
-	const char *dot = strchr(spec, '.');
-	size_t mainlen = dot ? (size_t)(dot - spec) : strlen(spec);
+	size_t mainlen = strcspn(spec, ".");
+	const char *dot = spec[mainlen] ? spec + mainlen : 0;
 	int sec = 0, cc = -1, yy = -1, mm, dd, hh, mi;
 	struct tm tmv;
 	time_t t;
 
 	if (dot) {
-		if (strlen(dot + 1) != 2 || read_digits(dot + 1, 2, &sec) < 0 || sec > 60)
+		if (strlen(dot + 1) != 2 || read_two_digits(dot + 1, &sec) < 0 || sec > 60)
 			return -1;
 	}
 
 	switch (mainlen) {
 	case 8: /* MMDDhhmm */
-		if (read_digits(spec, 2, &mm) < 0 || read_digits(spec + 2, 2, &dd) < 0 ||
-		    read_digits(spec + 4, 2, &hh) < 0 || read_digits(spec + 6, 2, &mi) < 0)
+		if (read_two_digits(spec, &mm) < 0 || read_two_digits(spec + 2, &dd) < 0 ||
+		    read_two_digits(spec + 4, &hh) < 0 || read_two_digits(spec + 6, &mi) < 0)
 			return -1;
 		break;
 	case 10: /* YYMMDDhhmm */
-		if (read_digits(spec, 2, &yy) < 0 || read_digits(spec + 2, 2, &mm) < 0 ||
-		    read_digits(spec + 4, 2, &dd) < 0 || read_digits(spec + 6, 2, &hh) < 0 ||
-		    read_digits(spec + 8, 2, &mi) < 0)
+		if (read_two_digits(spec, &yy) < 0 || read_two_digits(spec + 2, &mm) < 0 ||
+		    read_two_digits(spec + 4, &dd) < 0 || read_two_digits(spec + 6, &hh) < 0 ||
+		    read_two_digits(spec + 8, &mi) < 0)
 			return -1;
 		break;
 	case 12: /* CCYYMMDDhhmm */
-		if (read_digits(spec, 2, &cc) < 0 || read_digits(spec + 2, 2, &yy) < 0 ||
-		    read_digits(spec + 4, 2, &mm) < 0 || read_digits(spec + 6, 2, &dd) < 0 ||
-		    read_digits(spec + 8, 2, &hh) < 0 || read_digits(spec + 10, 2, &mi) < 0)
+		if (read_two_digits(spec, &cc) < 0 || read_two_digits(spec + 2, &yy) < 0 ||
+		    read_two_digits(spec + 4, &mm) < 0 || read_two_digits(spec + 6, &dd) < 0 ||
+		    read_two_digits(spec + 8, &hh) < 0 || read_two_digits(spec + 10, &mi) < 0)
 			return -1;
 		break;
 	default:
