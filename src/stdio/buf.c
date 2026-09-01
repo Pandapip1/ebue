@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include <errno.h>
+#include "ownership_stubs.h"
 #include "stdio_impl.h"
 
 ssize_t __file_read(FILE *f, void *buf, size_t n)
@@ -32,11 +33,17 @@ ssize_t __file_read(FILE *f, void *buf, size_t n)
 	if (f->is_mem) {
 		size_t avail = f->mem_pos < f->mem_len ? f->mem_len - f->mem_pos : 0;
 		if (n > avail) n = avail;
-		if (n) memcpy(buf, f->mem_buf + f->mem_pos, n);
+		if (n) {
+			const unsigned char *src = f->mem_buf + f->mem_pos;
+			__ownership_writable_span(buf, n);
+			__ownership_readable_span(src, n);
+			memcpy(buf, src, n);
+		}
 		f->mem_pos += n;
 		return (ssize_t)n;
 	}
 	if (f->fd < 0) { errno = EBADF; return -1; }
+	__ownership_writable_span(buf, n);
 	return read(f->fd, buf, n);
 }
 
@@ -131,15 +138,24 @@ ssize_t __file_write(FILE *f, const void *buf, size_t n)
 		}
 		avail = f->mem_pos < f->mem_size ? f->mem_size - f->mem_pos : 0;
 		if (n > avail) n = avail;   /* fmemopen: silently truncate, like a full device */
-		if (n) memcpy(f->mem_buf + f->mem_pos, buf, n);
+		if (n) {
+			unsigned char *dst = f->mem_buf + f->mem_pos;
+			__ownership_writable_span(dst, n);
+			__ownership_readable_span(buf, n);
+			memcpy(dst, buf, n);
+		}
 		f->mem_pos += n;
 		if (f->mem_pos > f->mem_len) f->mem_len = f->mem_pos;
-		if (f->mem_len <= f->mem_size && term <= f->mem_size - f->mem_len)
-			memset(f->mem_buf + f->mem_len, 0, term);
+		if (f->mem_len <= f->mem_size && term <= f->mem_size - f->mem_len) {
+			unsigned char *term_dst = f->mem_buf + f->mem_len;
+			__ownership_writable_span(term_dst, term);
+			memset(term_dst, 0, term);
+		}
 		mem_publish(f);
 		return (ssize_t)n;
 	}
 	if (f->fd < 0) { errno = EBADF; return -1; }
+	__ownership_readable_span(buf, n);
 	return write(f->fd, buf, n);
 }
 
