@@ -467,6 +467,22 @@ static int bi_tsort(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== Tier 4: grep(1p) ===================================================
+ *
+ * Same reasoning as every tier above: grep also exists as a real
+ * standalone obj/bin/grep.exe (src/util/grep.c, declared in
+ * src/internal/util.h), and stays registered here too so a script run
+ * before PATH lookup or __spawn() can be trusted still has it.  Not a
+ * 2.14 special built-in and has no effect on the shell execution
+ * environment itself, so env_effect is 0, same as the rest of this
+ * table. */
+static int bi_grep(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_grep(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_grep_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* XCU 2.14: "exit [n] -- ... shall cause the shell to exit with the
  * exit status specified by the unsigned decimal integer n.  If n is
  * specified, but its value is not between 0 and 255 inclusively, the
@@ -837,6 +853,7 @@ static const struct sh_builtin builtins[] = {
 	{ "comm",  0, 0, bi_comm },
 	{ "join",  0, 0, bi_join },
 	{ "tsort", 0, 0, bi_tsort },
+	{ "grep",  0, 0, bi_grep },
 	{ 0, 0, 0, 0 }
 };
 

@@ -222,6 +222,17 @@ int __util_sort_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_tsort_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_uniq_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* Tier 4: the first "bigger engine" utility -- grep(1p), a real
+ * regex-driven line filter, sharing src/regex/regex.c's regcomp()/
+ * regexec() (already used internally by src/util/csplit.c) rather than
+ * a second regex implementation.  Not __pure__: it reads a real file
+ * or stdin, so a repeated call with the same argv is not guaranteed to
+ * answer the same way twice.  Gets nonnull(2) for the same reason
+ * every tier above does -- a real argv from a real caller is never
+ * NULL, and a usage-error path taken with argc==1 still formats
+ * argv[0] into its own diagnostic. */
+int __util_grep_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 /* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
  * src/util/rm.c -----------------------------------------------------
  *
