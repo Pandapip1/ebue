@@ -59,6 +59,8 @@ using DisjointParameterKey =
     std::pair<const ParmVarDecl *, const ParmVarDecl *>;
 REGISTER_MAP_WITH_PROGRAMSTATE(GrantedDisjointProof, DisjointParameterKey,
                                const ParmVarDecl *)
+using SymbolRelation = std::pair<SymbolRef, SymbolRef>;
+REGISTER_SET_WITH_PROGRAMSTATE(ProvenLessEqual, SymbolRelation)
 
 namespace {
 
@@ -181,7 +183,8 @@ static void tokenContracts(const FunctionDecl *Function,
 
 class MemoryContractChecker
     : public Checker<check::PreCall, check::PostCall, check::BeginFunction,
-                     check::EndFunction, check::Bind> {
+                     check::EndFunction, check::Bind,
+                     check::BranchCondition> {
   mutable std::unique_ptr<BugType> SpanBT;
   mutable std::unique_ptr<BugType> OverlapBT;
   mutable std::unique_ptr<BugType> TokenBT;
@@ -398,6 +401,34 @@ class MemoryContractChecker
   }
 
 public:
+  void checkBranchCondition(const Stmt *Condition, CheckerContext &C) const {
+    const auto *Comparison = dyn_cast<BinaryOperator>(Condition);
+    if (!Comparison || !Comparison->isComparisonOp())
+      return;
+    ProgramStateRef State = C.getState();
+    bool IsTrue =
+        State->isNonNull(C.getSVal(Condition)).isConstrainedTrue();
+    bool IsFalse = State->isNull(C.getSVal(Condition)).isConstrainedTrue();
+    if (!IsTrue && !IsFalse)
+      return;
+    SymbolRef Left = C.getSVal(Comparison->getLHS()).getAsSymbol();
+    SymbolRef Right = C.getSVal(Comparison->getRHS()).getAsSymbol();
+    if (!Left || !Right)
+      return;
+    bool LeftLessEqual =
+        (IsTrue && Comparison->getOpcode() == BO_LE) ||
+        (IsFalse && Comparison->getOpcode() == BO_GT);
+    bool RightLessEqual =
+        (IsTrue && Comparison->getOpcode() == BO_GE) ||
+        (IsFalse && Comparison->getOpcode() == BO_LT);
+    if (LeftLessEqual)
+      State = State->add<ProvenLessEqual>({Left, Right});
+    if (RightLessEqual)
+      State = State->add<ProvenLessEqual>({Right, Left});
+    if (State != C.getState())
+      C.addTransition(State);
+  }
+
   static std::string text(const Stmt *Statement, CheckerContext &C) {
     const SourceManager &SM = C.getSourceManager();
     StringRef Raw =
@@ -520,6 +551,33 @@ public:
                 State->get<AssumedSpanExtent>(Region))
           if (ExtentProvesLength(*Assumed))
             return true;
+    if (UseAssumedSpans)
+      if (const auto *Element =
+              dyn_cast_or_null<ElementRegion>(Pointer.getAsRegion()))
+        if (const DefinedOrUnknownSVal *BaseExtent =
+                State->get<AssumedSpanExtent>(Element->getSuperRegion())) {
+          SVal ElementBytes = getElementExtent(Element->getElementType(),
+                                               C.getSValBuilder());
+          SVal Offset = Element->getIndex();
+          const llvm::APSInt *KnownElementBytes =
+              C.getSValBuilder().getKnownValue(State, ElementBytes);
+          if (!KnownElementBytes || KnownElementBytes->getZExtValue() != 1)
+            Offset = C.getSValBuilder().evalBinOp(
+                State, BO_Mul, Offset, ElementBytes,
+                C.getASTContext().getSizeType());
+          SVal OffsetFits = C.getSValBuilder().evalBinOp(
+              State, BO_GE, *BaseExtent, Offset,
+              C.getSValBuilder().getConditionType());
+          std::optional<DefinedOrUnknownSVal> Fits =
+              OffsetFits.getAs<DefinedOrUnknownSVal>();
+          if (Fits && !State->assume(*Fits, false)) {
+            SVal Remaining = C.getSValBuilder().evalBinOp(
+                State, BO_Sub, *BaseExtent, Offset,
+                C.getASTContext().getSizeType());
+            if (ExtentProvesLength(Remaining))
+              return true;
+          }
+        }
     SVal Extent = getDynamicExtentWithOffset(State, Pointer);
     if (Extent.isUnknownOrUndef() || Length.isUnknownOrUndef())
       return false;
@@ -528,6 +586,80 @@ public:
     if (stringLengthSourceSpanProven(Pointer, Length, State))
       return true;
     return ExtentProvesLength(Extent);
+  }
+
+  bool derivedContractSpanProven(SVal Pointer, SVal Length,
+                                 ProgramStateRef State,
+                                 CheckerContext &C) const {
+    const auto *Element =
+        dyn_cast_or_null<ElementRegion>(Pointer.getAsRegion());
+    if (!Element)
+      return false;
+    const auto *CurrentFunction = dyn_cast_or_null<FunctionDecl>(
+        C.getLocationContext()->getDecl());
+    if (!CurrentFunction)
+      return false;
+    SmallVector<SpanContract, 2> Spans;
+    SmallVector<DisjointContract, 1> Disjoint;
+    tokenContracts(CurrentFunction, Spans, Disjoint);
+    std::optional<DefinedOrUnknownSVal> Extent;
+    for (const SpanContract &Contract : Spans) {
+      if (Contract.Operation != MemoryTokenOperation::Require)
+        continue;
+      const ParmVarDecl *PointerParameter =
+          CurrentFunction->getParamDecl(Contract.Pointer);
+      const MemRegion *Base = State->getSVal(
+          State->getLValue(PointerParameter, C.getLocationContext()))
+                                  .getAsRegion();
+      if (!Base || Element->getSuperRegion()->getBaseRegion() !=
+                       Base->getBaseRegion())
+        continue;
+      const ParmVarDecl *LengthParameter =
+          CurrentFunction->getParamDecl(Contract.Length);
+      Extent = State->getSVal(
+          State->getLValue(LengthParameter, C.getLocationContext()))
+                   .getAs<DefinedOrUnknownSVal>();
+      break;
+    }
+    if (!Extent || Length.isUnknownOrUndef())
+      return false;
+    SVal Offset = Element->getIndex();
+    SVal ElementBytes =
+        getElementExtent(Element->getElementType(), C.getSValBuilder());
+    const llvm::APSInt *KnownElementBytes =
+        C.getSValBuilder().getKnownValue(State, ElementBytes);
+    if (!KnownElementBytes || KnownElementBytes->getZExtValue() != 1)
+      Offset = C.getSValBuilder().evalBinOp(
+          State, BO_Mul, Offset, ElementBytes,
+          C.getASTContext().getSizeType());
+    SVal Remaining = C.getSValBuilder().evalBinOp(
+        State, BO_Sub, *Extent, Offset, C.getASTContext().getSizeType());
+    SVal Enough = C.getSValBuilder().evalBinOp(
+        State, BO_GE, Remaining, Length,
+        C.getSValBuilder().getConditionType());
+    std::optional<DefinedOrUnknownSVal> Condition =
+        Enough.getAs<DefinedOrUnknownSVal>();
+    if (Condition && !State->assume(*Condition, false))
+      return true;
+    SymbolRef RemainingSymbol = Remaining.getAsSymbol();
+    SymbolRef LengthSymbol = Length.getAsSymbol();
+    if (!RemainingSymbol || !LengthSymbol)
+      return false;
+    if (State->contains<ProvenLessEqual>({LengthSymbol, RemainingSymbol}))
+      return true;
+    SymbolRef ExtentSymbol = Extent->getAsSymbol();
+    SymbolRef OffsetSymbol = Offset.getAsSymbol();
+    if (!ExtentSymbol || !OffsetSymbol)
+      return false;
+    for (const SymbolRelation &Relation : State->get<ProvenLessEqual>()) {
+      const auto *Difference = dyn_cast<SymSymExpr>(Relation.second);
+      if (Relation.first == LengthSymbol && Difference &&
+          Difference->getOpcode() == BO_Sub &&
+          Difference->getLHS() == ExtentSymbol &&
+          Difference->getRHS() == OffsetSymbol)
+        return true;
+    }
+    return false;
   }
 
   bool overlapProven(SVal First, SVal Second, SVal Length,
@@ -738,8 +870,16 @@ public:
       const MemRegion *Region = PointerValue.getAsRegion();
       std::optional<DefinedOrUnknownSVal> DefinedLength =
           LengthValue.getAs<DefinedOrUnknownSVal>();
-      if (Region && DefinedLength)
+      if (Region && DefinedLength) {
         State = State->set<AssumedSpanExtent>(Region, *DefinedLength);
+        /* A contract on a base pointer is also a conservative dynamic extent
+         * for that function-local symbolic region.  Do not overwrite an
+         * allocation's base extent when the contracted parameter itself is
+         * already interior. */
+        if (Region == Region->getBaseRegion())
+          State = setDynamicExtent(State, Region, *DefinedLength,
+                                   C.getSValBuilder());
+      }
     }
     for (const DisjointContract &Contract : Disjoint) {
       if (Contract.Operation != MemoryTokenOperation::Require)
@@ -828,7 +968,10 @@ public:
           Contract.Length >= Call.getNumArgs())
         continue;
       if (!spanProven(Call.getArgSVal(Contract.Pointer),
-                      Call.getArgSVal(Contract.Length), C.getState(), C)) {
+                      Call.getArgSVal(Contract.Length), C.getState(), C) &&
+          !derivedContractSpanProven(Call.getArgSVal(Contract.Pointer),
+                                     Call.getArgSVal(Contract.Length),
+                                     C.getState(), C)) {
         BugType *Type = SpanBT.get();
         report("memory operation span is not proven valid", Type, Call,
                ContractState, C);

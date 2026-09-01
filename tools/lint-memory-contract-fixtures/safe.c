@@ -105,6 +105,15 @@ void contracted_copy(char *out withtok(fixture_writable_span(length)),
 	memcpy(out, in, length);
 }
 
+void contracted_suffix(
+	char *out withtok(fixture_writable_span(capacity)), size_t capacity,
+	size_t offset, size_t length)
+{
+	if (offset > capacity || length > capacity - offset)
+		return;
+	memset(out + offset, 0, length);
+}
+
 void satisfy_contracts(void)
 {
 	char source[8], destination[8];

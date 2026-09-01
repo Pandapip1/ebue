@@ -69,6 +69,14 @@ static void contracted_fill(
 	memset(out, 0, length);
 }
 
+void insufficient_contracted_suffix(
+	char *out withtok(fixture_writable_span(capacity)), size_t capacity,
+	size_t offset, size_t length)
+{
+	if (offset <= capacity && length > capacity - offset)
+		memset(out + offset, 0, length); /* memory-contract-expect */
+}
+
 void violate_contracts(char *text)
 {
 	char source[4], destination[4];
