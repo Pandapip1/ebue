@@ -288,7 +288,7 @@ STATRENAME = stat=__real_stat
 HARNESSES = strtod printf scanf utf path strptime strtol strftime \
             fnmatch regex glob wordexp \
             shparse inet string search getopt env time pathname getdate \
-            iconv strfmon catgets
+            iconv strfmon catgets m4
 EXES = $(HARNESSES:%=$(OUT)/fuzz_%)
 SHIM_OBJ = $(SHIM_SRC:%.c=$(OUT)/%.o)
 COVSHIM_OBJ = $(SHIM_SRC:%.c=$(COVOUT)/%.o)

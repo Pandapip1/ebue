@@ -259,6 +259,56 @@
  * queue, trace set -- is allocated fresh on entry and freed on every
  * return path (m4_free()), so two sequential `m4` invocations in the
  * same shell session never share so much as one macro definition.
+ *
+ * ---- runaway expansion is bounded, and why that is not a correctness fix --
+ * `define(a,a)a` -- a macro whose own expansion is itself -- loops
+ * forever: "a" is looked up, found defined, its expansion ("a") is
+ * pushed back onto the input-frame stack, and the top-level scan()
+ * loop reads it right back off and does the same thing again. This is
+ * NOT a defect in the sense src/regex/regex.c's own bounded-matching
+ * fix (see fuzz/fuzz_regex.c's header comment) was one: that bug was a
+ * genuine implementation defect -- unbounded C recursion that could
+ * exhaust the stack and crash, for input a correctly-implemented
+ * engine is expected to always handle in bounded time. A macro
+ * processor that can express its own non-termination is not a
+ * defective one; real m4 implementations hang on this input too, by
+ * design, the same way `:(){ :|:& };:` or `while true; do :; done`
+ * "hangs" a shell on purpose. Nothing here changes that expansion
+ * really can run forever for a hostile or merely careless script.
+ *
+ * What IS worth bounding, independent of any fuzzer, is how long that
+ * can go on for CODE THAT RUNS IN-PROCESS AS A SHELL BUILTIN, with no
+ * separate process to kill and -- unlike ed.c's SIGINT/SIGHUP polling
+ * discipline -- no signal-check anywhere in scan()/collect_args() to
+ * poll for interruption. Today, a shell that runs a self-referential
+ * macro's expansion through the `m4` builtin has no way to recover
+ * short of killing the whole shell process from outside, and neither
+ * does a fuzz harness driving __util_m4_main() in-process with no
+ * per-input timeout of its own (see fuzz/fuzz_m4.c's header comment
+ * for why libFuzzer's is unavailable here). Two independent caps
+ * address this, one per dimension a run can fail to terminate in:
+ *
+ *   M4_MAX_EXPANSIONS bounds total macro invocations (the `define(a,a)a`
+ *   shape above -- a long FLAT chain, no extra C-stack depth per call,
+ *   per the "one loop" scanning-model description near the top of this
+ *   comment);
+ *
+ *   M4_MAX_DEPTH bounds real C-stack recursion depth (the
+ *   `len(len(len(...)))` shape -- genuinely nested, unmatched-paren
+ *   macro calls, one C stack frame per level, reachable with NO prior
+ *   define() at all since every builtin is predefined from m4_init()).
+ *
+ * Both are checked at their one call site in dispatch_macro() (see the
+ * comments there) and both unwind through the SAME cooperative path
+ * m4exit() already uses (st->exit_pending/st->exit_code) back to an
+ * ordinary `return status;`, with a nonzero status and one diagnostic
+ * line, no differently from any other error this file reports. A
+ * legitimate script -- even a long-running one -- is expected to stay
+ * far under either limit; a script that does not is either genuinely
+ * non-terminating (in which case this is the same trade a real m4
+ * offers no answer to at all) or is doing something unusual enough that
+ * a bounded, diagnosed stop is a better outcome than an unrecoverable
+ * hang or a stack-exhaustion crash.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -296,6 +346,21 @@ static const char *const m4_builtin_names[BI_COUNT] = {
 
 #define M4_MAXDELIM 32
 #define M4_BUILTIN_MAGIC "\x01M4BUILTIN:"
+
+/* ---- M4_MAX_EXPANSIONS: a deliberate, harness-motivated safety net, NOT
+ * a correctness fix -- see this file's header comment, "runaway
+ * expansion is bounded, and why that is not a correctness fix," for the
+ * reasoning in full.  Kept here, next to M4_MAXDELIM, because both are
+ * "one number a caller might reasonably want to raise someday" rather
+ * than load-bearing implementation detail. */
+#define M4_MAX_EXPANSIONS 2000000UL
+
+/* Real C-stack recursion depth, not total invocation count -- see the
+ * comment at its one check site in dispatch_macro(). 5000 is well
+ * inside any thread's default stack for this file's per-frame cost
+ * (scan()'s wbuf[256] dominates it), and is many times deeper than any
+ * legitimate, humanly-written m4 script's own macro-call nesting. */
+#define M4_MAX_DEPTH 5000
 
 /* ==== growable byte buffer ================================================== */
 
@@ -382,6 +447,9 @@ struct m4_state {
 
 	int exit_pending, exit_code;
 	int had_error;
+
+	unsigned long expansions;	/* see M4_MAX_EXPANSIONS */
+	int depth;			/* see M4_MAX_DEPTH */
 
 	int sysval;
 
@@ -1105,7 +1173,7 @@ static char *bi_index(const char *s, const char *sub)
 	if (lsub == 0) pos = 0;
 	else { const char *f = strstr(s, sub); if (f) pos = (long)(f - s); }
 	snprintf(buf, sizeof buf, "%ld", pos);
-	return strndup(buf, sizeof buf);
+	return strdup(buf);
 }
 
 static char *bi_substr(struct m4_state *st, const char *s, const char *start_s, const char *len_s)
@@ -1240,7 +1308,7 @@ static char *bi_sysval(struct m4_state *st)
 {
 	char buf[16];
 	snprintf(buf, sizeof buf, "%d", st->sysval);
-	return strndup(buf, sizeof buf);
+	return strdup(buf);
 }
 
 static char *bi_maketemp(const char *tmpl)
@@ -1553,6 +1621,28 @@ static void dispatch_macro(struct m4_state *st, struct m4_macro *m, const char *
 	struct m4_macro_def *def = m->top;
 	if (!def) return;
 
+	/* M4_MAX_EXPANSIONS: every macro invocation -- builtin or
+	 * user-defined, dnl included -- passes through here exactly once,
+	 * so this is the one place a per-run cap on total macro
+	 * invocations can live without threading a counter through
+	 * scan()/collect_args() by hand.  See the file header, "runaway
+	 * expansion is bounded, and why that is not a correctness fix."
+	 * st->exit_pending is the SAME cooperative-unwind flag m4exit()
+	 * uses (see the header's "exit() / _exit() are never called"
+	 * section) -- every loop in scan()/collect_args() already checks
+	 * it first thing on every iteration, so setting it here reaches
+	 * an ordinary `return status;` at the bottom of
+	 * __util_m4_main() exactly the way a real m4exit() would, with no
+	 * new unwind path to get wrong. */
+	if (++st->expansions > M4_MAX_EXPANSIONS) {
+		if (!st->exit_pending)
+			__util_diagf("m4: expansion limit exceeded (possible infinite recursion), aborting\n");
+		st->had_error = 1;
+		st->exit_pending = 1;
+		st->exit_code = 1;
+		return;
+	}
+
 	/* dnl(1p): "discard all input characters up to and including the
 	 * next <newline>" -- unconditionally, with no argument-list
 	 * syntax at all, so it must never go through collect_args(). */
@@ -1569,7 +1659,36 @@ static void dispatch_macro(struct m4_state *st, struct m4_macro *m, const char *
 		int nargs = 0;
 		char *result;
 
-		if (c == '(') args = collect_args(st, &nargs);
+		/* M4_MAX_DEPTH: the OTHER half of the header's "runaway
+		 * expansion is bounded" note, and a different dimension from
+		 * M4_MAX_EXPANSIONS above -- that counter bounds a LONG FLAT
+		 * chain (any number of macro calls, one open at a time,
+		 * costing no extra C stack per the file header's "one loop"
+		 * description); this one bounds real C-stack depth, which
+		 * only grows through THIS call: dispatch_macro() ->
+		 * collect_args() -> scan() -> dispatch_macro() again, one
+		 * level per open, unmatched '(' in a macro call's own
+		 * argument list (`foo(bar(baz(...))))`).  Every one of
+		 * POSIX's 32 builtins is predefined from m4_init() before a
+		 * byte of input is read, so this recursion needs no prior
+		 * define() to reach -- `len(len(len(...)))` alone drives it.
+		 * Guarded here, not by a separate parameter threaded through
+		 * collect_args()/scan(), so the two functions stay exactly
+		 * as the header describes them; only the one call site that
+		 * can actually recurse pays for the check. */
+		if (c == '(') {
+			if (++st->depth > M4_MAX_DEPTH) {
+				if (!st->exit_pending)
+					__util_diagf("m4: macro calls nested too deeply, aborting\n");
+				st->had_error = 1;
+				st->exit_pending = 1;
+				st->exit_code = 1;
+				st->depth--;
+				return;
+			}
+			args = collect_args(st, &nargs);
+			st->depth--;
+		}
 		else if (c >= 0) ungetc_raw(st, c);
 
 		if (st->exit_pending) { free_args(args, nargs); return; }
@@ -1645,14 +1764,14 @@ int __util_m4_main(int argc, char **argv)
 				if (++i >= argc) { __util_diagf("m4: -D: option requires an argument\n"); m4_free(&st); return 2; }
 				val = argv[i];
 			}
-			namelen = strcspn(val, "=");
-			eq = val + namelen;
+			eq = strchr(val, '=');
+			namelen = eq ? (size_t)(eq - val) : strlen(val);
 			if (!namelen || namelen >= sizeof namebuf) {
 				__util_diagf("m4: -D: %s: invalid name\n", val);
 				m4_free(&st); return 2;
 			}
 			memcpy(namebuf, val, namelen); namebuf[namelen] = 0;
-			define_macro(&st, namebuf, 0, 0, *eq ? eq + 1 : "", 0);
+			define_macro(&st, namebuf, 0, 0, eq ? eq + 1 : "", 0);
 			continue;
 		}
 
