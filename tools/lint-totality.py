@@ -15,7 +15,7 @@ from dataclasses import dataclass
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tools/lint-totality-fixtures"
 LOOP_KINDS = {"for", "while", "do"}
-LOOP_PROOFS = {"constant-false", "strict-scalar-rank",
+LOOP_PROOFS = {"constant-false", "strict-scalar-rank", "paired-scalar-rank",
                "sentinel-distance-rank", "unproved"}
 
 

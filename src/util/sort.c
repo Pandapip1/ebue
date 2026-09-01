@@ -363,14 +363,9 @@ static void merge_sort(struct line *lines, size_t n, const struct sort_opts *o)
 			size_t lo = i, mid = n - i < width ? n : i + width;
 			size_t hi = n - mid < width ? n : mid + width;
 			size_t a = lo, b = mid, k = lo;
-			/* Two nonempty runs need at most their total size minus one
-			 * comparisons before one of them is exhausted. */
-			size_t comparisons_left = b < hi ? hi - lo - 1 : 0;
-			while (comparisons_left > 0) {
-				comparisons_left--;
+			while (a < mid && b < hi) {
 				if (line_compare(o, &lines[a], &lines[b]) <= 0) tmp[k++] = lines[a++];
 				else tmp[k++] = lines[b++];
-				if (a == mid || b == hi) break;
 			}
 			while (a < mid) tmp[k++] = lines[a++];
 			while (b < hi) tmp[k++] = lines[b++];

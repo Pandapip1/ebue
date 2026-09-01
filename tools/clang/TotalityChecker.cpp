@@ -630,6 +630,196 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
            !(Result.Outcomes & (FallWithoutProgress | BackWithoutProgress));
   }
 
+  struct PairFlow {
+    /* Bit N means a path reaches this control edge after progressing the
+     * subset N of the two ranks. */
+    unsigned FallMasks;
+    unsigned BackMasks;
+    bool Exits;
+    bool Invalid;
+  };
+
+  static unsigned combineMasks(unsigned First, unsigned Second,
+                               bool &Repeated) {
+    unsigned Result = 0;
+    for (unsigned A = 0; A != 4; ++A)
+      if (First & (1u << A))
+        for (unsigned B = 0; B != 4; ++B) {
+          if (Second & (1u << B)) {
+            Repeated |= (A & B) != 0;
+            Result |= 1u << (A | B);
+          }
+        }
+    return Result;
+  }
+
+  static PairFlow pairSequence(PairFlow First, PairFlow Second) {
+    if (First.Invalid || Second.Invalid)
+      return {0, 0, false, true};
+    bool Repeated = false;
+    unsigned Fall = combineMasks(First.FallMasks, Second.FallMasks,
+                                 Repeated);
+    unsigned Back = First.BackMasks |
+        combineMasks(First.FallMasks, Second.BackMasks, Repeated);
+    return {Fall, Back, First.Exits || (First.FallMasks && Second.Exits),
+            Repeated};
+  }
+
+  static bool containsConditionalExecution(const Stmt *Statement) {
+    if (!Statement)
+      return false;
+    if (isa<ConditionalOperator>(Statement))
+      return true;
+    if (const auto *Binary = dyn_cast<BinaryOperator>(Statement))
+      if (Binary->isLogicalOp())
+        return true;
+    for (const Stmt *Child : Statement->children())
+      if (containsConditionalExecution(Child))
+        return true;
+    return false;
+  }
+
+  static bool containsAsm(const Stmt *Statement) {
+    if (!Statement)
+      return false;
+    if (isa<AsmStmt>(Statement))
+      return true;
+    for (const Stmt *Child : Statement->children())
+      if (containsAsm(Child))
+        return true;
+    return false;
+  }
+
+  static bool containsUnevaluatedOrEmbeddedControl(const Stmt *Statement) {
+    if (!Statement)
+      return false;
+    /* RecursiveASTVisitor exposes expression children which C does not
+     * necessarily evaluate (sizeof/_Alignof, nonselected generic/choose
+     * arms).  A GNU statement expression can likewise hide branches below
+     * an otherwise atomic outer expression.  The paired path-mask walk does
+     * not model those constructs, so they cannot contribute paired progress. */
+    if (isa<UnaryExprOrTypeTraitExpr>(Statement) ||
+        isa<GenericSelectionExpr>(Statement) || isa<ChooseExpr>(Statement) ||
+        isa<StmtExpr>(Statement))
+      return true;
+    for (const Stmt *Child : Statement->children())
+      if (containsUnevaluatedOrEmbeddedControl(Child))
+        return true;
+    return false;
+  }
+
+  static unsigned progressOccurrences(const Stmt *Statement,
+                                      const Progress &Expected) {
+    if (!Statement)
+      return 0;
+    if (const auto *Expression = dyn_cast<Expr>(Statement))
+      if (std::optional<Progress> Change = progress(Expression))
+        if (sameRank(*Change, Expected) &&
+            Change->Kind == Expected.Kind)
+          return 1;
+    unsigned Result = 0;
+    for (const Stmt *Child : Statement->children()) {
+      Result += progressOccurrences(Child, Expected);
+      if (Result > 1)
+        return Result;
+    }
+    return Result;
+  }
+
+  static PairFlow pairFlow(const Stmt *Statement, const Progress &First,
+                           const Progress &Second) {
+    if (!Statement)
+      return {1u, 0, false, false};
+    if (containsAsm(Statement) ||
+        containsUnevaluatedOrEmbeddedControl(Statement))
+      return {0, 0, false, true};
+    if (const auto *Expression = dyn_cast<Expr>(Statement)) {
+      const Expr *Plain = ignore(Expression);
+      if (const auto *Binary = dyn_cast_or_null<BinaryOperator>(Plain)) {
+        if (Binary->getOpcode() == BO_Comma)
+          return pairSequence(pairFlow(Binary->getLHS(), First, Second),
+                              pairFlow(Binary->getRHS(), First, Second));
+        if (Binary->isLogicalOp()) {
+          PairFlow Left = pairFlow(Binary->getLHS(), First, Second);
+          PairFlow Both = pairSequence(
+              Left, pairFlow(Binary->getRHS(), First, Second));
+          return {Left.FallMasks | Both.FallMasks,
+                  Left.BackMasks | Both.BackMasks,
+                  Left.Exits || Both.Exits,
+                  Left.Invalid || Both.Invalid};
+        }
+      }
+      if (const auto *Conditional =
+              dyn_cast_or_null<ConditionalOperator>(Plain)) {
+        PairFlow Prefix = pairFlow(Conditional->getCond(), First, Second);
+        PairFlow True = pairFlow(Conditional->getTrueExpr(), First, Second);
+        PairFlow False = pairFlow(Conditional->getFalseExpr(), First, Second);
+        PairFlow Arms{True.FallMasks | False.FallMasks,
+                      True.BackMasks | False.BackMasks,
+                      True.Exits || False.Exits,
+                      True.Invalid || False.Invalid};
+        return pairSequence(Prefix, Arms);
+      }
+      /* Do not flatten conditionally evaluated updates hidden inside a
+       * larger expression: the ordinary mutation walk deliberately loses
+       * that path correlation. */
+      if (containsConditionalExecution(Plain))
+        return {0, 0, false, true};
+    }
+    if (const auto *Compound = dyn_cast<CompoundStmt>(Statement)) {
+      PairFlow Result{1u, 0, false, false};
+      for (const Stmt *Child : Compound->body())
+        Result = pairSequence(Result, pairFlow(Child, First, Second));
+      return Result;
+    }
+    if (const auto *If = dyn_cast<IfStmt>(Statement)) {
+      PairFlow Prefix = pairSequence(
+          pairFlow(If->getInit(), First, Second),
+          pairFlow(If->getConditionVariableDeclStmt(), First, Second));
+      Prefix = pairSequence(Prefix,
+                            pairFlow(If->getCond(), First, Second));
+      PairFlow Then = pairFlow(If->getThen(), First, Second);
+      PairFlow Else = pairFlow(If->getElse(), First, Second);
+      PairFlow Arms{Then.FallMasks | Else.FallMasks,
+                    Then.BackMasks | Else.BackMasks,
+                    Then.Exits || Else.Exits,
+                    Then.Invalid || Else.Invalid};
+      return pairSequence(Prefix, Arms);
+    }
+    if (const auto *Label = dyn_cast<LabelStmt>(Statement))
+      return pairFlow(Label->getSubStmt(), First, Second);
+    if (isa<ContinueStmt>(Statement))
+      return {0, 1u, false, false};
+    if (isa<BreakStmt>(Statement) || isa<ReturnStmt>(Statement))
+      return {0, 0, true, false};
+    if (isa<ForStmt>(Statement) || isa<WhileStmt>(Statement) ||
+        isa<DoStmt>(Statement))
+      return mutation(Statement, First) == Mutation::None &&
+                     mutation(Statement, Second) == Mutation::None
+                 ? PairFlow{1u, 0, false, false}
+                 : PairFlow{0, 0, false, true};
+    if (isa<GotoStmt>(Statement) || isa<SwitchStmt>(Statement))
+      return {0, 0, false, true};
+    if (containsConditionalExecution(Statement))
+      return {0, 0, false, true};
+    unsigned FirstOccurrences = progressOccurrences(Statement, First);
+    unsigned SecondOccurrences = progressOccurrences(Statement, Second);
+    if (FirstOccurrences > 1 || SecondOccurrences > 1)
+      return {0, 0, false, true};
+    /* Clang represents unevaluated builtin arguments as ordinary call
+     * children (`__builtin_constant_p(a++)` is the important example).
+     * Do not infer progress nested anywhere inside a call expression. */
+    if (containsCall(Statement) && (FirstOccurrences || SecondOccurrences))
+      return {0, 0, false, true};
+    Mutation FirstMutation = mutation(Statement, First);
+    Mutation SecondMutation = mutation(Statement, Second);
+    if (FirstMutation == Mutation::Bad || SecondMutation == Mutation::Bad)
+      return {0, 0, false, true};
+    unsigned Mask = (FirstMutation == Mutation::Good ? 1u : 0u) |
+                    (SecondMutation == Mutation::Good ? 2u : 0u);
+    return {1u << Mask, 0, false, false};
+  }
+
   static void collectProgress(const Stmt *Statement,
                               std::vector<Progress> &Result) {
     if (!Statement)
@@ -675,6 +865,21 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return true;
     for (const Stmt *Child : Statement->children())
       if (containsCall(Child))
+        return true;
+    return false;
+  }
+
+  static bool containsStateMutation(const Stmt *Statement) {
+    if (!Statement)
+      return false;
+    if (const auto *Unary = dyn_cast<UnaryOperator>(Statement))
+      if (Unary->isIncrementDecrementOp())
+        return true;
+    if (const auto *Binary = dyn_cast<BinaryOperator>(Statement))
+      if (Binary->isAssignmentOp())
+        return true;
+    for (const Stmt *Child : Statement->children())
+      if (containsStateMutation(Child))
         return true;
     return false;
   }
@@ -802,6 +1007,29 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       if (addressTaken(Child, Variable))
         return true;
     return false;
+  }
+
+  bool pairedConditionValuesAreLocal(const Stmt *Statement) const {
+    if (!Statement || !Current)
+      return true;
+    if (const auto *Expression = dyn_cast<Expr>(Statement)) {
+      const Expr *Plain = ignore(Expression);
+      /* This first paired lemma intentionally covers scalar locals and
+       * parameters only.  A member/global bound can have aliases which are
+       * not created in the current function and therefore cannot be closed
+       * by its local escape walk. */
+      if (isa<MemberExpr>(Plain))
+        return false;
+      if (const auto *Reference = dyn_cast<DeclRefExpr>(Plain))
+        if (const auto *Variable = dyn_cast<VarDecl>(Reference->getDecl()))
+          if (!(isa<ParmVarDecl>(Variable) || Variable->hasLocalStorage()) ||
+              addressTaken(Current->getBody(), Variable))
+            return false;
+    }
+    for (const Stmt *Child : Statement->children())
+      if (!pairedConditionValuesAreLocal(Child))
+        return false;
+    return true;
   }
 
   static bool memberOf(const Expr *Expression, const ValueDecl *Field) {
@@ -1123,22 +1351,31 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   }
 
   bool strictComparison(const Expr *Condition, const Progress &Change,
-                        const Stmt *Body, const Expr *Increment) const {
+                        const Stmt *Body, const Expr *Increment,
+                        bool DirectRank = false) const {
     if (Change.RequiresNonzeroCondition)
       return false;
     Condition = ignore(Condition);
     if (const auto *Logical = dyn_cast_or_null<BinaryOperator>(Condition)) {
       if (Logical->getOpcode() == BO_LAnd)
-        return strictComparison(Logical->getLHS(), Change, Body, Increment) ||
-               strictComparison(Logical->getRHS(), Change, Body, Increment);
+        return strictComparison(Logical->getLHS(), Change, Body, Increment,
+                                DirectRank) ||
+               strictComparison(Logical->getRHS(), Change, Body, Increment,
+                                DirectRank);
       /* For A || B, either arm can keep the loop running.  Both therefore
        * need the same rank; accepting one arm makes
        * `i < n || keep_running` a false proof. */
       if (Logical->getOpcode() == BO_LOr)
-        return strictComparison(Logical->getLHS(), Change, Body, Increment) &&
-               strictComparison(Logical->getRHS(), Change, Body, Increment);
-      bool Left = affineOn(Logical->getLHS(), Change, Body, Increment);
-      bool Right = affineOn(Logical->getRHS(), Change, Body, Increment);
+        return strictComparison(Logical->getLHS(), Change, Body, Increment,
+                                DirectRank) &&
+               strictComparison(Logical->getRHS(), Change, Body, Increment,
+                                DirectRank);
+      bool Left = DirectRank
+                      ? rankAccess(Logical->getLHS(), Change)
+                      : affineOn(Logical->getLHS(), Change, Body, Increment);
+      bool Right = DirectRank
+                       ? rankAccess(Logical->getRHS(), Change)
+                       : affineOn(Logical->getRHS(), Change, Body, Increment);
       if (Change.Kind == ProgressKind::Up)
         return (Left &&
                 stableBound(Logical->getRHS(), Body, Increment) &&
@@ -1634,6 +1871,44 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       }
       if (sentinelCondition(Condition, Change))
         return "sentinel-distance-rank";
+    }
+    /* A merge-style loop can consume either of two finite inputs on a
+     * given pass.  Neither cursor is a rank by itself, but the sum of their
+     * remaining distances strictly decreases when every backedge advances
+     * at least one and neither ever retreats.  Keep this to while/do bodies
+     * for now: a for-loop continue edge reaches its increment and needs a
+     * separate composition rule. */
+    /* Condition-side mutation can reset either rank or move either bound;
+     * restricting every participating value to an unescaped local closes
+     * the pointer-to-pointer and globally-created-alias holes which the
+     * deliberately shallow alias walker cannot see. */
+    if (!Increment && !containsStateMutation(Condition) &&
+        pairedConditionValuesAreLocal(Condition)) {
+      for (size_t I = 0; I < Candidates.size(); ++I) {
+        const Progress &First = Candidates[I];
+        if (!isa<VarDecl>(First.Variable) ||
+            First.Kind != ProgressKind::Up ||
+            addressTaken(Current->getBody(), First.Variable) ||
+            !validRankVariable(First, Body) ||
+            mutation(Condition, First) != Mutation::None ||
+            !strictComparison(Condition, First, Body, nullptr, true))
+          continue;
+        for (size_t J = I + 1; J < Candidates.size(); ++J) {
+          const Progress &Second = Candidates[J];
+          if (!isa<VarDecl>(Second.Variable) ||
+              Second.Kind != ProgressKind::Up || sameRank(First, Second) ||
+              addressTaken(Current->getBody(), Second.Variable) ||
+              !validRankVariable(Second, Body) ||
+              mutation(Condition, Second) != Mutation::None ||
+              !strictComparison(Condition, Second, Body, nullptr, true))
+            continue;
+          PairFlow Result = pairFlow(Body, First, Second);
+          unsigned BackedgeMasks = Result.FallMasks | Result.BackMasks;
+          if (!Result.Invalid && (BackedgeMasks || Result.Exits) &&
+              !(BackedgeMasks & 1u))
+            return "paired-scalar-rank";
+        }
+      }
     }
     return "unproved";
   }

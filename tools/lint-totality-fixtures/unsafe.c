@@ -452,6 +452,190 @@ int dynamic_countdown_allows_zero(int n)
 	return n;
 }
 
+unsigned paired_rank_can_stall(unsigned a, unsigned a_end, unsigned b,
+	unsigned b_end, int choose, int stuck)
+{
+	while (a < a_end && b < b_end) { /* totality-expect */
+		if (choose)
+			a++;
+		else if (stuck)
+			continue;
+		else
+			b++;
+	}
+	return a + b;
+}
+
+unsigned paired_rank_can_retreat(unsigned a, unsigned a_end, unsigned b,
+	unsigned b_end, int choose)
+{
+	while (a < a_end && b < b_end) { /* totality-expect */
+		if (choose)
+			a++;
+		else {
+			b++;
+			a--;
+		}
+	}
+	return a + b;
+}
+
+unsigned paired_rank_can_wrap_one_component(unsigned a, unsigned a_end,
+	unsigned b, unsigned b_end, int choose)
+{
+	while (a < a_end && b < b_end) { /* totality-expect */
+		if (choose) {
+			a++;
+			a++;
+		} else {
+			b++;
+		}
+	}
+	return a + b;
+}
+
+static void paired_rank_sink(unsigned value)
+{
+	(void)value;
+}
+
+unsigned paired_rank_nested_repeated_progress(unsigned a, unsigned a_end,
+	unsigned b, unsigned b_end, int choose)
+{
+	while (a < a_end && b < b_end) { /* totality-expect */
+		if (choose)
+			paired_rank_sink((a++, a++));
+		else
+			b++;
+	}
+	return a + b;
+}
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunevaluated-expression"
+unsigned paired_rank_unevaluated_progress(unsigned a, unsigned a_end,
+	unsigned b, unsigned b_end, int choose)
+{
+	while (a < a_end && b < b_end) { /* totality-expect */
+		if (choose)
+			(void)sizeof(a++);
+		else
+			b++;
+	}
+	return a + b;
+}
+#pragma clang diagnostic pop
+
+unsigned paired_rank_builtin_unevaluated_progress(unsigned a,
+	unsigned a_end, unsigned b, unsigned b_end, int choose)
+{
+	while (a < a_end && b < b_end) { /* totality-expect */
+		if (choose)
+			(void)__builtin_constant_p(a++);
+		else
+			b++;
+	}
+	return a + b;
+}
+
+unsigned paired_rank_condition_resets_component(unsigned a, unsigned a_end,
+	unsigned b, unsigned b_end, int choose)
+{
+	unsigned *alias = &a;
+	while (a < a_end && b < b_end && ((*alias = 0), 1)) { /* totality-expect */
+		if (choose)
+			a++;
+		else
+			b++;
+	}
+	return a + b;
+}
+
+unsigned paired_rank_transitive_alias_reset(unsigned a, unsigned a_end,
+	unsigned b, unsigned b_end, int choose)
+{
+	unsigned *alias = &a;
+	unsigned **indirect = &alias;
+	while (a < a_end && b < b_end) { /* totality-expect */
+		if (choose)
+			a++;
+		else
+			b++;
+		**indirect = 0;
+	}
+	return a + b;
+}
+
+unsigned paired_rank_disjunctive_bound(unsigned a, unsigned a_end,
+	unsigned b, unsigned b_end, int choose)
+{
+	while (a < a_end || b < b_end) { /* totality-expect */
+		if (choose)
+			a++;
+		else
+			b++;
+	}
+	return a + b;
+}
+
+unsigned paired_rank_affine_wrap(unsigned char a, unsigned char a_end,
+	unsigned char b, unsigned char b_end, int choose)
+{
+	int offset = -1;
+	while (a + offset < a_end && b < b_end) { /* totality-expect */
+		if (choose)
+			a++;
+		else
+			b++;
+	}
+	return (unsigned)a + b;
+}
+
+unsigned paired_rank_mutable_bound(unsigned a, unsigned a_end, unsigned b,
+	unsigned b_end, int choose)
+{
+	while (a < a_end && b < b_end) { /* totality-expect */
+		if (choose) {
+			a++;
+			a_end++;
+		} else {
+			b++;
+		}
+	}
+	return a + b;
+}
+
+static unsigned paired_global_end;
+static unsigned *paired_global_end_alias = &paired_global_end;
+
+unsigned paired_rank_global_bound_alias(unsigned a, unsigned b,
+	unsigned b_end, int choose)
+{
+	while (a < paired_global_end && b < b_end) { /* totality-expect */
+		if (choose)
+			a++;
+		else
+			b++;
+		*paired_global_end_alias = a + 1;
+	}
+	return a + b;
+}
+
+unsigned paired_rank_local_bound_transitive_alias(unsigned a,
+	unsigned a_end, unsigned b, unsigned b_end, int choose)
+{
+	unsigned *alias = &a_end;
+	unsigned **indirect = &alias;
+	while (a < a_end && b < b_end) { /* totality-expect */
+		if (choose)
+			a++;
+		else
+			b++;
+		**indirect = a + 1;
+	}
+	return a + b;
+}
+
 int dynamic_countdown_allows_negative(int n)
 {
 	while (n > 0) { /* totality-expect */

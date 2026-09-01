@@ -316,6 +316,18 @@ unsigned progress_in_both_expression_arms(unsigned n, int choose)
 	return i;
 }
 
+unsigned paired_merge_rank(unsigned a, unsigned a_end, unsigned b,
+	unsigned b_end, int choose)
+{
+	while (a < a_end && b < b_end) {
+		if (choose)
+			a++;
+		else
+			b++;
+	}
+	return a + b;
+}
+
 unsigned guarded_recursion(unsigned n)
 {
 	if (n)
