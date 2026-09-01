@@ -2260,6 +2260,12 @@ public:
                                               : nullptr);
       if (!Variable || Variable->getStackFrame() != C.getStackFrame())
         continue;
+      /* Parameter tokens describe the function boundary: withtok preserves
+       * them, while consume/grant postconditions are proved independently by
+       * CapabilityTokenChecker.  They are not local values being abandoned
+       * at this return site. */
+      if (isa<ParmVarDecl>(Variable->getDecl()))
+        continue;
       const TypedefNameDecl *Token =
           dialectToken(C.getASTContext(), Family->getName());
       if (!Token || hasDialectQualifier(Token, "qual:implicit_drop"))

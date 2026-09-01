@@ -40,6 +40,17 @@ typedef struct { void *__opaque[8]; } pthread_barrier_t;
 typedef struct { void *__opaque[4]; } pthread_barrierattr_t;
 typedef struct { volatile int __value; } pthread_spinlock_t;
 
+
+#define token __token_type
+token pthread_mutex_unlocked;
+token pthread_mutex_locked l_unlimited;
+token pthread_rwlock_unlocked;
+token pthread_rwlock_shared l_unlimited;
+token pthread_rwlock_exclusive;
+token pthread_spin_unlocked;
+token pthread_spin_locked l_unlimited;
+#undef token
+
 #define PTHREAD_CREATE_JOINABLE 0
 #define PTHREAD_CREATE_DETACHED 1
 #define PTHREAD_SCOPE_SYSTEM 0
@@ -142,15 +153,15 @@ int pthread_setcancelstate(int, int *);
 int pthread_setcanceltype(int, int *);
 void pthread_testcancel(void);
 
-int pthread_mutex_init(pthread_mutex_t *__restrict, const pthread_mutexattr_t *__restrict handle(pthread_mutexattr)) __attribute__((ownership_constructs(pthread_mutex, 1), ownership_static(pthread_mutex, 1), ownership_adds_token(pthread_mutex_unlocked, 1)));
-int pthread_mutex_destroy(pthread_mutex_t *) __attribute__((ownership_destroys(pthread_mutex, 1), ownership_static(pthread_mutex, 1), ownership_drops_token(pthread_mutex_unlocked, 1)));
-int pthread_mutex_lock(pthread_mutex_t *) __attribute__((ownership_requires_handle(pthread_mutex, 1), ownership_static(pthread_mutex, 1), ownership_drops_token(pthread_mutex_unlocked, 1), ownership_adds_duplicable_token(pthread_mutex_locked, 1)));
-int pthread_mutex_trylock(pthread_mutex_t *) __attribute__((ownership_requires_handle(pthread_mutex, 1), ownership_static(pthread_mutex, 1), ownership_drops_token(pthread_mutex_unlocked, 1), ownership_adds_duplicable_token(pthread_mutex_locked, 1)));
-int pthread_mutex_timedlock(pthread_mutex_t *__restrict, const struct timespec *__restrict) __attribute__((ownership_requires_handle(pthread_mutex, 1), ownership_static(pthread_mutex, 1), ownership_drops_token(pthread_mutex_unlocked, 1), ownership_adds_duplicable_token(pthread_mutex_locked, 1)));
-int pthread_mutex_unlock(pthread_mutex_t *) __attribute__((ownership_requires_handle(pthread_mutex, 1), ownership_static(pthread_mutex, 1), ownership_drops_token(pthread_mutex_locked, 1), ownership_adds_token(pthread_mutex_unlocked, 1)));
-int pthread_mutex_getprioceiling(const pthread_mutex_t *__restrict, int *__restrict) __attribute__((ownership_requires_handle(pthread_mutex, 1), ownership_static(pthread_mutex, 1)));
-int pthread_mutex_setprioceiling(pthread_mutex_t *__restrict, int, int *__restrict) __attribute__((ownership_requires_handle(pthread_mutex, 1), ownership_static(pthread_mutex, 1), ownership_requires_token(pthread_mutex_unlocked, 1)));
-int pthread_mutex_consistent(pthread_mutex_t *) __attribute__((ownership_requires_handle(pthread_mutex, 1), ownership_static(pthread_mutex, 1), ownership_requires_token(pthread_mutex_locked, 1)));
+int pthread_mutex_init(pthread_mutex_t *__restrict construct(pthread_mutex) static_handle(pthread_mutex) grant(pthread_mutex_unlocked), const pthread_mutexattr_t *__restrict handle(pthread_mutexattr));
+int pthread_mutex_destroy(pthread_mutex_t * destroy(pthread_mutex) static_handle(pthread_mutex) consume(pthread_mutex_unlocked));
+int pthread_mutex_lock(pthread_mutex_t * handle(pthread_mutex) static_handle(pthread_mutex) consume(pthread_mutex_unlocked) grant(pthread_mutex_locked));
+int pthread_mutex_trylock(pthread_mutex_t * handle(pthread_mutex) static_handle(pthread_mutex) consume(pthread_mutex_unlocked) grant(pthread_mutex_locked));
+int pthread_mutex_timedlock(pthread_mutex_t *__restrict handle(pthread_mutex) static_handle(pthread_mutex) consume(pthread_mutex_unlocked) grant(pthread_mutex_locked), const struct timespec *__restrict);
+int pthread_mutex_unlock(pthread_mutex_t * handle(pthread_mutex) static_handle(pthread_mutex) consume(pthread_mutex_locked) grant(pthread_mutex_unlocked));
+int pthread_mutex_getprioceiling(const pthread_mutex_t *__restrict handle(pthread_mutex) static_handle(pthread_mutex), int *__restrict);
+int pthread_mutex_setprioceiling(pthread_mutex_t *__restrict handle(pthread_mutex) static_handle(pthread_mutex) withtok(pthread_mutex_unlocked), int, int *__restrict);
+int pthread_mutex_consistent(pthread_mutex_t * handle(pthread_mutex) static_handle(pthread_mutex) withtok(pthread_mutex_locked));
 int pthread_mutexattr_init(pthread_mutexattr_t * construct(pthread_mutexattr));
 int pthread_mutexattr_destroy(pthread_mutexattr_t * destroy(pthread_mutexattr));
 int pthread_mutexattr_getpshared(const pthread_mutexattr_t *__restrict handle(pthread_mutexattr), int *__restrict);
@@ -166,9 +177,9 @@ int pthread_mutexattr_setrobust(pthread_mutexattr_t * handle(pthread_mutexattr),
 
 int pthread_cond_init(pthread_cond_t *__restrict, const pthread_condattr_t *__restrict handle(pthread_condattr)) __attribute__((ownership_constructs(pthread_cond, 1), ownership_static(pthread_cond, 1)));
 int pthread_cond_destroy(pthread_cond_t *) __attribute__((ownership_destroys(pthread_cond, 1), ownership_static(pthread_cond, 1)));
-int pthread_cond_wait(pthread_cond_t *__restrict, pthread_mutex_t *__restrict) __attribute__((ownership_requires_handle(pthread_cond, 1), ownership_static(pthread_cond, 1), ownership_requires_handle(pthread_mutex, 2), ownership_static(pthread_mutex, 2), ownership_requires_token(pthread_mutex_locked, 2)));
-int pthread_cond_timedwait(pthread_cond_t *__restrict, pthread_mutex_t *__restrict,
-	const struct timespec *__restrict) __attribute__((ownership_requires_handle(pthread_cond, 1), ownership_static(pthread_cond, 1), ownership_requires_handle(pthread_mutex, 2), ownership_static(pthread_mutex, 2), ownership_requires_token(pthread_mutex_locked, 2)));
+int pthread_cond_wait(pthread_cond_t *__restrict, pthread_mutex_t *__restrict handle(pthread_mutex) static_handle(pthread_mutex) withtok(pthread_mutex_locked)) __attribute__((ownership_requires_handle(pthread_cond, 1), ownership_static(pthread_cond, 1)));
+int pthread_cond_timedwait(pthread_cond_t *__restrict, pthread_mutex_t *__restrict handle(pthread_mutex) static_handle(pthread_mutex) withtok(pthread_mutex_locked),
+	const struct timespec *__restrict) __attribute__((ownership_requires_handle(pthread_cond, 1), ownership_static(pthread_cond, 1)));
 int pthread_cond_signal(pthread_cond_t *) __attribute__((ownership_requires_handle(pthread_cond, 1), ownership_static(pthread_cond, 1)));
 int pthread_cond_broadcast(pthread_cond_t *) __attribute__((ownership_requires_handle(pthread_cond, 1), ownership_static(pthread_cond, 1)));
 int pthread_condattr_init(pthread_condattr_t * construct(pthread_condattr));
