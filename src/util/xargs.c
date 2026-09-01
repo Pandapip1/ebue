@@ -225,8 +225,10 @@ fail:
 /* Replace every occurrence of replstr within tmpl with value, for -I's
  * substitution.  A single allocation sized from a pre-count of
  * occurrences, not incremental realloc(). */
+withtok(heap_allocated)
 static char *subst(const char *tmpl, const char *replstr, const char *value)
     __attribute__((nonnull(1, 2, 3)));
+withtok(heap_allocated)
 static char *subst(const char *tmpl, const char *replstr, const char *value)
 {
 	size_t rlen = strlen(replstr), vlen = strlen(value), tlen = strlen(tmpl), occ = 0;
