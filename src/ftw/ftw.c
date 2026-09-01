@@ -62,6 +62,7 @@
 #include <errno.h>
 #include <limits.h>
 #include "libc.h"
+#include "ownership_stubs.h"
 
 struct level {
 	struct level *lru_prev, *lru_next;	/* only meaningful while dp != NULL */
@@ -116,20 +117,25 @@ struct walkstate {
  * the returned pointer is `path` itself. */
 static const char *resolve(struct walkstate *ws, const char *path, char **tmp)
 {
+	const char *cwd = ws->cwd0;
 	int absolute = path[0] == '/' || path[0] == '\\' ||
 		(((path[0] | 0x20) >= 'a' && (path[0] | 0x20) <= 'z') && path[1] == ':');
 	size_t l0, l1;
 	char *full;
 
 	*tmp = NULL;
-	if (absolute || !ws->cwd0) return path;
+	if (absolute || !cwd) return path;
 
-	l0 = strlen(ws->cwd0);
+	l0 = strlen(cwd);
 	l1 = strlen(path);
 	full = malloc(l0 + 1 + l1 + 1);
 	if (!full) { errno = ENOMEM; return NULL; }
-	memcpy(full, ws->cwd0, l0);
+	__ownership_writable_span(full, l0);
+	__ownership_readable_span(cwd, l0);
+	memcpy(full, cwd, l0);
 	full[l0] = '/';
+	__ownership_writable_span(full + l0 + 1, l1 + 1);
+	__ownership_readable_span(path, l1 + 1);
 	memcpy(full + l0 + 1, path, l1 + 1);
 	*tmp = full;
 	return full;
@@ -382,6 +388,7 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 
 		r = 0;
 		while ((de = readdir(lv.dp)) != NULL) {
+			const char *name = de->d_name;
 			char *child;
 			size_t clen, namelen, off, separator;
 
@@ -406,9 +413,13 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 			clen++;
 			child = malloc(clen);
 			if (!child) { r = -1; errno = ENOMEM; break; }
+			__ownership_writable_span(child, plen);
+			__ownership_readable_span(path, plen);
 			memcpy(child, path, plen);
 			if (separator) child[plen] = '/';
-			memcpy(child + off, de->d_name, namelen);
+			__ownership_writable_span(child + off, namelen);
+			__ownership_readable_span(name, namelen);
+			memcpy(child + off, name, namelen);
 			child[off + namelen] = 0;
 
 			/* level_open() may have closed lv.dp to make room for a
