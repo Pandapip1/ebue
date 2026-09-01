@@ -73,6 +73,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include <time.h>
 #include "util.h"
 
@@ -126,17 +127,41 @@ struct prstate {
 	const struct pr_opts *o;
 	const char *fname;
 	long lineno;
-	int lines_on_page;
+	long long lines_on_page;
 	int budget;
 	int page_open;
 };
 
-static void start_page(struct prstate *st)
+static int increment_long(long *value, const char *what)
 {
-	g_page_no++;
+	if (*value < 0 || *value >= LONG_MAX) {
+		errno = EOVERFLOW;
+		__util_diagf("pr: %s exceeds LONG_MAX\n", what);
+		return -1;
+	}
+	*value = (long)((unsigned long)*value + 1UL);
+	return 0;
+}
+
+static int start_page(struct prstate *st)
+{
+	if (increment_long(&g_page_no, "page count") < 0) return -1;
 	if (!st->o->opt_t) emit_header(st->o, st->fname);
 	st->lines_on_page = 0;
 	st->page_open = 1;
+	return 0;
+}
+
+static int page_body_fits(const struct prstate *st)
+{
+	long long limit = st->o->opt_d ? (long long)INT_MAX - 1 : INT_MAX;
+
+	if (st->lines_on_page < 0 || st->lines_on_page > limit) {
+		errno = EOVERFLOW;
+		__util_diagf("pr: page line count exceeds its proven bound\n");
+		return -1;
+	}
+	return 0;
 }
 
 static void end_page(struct prstate *st)
@@ -155,10 +180,11 @@ static int process_stream(const struct pr_opts *o, FILE *f, const char *fname)
 	struct prstate st;
 	char *line = 0;
 	size_t cap = 0;
+	int rc = 0, saved_errno = 0;
 
 	st.o = o;
 	st.fname = fname;
-	st.lineno = 1;
+	st.lineno = 0;
 	st.lines_on_page = 0;
 	st.page_open = 0;
 	st.budget = o->opt_t ? o->page_len : (o->page_len - 10);
@@ -171,12 +197,26 @@ static int process_stream(const struct pr_opts *o, FILE *f, const char *fname)
 		ssize_t n = getline(&line, &cap, f);
 		size_t len;
 		if (n < 0) break;
+		if (increment_long(&st.lineno, "line count") < 0) {
+			rc = -1;
+			saved_errno = errno;
+			goto done;
+		}
 		len = (size_t)n;
 		if (len > 0 && line[len - 1] == '\n') { line[len - 1] = 0; len--; }
 
 		if (!st.page_open || st.lines_on_page >= st.budget) {
 			if (st.page_open) end_page(&st);
-			start_page(&st);
+			if (start_page(&st) < 0) {
+				rc = -1;
+				saved_errno = errno;
+				goto done;
+			}
+		}
+		if (page_body_fits(&st) < 0) {
+			rc = -1;
+			saved_errno = errno;
+			goto done;
 		}
 
 		if (o->opt_n) printf("%*ld%c", o->n_width, st.lineno, o->n_sepchar);
@@ -190,12 +230,14 @@ static int process_stream(const struct pr_opts *o, FILE *f, const char *fname)
 			putchar('\n');
 			st.lines_on_page++;
 		}
-		st.lineno++;
 	}
+
+done:
 	free(line);
 
 	if (st.page_open) end_page(&st);
-	return 0;
+	if (rc < 0) errno = saved_errno;
+	return rc;
 }
 
 static int process_file(const struct pr_opts *o, const char *path)

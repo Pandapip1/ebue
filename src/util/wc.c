@@ -80,6 +80,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <limits.h>
 #include <ctype.h>
 #include <wchar.h>
 #include <fcntl.h>
@@ -91,6 +92,19 @@ struct wc_counts {
 	long long words;
 	long long bytes_or_chars;
 };
+
+static int add_count(long long *count, long long amount)
+{
+	if (*count < 0 || amount < 0 ||
+	    (unsigned long long)*count >
+	        (unsigned long long)LLONG_MAX - (unsigned long long)amount) {
+		errno = EOVERFLOW;
+		return -1;
+	}
+	*count = (long long)((unsigned long long)*count +
+	                     (unsigned long long)amount);
+	return 0;
+}
 
 /* Reads all of `fd`, filling `out` with exactly the newline/word/
  * byte-or-character counts count_stream() was asked for (`want_chars`
@@ -182,7 +196,10 @@ static int count_stream(int fd, int want_chars, struct wc_counts *out, const cha
 	if (want_chars && carry_len > 0) {
 		/* A sequence still incomplete at EOF: count what is left
 		 * one byte at a time rather than silently dropping it. */
-		out->bytes_or_chars += (long long)carry_len;
+		if (add_count(&out->bytes_or_chars, (long long)carry_len) < 0) {
+			__util_diagf("wc: %s: %s\n", label, strerror(errno));
+			return -1;
+		}
 	}
 	return 0;
 }
@@ -274,9 +291,12 @@ int __util_wc_main(int argc, char **argv)
 			(void)close(fd);
 		}
 		print_counts(&c, want_l, want_w, want_bc, path);
-		total.lines += c.lines;
-		total.words += c.words;
-		total.bytes_or_chars += c.bytes_or_chars;
+		if (add_count(&total.lines, c.lines) < 0 ||
+		    add_count(&total.words, c.words) < 0 ||
+		    add_count(&total.bytes_or_chars, c.bytes_or_chars) < 0) {
+			__util_diagf("wc: total: %s\n", strerror(errno));
+			return 1;
+		}
 	}
 
 	if (noperands > 1) print_counts(&total, want_l, want_w, want_bc, "total");
