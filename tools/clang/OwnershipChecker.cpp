@@ -1188,6 +1188,19 @@ enum class CapabilityOperation : unsigned char {
   GrantDuplicable
 };
 
+static DefinedOrUnknownSVal protocolSucceeded(const FunctionDecl *Function,
+                                              DefinedOrUnknownSVal Return,
+                                              SValBuilder &Builder,
+                                              ProgramStateRef State) {
+  DefinedOrUnknownSVal IsZero = Builder.evalEQ(
+      State, Return, Builder.makeZeroVal(Function->getReturnType()));
+  if (!Function->getReturnType()->isPointerType())
+    return IsZero;
+  return Builder.evalBinOp(State, BO_EQ, IsZero,
+                           Builder.makeTruthVal(false), Builder.getConditionType())
+      .castAs<DefinedOrUnknownSVal>();
+}
+
 struct CapabilityProtocol {
   CapabilityOperation Operation;
   const IdentifierInfo *Family;
@@ -1659,9 +1672,8 @@ public:
         Call.getReturnValue().getAs<DefinedOrUnknownSVal>();
     if (!Return)
       return;
-    DefinedOrUnknownSVal Success = C.getSValBuilder().evalEQ(
-        State, *Return,
-        C.getSValBuilder().makeZeroVal(Function->getReturnType()));
+    DefinedOrUnknownSVal Success = protocolSucceeded(
+        Function, *Return, C.getSValBuilder(), State);
     auto [Succeeded, Failed] = State->assume(Success);
     if (Succeeded)
       C.addTransition(transition(Succeeded, Call, Protocols, C));
@@ -1682,9 +1694,8 @@ public:
           C.getSVal(Return->getRetValue()).getAs<DefinedOrUnknownSVal>();
       if (!Result)
         return;
-      DefinedOrUnknownSVal IsSuccess = C.getSValBuilder().evalEQ(
-          State, *Result,
-          C.getSValBuilder().makeZeroVal(Function->getReturnType()));
+      DefinedOrUnknownSVal IsSuccess = protocolSucceeded(
+          Function, *Result, C.getSValBuilder(), State);
       State = State->assume(IsSuccess).first;
       if (!State)
         return;

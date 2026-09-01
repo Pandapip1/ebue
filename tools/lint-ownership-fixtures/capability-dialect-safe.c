@@ -32,3 +32,17 @@ void dialect_clear_string(char *text drop(dialect_terminated))
 {
 	dialect_invalidate_string(text);
 }
+
+char *dialect_copy_string(char *text grant(dialect_terminated))
+{
+	dialect_mark_terminated(text);
+	return text;
+}
+
+void pointer_success_grants_evidence(void)
+{
+	char text[8];
+	char *result = dialect_copy_string(text);
+	if (result)
+		dialect_use_string(text);
+}

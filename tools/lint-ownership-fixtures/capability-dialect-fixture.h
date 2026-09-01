@@ -27,3 +27,4 @@ void dialect_invalidate_string(char *text drop(dialect_terminated));
 void dialect_use_string(const char *text withtok(dialect_terminated));
 void dialect_clear_string(char *text drop(dialect_terminated));
 void dialect_bad_clear_string(char *text drop(dialect_terminated));
+char *dialect_copy_string(char *text grant(dialect_terminated));
