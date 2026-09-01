@@ -182,6 +182,21 @@ void copy_strnlen_suffix(const char *s, size_t n)
 	consume_bytes(s + 1, l - 1);
 }
 
+void consume_measured_substring(const char *s, size_t n)
+{
+	const char *substring = s + 2;
+	size_t l = strnlen(substring, n);
+	consume_bytes(substring, l);
+}
+
+void consume_guarded_strlen_difference(const char *s, const char *tail)
+{
+	size_t whole = strlen(s);
+	size_t removed = strlen(tail);
+	if (removed > whole) return;
+	consume_bytes(s, whole - removed);
+}
+
 /* xstrdup's own shape, duplicated across src/glob/glob.c,
  * src/sh/execute.c, src/sh/parse.c, and src/wordexp/wordexp.c (and
  * src/string/strdup.c itself): the allocation and the memcpy length are

@@ -409,7 +409,8 @@ class MemoryContractChecker
   // record "this conjured return symbol came from strlen/strnlen(s)" at
   // the call that produces it.
   static bool stringLengthSourceSpanProven(SVal Pointer, SVal Length,
-                                           ProgramStateRef State) {
+                                           ProgramStateRef State,
+                                           CheckerContext &C) {
     const MemRegion *PointerRegion = Pointer.getAsRegion();
     if (!PointerRegion)
       return false;
@@ -417,21 +418,54 @@ class MemoryContractChecker
     if (!PointerOffset.isValid() || PointerOffset.hasSymbolicOffset() ||
         PointerOffset.getOffset() < 0 || PointerOffset.getOffset() % 8 != 0)
       return false;
-    const MemRegion *Base = PointerOffset.getRegion();
-    int64_t PointerBytes = PointerOffset.getOffset() / 8;
+    auto RelativePointerBytes = [&](const MemRegion *Source)
+        -> std::optional<int64_t> {
+      RegionOffset SourceOffset = Source->getAsOffset();
+      if (!SourceOffset.isValid() || SourceOffset.hasSymbolicOffset() ||
+          SourceOffset.getRegion() != PointerOffset.getRegion() ||
+          SourceOffset.getOffset() % 8 != 0)
+        return std::nullopt;
+      int64_t Difference =
+          (PointerOffset.getOffset() - SourceOffset.getOffset()) / 8;
+      return Difference < 0 ? std::nullopt
+                            : std::optional<int64_t>(Difference);
+    };
     SymbolRef LengthSym;
     int64_t Slack;
-    if (!decomposeSignedAffine(Length, LengthSym, Slack) ||
-        (Slack > 0 &&
-         PointerBytes > std::numeric_limits<int64_t>::max() - Slack))
+    if (decomposeSignedAffine(Length, LengthSym, Slack)) {
+      if (const MemRegion *const *Source = State->get<StrlenSource>(LengthSym))
+        if (std::optional<int64_t> Bytes = RelativePointerBytes(*Source))
+          if (!(Slack > 0 &&
+                *Bytes > std::numeric_limits<int64_t>::max() - Slack) &&
+              *Bytes + Slack <= 1)
+            return true;
+      if (const MemRegion *const *Source =
+              State->get<StrnlenSource>(LengthSym))
+        if (std::optional<int64_t> Bytes = RelativePointerBytes(*Source))
+          if (!(Slack > 0 &&
+                *Bytes > std::numeric_limits<int64_t>::max() - Slack) &&
+              *Bytes + Slack <= 0)
+            return true;
+    }
+
+    /* Once a guard proves B <= strlen(P), the unsigned subtraction cannot
+     * underflow and strlen(P) - B is necessarily a readable prefix of P. */
+    const auto *Difference =
+        dyn_cast_or_null<SymSymExpr>(Length.getAsSymbol());
+    if (!Difference || Difference->getOpcode() != BO_Sub)
       return false;
-    if (const MemRegion *const *Source = State->get<StrlenSource>(LengthSym))
-      if (*Source == Base && PointerBytes + Slack <= 1)
-        return true;
-    if (const MemRegion *const *Source = State->get<StrnlenSource>(LengthSym))
-      if (*Source == Base && PointerBytes + Slack <= 0)
-        return true;
-    return false;
+    SymbolRef Measured = stripCasts(Difference->getLHS());
+    SymbolRef Removed = stripCasts(Difference->getRHS());
+    const MemRegion *const *Source = State->get<StrlenSource>(Measured);
+    if (!Source || RelativePointerBytes(*Source) != 0)
+      return false;
+    SVal NoUnderflow = C.getSValBuilder().evalBinOp(
+        State, BO_GE, C.getSValBuilder().makeSymbolVal(Measured),
+        C.getSValBuilder().makeSymbolVal(Removed),
+        C.getSValBuilder().getConditionType());
+    std::optional<DefinedOrUnknownSVal> Condition =
+        NoUnderflow.getAs<DefinedOrUnknownSVal>();
+    return Condition && !State->assume(*Condition, false);
   }
 
   static std::optional<SVal>
@@ -637,7 +671,7 @@ public:
       return false;
     if (sameSymbolSpanProven(Extent, Length, State, C))
       return true;
-    if (stringLengthSourceSpanProven(Pointer, Length, State))
+    if (stringLengthSourceSpanProven(Pointer, Length, State, C))
       return true;
     return ExtentProvesLength(Extent);
   }
@@ -1235,11 +1269,8 @@ public:
       const MemRegion *ArgRegion = Call.getArgSVal(0).getAsRegion();
       SymbolRef ReturnSym = stripCasts(Call.getReturnValue().getAsSymbol());
       if (ArgRegion && ReturnSym)
-        State = IsStrlen
-                    ? State->set<StrlenSource>(ReturnSym,
-                                               ArgRegion->getBaseRegion())
-                    : State->set<StrnlenSource>(ReturnSym,
-                                                ArgRegion->getBaseRegion());
+        State = IsStrlen ? State->set<StrlenSource>(ReturnSym, ArgRegion)
+                         : State->set<StrnlenSource>(ReturnSym, ArgRegion);
     }
 
     SmallVector<SpanContract, 2> Spans;

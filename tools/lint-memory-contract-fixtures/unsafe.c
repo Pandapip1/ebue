@@ -200,3 +200,10 @@ void too_much_from_strnlen_suffix(const char *s, size_t n)
 	if (l == 0) return;
 	consume_bytes(s + 1, l); /* memory-contract-expect */
 }
+
+void unchecked_strlen_difference(const char *s, const char *tail)
+{
+	size_t whole = strlen(s);
+	size_t removed = strlen(tail);
+	consume_bytes(s, whole - removed); /* memory-contract-expect */
+}
