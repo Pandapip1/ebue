@@ -216,6 +216,19 @@ void fill_strict_capacity(
 	if (used < capacity) memset(buffer, 0, used + 1);
 }
 
+void fill_nonzero_shorter(
+	char *buffer withtok(fixture_writable_span(capacity)), size_t capacity)
+{
+	if (capacity) memset(buffer, 0, capacity - 1);
+}
+
+void consume_shorter_bounded_prefix(const char *s, size_t requested)
+{
+	size_t available = strlen(s);
+	if (requested == 0 || requested > available) return;
+	consume_bytes(s, requested - 1);
+}
+
 /* xstrdup's own shape, duplicated across src/glob/glob.c,
  * src/sh/execute.c, src/sh/parse.c, and src/wordexp/wordexp.c (and
  * src/string/strdup.c itself): the allocation and the memcpy length are

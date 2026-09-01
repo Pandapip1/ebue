@@ -226,3 +226,16 @@ void overfill_nonstrict_capacity(
 	if (used <= capacity)
 		memset(buffer, 0, used + 1); /* memory-contract-expect */
 }
+
+void subtract_without_nonzero_guard(
+	char *buffer withtok(fixture_writable_span(capacity)), size_t capacity)
+{
+	memset(buffer, 0, capacity - 1); /* memory-contract-expect */
+}
+
+void consume_wrapping_bounded_prefix(const char *s, size_t requested)
+{
+	size_t available = strlen(s);
+	if (requested > available) return;
+	consume_bytes(s, requested - 1); /* memory-contract-expect */
+}

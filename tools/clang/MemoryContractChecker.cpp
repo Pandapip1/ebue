@@ -472,6 +472,21 @@ class MemoryContractChecker
     SymbolRef Bounded = stripCasts(Length.getAsSymbol());
     if (!Bounded)
       return false;
+    if (const auto *DifferenceLength = dyn_cast<SymIntExpr>(Bounded)) {
+      if (DifferenceLength->getOpcode() != BO_Sub ||
+          DifferenceLength->getRHS().isNegative())
+        return false;
+      SymbolRef Base = stripCasts(DifferenceLength->getLHS());
+      SVal NoUnderflow = C.getSValBuilder().evalBinOp(
+          State, BO_GE, C.getSValBuilder().makeSymbolVal(Base),
+          C.getSValBuilder().makeIntVal(DifferenceLength->getRHS()),
+          C.getSValBuilder().getConditionType());
+      std::optional<DefinedOrUnknownSVal> Condition =
+          NoUnderflow.getAs<DefinedOrUnknownSVal>();
+      if (!Condition || State->assume(*Condition, false))
+        return false;
+      Bounded = Base;
+    }
     for (const SymbolRelation &Relation : State->get<ProvenLessEqual>()) {
       if (stripCasts(Relation.first) != Bounded)
         continue;
@@ -665,6 +680,20 @@ public:
               State->contains<ProvenLessThan>(
                   {stripCasts(OffsetLength->getLHS()), ExtentSymbol}))
             return true;
+        if (const auto *Shorter = dyn_cast<SymIntExpr>(LengthSymbol))
+          if (Shorter->getOpcode() == BO_Sub &&
+              !Shorter->getRHS().isNegative() &&
+              stripCasts(Shorter->getLHS()) == ExtentSymbol) {
+            SVal NoUnderflow = C.getSValBuilder().evalBinOp(
+                State, BO_GE,
+                C.getSValBuilder().makeSymbolVal(ExtentSymbol),
+                C.getSValBuilder().makeIntVal(Shorter->getRHS()),
+                C.getSValBuilder().getConditionType());
+            std::optional<DefinedOrUnknownSVal> Condition =
+                NoUnderflow.getAs<DefinedOrUnknownSVal>();
+            if (Condition && !State->assume(*Condition, false))
+              return true;
+          }
       }
       SVal Enough = C.getSValBuilder().evalBinOp(
           State, BO_GE, Extent, Length,
