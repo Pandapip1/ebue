@@ -85,7 +85,8 @@ static void alertable_yield(void)
 	sched_yield();
 }
 
-__attribute__((ownership_adds_token(pthread_spin_unlocked, 1)))
+__attribute__((ownership_constructs(pthread_spin, 1),
+  ownership_adds_token(pthread_spin_unlocked, 1)))
 int pthread_spin_init(pthread_spinlock_t *lock, int pshared)
 {
 	if (!lock || (pshared != PTHREAD_PROCESS_PRIVATE &&
@@ -94,7 +95,8 @@ int pthread_spin_init(pthread_spinlock_t *lock, int pshared)
 	return 0;
 }
 
-__attribute__((ownership_drops_token(pthread_spin_unlocked, 1)))
+__attribute__((ownership_destroys(pthread_spin, 1),
+  ownership_drops_token(pthread_spin_unlocked, 1)))
 int pthread_spin_destroy(pthread_spinlock_t *lock)
 {
 	if (!lock || lock->__value != SPIN_UNLOCKED) return EBUSY;
@@ -102,7 +104,8 @@ int pthread_spin_destroy(pthread_spinlock_t *lock)
 	return 0;
 }
 
-__attribute__((ownership_drops_token(pthread_spin_unlocked, 1),
+__attribute__((ownership_requires_handle(pthread_spin, 1),
+  ownership_drops_token(pthread_spin_unlocked, 1),
   ownership_adds_duplicable_token(pthread_spin_locked, 1)))
 int pthread_spin_lock(pthread_spinlock_t *lock)
 {
@@ -117,7 +120,8 @@ int pthread_spin_lock(pthread_spinlock_t *lock)
 	}
 }
 
-__attribute__((ownership_drops_token(pthread_spin_unlocked, 1),
+__attribute__((ownership_requires_handle(pthread_spin, 1),
+  ownership_drops_token(pthread_spin_unlocked, 1),
   ownership_adds_duplicable_token(pthread_spin_locked, 1)))
 int pthread_spin_trylock(pthread_spinlock_t *lock)
 {
@@ -130,7 +134,8 @@ int pthread_spin_trylock(pthread_spinlock_t *lock)
 			SPIN_LOCKED) == SPIN_UNLOCKED ? 0 : EBUSY;
 }
 
-__attribute__((ownership_drops_token(pthread_spin_locked, 1),
+__attribute__((ownership_requires_handle(pthread_spin, 1),
+  ownership_drops_token(pthread_spin_locked, 1),
   ownership_adds_token(pthread_spin_unlocked, 1)))
 int pthread_spin_unlock(pthread_spinlock_t *lock)
 {
@@ -177,6 +182,8 @@ static void unlink_barrier_waiter_locked(struct barrier_waiter *waiter)
 	if (*link) *link = waiter->next;
 }
 
+__attribute__((ownership_constructs(pthread_barrier, 1),
+  ownership_requires_handle(pthread_barrierattr, 2)))
 int pthread_barrier_init(pthread_barrier_t *__restrict barrier,
 	const pthread_barrierattr_t *__restrict attr, unsigned count)
 {
@@ -196,6 +203,7 @@ int pthread_barrier_init(pthread_barrier_t *__restrict barrier,
 	return 0;
 }
 
+__attribute__((ownership_destroys(pthread_barrier, 1)))
 int pthread_barrier_destroy(pthread_barrier_t *barrier)
 {
 	struct barrier_data *data;
@@ -217,6 +225,7 @@ int pthread_barrier_destroy(pthread_barrier_t *barrier)
 	return result;
 }
 
+__attribute__((ownership_requires_handle(pthread_barrier, 1)))
 int pthread_barrier_wait(pthread_barrier_t *barrier)
 {
 	struct barrier_data *data;
@@ -273,6 +282,7 @@ int pthread_barrier_wait(pthread_barrier_t *barrier)
 	return 0;
 }
 
+__attribute__((ownership_constructs(pthread_barrierattr, 1)))
 int pthread_barrierattr_init(pthread_barrierattr_t *attr)
 {
 	struct barrierattr_data *data;
@@ -284,6 +294,7 @@ int pthread_barrierattr_init(pthread_barrierattr_t *attr)
 	return 0;
 }
 
+__attribute__((ownership_destroys(pthread_barrierattr, 1)))
 int pthread_barrierattr_destroy(pthread_barrierattr_t *attr)
 {
 	if (!attr || barrierattr_data(attr)->magic != BARATTR_MAGIC) return EINVAL;
@@ -291,6 +302,7 @@ int pthread_barrierattr_destroy(pthread_barrierattr_t *attr)
 	return 0;
 }
 
+__attribute__((ownership_requires_handle(pthread_barrierattr, 1)))
 int pthread_barrierattr_getpshared(const pthread_barrierattr_t *__restrict attr,
 	int *__restrict pshared)
 {
@@ -300,6 +312,7 @@ int pthread_barrierattr_getpshared(const pthread_barrierattr_t *__restrict attr,
 	return 0;
 }
 
+__attribute__((ownership_requires_handle(pthread_barrierattr, 1)))
 int pthread_barrierattr_setpshared(pthread_barrierattr_t *attr, int pshared)
 {
 	if (!attr || barrierattr_data(attr)->magic != BARATTR_MAGIC ||
