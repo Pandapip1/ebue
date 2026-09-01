@@ -37,6 +37,7 @@
 #include <unistd.h>
 #include "libc.h"
 #include "plat_stat.h"
+#include "ownership_stubs.h"
 
 /* ---- $LXMOD (src/stat/lxmod.c's __lxmod_get/__lxmod_set) -------------- */
 
@@ -473,6 +474,7 @@ int __plat_fstat(__plat_handle_t h, int type, struct stat *st)
 	unsigned lxmod = 0;
 	int have_lxmod, exe = 0;
 
+	__ownership_writable_span(st, sizeof *st);
 	memset(st, 0, sizeof *st);
 	if (type == __FD_PIPE) {
 		st->st_dev = __STAT_DEV_PIPE;
@@ -587,6 +589,7 @@ int __plat_statvfs(__plat_handle_t h, struct statvfs *buf)
 	NTSTATUS s;
 	unsigned long long cluster;
 
+	__ownership_writable_span(buf, sizeof *buf);
 	memset(buf, 0, sizeof *buf);
 
 	s = NtQueryVolumeInformationFile(h, &io, &fsi, sizeof fsi, FileFsFullSizeInformation);
@@ -650,6 +653,7 @@ int __plat_statvfs_path(const char *path, struct statvfs *buf)
 	if (vfs & __VFS_NATIVE) vfs = __VFS_NONE;
 	if (vfs == __VFS_MISSING) { errno = ENOENT; return -1; }
 	if (vfs != __VFS_NONE) {
+		__ownership_writable_span(buf, sizeof *buf);
 		memset(buf, 0, sizeof *buf);
 		buf->f_bsize = buf->f_frsize = 4096;
 		buf->f_fsid = 0xffffffffu;
