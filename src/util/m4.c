@@ -1105,7 +1105,7 @@ static char *bi_index(const char *s, const char *sub)
 	if (lsub == 0) pos = 0;
 	else { const char *f = strstr(s, sub); if (f) pos = (long)(f - s); }
 	snprintf(buf, sizeof buf, "%ld", pos);
-	return strdup(buf);
+	return strndup(buf, sizeof buf);
 }
 
 static char *bi_substr(struct m4_state *st, const char *s, const char *start_s, const char *len_s)
