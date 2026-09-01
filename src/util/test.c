@@ -256,8 +256,11 @@ static int t_nexpr(struct texpr *t)
 static int t_aexpr(struct texpr *t)
 {
 	int r = t_nexpr(t);
-	while (!t->err && t->i < t->n && !strcmp(t->v[t->i], "-a")) {
+	size_t remaining = t->i < t->n ? t->n - t->i : 0;
+	while (remaining > 0 && !t->err && t->i < t->n &&
+	       !strcmp(t->v[t->i], "-a")) {
 		int rhs;
+		remaining--;
 		t->i++;
 		rhs = t_nexpr(t);
 		/* Evaluated, not short-circuited: an error in either operand
@@ -273,8 +276,11 @@ static int t_aexpr(struct texpr *t)
 static int t_oexpr(struct texpr *t)
 {
 	int r = t_aexpr(t);
-	while (!t->err && t->i < t->n && !strcmp(t->v[t->i], "-o")) {
+	size_t remaining = t->i < t->n ? t->n - t->i : 0;
+	while (remaining > 0 && !t->err && t->i < t->n &&
+	       !strcmp(t->v[t->i], "-o")) {
 		int rhs;
+		remaining--;
 		t->i++;
 		rhs = t_aexpr(t);
 		if (r == T_ERR || rhs == T_ERR) r = T_ERR;
