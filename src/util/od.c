@@ -76,7 +76,7 @@ static int parse_odnum(const char *s, long long *out)
 	else if (s[n - 1] == 'k') { mult = 1024; n--; }
 	else if (s[n - 1] == 'm') { mult = 1048576; n--; }
 	if (n == 0 || n >= sizeof buf) return -1;
-	memcpy(buf, s, n);
+	strncpy(buf, s, n);
 	buf[n] = 0;
 
 	errno = 0;
