@@ -758,7 +758,8 @@ public:
             Contract.Length >= Call.getNumArgs())
           continue;
         if (spanProven(Call.getArgSVal(Contract.Pointer),
-                       Call.getArgSVal(Contract.Length), C.getState(), C)) {
+                       Call.getArgSVal(Contract.Length), C.getState(), C,
+                       false)) {
           BugType *Type = RedundantBT.get();
           report("manual memory proof axiom is redundant", Type, Call,
                  C.getState(), C);
@@ -778,7 +779,7 @@ public:
           if (overlapProven(Call.getArgSVal(Contract.First),
                             Call.getArgSVal(Contract.Second),
                             Call.getArgSVal(Contract.Length), C.getState(),
-                            C)) {
+                            C, false)) {
             BugType *Type = RedundantBT.get();
             report("manual memory proof axiom is redundant", Type, Call,
                    C.getState(), C);
