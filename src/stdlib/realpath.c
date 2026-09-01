@@ -32,6 +32,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include "libc.h"
+#include "ownership_stubs.h"
 
 withtok(heap_allocated)
 char *realpath(const char *__restrict path,
@@ -56,6 +57,8 @@ char *realpath(const char *__restrict path,
 			resolved = malloc(len + 1);
 			if (!resolved) return 0;
 		}
+		__ownership_writable_span(resolved, len + 1);
+		__ownership_readable_span(name, len + 1);
 		memcpy(resolved, name, len + 1);
 		return resolved;
 	}
@@ -75,6 +78,8 @@ char *realpath(const char *__restrict path,
 	if (len > 3 && p[len-1] == '/') p[--len] = 0;
 	if (!resolved) return p;
 	if (len + 1 > PATH_MAX) { free(p); errno = ENAMETOOLONG; return 0; }
+	__ownership_writable_span(resolved, len + 1);
+	__ownership_readable_span(p, len + 1);
 	memcpy(resolved, p, len + 1);
 	free(p);
 	return resolved;
