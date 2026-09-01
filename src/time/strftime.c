@@ -56,7 +56,10 @@ static int format_number(char *out, size_t out_size, long long value, // NOLINT(
 	if ((size_t)needed >= out_size) return -1;
 	if (sign) out[n++] = value < 0 ? '-' : '+';
 	while (zeroes--) out[n++] = '0';
-	while (digits) out[n++] = rev[--digits];
+	while (digits > 0) {
+		digits--;
+		out[n++] = rev[digits];
+	}
 	out[n] = 0;
 	return n;
 }

@@ -450,7 +450,10 @@ static void dec_exact(double v, struct dec *D)
 		char t[10];
 		i = 0;
 		do { t[i++] = (char)('0' + (int)(hi % 10)); hi /= 10; } while (hi);
-		while (i) *p++ = t[--i];
+		while (i > 0) {
+			i--;
+			*p++ = t[i];
+		}
 	}
 	for (i = bl - 2; i >= 0; i--) {
 		uint32_t w = bn[i];
