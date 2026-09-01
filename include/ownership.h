@@ -31,6 +31,8 @@
 	__attribute__((annotate("consume_any:" #token_name)))
 #define grant(token_name) \
 	__attribute__((annotate("grant:" #token_name)))
+#define drop(token_name) \
+	__attribute__((annotate("drop:" #token_name)))
 #define consume_if_nonnull_return(token_name) \
 	__attribute__((annotate("consume_if_nonnull_return:" #token_name)))
 #define construct(handle_name) \

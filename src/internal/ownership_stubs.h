@@ -3,6 +3,8 @@
 #ifndef _NTLIBC_OWNERSHIP_STUBS_H
 #define _NTLIBC_OWNERSHIP_STUBS_H
 
+#include <string_tokens.h>
+
 /* These declarations are the leaf axioms used to connect a concrete state
  * transition in a function body to its ownership-token contract.  They are
  * visible only to the static analyzer; ordinary builds erase each proof call
@@ -35,6 +37,9 @@ void __ownership_pthread_rwlock_unlocked(void *
 void __ownership_pthread_rwlock_destroyed(void *
 	consume(pthread_rwlock_unlocked));
 
+void __ownership_string_terminated(const void * grant(null_terminated));
+void __ownership_string_invalidated(void * drop(null_terminated));
+
 #else
 
 #define __ownership_pthread_mutex_initialized(object) ((void)0)
@@ -50,6 +55,8 @@ void __ownership_pthread_rwlock_destroyed(void *
 #define __ownership_pthread_rwlock_write_locked(object) ((void)0)
 #define __ownership_pthread_rwlock_unlocked(object) ((void)0)
 #define __ownership_pthread_rwlock_destroyed(object) ((void)0)
+#define __ownership_string_terminated(object) ((void)0)
+#define __ownership_string_invalidated(object) ((void)0)
 
 #endif
 #endif

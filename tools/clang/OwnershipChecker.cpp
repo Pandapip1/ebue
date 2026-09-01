@@ -1154,6 +1154,7 @@ enum class CapabilityOperation : unsigned char {
   RequireAbsent,
   Consume,
   ConsumeAny,
+  Drop,
   GrantLinear,
   GrantDuplicable
 };
@@ -1188,6 +1189,7 @@ class OwnershipContractChecker : public Checker<check::ASTDecl<FunctionDecl>> {
            Annotation.starts_with("withouttok:") ||
            Annotation.starts_with("consume:") ||
            Annotation.starts_with("consume_any:") ||
+           Annotation.starts_with("drop:") ||
            Annotation.starts_with("grant:") ||
            Annotation.starts_with("consume_if_nonnull_return:") ||
            Annotation.starts_with("construct:") ||
@@ -1288,6 +1290,7 @@ class CapabilityTokenChecker
         {"withouttok:", CapabilityOperation::RequireAbsent},
         {"consume:", CapabilityOperation::Consume},
         {"consume_any:", CapabilityOperation::ConsumeAny},
+        {"drop:", CapabilityOperation::Drop},
         {"grant:", CapabilityOperation::GrantLinear}};
     unsigned Argument = 0;
     for (const ParmVarDecl *Parameter : Function->parameters()) {
@@ -1322,7 +1325,8 @@ class CapabilityTokenChecker
              Input.Family == Output.Family &&
              (Input.Operation == CapabilityOperation::Require ||
               Input.Operation == CapabilityOperation::Consume ||
-              Input.Operation == CapabilityOperation::ConsumeAny);
+              Input.Operation == CapabilityOperation::ConsumeAny ||
+              Input.Operation == CapabilityOperation::Drop);
     });
   }
 
@@ -1515,6 +1519,9 @@ class CapabilityTokenChecker
         break;
       case CapabilityOperation::ConsumeAny:
         break;
+      case CapabilityOperation::Drop:
+        State = removeOperationToken(State, Carrier, Value, Protocol.Family);
+        break;
       case CapabilityOperation::GrantLinear:
         State = setOperationToken(State, Carrier, Value, Protocol.Family,
                                   CapabilityKind::Linear);
@@ -1543,7 +1550,8 @@ public:
       SVal Value = State->getSVal(State->getLValue(Parameter, LC));
       const MemRegion *Carrier = State->getLValue(Parameter, LC).getAsRegion();
       if (Protocol.Operation == CapabilityOperation::Require ||
-          Protocol.Operation == CapabilityOperation::Consume) {
+          Protocol.Operation == CapabilityOperation::Consume ||
+          Protocol.Operation == CapabilityOperation::Drop) {
         CapabilityKind Kind = dialectTokenKind(
                                   Function->getASTContext(),
                                   Protocol.Family->getName())
@@ -1664,7 +1672,8 @@ public:
                         CapabilityOperation::GrantDuplicable);
           });
       if ((Protocol.Operation == CapabilityOperation::Consume ||
-           Protocol.Operation == CapabilityOperation::ConsumeAny) &&
+           Protocol.Operation == CapabilityOperation::ConsumeAny ||
+           Protocol.Operation == CapabilityOperation::Drop) &&
           Present.Kind && !Regranted) {
         report("declared ownership token drop is not proven by function body",
                Site, State, C);

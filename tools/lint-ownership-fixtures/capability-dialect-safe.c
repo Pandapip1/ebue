@@ -12,3 +12,16 @@ void macro_declared_token_cycle(void)
 	dialect_mutex_unlock(&mutex);
 	dialect_mutex_destroy(&mutex);
 }
+
+void explicit_string_evidence_cycle(void)
+{
+	char text[8];
+	dialect_mark_terminated(text);
+	dialect_use_string(text);
+	dialect_clear_string(text);
+}
+
+void dialect_clear_string(char *text drop(dialect_terminated))
+{
+	dialect_invalidate_string(text);
+}

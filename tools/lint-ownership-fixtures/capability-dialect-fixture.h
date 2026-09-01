@@ -5,6 +5,7 @@
 
 tokdef dialect_mutex_unlocked;
 tokdef dialect_mutex_locked l_unlimited;
+tokdef dialect_terminated l_unlimited implicit_drop;
 
 typedef struct { void *opaque[8]; } dialect_mutex_t;
 
@@ -21,3 +22,8 @@ void dialect_mutex_unlock(dialect_mutex_t *mutex
 	grant(dialect_mutex_unlocked));
 void dialect_mutex_destroy(dialect_mutex_t *mutex
 	destroy(dialect_mutex) consume(dialect_mutex_unlocked));
+void dialect_mark_terminated(char *text grant(dialect_terminated));
+void dialect_invalidate_string(char *text drop(dialect_terminated));
+void dialect_use_string(const char *text withtok(dialect_terminated));
+void dialect_clear_string(char *text drop(dialect_terminated));
+void dialect_bad_clear_string(char *text drop(dialect_terminated));

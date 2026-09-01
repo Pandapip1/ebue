@@ -11,6 +11,7 @@
 
 #include <features.h>
 #include <stdlib.h>
+#include <string_tokens.h>
 
 #ifdef __cplusplus
 extern "C" {
