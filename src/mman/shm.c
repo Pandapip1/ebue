@@ -30,6 +30,7 @@
 #include <limits.h>
 #include <errno.h>
 #include "libc.h"
+#include "ownership_stubs.h"
 
 static const char *shm_tmpdir(void)
 {
@@ -87,8 +88,14 @@ static char *shm_path(const char *name)
 	pathlen = dirlen + prefix + namelen + 1;
 	path = malloc(pathlen);
 	if (!path) return NULL;
+	__ownership_writable_span(path, dirlen);
+	__ownership_readable_span(dir, dirlen);
 	memcpy(path, dir, dirlen);
+	__ownership_writable_span(path + dirlen, prefix);
+	__ownership_readable_span("/ntlibc-shm/", prefix);
 	memcpy(path + dirlen, "/ntlibc-shm/", prefix);
+	__ownership_writable_span(path + dirlen + prefix, namelen);
+	__ownership_readable_span(component, namelen);
 	memcpy(path + dirlen + prefix, component, namelen);
 	path[pathlen - 1] = 0;
 	return path;
@@ -151,8 +158,15 @@ static char *shm_mode_path(const char *path)
 	prefix = (size_t)(slash - path);
 	modepath = malloc(len + sizeof "-mode");
 	if (!modepath) return NULL;
+	__ownership_writable_span(modepath, prefix);
+	__ownership_readable_span(path, prefix);
 	memcpy(modepath, path, prefix);
+	__ownership_writable_span(modepath + prefix, sizeof "-mode" - 1);
+	__ownership_readable_span("-mode", sizeof "-mode" - 1);
 	memcpy(modepath + prefix, "-mode", sizeof "-mode" - 1);
+	__ownership_writable_span(modepath + prefix + sizeof "-mode" - 1,
+	                          len - prefix + 1);
+	__ownership_readable_span(slash, len - prefix + 1);
 	memcpy(modepath + prefix + sizeof "-mode" - 1, slash,
 	       len - prefix + 1);
 	return modepath;
@@ -310,6 +324,8 @@ static int rename_mapped_away(const char *path)
 	unsigned attempt;
 
 	if (!dead) return -1;
+	__ownership_writable_span(dead, dirlen);
+	__ownership_readable_span(path, dirlen);
 	memcpy(dead, path, dirlen);
 	for (attempt = 0; attempt < 32; attempt++) {
 		unsigned serial = ++tombstone_serial;
