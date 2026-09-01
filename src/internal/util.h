@@ -222,6 +222,16 @@ int __util_sort_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_tsort_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_uniq_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* Tier 4: "bigger engines" -- real parsers, real algorithms, not just
+ * line-oriented text filters (XCU diff(1p), cmp(1p)).  Neither is
+ * __pure__: both read real files (or stdin) whose contents can change
+ * between calls.  Each has its whole logic in src/util/<name>.c, no
+ * basename collision with any existing src/ file (checked before
+ * naming these -- see this header's own comment above for why that
+ * check matters). */
+int __util_cmp_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_diff_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 /* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
  * src/util/rm.c -----------------------------------------------------
  *
