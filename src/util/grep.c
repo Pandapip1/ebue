@@ -141,16 +141,16 @@ static int pl_add(struct pat_list *pl, const char *s, size_t len)
  * more patterns separated by '\n'; see this file's own header. */
 static int split_patterns(struct pat_list *pl, const char *s)
 {
-	const char *start = s, *nl;
+	const char *start = s;
 
 	if (!*s) return pl_add(pl, s, 0);
 	while (*start) {
-		nl = strchr(start, '\n');
-		if (nl) {
-			if (pl_add(pl, start, (size_t)(nl - start)) < 0) return -1;
-			start = nl + 1;
+		size_t len = strcspn(start, "\n");
+		if (start[len]) {
+			if (pl_add(pl, start, len) < 0) return -1;
+			start += len + 1;
 		} else {
-			if (pl_add(pl, start, strlen(start)) < 0) return -1;
+			if (pl_add(pl, start, len) < 0) return -1;
 			break;
 		}
 	}

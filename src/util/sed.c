@@ -1207,8 +1207,12 @@ static void do_list(const struct buf *ps)
 		case '\v': out[0] = '\\'; out[1] = 'v'; outlen = 2; break;
 		default:
 			if (ch < 0x20 || ch >= 0x7f) {
-				snprintf(out, sizeof out, "\\%03o", (unsigned)ch);
-				outlen = strlen(out);
+				int formatted = snprintf(out, sizeof out, "\\%03o", (unsigned)ch);
+				if (formatted < 0) outlen = 0;
+				else {
+					outlen = (size_t)formatted;
+					if (outlen >= sizeof out) outlen = sizeof out - 1;
+				}
 			} else {
 				out[0] = (char)ch;
 				outlen = 1;

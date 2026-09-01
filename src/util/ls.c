@@ -224,6 +224,7 @@ static char type_indicator(const struct ls_opts *o, const struct entry *e)
 
 /* -q: substitute '?' for any non-printable byte -- applied
  * unconditionally, see this file's header comment. */
+withtok(heap_allocated)
 static char *build_display_name(const struct ls_opts *o, const struct entry *e)
 {
 	char ind = type_indicator(o, e);
@@ -374,6 +375,7 @@ static int grow_entries(struct entry **arr, size_t *n, size_t *cap)
 	return 0;
 }
 
+withtok(heap_allocated)
 static char *join_path(const char *dir, const char *name)
 {
 	size_t dl = strlen(dir), nl = strlen(name);
