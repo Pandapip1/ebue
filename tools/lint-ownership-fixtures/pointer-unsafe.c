@@ -1,13 +1,8 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-typedef __SIZE_TYPE__ size_t;
-[[clang::ownership_returns(malloc)]]
-void *malloc(size_t);
-[[clang::ownership_takes(malloc, 1)]]
-void free(void *);
-[[clang::ownership_returns(internal_malloc)]]
-void *__malloc(size_t);
+#include "allocator-fixture.h"
+
 long getline(char **, size_t *, void *);
 
 int nullable_pointer(int *pointer)
