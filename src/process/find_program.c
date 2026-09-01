@@ -134,6 +134,7 @@ withtok(heap_allocated) __attribute__((nonnull(1)))
 char *__find_program(const char *name, int use_path)
 {
 	const char *path, *p;
+	size_t components_left;
 	char *r;
 	/* The empty string names nothing, and it has to be answered here
 	 * rather than left to the search below.  exec.html's [ENOENT] is
@@ -158,9 +159,13 @@ char *__find_program(const char *name, int use_path)
 	path = getenv("PATH");
 	if (!path) path = "";
 	p = path;
-	for (;;) {
+	/* A PATH of n bytes has at most n+1 semicolon-delimited
+	 * components, including the single empty component of "". */
+	components_left = strlen(path) + 1;
+	while (components_left > 0) {
 		const char *e = strchr(p, ';');
 		size_t len = e ? (size_t)(e - p) : strlen(p);
+		components_left--;
 		r = try_dir(p, len, name);
 		if (r) return r;
 		if (!e) break;
