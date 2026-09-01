@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include "libc.h"
+#include "ownership_stubs.h"
 #include "plat_fd.h"
 #include "plat_unistd.h"
 
@@ -462,6 +463,8 @@ int __plat_link(int olddirfd, const char *oldpath, int newdirfd, const char *new
 	li->ReplaceIfExists = 0;
 	li->RootDirectory = np.oa.RootDirectory;
 	li->FileNameLength = np.nt.Length;
+	__ownership_writable_span(li->FileName, np.nt.Length);
+	__ownership_readable_span(np.nt.Buffer, np.nt.Length);
 	memcpy(li->FileName, np.nt.Buffer, np.nt.Length);
 	st = NtSetInformationFile(h, &io, li, (ULONG)sz, FileLinkInformation);
 	__free(li);
@@ -554,6 +557,8 @@ ssize_t __plat_readlink(int dirfd, const char *path, char *buf, size_t bufsz)
 		const char *t = (const char *)r->GenericReparseBuffer.DataBuffer + 4;
 		size_t tl = r->ReparseDataLength - 4;
 		if (tl > bufsz) tl = bufsz;
+		__ownership_writable_span(buf, tl);
+		__ownership_readable_span(t, tl);
 		memcpy(buf, t, tl);
 		return (ssize_t)tl;
 	} else {
@@ -578,6 +583,8 @@ ssize_t __plat_readlink(int dirfd, const char *path, char *buf, size_t bufsz)
 		if (!u) return -1;
 		n = (int)strlen(u);
 		if ((size_t)n > bufsz) n = (int)bufsz;
+		__ownership_writable_span(buf, (size_t)n);
+		__ownership_readable_span(u, (size_t)n);
 		memcpy(buf, u, n);
 		__free(u);
 	}
@@ -670,15 +677,20 @@ int __plat_symlink(const char *target, int newdirfd, const char *linkpath)
 	sz = RDB_HDR + SL_HDR + (off + 2 * tl) * sizeof(WCHAR);
 	r = __malloc(sz);
 	if (!r) { __free(wt); NtClose(h); return -1; }
+	__ownership_writable_span(r, sz);
 	memset(r, 0, sz);
 	r->ReparseTag = IO_REPARSE_TAG_SYMLINK;
 	r->SymbolicLinkReparseBuffer.Flags = relative ? SYMLINK_FLAG_RELATIVE : 0;
 	{
 		WCHAR *pb = r->SymbolicLinkReparseBuffer.PathBuffer;
 		if (!relative) { pb[0] = '\\'; pb[1] = '?'; pb[2] = '?'; pb[3] = '\\'; }
+		__ownership_writable_span(pb + off, tl * sizeof(WCHAR));
+		__ownership_readable_span(wt, tl * sizeof(WCHAR));
 		memcpy(pb + off, wt, tl * sizeof(WCHAR));
 		r->SymbolicLinkReparseBuffer.SubstituteNameOffset = 0;
 		r->SymbolicLinkReparseBuffer.SubstituteNameLength = (USHORT)((off + tl) * sizeof(WCHAR));
+		__ownership_writable_span(pb + off + tl, tl * sizeof(WCHAR));
+		__ownership_readable_span(wt, tl * sizeof(WCHAR));
 		memcpy(pb + off + tl, wt, tl * sizeof(WCHAR));
 		r->SymbolicLinkReparseBuffer.PrintNameOffset = (USHORT)((off + tl) * sizeof(WCHAR));
 		r->SymbolicLinkReparseBuffer.PrintNameLength = (USHORT)(tl * sizeof(WCHAR));
@@ -762,11 +774,18 @@ static int sid_in_domain(const SID *sid, const SID *domain)
 	if (!sid_valid(sid) || !sid_valid(domain) ||
 	    sid->SubAuthorityCount != domain->SubAuthorityCount + 1)
 		return 0;
-	if (sid->Revision != domain->Revision ||
-	    memcmp(&sid->IdentifierAuthority, &domain->IdentifierAuthority,
+	if (sid->Revision != domain->Revision)
+		return 0;
+	__ownership_readable_span(&sid->IdentifierAuthority,
+	                          sizeof sid->IdentifierAuthority);
+	__ownership_readable_span(&domain->IdentifierAuthority,
+	                          sizeof domain->IdentifierAuthority);
+	if (memcmp(&sid->IdentifierAuthority, &domain->IdentifierAuthority,
 	           sizeof sid->IdentifierAuthority) != 0)
 		return 0;
 	n = (size_t)domain->SubAuthorityCount * sizeof(ULONG);
+	__ownership_readable_span(sid->SubAuthority, n);
+	__ownership_readable_span(domain->SubAuthority, n);
 	return memcmp(sid->SubAuthority, domain->SubAuthority, n) == 0;
 }
 
