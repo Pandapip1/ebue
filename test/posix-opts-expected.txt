@@ -18,14 +18,32 @@
 # from tools/posix-opts.py's own IFACES.rglob("*.c") discovery (see its
 # resolved_policy()), not from what happens to be listed below.
 #
-# Baseline: ntlibc 2cbd930, LTP 4c0cfb8, x86_64-win32-tcc, Wine,
+# Baseline: ntlibc 3feb5cf, LTP 4c0cfb8, x86_64-win32-tcc, Wine,
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# COUNTS PASS=1480 BUG=0 UNIMPL=15 NA=112 FLAKY=3
+# 2026-09-01 refresh: the pthread.h-blocked UNIMPL rows here (15 of them,
+# all reading "OPTS class A: compile/link blocked by pthread.h") predated
+# include/pthread.h and src/thread/*.c, which now exist and implement a
+# real pthread surface. Rebuilt every one of those 15 cases against the
+# current tree with x86_64-win32-tcc: 12 now compile and link cleanly with
+# no other error (the rows below this note), so they were removed and now
+# resolve via the wildcard PASS row. The remaining 3 (fork/13-1.c,
+# pthread_create/1-6.c, pthread_create/11-1.c) still fail to build, but
+# for an unrelated and now-accurate reason -- see their rows. This
+# refresh's environment had a working x86_64-win32-tcc but no runnable
+# x86_64 Wine (only an aarch64-windows Wine build was available, which
+# cannot load x86_64 PE images, and a real x86_64 Wine run under
+# qemu-x86_64 user-mode emulation consistently hit wine-preloader's own
+# "Unable to find a guest_base to satisfy all guest address mapping
+# requirements" -- a qemu-user/Wine layout incompatibility, not anything
+# case-specific), so the 12 PASS conversions rest on clean compile/link
+# evidence only, not on an independent Wine run of the built .exe files.
+#
+# COUNTS PASS=1492 BUG=0 UNIMPL=3 NA=112 FLAKY=3
 # (whole-suite totals once the wildcard default below is applied to every
 # real case tools/posix-opts.py discovers -- not a count of rows in this
-# file, which lists only the 144 explicit exceptions plus the wildcard.)
+# file, which lists only the 118 explicit exceptions plus the wildcard.)
 aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
 aio_cancel/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
 aio_cancel/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
@@ -54,10 +72,7 @@ clock_settime/7-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suit
 clock_settime/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNTESTED
 clock_settime/speculative/4-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNRESOLVED because this runtime cannot set the system clock
 clock_settime/speculative/4-4.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNRESOLVED because this runtime cannot set the system clock
-fork/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-fork/16-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
-fork/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-fork/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+fork/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	pthread.h no longer blocks this (include/pthread.h now exists); it now fails at link with tcc: error: unresolved reference to 'setitimer' and 'getitimer', which are deliberately unimplemented -- see include/sys/time.h's own "undefined-ok" comment on getitimer()/setitimer(): a repeating interval timer needs queued signal delivery, and SIGALRM here only arrives through an APC that runs while the thread is in an alertable wait, so repeat expiries would coalesce instead of queueing
 fork/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the test requires an external gencat utility to generate its message catalog
 kill/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED, not load noise: the case returns PTS_UNRESOLVED from its own setuid(1) privilege-drop guard at 2-2.c:58, reached unconditionally after a kill(999999, 0) ESRCH check that is itself timing-independent, and setuid() now refuses every id but this platform's single identity, so it cannot resolve on any box, quiet or loaded. A PASS or FAIL here means setuid() stopped refusing: re-adjudicate this row, do not retry it
 kill/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED, not load noise: the case returns PTS_UNRESOLVED from its own setuid(1) privilege-drop guard at 3-1.c:26, its first statement, before any test work runs, and setuid() now refuses every id but this platform's single identity, so it cannot resolve on any box, quiet or loaded. A PASS or FAIL here means setuid() stopped refusing: re-adjudicate this row, do not retry it
@@ -78,20 +93,13 @@ mq_timedsend/5-2.c	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	baseline di
 munmap/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the test hard-codes the Unix /dev/zero device, which does not exist in the Windows target environment
 nanosleep/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	requires fork(), but Wine does not implement ntdll RtlCloneUserProcess
 nanosleep/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	requires fork(), but Wine does not implement ntdll RtlCloneUserProcess
-pthread_atfork/3-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
 pthread_attr_setschedpolicy/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the test requires a non-POSIX CPU-affinity helper that ntlibc does not provide
 pthread_barrier_destroy/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	fixture publishes ENTERED_THREAD before calling pthread_barrier_wait; destruction during a wait is undefined and measured 20 EBUSY PASS plus 20 pre-entry UNSUPPORTED outcomes
 pthread_cancel/2-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture calls clock_gettime and uses CLOCK_REALTIME without including the required time.h header
-pthread_cond_broadcast/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h sys/mman.h sys/sysinfo.h
-pthread_cond_broadcast/2-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
 pthread_condattr_getclock/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture uses CLOCK_REALTIME without including the required time.h header
 pthread_condattr_setclock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture uses CLOCK_REALTIME without including the required time.h header
-pthread_create/1-5.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-pthread_create/1-6.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/pstat.h sys/sysctl.h
-pthread_create/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_create/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-pthread_equal/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-pthread_join/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+pthread_create/1-6.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	pthread.h and sys/pstat.h/sys/sysctl.h no longer block this (pthread.h now exists at include/pthread.h; the sysctl/pstat probes are optional and skipped); it now fails at link with tcc: error: unresolved reference to 'setitimer' and 'getitimer', which are deliberately unimplemented -- see include/sys/time.h's own "undefined-ok" comment on getitimer()/setitimer(): a repeating interval timer needs queued signal delivery, and SIGALRM here only arrives through an APC that runs while the thread is in an alertable wait, so repeat expiries would coalesce instead of queueing
+pthread_create/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	pthread.h no longer blocks this (include/pthread.h now exists); it now fails at link with tcc: error: unresolved reference to 'setitimer', which is deliberately unimplemented -- see include/sys/time.h's own "undefined-ok" comment on setitimer(): a repeating interval timer needs queued signal delivery, and SIGALRM here only arrives through an APC that runs while the thread is in an alertable wait, so repeat expiries would coalesce instead of queueing
 pthread_mutex_getprioceiling/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
 pthread_mutex_getprioceiling/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
 pthread_mutex_getprioceiling/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
@@ -99,14 +107,12 @@ pthread_mutex_getprioceiling/3-3.c	runtime=wine,target_arch=x86_64,kernel32=no	N
 pthread_mutex_init/speculative/5-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	speculative privilege test only defines expectations for Linux, AIX, and Solaris and reports other systems untested
 pthread_mutex_setprioceiling/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
 pthread_once/4-1-buildonly.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite build-only helper has no test_main entry point and is not an executable conformance case
-pthread_once/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
 pthread_rwlock_rdlock/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
 pthread_rwlock_rdlock/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
 pthread_rwlock_rdlock/2-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
 pthread_rwlock_timedrdlock/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture destroys the rwlock while its worker still owns the acquired read lock; POSIX leaves that destruction undefined
 pthread_rwlock_timedwrlock/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture destroys the rwlock while its worker still owns the acquired write lock; POSIX leaves that destruction undefined
 pthread_rwlock_unlock/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
-pthread_setschedparam/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
 sched_get_priority_max/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
 sched_get_priority_min/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
 sched_getparam/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test assumes a Unix PID 1 owned by a different identity; this runtime has neither that PID namespace nor multiple identities
