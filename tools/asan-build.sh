@@ -269,7 +269,7 @@ INTSAN="-fsanitize=unsigned-integer-overflow,unsigned-shift-base \
 # being active; see the long comment in src/internal/rpath.c for why that
 # proxy had to go.
 CFLAGS="$SAN $CONVSAN $INTSAN $LTOFLAGS -g -O1 -std=c99 -nostdinc -fno-builtin -fvisibility=hidden \
-        -D_XOPEN_SOURCE=700 -D_NTLIBC_INTERNAL -D_NTLIBC_NATIVE_BUILD $INC $EXTRA"
+        -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL -D_NTLIBC_NATIVE_BUILD $INC $EXTRA"
 
 if [ ! -f "$srcdir/obj/include/bits/alltypes.h" ]; then
 	echo "$TAG: obj/include/bits/alltypes.h missing -- run 'make' first" >&2
