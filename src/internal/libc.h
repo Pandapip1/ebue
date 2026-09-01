@@ -98,8 +98,10 @@ int __errno_from_doserror(unsigned);
 /* Convert a NUL-terminated UTF-8 string into a freshly malloc'd
  * NUL-terminated UTF-16 one; NULL with errno on failure.  *wlen, if not
  * NULL, receives the length in WCHARs excluding the terminator. */
+__attribute__((ownership_returns(internal_malloc)))
 WCHAR *__utf8_to_utf16(const char *, size_t *wlen);
 /* Convert n WCHARs into a freshly malloc'd NUL-terminated UTF-8 string. */
+__attribute__((ownership_returns(internal_malloc)))
 char *__utf16_to_utf8(const WCHAR *, size_t n);
 /* Convert into a caller-supplied buffer; returns bytes written excluding
  * the terminator, or -1 with errno (ERANGE if the buffer is too small). */
