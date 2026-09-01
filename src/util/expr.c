@@ -125,7 +125,9 @@ static const char *peek(struct expr_ctx *c)
 	return c->i < c->n ? c->v[c->i] : NULL;
 }
 
+withtok(heap_allocated)
 static char *dupstr(const char *s) __attribute__((nonnull(1)));
+withtok(heap_allocated)
 static char *dupstr(const char *s)
 {
 	size_t n = strlen(s) + 1;
@@ -135,6 +137,7 @@ static char *dupstr(const char *s)
 	return p;
 }
 
+withtok(heap_allocated)
 static char *numstr(long n)
 {
 	char buf[32];
@@ -142,12 +145,19 @@ static char *numstr(long n)
 	return dupstr(buf);
 }
 
+withtok(heap_allocated)
 static char *parse_or(struct expr_ctx *c) __attribute__((nonnull(1)));
+withtok(heap_allocated)
 static char *parse_and(struct expr_ctx *c) __attribute__((nonnull(1)));
+withtok(heap_allocated)
 static char *parse_cmp(struct expr_ctx *c) __attribute__((nonnull(1)));
+withtok(heap_allocated)
 static char *parse_add(struct expr_ctx *c) __attribute__((nonnull(1)));
+withtok(heap_allocated)
 static char *parse_mul(struct expr_ctx *c) __attribute__((nonnull(1)));
+withtok(heap_allocated)
 static char *parse_match(struct expr_ctx *c) __attribute__((nonnull(1)));
+withtok(heap_allocated)
 static char *parse_primary(struct expr_ctx *c) __attribute__((nonnull(1)));
 
 static int is_cmp_op(const char *s) __attribute__((nonnull(1), __pure__));
@@ -160,14 +170,20 @@ static int is_cmp_op(const char *s)
 /* p is required: every path dereferences it (strcmp against p is
  * unconditional).  c is left unmarked -- diagnostics go through xerr(),
  * which states its own contract. */
-static char *do_arith(struct expr_ctx *c, char *a, const char *op, char *b) __attribute__((nonnull(3)));
-static char *do_arith(struct expr_ctx *c, char *a, const char *op, char *b) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+withtok(heap_allocated)
+static char *do_arith(struct expr_ctx *c, char *a consume(heap_allocated), const char *op,
+	char *b consume(heap_allocated)) __attribute__((nonnull(3)));
+withtok(heap_allocated)
+static char *do_arith(struct expr_ctx *c, char *a consume(heap_allocated), const char *op,
+	char *b consume(heap_allocated)) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	long x, y, r;
-	if (c->err) return dupstr("");
+	char *result;
+	if (c->err) { result = dupstr(""); goto done; }
 	if (!is_num_candidate(a) || !is_num_candidate(b)) {
 		xerr(c, "non-numeric argument");
-		return dupstr("");
+		result = dupstr("");
+		goto done;
 	}
 	x = strtol(a, NULL, 10);
 	y = strtol(b, NULL, 10);
@@ -175,17 +191,27 @@ static char *do_arith(struct expr_ctx *c, char *a, const char *op, char *b) // N
 	else if (!strcmp(op, "-")) r = x - y;
 	else if (!strcmp(op, "*")) r = x * y;
 	else {
-		if (y == 0) { xerr(c, "division by zero"); return dupstr(""); }
+		if (y == 0) { xerr(c, "division by zero"); result = dupstr(""); goto done; }
 		r = !strcmp(op, "/") ? x / y : x % y;
 	}
-	return numstr(r);
+	result = numstr(r);
+done:
+	free(a);
+	free(b);
+	return result;
 }
 
-static char *do_cmp(struct expr_ctx *c, char *a, const char *op, char *b) __attribute__((nonnull(3)));
-static char *do_cmp(struct expr_ctx *c, char *a, const char *op, char *b) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+withtok(heap_allocated)
+static char *do_cmp(struct expr_ctx *c, char *a consume(heap_allocated), const char *op,
+	char *b consume(heap_allocated)) __attribute__((nonnull(3)));
+withtok(heap_allocated)
+static char *do_cmp(struct expr_ctx *c, char *a consume(heap_allocated), const char *op,
+	char *b consume(heap_allocated)) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int r;
-	if (c->err) return dupstr("");
+	const char *value;
+	char *result;
+	if (c->err) { result = dupstr(""); goto done; }
 	if (is_num_candidate(a) && is_num_candidate(b)) {
 		long x = strtol(a, NULL, 10), y = strtol(b, NULL, 10);
 		r = x < y ? -1 : x > y ? 1 : 0;
@@ -193,27 +219,37 @@ static char *do_cmp(struct expr_ctx *c, char *a, const char *op, char *b) // NOL
 		r = strcmp(a, b);
 		r = r < 0 ? -1 : r > 0 ? 1 : 0;
 	}
-	if (!strcmp(op, "=")) return dupstr(r == 0 ? "1" : "0");
-	if (!strcmp(op, "!=")) return dupstr(r != 0 ? "1" : "0");
-	if (!strcmp(op, "<")) return dupstr(r < 0 ? "1" : "0");
-	if (!strcmp(op, "<=")) return dupstr(r <= 0 ? "1" : "0");
-	if (!strcmp(op, ">")) return dupstr(r > 0 ? "1" : "0");
-	return dupstr(r >= 0 ? "1" : "0"); /* ">=" */
+	if (!strcmp(op, "=")) value = r == 0 ? "1" : "0";
+	else if (!strcmp(op, "!=")) value = r != 0 ? "1" : "0";
+	else if (!strcmp(op, "<")) value = r < 0 ? "1" : "0";
+	else if (!strcmp(op, "<=")) value = r <= 0 ? "1" : "0";
+	else if (!strcmp(op, ">")) value = r > 0 ? "1" : "0";
+	else value = r >= 0 ? "1" : "0"; /* ">=" */
+	result = dupstr(value);
+done:
+	free(a);
+	free(b);
+	return result;
 }
 
-static char *do_match(struct expr_ctx *c, char *a, char *pat) __attribute__((nonnull(2, 3)));
-static char *do_match(struct expr_ctx *c, char *a, char *pat)
+withtok(heap_allocated)
+static char *do_match(struct expr_ctx *c, char *a consume(heap_allocated),
+	char *pat consume(heap_allocated)) __attribute__((nonnull(2, 3)));
+withtok(heap_allocated)
+static char *do_match(struct expr_ctx *c, char *a consume(heap_allocated),
+	char *pat consume(heap_allocated))
 {
 	regex_t re;
 	regmatch_t pm[2];
 	int rc, matched;
 	char *result;
 
-	if (c->err) return dupstr("");
+	if (c->err) { result = dupstr(""); goto done; }
 	rc = regcomp(&re, pat, 0);
 	if (rc) {
 		xerr(c, "invalid regular expression");
-		return dupstr("");
+		result = dupstr("");
+		goto done;
 	}
 	rc = regexec(&re, a, 2, pm, 0);
 	matched = rc == 0 && pm[0].rm_so == 0;
@@ -221,9 +257,11 @@ static char *do_match(struct expr_ctx *c, char *a, char *pat)
 		if (matched && pm[1].rm_so >= 0) {
 			regoff_t len = pm[1].rm_eo - pm[1].rm_so;
 			result = malloc((size_t)len + 1);
-			if (!result) { regfree(&re); xerr(c, "out of memory"); return dupstr(""); }
-			memcpy(result, a + pm[1].rm_so, (size_t)len);
-			result[len] = 0;
+			if (!result) { xerr(c, "out of memory"); result = dupstr(""); }
+			else {
+				memcpy(result, a + pm[1].rm_so, (size_t)len);
+				result[len] = 0;
+			}
 		} else {
 			result = dupstr("");
 		}
@@ -231,10 +269,14 @@ static char *do_match(struct expr_ctx *c, char *a, char *pat)
 		result = matched ? numstr(pm[0].rm_eo - pm[0].rm_so) : dupstr("0");
 	}
 	regfree(&re);
+done:
+	free(a);
+	free(pat);
 	return result;
 }
 
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested expr grouping and is depth-bounded by argc
+withtok(heap_allocated)
 static char *parse_primary(struct expr_ctx *c)
 {
 	const char *tok = peek(c);
@@ -254,6 +296,7 @@ static char *parse_primary(struct expr_ctx *c)
 }
 
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested expr grouping and is depth-bounded by argc
+withtok(heap_allocated)
 static char *parse_match(struct expr_ctx *c)
 {
 	char *v = parse_primary(c);
@@ -267,6 +310,7 @@ static char *parse_match(struct expr_ctx *c)
 }
 
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested expr grouping and is depth-bounded by argc
+withtok(heap_allocated)
 static char *parse_mul(struct expr_ctx *c)
 {
 	char *v = parse_match(c);
@@ -281,6 +325,7 @@ static char *parse_mul(struct expr_ctx *c)
 }
 
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested expr grouping and is depth-bounded by argc
+withtok(heap_allocated)
 static char *parse_add(struct expr_ctx *c)
 {
 	char *v = parse_mul(c);
@@ -295,6 +340,7 @@ static char *parse_add(struct expr_ctx *c)
 }
 
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested expr grouping and is depth-bounded by argc
+withtok(heap_allocated)
 static char *parse_cmp(struct expr_ctx *c)
 {
 	char *v = parse_add(c);
@@ -309,6 +355,7 @@ static char *parse_cmp(struct expr_ctx *c)
 }
 
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested expr grouping and is depth-bounded by argc
+withtok(heap_allocated)
 static char *parse_and(struct expr_ctx *c)
 {
 	char *v = parse_cmp(c);
@@ -316,12 +363,19 @@ static char *parse_and(struct expr_ctx *c)
 		char *rhs;
 		c->i++;
 		rhs = parse_cmp(c);
-		if (null_or_zero(v) || null_or_zero(rhs)) v = dupstr("0");
+		if (null_or_zero(v) || null_or_zero(rhs)) {
+			free(v);
+			free(rhs);
+			v = dupstr("0");
+		} else {
+			free(rhs);
+		}
 	}
 	return v;
 }
 
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested expr grouping and is depth-bounded by argc
+withtok(heap_allocated)
 static char *parse_or(struct expr_ctx *c)
 {
 	char *v = parse_and(c);
@@ -329,7 +383,12 @@ static char *parse_or(struct expr_ctx *c)
 		char *rhs;
 		c->i++;
 		rhs = parse_and(c);
-		if (null_or_zero(v)) v = rhs;
+		if (null_or_zero(v)) {
+			free(v);
+			v = rhs;
+		} else {
+			free(rhs);
+		}
 	}
 	return v;
 }
@@ -338,6 +397,7 @@ int __util_expr_main(int argc, char **argv)
 {
 	struct expr_ctx c;
 	char *result;
+	int status;
 
 	if (argc < 2) {
 		__util_diagf("expr: missing operand\n");
@@ -351,8 +411,10 @@ int __util_expr_main(int argc, char **argv)
 
 	result = parse_or(&c);
 	if (!c.err && c.i != c.n) xerr(&c, "syntax error: unexpected argument");
-	if (c.err) return 2;
+	if (c.err) { free(result); return 2; }
 
 	printf("%s\n", result);
-	return null_or_zero(result) ? 1 : 0;
+	status = null_or_zero(result) ? 1 : 0;
+	free(result);
+	return status;
 }
