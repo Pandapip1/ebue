@@ -19,6 +19,7 @@
  * latter.  Restricting the component to the portable filename character set
  * also avoids giving DOS device names and separators a second interpretation.
  */
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- strnlen(): bounded name and path validation
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -50,18 +51,20 @@ static char *shm_path(const char *name)
 {
 	const char *dir;
 	const char *component;
-	size_t dirlen, namelen, pathlen;
+	const size_t prefix = sizeof "/ntlibc-shm/" - 1;
+	size_t dirlen, maxdir, namelen, pathlen;
 	char *path;
 	size_t i;
 
 	if (!name) { errno = EINVAL; return NULL; }
-	namelen = strlen(name);
+	namelen = strnlen(name, PATH_MAX);
 	/* {PATH_MAX} includes the terminating null; {NAME_MAX} does not. */
 	if (namelen >= PATH_MAX) { errno = ENAMETOOLONG; return NULL; }
-	component = name[0] == '/' ? name + 1 : name;
-	namelen = strlen(component);
+	if (name[0] == '/') { component = name + 1; namelen--; }
+	else component = name;
 	if (namelen > NAME_MAX) { errno = ENAMETOOLONG; return NULL; }
-	if (!namelen || !strcmp(component, ".") || !strcmp(component, "..")) {
+	if (!namelen || (namelen == 1 && component[0] == '.') ||
+	    (namelen == 2 && component[0] == '.' && component[1] == '.')) {
 		errno = EINVAL;
 		return NULL;
 	}
@@ -71,16 +74,23 @@ static char *shm_path(const char *name)
 			return NULL;
 		}
 
+	if (namelen > (size_t)PATH_MAX - 1 - prefix) {
+		errno = ENAMETOOLONG;
+		return NULL;
+	}
+	/* Bound the environment-derived directory scan by the exact room
+	 * remaining after the fixed namespace and validated object name. */
+	maxdir = (size_t)PATH_MAX - 1 - prefix - namelen;
 	dir = shm_tmpdir();
-	dirlen = strlen(dir);
-	pathlen = dirlen + sizeof "/ntlibc-shm/" - 1 + namelen;
-	if (pathlen >= PATH_MAX) { errno = ENAMETOOLONG; return NULL; }
-	path = malloc(pathlen + 1);
+	dirlen = strnlen(dir, maxdir + 1);
+	if (dirlen > maxdir) { errno = ENAMETOOLONG; return NULL; }
+	pathlen = dirlen + prefix + namelen + 1;
+	path = malloc(pathlen);
 	if (!path) return NULL;
 	memcpy(path, dir, dirlen);
-	memcpy(path + dirlen, "/ntlibc-shm/", sizeof "/ntlibc-shm/" - 1);
-	memcpy(path + dirlen + sizeof "/ntlibc-shm/" - 1,
-	       component, namelen + 1);
+	memcpy(path + dirlen, "/ntlibc-shm/", prefix);
+	memcpy(path + dirlen + prefix, component, namelen);
+	path[pathlen - 1] = 0;
 	return path;
 }
 

@@ -44,8 +44,12 @@ int scandir(const char *path, struct dirent ***res,
 	errno = 0;
 	while ((d = readdir(dp))) {
 		struct dirent *copy;
-		size_t namelen;
+		size_t copylen, namelen;
 
+		/* Validate the producer's fixed-size name member before either
+		 * this function or an application filter is allowed to traverse it. */
+		namelen = strnlen(d->d_name, sizeof d->d_name);
+		if (namelen == sizeof d->d_name) { errno = EIO; goto fail; }
 		if (filter && !filter(d)) continue;
 
 		if (n == cap) {
@@ -60,10 +64,15 @@ int scandir(const char *path, struct dirent ***res,
 			cap = newcap;
 		}
 
-		namelen = strlen(d->d_name);
-		copy = __malloc(offsetof(struct dirent, d_name) + namelen + 1);
+		copylen = offsetof(struct dirent, d_name) + namelen + 1;
+		copy = __malloc(copylen);
 		if (!copy) goto fail;
-		memcpy(copy, d, offsetof(struct dirent, d_name) + namelen + 1);
+		copy->d_ino = d->d_ino;
+		copy->d_off = d->d_off;
+		copy->d_reclen = d->d_reclen;
+		copy->d_type = d->d_type;
+		memcpy(copy->d_name, d->d_name, namelen);
+		copy->d_name[namelen] = 0;
 		list[n++] = copy;
 	}
 	if (errno) goto fail;
