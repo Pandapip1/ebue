@@ -258,6 +258,27 @@ unsigned char member_byte_rank_call_only_on_exit(struct byte_cursor *cursor,
 	return cursor->next;
 }
 
+struct restricted_byte_cursor {
+	unsigned char next;
+};
+
+struct disjoint_byte_state {
+	unsigned char next;
+};
+
+unsigned char restricted_member_call_not_receiving_base(
+	struct restricted_byte_cursor *restrict cursor, unsigned char total,
+	struct disjoint_byte_state *other, int skip)
+{
+	while (cursor->next < total) {
+		cursor->next++;
+		other->next = 0;
+		opaque_exit_call();
+		if (skip) continue;
+	}
+	return cursor->next;
+}
+
 int signed_extra_progress(int n, int skip)
 {
 	int i;

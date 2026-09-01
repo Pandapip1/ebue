@@ -802,6 +802,98 @@ unsigned char member_byte_rank_call_before_continue(struct byte_cursor *cursor,
 	return cursor->next;
 }
 
+struct restricted_byte_cursor {
+	unsigned char next;
+};
+
+extern void opaque_cursor_call(struct restricted_byte_cursor *);
+
+unsigned char nonrestricted_member_call_not_receiving_base(
+	struct restricted_byte_cursor *cursor, unsigned char total)
+{
+	while (cursor->next < total) { /* totality-expect */
+		cursor->next++;
+		opaque_mutation();
+	}
+	return cursor->next;
+}
+
+unsigned char restricted_member_direct_alias_reset(
+	struct restricted_byte_cursor *restrict cursor, unsigned char total)
+{
+	struct restricted_byte_cursor *alias = cursor;
+	while (cursor->next < total) { /* totality-expect */
+		cursor->next++;
+		alias->next = 0;
+	}
+	return cursor->next;
+}
+
+unsigned char restricted_member_indirect_alias_reset(
+	struct restricted_byte_cursor *restrict cursor, unsigned char total)
+{
+	struct restricted_byte_cursor *alias = cursor;
+	struct restricted_byte_cursor **indirect = &alias;
+	while (cursor->next < total) { /* totality-expect */
+		cursor->next++;
+		(*indirect)->next = 0;
+	}
+	return cursor->next;
+}
+
+unsigned char restricted_member_call_receives_base(
+	struct restricted_byte_cursor *restrict cursor, unsigned char total)
+{
+	while (cursor->next < total) { /* totality-expect */
+		cursor->next++;
+		opaque_cursor_call(cursor);
+	}
+	return cursor->next;
+}
+
+unsigned char restricted_member_call_receives_alias(
+	struct restricted_byte_cursor *restrict cursor, unsigned char total)
+{
+	struct restricted_byte_cursor *alias = cursor;
+	while (cursor->next < total) { /* totality-expect */
+		cursor->next++;
+		opaque_cursor_call(alias);
+	}
+	return cursor->next;
+}
+
+unsigned char restricted_member_bound_changes(
+	struct restricted_byte_cursor *restrict cursor, unsigned char total)
+{
+	while (cursor->next < total) { /* totality-expect */
+		cursor->next++;
+		total++;
+	}
+	return cursor->next;
+}
+
+unsigned char restricted_member_can_wrap_at_maximum(
+	struct restricted_byte_cursor *restrict cursor, unsigned char total)
+{
+	while (cursor->next <= total) { /* totality-expect */
+		cursor->next++;
+		opaque_mutation();
+	}
+	return cursor->next;
+}
+
+unsigned char restricted_member_early_continue(
+	struct restricted_byte_cursor *restrict cursor, unsigned char total,
+	int skip)
+{
+	while (cursor->next < total) { /* totality-expect */
+		if (skip) continue;
+		cursor->next++;
+		opaque_mutation();
+	}
+	return cursor->next;
+}
+
 unsigned member_rank_with_condition_call(struct vec *p)
 {
 	while (p->n && opaque_predicate()) { /* totality-expect */

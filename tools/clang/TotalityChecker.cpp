@@ -1110,6 +1110,50 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return false;
   }
 
+  static bool directMemberOfBase(const Expr *Expression,
+                                 const ValueDecl *Base) {
+    const auto *Member = dyn_cast_or_null<MemberExpr>(ignore(Expression));
+    return Member && value(Member->getBase()) == Base;
+  }
+
+  static bool exportsMemberBase(const Stmt *Statement,
+                                const ValueDecl *Base) {
+    if (!Statement)
+      return false;
+    if (const auto *Expression = dyn_cast<Expr>(Statement)) {
+      const Expr *Plain = ignore(Expression);
+      /* Ordinary scalar/member loads and stores through Base are exactly
+       * what a restrict-qualified base is for.  Taking a member's address,
+       * however, exports a pointer based on Base and lets a callee mutate the
+       * rank legitimately, so it must remain unproved. */
+      if (const auto *Unary = dyn_cast_or_null<UnaryOperator>(Plain))
+        if (Unary->getOpcode() == UO_AddrOf &&
+            directMemberOfBase(Unary->getSubExpr(), Base))
+          return true;
+      if (directMemberOfBase(Plain, Base))
+        return false;
+      if (const auto *Reference = dyn_cast_or_null<DeclRefExpr>(Plain))
+        if (Reference->getDecl() == Base)
+          return true;
+    }
+    for (const Stmt *Child : Statement->children())
+      if (exportsMemberBase(Child, Base))
+        return true;
+    return false;
+  }
+
+  bool restrictedMemberBaseIsClosed(const VarDecl *Base) const {
+    /* A restrict-qualified parameter gives the needed object-identity
+     * invariant: once the loop modifies a member through Base, a defined C
+     * execution cannot have an opaque call reach the same object through a
+     * globally-created alias.  Still reject every function which exports
+     * Base itself (including copies, casts, &Base, &Base->member and call
+     * arguments); those expressions create a legitimate Base-derived path
+     * by which the call could reset the rank. */
+    return Base && isa<ParmVarDecl>(Base) && Base->getType().isRestrictQualified() &&
+           Current && !exportsMemberBase(Current->getBody(), Base);
+  }
+
   bool pairedConditionValuesAreLocal(const Stmt *Statement) const {
     if (!Statement || !Current)
       return true;
@@ -1289,10 +1333,13 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
                          const Expr *Increment = nullptr) const {
     if (const auto *Field = dyn_cast<FieldDecl>(Change.Variable)) {
       const auto *Base = dyn_cast_or_null<VarDecl>(Change.Base);
+      bool ClosedRestrictedBase = restrictedMemberBaseIsClosed(Base);
       return !Change.VolatileAccess && !Field->getType().isVolatileQualified() &&
              Base && !Base->getType().isVolatileQualified() && Current &&
-             !callCanReachBackedge(Body) &&
-             !containsCall(Increment) &&
+             (!Base->getType().isRestrictQualified() ||
+              ClosedRestrictedBase) &&
+             ((!callCanReachBackedge(Body) && !containsCall(Increment)) ||
+              ClosedRestrictedBase) &&
              !writesVariable(Body, Base) && !aliasedWrite(Base, Body) &&
              (!Base->getType()->isPointerType() ||
               !writesThroughAlias(Body, Base, false));
