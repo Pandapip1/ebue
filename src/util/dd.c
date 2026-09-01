@@ -118,6 +118,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <inttypes.h>
+#include "ownership_stubs.h"
 #include "util.h"
 
 static volatile sig_atomic_t dd_interrupted;
@@ -177,6 +178,8 @@ static int parse_conv(const char *val, int *notrunc, int *sync, int *noerror)
 	size_t n = strlen(val);
 
 	if (n >= sizeof buf) { __util_diagf("dd: conv=%s: too long\n", val); return -1; }
+	__ownership_writable_span(buf, n + 1);
+	__ownership_readable_span(val, n + 1);
 	memcpy(buf, val, n + 1);
 
 	*notrunc = *sync = *noerror = 0;
@@ -197,6 +200,7 @@ static int write_all(int fd, const char *buf, size_t n, const char *what)
 {
 	size_t off = 0;
 	while (off < n) {
+		__ownership_readable_span(buf + off, n - off);
 		ssize_t w = write(fd, buf + off, n - off);
 		if (w < 0) {
 			if (errno == EINTR) continue;
@@ -245,7 +249,12 @@ static int dd_copy_direct(int ifd, int ofd, const struct dd_opts *o,
 		if (n == 0) break;
 		blocks++;
 		if ((uintmax_t)n == o->ibs) (*in_full)++; else (*in_partial)++;
-		if (o->sync && (uintmax_t)n < o->ibs) { memset(buf + n, 0, (size_t)(o->ibs - (uintmax_t)n)); n = (ssize_t)o->ibs; }
+		if (o->sync && (uintmax_t)n < o->ibs) {
+			__ownership_writable_span(buf + n,
+			                          (size_t)(o->ibs - (uintmax_t)n));
+			memset(buf + n, 0, (size_t)(o->ibs - (uintmax_t)n));
+			n = (ssize_t)o->ibs;
+		}
 
 		if (write_all(ofd, buf, (size_t)n, o->of_path ? o->of_path : "stdout") < 0) { *had_error = 1; break; }
 		if ((uintmax_t)n == o->obs) (*out_full)++; else (*out_partial)++;
@@ -293,13 +302,21 @@ static int dd_copy_blocked(int ifd, int ofd, const struct dd_opts *o,
 		} else {
 			blocks++;
 			if ((uintmax_t)n == o->ibs) (*in_full)++; else (*in_partial)++;
-			if (o->sync && (uintmax_t)n < o->ibs) { memset(ibuf + n, 0, (size_t)(o->ibs - (uintmax_t)n)); n = (ssize_t)o->ibs; }
+			if (o->sync && (uintmax_t)n < o->ibs) {
+				__ownership_writable_span(ibuf + n,
+				                          (size_t)(o->ibs - (uintmax_t)n));
+				memset(ibuf + n, 0,
+				       (size_t)(o->ibs - (uintmax_t)n));
+				n = (ssize_t)o->ibs;
+			}
 		}
 
 		off = 0;
 		while (off < (size_t)n) {
 			size_t take = (size_t)o->obs - obuf_used;
 			if (take > (size_t)n - off) take = (size_t)n - off;
+			__ownership_writable_span(obuf + obuf_used, take);
+			__ownership_readable_span(ibuf + off, take);
 			memcpy(obuf + obuf_used, ibuf + off, take);
 			obuf_used += take;
 			off += take;
