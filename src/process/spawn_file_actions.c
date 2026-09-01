@@ -84,13 +84,12 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *fa)
 
 int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *fa)
 {
-	int i, len, e = errno;
+	int i, e = errno;
 	/* fa->__actions[i]: same fa->__len > 0 implies fa->__actions != NULL
 	 * field invariant as fa_push()'s own comment above establishes; not
 	 * expressible via nonnull on fa (already marked in spawn.h) since
 	 * this is about one of fa's fields, not fa itself. */
-	len = fa->__len;
-	for (i = 0; i < len; i++) free(fa->__actions[i].path);
+	for (i = 0; i < fa->__len; i++) free(fa->__actions[i].path);
 	free(fa->__actions);
 	fa->__actions = 0;
 	fa->__len = fa->__cap = 0;

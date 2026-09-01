@@ -1686,12 +1686,11 @@ int __wordexp_sh(const char *words, wordexp_t *pwordexp, int flags)
 
 void wordfree(wordexp_t *pwordexp)
 {
-	size_t i, offs, count;
+	size_t i, offs;
 
 	if (!pwordexp || !pwordexp->we_wordv) return;
 	offs = pwordexp->we_offs;
-	count = pwordexp->we_wordc;
-	for (i = 0; i < count; i++) __free(pwordexp->we_wordv[offs + i]);
+	for (i = 0; i < pwordexp->we_wordc; i++) __free(pwordexp->we_wordv[offs + i]);
 	__free((void *)pwordexp->we_wordv);
 	pwordexp->we_wordv = 0;
 	pwordexp->we_wordc = 0;

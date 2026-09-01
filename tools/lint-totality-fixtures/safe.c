@@ -336,6 +336,14 @@ struct vec {
 	unsigned *v;
 };
 
+void free(void *);
+void __free(void *);
+
+struct owned_vec {
+	unsigned n;
+	void **v;
+};
+
 unsigned member_bound_arrow(struct vec *p)
 {
 	unsigned i;
@@ -360,5 +368,21 @@ unsigned member_bound_while(struct vec *p)
 			return i;
 		i++;
 	}
+	return i;
+}
+
+unsigned member_bound_across_free(struct owned_vec *p)
+{
+	unsigned i;
+	for (i = 0; i < p->n; i++)
+		free(p->v[i]);
+	return i;
+}
+
+unsigned member_bound_across_internal_free(struct owned_vec *p)
+{
+	unsigned i;
+	for (i = 0; i < p->n; i++)
+		__free(p->v[i]);
 	return i;
 }

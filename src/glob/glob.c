@@ -95,8 +95,8 @@ static int pv_push(struct pv *p, char *s)
 static void pv_free_from(struct pv *p, size_t from) __attribute__((nonnull(1)));
 static void pv_free_from(struct pv *p, size_t from)
 {
-	size_t i, end = p->n;
-	for (i = from; i < end; i++) __free(p->v[i]);
+	size_t i;
+	for (i = from; i < p->n; i++) __free(p->v[i]);
 	__free((void *)p->v);
 	p->v = 0;
 	p->n = p->cap = 0;
@@ -557,12 +557,11 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
 
 void globfree(glob_t *pglob)
 {
-	size_t i, offs, count;
+	size_t i, offs;
 
 	if (!pglob || !pglob->gl_pathv) return;
 	offs = pglob->gl_offs;
-	count = pglob->gl_pathc;
-	for (i = 0; i < count; i++) __free(pglob->gl_pathv[offs + i]);
+	for (i = 0; i < pglob->gl_pathc; i++) __free(pglob->gl_pathv[offs + i]);
 	__free((void *)pglob->gl_pathv);
 	pglob->gl_pathv = 0;
 	pglob->gl_pathc = 0;

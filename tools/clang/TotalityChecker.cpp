@@ -679,6 +679,29 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return false;
   }
 
+  static bool knownDeallocator(const CallExpr *Call) {
+    const FunctionDecl *Callee = Call ? Call->getDirectCallee() : nullptr;
+    return Callee &&
+           (Callee->getName() == "free" || Callee->getName() == "__free");
+  }
+
+  static bool containsMemberInvalidatingCall(const Stmt *Statement) {
+    if (!Statement)
+      return false;
+    /* A successful free cannot mutate a live object which carries a member
+     * bound.  If its argument aliases that object, the next bound read is a
+     * use after lifetime and the execution has already left defined C.  Keep
+     * every other call conservative, including realloc-like calls, and still
+     * inspect a known deallocator's argument for nested unknown calls. */
+    if (const auto *Call = dyn_cast<CallExpr>(Statement))
+      if (!knownDeallocator(Call))
+        return true;
+    for (const Stmt *Child : Statement->children())
+      if (containsMemberInvalidatingCall(Child))
+        return true;
+    return false;
+  }
+
   enum CallFlowOutcome : unsigned {
     FallWithoutCall = 1,
     FallWithCall = 2,
@@ -850,8 +873,10 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     /* A call need not receive BaseVar to mutate the same object: a parameter
      * may alias globally reachable storage, and a local object's address may
      * have escaped before the loop.  Without an interprocedural no-write
-     * summary, any call invalidates a member bound. */
-    if (containsCall(Body) || containsCall(Increment))
+     * summary, every call except the lifetime-only deallocators above
+     * invalidates a member bound. */
+    if (containsMemberInvalidatingCall(Body) ||
+        containsMemberInvalidatingCall(Increment))
       return false;
     if (writesVariable(Body, BaseVar) || writesVariable(Increment, BaseVar) ||
         aliasedWrite(BaseVar, Body))

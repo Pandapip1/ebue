@@ -191,6 +191,8 @@ struct vec {
 };
 
 void mutate_vec(struct vec *p);
+void free(void *);
+void *realloc(void *, __SIZE_TYPE__);
 
 unsigned member_bound_mutated_in_body(struct vec *p)
 {
@@ -206,6 +208,24 @@ unsigned member_bound_escapes_to_call(struct vec *p)
 	unsigned i;
 	for (i = 0; i < p->n; i++) { /* totality-expect */
 		mutate_vec(p);
+	}
+	return i;
+}
+
+unsigned member_bound_across_realloc(struct vec *p)
+{
+	unsigned i;
+	for (i = 0; i < p->n; i++) { /* totality-expect */
+		(void)realloc(p->v, 16);
+	}
+	return i;
+}
+
+unsigned member_bound_address_taken(struct vec *p)
+{
+	unsigned i;
+	for (i = 0; i < p->n; i++) { /* totality-expect */
+		(void)&p->n;
 	}
 	return i;
 }
