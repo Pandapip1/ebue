@@ -113,9 +113,13 @@ ssize_t __file_write(FILE *f, const void *buf, size_t n)
 			}
 			if (need > f->mem_size) {
 				size_t ns = f->mem_size ? f->mem_size : 128;
-				while (ns < need) {
+				/* Each doubling consumes another value bit; the overflow
+				 * guard may finish the growth one iteration earlier. */
+				unsigned steps = sizeof(size_t) * CHAR_BIT;
+				while (ns < need && steps > 0) {
 					if (ns > (size_t)PTRDIFF_MAX / 2) { ns = need; break; }
 					ns *= 2;
+					steps--;
 				}
 				{
 					unsigned char *nb = realloc(f->mem_buf, ns);

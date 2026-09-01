@@ -322,12 +322,15 @@ static int ab_room(struct abuf *b, int need)
 {
 	void *q;
 	int cap = b->cap;
+	/* cap starts positive below and each pass consumes one value bit. */
+	unsigned steps = sizeof(int) * CHAR_BIT;
 
 	if (need <= cap) return 1;
 	if (cap < 32) cap = 32;
-	while (cap < need) {
+	while (cap < need && steps > 0) {
 		if (cap > INT_MAX / 2) return 0;
 		cap *= 2;
+		steps--;
 	}
 	if (cap > INT_MAX / b->esz) return 0;
 	q = realloc(b->p, (size_t)cap * (size_t)b->esz);

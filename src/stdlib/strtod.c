@@ -187,8 +187,15 @@ __wraps static void bn_sub(bn_t *a, const bn_t *b)
 static void bn_mul_pow10(bn_t *a, int e)
 {
 	int k = e;
+	/* Every caller passes a nonnegative exponent.  Snapshot the exact
+	 * number of full 5^13 chunks before bn_muladd() can obscure it. */
+	int chunks = k / 13;
 
-	while (k >= 13) { bn_muladd(a, 1220703125u, 0); k -= 13; } /* 5^13 */
+	while (chunks > 0) {
+		bn_muladd(a, 1220703125u, 0); /* 5^13 */
+		k -= 13;
+		chunks--;
+	}
 	if (k) {
 		uint32_t m = 1;
 		while (k--) m *= 5;
