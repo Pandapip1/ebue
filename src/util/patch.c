@@ -906,6 +906,7 @@ fail:
 
 /* ==== filename determination (context/unified, no operand given) ========= */
 
+withtok(heap_allocated)
 static char *strip_components(const char *name, long strip)
 {
 	const char *p = name;
