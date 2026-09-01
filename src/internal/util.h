@@ -292,6 +292,28 @@ int __util_ar_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_file_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_pax_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* Tier 4 continued: find(1p), xargs(1p), expr(1p), ls(1p) -- real
+ * expression grammars and a real recursive traversal, not just a
+ * straight-line pass over stdin/argv the way most of Tiers 0-3 are.
+ * Each has its own real, deliberate scope narrowing documented at
+ * length in its own src/util/<name>.c header comment (find: -H/-L,
+ * XSI-only -perm symbolic-mode grammar, -xdev/-nouser/-nogroup;
+ * xargs: -0/-d, -E's default-enabled state; ls: -H/-L, the two
+ * XSI-shaded -g/-o long-format variants) rather than being silently
+ * approximated -- read each file's own comment before assuming a
+ * missing flag was an oversight.  None of the four is __pure__: find
+ * and ls both walk the real filesystem (and find's -exec/-ok, like
+ * xargs's whole reason to exist, spawn real child processes via this
+ * project's own __find_program()/__spawn(), src/process/), and expr,
+ * though it touches no filesystem itself, still isn't marked __pure__
+ * because it writes its result to stdout as its entire purpose (the
+ * same reasoning src/util/printf.c's own entry doesn't claim __pure__
+ * either). */
+int __util_expr_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_find_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_ls_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_xargs_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 /* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
  * src/util/rm.c -----------------------------------------------------
  *

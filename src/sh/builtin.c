@@ -591,6 +591,47 @@ static int bi_file(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* Tier 4 continued: find(1p), xargs(1p), expr(1p), ls(1p) -- same
+ * reasoning as every tier above: each also exists as a real standalone
+ * obj/bin/<name>.exe (src/util/<name>.c, declared in src/internal/
+ * util.h), and stays registered here too so a script run before PATH
+ * lookup or __spawn() can be trusted still has them -- which matters
+ * more than usual for `find -exec`/`xargs` specifically, since both of
+ * those *themselves* depend on __find_program()/__spawn() to run
+ * whatever they were told to invoke; running find/xargs/expr/ls
+ * in-process here needs none of that to already work.  None of these
+ * four is a 2.14 special built-in and none has any effect on the shell
+ * execution environment itself (2.12's list -- none of them `cd`s or
+ * assigns a shell variable), so `env_effect` is 0 for all four, same
+ * as every other regular built-in in this table. */
+static int bi_find(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_find(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_find_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_xargs(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_xargs(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_xargs_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_expr(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_expr(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_expr_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_ls(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_ls(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_ls_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* XCU 2.14: "exit [n] -- ... shall cause the shell to exit with the
  * exit status specified by the unsigned decimal integer n.  If n is
  * specified, but its value is not between 0 and 255 inclusively, the
@@ -973,6 +1014,10 @@ static const struct sh_builtin builtins[] = {
 	{ "pax",  0, 0, bi_pax },
 	{ "ar",   0, 0, bi_ar },
 	{ "file", 0, 0, bi_file },
+	{ "find",  0, 0, bi_find },
+	{ "xargs", 0, 0, bi_xargs },
+	{ "expr",  0, 0, bi_expr },
+	{ "ls",    0, 0, bi_ls },
 	{ 0, 0, 0, 0 }
 };
 

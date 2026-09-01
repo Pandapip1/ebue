@@ -619,6 +619,12 @@ obj/test/util-grep.exe: obj/bin/grep.exe $(SH_EXE)
 # first.
 obj/test/util-archive.exe: obj/bin/pax.exe obj/bin/file.exe obj/bin/ar.exe $(SH_EXE)
 
+# test/util-findls.c is the same idea, one tier up again: find(1p)/
+# xargs(1p)/expr(1p)/ls(1p), each spawned as obj/bin/<name>.exe and
+# exercised as a shell built-in via obj/sh/sh.exe -c, so all four .exes
+# plus the shell need to exist first.
+obj/test/util-findls.exe: obj/bin/find.exe obj/bin/xargs.exe obj/bin/expr.exe obj/bin/ls.exe $(SH_EXE)
+
 # test/delayall.c and its plugin DLL: proof that an *unmodified* program
 # (plain extern, ordinary call, no ntlibc-specific macro at the call
 # site) gets $ORIGIN delay loading through -Wl,--delay-all and
