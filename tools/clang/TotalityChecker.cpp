@@ -30,6 +30,13 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   struct Progress {
     const ValueDecl *Variable;
     ProgressKind Kind;
+    const ValueDecl *Base;
+    /* Non-null only for an unsigned non-unit subtraction.  Such a change
+     * is strict progress only when the loop condition also proves that the
+     * subtraction cannot wrap. */
+    const Expr *GuardedStep = nullptr;
+    bool VolatileAccess = false;
+    bool RequiresNonzeroCondition = false;
   };
 
   std::string file(SourceLocation Location) const {
@@ -80,8 +87,12 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   }
 
   static const ValueDecl *value(const Expr *Expression) {
-    const auto *Reference = dyn_cast_or_null<DeclRefExpr>(ignore(Expression));
-    return Reference ? dyn_cast<ValueDecl>(Reference->getDecl()) : nullptr;
+    Expression = ignore(Expression);
+    if (const auto *Reference = dyn_cast_or_null<DeclRefExpr>(Expression))
+      return dyn_cast<ValueDecl>(Reference->getDecl());
+    if (const auto *Member = dyn_cast_or_null<MemberExpr>(Expression))
+      return Member->getMemberDecl();
+    return nullptr;
   }
 
   static bool unitInteger(const Expr *Expression) {
@@ -94,12 +105,53 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return Literal && Literal->getValue().ugt(1);
   }
 
+  static bool positiveInteger(const Expr *Expression) {
+    const auto *Literal = dyn_cast_or_null<IntegerLiteral>(ignore(Expression));
+    return Literal && !Literal->getValue().isZero();
+  }
+
+  static bool positiveConstantStep(const Expr *Expression) {
+    if (positiveInteger(Expression))
+      return true;
+    const auto *Trait =
+        dyn_cast_or_null<UnaryExprOrTypeTraitExpr>(ignore(Expression));
+    return Trait && (Trait->getKind() == UETT_SizeOf ||
+                     Trait->getKind() == UETT_AlignOf);
+  }
+
+  static bool unsignedByteValue(const Expr *Expression) {
+    Expression = ignore(Expression);
+    if (const auto *Cast = dyn_cast_or_null<ExplicitCastExpr>(Expression))
+      Expression = ignore(Cast->getSubExpr());
+    const auto *Builtin = Expression
+                              ? Expression->getType()->getAs<BuiltinType>()
+                              : nullptr;
+    return Builtin && (Builtin->getKind() == BuiltinType::UChar ||
+                       Builtin->getKind() == BuiltinType::Char_U);
+  }
+
+  static bool strictlyPositive(const Expr *Expression) {
+    Expression = ignore(Expression);
+    if (positiveInteger(Expression))
+      return true;
+    const auto *Binary = dyn_cast_or_null<BinaryOperator>(Expression);
+    if (!Binary || Binary->getOpcode() != BO_Add)
+      return false;
+    const Expr *Left = ignore(Binary->getLHS());
+    const Expr *Right = ignore(Binary->getRHS());
+    /* An arbitrary unsigned value plus one can wrap to zero.  The byte
+     * source is the one useful bounded form in this tree: after integer
+     * promotion its maximum plus one is still strictly positive. */
+    return (unitInteger(Left) && unsignedByteValue(Right)) ||
+           (unitInteger(Right) && unsignedByteValue(Left));
+  }
+
   static bool zeroInteger(const Expr *Expression) {
     const auto *Literal = dyn_cast_or_null<IntegerLiteral>(ignore(Expression));
     return Literal && Literal->getValue().isZero();
   }
 
-  static bool nonzeroWhen(const Expr *Condition, const ParmVarDecl *Parameter,
+  static bool nonzeroWhen(const Expr *Condition, const ValueDecl *Parameter,
                           bool Truth) {
     Condition = ignore(Condition);
     if (!Condition)
@@ -242,18 +294,43 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return Result.empty() ? "-" : Result;
   }
 
-  static bool basedOn(const Expr *Expression, const ValueDecl *Variable) {
+  static Progress makeProgress(const ValueDecl *Variable, ProgressKind Kind,
+                               const ValueDecl *Base, const Expr *Access,
+                               const Expr *GuardedStep = nullptr,
+                               bool RequiresNonzeroCondition = false) {
+    return Progress{Variable, Kind, Base, GuardedStep,
+                    Access && Access->getType().isVolatileQualified(),
+                    RequiresNonzeroCondition};
+  }
+
+  static bool sameRank(const Progress &Left, const Progress &Right) {
+    if (Left.Variable != Right.Variable)
+      return false;
+    return !isa<FieldDecl>(Left.Variable) || Left.Base == Right.Base;
+  }
+
+  static bool rankAccess(const Expr *Expression, const Progress &Rank) {
     Expression = ignore(Expression);
-    if (value(Expression) == Variable)
+    if (const auto *Field = dyn_cast<FieldDecl>(Rank.Variable)) {
+      const auto *Member = dyn_cast_or_null<MemberExpr>(Expression);
+      return Member && Member->getMemberDecl() == Field &&
+             value(Member->getBase()) == Rank.Base;
+    }
+    return value(Expression) == Rank.Variable;
+  }
+
+  static bool basedOn(const Expr *Expression, const Progress &Rank) {
+    Expression = ignore(Expression);
+    if (rankAccess(Expression, Rank))
       return true;
     if (const auto *Unary = dyn_cast_or_null<UnaryOperator>(Expression))
-      return basedOn(Unary->getSubExpr(), Variable);
+      return basedOn(Unary->getSubExpr(), Rank);
     if (const auto *Member = dyn_cast_or_null<MemberExpr>(Expression))
-      return basedOn(Member->getBase(), Variable);
+      return basedOn(Member->getBase(), Rank);
     if (const auto *Subscript =
             dyn_cast_or_null<ArraySubscriptExpr>(Expression))
-      return basedOn(Subscript->getBase(), Variable) ||
-             basedOn(Subscript->getIdx(), Variable);
+      return basedOn(Subscript->getBase(), Rank) ||
+             basedOn(Subscript->getIdx(), Rank);
     return false;
   }
 
@@ -263,10 +340,15 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       const ValueDecl *Variable = value(Unary->getSubExpr());
       if (!Variable)
         return std::nullopt;
+      const auto *Member = dyn_cast_or_null<MemberExpr>(
+          ignore(Unary->getSubExpr()));
+      const ValueDecl *Base = Member ? value(Member->getBase()) : nullptr;
       if (Unary->isIncrementOp())
-        return Progress{Variable, ProgressKind::Up};
+        return makeProgress(Variable, ProgressKind::Up, Base,
+                            Unary->getSubExpr());
       if (Unary->isDecrementOp())
-        return Progress{Variable, ProgressKind::Down};
+        return makeProgress(Variable, ProgressKind::Down, Base,
+                            Unary->getSubExpr());
     }
     const auto *Binary = dyn_cast_or_null<BinaryOperator>(Expression);
     if (!Binary)
@@ -274,36 +356,80 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     const ValueDecl *Variable = value(Binary->getLHS());
     if (!Variable)
       return std::nullopt;
+    const auto *Member =
+        dyn_cast_or_null<MemberExpr>(ignore(Binary->getLHS()));
+    const ValueDecl *Base = Member ? value(Member->getBase()) : nullptr;
     /* A step larger than one can jump over the bound and wrap.  In
      * particular, `for (unsigned i = 0; i < UINT_MAX; i += 2)` does not
      * terminate.  Unit steps are the only context-free scalar proof. */
-    if (Binary->getOpcode() == BO_AddAssign && unitInteger(Binary->getRHS()))
-      return Progress{Variable, ProgressKind::Up};
-    if (Binary->getOpcode() == BO_SubAssign && unitInteger(Binary->getRHS()))
-      return Progress{Variable, ProgressKind::Down};
+    if (Binary->getOpcode() == BO_AddAssign &&
+        (unitInteger(Binary->getRHS()) ||
+         (Variable->getType()->isSignedIntegerType() &&
+          positiveInteger(Binary->getRHS())) ||
+         (Variable->getType()->isPointerType() &&
+          strictlyPositive(Binary->getRHS()))))
+      return makeProgress(Variable, ProgressKind::Up, Base, Binary->getLHS());
+    if (Binary->getOpcode() == BO_SubAssign &&
+        (unitInteger(Binary->getRHS()) ||
+         (Variable->getType()->isSignedIntegerType() &&
+          positiveInteger(Binary->getRHS())) ||
+         (Variable->getType()->isUnsignedIntegerType() &&
+          positiveConstantStep(Binary->getRHS()))))
+      return makeProgress(
+          Variable, ProgressKind::Down, Base, Binary->getLHS(),
+          Variable->getType()->isUnsignedIntegerType() &&
+                  !unitInteger(Binary->getRHS())
+              ? Binary->getRHS()
+              : nullptr);
     /* For an unsigned value tested for nonzero, division by a constant
      * greater than one is a strict descent to zero.  This is the common
      * integer-to-text digit loop (`while (u) u /= 10`); unlike a non-unit
      * additive step it cannot skip a bound and wrap back around. */
     if (Binary->getOpcode() == BO_DivAssign &&
-        Variable->getType()->isUnsignedIntegerType() &&
+        Variable->getType()->isIntegerType() &&
         integerGreaterThanOne(Binary->getRHS()))
-      return Progress{Variable, ProgressKind::Down};
+      return makeProgress(Variable, ProgressKind::Down, Base,
+                          Binary->getLHS(), nullptr, true);
+    if (Binary->getOpcode() == BO_ShrAssign &&
+        Variable->getType()->isUnsignedIntegerType() &&
+        positiveInteger(Binary->getRHS()))
+      return makeProgress(Variable, ProgressKind::Down, Base,
+                          Binary->getLHS(), nullptr, true);
     if (!Binary->isAssignmentOp())
       return std::nullopt;
     const Expr *Right = ignore(Binary->getRHS());
     if (const auto *Operation = dyn_cast<BinaryOperator>(Right)) {
       if (value(Operation->getLHS()) == Variable) {
         if (Operation->getOpcode() == BO_Add &&
-            unitInteger(Operation->getRHS()))
-          return Progress{Variable, ProgressKind::Up};
+            (unitInteger(Operation->getRHS()) ||
+             (Variable->getType()->isSignedIntegerType() &&
+              positiveInteger(Operation->getRHS())) ||
+             (Variable->getType()->isPointerType() &&
+              strictlyPositive(Operation->getRHS()))))
+          return makeProgress(Variable, ProgressKind::Up, Base,
+                              Binary->getLHS());
         if (Operation->getOpcode() == BO_Sub &&
-            unitInteger(Operation->getRHS()))
-          return Progress{Variable, ProgressKind::Down};
+            (unitInteger(Operation->getRHS()) ||
+             (Variable->getType()->isSignedIntegerType() &&
+              positiveInteger(Operation->getRHS())) ||
+             (Variable->getType()->isUnsignedIntegerType() &&
+              positiveConstantStep(Operation->getRHS()))))
+          return makeProgress(
+              Variable, ProgressKind::Down, Base, Binary->getLHS(),
+              Variable->getType()->isUnsignedIntegerType() &&
+                      !unitInteger(Operation->getRHS())
+                  ? Operation->getRHS()
+                  : nullptr);
         if (Operation->getOpcode() == BO_Div &&
-            Variable->getType()->isUnsignedIntegerType() &&
+            Variable->getType()->isIntegerType() &&
             integerGreaterThanOne(Operation->getRHS()))
-          return Progress{Variable, ProgressKind::Down};
+          return makeProgress(Variable, ProgressKind::Down, Base,
+                              Binary->getLHS(), nullptr, true);
+        if (Operation->getOpcode() == BO_Shr &&
+            Variable->getType()->isUnsignedIntegerType() &&
+            positiveInteger(Operation->getRHS()))
+          return makeProgress(Variable, ProgressKind::Down, Base,
+                              Binary->getLHS(), nullptr, true);
       }
     }
     /* `node = node->next` is progress only when the structure is acyclic.
@@ -340,19 +466,32 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return Mutation::None;
     if (const auto *Expression = dyn_cast<Expr>(Statement)) {
       if (std::optional<Progress> Change = progress(Expression)) {
-        if (Change->Variable == Expected.Variable)
-          return Change->Kind == Expected.Kind ? Mutation::Good : Mutation::Bad;
+        if (sameRank(*Change, Expected)) {
+          if (Change->Kind != Expected.Kind)
+            return Mutation::Bad;
+          /* A condition guarding one unsigned chunk size says nothing about
+           * a different chunk on another path.  Requiring the very same AST
+           * update keeps the guarded proof single-step; ordinary unit and
+           * signed steps retain the existing same-direction treatment. */
+          if ((Change->GuardedStep || Expected.GuardedStep) &&
+              Change->GuardedStep != Expected.GuardedStep)
+            return Mutation::Bad;
+          if (Change->RequiresNonzeroCondition !=
+              Expected.RequiresNonzeroCondition)
+            return Mutation::Bad;
+          return Mutation::Good;
+        }
       }
       const Expr *Plain = ignore(Expression);
       if (const auto *Unary = dyn_cast_or_null<UnaryOperator>(Plain)) {
         if ((Unary->isIncrementDecrementOp() ||
              Unary->getOpcode() == UO_AddrOf) &&
-            value(Unary->getSubExpr()) == Expected.Variable)
+            rankAccess(Unary->getSubExpr(), Expected))
           return Mutation::Bad;
       }
       if (const auto *Binary = dyn_cast_or_null<BinaryOperator>(Plain))
         if (Binary->isAssignmentOp() &&
-            value(Binary->getLHS()) == Expected.Variable)
+            rankAccess(Binary->getLHS(), Expected))
           return Mutation::Bad;
     }
     Mutation Result = Mutation::None;
@@ -425,9 +564,18 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return {BackWithoutProgress, false};
     if (isa<BreakStmt>(Statement) || isa<ReturnStmt>(Statement))
       return {ExitsLoop, false};
-    if (isa<GotoStmt>(Statement) || isa<SwitchStmt>(Statement) ||
-        isa<ForStmt>(Statement) || isa<WhileStmt>(Statement) ||
-        isa<DoStmt>(Statement))
+    if (isa<ForStmt>(Statement) || isa<WhileStmt>(Statement) ||
+        isa<DoStmt>(Statement)) {
+      /* Nested loops receive their own independent totality obligation.
+       * For the enclosing rank they are an ordinary falling-through
+       * statement when they do not mutate that rank; rejecting them
+       * outright made a proved inner scan poison an otherwise elementary
+       * outer index loop. */
+      return mutation(Statement, Expected) == Mutation::None
+                 ? Flow{FallWithoutProgress, false}
+                 : Flow{0, true};
+    }
+    if (isa<GotoStmt>(Statement) || isa<SwitchStmt>(Statement))
       return {0, true};
     switch (mutation(Statement, Expected)) {
     case Mutation::None:
@@ -455,7 +603,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       if (std::optional<Progress> Change = progress(Expression)) {
         bool Seen = false;
         for (const Progress &Existing : Result)
-          Seen |= Existing.Variable == Change->Variable &&
+          Seen |= sameRank(Existing, *Change) &&
                   Existing.Kind == Change->Kind;
         if (!Seen)
           Result.push_back(*Change);
@@ -481,6 +629,31 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     }
     for (const Stmt *Child : Statement->children())
       if (writesVariable(Child, Variable))
+        return true;
+    return false;
+  }
+
+  static bool containsCall(const Stmt *Statement) {
+    if (!Statement)
+      return false;
+    if (isa<CallExpr>(Statement))
+      return true;
+    for (const Stmt *Child : Statement->children())
+      if (containsCall(Child))
+        return true;
+    return false;
+  }
+
+  static bool addressTaken(const Stmt *Statement,
+                           const ValueDecl *Variable) {
+    if (!Statement)
+      return false;
+    if (const auto *Unary = dyn_cast<UnaryOperator>(Statement))
+      if (Unary->getOpcode() == UO_AddrOf &&
+          value(Unary->getSubExpr()) == Variable)
+        return true;
+    for (const Stmt *Child : Statement->children())
+      if (addressTaken(Child, Variable))
         return true;
     return false;
   }
@@ -546,11 +719,16 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
                     const Expr *Increment) const {
     const ValueDecl *Field = Member->getMemberDecl();
     const ValueDecl *BaseDecl = value(Member->getBase());
-    if (!Field || !BaseDecl)
+    if (!Field || !BaseDecl || Member->getType().isVolatileQualified())
       return false;
     const auto *BaseVar = dyn_cast<VarDecl>(BaseDecl);
-    if (!BaseVar || !(isa<ParmVarDecl>(BaseVar) || BaseVar->hasLocalStorage()) ||
-        BaseVar->getType().isVolatileQualified() || !Current)
+    if (!BaseVar || BaseVar->getType().isVolatileQualified() || !Current)
+      return false;
+    /* A call need not receive BaseVar to mutate the same object: a parameter
+     * may alias globally reachable storage, and a local object's address may
+     * have escaped before the loop.  Without an interprocedural no-write
+     * summary, any call invalidates a member bound. */
+    if (containsCall(Body) || containsCall(Increment))
       return false;
     if (writesVariable(Body, BaseVar) || writesVariable(Increment, BaseVar) ||
         aliasedWrite(BaseVar, Body))
@@ -627,12 +805,30 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return false;
   }
 
-  bool validRankVariable(const Progress &Change, const Stmt *Body) const {
+  bool validRankVariable(const Progress &Change, const Stmt *Body,
+                         const Expr *Increment = nullptr) const {
+    if (const auto *Field = dyn_cast<FieldDecl>(Change.Variable)) {
+      const auto *Base = dyn_cast_or_null<VarDecl>(Change.Base);
+      return !Change.VolatileAccess && !Field->getType().isVolatileQualified() &&
+             Base && !Base->getType().isVolatileQualified() && Current &&
+             !containsCall(Body) &&
+             !containsCall(Increment) &&
+             !writesVariable(Body, Base) && !aliasedWrite(Base, Body) &&
+             (!Base->getType()->isPointerType() ||
+              !writesThroughAlias(Body, Base));
+    }
     const auto *Variable = dyn_cast<VarDecl>(Change.Variable);
-    return Variable &&
-           (isa<ParmVarDecl>(Variable) || Variable->hasLocalStorage()) &&
-           !Variable->getType().isVolatileQualified() && Current &&
-           !aliasedWrite(Variable, Body);
+    if (!Variable || Variable->getType().isVolatileQualified() || !Current)
+      return false;
+    if (!(isa<ParmVarDecl>(Variable) || Variable->hasLocalStorage())) {
+      if (Variable->getFormalLinkage() != Linkage::Internal ||
+          containsCall(Body) || containsCall(Increment))
+        return false;
+    } else if ((containsCall(Body) || containsCall(Increment)) &&
+               addressTaken(Current->getBody(), Variable)) {
+      return false;
+    }
+    return !aliasedWrite(Variable, Body);
   }
 
   bool stableBound(const Expr *Expression, const Stmt *Body,
@@ -643,19 +839,33 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     if (Expression->EvaluateAsInt(Constant, Context))
       return true;
     const Expr *Plain = ignore(Expression);
+    if (const auto *Cast = dyn_cast_or_null<CastExpr>(Plain))
+      return stableBound(Cast->getSubExpr(), Body, Increment);
     if (const auto *Reference = dyn_cast_or_null<DeclRefExpr>(Plain)) {
       const auto *Variable = dyn_cast<VarDecl>(Reference->getDecl());
-      return Variable &&
-             (isa<ParmVarDecl>(Variable) || Variable->hasLocalStorage()) &&
-             !Variable->getType().isVolatileQualified() && Current &&
-             !aliasedWrite(Variable, Body) && !writesVariable(Body, Variable) &&
+      if (!Variable || Variable->getType().isVolatileQualified() || !Current)
+        return false;
+      if (!(isa<ParmVarDecl>(Variable) || Variable->hasLocalStorage())) {
+        if (Variable->getFormalLinkage() != Linkage::Internal ||
+            containsCall(Body) || containsCall(Increment))
+          return false;
+      } else if ((containsCall(Body) || containsCall(Increment)) &&
+                 addressTaken(Current->getBody(), Variable)) {
+        return false;
+      }
+      return !aliasedWrite(Variable, Body) &&
+             !writesVariable(Body, Variable) &&
              !writesVariable(Increment, Variable);
     }
     if (const auto *Member = dyn_cast_or_null<MemberExpr>(Plain))
       return memberStable(Member, Body, Increment);
     if (const auto *Unary = dyn_cast_or_null<UnaryOperator>(Plain)) {
-      if (Unary->isIncrementDecrementOp() || Unary->getOpcode() == UO_AddrOf ||
-          Unary->getOpcode() == UO_Deref)
+      /* A second pointer can alias the pointee without being derived from
+       * this spelling.  Local syntactic escape tracking is insufficient to
+       * prove `*p` stable, and volatile pointees make the issue explicit. */
+      if (Unary->getOpcode() == UO_Deref)
+        return false;
+      if (Unary->isIncrementDecrementOp() || Unary->getOpcode() == UO_AddrOf)
         return false;
       return stableBound(Unary->getSubExpr(), Body, Increment);
     }
@@ -669,16 +879,24 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return false;
   }
 
-  bool belowTypeMaximum(const Expr *Bound, const ValueDecl *Variable) const {
+  bool maximumFitsRank(const llvm::APSInt &BoundMaximum,
+                       const ValueDecl *Variable,
+                       bool AllowEqual) const {
     QualType VariableType = Variable->getType();
     if (!VariableType->isIntegerType())
       return false;
     llvm::APSInt Maximum = llvm::APSInt::getMaxValue(
         Context.getIntWidth(VariableType),
         VariableType->isUnsignedIntegerOrEnumerationType());
+    int Comparison = llvm::APSInt::compareValues(BoundMaximum, Maximum);
+    return AllowEqual ? Comparison <= 0 : Comparison < 0;
+  }
+
+  bool boundFitsRank(const Expr *Bound, const ValueDecl *Variable,
+                     bool AllowEqual) const {
     Expr::EvalResult Constant;
     if (Bound->EvaluateAsInt(Constant, Context))
-      return llvm::APSInt::compareValues(Constant.Val.getInt(), Maximum) < 0;
+      return maximumFitsRank(Constant.Val.getInt(), Variable, AllowEqual);
     const Expr *Plain = ignore(Bound);
     if (!Plain || !Plain->getType()->isIntegerType())
       return false;
@@ -686,7 +904,16 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     llvm::APSInt BoundMaximum = llvm::APSInt::getMaxValue(
         Context.getIntWidth(BoundType),
         BoundType->isUnsignedIntegerOrEnumerationType());
-    return llvm::APSInt::compareValues(BoundMaximum, Maximum) < 0;
+    return maximumFitsRank(BoundMaximum, Variable, AllowEqual);
+  }
+
+  bool belowTypeMaximum(const Expr *Bound, const ValueDecl *Variable) const {
+    return boundFitsRank(Bound, Variable, false);
+  }
+
+  bool atMostTypeMaximum(const Expr *Bound,
+                         const ValueDecl *Variable) const {
+    return boundFitsRank(Bound, Variable, true);
   }
 
   bool aboveTypeMinimum(const Expr *Bound, const ValueDecl *Variable) const {
@@ -709,8 +936,45 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return llvm::APSInt::compareValues(BoundMinimum, Minimum) > 0;
   }
 
+  bool affineOn(const Expr *Expression, const Progress &Rank,
+                const Stmt *Body, const Expr *Increment) const {
+    Expression = ignore(Expression);
+    if (rankAccess(Expression, Rank))
+      return true;
+    const auto *Binary = dyn_cast_or_null<BinaryOperator>(Expression);
+    if (!Binary || Binary->getOpcode() != BO_Add)
+      return false;
+    if (rankAccess(Binary->getLHS(), Rank))
+      return stableBound(Binary->getRHS(), Body, Increment);
+    return rankAccess(Binary->getRHS(), Rank) &&
+           stableBound(Binary->getLHS(), Body, Increment);
+  }
+
+  bool guardsUnsignedStep(BinaryOperatorKind Opcode, const Expr *Bound,
+                          const Progress &Change) const {
+    if (!Change.GuardedStep)
+      return true;
+    /* For `n -= K`, an unsigned backedge is safe exactly when the taken
+     * condition establishes n >= K.  Keep this deliberately narrow: both
+     * K and the lower bound must be integer constant expressions, and use
+     * only the direct inclusive spelling.  This covers chunked countdowns
+     * such as `while (n >= sizeof word) n -= sizeof word` without accepting
+     * the wrapping `while (n) n -= 2`. */
+    if (Opcode != BO_GE)
+      return false;
+    Expr::EvalResult BoundValue;
+    Expr::EvalResult StepValue;
+    if (!Bound->EvaluateAsInt(BoundValue, Context) ||
+        !Change.GuardedStep->EvaluateAsInt(StepValue, Context))
+      return false;
+    return llvm::APSInt::compareValues(BoundValue.Val.getInt(),
+                                       StepValue.Val.getInt()) >= 0;
+  }
+
   bool strictComparison(const Expr *Condition, const Progress &Change,
                         const Stmt *Body, const Expr *Increment) const {
+    if (Change.RequiresNonzeroCondition)
+      return false;
     Condition = ignore(Condition);
     if (const auto *Logical = dyn_cast_or_null<BinaryOperator>(Condition)) {
       if (Logical->getOpcode() == BO_LAnd)
@@ -722,59 +986,144 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       if (Logical->getOpcode() == BO_LOr)
         return strictComparison(Logical->getLHS(), Change, Body, Increment) &&
                strictComparison(Logical->getRHS(), Change, Body, Increment);
-      const ValueDecl *Left = value(Logical->getLHS());
-      const ValueDecl *Right = value(Logical->getRHS());
+      bool Left = affineOn(Logical->getLHS(), Change, Body, Increment);
+      bool Right = affineOn(Logical->getRHS(), Change, Body, Increment);
       if (Change.Kind == ProgressKind::Up)
-        return (Left == Change.Variable &&
+        return (Left &&
                 stableBound(Logical->getRHS(), Body, Increment) &&
-                (Logical->getOpcode() == BO_LT ||
+                ((Logical->getOpcode() == BO_LT &&
+                  (!Change.Variable->getType()->isUnsignedIntegerType() ||
+                   atMostTypeMaximum(Logical->getRHS(), Change.Variable))) ||
                  (Logical->getOpcode() == BO_LE &&
-                  belowTypeMaximum(Logical->getRHS(), Change.Variable)))) ||
-               (Right == Change.Variable &&
+                  (!Change.Variable->getType()->isUnsignedIntegerType() ||
+                   belowTypeMaximum(Logical->getRHS(), Change.Variable))))) ||
+               (Right &&
                 stableBound(Logical->getLHS(), Body, Increment) &&
-                (Logical->getOpcode() == BO_GT ||
+                ((Logical->getOpcode() == BO_GT &&
+                  (!Change.Variable->getType()->isUnsignedIntegerType() ||
+                   atMostTypeMaximum(Logical->getLHS(), Change.Variable))) ||
                  (Logical->getOpcode() == BO_GE &&
-                  belowTypeMaximum(Logical->getLHS(), Change.Variable))));
+                  (!Change.Variable->getType()->isUnsignedIntegerType() ||
+                   belowTypeMaximum(Logical->getLHS(), Change.Variable)))));
       if (Change.Kind == ProgressKind::Down)
-        return (Left == Change.Variable &&
+        return (Left &&
                 stableBound(Logical->getRHS(), Body, Increment) &&
+                guardsUnsignedStep(Logical->getOpcode(), Logical->getRHS(),
+                                   Change) &&
                 (Logical->getOpcode() == BO_GT ||
                  (Logical->getOpcode() == BO_GE &&
-                  aboveTypeMinimum(Logical->getRHS(), Change.Variable)))) ||
-               (Right == Change.Variable &&
+                  (Change.Variable->getType()->isSignedIntegerType() ||
+                   aboveTypeMinimum(Logical->getRHS(), Change.Variable))))) ||
+               (Right &&
                 stableBound(Logical->getLHS(), Body, Increment) &&
+                guardsUnsignedStep(
+                    BinaryOperator::reverseComparisonOp(
+                        Logical->getOpcode()),
+                    Logical->getLHS(), Change) &&
                 (Logical->getOpcode() == BO_LT ||
                  (Logical->getOpcode() == BO_LE &&
-                  aboveTypeMinimum(Logical->getLHS(), Change.Variable))));
+                  (Change.Variable->getType()->isSignedIntegerType() ||
+                   aboveTypeMinimum(Logical->getLHS(), Change.Variable)))));
     }
     return false;
   }
 
-  static bool sentinelRead(const Stmt *Statement, const ValueDecl *Variable) {
+  static bool sentinelRead(const Stmt *Statement, const Progress &Rank) {
     if (!Statement)
       return false;
     if (const auto *Unary = dyn_cast<UnaryOperator>(Statement)) {
       if (Unary->getOpcode() == UO_Deref &&
-          basedOn(Unary->getSubExpr(), Variable))
+          basedOn(Unary->getSubExpr(), Rank))
         return true;
     }
     if (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(Statement)) {
-      if (basedOn(Subscript->getBase(), Variable) ||
-          basedOn(Subscript->getIdx(), Variable))
+      if (basedOn(Subscript->getBase(), Rank) ||
+          basedOn(Subscript->getIdx(), Rank))
         return true;
     }
     if (const auto *Member = dyn_cast<MemberExpr>(Statement)) {
-      if (Member->isArrow() && basedOn(Member->getBase(), Variable))
+      if (Member->isArrow() && basedOn(Member->getBase(), Rank))
         return true;
     }
     for (const Stmt *Child : Statement->children())
-      if (sentinelRead(Child, Variable))
+      if (sentinelRead(Child, Rank))
         return true;
     return false;
   }
 
-  static bool sentinelCondition(const Expr *Condition, const Progress &Change) {
+  bool sentinelDomainCannotCycle(const Progress &Rank) const {
+    QualType Type = Rank.Variable->getType();
+    if (Type->isPointerType() || Type->isSignedIntegerType())
+      return true;
+    if (!Type->isUnsignedIntegerType())
+      return false;
+    /* A dereference does not itself keep an unsigned index from wrapping.
+     * Finite-object reasoning supplies a rank only when the index domain is
+     * at least as wide as size_t: then every representable object runs out
+     * of valid element offsets before the induction value can cycle.  A
+     * narrower index needs an independently proved strict scalar bound;
+     * strictComparison() is tried before this sentinel fallback. */
+    llvm::APSInt ObjectExtentMaximum = llvm::APSInt::getMaxValue(
+        Context.getIntWidth(Context.getSizeType()), true);
+    return maximumFitsRank(ObjectExtentMaximum, Rank.Variable, true);
+  }
+
+  static bool rankNonzeroWhen(const Expr *Condition, const Progress &Rank,
+                              bool Truth) {
     Condition = ignore(Condition);
+    if (!Condition)
+      return false;
+    if (rankAccess(Condition, Rank))
+      return Truth;
+    if (const auto *Unary = dyn_cast<UnaryOperator>(Condition)) {
+      if (Unary->getOpcode() == UO_LNot)
+        return rankNonzeroWhen(Unary->getSubExpr(), Rank, !Truth);
+    }
+    const auto *Binary = dyn_cast<BinaryOperator>(Condition);
+    if (!Binary)
+      return false;
+    if (Binary->getOpcode() == BO_LAnd) {
+      if (Truth)
+        return rankNonzeroWhen(Binary->getLHS(), Rank, true) ||
+               rankNonzeroWhen(Binary->getRHS(), Rank, true);
+      return rankNonzeroWhen(Binary->getLHS(), Rank, false) &&
+             rankNonzeroWhen(Binary->getRHS(), Rank, false);
+    }
+    if (Binary->getOpcode() == BO_LOr) {
+      if (Truth)
+        return rankNonzeroWhen(Binary->getLHS(), Rank, true) &&
+               rankNonzeroWhen(Binary->getRHS(), Rank, true);
+      return rankNonzeroWhen(Binary->getLHS(), Rank, false) ||
+             rankNonzeroWhen(Binary->getRHS(), Rank, false);
+    }
+    bool RankLeft =
+        rankAccess(Binary->getLHS(), Rank) && zeroInteger(Binary->getRHS());
+    bool RankRight =
+        rankAccess(Binary->getRHS(), Rank) && zeroInteger(Binary->getLHS());
+    if (!RankLeft && !RankRight)
+      return false;
+    switch (Binary->getOpcode()) {
+    case BO_NE:
+      return Truth;
+    case BO_EQ:
+      return !Truth;
+    case BO_GT:
+      return RankLeft && Truth;
+    case BO_LT:
+      return RankRight && Truth;
+    case BO_LE:
+      return RankLeft && !Truth;
+    case BO_GE:
+      return RankRight && !Truth;
+    default:
+      return false;
+    }
+  }
+
+  bool sentinelCondition(const Expr *Condition, const Progress &Change) const {
+    Condition = ignore(Condition);
+    if (Change.RequiresNonzeroCondition)
+      return rankNonzeroWhen(Condition, Change, true);
     if (const auto *Logical = dyn_cast_or_null<BinaryOperator>(Condition)) {
       if (Logical->getOpcode() == BO_LAnd)
         return sentinelCondition(Logical->getLHS(), Change) ||
@@ -783,15 +1132,24 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         return sentinelCondition(Logical->getLHS(), Change) &&
                sentinelCondition(Logical->getRHS(), Change);
     }
-    if (Change.Kind == ProgressKind::Down &&
-        Change.Variable->getType()->isUnsignedIntegerType() &&
-        value(Condition) == Change.Variable)
+    /* A nonzero integer condition paired with a strict integer descent is
+     * a scalar rank for both unsigned and signed values.  For signed
+     * subtraction from a negative value, the only alternative to reaching
+     * zero is signed overflow, so no infinite *defined* C execution is
+     * admitted.  nonzeroWhen() also handles `n != 0` and conjunctions while
+     * deliberately requiring both arms of a disjunction to imply nonzero. */
+    if (!Change.GuardedStep && Change.Kind == ProgressKind::Down &&
+        Change.Variable->getType()->isIntegerType() &&
+        rankNonzeroWhen(Condition, Change, true))
       return true;
-    /* A load through the induction variable supplies an explicit sentinel
-     * rank.  On every defined execution a unit pointer/index step can visit
-     * only the finite remainder of its C object before either observing the
-     * sentinel or leaving the domain of defined execution. */
-    return sentinelRead(Condition, Change.Variable);
+    /* A load through the induction variable supplies an object-distance
+     * rank only when that induction domain cannot cycle before exhausting
+     * the object.  Pointer and signed overflow leave defined C execution;
+     * sufficiently wide unsigned indices exhaust every possible object.
+     * Narrow unsigned indices require the explicit scalar bound handled
+     * above, because their modular arithmetic can revisit the same bytes. */
+    return sentinelDomainCannotCycle(Change) &&
+           sentinelRead(Condition, Change);
   }
 
   static bool constantFalse(const Expr *Condition, ASTContext &Context) {
@@ -802,21 +1160,29 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
            Result.Val.getInt().isZero();
   }
 
-  static const ValueDecl *conditionCountdown(const Expr *Condition) {
+  static std::optional<Progress> conditionCountdown(const Expr *Condition) {
     Condition = ignore(Condition);
-    auto Decremented = [](const Expr *Expression) -> const ValueDecl * {
+    auto Decremented = [](const Expr *Expression)
+        -> std::optional<Progress> {
       const auto *Unary = dyn_cast_or_null<UnaryOperator>(ignore(Expression));
-      return Unary && Unary->isDecrementOp()
-                 ? value(Unary->getSubExpr())
-                 : nullptr;
+      if (!Unary || !Unary->isDecrementOp())
+        return std::nullopt;
+      const ValueDecl *Variable = value(Unary->getSubExpr());
+      if (!Variable)
+        return std::nullopt;
+      const auto *Member = dyn_cast_or_null<MemberExpr>(
+          ignore(Unary->getSubExpr()));
+      const ValueDecl *Base = Member ? value(Member->getBase()) : nullptr;
+      return makeProgress(Variable, ProgressKind::Down, Base,
+                          Unary->getSubExpr());
     };
-    if (const ValueDecl *Variable = Decremented(Condition))
-      return Variable;
+    if (std::optional<Progress> Change = Decremented(Condition))
+      return Change;
     const auto *Comparison = dyn_cast_or_null<BinaryOperator>(Condition);
     if (!Comparison)
-      return nullptr;
-    const ValueDecl *Left = Decremented(Comparison->getLHS());
-    const ValueDecl *Right = Decremented(Comparison->getRHS());
+      return std::nullopt;
+    std::optional<Progress> Left = Decremented(Comparison->getLHS());
+    std::optional<Progress> Right = Decremented(Comparison->getRHS());
     if (Left && zeroInteger(Comparison->getRHS()) &&
         (Comparison->getOpcode() == BO_GT ||
          Comparison->getOpcode() == BO_NE))
@@ -825,22 +1191,26 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         (Comparison->getOpcode() == BO_LT ||
          Comparison->getOpcode() == BO_NE))
       return Right;
-    return nullptr;
+    return std::nullopt;
   }
 
   std::string loopProof(const Expr *Condition, const Expr *Increment,
                         const Stmt *Body) const {
     if (constantFalse(Condition, Context))
       return "constant-false";
+    /* Without an explicit total/pure call summary, a call made while
+     * deciding whether to take the backedge can both fail to return and
+     * mutate globally reachable rank or bound state. */
+    if (containsCall(Condition))
+      return "unproved";
     /* `while (n--)` and `for (...; n-- > 0; ...)` perform their strict
      * descent in the condition, before every taken iteration.  The final
      * false test may itself wrap an unsigned n, but there is no following
      * backedge, so that cannot create a cycle. */
-    if (const ValueDecl *Variable = conditionCountdown(Condition)) {
-      Progress Change{Variable, ProgressKind::Down};
-      if (Variable->getType()->isIntegerType() &&
-          validRankVariable(Change, Body) &&
-          mutation(Body, Change) == Mutation::None)
+    if (std::optional<Progress> Change = conditionCountdown(Condition)) {
+      if (Change->Variable->getType()->isIntegerType() &&
+          validRankVariable(*Change, Body, Increment) &&
+          mutation(Body, *Change) == Mutation::None)
         return "strict-scalar-rank";
     }
     if (std::optional<Progress> Change = progress(Increment)) {
@@ -853,10 +1223,11 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
        * many steps, or the addition overflows and the execution was already
        * outside C's defined domain.  Keep rejecting it for unsigned ranks,
        * where wrapping is defined and can make the loop genuinely cycle. */
-      if (!validRankVariable(*Change, Body) ||
+      if (!validRankVariable(*Change, Body, Increment) ||
           (BodyMutation != Mutation::None &&
            !(BodyMutation == Mutation::Good &&
-             Change->Variable->getType()->isSignedIntegerType())))
+             (Change->Variable->getType()->isSignedIntegerType() ||
+              Change->Variable->getType()->isPointerType()))))
         return "unproved";
       if (strictComparison(Condition, *Change, Body, Increment))
         return "strict-scalar-rank";
@@ -873,11 +1244,12 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     collectProgress(Increment, IncrementCandidates);
     for (const Progress &Change : IncrementCandidates) {
       Mutation BodyMutation = mutation(Body, Change);
-      if (!validRankVariable(Change, Body) ||
+      if (!validRankVariable(Change, Body, Increment) ||
           mutation(Increment, Change) != Mutation::Good ||
           (BodyMutation != Mutation::None &&
            !(BodyMutation == Mutation::Good &&
-             Change.Variable->getType()->isSignedIntegerType())))
+             (Change.Variable->getType()->isSignedIntegerType() ||
+              Change.Variable->getType()->isPointerType()))))
         continue;
       if (strictComparison(Condition, Change, Body, Increment))
         return "strict-scalar-rank";
@@ -887,7 +1259,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     std::vector<Progress> Candidates;
     collectProgress(Body, Candidates);
     for (const Progress &Change : Candidates) {
-      if (!validRankVariable(Change, Body) ||
+      if (!validRankVariable(Change, Body, Increment) ||
           !bodyGuaranteesProgress(Body, Change))
         continue;
       if (strictComparison(Condition, Change, Body, Increment))
