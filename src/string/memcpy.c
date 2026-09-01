@@ -14,8 +14,11 @@ void *memcpy(void *__restrict dest, const void *__restrict src, size_t n) // NOL
 	const unsigned char *s = src;
 
 	if (n >= 4*sizeof(size_t) && ((uintptr_t)d & (sizeof(size_t)-1)) == ((uintptr_t)s & (sizeof(size_t)-1))) {
+		size_t words;
 		while ((uintptr_t)d & (sizeof(size_t)-1)) { *d++ = *s++; n--; }
-		for (; n >= sizeof(size_t); n -= sizeof(size_t), d += sizeof(size_t), s += sizeof(size_t))
+		/* Snapshot the exact number of complete aligned words. */
+		for (words = n / sizeof(size_t); words > 0;
+		     words--, n -= sizeof(size_t), d += sizeof(size_t), s += sizeof(size_t))
 			*(size_t *)d = *(const size_t *)s;
 	}
 	for (; n; n--) *d++ = *s++;

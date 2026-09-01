@@ -10,10 +10,13 @@ void *memset(void *dest, int c, size_t n) // NOLINT(bugprone-easily-swappable-pa
 
 	if (n >= 4*sizeof(size_t)) {
 		size_t w = (unsigned char)c;
+		size_t words;
 		w |= w << 8; w |= w << 16;
 		if (sizeof(size_t) > 4) w |= w << 16 << 16;
 		while ((uintptr_t)s & (sizeof(size_t)-1)) { *s++ = (unsigned char)c; n--; }
-		for (; n >= sizeof(size_t); n -= sizeof(size_t), s += sizeof(size_t))
+		/* Snapshot the exact number of complete aligned words. */
+		for (words = n / sizeof(size_t); words > 0;
+		     words--, n -= sizeof(size_t), s += sizeof(size_t))
 			*(size_t *)s = w;
 	}
 	for (k = 0; k < n; k++) s[k] = (unsigned char)c;

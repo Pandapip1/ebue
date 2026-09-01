@@ -212,10 +212,15 @@ static void pad(struct sink *sk, char c, size_t n) // NOLINT(bugprone-easily-swa
 		if (emit > avail) { skipped = emit - avail; emit = avail; }
 	}
 	memset(buf, c, sizeof buf);
-	while (emit && !sk->bad) {
-		size_t k = emit < sizeof buf ? emit : sizeof buf;
-		out(sk, buf, k);
-		emit -= k;
+	{
+		/* ceil(emit / sizeof buf), without an overflowing addition. */
+		size_t chunks = emit / sizeof buf + (emit % sizeof buf != 0);
+		while (chunks > 0 && !sk->bad) {
+			size_t k = emit < sizeof buf ? emit : sizeof buf;
+			out(sk, buf, k);
+			emit -= k;
+			chunks--;
+		}
 	}
 	/* count_fits() above proved this whole run representable.  out()
 	 * counted the stored prefix; account for the fixed buffer's discarded
