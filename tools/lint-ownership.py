@@ -30,6 +30,7 @@ DIAGNOSTIC = re.compile(
     r"pointer operation is blocked while unchecked ownership token is held|"
     r"source ownership type does not provide destination token bundle|"
     r"source ownership token has already moved|"
+    r"ownership token is not implicitly droppable|"
     r"declared ownership token drop is not proven by function body|"
     r"declared ownership token addition is not proven by function body|"
     r"pointer dereference is not proven nonnull|"

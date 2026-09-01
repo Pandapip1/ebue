@@ -21,6 +21,13 @@ void move_dialect_token_twice(void)
 	void *first withtok(heap_allocated) = allocate();
 	void *second withtok(heap_allocated) = first;
 	void *third withtok(heap_allocated) = first; /* ownership-expect: dialect-move */
-	(void)second;
 	(void)third;
+	release(second);
+}
+
+void required_dialect_token_cannot_disappear(void)
+{
+	void *value withtok(heap_allocated) = allocate();
+	(void)value;
+	return; /* ownership-expect: dialect-drop */
 }

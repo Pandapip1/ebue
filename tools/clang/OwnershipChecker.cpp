@@ -171,6 +171,39 @@ static std::optional<CapabilityKind> dialectTokenKind(ASTContext &Context,
              : CapabilityKind::Linear;
 }
 
+static std::optional<int64_t> dialectExcludedSentinel(
+    const TypedefNameDecl *Token) {
+  if (!Token)
+    return std::nullopt;
+  constexpr StringRef Prefix = "qual:sentinel_exclude=";
+  for (const AnnotateAttr *Attr : Token->specific_attrs<AnnotateAttr>()) {
+    StringRef Text = Attr->getAnnotation();
+    if (!Text.consume_front(Prefix))
+      continue;
+    if (Text == "NULL")
+      return 0;
+    int64_t Value = 0;
+    if (!Text.getAsInteger(10, Value))
+      return Value;
+  }
+  return std::nullopt;
+}
+
+static bool dialectTokenExcludes(const IdentifierInfo *Family,
+                                 const Expr *Expression,
+                                 ASTContext &Context) {
+  if (!Family || !Expression)
+    return false;
+  std::optional<int64_t> Sentinel = dialectExcludedSentinel(
+      dialectToken(Context, Family->getName()));
+  if (!Sentinel)
+    return false;
+  std::optional<llvm::APSInt> Value =
+      Expression->IgnoreParenImpCasts()->getIntegerConstantExpr(Context);
+  return Value && Value->isSignedIntN(64) &&
+         Value->getSExtValue() == *Sentinel;
+}
+
 static ProgramStateRef setCarrierToken(ProgramStateRef State,
                                        const MemRegion *Carrier,
                                        const IdentifierInfo *Family,
@@ -1599,7 +1632,8 @@ class OwnershipTypeChecker
           check::PostStmt<BinaryOperator>, check::PreStmt<UnaryOperator>,
           check::PreStmt<ArraySubscriptExpr>, check::PreStmt<MemberExpr>,
           check::PostStmt<ImplicitCastExpr>, check::PreStmt<ReturnStmt>,
-          check::BranchCondition, check::PreCall, check::PostCall> {
+          check::BranchCondition, check::PreCall, check::PostCall,
+          check::EndFunction> {
   mutable std::unique_ptr<BugType> BT;
 
   static llvm::SmallVector<OwnershipTypeEntry, 4>
@@ -1756,6 +1790,8 @@ class OwnershipTypeChecker
       CapabilityPresence Present =
           capabilityFor(State, SourceCarrier, SourceValue, Entry.Family);
       if (!Present.Kind) {
+        if (dialectTokenExcludes(Entry.Family, Source, C.getASTContext()))
+          continue;
         report(contains(SourceBundle, Entry)
                    ? "source ownership token has already moved"
                    : "source ownership type does not provide destination "
@@ -1831,6 +1867,10 @@ class OwnershipTypeChecker
     for (const OwnershipTypeEntry &Entry : DestinationBundle) {
       if (Entry.Member == OwnershipTypeMember::Handle)
         continue;
+      if (dialectTokenExcludes(Entry.Family, Source, C.getASTContext())) {
+        State = removeCarrierToken(State, DestinationCarrier, Entry.Family);
+        continue;
+      }
       CapabilityPresence SourceToken =
           capabilityFor(State, SourceCarrier, SourceValue, Entry.Family);
       if (!SourceToken.Kind)
@@ -2073,6 +2113,32 @@ public:
     }
     if (Changed)
       C.addTransition(State);
+  }
+
+  void checkEndFunction(const ReturnStmt *Return, CheckerContext &C) const {
+    ProgramStateRef State = C.getState();
+    for (const auto &Entry : State->get<CarrierCapabilityMap>()) {
+      if (Entry.second == CarrierCapabilityKind::Absent)
+        continue;
+      const MemRegion *Carrier = Entry.first.first;
+      const IdentifierInfo *Family = Entry.first.second;
+      const auto *Variable =
+          dyn_cast_or_null<VarRegion>(Carrier ? Carrier->getBaseRegion()
+                                              : nullptr);
+      if (!Variable || Variable->getStackFrame() != C.getStackFrame())
+        continue;
+      const TypedefNameDecl *Token =
+          dialectToken(C.getASTContext(), Family->getName());
+      if (!Token || hasDialectQualifier(Token, "qual:implicit_drop"))
+        continue;
+      const auto *Function = dyn_cast_or_null<FunctionDecl>(
+          C.getLocationContext()->getDecl());
+      const Stmt *Site = Return ? static_cast<const Stmt *>(Return)
+                                : Function ? Function->getBody() : nullptr;
+      if (Site)
+        report("ownership token is not implicitly droppable", Site, State, C);
+      return;
+    }
   }
 };
 
