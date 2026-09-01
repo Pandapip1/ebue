@@ -3,14 +3,14 @@
 
 #include "../../include/ownership.h"
 
-token heap_allocated;
-token mutex_unlock
+tokdef heap_allocated;
+tokdef mutex_unlock
 	l_unlimited;
-token nonnull
+tokdef nonnull
 	l_unlimited
 	implicit_drop
 	sentinel_exclude(NULL);
-token checked_fd
+tokdef checked_fd
 	sentinel_exclude(-1);
 
 void *allocate(void) withtok(heap_allocated);

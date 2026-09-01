@@ -25,12 +25,12 @@
 #include <stddef.h>
 #include <string.h>
 
-#ifndef token
-#define token __token_type
+#ifndef tokdef
+#define tokdef __token_type
 #endif
-token rtl_heap_allocated
+tokdef rtl_heap_allocated
 	dynamic_storage;
-#undef token
+#undef tokdef
 
 #ifdef __i386__
 #define NTAPI __attribute__((stdcall))

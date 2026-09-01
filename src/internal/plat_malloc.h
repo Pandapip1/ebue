@@ -33,12 +33,12 @@
 #include <ownership.h>
 #include <stddef.h>
 
-#ifndef token
-#define token __token_type
+#ifndef tokdef
+#define tokdef __token_type
 #endif
-token platform_heap_allocated
+tokdef platform_heap_allocated
 	dynamic_storage;
-#undef token
+#undef tokdef
 
 withtok(platform_heap_allocated)
 void *__plat_alloc(size_t n, int zero);

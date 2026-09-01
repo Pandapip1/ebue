@@ -3,9 +3,9 @@
 
 #include "../../include/ownership.h"
 
-token unchecked_fd sentinel_exclude(-1);
-token unchecked_null sentinel_exclude(NULL) blocks_dereference;
-#undef token
+tokdef unchecked_fd sentinel_exclude(-1);
+tokdef unchecked_null sentinel_exclude(NULL) blocks_dereference;
+#undef tokdef
 
 withtok(unchecked_fd)
 int acquire_fd(void);

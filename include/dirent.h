@@ -16,12 +16,12 @@ extern "C" {
 #include <features.h>
 #include <ownership.h>
 
-#ifndef token
-#define token __token_type
+#ifndef tokdef
+#define tokdef __token_type
 #endif
-token directory_stream_open
+tokdef directory_stream_open
 	dynamic_storage;
-#undef token
+#undef tokdef
 
 #define __NEED_ino_t
 #define __NEED_off_t

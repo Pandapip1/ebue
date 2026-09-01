@@ -5,20 +5,22 @@
 
 typedef __SIZE_TYPE__ size_t;
 
-token widget_allocated
+tokdef widget_allocated
 	dynamic_storage;
+tokdef heap_allocated
+	dynamic_storage;
+#undef tokdef
 
 /* Header-only declarations are explicit external assumptions.  If a .c
  * definition of free exists in the scanned tree, that definition must repeat
  * ownership_takes and its body is then proved. */
-[[clang::ownership_returns(malloc)]]
+withtok(heap_allocated)
 void *malloc(size_t);
-[[clang::ownership_takes(malloc, 1)]]
-void free(void *);
-[[ownership_reallocates(1), clang::ownership_returns(malloc)]]
-void *realloc(void *, size_t);
-[[ownership_returns_argument(1), clang::ownership_returns(malloc)]]
-void *conditional_buffer(void *);
+void free(void *consume(heap_allocated));
+withtok(heap_allocated)
+void *realloc(void *consume_if_nonnull_return(heap_allocated), size_t);
+withtok(heap_allocated)
+void *conditional_buffer(void *withtok(heap_allocated));
 
 void *make_widget(void) withtok(widget_allocated);
 void destroy_widget(void *object consume(widget_allocated));

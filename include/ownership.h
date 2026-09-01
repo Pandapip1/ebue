@@ -7,7 +7,7 @@
  * Token policy belongs to the nominal token typedef; values and operations
  * refer to that policy by name. */
 #define __token_type typedef struct { char _tok; }
-#define token __token_type
+#define tokdef __token_type
 /* Linear tokens are strict by default.  A permissive token remains linear,
  * but may stay behind while other, unlimited tokens on its carrier copy. */
 #define l_strict __attribute__((annotate("qual:l_strict")))

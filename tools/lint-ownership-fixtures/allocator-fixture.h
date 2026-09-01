@@ -5,8 +5,8 @@
 
 typedef __SIZE_TYPE__ size_t;
 
-token heap_allocated dynamic_storage;
-#undef token
+tokdef heap_allocated dynamic_storage;
+#undef tokdef
 
 withtok(heap_allocated)
 void *malloc(size_t);

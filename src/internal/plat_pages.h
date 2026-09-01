@@ -34,12 +34,12 @@
 #include <ownership.h>
 #include <stddef.h>
 
-#ifndef token
-#define token __token_type
+#ifndef tokdef
+#define tokdef __token_type
 #endif
-token platform_pages_allocated
+tokdef platform_pages_allocated
 	dynamic_storage;
-#undef token
+#undef tokdef
 
 /* Returns freshly zeroed memory, or NULL on failure. */
 withtok(platform_pages_allocated)

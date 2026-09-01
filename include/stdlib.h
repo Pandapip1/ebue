@@ -12,12 +12,12 @@
 #include <features.h>
 #include <ownership.h>
 
-#ifndef token
-#define token __token_type
+#ifndef tokdef
+#define tokdef __token_type
 #endif
-token heap_allocated
+tokdef heap_allocated
 	dynamic_storage;
-#undef token
+#undef tokdef
 
 #ifdef __cplusplus
 extern "C" {

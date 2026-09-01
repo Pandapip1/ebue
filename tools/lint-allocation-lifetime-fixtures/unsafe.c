@@ -27,19 +27,13 @@ void *uncontracted_return(void)
 	return malloc(8); /* allocation-lifetime-expect: return-contract */
 }
 
-[[clang::ownership_takes(broken, 1)]]
-void broken_destroy(void *);
-[[clang::ownership_returns(broken)]]
-void *make_broken(void);
-
-[[clang::ownership_returns(broken)]]
+withtok(broken_allocated)
 void *make_broken(void)
 {
 	return malloc(8);
 }
 
-[[clang::ownership_takes(broken, 1)]]
-void broken_destroy(void *object)
+void broken_destroy(void *object consume(broken_allocated))
 {
 	(void)object;
 } /* allocation-lifetime-expect: broken-freer */

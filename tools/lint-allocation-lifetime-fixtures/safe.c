@@ -9,10 +9,10 @@ void local_release(void)
 	free(p);
 }
 
-[[clang::ownership_returns(malloc)]]
+withtok(heap_allocated)
 void *nullable_producer(void);
 
-[[clang::ownership_returns(malloc)]]
+withtok(heap_allocated)
 void *nullable_producer(void)
 {
 	void *p = malloc(16);
@@ -47,8 +47,8 @@ void repeated_reallocation(void)
 	free(third);
 }
 
-[[ownership_returns_argument(1), clang::ownership_returns(malloc)]]
-void *conditional_buffer(void *buffer)
+withtok(heap_allocated)
+void *conditional_buffer(void *buffer withtok(heap_allocated))
 {
 	return buffer ? buffer : malloc(8);
 }

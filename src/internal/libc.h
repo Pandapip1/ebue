@@ -22,12 +22,12 @@
 #include "thread_annotations.h"
 #include "plat_handle.h"
 
-#ifndef token
-#define token __token_type
+#ifndef tokdef
+#define tokdef __token_type
 #endif
-token internal_heap_allocated
+tokdef internal_heap_allocated
 	dynamic_storage;
-#undef token
+#undef tokdef
 
 /* ---- lockset (Clang Thread Safety Analysis) capability tokens ---------
  * Two internal locks get a NTLIBC_CAPABILITY token here: __sig_lock()/

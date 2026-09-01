@@ -4,11 +4,11 @@
 
 #include "../../include/ownership.h"
 
-token heap_free;
-token shared_access l_unlimited implicit_drop;
-token strict_once l_strict implicit_drop;
-token strict_view l_unlimited implicit_drop;
-#undef token
+tokdef heap_free;
+tokdef shared_access l_unlimited implicit_drop;
+tokdef strict_once l_strict implicit_drop;
+tokdef strict_view l_unlimited implicit_drop;
+#undef tokdef
 
 struct owner_box {
 	void *value withhandle(heap) withtok(heap_free);
