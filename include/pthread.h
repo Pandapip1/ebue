@@ -13,6 +13,7 @@ extern "C" {
 #endif
 
 #include <features.h>
+#include <ownership.h>
 #define __NEED_size_t
 #define __NEED_time_t
 #define __NEED_clockid_t
@@ -94,34 +95,34 @@ void __pthread_cleanup_pop(struct __pthread_cleanup *, int);
 	__pthread_cleanup_pop(&__pthread_cleanup_frame, (execute)); \
 } while (0)
 
-int pthread_create(pthread_t *__restrict, const pthread_attr_t *__restrict,
-	void *(*)(void *), void *__restrict) __attribute__((ownership_requires_handle(pthread_attr, 2)));
+int pthread_create(pthread_t *__restrict, const pthread_attr_t *__restrict handle(pthread_attr),
+	void *(*)(void *), void *__restrict);
 int pthread_join(pthread_t, void **);
 int pthread_detach(pthread_t);
 pthread_t pthread_self(void);
 int pthread_equal(pthread_t, pthread_t);
 _Noreturn void pthread_exit(void *);
 
-int pthread_attr_init(pthread_attr_t *) __attribute__((ownership_constructs(pthread_attr, 1)));
-int pthread_attr_destroy(pthread_attr_t *) __attribute__((ownership_destroys(pthread_attr, 1)));
-int pthread_attr_getdetachstate(const pthread_attr_t *__restrict, int *__restrict) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_setdetachstate(pthread_attr_t *, int) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_getguardsize(const pthread_attr_t *__restrict, size_t *__restrict) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_setguardsize(pthread_attr_t *, size_t) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_getinheritsched(const pthread_attr_t *__restrict, int *__restrict) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_setinheritsched(pthread_attr_t *, int) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_getschedparam(const pthread_attr_t *__restrict, struct sched_param *__restrict) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_setschedparam(pthread_attr_t *__restrict, const struct sched_param *__restrict) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_getschedpolicy(const pthread_attr_t *__restrict, int *__restrict) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_setschedpolicy(pthread_attr_t *, int) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_getscope(const pthread_attr_t *__restrict, int *__restrict) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_setscope(pthread_attr_t *, int) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_getstack(const pthread_attr_t *__restrict, void **__restrict, size_t *__restrict) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_setstack(pthread_attr_t *, void *, size_t) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_getstacksize(const pthread_attr_t *__restrict, size_t *__restrict) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_setstacksize(pthread_attr_t *, size_t) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_getstackaddr(const pthread_attr_t *__restrict, void **__restrict) __attribute__((ownership_requires_handle(pthread_attr, 1)));
-int pthread_attr_setstackaddr(pthread_attr_t *, void *) __attribute__((ownership_requires_handle(pthread_attr, 1)));
+int pthread_attr_init(pthread_attr_t * construct(pthread_attr));
+int pthread_attr_destroy(pthread_attr_t * destroy(pthread_attr));
+int pthread_attr_getdetachstate(const pthread_attr_t *__restrict handle(pthread_attr), int *__restrict);
+int pthread_attr_setdetachstate(pthread_attr_t * handle(pthread_attr), int);
+int pthread_attr_getguardsize(const pthread_attr_t *__restrict handle(pthread_attr), size_t *__restrict);
+int pthread_attr_setguardsize(pthread_attr_t * handle(pthread_attr), size_t);
+int pthread_attr_getinheritsched(const pthread_attr_t *__restrict handle(pthread_attr), int *__restrict);
+int pthread_attr_setinheritsched(pthread_attr_t * handle(pthread_attr), int);
+int pthread_attr_getschedparam(const pthread_attr_t *__restrict handle(pthread_attr), struct sched_param *__restrict);
+int pthread_attr_setschedparam(pthread_attr_t *__restrict handle(pthread_attr), const struct sched_param *__restrict);
+int pthread_attr_getschedpolicy(const pthread_attr_t *__restrict handle(pthread_attr), int *__restrict);
+int pthread_attr_setschedpolicy(pthread_attr_t * handle(pthread_attr), int);
+int pthread_attr_getscope(const pthread_attr_t *__restrict handle(pthread_attr), int *__restrict);
+int pthread_attr_setscope(pthread_attr_t * handle(pthread_attr), int);
+int pthread_attr_getstack(const pthread_attr_t *__restrict handle(pthread_attr), void **__restrict, size_t *__restrict);
+int pthread_attr_setstack(pthread_attr_t * handle(pthread_attr), void *, size_t);
+int pthread_attr_getstacksize(const pthread_attr_t *__restrict handle(pthread_attr), size_t *__restrict);
+int pthread_attr_setstacksize(pthread_attr_t * handle(pthread_attr), size_t);
+int pthread_attr_getstackaddr(const pthread_attr_t *__restrict handle(pthread_attr), void **__restrict);
+int pthread_attr_setstackaddr(pthread_attr_t * handle(pthread_attr), void *);
 int pthread_getattr_np(pthread_t, pthread_attr_t *);
 
 /* control is required: src/thread/pthread_tsd.c's own pthread_once()
