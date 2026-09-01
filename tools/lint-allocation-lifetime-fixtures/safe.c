@@ -75,3 +75,21 @@ void use_contract(void)
 	void *widget = make_widget();
 	destroy_widget(widget);
 }
+
+withtok(sentinel_allocated)
+void *sentinel_producer(int fail)
+{
+	return fail ? (void *)-1 : malloc(16);
+}
+
+void sentinel_release(void *object consume(sentinel_allocated))
+{
+	free(object);
+}
+
+void sentinel_result(int fail)
+{
+	void *object = sentinel_producer(fail);
+	if (object != (void *)-1)
+		sentinel_release(object);
+}

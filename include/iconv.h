@@ -40,6 +40,7 @@ extern "C" {
 #endif
 
 #include <features.h>
+#include <ownership.h>
 
 #define __NEED_size_t
 
@@ -47,10 +48,19 @@ extern "C" {
 
 typedef void *iconv_t;
 
+#ifndef tokdef
+#define tokdef __token_type
+#endif
+tokdef iconv_opened
+	dynamic_storage
+	sentinel_exclude(-1);
+#undef tokdef
+
+withtok(iconv_opened)
 iconv_t iconv_open(const char *, const char *);
 size_t  iconv(iconv_t, char **__restrict, size_t *__restrict,
               char **__restrict, size_t *__restrict);
-int     iconv_close(iconv_t);
+int     iconv_close(iconv_t consume(iconv_opened));
 
 #ifdef __cplusplus
 }

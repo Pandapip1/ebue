@@ -64,6 +64,28 @@ static bool isDynamicStorageToken(ASTContext &Context, StringRef Name) {
   return false;
 }
 
+static std::optional<int64_t>
+excludedSentinel(const IdentifierInfo *Family, ASTContext &Context) {
+  if (!Family)
+    return std::nullopt;
+  const TypedefNameDecl *Token = dialectToken(Context, Family->getName());
+  if (!Token)
+    return std::nullopt;
+  constexpr StringRef Prefix = "qual:sentinel_exclude=";
+  for (const AnnotateAttr *Attribute :
+       Token->specific_attrs<AnnotateAttr>()) {
+    StringRef Text = Attribute->getAnnotation();
+    if (!Text.consume_front(Prefix))
+      continue;
+    if (Text == "NULL")
+      return 0;
+    int64_t Value = 0;
+    if (!Text.getAsInteger(10, Value))
+      return Value;
+  }
+  return std::nullopt;
+}
+
 static const IdentifierInfo *annotationFamily(const Decl *Declaration,
                                               StringRef Prefix) {
   if (!Declaration)
@@ -346,7 +368,24 @@ public:
           NextStates.push_back(State);
           continue;
         }
-        auto [NonNullState, NullState] = State->assume(*Defined);
+        ProgramStateRef ValueState = State;
+        if (std::optional<int64_t> Sentinel =
+                excludedSentinel(Family, Function->getASTContext())) {
+          DefinedSVal SentinelValue = C.getSValBuilder().makeIntVal(
+              static_cast<uint64_t>(*Sentinel), Parameter->getType());
+          DefinedOrUnknownSVal IsSentinel =
+              C.getSValBuilder().evalEQ(ValueState, *Defined, SentinelValue);
+          auto [SentinelState, NonSentinelState] =
+              ValueState->assume(IsSentinel);
+          if (SentinelState)
+            NextStates.push_back(SentinelState);
+          ValueState = NonSentinelState;
+          if (!ValueState) {
+            Changed = true;
+            continue;
+          }
+        }
+        auto [NonNullState, NullState] = ValueState->assume(*Defined);
         if (NullState)
           NextStates.push_back(NullState);
         if (NonNullState)
@@ -418,6 +457,19 @@ public:
         ReturnValue.getAs<DefinedOrUnknownSVal>();
     if (!Defined)
       return;
+    if (std::optional<int64_t> Sentinel =
+            excludedSentinel(Returns->Family, Function->getASTContext())) {
+      DefinedSVal SentinelValue = C.getSValBuilder().makeIntVal(
+          static_cast<uint64_t>(*Sentinel), Function->getReturnType());
+      DefinedOrUnknownSVal IsSentinel =
+          C.getSValBuilder().evalEQ(State, *Defined, SentinelValue);
+      auto [SentinelState, ValueState] = State->assume(IsSentinel);
+      if (SentinelState)
+        C.addTransition(SentinelState);
+      if (!ValueState)
+        return;
+      State = ValueState;
+    }
     auto [NonNullState, NullState] = State->assume(*Defined);
     if (NullState)
       C.addTransition(NullState);

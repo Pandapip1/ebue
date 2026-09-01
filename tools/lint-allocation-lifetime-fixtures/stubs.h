@@ -9,6 +9,9 @@ tokdef widget_allocated
 	dynamic_storage;
 tokdef heap_allocated
 	dynamic_storage;
+tokdef sentinel_allocated
+	dynamic_storage
+	sentinel_exclude(-1);
 #undef tokdef
 
 /* Header-only declarations are explicit external assumptions.  If a .c
@@ -24,3 +27,6 @@ void *conditional_buffer(void *withtok(heap_allocated));
 
 void *make_widget(void) withtok(widget_allocated);
 void destroy_widget(void *object consume(widget_allocated));
+withtok(sentinel_allocated)
+void *sentinel_producer(int fail);
+void sentinel_release(void *object consume(sentinel_allocated));

@@ -44,6 +44,11 @@ void wrong_freer(void)
 	free(object);
 } /* allocation-lifetime-expect: wrong-family */
 
+void leaked_sentinel_result(int fail)
+{
+	(void)sentinel_producer(fail);
+} /* allocation-lifetime-expect: sentinel-result */
+
 void *make_inherited(void)
 {
 	return malloc(8);

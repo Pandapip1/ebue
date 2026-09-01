@@ -107,6 +107,7 @@ static int codeset(const char *name, int *out)
 	return 0;
 }
 
+withtok(iconv_opened)
 iconv_t iconv_open(const char *tocode, const char *fromcode)
 {
 	struct __iconv_state *st;
@@ -125,7 +126,7 @@ iconv_t iconv_open(const char *tocode, const char *fromcode)
 	return (iconv_t)st;
 }
 
-int iconv_close(iconv_t cd)
+int iconv_close(iconv_t cd consume(iconv_opened))
 {
 	if (!cd || cd == (iconv_t)-1) { errno = EBADF; return -1; }
 	free(cd);
