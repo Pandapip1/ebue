@@ -342,12 +342,17 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 			size_t namelen;
 			struct stat st;
 
-			if (!strcmp(d->d_name, ".") || !strcmp(d->d_name, "..")) continue;
+			/* Validate the producer's fixed-size name member before any
+			 * string traversal or copy can leave that live object. */
+			namelen = strnlen(d->d_name, sizeof d->d_name);
+			if (namelen == sizeof d->d_name) { errno = EIO; break; }
+			if ((namelen == 1 && d->d_name[0] == '.') ||
+			    (namelen == 2 && d->d_name[0] == '.' && d->d_name[1] == '.'))
+				continue;
 			if (d->d_name[0] == '.' && !dot_ok) continue;
 			if (fnmatch(segbuf, d->d_name, (flags & GLOB_NOESCAPE) ? FNM_NOESCAPE : 0) != 0)
 				continue;
 
-			namelen = strlen(d->d_name);
 			if (join(newprefix, prefix, preflen, d->d_name, namelen,
 			         want_slash, &newlen))
 				continue;
