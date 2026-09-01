@@ -140,6 +140,37 @@ static CapabilityPresence capabilityFor(ProgramStateRef State,
   return {false, std::nullopt};
 }
 
+static const TypedefNameDecl *dialectToken(ASTContext &Context,
+                                           StringRef Name) {
+  IdentifierInfo &Identifier = Context.Idents.get(Name);
+  DeclarationName Declaration(&Identifier);
+  for (NamedDecl *Candidate :
+       Context.getTranslationUnitDecl()->lookup(Declaration))
+    if (const auto *Token = dyn_cast<TypedefNameDecl>(Candidate))
+      return Token;
+  return nullptr;
+}
+
+static bool hasDialectQualifier(const TypedefNameDecl *Token,
+                                StringRef Qualifier) {
+  if (!Token)
+    return false;
+  for (const AnnotateAttr *Attr : Token->specific_attrs<AnnotateAttr>())
+    if (Attr->getAnnotation() == Qualifier)
+      return true;
+  return false;
+}
+
+static std::optional<CapabilityKind> dialectTokenKind(ASTContext &Context,
+                                                       StringRef Name) {
+  const TypedefNameDecl *Token = dialectToken(Context, Name);
+  if (!Token)
+    return std::nullopt;
+  return hasDialectQualifier(Token, "qual:l_unlimited")
+             ? CapabilityKind::Duplicable
+             : CapabilityKind::Linear;
+}
+
 static ProgramStateRef setCarrierToken(ProgramStateRef State,
                                        const MemRegion *Carrier,
                                        const IdentifierInfo *Family,
@@ -1075,6 +1106,12 @@ class OwnershipContractChecker : public Checker<check::ASTDecl<FunctionDecl>> {
                  << Line << '\n';
   }
 
+  static bool isOwnershipContract(StringRef Annotation) {
+    return Annotation.starts_with("ownership_") ||
+           Annotation.starts_with("withtok:") ||
+           Annotation.starts_with("consume:");
+  }
+
 public:
   void checkASTDecl(const FunctionDecl *Function, AnalysisManager &,
                     BugReporter &) const {
@@ -1091,7 +1128,7 @@ public:
     for (const AnnotateAttr *Attribute :
          Function->specific_attrs<AnnotateAttr>()) {
       StringRef Contract = Attribute->getAnnotation();
-      if (Contract.starts_with("ownership_"))
+      if (isOwnershipContract(Contract))
         emitContract(Function, Attribute, Contract, Path, Line);
     }
     unsigned Argument = 1;
@@ -1099,7 +1136,7 @@ public:
       for (const AnnotateAttr *Attribute :
            Parameter->specific_attrs<AnnotateAttr>()) {
         StringRef Annotation = Attribute->getAnnotation();
-        if (!Annotation.starts_with("ownership_"))
+        if (!isOwnershipContract(Annotation))
           continue;
         std::string Contract =
             ("parameter:" + llvm::Twine(Argument) + ":" + Annotation).str();
@@ -1173,6 +1210,9 @@ class CapabilityTokenChecker
       if (Text.consume_front("ownership_holds_duplicable_token:") &&
           Text == Family->getName())
         return CapabilityKind::Duplicable;
+      Text = Attr->getAnnotation();
+      if (Text.consume_front("withtok:") && Text == Family->getName())
+        return dialectTokenKind(Declaration->getASTContext(), Text);
     }
     return std::nullopt;
   }
@@ -1194,7 +1234,8 @@ class CapabilityTokenChecker
         {"ownership_drops_any_token:", CapabilityOperation::ConsumeAny},
         {"ownership_adds_token:", CapabilityOperation::GrantLinear},
         {"ownership_adds_duplicable_token:",
-         CapabilityOperation::GrantDuplicable}};
+         CapabilityOperation::GrantDuplicable},
+        {"consume:", CapabilityOperation::Consume}};
     for (const AnnotateAttr *Attr : Function->specific_attrs<AnnotateAttr>())
       for (const OperationAnnotation &Candidate : Operations)
         if (std::optional<FamilyArgument> Parsed =
@@ -1585,6 +1626,19 @@ class OwnershipTypeChecker
         Bundle.push_back(
             {&Declaration->getASTContext().Idents.get(Text), Candidate.Member});
       }
+      StringRef Text = Attr->getAnnotation();
+      if (!Text.consume_front("withtok:") || Text.empty() ||
+          Text.contains(':'))
+        continue;
+      std::optional<CapabilityKind> Kind =
+          dialectTokenKind(Declaration->getASTContext(), Text);
+      if (!Kind)
+        continue;
+      Bundle.push_back(
+          {&Declaration->getASTContext().Idents.get(Text),
+           *Kind == CapabilityKind::Duplicable
+               ? OwnershipTypeMember::DuplicableToken
+               : OwnershipTypeMember::LinearToken});
     }
     return Bundle;
   }
