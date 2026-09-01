@@ -1240,7 +1240,7 @@ static char *bi_sysval(struct m4_state *st)
 {
 	char buf[16];
 	snprintf(buf, sizeof buf, "%d", st->sysval);
-	return strdup(buf);
+	return strndup(buf, sizeof buf);
 }
 
 static char *bi_maketemp(const char *tmpl)
