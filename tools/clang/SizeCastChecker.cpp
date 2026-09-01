@@ -839,6 +839,16 @@ class SignedArithmeticChecker : public Checker<check::PreStmt<BinaryOperator>,
 
 public:
   void checkPreStmt(const BinaryOperator *Operation, CheckerContext &C) const {
+    // Pointer subtraction has a signed ptrdiff_t result, but its validity is
+    // not an ordinary signed-integer overflow question: C requires both
+    // common array provenance and a representable element distance.  Those
+    // are pointer-provenance/object-bound obligations.  Applying the generic
+    // integer interval rule here loses the pointer regions and independently
+    // reports on an operation whose validity it cannot decide.
+    if (Operation->getOpcode() == BO_Sub &&
+        Operation->getLHS()->getType()->isPointerType() &&
+        Operation->getRHS()->getType()->isPointerType())
+      return;
     QualType Type = Operation->getType();
     if (!Type->isSignedIntegerType())
       return;

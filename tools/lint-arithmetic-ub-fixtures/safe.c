@@ -155,3 +155,10 @@ unsigned rem_materialized_then_divide(unsigned value, unsigned k)
 	d = k % 100 + 1;
 	return value % d;
 }
+
+/* Pointer subtraction belongs to provenance/object-bound analysis, not to
+ * generic signed integer arithmetic. */
+long pointer_difference_is_not_integer_arithmetic(int *left, int *right)
+{
+	return left - right;
+}
