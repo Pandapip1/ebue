@@ -45,6 +45,7 @@
 #include <errno.h>
 #include <limits.h>
 #include "libc.h"
+#include "ownership_stubs.h"
 
 /* XBD <limits.h> {NAME_MAX}: "Maximum number of bytes in a filename
  * (not including the terminating null of a string)."  BYTES, not
@@ -314,11 +315,13 @@ static int ntpath_impl(const char *path, struct __ntpath *out, ULONG attributes,
 	 * its own hand-built string (src/unistd/chdir.c). */
 	if (n > __US_MAX_WCHARS) { __free(dos); errno = ENAMETOOLONG; return -1; }
 
+	__ownership_writable_span(out, sizeof *out);
 	memset(out, 0, sizeof *out);
 	st = RtlDosPathNameToNtPathName_U_WithStatus(dos, &out->nt, 0, 0);
 	if (NT_SUCCESS(st)) {
 		out->buf = out->nt.Buffer;
 		out->dos = dos;
+		__ownership_writable_span(&out->oa, sizeof out->oa);
 		InitializeObjectAttributes(&out->oa, &out->nt, attributes, 0, 0);
 	} else if (st == STATUS_NAME_TOO_LONG &&
 	           !nt_path_over_max_path(dos, n, &trailing, out, attributes)) {
@@ -558,12 +561,14 @@ static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
 	/* The same UNICODE_STRING ceiling the rest of this file applies. */
 	if (len > __US_MAX_WCHARS) { __free(w); return -1; }
 
+	__ownership_writable_span(out, sizeof *out);
 	memset(out, 0, sizeof *out);
 	out->nt.Buffer = w;
 	out->nt.Length = (USHORT)(len * sizeof(WCHAR));
 	out->nt.MaximumLength = (USHORT)(out->nt.Length + sizeof(WCHAR));
 	out->buf = 0;                   /* w is freed as ->dos */
 	out->dos = w;
+	__ownership_writable_span(&out->oa, sizeof out->oa);
 	InitializeObjectAttributes(&out->oa, &out->nt, attributes, 0, 0);
 	return 0;
 }
@@ -682,12 +687,14 @@ static int ntpath_at_impl(int dirfd, const char *path, struct __ntpath *out,
 			errno = ENAMETOOLONG;
 			return -1;
 		}
+		__ownership_writable_span(out, sizeof *out);
 		memset(out, 0, sizeof *out);
 		out->nt.Buffer = w;
 		out->nt.Length = (USHORT)(n * sizeof(WCHAR));
 		out->nt.MaximumLength = (USHORT)(out->nt.Length + sizeof(WCHAR));
 		out->buf = 0;      /* w is freed as dos */
 		out->dos = w;
+		__ownership_writable_span(&out->oa, sizeof out->oa);
 		InitializeObjectAttributes(&out->oa, &out->nt, attributes, f->h, 0);
 		if (trailing && reject_if_not_dir(out)) return -1;
 		/* Relative to RootDirectory: every component of this name is a
