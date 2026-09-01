@@ -27,6 +27,8 @@ withhandle(permissive) withtok(permissive_once) withtok(permissive_view)
 void *make_permissive(void);
 void inspect_permissive(void *value
     withhandle(permissive) withtok(permissive_view));
+void consume_permissive(void *value
+    withhandle(permissive) consume(permissive_once));
 
 withhandle(heap) withtok(heap_free)
 void *forward_owner(void)
@@ -73,4 +75,19 @@ void copy_around_permissive_linear_token(void)
 	void *copy withhandle(permissive) withtok(permissive_view) = owner;
 	inspect_permissive(owner);
 	inspect_permissive(copy);
+	consume_permissive(owner);
+}
+
+withhandle(strict) withtok(heap_free)
+void *make_strict_borrowed_owner(void);
+void consume_strict_borrowed_owner(void *value
+    withhandle(strict) withtok(heap_free));
+
+void bounded_strict_loan(void)
+{
+	void *owner withhandle(strict) withtok(heap_free) =
+	    make_strict_borrowed_owner();
+	void *borrowed = owner;
+	(void)borrowed;
+	consume_strict_borrowed_owner(owner);
 }

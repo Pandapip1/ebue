@@ -47,6 +47,9 @@ using CarrierCapabilityKey =
     std::pair<const MemRegion *, const IdentifierInfo *>;
 REGISTER_MAP_WITH_PROGRAMSTATE(CarrierCapabilityMap, CarrierCapabilityKey,
                                CarrierCapabilityKind)
+using StrictLoanKey = std::pair<const MemRegion *, const IdentifierInfo *>;
+REGISTER_MAP_WITH_PROGRAMSTATE(StrictLoanMap, StrictLoanKey, const MemRegion *)
+REGISTER_SET_WITH_PROGRAMSTATE(ExpiredStrictLoanSet, const MemRegion *)
 
 REGISTER_MAP_WITH_PROGRAMSTATE(ResourceMap, SymbolRef, unsigned)
 
@@ -1966,20 +1969,10 @@ class OwnershipTypeChecker
     ProgramStateRef State = C.getState();
     const MemRegion *SourceCarrier = carrierRegion(Source, C);
     SVal SourceValue = C.getSVal(Source);
-    if (!DestinationBundle.empty())
-      for (const OwnershipTypeEntry &Entry : SourceBundle) {
-        if (Entry.Member != OwnershipTypeMember::LinearToken ||
-            contains(DestinationBundle, Entry))
-          continue;
-        const TypedefNameDecl *Token =
-            dialectToken(C.getASTContext(), Entry.Family->getName());
-        if (dialectTokenPermitsCarrierCopy(Token))
-          continue;
-        report("strict linear token prevents copying the remaining ownership "
-               "bundle",
-               Statement, State, C);
-        return;
-      }
+    if (SourceCarrier && State->contains<ExpiredStrictLoanSet>(SourceCarrier)) {
+      report("borrow accesses a consumed owner", Statement, State, C);
+      return;
+    }
     for (const OwnershipTypeEntry &Entry : DestinationBundle) {
       if (Entry.Member == OwnershipTypeMember::Handle)
         continue;
@@ -2017,11 +2010,40 @@ class OwnershipTypeChecker
     return Expression ? C.getSVal(Expression) : UnknownVal();
   }
 
+  static ProgramStateRef expireStrictLoans(
+      ProgramStateRef State, const MemRegion *Owner,
+      const IdentifierInfo *Family) {
+    if (!Owner || !Family)
+      return State;
+    for (const auto &Loan : State->get<StrictLoanMap>())
+      if (Loan.second == Owner && Loan.first.second == Family)
+        State = State->add<ExpiredStrictLoanSet>(Loan.first.first);
+    return State;
+  }
+
+  static ProgramStateRef copyStrictLoans(ProgramStateRef State,
+                                         const MemRegion *Destination,
+                                         const MemRegion *Source) {
+    if (!Destination || !Source || Destination == Source)
+      return State;
+    for (const auto &Loan : State->get<StrictLoanMap>())
+      if (Loan.first.first == Source)
+        State = State->set<StrictLoanMap>(
+            {Destination, Loan.first.second}, Loan.second);
+    if (State->contains<ExpiredStrictLoanSet>(Source))
+      State = State->add<ExpiredStrictLoanSet>(Destination);
+    return State;
+  }
+
   void requireDereferenceAllowed(const Expr *Pointer, const Stmt *Statement,
                                  CheckerContext &C) const {
     ProgramStateRef State = C.getState();
     SVal Value = C.getSVal(Pointer);
     const MemRegion *Carrier = carrierRegion(Pointer, C);
+    if (Carrier && State->contains<ExpiredStrictLoanSet>(Carrier)) {
+      report("borrow accesses a consumed owner", Statement, State, C);
+      return;
+    }
     for (const IdentifierInfo *Family : familyTraits(
              declarationFor(Pointer), "ownership_token_blocks_dereference:"))
       if (capabilityFor(State, Carrier, Value, Family).Kind) {
@@ -2044,6 +2066,20 @@ class OwnershipTypeChecker
     llvm::SmallVector<OwnershipTypeEntry, 4> SourceBundle = bundleFor(Source);
     const MemRegion *SourceCarrier = carrierRegion(Source, C);
     SVal SourceValue = C.getSVal(Source);
+
+    State = copyStrictLoans(State, DestinationCarrier, SourceCarrier);
+
+    for (const OwnershipTypeEntry &Entry : SourceBundle) {
+      if (Entry.Member != OwnershipTypeMember::LinearToken ||
+          contains(DestinationBundle, Entry) || !SourceCarrier ||
+          !DestinationCarrier || SourceCarrier == DestinationCarrier)
+        continue;
+      const TypedefNameDecl *Token =
+          dialectToken(C.getASTContext(), Entry.Family->getName());
+      if (!dialectTokenPermitsCarrierCopy(Token))
+        State = State->set<StrictLoanMap>(
+            {DestinationCarrier, Entry.Family}, SourceCarrier);
+    }
 
     if (Source->isNullPointerConstant(
             C.getASTContext(), Expr::NPC_ValueDependentIsNotNull)) {
@@ -2080,8 +2116,13 @@ class OwnershipTypeChecker
       State =
           setCarrierToken(State, DestinationCarrier, Entry.Family, Required);
       if (Required == CapabilityKind::Linear && SourceCarrier &&
-          SourceCarrier != DestinationCarrier)
+          SourceCarrier != DestinationCarrier) {
+        const TypedefNameDecl *Token =
+            dialectToken(C.getASTContext(), Entry.Family->getName());
+        if (!dialectTokenPermitsCarrierCopy(Token))
+          State = expireStrictLoans(State, SourceCarrier, Entry.Family);
         State = removeCarrierToken(State, SourceCarrier, Entry.Family);
+      }
     }
     return State;
   }
@@ -2285,6 +2326,19 @@ public:
       State = transferTokens(Function->getParamDecl(Argument), nullptr,
                              Call.getArgExpr(Argument), Call.getOriginExpr(),
                              State, C);
+      for (const AnnotateAttr *Attribute :
+           Function->getParamDecl(Argument)->specific_attrs<AnnotateAttr>()) {
+        StringRef Text = Attribute->getAnnotation();
+        if (!Text.consume_front("consume:") || Text.empty() ||
+            Text.contains(':'))
+          continue;
+        const TypedefNameDecl *Token =
+            dialectToken(C.getASTContext(), Text);
+        if (!dialectTokenPermitsCarrierCopy(Token))
+          State = expireStrictLoans(
+              State, carrierRegion(Call.getArgExpr(Argument), C),
+              &C.getASTContext().Idents.get(Text));
+      }
       Changed = true;
     }
     if (Changed)

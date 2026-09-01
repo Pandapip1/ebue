@@ -21,6 +21,9 @@ void inspect_owner(void *value withhandle(heap) withtok(heap_free));
 
 withhandle(strict) withtok(strict_once) withtok(strict_view)
 void *make_strict(void);
+void consume_strict(void *value withhandle(strict) consume(strict_once));
+void inspect_strict(void *value
+    withhandle(strict) withtok(strict_view));
 
 void manufacture_token(void)
 {
@@ -76,7 +79,7 @@ void copy_around_strict_linear_token(void)
 {
 	void *owner withhandle(strict) withtok(strict_once) withtok(strict_view) =
 	    make_strict();
-	void *copy /* ownership-expect: strict-copy */
-	    withhandle(strict) withtok(strict_view) = owner;
-	(void)copy;
+	void *copy withhandle(strict) withtok(strict_view) = owner;
+	consume_strict(owner);
+	inspect_strict(copy); /* ownership-expect: strict-loan-expired */
 }
