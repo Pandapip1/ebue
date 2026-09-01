@@ -41,6 +41,7 @@
 #include <string.h>
 #include "libc.h"
 #include "afd.h"
+#include "ownership_stubs.h"
 
 int setsockopt(int fd, int level, int optname, const void *optval, socklen_t optlen) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
@@ -54,6 +55,8 @@ int setsockopt(int fd, int level, int optname, const void *optval, socklen_t opt
 	switch (optname) {
 	case SO_REUSEADDR:
 		if (!optval || optlen < (socklen_t)sizeof(int)) { errno = EINVAL; return -1; }
+		__ownership_writable_span(&v, sizeof(v));
+		__ownership_readable_span(optval, sizeof(v));
 		memcpy(&v, optval, sizeof(v));
 		if (v) f->pad |= AFD_ST_REUSEADDR; else f->pad &= ~AFD_ST_REUSEADDR;
 		return 0;
@@ -84,6 +87,8 @@ int getsockopt(int fd, int level, int optname, void *__restrict optval, socklen_
 
 	{
 		socklen_t n = *optlen < (socklen_t)sizeof(v) ? *optlen : (socklen_t)sizeof(v);
+		__ownership_writable_span(optval, n);
+		__ownership_readable_span(&v, n);
 		memcpy(optval, &v, n);
 		*optlen = sizeof(v);
 	}

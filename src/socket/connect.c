@@ -19,6 +19,7 @@
 #include <string.h>
 #include "libc.h"
 #include "plat_socket.h"
+#include "ownership_stubs.h"
 
 int connect(int fd, const struct sockaddr *addr, socklen_t len)
 {
@@ -47,6 +48,8 @@ int connect(int fd, const struct sockaddr *addr, socklen_t len)
 	if (__plat_socket_connect(f->h, addr, len) < 0) return -1;
 
 	f->pad |= __SOCK_ST_CONNECTED;
+	__ownership_writable_span(f->peer, sizeof(struct sockaddr_in));
+	__ownership_readable_span(addr, sizeof(struct sockaddr_in));
 	memcpy(f->peer, addr, sizeof(struct sockaddr_in));
 	f->peer_len = sizeof(struct sockaddr_in);
 	return 0;

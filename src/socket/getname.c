@@ -69,6 +69,7 @@
 #include <string.h>
 #include "libc.h"
 #include "afd.h"
+#include "ownership_stubs.h"
 
 /* The shared preamble: the three checks both calls make, in the order
  * argument validity precedes socket state.  Returns the descriptor, or
@@ -136,6 +137,8 @@ int getpeername(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict 
 	if (!(f->pad & AFD_ST_CONNECTED)) { errno = ENOTCONN; return -1; }
 	if (!f->peer_len) { errno = ENOTCONN; return -1; }
 	n = *len < f->peer_len ? *len : f->peer_len;
+	__ownership_writable_span(addr, n);
+	__ownership_readable_span(f->peer, n);
 	memcpy(addr, f->peer, n);
 	*len = f->peer_len;
 	return 0;
