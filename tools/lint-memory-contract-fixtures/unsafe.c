@@ -18,6 +18,8 @@ void *__malloc(size_t length);
 void *opaque_allocator(size_t length);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
+void consume_bytes(const void *source withtok(fixture_readable_span(length)),
+	size_t length);
 void establish_writable(
 	void *buffer grant(fixture_writable_span(length)), size_t length);
 void __ownership_writable_span(
@@ -188,4 +190,13 @@ void too_much_from_strnlen(const char *s, size_t n)
 	if (!d) return;
 	memcpy(d, s, l + 1); /* memory-contract-expect */
 	d[0] = 0;
+}
+
+/* Advancing the source without shortening the requested span still reaches
+ * one byte beyond what strnlen established. */
+void too_much_from_strnlen_suffix(const char *s, size_t n)
+{
+	size_t l = strnlen(s, n);
+	if (l == 0) return;
+	consume_bytes(s + 1, l); /* memory-contract-expect */
 }

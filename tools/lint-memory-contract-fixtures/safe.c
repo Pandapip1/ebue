@@ -25,6 +25,8 @@ withtok(fixture_writable_span(count * size))
 void *allocate_array(size_t count, size_t size);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
+void consume_bytes(const void *source withtok(fixture_readable_span(length)),
+	size_t length);
 void establish_writable(
 	void *buffer grant(fixture_writable_span(length)), size_t length);
 void establish_readable(
@@ -169,6 +171,15 @@ char *dup_prefix(const char *s, size_t n)
 	memcpy(d, s, l);
 	d[l] = 0;
 	return d;
+}
+
+/* A length established at the base also proves the corresponding shortened
+ * span after advancing the pointer by the same number of bytes. */
+void copy_strnlen_suffix(const char *s, size_t n)
+{
+	size_t l = strnlen(s, n);
+	if (l == 0) return;
+	consume_bytes(s + 1, l - 1);
 }
 
 /* xstrdup's own shape, duplicated across src/glob/glob.c,

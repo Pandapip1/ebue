@@ -17,6 +17,7 @@
 #include "llvm/ADT/StringExtras.h"
 
 #include <cctype>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -292,6 +293,31 @@ class MemoryContractChecker
     return true;
   }
 
+  static bool decomposeSignedAffine(SVal V, SymbolRef &Base,
+                                    int64_t &Offset) {
+    SymbolRef Original = V.getAsSymbol();
+    SymbolRef Sym = stripCasts(Original);
+    if (!Sym || Sym != Original)
+      return false;
+    if (const auto *IntExpr = dyn_cast<SymIntExpr>(Sym)) {
+      if (IntExpr->getOpcode() != BO_Add &&
+          IntExpr->getOpcode() != BO_Sub)
+        return false;
+      const llvm::APSInt &Constant = IntExpr->getRHS();
+      if (Constant.isNegative() || Constant.getActiveBits() > 63)
+        return false;
+      Base = IntExpr->getLHS();
+      if (isa<SymbolCast>(Base))
+        return false;
+      int64_t Magnitude = static_cast<int64_t>(Constant.getZExtValue());
+      Offset = IntExpr->getOpcode() == BO_Add ? Magnitude : -Magnitude;
+      return true;
+    }
+    Base = Sym;
+    Offset = 0;
+    return true;
+  }
+
   // For a heap allocation whose real dynamic extent was set (above)
   // directly from its own size ARGUMENT expression, prove a span
   // in-bounds when the operation's LENGTH argument shares that same
@@ -387,16 +413,23 @@ class MemoryContractChecker
     const MemRegion *PointerRegion = Pointer.getAsRegion();
     if (!PointerRegion)
       return false;
-    const MemRegion *Base = PointerRegion->getBaseRegion();
+    RegionOffset PointerOffset = PointerRegion->getAsOffset();
+    if (!PointerOffset.isValid() || PointerOffset.hasSymbolicOffset() ||
+        PointerOffset.getOffset() < 0 || PointerOffset.getOffset() % 8 != 0)
+      return false;
+    const MemRegion *Base = PointerOffset.getRegion();
+    int64_t PointerBytes = PointerOffset.getOffset() / 8;
     SymbolRef LengthSym;
     int64_t Slack;
-    if (!decomposeAffine(Length, LengthSym, Slack))
+    if (!decomposeSignedAffine(Length, LengthSym, Slack) ||
+        (Slack > 0 &&
+         PointerBytes > std::numeric_limits<int64_t>::max() - Slack))
       return false;
     if (const MemRegion *const *Source = State->get<StrlenSource>(LengthSym))
-      if (*Source == Base && Slack <= 1)
+      if (*Source == Base && PointerBytes + Slack <= 1)
         return true;
     if (const MemRegion *const *Source = State->get<StrnlenSource>(LengthSym))
-      if (*Source == Base && Slack <= 0)
+      if (*Source == Base && PointerBytes + Slack <= 0)
         return true;
     return false;
   }

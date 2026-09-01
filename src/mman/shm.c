@@ -90,7 +90,6 @@ static char *shm_path(const char *name)
 	if (!path) return NULL;
 	memcpy(path, dir, dirlen);
 	memcpy(path + dirlen, "/ntlibc-shm/", prefix);
-	__ownership_readable_span(component, namelen);
 	memcpy(path + dirlen + prefix, component, namelen);
 	path[pathlen - 1] = 0;
 	return path;

@@ -99,7 +99,6 @@ static char *sem_path(const char *name)
 	if (!path) return NULL;
 	memcpy(path, dir, d);
 	memcpy(path + d, "/ntlibc-sem/", prefix);
-	__ownership_readable_span(component, n);
 	memcpy(path + d + prefix, component, n);
 	path[total - 1] = 0;
 	return path;
