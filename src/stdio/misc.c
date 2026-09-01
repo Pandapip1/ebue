@@ -31,6 +31,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/wait.h>
+#include "ownership_stubs.h"
 #include "stdio_impl.h"
 #include "plat_stdio.h"
 #include "plat_fd.h"
@@ -103,7 +104,11 @@ FILE *tmpfile(void)
 	if (n > (size_t)-1 - sizeof "/ntlibcXXXXXX") { errno = ENOMEM; return 0; }
 	tmpl = malloc(n + sizeof "/ntlibcXXXXXX");
 	if (!tmpl) return 0;
+	__ownership_writable_span(tmpl, n + sizeof "/ntlibcXXXXXX");
+	__ownership_readable_span(dir, n);
 	memcpy(tmpl, dir, n);
+	__ownership_writable_span(tmpl + n, sizeof "/ntlibcXXXXXX");
+	__ownership_readable_span("/ntlibcXXXXXX", sizeof "/ntlibcXXXXXX");
 	memcpy(tmpl + n, "/ntlibcXXXXXX", sizeof "/ntlibcXXXXXX");
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return 0; }
@@ -190,6 +195,8 @@ char *tmpnam(char *s)
 	if (!*mktemp(tmpl)) return 0; // NOLINT(clang-analyzer-security.insecureAPI.mktemp) -- see above: mkstemp() is the defect, not the fix
 	errno = e;
 	if (!s) s = buf;
+	__ownership_writable_span(s, sizeof tmpl);
+	__ownership_readable_span(tmpl, sizeof tmpl);
 	memcpy(s, tmpl, sizeof tmpl);
 	return s;
 }
@@ -202,9 +209,21 @@ char *tempnam(const char *dir, const char *pfx) // NOLINT(bugprone-easily-swappa
 	char *tmpl = malloc(n + 1 + pn + sizeof "XXXXXX");
 	int fd;
 	if (!tmpl) return 0;
-	memcpy(tmpl, d, n); // NOLINT(bugprone-not-null-terminated-result) -- built up piece by piece, terminated below
+	{
+		char *dst = tmpl;
+		const char *src = d;
+		__ownership_writable_span(dst, n);
+		__ownership_readable_span(src, n);
+		memcpy(dst, src, n); // NOLINT(bugprone-not-null-terminated-result) -- built up piece by piece, terminated below
+	}
 	tmpl[n] = '/';
-	if (pn) memcpy(tmpl + n + 1, pfx, pn); // NOLINT(bugprone-not-null-terminated-result) -- ditto
+	if (pn) {
+		__ownership_writable_span(tmpl + n + 1, pn);
+		__ownership_readable_span(pfx, pn);
+		memcpy(tmpl + n + 1, pfx, pn); // NOLINT(bugprone-not-null-terminated-result) -- ditto
+	}
+	__ownership_writable_span(tmpl + n + 1 + pn, sizeof "XXXXXX");
+	__ownership_readable_span("XXXXXX", sizeof "XXXXXX");
 	memcpy(tmpl + n + 1 + pn, "XXXXXX", sizeof "XXXXXX");
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return 0; }
@@ -221,7 +240,12 @@ char *tempnam(const char *dir, const char *pfx) // NOLINT(bugprone-easily-swappa
 char *ctermid(char *s)
 {
 	static char buf[L_ctermid] = "/dev/tty";
-	if (s) { memcpy(s, "/dev/tty", sizeof "/dev/tty"); return s; }
+	if (s) {
+		__ownership_writable_span(s, sizeof "/dev/tty");
+		__ownership_readable_span("/dev/tty", sizeof "/dev/tty");
+		memcpy(s, "/dev/tty", sizeof "/dev/tty");
+		return s;
+	}
 	return buf;
 }
 
