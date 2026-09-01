@@ -10,6 +10,7 @@
 #define	_STRING_H
 
 #include <features.h>
+#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -201,9 +202,9 @@ char *stpncpy(char *__restrict, const char *__restrict, size_t) __attribute__((n
  * against the ownership sweep's own proof obligation), an unrelated,
  * orthogonal claim from __pure__. */
 size_t strnlen (const char *, size_t) __attribute__((__pure__));
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 char *strdup (const char * __NTLIBC_STRING);
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 char *strndup (const char *, size_t);
 /* strsignal (src/string/strsignal.c): same fixed-static-table shape as
  * strerror() above, indexed by sig -- __pure__ for the same reason. */

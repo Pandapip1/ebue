@@ -114,7 +114,7 @@
 /* Resolve the shell to run commands through, or 0 (errno set) if none
  * can be found.  See the header comment for why ComSpec, checked with
  * access() ourselves, comes first. */
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 static char *find_shell(void)
 {
 	const char *cs = getenv("ComSpec");

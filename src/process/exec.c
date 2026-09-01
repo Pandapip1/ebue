@@ -262,7 +262,7 @@ int execvp(const char *file, char *const argv[])
 	return execvpe(file, argv, __environ);
 }
 
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 static char **build_argv(const char *arg0, va_list ap, char ***envout)
 {
 	size_t cap = 8, n = 0;

@@ -99,7 +99,7 @@ static int name_char(unsigned char c)
 	       (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
 }
 
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 static char *mq_path(const char *name)
 {
 	const char *component, *dir;

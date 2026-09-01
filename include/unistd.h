@@ -10,6 +10,7 @@
 #define	_UNISTD_H
 
 #include <features.h>
+#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -257,7 +258,7 @@ int setresuid(uid_t, uid_t, uid_t);  /* undefined-ok: real/effective/saved
 int setresgid(gid_t, gid_t, gid_t);  /* undefined-ok: see setresuid */
 int getresuid(uid_t *, uid_t *, uid_t *);  /* undefined-ok: see setresuid */
 int getresgid(gid_t *, gid_t *, gid_t *);  /* undefined-ok: see setresuid */
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 char *get_current_dir_name(void);
 int syncfs(int);  /* undefined-ok: syncs an entire filesystem by fd; NT has
 	no per-volume sync primitive this library wires up, and fsync()

@@ -3,8 +3,7 @@
 
 #include "../../include/ownership.h"
 
-token heap_allocated
-	dynamic_storage;
+token heap_allocated;
 token mutex_unlock
 	l_unlimited;
 token nonnull

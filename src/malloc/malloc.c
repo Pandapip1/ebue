@@ -28,7 +28,7 @@
 #include "libc.h"
 #include "plat_malloc.h"
 
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 void *malloc(size_t n)
 {
 	void *p = __plat_alloc(n, 0);
@@ -36,7 +36,7 @@ void *malloc(size_t n)
 	return p;
 }
 
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 void *calloc(size_t m, size_t n)
 {
 	void *p;
@@ -46,8 +46,8 @@ void *calloc(size_t m, size_t n)
 	return p;
 }
 
-__attribute__((ownership_reallocates(1), ownership_returns(malloc)))
-void *realloc(void *p, size_t n)
+withtok(heap_allocated)
+void *realloc(void *p consume_if_nonnull_return(heap_allocated), size_t n)
 {
 	void *q;
 	if (!p) return malloc(n);
@@ -66,8 +66,8 @@ size_t malloc_usable_size(void *p)
 	return p ? __plat_alloc_size(p) : 0;
 }
 
-__attribute__((ownership_reallocates(1), ownership_returns(malloc)))
-void *reallocarray(void *p, size_t m, size_t n)
+withtok(heap_allocated)
+void *reallocarray(void *p consume_if_nonnull_return(heap_allocated), size_t m, size_t n)
 {
 	if (n && m > (size_t)-1 / n) { errno = ENOMEM; return 0; }
 	return realloc(p, m * n); // NOLINT(clang-analyzer-optin.portability.UnixAPI) -- realloc(p, 0) is a deliberate, defined passthrough here
@@ -102,7 +102,7 @@ int posix_memalign(void **res, size_t align, size_t len)
 	return 0;
 }
 
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 void *aligned_alloc(size_t align, size_t len)
 {
 	void *p;
@@ -111,13 +111,13 @@ void *aligned_alloc(size_t align, size_t len)
 	return p;
 }
 
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 void *memalign(size_t align, size_t len) { return aligned_alloc(align, len); }
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 void *valloc(size_t len) { return aligned_alloc(4096, len); }
 
 __attribute__((ownership_takes(malloc, 1)))
-void free(void *p)
+void free(void *p consume(heap_allocated))
 {
 	struct aligned_rec **pp;
 	if (!p) return;

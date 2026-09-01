@@ -250,9 +250,9 @@ static int append_prog(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 /* argv required: subscripted unconditionally (`argv[i]`) at loop
  * entry, matching every execve-family argv contract this tree already
  * treats as required elsewhere. */
-__attribute__((nonnull(1), ownership_returns(malloc)))
+withtok(heap_allocated) __attribute__((nonnull(1)))
 static WCHAR *build_cmdline(char *const argv[]);
-__attribute__((nonnull(1), ownership_returns(malloc)))
+withtok(heap_allocated) __attribute__((nonnull(1)))
 static WCHAR *build_cmdline(char *const argv[])
 {
 	WCHAR *buf = 0;
@@ -282,7 +282,7 @@ static WCHAR *build_cmdline(char *const argv[])
  * zero-length entry and an entry with no '=' are both dropped rather
  * than passed on, and why a leading '=' (Windows' own per-drive
  * current-directory shape) is kept. */
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 static WCHAR *build_env_block(char *const envp[])
 {
 	size_t cap = 256, len = 0;

@@ -36,6 +36,8 @@
 #ifndef _NTLIBC_UTIL_H
 #define _NTLIBC_UTIL_H
 
+#include <stdlib.h>
+
 #include <errno.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -235,7 +237,7 @@ int __util_uniq_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_copy_regular_file(const char *src, const char *dst, int force) __attribute__((nonnull(1, 2)));
 int __util_copy_tree(const char *src, const char *dst, int force) __attribute__((nonnull(1, 2)));
 int __util_remove_tree(const char *path) __attribute__((nonnull(1)));
-__attribute__((ownership_returns(malloc), nonnull(1, 2)))
+withtok(heap_allocated) __attribute__((nonnull(1, 2)))
 char *__util_join_basename(const char *dir, const char *src);
 
 #endif

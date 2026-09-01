@@ -105,7 +105,7 @@ static int add_edge(int a, int b)
 	return 0;
 }
 
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 static char *slurp(FILE *f, size_t *outlen)
 {
 	size_t cap = 65536, len = 0;

@@ -14,6 +14,7 @@ extern "C" {
 #endif
 
 #include <features.h>
+#include <stdlib.h>
 
 #define __NEED_FILE
 #define __NEED___isoc_va_list
@@ -96,7 +97,7 @@ wchar_t *wmemchr (const wchar_t *, wchar_t, size_t) __attribute__((nonnull(1), _
 /* wcsnlen (src/string/wcsnlen.c) is wmemchr(s, 0, n) plus arithmetic --
  * reads only, same __pure__ reasoning as strnlen (string.h). */
 size_t wcsnlen (const wchar_t *, size_t) __attribute__((__pure__));
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 wchar_t *wcsdup (const wchar_t *);
 /* wcpcpy/wcpncpy dereference d/s the same unconditional way as
  * stpcpy/stpncpy above (their own header comment applies verbatim;

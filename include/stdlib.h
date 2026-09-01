@@ -10,6 +10,11 @@
 #define _STDLIB_H
 
 #include <features.h>
+#include <ownership.h>
+
+token heap_allocated
+	dynamic_storage;
+#undef token
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,15 +48,15 @@ unsigned long long strtoull (const char *__restrict, char **__restrict, int);
 int rand (void);
 void srand (unsigned);
 
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 void *malloc (size_t);
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 void *calloc (size_t, size_t);
-__attribute__((ownership_reallocates(1), ownership_returns(malloc)))
-void *realloc (void *, size_t);
+withtok(heap_allocated)
+void *realloc (void * consume_if_nonnull_return(heap_allocated), size_t);
 __attribute__((ownership_takes(malloc, 1)))
-void free (void *);
-__attribute__((ownership_returns(malloc)))
+void free (void * consume(heap_allocated));
+withtok(heap_allocated)
 void *aligned_alloc(size_t, size_t);
 
 _Noreturn void abort (void);
@@ -205,16 +210,16 @@ void lcong48 (unsigned short [7]);
 char *mktemp (char *) __attribute__((nonnull(1)));
 int mkstemps (char *, int);
 int mkostemps (char *, int, int);
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 void *valloc (size_t);
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 void *memalign(size_t, size_t);
 size_t malloc_usable_size(void *);
 int getloadavg(double *, int);
 #define WCOREDUMP(s) ((s) & 0x80)
 #define WIFCONTINUED(s) ((s) == 0xffff)
-__attribute__((ownership_reallocates(1), ownership_returns(malloc)))
-void *reallocarray (void *, size_t, size_t);
+withtok(heap_allocated)
+void *reallocarray (void * consume_if_nonnull_return(heap_allocated), size_t, size_t);
 void qsort_r (void *, size_t, size_t, int (*)(const void *, const void *, void *), void *);
 #endif
 

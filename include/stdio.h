@@ -10,6 +10,7 @@
 #define _STDIO_H
 
 #include <features.h>
+#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -249,7 +250,7 @@ char *ctermid(char *);
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) \
  || defined(_BSD_SOURCE)
 #define P_tmpdir "/tmp"
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 char *tempnam(const char *, const char *);
 #endif
 

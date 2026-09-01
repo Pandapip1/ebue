@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 char *strdup(const char *s)
 {
 	size_t l = strlen(s);

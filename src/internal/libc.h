@@ -13,6 +13,7 @@
 #define _NTLIBC_LIBC_H
 
 #include <stddef.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <errno.h>
@@ -479,7 +480,7 @@ int __spawn(const char *path, char *const argv[], char *const envp[]);
  * for its own reasons (execvpe()'s own `strchr(file, ...)` calls
  * before forwarding it as name; posix_spawn.c's/execute.c's own
  * argv[0]-derived strings, never NULL). */
-__attribute__((ownership_returns(malloc), nonnull(1)))
+withtok(heap_allocated) __attribute__((nonnull(1)))
 char *__find_program(const char *name, int use_path);
 int __is_program(const char *path);
 /* WSL/ntfs3's four-byte little-endian $LXMOD extended attribute.  Only the

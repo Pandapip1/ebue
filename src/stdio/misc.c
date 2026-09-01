@@ -192,7 +192,7 @@ char *tmpnam(char *s)
 	return s;
 }
 
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 char *tempnam(const char *dir, const char *pfx) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const char *d = dir ? dir : tmpdir();

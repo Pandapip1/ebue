@@ -156,7 +156,7 @@ static int cpt_tree_failed;
  * given, so this is guaranteed rather than merely assumed.  Returns a
  * freshly malloc'd string, or NULL (errno ENOMEM) on allocation
  * failure. */
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 static char *cpt_dst_path(const char *srcpath)
 {
 	const char *rel = srcpath + cpt_src_root_len;
@@ -300,7 +300,7 @@ int __util_copy_tree(const char *src, const char *dst, int force)
 
 /* ==== "target/basename(source)", shared with src/util/mv.c ============= */
 
-__attribute__((ownership_returns(malloc), nonnull(1, 2)))
+withtok(heap_allocated) __attribute__((nonnull(1, 2)))
 char *__util_join_basename(const char *dir, const char *src) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	char *srccopy = strdup(src);

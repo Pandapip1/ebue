@@ -107,7 +107,7 @@ static int has_dir(const char *name)
 	return 0;
 }
 
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 static char *try_dir(const char *dir, size_t dlen, const char *name)
 {
 	size_t nlen = strlen(name);
@@ -130,7 +130,7 @@ static char *try_dir(const char *dir, size_t dlen, const char *name)
 	return 0;
 }
 
-__attribute__((nonnull(1), ownership_returns(malloc)))
+withtok(heap_allocated) __attribute__((nonnull(1)))
 char *__find_program(const char *name, int use_path)
 {
 	const char *path, *p;

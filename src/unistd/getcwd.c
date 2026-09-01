@@ -61,7 +61,7 @@ char *getcwd(char *buf, size_t size)
 	return buf;
 }
 
-__attribute__((ownership_returns(malloc)))
+withtok(heap_allocated)
 char *get_current_dir_name(void)
 {
 	return getcwd(0, 0);

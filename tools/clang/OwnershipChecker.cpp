@@ -1325,8 +1325,14 @@ class CapabilityTokenChecker
       for (const AnnotateAttr *Attr : Parameter->specific_attrs<AnnotateAttr>())
         for (const OperationAnnotation &Candidate : Operations)
           if (const IdentifierInfo *Family =
-                  parameterAnnotation(Function, Attr, Candidate.Prefix))
+                  parameterAnnotation(Function, Attr, Candidate.Prefix)) {
+            if (Candidate.Operation == CapabilityOperation::Consume &&
+                hasDialectQualifier(
+                    dialectToken(Function->getASTContext(), Family->getName()),
+                    "qual:dynamic_storage"))
+              continue;
             Protocols.push_back({Candidate.Operation, Family, Argument});
+          }
       ++Argument;
     }
     return Protocols;
@@ -1712,6 +1718,10 @@ class OwnershipTypeChecker
       std::optional<CapabilityKind> Kind =
           dialectTokenKind(Declaration->getASTContext(), Text);
       if (!Kind)
+        continue;
+      if (hasDialectQualifier(
+              dialectToken(Declaration->getASTContext(), Text),
+              "qual:dynamic_storage"))
         continue;
       Bundle.push_back(
           {&Declaration->getASTContext().Idents.get(Text),
