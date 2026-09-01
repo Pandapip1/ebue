@@ -123,7 +123,9 @@ struct line {
  * original block -- the classic realloc mistake clang-tidy's bugprone-
  * suspicious-realloc-usage and cppcheck's memleakOnRealloc both flag
  * (and did, against an earlier version of this file). */
-static struct field *fields_grow(struct field *out, size_t *cap)
+withtok(heap_allocated)
+static struct field *fields_grow(
+	struct field *out consume_if_nonnull_return(heap_allocated), size_t *cap)
 {
 	size_t newcap;
 	struct field *g;
