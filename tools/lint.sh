@@ -114,11 +114,16 @@
 #             claim for any function already marked pure that fails it,
 #             which is a real correctness bug rather than a style nit.
 #   undefined tools/lint-undefined.sh: a public header declaring a
-#             function nothing defines.  No tool needed.
+#             function nothing defines.  Needs clang-18/clang++-18/
+#             llvm-config-18 (a real AST walk, tools/clang/
+#             LintDeclScanner.cpp, same as the totality/ownership/etc.
+#             stages below).
 #   unreferenced
 #             tools/lint-unreferenced.sh: a function a public header
 #             declares, this library implements, and no test/*.c
-#             references.  Needs a native C compiler and nm.
+#             references.  Needs a native C compiler, nm, and
+#             clang-18/clang++-18/llvm-config-18 (same AST walk as
+#             `undefined` above).
 #   widthmod  tools/lint-widthmod.sh: printf/scanf's `z` and `t` length
 #             modifiers read or written as `long`, which is 32 bits on
 #             this LLP64 target while size_t and ptrdiff_t are 64.  No

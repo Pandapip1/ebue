@@ -153,6 +153,16 @@
 #
 # Exit status is 1 if the finding count exceeds the baseline, or if any
 # floor was not met.
+#
+# The declared/implemented sets (which functions a header prototypes,
+# and which a .c file actually defines) come from a real clang AST walk,
+# tools/clang/LintDeclScanner.cpp -- see tools/lint-undefined.sh's header
+# comment for the false-positive bug class this fixes in what used to be
+# a shared hand-rolled awk scanner (tools/lint-decls.awk). This adds a
+# clang-18/clang++-18/llvm-config-18 (with Clang 18 development
+# libraries) requirement on top of the native-compiler-and-nm one
+# already documented above, the same toolchain tools/linkcheck.sh and
+# tools/lint.sh's clang-based stages already require.
 
 set -u
 
@@ -204,13 +214,84 @@ not_native_why() {
 workdir=$(mktemp -d) || exit 1
 trap 'rm -rf "$workdir"' EXIT INT TERM
 
+# ---------------------------------------------------------------------
+# The declared/implemented scanner: tools/clang/LintDeclScanner.cpp, a
+# real clang AST walk that replaced tools/lint-decls.awk (see that
+# file's own header comment, and tools/lint-undefined.sh's, for the
+# false-positive bug class this fixes -- `// NOLINTBEGIN(...)` comments
+# and ownership.h's `withtok()` prefix attribute both defeated the old
+# awk's "first identifier before '('" heuristic). Built once, the same
+# way tools/linkcheck.sh builds tools/clang/DeclScanner.cpp.
+# ---------------------------------------------------------------------
+for lintdecls_tool in clang-18 clang++-18 llvm-config-18; do
+	command -v "$lintdecls_tool" >/dev/null 2>&1 || {
+		echo "lint-unreferenced: FAILED -- '$lintdecls_tool' not found on PATH." >&2
+		echo "lint-unreferenced: the declaration scanner (tools/clang/LintDeclScanner.cpp) is" >&2
+		echo "lint-unreferenced: a real clang AST walk, built and run the same way" >&2
+		echo "lint-unreferenced: tools/linkcheck.sh builds tools/clang/DeclScanner.cpp -- see" >&2
+		echo "lint-unreferenced: that script for what to install (CI: clang-18 libclang-18-dev" >&2
+		echo "lint-unreferenced: llvm-18-dev)." >&2
+		exit 1
+	}
+done
+lintdecls_libdir=$(llvm-config-18 --libdir) || {
+	echo "lint-unreferenced: FAILED -- 'llvm-config-18 --libdir' failed." >&2
+	exit 1
+}
+lintdecls_clang_cpp=$(find "$lintdecls_libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' \
+	-print 2>/dev/null | sort | head -n 1)
+if [ -z "$lintdecls_clang_cpp" ]; then
+	echo "lint-unreferenced: FAILED -- Clang 18 development libraries (libclang-cpp.so.18*)" >&2
+	echo "lint-unreferenced: not found under '$lintdecls_libdir'.  Install them the same way" >&2
+	echo "lint-unreferenced: CI does (libclang-18-dev)." >&2
+	exit 1
+fi
+lintdecls_plugin="$workdir/ntlibc-lintdecls.so"
+# llvm-config deliberately returns shell words, not one argument.
+# shellcheck disable=SC2046
+clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
+	tools/clang/LintDeclScanner.cpp -o "$lintdecls_plugin" "$lintdecls_clang_cpp" \
+	$(llvm-config-18 --ldflags --libs --system-libs) || {
+	echo "lint-unreferenced: FAILED -- could not build tools/clang/LintDeclScanner.cpp into a" >&2
+	echo "lint-unreferenced: clang plugin." >&2
+	exit 1
+}
+scan_one() {
+	# scan_one MODE FILE -- see tools/lint-undefined.sh's identical helper.
+	# shellcheck disable=SC2086
+	clang-18 -std=c99 -fsyntax-only $lintdecls_flags \
+		-Xclang -load -Xclang "$lintdecls_plugin" \
+		-Xclang -add-plugin -Xclang ntlibc-lintdecls \
+		-Xclang -plugin-arg-ntlibc-lintdecls -Xclang "$1" \
+		-Xclang -plugin-arg-ntlibc-lintdecls -Xclang "$2" \
+		"$2" 2>> "$workdir/scan.err"
+}
+: > "$workdir/scan.err"
+
 # ---- declared: every function a public header prototypes ------------------
+#
+# Headers are preprocessed the way a real consumer's #include sees them
+# (no -D_NTLIBC_INTERNAL), ARCH=x86_64 for bits/alltypes.h's shape -- see
+# tools/lint-undefined.sh's identical choice and its reasoning (a public
+# header's declared function set does not vary by arch in this tree).
 headers=$(find include -type f -name '*.h' | sort)
 nheaders=$(printf '%s\n' "$headers" | grep -c . || true)
-# $headers is a whitespace-separated list and is meant to word-split.
-# shellcheck disable=SC2086
-awk -v MODE=decl -f "$srcdir/tools/lint-decls.awk" $headers \
-	| cut -f1 | sort -u > "$workdir/declared"
+hdrgendir="$workdir/gen/x86_64"
+mkdir -p "$hdrgendir/include/bits" || exit 1
+cat "arch/x86_64/bits/alltypes.h.gen" include/alltypes.h.gen > "$hdrgendir/include/bits/alltypes.h" || exit 1
+lintdecls_flags="-nostdinc -fno-builtin -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -Iarch/x86_64 -Iarch/generic -I$hdrgendir/include -Iinclude"
+decl_rc=0
+for h in $headers; do
+	scan_one decl "$h" || decl_rc=1
+done > "$workdir/decl.raw"
+if [ "$decl_rc" -ne 0 ]; then
+	echo "lint-unreferenced: FAILED -- the header scanner (clang-18 +" >&2
+	echo "lint-unreferenced: tools/clang/LintDeclScanner.cpp) exited nonzero on at least one" >&2
+	echo "lint-unreferenced: header.  Diagnostics:" >&2
+	sed 's/^/lint-unreferenced: /' "$workdir/scan.err" >&2
+	exit 1
+fi
+cut -f1 "$workdir/decl.raw" | sort -u > "$workdir/declared"
 ndecl=$(grep -c . "$workdir/declared" || true)
 
 # ---- macro-shadowed: declared as a function AND #defined as a macro -------
@@ -235,10 +316,72 @@ ndecl=$(grep -c . "$workdir/declared" || true)
 # coverage.  sh/ is left out for the mirror reason -- it is a program
 # built on top of libc.a, not part of it, and nothing it defines is
 # declared in include/ (checked: the two sets do not intersect today).
-cfiles=$(find src arch crt -type f -name '*.c' 2>/dev/null)
-# shellcheck disable=SC2086
-awk -v MODE=def -f "$srcdir/tools/lint-decls.awk" $cfiles \
-	| cut -f1 | sort -u > "$workdir/implemented"
+#
+# One real per-arch source set and target per arch this tree supports
+# (i386, x86_64, aarch64), not a single fixed arch: the old awk-based
+# scan was arch- and platform-*blind* (a plain `find src arch crt -name
+# '*.c'`, no Makefile override logic at all), so a function defined only
+# under, say, arch/aarch64/src/ or src/*/linux/* was already counted as
+# implemented, and scanning only one arch here would make that a new,
+# false "unreferenced" finding once the required-arch test source (see
+# below) also cannot exercise it -- a regression this rewrite must not
+# introduce. A mismatched fixed arch is also not merely imprecise here:
+# tools/lint.sh's own stage_totality() comment records hitting a hard
+# `#error unsupported architecture` compiling an aarch64-only file under
+# the wrong target, a real observed failure, not a hypothetical one.
+platform_for() {
+	case $1 in
+	i386|x86_64) echo nt ;;
+	aarch64)     echo linux ;;
+	esac
+}
+triple_for() {
+	case $1 in
+	i386)    echo i686-w64-mingw32 ;;
+	x86_64)  echo x86_64-w64-mingw32 ;;
+	aarch64) echo aarch64-linux-gnu ;;
+	esac
+}
+# The same source set the Makefile builds for one arch -- see
+# tools/lint.sh's sources_for() (this is a deliberate, commented
+# duplicate of it, matching tools/lint-undefined.sh's identical copy;
+# tools/lint.sh dispatches immediately when run, so it cannot be sourced
+# for just its helper functions without also running its own stage loop).
+lintdecls_sources_for() {
+	arch=$1
+	plat=$(platform_for "$arch")
+	for f in src/*/*.c crt/*.c arch/"$arch"/src/*.c src/*/"$arch"/*.c \
+	         src/*/"$plat"/*.c crt/"$plat"/*.c; do
+		[ -e "$f" ] || continue
+		case $f in
+		src/*/*.c)
+			d=${f%/*}; b=${f##*/}
+			[ -e "$d/$arch/$b" ] && [ "${d##*/}" != "$arch" ] && continue
+			;;
+		esac
+		echo "$f"
+	done
+}
+def_rc=0
+: > "$workdir/def.raw"
+for arch in i386 x86_64 aarch64; do
+	agendir="$workdir/gen/$arch"
+	mkdir -p "$agendir/include/bits" || exit 1
+	cat "arch/$arch/bits/alltypes.h.gen" include/alltypes.h.gen > "$agendir/include/bits/alltypes.h" || exit 1
+	t=$(triple_for "$arch")
+	lintdecls_flags="-nostdinc -fno-builtin -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL -Iarch/$arch -Iarch/generic -I$agendir/include -Iinclude -Isrc/internal ${t:+--target=$t}"
+	for f in $(lintdecls_sources_for "$arch"); do
+		scan_one def "$f" || def_rc=1
+	done >> "$workdir/def.raw"
+done
+if [ "$def_rc" -ne 0 ]; then
+	echo "lint-unreferenced: FAILED -- the .c-file scanner (clang-18 +" >&2
+	echo "lint-unreferenced: tools/clang/LintDeclScanner.cpp) exited nonzero on at least one" >&2
+	echo "lint-unreferenced: .c file.  Diagnostics:" >&2
+	sed 's/^/lint-unreferenced: /' "$workdir/scan.err" >&2
+	exit 1
+fi
+cut -f1 "$workdir/def.raw" | sort -u > "$workdir/implemented"
 sfiles=$(find src arch crt -type f -name '*.S' 2>/dev/null)
 for f in $sfiles; do
 	grep -E '^\.globl?' "$f" 2>/dev/null
