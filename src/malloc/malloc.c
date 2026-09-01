@@ -115,7 +115,6 @@ void *memalign(size_t align, size_t len) { return aligned_alloc(align, len); }
 withtok(heap_allocated)
 void *valloc(size_t len) { return aligned_alloc(4096, len); }
 
-__attribute__((ownership_takes(malloc, 1)))
 void free(void *p consume(heap_allocated))
 {
 	struct aligned_rec **pp;

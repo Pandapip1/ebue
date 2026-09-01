@@ -144,7 +144,7 @@ reallocatedArgument(const FunctionDecl *Function) {
  * allocate one only when that argument is null.  The ordinary returns
  * attribute would incorrectly make both results owned. */
 static std::optional<unsigned>
-returnedArgument(const FunctionDecl *Function) {
+returnedArgument(const FunctionDecl *Function, const IdentifierInfo *Family) {
   if (!Function)
     return std::nullopt;
   constexpr StringRef Prefix = "ownership_returns_argument:";
@@ -156,6 +156,18 @@ returnedArgument(const FunctionDecl *Function) {
     if (!Text.drop_front(Prefix.size()).getAsInteger(10, SourceIndex) &&
         SourceIndex > 0)
       return SourceIndex - 1;
+  }
+  if (!Family)
+    return std::nullopt;
+  unsigned Argument = 0;
+  for (const ParmVarDecl *Parameter : Function->parameters()) {
+    for (const AnnotateAttr *Attribute :
+         Parameter->specific_attrs<AnnotateAttr>()) {
+      StringRef Text = Attribute->getAnnotation();
+      if (Text.consume_front("withtok:") && Text == Family->getName())
+        return Argument;
+    }
+    ++Argument;
   }
   return std::nullopt;
 }
@@ -464,7 +476,7 @@ public:
       return;
     ProgramStateRef State = C.getState();
     if (std::optional<unsigned> Argument =
-            returnedArgument(Function)) {
+            returnedArgument(Function, Returns->Family)) {
       if (*Argument >= Call.getNumArgs())
         return;
       std::optional<DefinedOrUnknownSVal> ArgumentValue =

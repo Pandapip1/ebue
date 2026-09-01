@@ -91,8 +91,8 @@ int faccessat(int, const char *, int, int);
 
 int chdir(const char *);
 int fchdir(int);
-__attribute__((ownership_returns_argument(1), ownership_returns(malloc)))
-char *getcwd(char *, size_t);
+withtok(heap_allocated)
+char *getcwd(char * withtok(heap_allocated), size_t);
 
 unsigned alarm(unsigned);
 unsigned sleep(unsigned);

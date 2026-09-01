@@ -16,8 +16,8 @@
 #include <errno.h>
 #include "libc.h"
 
-__attribute__((ownership_returns_argument(1), ownership_returns(malloc)))
-char *getcwd(char *buf, size_t size)
+withtok(heap_allocated)
+char *getcwd(char *buf withtok(heap_allocated), size_t size)
 {
 	WCHAR w[4096];
 	char tmp[4096 * 3];

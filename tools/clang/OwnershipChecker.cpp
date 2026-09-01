@@ -390,7 +390,34 @@ class OwnershipChecker
 
   static std::optional<unsigned>
   returnedArgument(const FunctionDecl *Function) {
-    return annotatedArgument(Function, "ownership_returns_argument:");
+    if (std::optional<unsigned> Argument =
+            annotatedArgument(Function, "ownership_returns_argument:"))
+      return Argument;
+    if (!Function)
+      return std::nullopt;
+    StringRef ReturnedFamily;
+    for (const AnnotateAttr *Attribute :
+         Function->specific_attrs<AnnotateAttr>()) {
+      StringRef Text = Attribute->getAnnotation();
+      if (Text.consume_front("withtok:") && !Text.empty() &&
+          !Text.contains(':')) {
+        ReturnedFamily = Text;
+        break;
+      }
+    }
+    if (ReturnedFamily.empty())
+      return std::nullopt;
+    unsigned Argument = 0;
+    for (const ParmVarDecl *Parameter : Function->parameters()) {
+      for (const AnnotateAttr *Attribute :
+           Parameter->specific_attrs<AnnotateAttr>()) {
+        StringRef Text = Attribute->getAnnotation();
+        if (Text.consume_front("withtok:") && Text == ReturnedFamily)
+          return Argument;
+      }
+      ++Argument;
+    }
+    return std::nullopt;
   }
 
   static std::optional<unsigned>

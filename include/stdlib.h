@@ -57,7 +57,6 @@ withtok(heap_allocated)
 void *calloc (size_t, size_t);
 withtok(heap_allocated)
 void *realloc (void * consume_if_nonnull_return(heap_allocated), size_t);
-__attribute__((ownership_takes(malloc, 1)))
 void free (void * consume(heap_allocated));
 withtok(heap_allocated)
 void *aligned_alloc(size_t, size_t);
@@ -160,8 +159,9 @@ int rand_r (unsigned *) __attribute__((nonnull(1)));
 
 
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
-__attribute__((ownership_returns_argument(2), ownership_returns(malloc)))
-char *realpath (const char *__restrict, char *__restrict);
+withtok(heap_allocated)
+char *realpath (const char *__restrict,
+	char *__restrict withtok(heap_allocated));
 long int random (void);
 void srandom (unsigned int);
 char *initstate (unsigned int, char *, size_t);
