@@ -89,8 +89,8 @@ static int pv_push(struct pv *p, char *s)
 static void pv_free_from(struct pv *p, size_t from) __attribute__((nonnull(1)));
 static void pv_free_from(struct pv *p, size_t from)
 {
-	size_t i;
-	for (i = from; i < p->n; i++) __free(p->v[i]);
+	size_t i, end = p->n;
+	for (i = from; i < end; i++) __free(p->v[i]);
 	__free((void *)p->v);
 	p->v = 0;
 	p->n = p->cap = 0;
