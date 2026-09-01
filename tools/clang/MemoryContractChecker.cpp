@@ -18,6 +18,7 @@
 
 #include <cctype>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -337,6 +338,68 @@ class MemoryContractChecker
     return true;
   }
 
+  struct LinearSymbolForm {
+    std::map<SymbolRef, int64_t> Terms;
+    __int128 Constant = 0;
+  };
+
+  static bool addLinearSymbol(SymbolRef Symbol, int64_t Sign,
+                              LinearSymbolForm &Form) {
+    Symbol = stripCasts(Symbol);
+    if (!Symbol)
+      return false;
+    if (const auto *Expression = dyn_cast<SymSymExpr>(Symbol)) {
+      if (Expression->getOpcode() != BO_Add &&
+          Expression->getOpcode() != BO_Sub)
+        goto atomic;
+      return addLinearSymbol(Expression->getLHS(), Sign, Form) &&
+             addLinearSymbol(Expression->getRHS(),
+                             Expression->getOpcode() == BO_Add ? Sign : -Sign,
+                             Form);
+    }
+    if (const auto *Expression = dyn_cast<SymIntExpr>(Symbol)) {
+      if (Expression->getOpcode() != BO_Add &&
+          Expression->getOpcode() != BO_Sub)
+        goto atomic;
+      const llvm::APSInt &Value = Expression->getRHS();
+      if (!Value.isSignedIntN(64))
+        return false;
+      Form.Constant += static_cast<__int128>(Sign) * Value.getSExtValue() *
+                       (Expression->getOpcode() == BO_Add ? 1 : -1);
+      return addLinearSymbol(Expression->getLHS(), Sign, Form);
+    }
+    if (const auto *Expression = dyn_cast<IntSymExpr>(Symbol)) {
+      if (Expression->getOpcode() != BO_Add &&
+          Expression->getOpcode() != BO_Sub)
+        goto atomic;
+      const llvm::APSInt &Value = Expression->getLHS();
+      if (!Value.isSignedIntN(64))
+        return false;
+      Form.Constant += static_cast<__int128>(Sign) * Value.getSExtValue();
+      return addLinearSymbol(Expression->getRHS(),
+                             Expression->getOpcode() == BO_Add ? Sign : -Sign,
+                             Form);
+    }
+  atomic:
+    Form.Terms[Symbol] += Sign;
+    return true;
+  }
+
+  static bool symbolicallyEquivalent(SVal Left, SVal Right) {
+    SymbolRef L = Left.getAsSymbol();
+    SymbolRef R = Right.getAsSymbol();
+    if (!L || !R)
+      return false;
+    LinearSymbolForm Difference;
+    if (!addLinearSymbol(L, 1, Difference) ||
+        !addLinearSymbol(R, -1, Difference) || Difference.Constant != 0)
+      return false;
+    for (const auto &[Symbol, Coefficient] : Difference.Terms)
+      if (Coefficient != 0)
+        return false;
+    return true;
+  }
+
   // For a heap allocation whose real dynamic extent was set (above)
   // directly from its own size ARGUMENT expression, prove a span
   // in-bounds when the operation's LENGTH argument shares that same
@@ -362,6 +425,8 @@ class MemoryContractChecker
     /* Identical symbolic values compare equal even if their common
      * expression wrapped before reaching this point. */
     if (ExtentSymbol && ExtentSymbol == LengthSymbol)
+      return true;
+    if (symbolicallyEquivalent(Extent, Length))
       return true;
     const auto *ExtentProduct = dyn_cast_or_null<SymSymExpr>(ExtentSymbol);
     const auto *LengthProduct = dyn_cast_or_null<SymSymExpr>(LengthSymbol);

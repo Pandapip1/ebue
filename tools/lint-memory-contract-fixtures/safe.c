@@ -310,3 +310,10 @@ void declaration_driven_array_allocator(size_t count, size_t size)
 	if (!buffer) return;
 	memset(buffer, 0, count * size);
 }
+
+void fill_reassociated_allocation(size_t left, size_t right)
+{
+	char *buffer = __malloc(left + right);
+	if (!buffer) return;
+	memset(buffer, 0, right + left);
+}
