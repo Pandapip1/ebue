@@ -383,17 +383,33 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 		r = 0;
 		while ((de = readdir(lv.dp)) != NULL) {
 			char *child;
-			size_t clen, off;
+			size_t clen, namelen, off, separator;
 
-			if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+			/* readdir() returns a fixed struct dirent.  Validate its name
+			 * within that physical member before traversing or copying it. */
+			namelen = strnlen(de->d_name, sizeof de->d_name);
+			if (namelen == sizeof de->d_name) { r = -1; errno = EIO; break; }
+			if ((namelen == 1 && de->d_name[0] == '.') ||
+			    (namelen == 2 && de->d_name[0] == '.' &&
+			     de->d_name[1] == '.')) continue;
 
-			clen = plen + (had_trailing_slash ? 0 : 1) + strlen(de->d_name) + 1;
+			separator = had_trailing_slash ? 0 : 1;
+			if (plen > (size_t)-1 - separator) {
+				r = -1; errno = ENOMEM; break;
+			}
+			off = plen + separator;
+			if (namelen > (size_t)-1 - off) {
+				r = -1; errno = ENOMEM; break;
+			}
+			clen = off + namelen;
+			if (clen == (size_t)-1) { r = -1; errno = ENOMEM; break; }
+			clen++;
 			child = malloc(clen);
 			if (!child) { r = -1; errno = ENOMEM; break; }
 			memcpy(child, path, plen);
-			off = plen;
-			if (!had_trailing_slash) child[off++] = '/';
-			memcpy(child + off, de->d_name, strlen(de->d_name) + 1);
+			if (separator) child[plen] = '/';
+			memcpy(child + off, de->d_name, namelen);
+			child[off + namelen] = 0;
 
 			/* level_open() may have closed lv.dp to make room for a
 			 * descendant's own directory; reopen (and replay via
