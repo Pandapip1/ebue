@@ -156,6 +156,141 @@ unsigned rem_materialized_then_divide(unsigned value, unsigned k)
 	return value % d;
 }
 
+int ordered_nonnegative_subtraction(int total, int removed)
+{
+	if (removed < 0 || removed > total)
+		return 0;
+	total -= removed;
+	return total;
+}
+
+static int cleanup_preserved_total;
+extern void free(void *);
+__attribute__((annotate("ntlibc_arith_scalar_noop")))
+void __free(void *allocation)
+{
+	free(allocation);
+}
+
+int ordered_global_subtraction_across_free(int removed, void *allocation)
+{
+	if (removed < 0 || removed > cleanup_preserved_total)
+		return 0;
+	__free(allocation);
+	return cleanup_preserved_total - removed;
+}
+
+int ordered_nonpositive_subtraction(int total, int removed)
+{
+	if (removed > 0 || removed < total)
+		return 0;
+	total -= removed;
+	return total;
+}
+
+int ordered_subtraction_boundaries(int value)
+{
+	if (value != (-2147483647 - 1) && value != 2147483647)
+		return 0;
+	return value - 0;
+}
+
+struct member_countdown {
+	int count;
+	int values[4];
+};
+
+void positive_member_countdown(struct member_countdown *state)
+{
+	while (state->count > 0 && !state->values[state->count - 1])
+		state->count--;
+}
+
+#define fixture_arith_range(minimum, maximum) \
+	__attribute__((annotate("ntlibc_arith_range:" #minimum ":" #maximum)))
+#define fixture_nonzero_field_on_success(argument, field) \
+	__attribute__((annotate("ntlibc_arith_nonzero_field_on_success:" \
+		#argument ":" #field)))
+
+static unsigned range_checked_divisor(unsigned value,
+	int divisor fixture_arith_range(2, 36))
+{
+	return value % (unsigned)divisor;
+}
+
+unsigned guarded_range_contract_call(unsigned value, int divisor)
+{
+	if (divisor < 2 || divisor > 36)
+		return 0;
+	return range_checked_divisor(value, divisor);
+}
+
+static int range_checked_digit(unsigned value,
+	int radix fixture_arith_range(2, 36))
+{
+	int digit = (int)(value % (unsigned)radix);
+	return digit < 10 ? '0' + digit : 'a' + digit - 10;
+}
+
+int guarded_symbolic_remainder_range(unsigned value, int radix)
+{
+	if (radix < 2 || radix > 36)
+		return 0;
+	return range_checked_digit(value, radix);
+}
+
+static int range_checked_negative_remainder(int value,
+	int radix fixture_arith_range(2, 36))
+{
+	int digit;
+	if (value > 0)
+		return 0;
+	digit = value % radix;
+	return digit + 35;
+}
+
+int guarded_negative_remainder_range(int value, int radix)
+{
+	if (radix < 2 || radix > 36)
+		return 0;
+	return range_checked_negative_remainder(value, radix);
+}
+
+struct fixture_bucket_table { unsigned count; };
+
+static int establish_bucket_count(struct fixture_bucket_table *table)
+	fixture_nonzero_field_on_success(0, count);
+
+static int establish_bucket_count(struct fixture_bucket_table *table)
+{
+	if (!table)
+		return 0;
+	table->count = 16;
+	return 1;
+}
+
+static int fail_with_zero_bucket_count(struct fixture_bucket_table *table)
+	fixture_nonzero_field_on_success(0, count);
+
+static int fail_with_zero_bucket_count(struct fixture_bucket_table *table)
+{
+	table->count = 0;
+	return 0;
+}
+
+int failed_summary_may_leave_zero(struct fixture_bucket_table *table)
+{
+	return fail_with_zero_bucket_count(table);
+}
+
+unsigned summarized_nonzero_field(unsigned value,
+	struct fixture_bucket_table *table)
+{
+	if (!establish_bucket_count(table))
+		return 0;
+	return value % table->count;
+}
+
 /* Pointer subtraction belongs to provenance/object-bound analysis, not to
  * generic signed integer arithmetic. */
 long pointer_difference_is_not_integer_arithmetic(int *left, int *right)

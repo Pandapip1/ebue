@@ -153,15 +153,12 @@ int __sh_params_replace(char *const *argv, int n)
  * parameter-level `nonnull` fix for the flagged deref here either. */
 int __sh_params_shift(int n)
 {
-	int i, remaining;
+	int i;
 
 	if (n < 0 || n > pn) return -1;
 	if (n == 0) return 0;
 	for (i = 0; i < n; i++) __free(pv[i]);
-	/* The validated subtraction is the exact number of surviving
-	 * parameters which must be moved down. */
-	remaining = pn - n;
-	for (i = n; remaining > 0; i++, remaining--)
+	for (i = n; i < pn; i++)
 		pv[i - n] = pv[i];
 	pn -= n;
 	return 0;

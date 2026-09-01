@@ -1075,9 +1075,9 @@ stage_arithub() {
 	: > "$fixture_log"
 	for fixture in tools/lint-arithmetic-ub-fixtures/*.c; do
 		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
-			-Xclang -analyzer-checker=ntlibc.Divisor,ntlibc.ShiftCount,ntlibc.SignedArithmetic \
+			-Xclang -analyzer-checker=ntlibc.Divisor,ntlibc.ShiftCount,ntlibc.SignedArithmetic,ntlibc.ArithmeticContract \
 			-Xclang -analyzer-disable-checker=core.DivideZero,core.BitwiseShift \
-			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
+			-Xclang -analyzer-output=text -DNTLIBC_ARITHMETIC_ANALYSIS "$fixture" -o /dev/null \
 			>> "$fixture_log" 2>&1 || any=1
 	done
 	tools/lint-arithmetic-ub.py --fixtures "$fixture_log" || any=1
@@ -1097,9 +1097,9 @@ stage_arithub() {
 			id=$(printf %s "$f" | tr / _)
 			# shellcheck disable=SC2086
 			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
-				-Xclang -analyzer-checker=ntlibc.Divisor,ntlibc.ShiftCount,ntlibc.SignedArithmetic \
+				-Xclang -analyzer-checker=ntlibc.Divisor,ntlibc.ShiftCount,ntlibc.SignedArithmetic,ntlibc.ArithmeticContract \
 				-Xclang -analyzer-disable-checker=core.DivideZero,core.BitwiseShift \
-				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
+				-Xclang -analyzer-output=text -DNTLIBC_ARITHMETIC_ANALYSIS "$@" "$f" -o /dev/null \
 				> "'"$pardir"'/$id.log" 2>&1
 		' _ {} clang-18 "$plugin" "$target" $flags
 		runrc=$?

@@ -169,7 +169,7 @@ struct pax_member {
 /* True if `value` fits in `ndigits` octal digits (no sign, no NUL --
  * this is a pure magnitude check used before every fixed-width octal
  * field this file writes). */
-static int fits_octal(unsigned long value, int ndigits)
+static int fits_octal(unsigned long value, int ndigits __arith_range(1, 11))
 {
 	if (ndigits >= (int)(sizeof(unsigned long) * 8 / 3 + 1)) return 1;
 	return value < (1UL << (3 * ndigits));
@@ -394,7 +394,8 @@ static unsigned long pax_type_to_ifmt(enum pax_type t)
 	}
 }
 
-static int cpio_put_field(char *field, int width, unsigned long value, const char *ctxname, const char *what)
+static int cpio_put_field(char *field, int width __arith_range(6, 11),
+	unsigned long value, const char *ctxname, const char *what)
 {
 	char tmp[24];
 	if (!fits_octal(value, width)) {
