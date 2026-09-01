@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <features.h>
+#include "ownership_stubs.h"
 
 /* drand48.html's process-start initializer is Xi = 0.  This is distinct
  * from srand48(seed), which explicitly installs 0x330e in the low word. */
@@ -44,7 +45,11 @@ void srand48(long seed)
 unsigned short *seed48(unsigned short s[3])
 {
 	static unsigned short old[3];
+	__ownership_writable_span(old, sizeof old);
+	__ownership_readable_span(xsubi_default, sizeof old);
 	memcpy(old, xsubi_default, sizeof old);
+	__ownership_writable_span(xsubi_default, sizeof old);
+	__ownership_readable_span(s, sizeof old);
 	memcpy(xsubi_default, s, sizeof old);
 	a_[0] = 0xe66d; a_[1] = 0xdeec; a_[2] = 0x5; c_ = 0xb;
 	return old;
@@ -52,7 +57,11 @@ unsigned short *seed48(unsigned short s[3])
 
 void lcong48(unsigned short p[7])
 {
+	__ownership_writable_span(xsubi_default, 3 * sizeof(unsigned short));
+	__ownership_readable_span(p, 3 * sizeof(unsigned short));
 	memcpy(xsubi_default, p, 3 * sizeof(unsigned short));
+	__ownership_writable_span(a_, 3 * sizeof(unsigned short));
+	__ownership_readable_span(p + 3, 3 * sizeof(unsigned short));
 	memcpy(a_, p + 3, 3 * sizeof(unsigned short));
 	c_ = p[6];
 }
