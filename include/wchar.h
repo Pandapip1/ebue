@@ -85,8 +85,11 @@ wchar_t *wcsrchr (const wchar_t *, wchar_t) __attribute__((__pure__));
  * only. */
 wchar_t *wcsstr (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2), __pure__));
 size_t wcslen (const wchar_t *) __attribute__((nonnull(1), __pure__));
-wchar_t *wmemcpy (wchar_t *__restrict, const wchar_t *__restrict, size_t);
-wchar_t *wmemmove (wchar_t *, const wchar_t *, size_t);
+wchar_t *wmemcpy (
+	wchar_t *__restrict d withtok(writable_elements(n)),
+	const wchar_t *__restrict s withtok(readable_elements(n)), size_t n);
+wchar_t *wmemmove (wchar_t *d withtok(writable_elements(n)),
+	const wchar_t *s withtok(readable_elements(n)), size_t n);
 /* Same n == 0 escape as mem*'s own family (glibc: wmemset nonnull(1)). */
 wchar_t *wmemset (wchar_t *, wchar_t, size_t) __attribute__((nonnull(1)));
 /* wmemcmp/wmemchr (src/string/wmemcmp.c, wmemchr.c): reads only, same

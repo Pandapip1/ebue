@@ -130,6 +130,7 @@ struct SpanContract {
   MemoryTokenOperation Operation;
   unsigned Pointer;
   unsigned Length;
+  uint64_t Scale;
 };
 
 struct DisjointContract {
@@ -141,7 +142,7 @@ struct DisjointContract {
 
 static bool operator==(const SpanContract &Left, const SpanContract &Right) {
   return Left.Operation == Right.Operation && Left.Pointer == Right.Pointer &&
-         Left.Length == Right.Length;
+         Left.Length == Right.Length && Left.Scale == Right.Scale;
 }
 
 static bool operator==(const DisjointContract &Left,
@@ -168,9 +169,21 @@ static void tokenContracts(const FunctionDecl *Function,
           continue;
         const TypedefNameDecl *Token =
             dialectToken(Function->getASTContext(), Family);
-        if (hasDialectQualifier(Token, "qual:extent_at_least") &&
+        bool ByteExtent = hasDialectQualifier(Token, "qual:extent_at_least");
+        bool ElementExtent = hasDialectQualifier(Token, "qual:element_extent");
+        if ((ByteExtent || ElementExtent) &&
             Arguments.size() == 1) {
-          SpanContract Contract{Operation, Pointer, Arguments[0]};
+          uint64_t Scale = 1;
+          if (ElementExtent) {
+            QualType Type = Redeclaration->getParamDecl(Pointer)->getType();
+            if (!Type->isPointerType() ||
+                Type->getPointeeType()->isIncompleteType())
+              continue;
+            Scale = Function->getASTContext()
+                        .getTypeSizeInChars(Type->getPointeeType())
+                        .getQuantity();
+          }
+          SpanContract Contract{Operation, Pointer, Arguments[0], Scale};
           if (llvm::find(Spans, Contract) == Spans.end())
             Spans.push_back(Contract);
         }
@@ -184,6 +197,16 @@ static void tokenContracts(const FunctionDecl *Function,
       }
     }
   }
+}
+
+static SVal scaledSpanLength(const SpanContract &Contract, SVal Count,
+                             ProgramStateRef State, SValBuilder &Builder) {
+  if (Contract.Scale == 1 || Count.isUnknownOrUndef())
+    return Count;
+  return Builder.evalBinOp(
+      State, BO_Mul, Count,
+      Builder.makeIntVal(Contract.Scale, Builder.getContext().getSizeType()),
+      Builder.getContext().getSizeType());
 }
 
 class MemoryContractChecker
@@ -1020,6 +1043,8 @@ public:
           Contract.Length, State, C.getLocationContext()).value_or(
           State->getSVal(
               State->getLValue(LengthParameter, C.getLocationContext())));
+      LengthValue = scaledSpanLength(Contract, LengthValue, State,
+                                     C.getSValBuilder());
       Extent = LengthValue.getAs<DefinedOrUnknownSVal>();
       break;
     }
@@ -1192,7 +1217,8 @@ public:
 
   static ProgramStateRef applyGrants(
       ProgramStateRef State, const CallEvent &Call,
-      ArrayRef<SpanContract> Spans, ArrayRef<DisjointContract> Disjoint) {
+      ArrayRef<SpanContract> Spans, ArrayRef<DisjointContract> Disjoint,
+      SValBuilder &Builder) {
     for (const SpanContract &Contract : Spans) {
       if (Contract.Operation != MemoryTokenOperation::Grant ||
           Contract.Pointer >= Call.getNumArgs() ||
@@ -1200,8 +1226,11 @@ public:
         continue;
       const MemRegion *Region =
           Call.getArgSVal(Contract.Pointer).getAsRegion();
+      SVal Length = scaledSpanLength(Contract,
+                                     Call.getArgSVal(Contract.Length), State,
+                                     Builder);
       std::optional<DefinedOrUnknownSVal> Extent =
-          Call.getArgSVal(Contract.Length).getAs<DefinedOrUnknownSVal>();
+          Length.getAs<DefinedOrUnknownSVal>();
       if (Region && Extent)
         State = State->set<AssumedSpanExtent>(Region, *Extent);
     }
@@ -1323,6 +1352,8 @@ public:
       if (std::optional<SVal> CallerLength = callerArgumentValue(
               Contract.Length, State, C.getLocationContext()))
         LengthValue = *CallerLength;
+      LengthValue = scaledSpanLength(Contract, LengthValue, State,
+                                     C.getSValBuilder());
       const MemRegion *Region = PointerValue.getAsRegion();
       std::optional<DefinedOrUnknownSVal> DefinedLength =
           LengthValue.getAs<DefinedOrUnknownSVal>();
@@ -1432,8 +1463,11 @@ public:
         continue;
       const MemRegion *Region =
           Call.getArgSVal(Contract.Pointer).getAsRegion();
+      SVal Length = scaledSpanLength(Contract,
+                                     Call.getArgSVal(Contract.Length),
+                                     C.getState(), C.getSValBuilder());
       std::optional<DefinedOrUnknownSVal> DefinedLength =
-          Call.getArgSVal(Contract.Length).getAs<DefinedOrUnknownSVal>();
+          Length.getAs<DefinedOrUnknownSVal>();
       if (Region && DefinedLength)
         ContractState =
             ContractState->set<AssumedSpanExtent>(Region, *DefinedLength);
@@ -1444,15 +1478,16 @@ public:
       if (Contract.Pointer >= Call.getNumArgs() ||
           Contract.Length >= Call.getNumArgs())
         continue;
-      if (!spanProven(Call.getArgSVal(Contract.Pointer),
-                      Call.getArgSVal(Contract.Length), C.getState(), C) &&
+      SVal Length = scaledSpanLength(Contract,
+                                     Call.getArgSVal(Contract.Length),
+                                     C.getState(), C.getSValBuilder());
+      if (!spanProven(Call.getArgSVal(Contract.Pointer), Length,
+                      C.getState(), C) &&
           !typedObjectSpanProven(Call.getArgExpr(Contract.Pointer),
                                  Call.getArgExpr(Contract.Length),
-                                 Call.getArgSVal(Contract.Length),
-                                 C.getState(), C) &&
+                                 Length, C.getState(), C) &&
           !derivedContractSpanProven(Call.getArgSVal(Contract.Pointer),
-                                     Call.getArgSVal(Contract.Length),
-                                     C.getState(), C)) {
+                                     Length, C.getState(), C)) {
         BugType *Type = SpanBT.get();
         report("memory operation span is not proven valid", Type, Call,
                ContractState, C);
@@ -1541,7 +1576,8 @@ public:
       return;
     }
     if (Function->getReturnType()->isVoidType()) {
-      C.addTransition(applyGrants(State, Call, Spans, Disjoint));
+      C.addTransition(applyGrants(State, Call, Spans, Disjoint,
+                                  C.getSValBuilder()));
       return;
     }
     std::optional<DefinedOrUnknownSVal> Return =
@@ -1557,7 +1593,8 @@ public:
         Function, *Return, C.getSValBuilder(), State);
     auto [Succeeded, Failed] = State->assume(Success);
     if (Succeeded)
-      C.addTransition(applyGrants(Succeeded, Call, Spans, Disjoint));
+      C.addTransition(applyGrants(Succeeded, Call, Spans, Disjoint,
+                                  C.getSValBuilder()));
     if (Failed)
       C.addTransition(removeGrantProofs(Failed, Call, Spans, Disjoint));
   }
@@ -1595,6 +1632,8 @@ public:
       SVal PointerValue =
           State->getSVal(State->getLValue(Pointer, LC));
       SVal LengthValue = State->getSVal(State->getLValue(Length, LC));
+      LengthValue = scaledSpanLength(Contract, LengthValue, State,
+                                     C.getSValBuilder());
       const MemRegion *Region = PointerValue.getAsRegion();
       bool Proven = State->isNull(LengthValue).isConstrainedTrue();
       if (!Proven)

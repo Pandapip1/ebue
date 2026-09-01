@@ -8,7 +8,9 @@
 #include <wchar.h>
 #include <string.h>
 
-wchar_t *wmemcpy(wchar_t *__restrict d, const wchar_t *__restrict s, size_t n)
+wchar_t *wmemcpy(
+	wchar_t *__restrict d withtok(writable_elements(n)),
+	const wchar_t *__restrict s withtok(readable_elements(n)), size_t n)
 {
 	return memcpy(d, s, n * sizeof(wchar_t));
 }

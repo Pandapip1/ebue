@@ -5,7 +5,8 @@
 #include "libc.h"
 
 
-int strerror_r(int err, char *buf, size_t buflen)
+int strerror_r(int err, char *buf withtok(writable_span(buflen)),
+	size_t buflen)
 {
 	const char *msg = __strerror_msg(err);
 	size_t l = strlen(msg);

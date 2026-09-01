@@ -11,7 +11,7 @@
 #include <string.h>
 #include <errno.h>
 
-int gethostname(char *name, size_t len)
+int gethostname(char *name withtok(writable_span(len)), size_t len)
 {
 	const char *h = getenv("COMPUTERNAME");
 	size_t n;

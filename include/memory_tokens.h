@@ -21,6 +21,21 @@ tokdef writable_span
 	extent_at_least
 	zero_vacuous;
 
+/* Element-counted variants derive their byte extent from the carrier's
+ * pointed-to type.  They keep standard interfaces such as wmemcpy expressed
+ * in their native element units without baking ABI byte widths into headers. */
+tokdef readable_elements
+	l_unlimited
+	implicit_drop
+	element_extent
+	zero_vacuous;
+
+tokdef writable_elements
+	l_unlimited
+	implicit_drop
+	element_extent
+	zero_vacuous;
+
 tokdef disjoint_span
 	l_unlimited
 	implicit_drop
