@@ -360,6 +360,35 @@ unsigned member_rank_across_opaque_call(struct vec *p)
 	return p->n;
 }
 
+unsigned member_rank_call_before_continue(struct vec *p, int call)
+{
+	while (p->n) { /* totality-expect */
+		p->n--;
+		if (call) {
+			opaque_mutation();
+			continue;
+		}
+	}
+	return p->n;
+}
+
+struct byte_cursor {
+	unsigned char next;
+};
+
+unsigned char member_byte_rank_call_before_continue(struct byte_cursor *cursor,
+	unsigned char total, int call)
+{
+	while (cursor->next < total) { /* totality-expect */
+		cursor->next++;
+		if (call) {
+			opaque_mutation();
+			continue;
+		}
+	}
+	return cursor->next;
+}
+
 unsigned member_rank_with_condition_call(struct vec *p)
 {
 	while (p->n && opaque_predicate()) { /* totality-expect */

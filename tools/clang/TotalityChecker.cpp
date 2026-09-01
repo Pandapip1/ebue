@@ -644,6 +644,94 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return false;
   }
 
+  enum CallFlowOutcome : unsigned {
+    FallWithoutCall = 1,
+    FallWithCall = 2,
+    BackWithoutCall = 4,
+    BackWithCall = 8,
+    ExitWithoutCall = 16,
+    ExitWithCall = 32,
+  };
+
+  struct CallFlow {
+    unsigned Outcomes;
+    bool Invalid;
+  };
+
+  static unsigned afterCall(unsigned Outcomes) {
+    unsigned Result = 0;
+    if (Outcomes & (FallWithoutCall | FallWithCall))
+      Result |= FallWithCall;
+    if (Outcomes & (BackWithoutCall | BackWithCall))
+      Result |= BackWithCall;
+    if (Outcomes & (ExitWithoutCall | ExitWithCall))
+      Result |= ExitWithCall;
+    return Result;
+  }
+
+  static CallFlow callSequence(CallFlow First, CallFlow Second) {
+    if (First.Invalid || Second.Invalid)
+      return {0, true};
+    unsigned Result =
+        First.Outcomes &
+        (BackWithoutCall | BackWithCall | ExitWithoutCall | ExitWithCall);
+    if (First.Outcomes & FallWithoutCall)
+      Result |= Second.Outcomes;
+    if (First.Outcomes & FallWithCall)
+      Result |= afterCall(Second.Outcomes);
+    return {Result, false};
+  }
+
+  static CallFlow callFlow(const Stmt *Statement) {
+    if (!Statement)
+      return {FallWithoutCall, false};
+    if (const auto *Compound = dyn_cast<CompoundStmt>(Statement)) {
+      CallFlow Result{FallWithoutCall, false};
+      for (const Stmt *Child : Compound->body())
+        Result = callSequence(Result, callFlow(Child));
+      return Result;
+    }
+    if (const auto *If = dyn_cast<IfStmt>(Statement)) {
+      CallFlow Prefix = callSequence(callFlow(If->getInit()),
+                                     callFlow(If->getConditionVariableDeclStmt()));
+      Prefix = callSequence(Prefix, callFlow(If->getCond()));
+      CallFlow Then = callFlow(If->getThen());
+      CallFlow Else = callFlow(If->getElse());
+      CallFlow Branches{Then.Outcomes | Else.Outcomes,
+                        Then.Invalid || Else.Invalid};
+      return callSequence(Prefix, Branches);
+    }
+    if (const auto *Label = dyn_cast<LabelStmt>(Statement))
+      return callFlow(Label->getSubStmt());
+    if (isa<ContinueStmt>(Statement))
+      return {BackWithoutCall, false};
+    if (isa<BreakStmt>(Statement))
+      return {ExitWithoutCall, false};
+    if (const auto *Return = dyn_cast<ReturnStmt>(Statement))
+      return callSequence(callFlow(Return->getRetValue()),
+                          {ExitWithoutCall, false});
+    if (isa<ForStmt>(Statement) || isa<WhileStmt>(Statement) ||
+        isa<DoStmt>(Statement)) {
+      /* A nested loop has its own control targets.  If it contains a call,
+       * conservatively assume that call can return and the nested loop can
+       * then fall through to this loop's backedge. */
+      return containsCall(Statement)
+                 ? CallFlow{FallWithoutCall | FallWithCall, false}
+                 : CallFlow{FallWithoutCall, false};
+    }
+    if (isa<GotoStmt>(Statement) || isa<SwitchStmt>(Statement))
+      return {0, true};
+    return containsCall(Statement)
+               ? CallFlow{FallWithoutCall | FallWithCall, false}
+               : CallFlow{FallWithoutCall, false};
+  }
+
+  static bool callCanReachBackedge(const Stmt *Body) {
+    CallFlow Result = callFlow(Body);
+    return Result.Invalid ||
+           (Result.Outcomes & (FallWithCall | BackWithCall));
+  }
+
   static bool addressTaken(const Stmt *Statement,
                            const ValueDecl *Variable) {
     if (!Statement)
@@ -764,7 +852,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   }
 
   static bool writesThroughAlias(const Stmt *Statement,
-                                 const ValueDecl *Alias) {
+                                 const ValueDecl *Alias,
+                                 bool CallsAreWrites = true) {
     if (!Statement)
       return false;
     if (const auto *Expression = dyn_cast<Expr>(Statement)) {
@@ -785,13 +874,15 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
             value(Target->getSubExpr()) == Alias)
           return true;
       }
-      if (const auto *Call = dyn_cast_or_null<CallExpr>(Plain))
-        for (const Expr *Argument : Call->arguments())
-          if (value(Argument) == Alias)
-            return true;
+      if (CallsAreWrites) {
+        if (const auto *Call = dyn_cast_or_null<CallExpr>(Plain))
+          for (const Expr *Argument : Call->arguments())
+            if (value(Argument) == Alias)
+              return true;
+      }
     }
     for (const Stmt *Child : Statement->children())
-      if (writesThroughAlias(Child, Alias))
+      if (writesThroughAlias(Child, Alias, CallsAreWrites))
         return true;
     return false;
   }
@@ -811,11 +902,11 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       const auto *Base = dyn_cast_or_null<VarDecl>(Change.Base);
       return !Change.VolatileAccess && !Field->getType().isVolatileQualified() &&
              Base && !Base->getType().isVolatileQualified() && Current &&
-             !containsCall(Body) &&
+             !callCanReachBackedge(Body) &&
              !containsCall(Increment) &&
              !writesVariable(Body, Base) && !aliasedWrite(Base, Body) &&
              (!Base->getType()->isPointerType() ||
-              !writesThroughAlias(Body, Base));
+              !writesThroughAlias(Body, Base, false));
     }
     const auto *Variable = dyn_cast<VarDecl>(Change.Variable);
     if (!Variable || Variable->getType().isVolatileQualified() || !Current)

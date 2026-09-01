@@ -161,11 +161,41 @@ struct counter {
 	unsigned n;
 };
 
+void opaque_exit_call(void);
+
 unsigned member_countdown(struct counter *counter)
 {
 	while (counter->n)
 		counter->n--;
 	return counter->n;
+}
+
+unsigned member_countdown_call_only_on_exit(struct counter *counter, int stop)
+{
+	while (counter->n) {
+		counter->n--;
+		if (stop) {
+			opaque_exit_call();
+			return counter->n;
+		}
+	}
+	return counter->n;
+}
+
+struct byte_cursor {
+	unsigned char next;
+};
+
+unsigned char member_byte_rank_call_only_on_exit(struct byte_cursor *cursor,
+	unsigned char total, int skip)
+{
+	while (cursor->next < total) {
+		cursor->next++;
+		if (skip) continue;
+		opaque_exit_call();
+		return cursor->next;
+	}
+	return cursor->next;
 }
 
 int signed_extra_progress(int n, int skip)
