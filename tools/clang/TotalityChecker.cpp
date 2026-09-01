@@ -637,6 +637,100 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
            !(Result.Outcomes & (FallWithoutProgress | BackWithoutProgress));
   }
 
+  enum RankMutationOutcome : unsigned {
+    FallRankClean = 1,
+    FallRankChanged = 2,
+    BackRankClean = 4,
+    BackRankChanged = 8,
+    ExitsAfterRankMutation = 16,
+  };
+
+  struct RankMutationFlow {
+    unsigned Outcomes;
+    bool Invalid;
+  };
+
+  static bool rankMutationFlowUnsupported(const Stmt *Statement) {
+    if (!Statement)
+      return false;
+    if (isa<AsmStmt>(Statement) || isa<GotoStmt>(Statement) ||
+        isa<IndirectGotoStmt>(Statement) || isa<StmtExpr>(Statement))
+      return true;
+    for (const Stmt *Child : Statement->children())
+      if (rankMutationFlowUnsupported(Child))
+        return true;
+    return false;
+  }
+
+  static RankMutationFlow rankMutationSequence(RankMutationFlow First,
+                                               RankMutationFlow Second) {
+    if (First.Invalid || Second.Invalid)
+      return {0, true};
+    unsigned Result = First.Outcomes &
+        (BackRankClean | BackRankChanged | ExitsAfterRankMutation);
+    if (First.Outcomes & FallRankClean)
+      Result |= Second.Outcomes;
+    if (First.Outcomes & FallRankChanged) {
+      if (Second.Outcomes & (FallRankClean | FallRankChanged))
+        Result |= FallRankChanged;
+      if (Second.Outcomes & (BackRankClean | BackRankChanged))
+        Result |= BackRankChanged;
+      if (Second.Outcomes & ExitsAfterRankMutation)
+        Result |= ExitsAfterRankMutation;
+    }
+    return {Result, false};
+  }
+
+  static RankMutationFlow rankMutationFlow(const Stmt *Statement,
+                                           const Progress &Rank) {
+    if (!Statement)
+      return {FallRankClean, false};
+    if (rankMutationFlowUnsupported(Statement))
+      return {0, true};
+    if (const auto *Compound = dyn_cast<CompoundStmt>(Statement)) {
+      RankMutationFlow Result{FallRankClean, false};
+      for (const Stmt *Child : Compound->body())
+        Result = rankMutationSequence(Result,
+                                      rankMutationFlow(Child, Rank));
+      return Result;
+    }
+    if (const auto *If = dyn_cast<IfStmt>(Statement)) {
+      RankMutationFlow Prefix = rankMutationSequence(
+          rankMutationFlow(If->getInit(), Rank),
+          rankMutationFlow(If->getConditionVariableDeclStmt(), Rank));
+      Prefix = rankMutationSequence(Prefix,
+                                    rankMutationFlow(If->getCond(), Rank));
+      RankMutationFlow Then = rankMutationFlow(If->getThen(), Rank);
+      RankMutationFlow Else = rankMutationFlow(If->getElse(), Rank);
+      RankMutationFlow Arms{Then.Outcomes | Else.Outcomes,
+                            Then.Invalid || Else.Invalid};
+      return rankMutationSequence(Prefix, Arms);
+    }
+    if (const auto *Label = dyn_cast<LabelStmt>(Statement))
+      return rankMutationFlow(Label->getSubStmt(), Rank);
+    if (isa<ContinueStmt>(Statement))
+      return {BackRankClean, false};
+    if (isa<BreakStmt>(Statement) || isa<ReturnStmt>(Statement))
+      return {ExitsAfterRankMutation, false};
+    if (isa<GotoStmt>(Statement) || isa<SwitchStmt>(Statement))
+      return {0, true};
+    if (isa<ForStmt>(Statement) || isa<WhileStmt>(Statement) ||
+        isa<DoStmt>(Statement))
+      return mutation(Statement, Rank) == Mutation::None
+                 ? RankMutationFlow{FallRankClean, false}
+                 : RankMutationFlow{FallRankChanged, false};
+    return mutation(Statement, Rank) == Mutation::None
+               ? RankMutationFlow{FallRankClean, false}
+               : RankMutationFlow{FallRankChanged, false};
+  }
+
+  static bool rankUnmodifiedOnBackedges(const Stmt *Body,
+                                        const Progress &Rank) {
+    RankMutationFlow Result = rankMutationFlow(Body, Rank);
+    return !Result.Invalid && Result.Outcomes != 0 &&
+           !(Result.Outcomes & (FallRankChanged | BackRankChanged));
+  }
+
   struct PairFlow {
     /* Bit N means a path reaches this control edge after progressing the
      * subset N of the two ranks. */
@@ -1297,6 +1391,28 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return boundFitsRank(Bound, Variable, false);
   }
 
+  bool belowTypeMaximumAfterConversion(
+      const Expr *Bound, const ValueDecl *Variable) const {
+    const Expr *Source = ignore(Bound);
+    if (!Source)
+      return false;
+    QualType SourceType = Source->getType();
+    QualType ConvertedType = Bound->getType();
+    if (SourceType->isSignedIntegerOrEnumerationType() &&
+        ConvertedType->isUnsignedIntegerOrEnumerationType()) {
+      /* A negative signed value converted to the unsigned comparison
+       * domain can become its maximum: -1 is exactly UINT_MAX.  That is
+       * harmless for strict `<`, but `rank <= UINT_MAX; rank++` wraps.
+       * Accept this conversion only when the source is a known
+       * nonnegative constant; arbitrary signed bounds include -1. */
+      Expr::EvalResult Constant;
+      if (!Source->EvaluateAsInt(Constant, Context) ||
+          Constant.Val.getInt().isNegative())
+        return false;
+    }
+    return belowTypeMaximum(Bound, Variable);
+  }
+
   bool atMostTypeMaximum(const Expr *Bound,
                          const ValueDecl *Variable) const {
     return boundFitsRank(Bound, Variable, true);
@@ -1391,7 +1507,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
                    atMostTypeMaximum(Logical->getRHS(), Change.Variable))) ||
                  (Logical->getOpcode() == BO_LE &&
                   (!Change.Variable->getType()->isUnsignedIntegerType() ||
-                   belowTypeMaximum(Logical->getRHS(), Change.Variable))))) ||
+                   belowTypeMaximumAfterConversion(
+                       Logical->getRHS(), Change.Variable))))) ||
                (Right &&
                 stableBound(Logical->getLHS(), Body, Increment) &&
                 ((Logical->getOpcode() == BO_GT &&
@@ -1399,7 +1516,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
                    atMostTypeMaximum(Logical->getLHS(), Change.Variable))) ||
                  (Logical->getOpcode() == BO_GE &&
                   (!Change.Variable->getType()->isUnsignedIntegerType() ||
-                   belowTypeMaximum(Logical->getLHS(), Change.Variable)))));
+                   belowTypeMaximumAfterConversion(
+                       Logical->getLHS(), Change.Variable)))));
       if (Change.Kind == ProgressKind::Down)
         return (Left &&
                 stableBound(Logical->getRHS(), Body, Increment) &&
@@ -1421,6 +1539,53 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
                    aboveTypeMinimum(Logical->getLHS(), Change.Variable)))));
     }
     return false;
+  }
+
+  bool sameDomainUnitUpperBound(const Expr *Condition,
+                                const Progress &Change) const {
+    if (!Change.UnitStep || Change.Kind != ProgressKind::Up ||
+        !Change.Variable->getType()->isIntegerType() ||
+        mutation(Condition, Change) != Mutation::None)
+      return false;
+    const auto *Comparison = dyn_cast_or_null<BinaryOperator>(
+        ignore(Condition));
+    if (!Comparison)
+      return false;
+    const Expr *RankOperand = nullptr;
+    const Expr *Bound = nullptr;
+    bool Inclusive = false;
+    if (rankAccess(Comparison->getLHS(), Change) &&
+        (Comparison->getOpcode() == BO_LT ||
+         Comparison->getOpcode() == BO_LE)) {
+      RankOperand = Comparison->getLHS();
+      Bound = Comparison->getRHS();
+      Inclusive = Comparison->getOpcode() == BO_LE;
+    } else if (rankAccess(Comparison->getRHS(), Change) &&
+               (Comparison->getOpcode() == BO_GT ||
+                Comparison->getOpcode() == BO_GE)) {
+      RankOperand = Comparison->getRHS();
+      Bound = Comparison->getLHS();
+      Inclusive = Comparison->getOpcode() == BO_GE;
+    } else {
+      return false;
+    }
+    if (!RankOperand->getType()->isIntegerType() ||
+        !Bound->getType()->isIntegerType())
+      return false;
+    QualType RankComparisonType = RankOperand->getType().getCanonicalType()
+                                      .getUnqualifiedType();
+    QualType BoundComparisonType = Bound->getType().getCanonicalType()
+                                       .getUnqualifiedType();
+    if (RankComparisonType != BoundComparisonType)
+      return false;
+    /* The condition is reevaluated before every backedge.  If every value
+     * the upper operand can contribute fits in the rank's own arithmetic
+     * domain, a taken `rank < bound` proves rank != TYPE_MAX.  Unit `++`
+     * is therefore representable and strictly advances even when the bound
+     * is live, aliased, or changed by a callback.  `<=` needs the stronger
+     * strict-below-maximum fact because equality also takes the backedge. */
+    return Inclusive ? belowTypeMaximumAfterConversion(Bound, Change.Variable)
+                     : atMostTypeMaximum(Bound, Change.Variable);
   }
 
   static bool sentinelRead(const Stmt *Statement, const Progress &Rank) {
@@ -1973,6 +2138,14 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
        * mutation could cancel it or turn the effective step into a
        * sentinel-skipping/wrapping step. */
       Mutation BodyMutation = mutation(Body, *Change);
+      if (sameDomainUnitUpperBound(Condition, *Change) &&
+          isa<VarDecl>(Change->Variable) &&
+          (isa<ParmVarDecl>(Change->Variable) ||
+           cast<VarDecl>(Change->Variable)->hasLocalStorage()) &&
+          !addressTaken(Current->getBody(), Change->Variable) &&
+          validRankVariable(*Change, Body, Increment) &&
+          rankUnmodifiedOnBackedges(Body, *Change))
+        return "strict-scalar-rank";
       /* An additional same-direction unit step cannot invalidate a signed
        * induction rank: either the comparison is reached after finitely
        * many steps, or the addition overflows and the execution was already
@@ -1999,7 +2172,18 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     collectProgress(Increment, IncrementCandidates);
     for (const Progress &Change : IncrementCandidates) {
       Mutation BodyMutation = mutation(Body, Change);
-      if (!validRankVariable(Change, Body, Increment) ||
+      if (sameDomainUnitUpperBound(Condition, Change) &&
+          isa<VarDecl>(Change.Variable) &&
+          (isa<ParmVarDecl>(Change.Variable) ||
+           cast<VarDecl>(Change.Variable)->hasLocalStorage()) &&
+          !addressTaken(Current->getBody(), Change.Variable) &&
+          validRankVariable(Change, Body, Increment) &&
+          progressOccurrences(Increment, Change) == 1 &&
+          mutation(Increment, Change) == Mutation::Good &&
+          rankUnmodifiedOnBackedges(Body, Change))
+        return "strict-scalar-rank";
+      if (progressOccurrences(Increment, Change) != 1 ||
+          !validRankVariable(Change, Body, Increment) ||
           mutation(Increment, Change) != Mutation::Good ||
           (BodyMutation != Mutation::None &&
            !(BodyMutation == Mutation::Good &&

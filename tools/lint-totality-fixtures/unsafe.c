@@ -196,8 +196,10 @@ void *realloc(void *, __SIZE_TYPE__);
 
 unsigned member_bound_mutated_in_body(struct vec *p)
 {
+	/* The bound may move on a continuing path: strict same-domain `<`
+	 * still makes a TYPE_MAX backedge impossible for local unit rank i. */
 	unsigned i;
-	for (i = 0; i < p->n; i++) { /* totality-expect */
+	for (i = 0; i < p->n; i++) {
 		p->n++;
 	}
 	return i;
@@ -206,7 +208,7 @@ unsigned member_bound_mutated_in_body(struct vec *p)
 unsigned member_bound_escapes_to_call(struct vec *p)
 {
 	unsigned i;
-	for (i = 0; i < p->n; i++) { /* totality-expect */
+	for (i = 0; i < p->n; i++) {
 		mutate_vec(p);
 	}
 	return i;
@@ -215,7 +217,7 @@ unsigned member_bound_escapes_to_call(struct vec *p)
 unsigned member_bound_across_realloc(struct vec *p)
 {
 	unsigned i;
-	for (i = 0; i < p->n; i++) { /* totality-expect */
+	for (i = 0; i < p->n; i++) {
 		(void)realloc(p->v, 16);
 	}
 	return i;
@@ -224,7 +226,7 @@ unsigned member_bound_across_realloc(struct vec *p)
 unsigned member_bound_address_taken(struct vec *p)
 {
 	unsigned i;
-	for (i = 0; i < p->n; i++) { /* totality-expect */
+	for (i = 0; i < p->n; i++) {
 		(void)&p->n;
 	}
 	return i;
@@ -276,7 +278,7 @@ unsigned ascent_allows_oversize(unsigned end, unsigned step)
 unsigned member_bound_base_reseated(struct vec *p, struct vec *q)
 {
 	unsigned i;
-	for (i = 0; i < p->n; i++) { /* totality-expect */
+	for (i = 0; i < p->n; i++) {
 		p = q;
 	}
 	return i;
@@ -389,7 +391,7 @@ unsigned volatile_member_base(struct vec * volatile p)
 unsigned volatile_member_bound(volatile struct vec *p)
 {
 	unsigned i;
-	for (i = 0; i < p->n; i++) { /* totality-expect */
+	for (i = 0; i < p->n; i++) {
 	}
 	return i;
 }
@@ -424,7 +426,7 @@ unsigned shift_zero_fixed_point(unsigned n, const unsigned char *table)
 unsigned member_bound_across_opaque_call(struct vec *p)
 {
 	unsigned i;
-	for (i = 0; i < p->n; i++) { /* totality-expect */
+	for (i = 0; i < p->n; i++) {
 		opaque_mutation();
 	}
 	return i;
@@ -815,7 +817,7 @@ static unsigned *escaped_bound;
 unsigned file_bound_across_opaque_call(void)
 {
 	unsigned i;
-	for (i = 0; i < file_bound; i++) { /* totality-expect */
+	for (i = 0; i < file_bound; i++) {
 		opaque_mutation();
 	}
 	return i;
@@ -837,6 +839,170 @@ unsigned escaped_scalar_bound_across_opaque_call(unsigned bound)
 	while (i < bound) { /* totality-expect */
 		opaque_mutation();
 		i++;
+	}
+	return i;
+}
+
+unsigned char byte_rank_wider_bound(__SIZE_TYPE__ bound)
+{
+	unsigned char i;
+	for (i = 0; i < bound; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned inclusive_unit_rank_can_wrap(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; i <= bound; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned inclusive_negative_constant_wraps(void)
+{
+	unsigned i;
+	for (i = 0; i <= -1; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned inclusive_runtime_signed_bound(int bound)
+{
+	unsigned i;
+	for (i = 0; i <= bound; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned reversed_inclusive_runtime_signed_bound(int bound)
+{
+	unsigned i;
+	for (i = 0; bound >= i; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned inclusive_narrow_signed_bound(signed char bound)
+{
+	unsigned i;
+	for (i = 0; i <= bound; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned repeated_unit_increment(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; i < bound; i++, i++) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned continuing_rank_reset(unsigned bound, int reset)
+{
+	unsigned i;
+	for (i = 0; i < bound; i++) { /* totality-expect */
+		if (reset)
+			i = 0;
+	}
+	return i;
+}
+
+void callback_changes_rank(unsigned *rank);
+
+unsigned callback_rank_mutation(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; i < bound; i++) { /* totality-expect */
+		callback_changes_rank(&i);
+	}
+	return i;
+}
+
+unsigned reused_rank_in_continuing_inner_loop(unsigned bound, unsigned inner,
+	int reuse)
+{
+	unsigned i;
+	for (i = 0; i < bound; i++) { /* totality-expect */
+		if (reuse)
+			for (i = 0; i < inner; i++) {
+			}
+	}
+	return i;
+}
+
+unsigned char byte_rank_mixed_signed_bound(int bound)
+{
+	unsigned char i;
+	for (i = 0; i < bound; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned short narrow_rank_runtime_wide_bound(unsigned bound)
+{
+	unsigned short i;
+	for (i = 0; i < bound; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+int signed_rank_unsigned_domain(unsigned bound)
+{
+	int i;
+	/* A signed overflow leaves defined C execution, so this pre-existing
+	 * signed-rank proof does not need the unsigned same-domain lemma. */
+	for (i = 0; i < bound; i++) {
+	}
+	return i;
+}
+
+unsigned nonunit_upper_bound(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; i < bound; i += 2) { /* totality-expect */
+	}
+	return i;
+}
+
+static unsigned global_unit_rank;
+
+unsigned nonlocal_unit_rank(unsigned bound)
+{
+	for (global_unit_rank = 0; global_unit_rank < bound; /* totality-expect */
+	     global_unit_rank++) {
+		opaque_mutation();
+	}
+	return global_unit_rank;
+}
+
+unsigned nested_goto_skips_exit(unsigned bound, unsigned inner, int reuse)
+{
+	unsigned i;
+	for (i = 0; i < bound; i++) { /* totality-expect */
+		if (reuse) {
+			for (i = 0; i < inner; i++)
+				goto keep_going;
+			return i;
+		}
+keep_going:
+		;
+	}
+	return i;
+}
+
+unsigned statement_expression_skips_progress(unsigned bound, int reset)
+{
+	unsigned i;
+	for (i = 0; i < bound; i++) { /* totality-expect */
+		(void)({
+			if (reset) {
+				i = 0;
+				continue;
+			}
+			0;
+		});
 	}
 	return i;
 }

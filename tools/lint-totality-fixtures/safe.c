@@ -432,3 +432,103 @@ __SIZE_TYPE__ guarded_signed_distance_ascent(__SIZE_TYPE__ end)
 	}
 	return i;
 }
+
+static void change_live_unsigned_bound(unsigned *bound)
+{
+	if (*bound)
+		(*bound)--;
+}
+
+unsigned unit_rank_with_live_bound(unsigned *bound)
+{
+	unsigned i;
+	for (i = 0; i < *bound; i++)
+		change_live_unsigned_bound(bound);
+	return i;
+}
+
+int signed_unit_rank_with_live_bound(int *bound)
+{
+	int i;
+	for (i = -4; i < *bound; i++)
+		if (*bound > 0)
+			(*bound)--;
+	return i;
+}
+
+unsigned char promoted_byte_unit_rank(unsigned char bound)
+{
+	unsigned char i;
+	for (i = 0; i < bound; i++) {
+	}
+	return i;
+}
+
+unsigned char byte_rank_with_fitting_wide_constant(void)
+{
+	unsigned char i;
+	for (i = 0; i < 200U; i++) {
+	}
+	return i;
+}
+
+signed char signed_byte_rank_with_fitting_constant(void)
+{
+	signed char i;
+	for (i = -2; i < 100L; i++) {
+	}
+	return i;
+}
+
+unsigned reversed_unit_upper_bound(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; bound > i; i++) {
+	}
+	return i;
+}
+
+unsigned inclusive_below_maximum(void)
+{
+	unsigned char i;
+	for (i = 0; i <= 254; i++) {
+	}
+	return i;
+}
+
+unsigned inclusive_nonnegative_signed_constant(void)
+{
+	unsigned i;
+	for (i = 0; i <= 5; i++) {
+	}
+	return i;
+}
+
+void opaque_exit_path_call(void);
+
+unsigned exit_path_call_and_rank_change(unsigned bound, int stop)
+{
+	unsigned i;
+	for (i = 0; i < bound; i++) {
+		if (stop) {
+			opaque_exit_path_call();
+			i = bound;
+			return i;
+		}
+	}
+	return i;
+}
+
+unsigned reused_rank_only_before_return(unsigned bound, unsigned inner,
+	int stop)
+{
+	unsigned i;
+	for (i = 0; i < bound; i++) {
+		if (stop) {
+			for (i = 0; i < inner; i++) {
+			}
+			return i;
+		}
+	}
+	return i;
+}
