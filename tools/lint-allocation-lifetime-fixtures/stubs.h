@@ -12,7 +12,6 @@ tokdef heap_allocated
 tokdef sentinel_allocated
 	dynamic_storage
 	sentinel_exclude(-1);
-#undef tokdef
 
 /* Header-only declarations are explicit external assumptions.  If a .c
  * definition of free exists in the scanned tree, that definition must repeat

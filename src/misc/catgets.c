@@ -171,6 +171,7 @@ static int check_catalog(const unsigned char *m, size_t size)
 /* Read a whole file into one block.  Not mmap: this tree's mmap is a
  * section-object wrapper with page granularity and no advantage here,
  * and catclose() then has nothing to remember but the pointer. */
+withtok(catalog_opened)
 static nl_catd read_catalog(const char *path)
 {
 	unsigned char *buf = 0, *nbuf;
@@ -281,6 +282,7 @@ static size_t expand(char *buf, size_t bufsz, const char *tmpl,
 	return i;
 }
 
+withtok(catalog_opened)
 nl_catd catopen(const char *name, int oflag)
 {
 	/* A named array rather than a second "%N" literal purely so
@@ -356,7 +358,7 @@ nl_catd catopen(const char *name, int oflag)
 	return (nl_catd)-1;
 }
 
-char *catgets(nl_catd catd, int set_id, int msg_id, const char *s) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+char *catgets(nl_catd catd withtok(catalog_opened), int set_id, int msg_id, const char *s) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const unsigned char *m = (const unsigned char *)catd;
 	const unsigned char *sets, *msgs, *strings;
@@ -417,7 +419,7 @@ char *catgets(nl_catd catd, int set_id, int msg_id, const char *s) // NOLINT(bug
 	return (char *)s;
 }
 
-int catclose(nl_catd catd)
+int catclose(nl_catd catd consume(catalog_opened))
 {
 	/* "[EBADF] The catalog descriptor is not valid." is a *may fail*;
 	 * a descriptor this implementation handed out is a malloc'd block

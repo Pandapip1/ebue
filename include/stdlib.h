@@ -12,12 +12,8 @@
 #include <features.h>
 #include <ownership.h>
 
-#ifndef tokdef
-#define tokdef __token_type
-#endif
 tokdef heap_allocated
 	dynamic_storage;
-#undef tokdef
 
 #ifdef __cplusplus
 extern "C" {
