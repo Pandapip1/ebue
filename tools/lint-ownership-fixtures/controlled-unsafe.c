@@ -1,31 +1,29 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../../include/ownership.h"
+
+token guarded_unlocked implicit_drop;
+token guarded_access l_unlimited implicit_drop;
+#undef token
+
 typedef struct { void *opaque[8]; } guarded_t;
 
 struct guarded_slot {
-	guarded_t *value [[ownership_holds_handle(guarded),
-	                  ownership_holds_token(guarded_unlocked)]];
+	guarded_t *value withhandle(guarded) withtok(guarded_unlocked);
 };
 
 int guarded_init(guarded_t *object
-    [[ownership_constructs(guarded),
-      ownership_adds_token(guarded_unlocked)]]);
+    construct(guarded) grant(guarded_unlocked));
 int guarded_lock(guarded_t *object
-    [[ownership_requires_handle(guarded),
-      ownership_drops_token(guarded_unlocked),
-      ownership_adds_duplicable_token(guarded_access)]]);
+    handle(guarded) consume(guarded_unlocked) grant(guarded_access));
 int guarded_unlock(guarded_t *object
-    [[ownership_requires_handle(guarded),
-      ownership_drops_token(guarded_access),
-      ownership_adds_token(guarded_unlocked)]]);
+    handle(guarded) consume(guarded_access) grant(guarded_unlocked));
 
 void inspect_protected_value(guarded_t *object
-    [[ownership_requires_handle(guarded),
-      ownership_requires_token(guarded_access)]]);
+    handle(guarded) withtok(guarded_access));
 void reset_while_unlocked(guarded_t *object
-    [[ownership_requires_handle(guarded),
-      ownership_requires_absent_token(guarded_access)]]);
+    handle(guarded) withouttok(guarded_access));
 
 void access_without_lock_authority(void)
 {
