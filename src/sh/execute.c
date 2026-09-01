@@ -2002,11 +2002,12 @@ static int exec_group(const struct sh_command *cmd, int *status)
  */
 
 /* Reads everything left in `fd` into a freshly __malloc'd,
- * NUL-terminated buffer. Returns NULL on OOM or a read error. A capture
- * containing null bytes comes back truncated at the first one as far as
- * any string caller can see -- 2.6.3: "If the output contains any null
- * bytes, the behavior is unspecified." */
-static char *slurp_fd(int fd)
+ * NUL-terminated buffer and stores the exact captured byte count in
+ * `out_len`. Returns NULL on OOM or a read error. A capture containing
+ * null bytes comes back truncated at the first one as far as any string
+ * caller can see -- 2.6.3: "If the output contains any null bytes, the
+ * behavior is unspecified." */
+static char *slurp_fd(int fd, size_t *out_len)
 {
 	char *buf = 0;
 	size_t len = 0, cap = 0;
@@ -2031,6 +2032,7 @@ static char *slurp_fd(int fd)
 	}
 	if (!buf) { buf = __malloc(1); if (!buf) return 0; }
 	buf[len] = 0;
+	*out_len = len;
 	return buf;
 }
 
@@ -2055,7 +2057,7 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	int saved_last;
 	FILE *tf;
 	int tfd, rc, st = 0;
-	size_t len;
+	size_t len = 0;
 
 	*out = 0;
 	list = __sh_parse(program, 0, 0);
@@ -2130,14 +2132,14 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	if (rc) { (void)fclose(tf); return -1; }
 
 	if (lseek(tfd, 0, SEEK_SET) < 0) { (void)fclose(tf); return -1; }
-	buf = slurp_fd(tfd);
+	buf = slurp_fd(tfd, &len);
 	(void)fclose(tf);
 	if (!buf) return -1;
 
 	/* 2.6.3: "removing sequences of one or more <newline> characters at
 	 * the end of the substitution. Embedded <newline> characters before
 	 * the end of the output shall not be removed". */
-	len = strlen(buf);
+	len = strnlen(buf, len);
 	while (len && buf[len - 1] == '\n') len--;
 	buf[len] = 0;
 
