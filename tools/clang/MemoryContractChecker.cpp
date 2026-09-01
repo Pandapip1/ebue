@@ -472,6 +472,21 @@ class MemoryContractChecker
     SymbolRef Bounded = stripCasts(Length.getAsSymbol());
     if (!Bounded)
       return false;
+    auto RelationProvesStringBound = [&](SymbolRef Candidate) {
+      for (const SymbolRelation &Relation : State->get<ProvenLessEqual>()) {
+        if (stripCasts(Relation.first) != Candidate)
+          continue;
+        SymbolRef Bound = stripCasts(Relation.second);
+        const MemRegion *const *Strlen = State->get<StrlenSource>(Bound);
+        const MemRegion *const *Strnlen = State->get<StrnlenSource>(Bound);
+        if ((Strlen || Strnlen) &&
+            RelativePointerBytes(Strlen ? *Strlen : *Strnlen) == 0)
+          return true;
+      }
+      return false;
+    };
+    if (RelationProvesStringBound(Bounded))
+      return true;
     if (const auto *DifferenceLength = dyn_cast<SymIntExpr>(Bounded)) {
       if (DifferenceLength->getOpcode() != BO_Sub ||
           DifferenceLength->getRHS().isNegative())
@@ -487,17 +502,7 @@ class MemoryContractChecker
         return false;
       Bounded = Base;
     }
-    for (const SymbolRelation &Relation : State->get<ProvenLessEqual>()) {
-      if (stripCasts(Relation.first) != Bounded)
-        continue;
-      SymbolRef Bound = stripCasts(Relation.second);
-      const MemRegion *const *Strlen = State->get<StrlenSource>(Bound);
-      const MemRegion *const *Strnlen = State->get<StrnlenSource>(Bound);
-      if ((Strlen || Strnlen) &&
-          RelativePointerBytes(Strlen ? *Strlen : *Strnlen) == 0)
-        return true;
-    }
-    return false;
+    return RelationProvesStringBound(Bounded);
   }
 
   static std::optional<SVal>
