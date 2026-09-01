@@ -24,10 +24,18 @@ long telldir(DIR *dp)
 
 void seekdir(DIR *dp, long loc)
 {
+	unsigned long remaining;
+
 	if (loc < 0) return;
 	if (loc < dp->tell) rewinddir(dp);
-	while (dp->tell < loc)
+	/* A successful readdir() advances dp->tell by exactly one.  Snapshot
+	 * that exact maximum number of successful calls as an independent
+	 * rank; end-of-directory and errors still stop at the same call. */
+	remaining = (unsigned long)loc - (unsigned long)dp->tell;
+	while (remaining > 0 && dp->tell < loc) {
+		remaining--;
 		if (!readdir(dp)) break;
+	}
 }
 
 // NOLINTEND(misc-include-cleaner)
