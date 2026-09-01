@@ -29,6 +29,7 @@
 #include "plat_malloc.h"
 
 withtok(heap_allocated)
+withtok(writable_span(n))
 void *malloc(size_t n)
 {
 	void *p = __plat_alloc(n, 0);
@@ -47,6 +48,7 @@ void *calloc(size_t m, size_t n)
 }
 
 withtok(heap_allocated)
+withtok(writable_span(n))
 void *realloc(void *p consume_if_nonnull_return(heap_allocated), size_t n)
 {
 	void *q;
@@ -57,6 +59,7 @@ void *realloc(void *p consume_if_nonnull_return(heap_allocated), size_t n)
 }
 
 withtok(internal_heap_allocated)
+withtok(writable_span(n))
 void *__malloc(size_t n) { return malloc(n); }
 void __free(void *p consume(internal_heap_allocated)) { free(p); }
 
@@ -102,6 +105,7 @@ int posix_memalign(void **res, size_t align, size_t len)
 }
 
 withtok(heap_allocated)
+withtok(writable_span(len))
 void *aligned_alloc(size_t align, size_t len)
 {
 	void *p;

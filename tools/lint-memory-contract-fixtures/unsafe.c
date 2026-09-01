@@ -13,7 +13,9 @@ void *memcpy(void *destination withtok(fixture_writable_span(length))
 	const void *source withtok(fixture_readable_span(length)), size_t length);
 void *memset(void *destination withtok(fixture_writable_span(length)), int,
 	size_t length);
-void *__malloc(size_t);
+withtok(fixture_writable_span(length))
+void *__malloc(size_t length);
+void *opaque_allocator(size_t length);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 void establish_writable(
@@ -126,6 +128,14 @@ void too_small_heap_allocation(const char *s)
 {
 	char *d = __malloc(4);
 	memcpy(d, s, 8); /* memory-contract-expect */
+}
+
+/* A suggestive allocator name is not a contract. */
+void undeclared_allocator_extent(size_t length)
+{
+	char *buffer = opaque_allocator(length);
+	if (!buffer) return;
+	memset(buffer, 0, length); /* memory-contract-expect */
 }
 
 /* Sharing an affine root does not prove the larger expression is larger:

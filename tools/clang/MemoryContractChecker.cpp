@@ -198,50 +198,30 @@ class MemoryContractChecker
            Function->getName().starts_with("__ownership_");
   }
 
-  // Clang's own dynamic-extent tracking for an allocator's return value
-  // only fires for a handful of literally-named standard functions:
-  // `malloc(n)` gets a real, usable dynamic extent from clang's builtin
-  // modeling, but `__malloc(n)` -- the name every allocation inside this
-  // tree's OWN code actually goes through, since `malloc` is just this
-  // codebase's own public wrapper around it -- does not, leaving
-  // spanProven's getDynamicExtentWithOffset() with nothing but an
-  // unconstrained placeholder for every buffer this codebase allocates
-  // through its own internal entry point. This is the identical gap
-  // OwnershipChecker::allocationSizeInBytes fixes for the sibling
-  // ValidPointerChecker (see 8a56a66's own extensive writeup); this
-  // checker needs its own copy since the memcontracts stage does not run
-  // ntlibc.Ownership, whose checkPostCall would otherwise set the state.
-  // Setting
-  // the region's real dynamic extent straight from the real size
-  // argument(s) is not a new assumption layered on top of what the
-  // program does: it is the exact byte count the allocator itself is
-  // about to hand back, read directly off the arguments of the call that
-  // produced it. strdup/strndup are deliberately left alone, matching
-  // 8a56a66: their real size depends on string *content*, not an
-  // argument SVal already sitting at the call site.
-  static std::optional<SVal> allocationSizeInBytes(const CallEvent &Call,
-                                                    CheckerContext &C) {
-    SValBuilder &Builder = C.getSValBuilder();
-    QualType SizeTy = C.getASTContext().getSizeType();
-    unsigned NumArgs = Call.getNumArgs();
-    auto Arg = [&](unsigned Index) -> SVal {
-      return Index < NumArgs ? Call.getArgSVal(Index) : UnknownVal();
-    };
-    if (hasName(Call, "malloc") || hasName(Call, "__malloc") ||
-        hasName(Call, "valloc"))
-      return NumArgs >= 1 ? std::optional<SVal>(Arg(0)) : std::nullopt;
-    if (hasName(Call, "calloc"))
-      return NumArgs >= 2 ? std::optional<SVal>(Builder.evalBinOp(
-                                C.getState(), BO_Mul, Arg(0), Arg(1), SizeTy))
-                          : std::nullopt;
-    if (hasName(Call, "realloc"))
-      return NumArgs >= 2 ? std::optional<SVal>(Arg(1)) : std::nullopt;
-    if (hasName(Call, "reallocarray"))
-      return NumArgs >= 3 ? std::optional<SVal>(Builder.evalBinOp(
-                                C.getState(), BO_Mul, Arg(1), Arg(2), SizeTy))
-                          : std::nullopt;
-    if (hasName(Call, "aligned_alloc") || hasName(Call, "memalign"))
-      return NumArgs >= 2 ? std::optional<SVal>(Arg(1)) : std::nullopt;
+  /* A pointer-returning function carries its byte extent on the function
+   * declaration itself: `withtok(writable_span(size))`.  Interpreting the
+   * function-level token as a return-value grant keeps allocator knowledge in
+   * headers and stubs; the checker never recognizes an allocator by name. */
+  static std::optional<unsigned>
+  declaredReturnSpanLength(const FunctionDecl *Function) {
+    if (!Function || !Function->getReturnType()->isPointerType())
+      return std::nullopt;
+    for (const FunctionDecl *Redeclaration : Function->redecls())
+      for (const AnnotateAttr *Attribute :
+           Redeclaration->specific_attrs<AnnotateAttr>()) {
+        StringRef Family;
+        SmallVector<unsigned, 2> Arguments;
+        MemoryTokenOperation Operation;
+        if (!tokenApplication(Redeclaration, Attribute->getAnnotation(),
+                              Operation, Family, Arguments))
+          continue;
+        const TypedefNameDecl *Token =
+            dialectToken(Function->getASTContext(), Family);
+        if (Operation == MemoryTokenOperation::Require &&
+            hasDialectQualifier(Token, "qual:extent_at_least") &&
+            Arguments.size() == 1)
+          return Arguments[0];
+      }
     return std::nullopt;
   }
 
@@ -851,22 +831,19 @@ public:
       C.addTransition(ContractState);
   }
 
-  // See allocationSizeInBytes above: give this tree's own __malloc-family
-  // allocator calls the same real dynamic extent clang's builtin modeling
-  // already gives literally-named "malloc"/"calloc"/etc, so spanProven has
-  // real information to work with instead of an unconstrained placeholder.
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
     ProgramStateRef State = C.getState();
-    if (std::optional<SVal> SizeInBytes = allocationSizeInBytes(Call, C)) {
-      if (std::optional<DefinedOrUnknownSVal> DefinedSize =
-              SizeInBytes->getAs<DefinedOrUnknownSVal>()) {
-        if (const MemRegion *Region = Call.getReturnValue().getAsRegion()) {
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    if (std::optional<unsigned> Length = declaredReturnSpanLength(Function)) {
+      if (*Length < Call.getNumArgs())
+        if (std::optional<DefinedOrUnknownSVal> DefinedSize =
+                Call.getArgSVal(*Length).getAs<DefinedOrUnknownSVal>())
+          if (const MemRegion *Region = Call.getReturnValue().getAsRegion()) {
           const MemRegion *Base = Region->getBaseRegion();
           State = setDynamicExtent(State, Base, *DefinedSize,
                                    C.getSValBuilder());
           State = State->add<AllocatedBaseRegion>(Base);
-        }
-      }
+          }
     }
     // See stringLengthSourceSpanProven above: record which pointer
     // argument a strlen()/strnlen() call's return symbol was measured
@@ -886,7 +863,6 @@ public:
                                                 ArgRegion->getBaseRegion());
     }
 
-    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
     SmallVector<SpanContract, 2> Spans;
     SmallVector<DisjointContract, 1> Disjoint;
     tokenContracts(Function, Spans, Disjoint);

@@ -563,7 +563,8 @@ int __sh_last_status(void);
 
 /* ---- heap -------------------------------------------------------------- */
 withtok(internal_heap_allocated)
-void *__malloc(size_t);
+withtok(writable_span(size))
+void *__malloc(size_t size);
 void __free(void * consume(internal_heap_allocated));
 
 /* ---- time -------------------------------------------------------------- */

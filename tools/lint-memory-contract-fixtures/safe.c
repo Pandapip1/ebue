@@ -17,7 +17,10 @@ void *memset(void *destination withtok(fixture_writable_span(length)), int,
 	size_t length);
 long read(int, void *buffer withtok(fixture_writable_span(length)),
 	size_t length);
-void *__malloc(size_t);
+withtok(fixture_writable_span(length))
+void *__malloc(size_t length);
+withtok(fixture_writable_span(length))
+void *allocate_bytes(size_t length);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 void establish_writable(
@@ -164,4 +167,12 @@ char *dup_all(void)
 	if (!p) return 0;
 	memcpy(p, s, n);
 	return p;
+}
+
+/* Return extents are declaration-driven, not tied to allocator spellings. */
+void declaration_driven_allocator(size_t length)
+{
+	char *buffer = allocate_bytes(length);
+	if (!buffer) return;
+	memset(buffer, 0, length);
 }

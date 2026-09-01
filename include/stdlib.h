@@ -11,6 +11,7 @@
 
 #include <features.h>
 #include <ownership.h>
+#include <memory_tokens.h>
 #include <string_tokens.h>
 
 tokdef heap_allocated
@@ -49,14 +50,17 @@ int rand (void);
 void srand (unsigned);
 
 withtok(heap_allocated)
-void *malloc (size_t);
+withtok(writable_span(size))
+void *malloc (size_t size);
 withtok(heap_allocated)
 void *calloc (size_t, size_t);
 withtok(heap_allocated)
-void *realloc (void * consume_if_nonnull_return(heap_allocated), size_t);
+withtok(writable_span(size))
+void *realloc (void * consume_if_nonnull_return(heap_allocated), size_t size);
 void free (void * consume(heap_allocated));
 withtok(heap_allocated)
-void *aligned_alloc(size_t, size_t);
+withtok(writable_span(size))
+void *aligned_alloc(size_t alignment, size_t size);
 
 _Noreturn void abort (void);
 int atexit (void (*) (void));
