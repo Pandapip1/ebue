@@ -7,3 +7,9 @@ int iswspace(wint_t wc)
 {
 	return isspace((int)wc);
 }
+
+int iswspace_l(wint_t wc, locale_t loc)
+{
+	(void)loc;
+	return iswspace(wc);
+}

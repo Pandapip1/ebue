@@ -7,3 +7,9 @@ int iswgraph(wint_t wc)
 {
 	return isgraph((int)wc);
 }
+
+int iswgraph_l(wint_t wc, locale_t loc)
+{
+	(void)loc;
+	return iswgraph(wc);
+}

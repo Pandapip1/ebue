@@ -7,3 +7,9 @@ int iswlower(wint_t wc)
 {
 	return islower((int)wc);
 }
+
+int iswlower_l(wint_t wc, locale_t loc)
+{
+	(void)loc;
+	return iswlower(wc);
+}

@@ -7,3 +7,9 @@ int iswpunct(wint_t wc)
 {
 	return ispunct((int)wc);
 }
+
+int iswpunct_l(wint_t wc, locale_t loc)
+{
+	(void)loc;
+	return iswpunct(wc);
+}

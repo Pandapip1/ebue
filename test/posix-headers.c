@@ -153,7 +153,7 @@ static void test_sched_h_defines_sched_param(void)
 /* ============= island: <ctype.h>, alone ========================== */
 #include <ctype.h>
 
-#if NTLIBC_TEST(UNIMPL, posix_headers_ctype_h_defines_locale_t) /* UNIMPL: <ctype.h> does not define locale_t.
+#if NTLIBC_TEST(PASS, posix_headers_ctype_h_defines_locale_t) /* Was UNIMPL: <ctype.h> did not define locale_t.
 	 * basedefs/ctype.h.html: "The <ctype.h> header shall define the
 	 * locale_t type as described in <locale.h>."  It is an
 	 * unconditional sentence about a type, and it is what lets a
@@ -180,7 +180,11 @@ static void test_sched_h_defines_sched_param(void)
 	 * failure was <signal.h>/pthread_t -- these two were not among the
 	 * ones probed.
 	 *
-	 * Re-enable when include/ctype.h requests the type. */
+	 * Fixed: include/ctype.h now requests __NEED_locale_t
+	 * unconditionally (see its own banner comment for the citation)
+	 * and includes bits/alltypes.h to get it, alongside declaring the
+	 * isalnum_l() ... toupper_l() family that gives the type
+	 * something to be the argument of. */
 static void test_ctype_h_defines_locale_t(void)
 {
 	locale_t l = (locale_t)0;
@@ -193,14 +197,17 @@ static void test_ctype_h_defines_locale_t(void)
 /* ============= island: <wctype.h>, alone ========================= */
 #include <wctype.h>
 
-#if NTLIBC_TEST(UNIMPL, posix_headers_wctype_h_defines_locale_t) /* UNIMPL: <wctype.h> does not define locale_t either.
+#if NTLIBC_TEST(PASS, posix_headers_wctype_h_defines_locale_t) /* Was UNIMPL: <wctype.h> did not define locale_t either.
 	 * basedefs/wctype.h.html lists the types the header shall define --
 	 * wint_t, wctrans_t, wctype_t, and locale_t "As described in
-	 * <locale.h>".  include/wctype.h asks bits/alltypes.h only for
+	 * <locale.h>".  include/wctype.h asked bits/alltypes.h only for
 	 * __NEED_wint_t and __NEED_wctype_t.  Same mechanism, same
 	 * one-line fix, as the <ctype.h> island above; kept as its own
 	 * island because the clause is about what this header supplies on
-	 * its own. */
+	 * its own.
+	 *
+	 * Fixed: include/wctype.h now requests __NEED_locale_t too,
+	 * alongside declaring the iswalnum_l() ... wctrans_l() family. */
 static void test_wctype_h_defines_locale_t(void)
 {
 	locale_t l = (locale_t)0;

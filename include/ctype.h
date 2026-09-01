@@ -11,6 +11,15 @@
 
 #include <features.h>
 
+/* basedefs/ctype.h.html DESCRIPTION: "The <ctype.h> header shall define
+ * the locale_t type as described in <locale.h>."  That sentence is
+ * unconditional -- not gated behind any of the _POSIX_SOURCE/XOPEN/GNU
+ * feature-test macros locale.h itself gates newlocale() et al. behind
+ * -- so the request for the type is unconditional here too. */
+#define __NEED_locale_t
+
+#include <bits/alltypes.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -37,6 +46,36 @@ int   isupper(int) __attribute__((__pure__));
 int   isxdigit(int) __attribute__((__pure__));
 int   tolower(int) __attribute__((__pure__));
 int   toupper(int) __attribute__((__pure__));
+
+/* The _l family (isalnum_l() ... toupper_l(), CX in this edition):
+ * ctype.h.html's own DESCRIPTION says each "shall be equivalent to
+ * ... except that the effect ... in the locale represented by locale
+ * is used instead of the current locale."  ntlibc's locale.c accepts
+ * exactly one locale ("C"/"POSIX" -- setlocale() rejects every other
+ * name, and newlocale() in locale.h hands out the address of that same
+ * one static object for every valid request), so "the locale
+ * represented by locale" and "the current locale" are always the same
+ * classification table.  Each _l function below is therefore its
+ * non-_l sibling above, taking and ignoring a locale_t argument --
+ * documented, not silent, exactly the strcasecmp_l()/strncasecmp_l()
+ * precedent in strings.h (see src/ctype/isalpha.c etc. for the `(void)
+ * loc;` bodies).  Still __pure__: the ignored locale_t is never
+ * dereferenced, so nothing changes about totality or the absence of
+ * side effects. */
+int   isalnum_l(int, locale_t) __attribute__((__pure__));
+int   isalpha_l(int, locale_t) __attribute__((__pure__));
+int   isblank_l(int, locale_t) __attribute__((__pure__));
+int   iscntrl_l(int, locale_t) __attribute__((__pure__));
+int   isdigit_l(int, locale_t) __attribute__((__pure__));
+int   isgraph_l(int, locale_t) __attribute__((__pure__));
+int   islower_l(int, locale_t) __attribute__((__pure__));
+int   isprint_l(int, locale_t) __attribute__((__pure__));
+int   ispunct_l(int, locale_t) __attribute__((__pure__));
+int   isspace_l(int, locale_t) __attribute__((__pure__));
+int   isupper_l(int, locale_t) __attribute__((__pure__));
+int   isxdigit_l(int, locale_t) __attribute__((__pure__));
+int   tolower_l(int, locale_t) __attribute__((__pure__));
+int   toupper_l(int, locale_t) __attribute__((__pure__));
 
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 int   isascii(int) __attribute__((__pure__));

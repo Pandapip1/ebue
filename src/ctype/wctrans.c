@@ -17,3 +17,9 @@ wctrans_t wctrans(const char *name withtok(null_terminated))
 	 * valid for the current locale." */
 	return 0;
 }
+
+wctrans_t wctrans_l(const char *name withtok(null_terminated), locale_t loc)
+{
+	(void)loc;
+	return wctrans(name);
+}

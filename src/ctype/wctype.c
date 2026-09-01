@@ -28,3 +28,9 @@ wctype_t wctype(const char *name withtok(null_terminated))
 	 * current locale, wctype() shall return a value of zero." */
 	return (wctype_t)0;
 }
+
+wctype_t wctype_l(const char *name withtok(null_terminated), locale_t loc)
+{
+	(void)loc;
+	return wctype(name);
+}

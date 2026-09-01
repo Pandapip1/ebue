@@ -6,3 +6,9 @@ int isalnum(int c)
 {
 	return isalpha(c) || isdigit(c);
 }
+
+int isalnum_l(int c, locale_t loc)
+{
+	(void)loc;
+	return isalnum(c);
+}

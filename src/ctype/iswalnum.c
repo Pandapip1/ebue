@@ -7,3 +7,9 @@ int iswalnum(wint_t wc)
 {
 	return isalnum((int)wc);
 }
+
+int iswalnum_l(wint_t wc, locale_t loc)
+{
+	(void)loc;
+	return iswalnum(wc);
+}

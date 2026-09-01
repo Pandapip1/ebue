@@ -15,3 +15,9 @@ wint_t towlower(wint_t wc)
 	if (iswupper(wc)) return wc | 32;
 	return wc;
 }
+
+wint_t towlower_l(wint_t wc, locale_t loc)
+{
+	(void)loc;
+	return towlower(wc);
+}

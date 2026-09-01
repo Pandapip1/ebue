@@ -12,4 +12,10 @@ __wraps int isxdigit(int c)
 	return isdigit(c) || ((unsigned)c|32)-'a' < 6;
 }
 
+int isxdigit_l(int c, locale_t loc)
+{
+	(void)loc;
+	return isxdigit(c);
+}
+
 // NOLINTEND(misc-include-cleaner)

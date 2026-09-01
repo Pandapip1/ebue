@@ -7,3 +7,9 @@ int iswupper(wint_t wc)
 {
 	return isupper((int)wc);
 }
+
+int iswupper_l(wint_t wc, locale_t loc)
+{
+	(void)loc;
+	return iswupper(wc);
+}

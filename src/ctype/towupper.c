@@ -11,3 +11,9 @@ wint_t towupper(wint_t wc)
 	if (iswlower(wc)) return wc & 0x5f;
 	return wc;
 }
+
+wint_t towupper_l(wint_t wc, locale_t loc)
+{
+	(void)loc;
+	return towupper(wc);
+}

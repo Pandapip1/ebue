@@ -7,3 +7,9 @@ int iswprint(wint_t wc)
 {
 	return isprint((int)wc);
 }
+
+int iswprint_l(wint_t wc, locale_t loc)
+{
+	(void)loc;
+	return iswprint(wc);
+}

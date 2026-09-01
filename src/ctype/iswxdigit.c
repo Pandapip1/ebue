@@ -7,3 +7,9 @@ int iswxdigit(wint_t wc)
 {
 	return isxdigit((int)wc);
 }
+
+int iswxdigit_l(wint_t wc, locale_t loc)
+{
+	(void)loc;
+	return iswxdigit(wc);
+}

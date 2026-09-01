@@ -20,3 +20,9 @@ wint_t towctrans(wint_t wc, wctrans_t desc) // NOLINT(bugprone-easily-swappable-
 	default: return wc;
 	}
 }
+
+wint_t towctrans_l(wint_t wc, wctrans_t desc, locale_t loc)
+{
+	(void)loc;
+	return towctrans(wc, desc);
+}
