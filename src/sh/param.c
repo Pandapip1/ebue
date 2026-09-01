@@ -74,7 +74,7 @@ static void free_vec(char **v, int n)
 	int i;
 	if (!v) return;
 	for (i = 0; i < n; i++) __free(v[i]);
-	__free(v);
+	__free((void *)v);
 }
 
 const char *__sh_param_zero(void)
@@ -128,7 +128,7 @@ int __sh_params_replace(char *const *argv, int n)
 
 	if (n < 0) n = 0;
 	if (n > 0) {
-		nv = __malloc((size_t)n * sizeof *nv);
+		nv = (char **)__malloc((size_t)n * sizeof *nv);
 		if (!nv) return -1;
 		for (i = 0; i < n; i++) {
 			nv[i] = dup_str(argv[i]);
@@ -153,12 +153,16 @@ int __sh_params_replace(char *const *argv, int n)
  * parameter-level `nonnull` fix for the flagged deref here either. */
 int __sh_params_shift(int n)
 {
-	int i;
+	int i, remaining;
 
 	if (n < 0 || n > pn) return -1;
 	if (n == 0) return 0;
 	for (i = 0; i < n; i++) __free(pv[i]);
-	for (i = n; i < pn; i++) pv[i - n] = pv[i];
+	/* The validated subtraction is the exact number of surviving
+	 * parameters which must be moved down. */
+	remaining = pn - n;
+	for (i = n; remaining > 0; i++, remaining--)
+		pv[i - n] = pv[i];
 	pn -= n;
 	return 0;
 }

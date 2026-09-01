@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 /* realpath: open the file and ask the kernel what it is called.  A path
  * that does not exist cannot be canonicalised that way, so it is an
  * ENOENT like POSIX says.
@@ -28,7 +33,9 @@
 #include <errno.h>
 #include "libc.h"
 
-char *realpath(const char *__restrict path, char *__restrict resolved)
+withtok(heap_allocated)
+char *realpath(const char *__restrict path,
+	char *__restrict resolved withtok(heap_allocated))
 {
 	int fd, saved;
 	char *p, *q;
@@ -60,7 +67,7 @@ char *realpath(const char *__restrict path, char *__restrict resolved)
 	}
 	p = __handle_path(__fd_handle(fd));
 	saved = errno;
-	close(fd);
+	(void)close(fd);
 	errno = saved;
 	if (!p) return 0;
 	for (q = p; *q; q++) if (*q == '\\') *q = '/';
@@ -72,3 +79,5 @@ char *realpath(const char *__restrict path, char *__restrict resolved)
 	free(p);
 	return resolved;
 }
+
+// NOLINTEND(misc-include-cleaner)

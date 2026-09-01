@@ -132,11 +132,13 @@ static const char *progname = "sh";
  * and ends in a newline -- XCU sh(1p)'s "STDERR" ("used only for
  * diagnostic messages") plus 2.8.1's requirement that a non-interactive
  * shell say something before it gives up. A macro rather than a
- * function so each call site keeps its own printf arguments. */
+ * function so each call site keeps its own printf arguments.  These writes
+ * are secondary to an exit status already selected; stderr failure cannot
+ * be reported recursively and must not replace that primary outcome. */
 #define diag(...) do { \
-	fprintf(stderr, "%s: ", progname); \
-	fprintf(stderr, __VA_ARGS__); \
-	fputc('\n', stderr); \
+	(void)fprintf(stderr, "%s: ", progname); \
+	(void)fprintf(stderr, __VA_ARGS__); \
+	(void)fputc('\n', stderr); \
 } while (0)
 
 /* One message, three call sites (a word, a redirection target, a
@@ -315,6 +317,7 @@ static int check_redirs(const struct sh_redir *r)
 static int check_list(const struct sh_list *list);
 
 static int check_command(const struct sh_command *c) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- validation mirrors the nested shell-AST hierarchy
 static int check_command(const struct sh_command *c)
 {
 	const char *name;
@@ -401,6 +404,7 @@ static int check_command(const struct sh_command *c)
  * `.pipeline.commands` array pointer -- the same class of internal-AST
  * residual as print.c's queue_nested_heredocs_list() above, not
  * something list's own nullability can express. */
+// NOLINTNEXTLINE(misc-no-recursion) -- validation mirrors the nested shell-AST hierarchy
 static int check_list(const struct sh_list *list)
 {
 	const struct sh_list_item *it;
@@ -473,7 +477,8 @@ static int slurp(FILE *f, char **out)
 
 static void usage(void)
 {
-	fprintf(stderr,
+	/* usage() accompanies EX_USAGE and has no independent status channel. */
+	(void)fprintf(stderr,
 		"usage: %s -c command_string [command_name [argument...]]\n"
 		"       %s [-s] [command_file [argument...]]\n",
 		progname, progname);
@@ -559,14 +564,15 @@ int __sh_main(int argc, char **argv)
 	}
 
 	if (cmdstr) {
-		text = malloc(strlen(cmdstr) + 1);
+		size_t n = strlen(cmdstr) + 1;
+		text = malloc(n);
 		if (!text) { diag("out of memory"); return EX_USAGE; }
-		strcpy(text, cmdstr);
+		memcpy(text, cmdstr, n);
 	} else if (file) {
 		FILE *f = fopen(file, "rb");
 		if (!f) { diag("%s: cannot open command_file", file); return EX_NOSCRIPT; }
-		if (slurp(f, &text)) { fclose(f); diag("%s: read error", file); return EX_NOSCRIPT; }
-		fclose(f);
+		if (slurp(f, &text)) { (void)fclose(f); diag("%s: read error", file); return EX_NOSCRIPT; }
+		(void)fclose(f);
 	} else {
 		if (slurp(stdin, &text)) { diag("stdin: read error"); return EX_NOSCRIPT; }
 	}

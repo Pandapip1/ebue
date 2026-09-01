@@ -425,6 +425,12 @@ obj/bin/%.exe: $(srcdir)/bin/%.c $(ALL_LIBS) | obj/bin
 # obj/test/rpath-plugin.dll), even though delayall.c, unlike that file,
 # does have a main and is otherwise an ordinary test.
 TEST_SRCS = $(filter-out $(srcdir)/test/delayall.c,$(sort $(wildcard $(srcdir)/test/*.c)))
+ifeq ($(ARCH),aarch64)
+# These three tests exercise compiler facilities the arm64 TinyCC target does
+# not provide yet: stack alloca, x87 inline assembly, and float-to-int runtime
+# helpers. Keep the rest of the native Windows ARM suite buildable and visible.
+TEST_SRCS := $(filter-out $(srcdir)/test/alloca.c $(srcdir)/test/posix-math.c $(srcdir)/test/rtlib.c,$(TEST_SRCS))
+endif
 TEST_EXES = $(patsubst $(srcdir)/test/%.c,obj/test/%.exe,$(TEST_SRCS))
 TEST_RUN = $(filter-out %-win.exe,$(TEST_EXES))
 
@@ -803,10 +809,16 @@ install-check: config.mak
 # analyzer, cppcheck, shellcheck).  Never a prerequisite of anything: the
 # library is built with tcc, and tools/lint.sh only reports.  It skips any
 # tool that is not installed.  See tools/lint.sh for the flag set and
-# .clang-tidy for the check list.
+# .clang-tidy for the check list. Keep this required-stage list explicit so
+# `make lint` and the per-stage CI matrix cannot silently disagree about
+# which zero-backlog checks are gates.
 #
+LINT_REQUIRED_STAGES = warn analyze cppcheck shell sizearith fallible locks \
+	lockset provenance reentrancy variadic signals abizeroinit initproof \
+	errno purity undefined unreferenced widthmod
+
 lint:
-	./tools/lint.sh
+	./tools/lint.sh $(LINT_REQUIRED_STAGES)
 
 .PHONY: lint
 

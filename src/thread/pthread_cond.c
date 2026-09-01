@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <pthread.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -38,29 +43,30 @@ struct condattr_data {
 struct cond_cleanup {
 	struct cond_data *cond;
 	struct cond_waiter *waiter;
-	pthread_mutex_t *mutex;
+	pthread_mutex_t *mutex withhandle(pthread_mutex)
+		withtok(pthread_mutex_unlocked);
 	int mutex_held;
 };
 
 static struct cond_data *cond_data(pthread_cond_t *cond)
 {
-	return (struct cond_data *)(void *)cond;
+	return (struct cond_data *)(void *)cond; // NOLINT(bugprone-casting-through-void) -- public pthread_cond_t is opaque storage for this ABI-defined internal layout
 }
 
 static const struct cond_data *const_cond_data(const pthread_cond_t *cond)
 {
-	return (const struct cond_data *)(const void *)cond;
+	return (const struct cond_data *)(const void *)cond; // NOLINT(bugprone-casting-through-void) -- public pthread_cond_t is opaque storage for this ABI-defined internal layout
 }
 
 static struct condattr_data *condattr_data(pthread_condattr_t *attr)
 {
-	return (struct condattr_data *)(void *)attr;
+	return (struct condattr_data *)(void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_condattr_t is opaque storage for this ABI-defined internal layout
 }
 
 static const struct condattr_data *const_condattr_data(
 	const pthread_condattr_t *attr)
 {
-	return (const struct condattr_data *)(const void *)attr;
+	return (const struct condattr_data *)(const void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_condattr_t is opaque storage for this ABI-defined internal layout
 }
 
 static int cond_ready(pthread_cond_t *cond)
@@ -87,8 +93,9 @@ static int cond_ready(pthread_cond_t *cond)
 	return data->magic == COND_MAGIC ? 0 : EINVAL;
 }
 
-int pthread_cond_init(pthread_cond_t *__restrict cond,
-	const pthread_condattr_t *__restrict attr)
+
+int pthread_cond_init(pthread_cond_t *__restrict cond construct(pthread_cond) static_handle(pthread_cond),
+	const pthread_condattr_t *__restrict attr handle(pthread_condattr))
 {
 	struct cond_data *data;
 	const struct condattr_data *attributes = 0;
@@ -97,7 +104,7 @@ int pthread_cond_init(pthread_cond_t *__restrict cond,
 		attributes = const_condattr_data(attr);
 		if (attributes->magic != CONDATTR_MAGIC) return EINVAL;
 	}
-	memset(cond, 0, sizeof *cond);
+	memset(cond, 0, sizeof *cond); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- initializes caller-supplied opaque storage before constructing the condition variable; no live object is copied
 	data = cond_data(cond);
 	data->magic = COND_MAGIC;
 	data->pshared = attributes ? attributes->pshared : PTHREAD_PROCESS_PRIVATE;
@@ -105,7 +112,8 @@ int pthread_cond_init(pthread_cond_t *__restrict cond,
 	return 0;
 }
 
-int pthread_cond_destroy(pthread_cond_t *cond)
+
+int pthread_cond_destroy(pthread_cond_t *cond destroy(pthread_cond) static_handle(pthread_cond))
 {
 	struct cond_data *data;
 	int error = cond_ready(cond);
@@ -156,15 +164,16 @@ static void cond_wait_cleanup(void *argument)
 		cleanup->waiter->semaphore = 0;
 	}
 	if (!cleanup->mutex_held) {
-		pthread_mutex_lock(cleanup->mutex);
+		(void)pthread_mutex_lock(cleanup->mutex);
 		cleanup->mutex_held = 1;
 	}
 	free(cleanup->waiter);
 	cleanup->waiter = 0;
 }
 
+
 static int cond_wait(pthread_cond_t *__restrict cond,
-	pthread_mutex_t *__restrict mutex, const struct timespec *absolute)
+	pthread_mutex_t *__restrict mutex withtok(pthread_mutex_locked), const struct timespec *absolute)
 {
 	struct cond_data *data;
 	struct cond_waiter *waiter;
@@ -186,7 +195,6 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	}
 	cleanup.cond = data;
 	cleanup.waiter = waiter;
-	cleanup.mutex = mutex;
 	cleanup.mutex_held = 0;
 	pthread_cleanup_push(cond_wait_cleanup, &cleanup);
 	__plat_fast_lock();
@@ -198,7 +206,7 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	if (error) {
 		unlink_waiter(data, waiter);
 		cleanup.mutex_held = 1;
-	}
+	} else cleanup.mutex = mutex;
 	__plat_fast_unlock();
 	while (!error) {
 		int status;
@@ -239,7 +247,7 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	}
 	if (!error) {
 		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &old_state);
-		lock_error = pthread_mutex_lock(mutex);
+		lock_error = pthread_mutex_lock(cleanup.mutex);
 		cleanup.mutex_held = lock_error == 0;
 		pthread_setcancelstate(old_state, 0);
 	}
@@ -250,20 +258,23 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	return lock_error ? lock_error : result;
 }
 
-int pthread_cond_wait(pthread_cond_t *__restrict cond,
-	pthread_mutex_t *__restrict mutex)
+
+int pthread_cond_wait(pthread_cond_t *__restrict cond handle(pthread_cond) static_handle(pthread_cond),
+	pthread_mutex_t *__restrict mutex handle(pthread_mutex) static_handle(pthread_mutex) withtok(pthread_mutex_locked))
 {
 	return cond_wait(cond, mutex, 0);
 }
 
-int pthread_cond_timedwait(pthread_cond_t *__restrict cond,
-	pthread_mutex_t *__restrict mutex, const struct timespec *__restrict absolute)
+
+int pthread_cond_timedwait(pthread_cond_t *__restrict cond handle(pthread_cond) static_handle(pthread_cond),
+	pthread_mutex_t *__restrict mutex handle(pthread_mutex) static_handle(pthread_mutex) withtok(pthread_mutex_locked), const struct timespec *__restrict absolute)
 {
 	if (!absolute) return EINVAL;
 	return cond_wait(cond, mutex, absolute);
 }
 
-int pthread_cond_signal(pthread_cond_t *cond)
+
+int pthread_cond_signal(pthread_cond_t *cond handle(pthread_cond) static_handle(pthread_cond))
 {
 	struct cond_data *data;
 	struct cond_waiter *waiter;
@@ -282,7 +293,8 @@ int pthread_cond_signal(pthread_cond_t *cond)
 	return 0;
 }
 
-int pthread_cond_broadcast(pthread_cond_t *cond)
+
+int pthread_cond_broadcast(pthread_cond_t *cond handle(pthread_cond) static_handle(pthread_cond))
 {
 	struct cond_data *data;
 	struct cond_waiter *waiter;
@@ -300,7 +312,8 @@ int pthread_cond_broadcast(pthread_cond_t *cond)
 	return 0;
 }
 
-int pthread_condattr_init(pthread_condattr_t *attr)
+
+int pthread_condattr_init(pthread_condattr_t *attr construct(pthread_condattr))
 {
 	struct condattr_data *data;
 	if (!attr) return EINVAL;
@@ -312,14 +325,16 @@ int pthread_condattr_init(pthread_condattr_t *attr)
 	return 0;
 }
 
-int pthread_condattr_destroy(pthread_condattr_t *attr)
+
+int pthread_condattr_destroy(pthread_condattr_t *attr destroy(pthread_condattr))
 {
 	if (!attr || condattr_data(attr)->magic != CONDATTR_MAGIC) return EINVAL;
 	memset(attr, 0, sizeof *attr);
 	return 0;
 }
 
-int pthread_condattr_getclock(const pthread_condattr_t *__restrict attr,
+
+int pthread_condattr_getclock(const pthread_condattr_t *__restrict attr handle(pthread_condattr),
 	clockid_t *__restrict clock)
 {
 	if (!attr || !clock || const_condattr_data(attr)->magic != CONDATTR_MAGIC)
@@ -328,7 +343,8 @@ int pthread_condattr_getclock(const pthread_condattr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_condattr_setclock(pthread_condattr_t *attr, clockid_t clock)
+
+int pthread_condattr_setclock(pthread_condattr_t *attr handle(pthread_condattr), clockid_t clock)
 {
 	if (!attr || condattr_data(attr)->magic != CONDATTR_MAGIC ||
 	    (clock != CLOCK_REALTIME && clock != CLOCK_MONOTONIC)) return EINVAL;
@@ -336,7 +352,8 @@ int pthread_condattr_setclock(pthread_condattr_t *attr, clockid_t clock)
 	return 0;
 }
 
-int pthread_condattr_getpshared(const pthread_condattr_t *__restrict attr,
+
+int pthread_condattr_getpshared(const pthread_condattr_t *__restrict attr handle(pthread_condattr),
 	int *__restrict pshared)
 {
 	if (!attr || !pshared || const_condattr_data(attr)->magic != CONDATTR_MAGIC)
@@ -345,7 +362,8 @@ int pthread_condattr_getpshared(const pthread_condattr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_condattr_setpshared(pthread_condattr_t *attr, int pshared)
+
+int pthread_condattr_setpshared(pthread_condattr_t *attr handle(pthread_condattr), int pshared)
 {
 	if (!attr || condattr_data(attr)->magic != CONDATTR_MAGIC ||
 	    (pshared != PTHREAD_PROCESS_PRIVATE &&
@@ -353,3 +371,5 @@ int pthread_condattr_setpshared(pthread_condattr_t *attr, int pshared)
 	condattr_data(attr)->pshared = pshared;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

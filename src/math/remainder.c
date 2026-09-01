@@ -34,7 +34,10 @@ static long double remainder_impl(long double x, long double y, int *quop)
 	}
 
 	qneg = (x < 0.0L) != (y < 0.0L);
-	r = __x87_remainder(x, y, quop ? &q : 0);
+	/* The architecture helper always computes quotient bits.  Keep its
+	 * required output live even for remainder(), whose caller does not
+	 * request them; the aarch64 implementation writes it unconditionally. */
+	r = __x87_remainder(x, y, &q);
 	/* "If the result equals 0, then it has the same sign as x." */
 	if (r == 0.0L) r = copysignl(r, x);
 

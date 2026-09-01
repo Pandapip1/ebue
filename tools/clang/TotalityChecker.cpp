@@ -89,6 +89,11 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return Literal && Literal->getValue() == 1;
   }
 
+  static bool integerGreaterThanOne(const Expr *Expression) {
+    const auto *Literal = dyn_cast_or_null<IntegerLiteral>(ignore(Expression));
+    return Literal && Literal->getValue().ugt(1);
+  }
+
   static bool zeroInteger(const Expr *Expression) {
     const auto *Literal = dyn_cast_or_null<IntegerLiteral>(ignore(Expression));
     return Literal && Literal->getValue().isZero();
@@ -276,15 +281,28 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return Progress{Variable, ProgressKind::Up};
     if (Binary->getOpcode() == BO_SubAssign && unitInteger(Binary->getRHS()))
       return Progress{Variable, ProgressKind::Down};
+    /* For an unsigned value tested for nonzero, division by a constant
+     * greater than one is a strict descent to zero.  This is the common
+     * integer-to-text digit loop (`while (u) u /= 10`); unlike a non-unit
+     * additive step it cannot skip a bound and wrap back around. */
+    if (Binary->getOpcode() == BO_DivAssign &&
+        Variable->getType()->isUnsignedIntegerType() &&
+        integerGreaterThanOne(Binary->getRHS()))
+      return Progress{Variable, ProgressKind::Down};
     if (!Binary->isAssignmentOp())
       return std::nullopt;
     const Expr *Right = ignore(Binary->getRHS());
     if (const auto *Operation = dyn_cast<BinaryOperator>(Right)) {
-      if (value(Operation->getLHS()) == Variable &&
-          unitInteger(Operation->getRHS())) {
-        if (Operation->getOpcode() == BO_Add)
+      if (value(Operation->getLHS()) == Variable) {
+        if (Operation->getOpcode() == BO_Add &&
+            unitInteger(Operation->getRHS()))
           return Progress{Variable, ProgressKind::Up};
-        if (Operation->getOpcode() == BO_Sub)
+        if (Operation->getOpcode() == BO_Sub &&
+            unitInteger(Operation->getRHS()))
+          return Progress{Variable, ProgressKind::Down};
+        if (Operation->getOpcode() == BO_Div &&
+            Variable->getType()->isUnsignedIntegerType() &&
+            integerGreaterThanOne(Operation->getRHS()))
           return Progress{Variable, ProgressKind::Down};
       }
     }
@@ -784,22 +802,87 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
            Result.Val.getInt().isZero();
   }
 
+  static const ValueDecl *conditionCountdown(const Expr *Condition) {
+    Condition = ignore(Condition);
+    auto Decremented = [](const Expr *Expression) -> const ValueDecl * {
+      const auto *Unary = dyn_cast_or_null<UnaryOperator>(ignore(Expression));
+      return Unary && Unary->isDecrementOp()
+                 ? value(Unary->getSubExpr())
+                 : nullptr;
+    };
+    if (const ValueDecl *Variable = Decremented(Condition))
+      return Variable;
+    const auto *Comparison = dyn_cast_or_null<BinaryOperator>(Condition);
+    if (!Comparison)
+      return nullptr;
+    const ValueDecl *Left = Decremented(Comparison->getLHS());
+    const ValueDecl *Right = Decremented(Comparison->getRHS());
+    if (Left && zeroInteger(Comparison->getRHS()) &&
+        (Comparison->getOpcode() == BO_GT ||
+         Comparison->getOpcode() == BO_NE))
+      return Left;
+    if (Right && zeroInteger(Comparison->getLHS()) &&
+        (Comparison->getOpcode() == BO_LT ||
+         Comparison->getOpcode() == BO_NE))
+      return Right;
+    return nullptr;
+  }
+
   std::string loopProof(const Expr *Condition, const Expr *Increment,
                         const Stmt *Body) const {
     if (constantFalse(Condition, Context))
       return "constant-false";
+    /* `while (n--)` and `for (...; n-- > 0; ...)` perform their strict
+     * descent in the condition, before every taken iteration.  The final
+     * false test may itself wrap an unsigned n, but there is no following
+     * backedge, so that cannot create a cycle. */
+    if (const ValueDecl *Variable = conditionCountdown(Condition)) {
+      Progress Change{Variable, ProgressKind::Down};
+      if (Variable->getType()->isIntegerType() &&
+          validRankVariable(Change, Body) &&
+          mutation(Body, Change) == Mutation::None)
+        return "strict-scalar-rank";
+    }
     if (std::optional<Progress> Change = progress(Increment)) {
       /* The for increment is on every backedge, but an additional body
        * mutation could cancel it or turn the effective step into a
        * sentinel-skipping/wrapping step. */
+      Mutation BodyMutation = mutation(Body, *Change);
+      /* An additional same-direction unit step cannot invalidate a signed
+       * induction rank: either the comparison is reached after finitely
+       * many steps, or the addition overflows and the execution was already
+       * outside C's defined domain.  Keep rejecting it for unsigned ranks,
+       * where wrapping is defined and can make the loop genuinely cycle. */
       if (!validRankVariable(*Change, Body) ||
-          mutation(Body, *Change) != Mutation::None)
+          (BodyMutation != Mutation::None &&
+           !(BodyMutation == Mutation::Good &&
+             Change->Variable->getType()->isSignedIntegerType())))
         return "unproved";
       if (strictComparison(Condition, *Change, Body, Increment))
         return "strict-scalar-rank";
       if (sentinelCondition(Condition, *Change))
         return "sentinel-distance-rank";
       return "unproved";
+    }
+    /* A comma expression is the normal spelling of a multi-variable for
+     * increment (`i++, j--`).  progress() intentionally describes one
+     * scalar, so collect each candidate and prove the one used by the loop
+     * condition.  mutation() still rejects cancellation of that candidate.
+     */
+    std::vector<Progress> IncrementCandidates;
+    collectProgress(Increment, IncrementCandidates);
+    for (const Progress &Change : IncrementCandidates) {
+      Mutation BodyMutation = mutation(Body, Change);
+      if (!validRankVariable(Change, Body) ||
+          mutation(Increment, Change) != Mutation::Good ||
+          (BodyMutation != Mutation::None &&
+           !(BodyMutation == Mutation::Good &&
+             Change.Variable->getType()->isSignedIntegerType())))
+        continue;
+      if (strictComparison(Condition, Change, Body, Increment))
+        return "strict-scalar-rank";
+      if (sentinelCondition(Condition, Change))
+        return "sentinel-distance-rank";
     }
     std::vector<Progress> Candidates;
     collectProgress(Body, Candidates);

@@ -41,8 +41,8 @@ int __util_pwd_main(int argc, char **argv)
 	char *cwd;
 
 	for (i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "-L") && strcmp(argv[i], "-P")) {
-			fprintf(stderr, "pwd: %s: unsupported option or operand -- "
+		if (strcmp(argv[i], "-L") && strcmp(argv[i], "-P")) { // NOLINT(bugprone-suspicious-string-compare) -- nonzero from both calls intentionally means neither supported option matches
+			__util_diagf("pwd: %s: unsupported option or operand -- "
 			                "pwd(1p) takes no operands\n", argv[i]);
 			return 2;
 		}
@@ -56,8 +56,11 @@ int __util_pwd_main(int argc, char **argv)
 		perror("pwd");
 		return 1;
 	}
-	fputs(cwd, stdout);
-	fputc('\n', stdout);
+	if (fputs(cwd, stdout) < 0 || fputc('\n', stdout) == EOF ||
+	    fflush(stdout) != 0) {
+		free(cwd);
+		return 1;
+	}
 	free(cwd);
 	return 0;
 }

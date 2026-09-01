@@ -11,18 +11,27 @@
  * copies it through unswapped, the least surprising of the allowed
  * choices).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <unistd.h>
 
-void swab(const void *__restrict src, void *__restrict dest, ssize_t nbytes)
+void swab(const void *__restrict src, void *__restrict dest, ssize_t nbytes) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const unsigned char *s = src;
 	unsigned char *d = dest;
-	ssize_t i;
+	ssize_t i, pairs;
 
 	if (nbytes <= 0) return;
-	for (i = 0; i + 1 < nbytes; i += 2) {
-		d[i] = s[i + 1];
-		d[i + 1] = s[i];
+	pairs = nbytes / 2;
+	for (i = 0; i < pairs; i++) {
+		d[2 * i] = s[2 * i + 1];
+		d[2 * i + 1] = s[2 * i];
 	}
+	i *= 2;
 	if (i < nbytes) d[i] = s[i];
 }
+
+// NOLINTEND(misc-include-cleaner)

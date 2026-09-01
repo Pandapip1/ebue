@@ -53,10 +53,11 @@
 
 static void emit_line(const unsigned char *buf, size_t n)
 {
-	size_t i;
+	size_t group, groups = n / 3 + (n % 3 != 0);
 
-	putchar(UUENC((int)n));
-	for (i = 0; i < n; i += 3) {
+	putchar(UUENC((unsigned)n));
+	for (group = 0; group < groups; group++) {
+		size_t i = 3 * group;
 		unsigned char b0 = buf[i];
 		unsigned char b1 = (i + 1 < n) ? buf[i + 1] : 0;
 		unsigned char b2 = (i + 2 < n) ? buf[i + 2] : 0;
@@ -80,31 +81,34 @@ int __util_uuencode_main(int argc, char **argv)
 	mode_t mode = 0644; /* traditional stdin-source default -- see header */
 	unsigned char buf[45];
 	size_t n;
+	int noperands;
+	int status = 0;
 
 	for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
 		if (!strcmp(argv[i], "--")) { i++; break; }
 		if (!strcmp(argv[i], "-m")) {
-			fprintf(stderr, "uuencode: -m: Base64 encoding is not supported "
+			__util_diagf("uuencode: -m: Base64 encoding is not supported "
 			                "by this build -- see src/util/uuencode.c\n");
 			return 1;
 		}
-		fprintf(stderr, "uuencode: %s: invalid option\n", argv[i]);
+		__util_diagf("uuencode: %s: invalid option\n", argv[i]);
 		return 1;
 	}
 
-	if (argc - i == 1) {
+	noperands = i < argc ? argc - i : 0;
+	if (noperands == 1) {
 		decode_name = argv[i];
 		in = stdin;
-	} else if (argc - i == 2) {
+	} else if (noperands == 2) {
 		src_path = argv[i];
 		decode_name = argv[i + 1];
 		in = fopen(src_path, "rb");
 		if (!in) {
-			fprintf(stderr, "uuencode: %s: %s\n", src_path, strerror(errno));
+			__util_diagf("uuencode: %s: %s\n", src_path, strerror(errno));
 			return 1;
 		}
 	} else {
-		fprintf(stderr, "uuencode: usage: uuencode [-m] [source_file] decode_pathname\n");
+		__util_diagf("uuencode: usage: uuencode [-m] [source_file] decode_pathname\n");
 		return 1;
 	}
 
@@ -117,12 +121,14 @@ int __util_uuencode_main(int argc, char **argv)
 
 	while ((n = fread(buf, 1, sizeof buf, in)) > 0) emit_line(buf, n);
 	if (ferror(in)) {
-		fprintf(stderr, "uuencode: %s: %s\n", src_path ? src_path : "stdin", strerror(errno));
-		if (src_path) fclose(in);
+		__util_diagf("uuencode: %s: %s\n", src_path ? src_path : "stdin", strerror(errno));
+		/* The input error is primary; close is cleanup only. */
+		if (src_path) (void)fclose(in);
 		return 1;
 	}
 
 	printf("`\nend\n");
-	if (src_path) fclose(in);
-	return 0;
+	if (src_path && fclose(in) != 0) status = 1;
+	if (fflush(stdout) != 0) status = 1;
+	return status;
 }

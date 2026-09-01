@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -8,12 +13,21 @@
 #define _NTLIBC_LIBC_H
 
 #include <stddef.h>
+#include <stdlib.h>
 #include <stdint.h>
+#include <sys/types.h>
 #include <errno.h>
 #include <wordexp.h>
 #include "nt.h"
 #include "thread_annotations.h"
 #include "plat_handle.h"
+
+#ifndef tokdef
+#define tokdef __token_type
+#endif
+tokdef internal_heap_allocated
+	dynamic_storage;
+#undef tokdef
 
 /* ---- lockset (Clang Thread Safety Analysis) capability tokens ---------
  * Two internal locks get a NTLIBC_CAPABILITY token here: __sig_lock()/
@@ -44,6 +58,12 @@ extern char **__argv;
 extern int __argc;
 extern char *__progname;                     /* argv[0] */
 extern char *__progname_full;                /* image path, UTF-8 */
+
+/* Internal users need the thread id regardless of whether the public
+ * GNU-extension declaration in <unistd.h> is visible under the current
+ * feature-test macros. */
+pid_t gettid(void);
+int __verify_ldbl_layout(void);
 
 /* environ helpers shared by getenv.c and setenv.c.  __env_find returns the
  * slot in environ holding "name=..." for the first l bytes of name, or
@@ -86,8 +106,10 @@ int __errno_from_doserror(unsigned);
 /* Convert a NUL-terminated UTF-8 string into a freshly malloc'd
  * NUL-terminated UTF-16 one; NULL with errno on failure.  *wlen, if not
  * NULL, receives the length in WCHARs excluding the terminator. */
+withtok(internal_heap_allocated)
 WCHAR *__utf8_to_utf16(const char *, size_t *wlen);
 /* Convert n WCHARs into a freshly malloc'd NUL-terminated UTF-8 string. */
+withtok(internal_heap_allocated)
 char *__utf16_to_utf8(const WCHAR *, size_t n);
 /* Convert into a caller-supplied buffer; returns bytes written excluding
  * the terminator, or -1 with errno (ERANGE if the buffer is too small). */
@@ -153,6 +175,7 @@ void __ntpath_free(struct __ntpath *);
 int __nt_prefix_not_dir(const UNICODE_STRING *nt, HANDLE root)
     __attribute__((nonnull(1)));
 /* The DOS-form absolute path of a handle, UTF-8, malloc'd. */
+withtok(internal_heap_allocated)
 char *__handle_path(HANDLE);
 
 /* The guts of open()/openat(): resolve and open, handing back the raw
@@ -293,8 +316,12 @@ void __mq_fd_closed(int);                    /* release side handles for an mqd_
 void __mq_fd_replaced(int, __plat_handle_t);  /* follow fork/fcntl handle remakes */
 /* Serialise the inheritable part of the descriptor table into a freshly
  * malloc'd blob for a child's RTL_USER_PROCESS_PARAMETERS RuntimeData;
- * *len receives its size.  NULL with errno on failure. */
-void *__fd_runtime_data(size_t *len);
+ * *len receives its size.  When making a descriptor inheritable replaces
+ * its handle, update any matching standard-handle snapshot too, so the
+ * process parameters do not retain the now-closed old value.  NULL with
+ * errno on failure. */
+void *__fd_runtime_data(size_t *len, __plat_handle_t std[3])
+    __attribute__((nonnull(1, 2)));
 
 /* Resolve a path in the fixed POSIX namespace.  __VFS_NONE means the path
  * is native, __VFS_MISSING means it is inside the namespace but absent,
@@ -460,8 +487,8 @@ int __spawn(const char *path, char *const argv[], char *const envp[]);
  * for its own reasons (execvpe()'s own `strchr(file, ...)` calls
  * before forwarding it as name; posix_spawn.c's/execute.c's own
  * argv[0]-derived strings, never NULL). */
-char *__find_program(const char *name, int use_path)
-    __attribute__((nonnull(1)));
+withtok(heap_allocated) __attribute__((nonnull(1)))
+char *__find_program(const char *name, int use_path);
 int __is_program(const char *path);
 /* WSL/ntfs3's four-byte little-endian $LXMOD extended attribute.  Only the
  * mode attribute is used: ntlibc must not manufacture Linux UID/GID values.
@@ -538,8 +565,9 @@ const char *__sh_param_get(int n);
 int __sh_last_status(void);
 
 /* ---- heap -------------------------------------------------------------- */
+withtok(internal_heap_allocated)
 void *__malloc(size_t);
-void __free(void *);
+void __free(void * consume(internal_heap_allocated));
 
 /* ---- time -------------------------------------------------------------- */
 #define __TICKS_PER_SEC 10000000LL
@@ -689,7 +717,7 @@ static inline int __utf16_to_utf8_capacity(size_t units, size_t *capacity)
  * requested element count or its byte size wrap.  Growth is bounded by the
  * machine word width: when another doubling would exceed the representable
  * byte limit, use the exact requested capacity instead. */
-static inline int __array_next_capacity(size_t current, size_t used,
+static inline int __array_next_capacity(size_t current, size_t used, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	size_t additional, size_t initial, size_t element_size, size_t *result)
 {
 	size_t minimum, maximum, capacity;
@@ -822,8 +850,9 @@ long long __fsize_clamp(__plat_handle_t h, int append, size_t count);
 long long __fsize_room_at(long long off);
 int __fsize_allow(long long size);
 int __fsize_exceeded(void);
-int __raise_internal(int);
-int __raise_internal_info(int, const void *);
+int __raise_internal(int) NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
+int __raise_internal_info(int, const void *)
+    NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 int __sig_queue_process_info(int, const void *);
 /* How many times a signal-catching function has been entered.  Compared
  * across an alertable wait by src/unistd/sleep.c to tell a caught signal
@@ -844,7 +873,7 @@ struct __sigset_t;
  * in either body. */
 void __sig_current_mask_copy(struct __sigset_t *) __attribute__((nonnull(1)));
 void __sig_current_mask_install(const struct __sigset_t *) __attribute__((nonnull(1)));
-int __raise_thread_internal(int);
+int __raise_thread_internal(int) NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 /* Nonzero if SIGCHLD's installed sa_flags has SA_NOCLDWAIT set -- see the
  * comment on __sigchld_nocldwait() in src/signal/signal.c. */
 int __sigchld_nocldwait(void);
@@ -895,13 +924,17 @@ void __sig_notify_delivery(void);
 int __sig_try_deliver_remote(int pid, int sig);
 int __sig_try_deliver_remote_info(int pid, int sig, const void *);
 int __sig_try_deliver_remote_nondefault(int pid, int sig);
-int __sig_disposition_is_default(int sig);
+int __sig_disposition_is_default(int sig)
+    NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 int __sig_consume_child_stop(int pid);
 void __sigchld_job_control(struct __child *, int sig);
 void __sig_pending_reset_after_fork(void);
 int __sig_pending_member(int sig);
 void __timer_reinit_after_fork(void);
 void __mman_reset_after_fork(void);
+int __mman_fault_is_object_error(const void *);
+int __mman_address_is_live(const void *);
+int __mman_range_is_live(const void *, size_t);
 void __aio_reset_after_fork(void);
 void __sig_lock(void) NTLIBC_ACQUIRE(__ntlibc_sig_lock_token);
 void __sig_unlock(void) NTLIBC_RELEASE(__ntlibc_sig_lock_token);
@@ -932,9 +965,11 @@ const char *__strerror_msg(int e);
 #ifdef __i386__
 void __wow64_fixup_clone(HANDLE process, HANDLE thread);
 #else
-static inline void __wow64_fixup_clone(HANDLE process, HANDLE thread) { (void)process; (void)thread; }
+static inline void __wow64_fixup_clone(HANDLE process, HANDLE thread) { (void)process; (void)thread; } // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 #endif
 
 #define __container_of(ptr, type, member) ((type *)((char *)(ptr) - offsetof(type, member)))
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

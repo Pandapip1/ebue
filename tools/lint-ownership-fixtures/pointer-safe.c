@@ -1,11 +1,8 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-typedef __SIZE_TYPE__ size_t;
-void *malloc(size_t);
-void free(void *);
-void *__malloc(size_t);
-void *realloc(void *, size_t);
+#include "allocator-fixture.h"
+
 size_t strcspn(const char *, const char *);
 size_t strspn(const char *, const char *);
 /* Deliberately `unsigned short`, NOT whatever clang's own builtin
@@ -17,6 +14,8 @@ size_t strspn(const char *, const char *);
  * type's real size, not ASTContext::getWCharType()'s. */
 typedef unsigned short wchar_t;
 size_t wcsspn(const wchar_t *, const wchar_t *);
+long strtol(const char *, char **, int);
+long getline(char **, size_t *, void *);
 
 int local_object(void)
 {
@@ -147,6 +146,18 @@ void *peb_is_always_valid(void)
 	return __peb->ImageBaseAddress;
 }
 
+/* The process child table is initialized to a fixed seed array and its only
+ * replacement is published after a checked allocation.  It is never cleared,
+ * so the checker may trust this one reserved global's cross-TU invariant. */
+struct __child { int pid; };
+static struct __child child_seed[4];
+struct __child *__children = child_seed;
+
+int child_table_is_always_valid(void)
+{
+	return __children[0].pid;
+}
+
 /* GCC/Clang's `nonnull` attribute is the C ecosystem's own standard way
  * to say a pointer parameter is required, not optional -- real compilers
  * already diagnose a provably-NULL argument at the call site under
@@ -162,6 +173,35 @@ int nonnull_attribute_is_trusted(int *pointer) __attribute__((nonnull(1)));
 int nonnull_attribute_is_trusted(int *pointer)
 {
 	return *pointer;
+}
+
+/* strto* guarantees that a supplied end pointer receives either the input
+ * pointer itself or a pointer to the first unconverted byte within that same
+ * nonnull string.  The generic analyzer invalidates `end` across the call but
+ * does not know that the fresh value is necessarily nonnull; pin the
+ * ValidPointer checkPostCall summary that supplies this standard contract. */
+int string_conversion_end_pointer_is_nonnull(const char *text)
+    __attribute__((nonnull(1)));
+int string_conversion_end_pointer_is_nonnull(const char *text)
+{
+	char *end;
+	(void)strtol(text, &end, 10);
+	return *end;
+}
+
+/* On success getline writes a nonnull buffer containing the returned byte
+ * count followed by a NUL.  This checks both facts: pointer validity and the
+ * return-value-derived dynamic extent. */
+int line_input_result_bounds_the_buffer(void *stream)
+    __attribute__((nonnull(1)));
+int line_input_result_bounds_the_buffer(void *stream)
+{
+	char *line = 0;
+	size_t capacity = 0;
+	long length = getline(&line, &capacity, stream);
+	if (length < 0)
+		return 0;
+	return line[length];
 }
 
 /* clang's own dynamic-extent tracking for an allocator's return value only

@@ -21,6 +21,11 @@
  * harmless dead code, not a correctness issue.
  */
 
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+
 #include "libc.h"
 PTEB __teb(void)
 {
@@ -28,3 +33,5 @@ PTEB __teb(void)
 	__asm__ __volatile__("mov %0, x18" : "=r"(t));
 	return t;
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -38,7 +38,7 @@ int __util_basename_main(int argc, char **argv)
 	size_t blen, slen;
 
 	if (argc < 2 || argc > 3) {
-		fprintf(stderr, "basename: usage: basename string [suffix]\n");
+		__util_diagf("basename: usage: basename string [suffix]\n");
 		return 2;
 	}
 
@@ -53,7 +53,6 @@ int __util_basename_main(int argc, char **argv)
 			base[blen - slen] = 0;
 	}
 
-	fputs(base, stdout);
-	fputc('\n', stdout);
-	return 0;
+	if (fputs(base, stdout) < 0 || fputc('\n', stdout) == EOF) return 1;
+	return fflush(stdout) == 0 ? 0 : 1;
 }

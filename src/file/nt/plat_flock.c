@@ -16,6 +16,11 @@
  * for the fuller account of this and the other Wine landmines this
  * file works around.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include "libc.h"
 #include "plat_flock.h"
 
@@ -37,3 +42,5 @@ int __plat_flock_unlock(__plat_handle_t h)
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

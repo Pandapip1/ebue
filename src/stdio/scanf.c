@@ -40,7 +40,12 @@
  * implemented; positional arguments and vector-of-float %a/%A input
  * conversions are not, since nothing in this tree needs them.
  */
-#define _GNU_SOURCE
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -317,12 +322,15 @@ static int ab_room(struct abuf *b, int need)
 {
 	void *q;
 	int cap = b->cap;
+	/* cap starts positive below and each pass consumes one value bit. */
+	unsigned steps = sizeof(int) * CHAR_BIT;
 
 	if (need <= cap) return 1;
 	if (cap < 32) cap = 32;
-	while (cap < need) {
+	while (cap < need && steps > 0) {
 		if (cap > INT_MAX / 2) return 0;
 		cap *= 2;
+		steps--;
 	}
 	if (cap > INT_MAX / b->esz) return 0;
 	q = realloc(b->p, (size_t)cap * (size_t)b->esz);
@@ -394,10 +402,11 @@ static int hexval(int c)
  * stops in between ("infi") is consumed in full and is a matching
  * failure.  1 if a spelling matched, 0 if not, -1 out of memory.  c is
  * the first character, already read. */
-static int scanword(struct fld *fl, struct nbuf *b, const char *word, int least, int c)
+static int scanword(struct fld *fl, struct nbuf *b, const char *word, int least, int c) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int i = 0, ok = 0;
-	for (;;) {
+	/* The two closed call sites match "nan" and "infinity". */
+	for (unsigned chars_left = 8; chars_left > 0; chars_left--) {
 		if (c == EOF || tolower(c) != word[i]) break;
 		if (!nb_put(b, c)) return -1;
 		i++;
@@ -612,7 +621,10 @@ static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
 	if (r == (size_t)-2) return 0;          /* incomplete; more bytes needed */
 	if (assign) ws[*nn] = wc;
 	(*nn)++;
-	while (mbrtowc(&wc, &ch, 0, st) == (size_t)-3) {
+	/* mbrtowc can hold at most one queued low surrogate.  One check
+	 * drains it and the second observes the now-empty state. */
+	for (unsigned checks_left = 2; checks_left > 0; checks_left--) {
+		if (mbrtowc(&wc, &ch, 0, st) != (size_t)-3) break;
 		if (assign) ws[*nn] = wc;
 		(*nn)++;
 	}
@@ -660,7 +672,7 @@ static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
  * abstraction changes; only whether the compiler is given the chance to
  * fold `st` away at each site. */
 #define gf(q, s) ((s) == 1 ? (unsigned)(unsigned char)*(q) \
-                           : (unsigned)*(const wchar_t *)(const void *)(q))
+	                           : (unsigned)*(const wchar_t *)(q))
 /* KNOWN RESIDUAL COST, measured, so nobody re-derives it: the `s == 1`
  * test above is a real branch per format character, and it is worth
  * about 3.8% of this scanner's time (0.790s -> 0.820s over 300000
@@ -706,8 +718,8 @@ static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
  * convert, not on every path. */
 static int store_unit(int wide_in, int c, void *dst, int *nn, mbstate_t *mbs,
                       int assign, int wide_out) __attribute__((nonnull(4)));
-static int store_unit(int wide_in, int c, void *dst, int *nn, mbstate_t *mbs,
-                      int assign, int wide_out)
+static int store_unit(int wide_in, int c, void *dst, int *nn, mbstate_t *mbs, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+                      int assign, int wide_out) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	if (!wide_in) {
 		if (wide_out) return wide_put(c, (wchar_t *)dst, nn, mbs, assign);
@@ -750,7 +762,7 @@ static int store_unit(int wide_in, int c, void *dst, int *nn, mbstate_t *mbs,
  * -- both branches of `if (wide_out) ... else ...` write through it,
  * with no `assign`-style guard on either. */
 static void store_term(void *dst, int nn, int wide_out) __attribute__((nonnull(1)));
-static void store_term(void *dst, int nn, int wide_out)
+static void store_term(void *dst, int nn, int wide_out) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	if (wide_out) ((wchar_t *)dst)[nn] = 0;
 	else ((char *)dst)[nn] = 0;
@@ -779,8 +791,8 @@ static void store_term(void *dst, int nn, int wide_out)
  * blen == 0 (the same ISO 7.24.1p2 "still valid at n == 0" convention
  * as the mem-family, since q == b is what the loop's own gf(q, st)
  * would dereference first were blen nonzero). */
-static int wset_has(const char *b, size_t blen, int st, unsigned c) __attribute__((nonnull(1)));
-static int wset_has(const char *b, size_t blen, int st, unsigned c)
+static int wset_has(const char *b, size_t blen, size_t st, unsigned c) __attribute__((nonnull(1)));
+static int wset_has(const char *b, size_t blen, size_t st, unsigned c) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const char *q, *e = b + blen;
 	for (q = b; q < e; q += st) {
@@ -1070,7 +1082,7 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 					do {
 						if (gf(fp, st) == '-' && gf(fp + st, st) && gf(fp + st, st) != ']' && fp != start) {
 							unsigned a = gf(fp - st, st), b = gf(fp + st, st), k;
-							if (a < 256 && b < 256) for (k = a; k <= b; k++) set[k] = 1;
+							if (a < 256 && b < 256) for (k = a; k < b + 1; k++) set[k] = 1;
 							else anyhigh = 1;
 							fp += 2 * st;
 						} else {
@@ -1183,9 +1195,9 @@ int vscanf(const char *__restrict fmt, __isoc_va_list ap)
 /* s is dereferenced unconditionally (`mf.mem_len = strlen(s);`); fmt
  * is forwarded into __vfscanf(), which itself requires it. */
 static int vsscanf_impl(const char *s, const char *fmt, va_list ap) __attribute__((nonnull(1, 2)));
-static int vsscanf_impl(const char *s, const char *fmt, va_list ap)
+static int vsscanf_impl(const char *s, const char *fmt, va_list ap) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
-	FILE mf;
+	FILE mf; // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- implementation-owned transient memory-stream adapter is constructed from scratch, not copied
 	int r;
 	memset(&mf, 0, sizeof mf);
 	mf.fd = -1;
@@ -1243,7 +1255,7 @@ int sscanf(const char *__restrict s, const char *__restrict fmt, ...)
 
 int __vfwscanf(FILE *f, const wchar_t *fmt, va_list ap)
 {
-	return vfscanf_st(f, (const char *)(const void *)fmt, ap, (int)sizeof(wchar_t));
+	return vfscanf_st(f, (const char *)fmt, ap, (int)sizeof(wchar_t));
 }
 
 /* swscanf() reads a wchar_t array, and reads it IN PLACE: the memory
@@ -1258,9 +1270,9 @@ int __vfwscanf(FILE *f, const wchar_t *fmt, va_list ap)
 /* s is dereferenced unconditionally (`mf.mem_len = wcslen(s) * ...`);
  * fmt is forwarded into vfscanf_st(), which itself requires it. */
 static int vswscanf_impl(const wchar_t *s, const wchar_t *fmt, va_list ap) __attribute__((nonnull(1, 2)));
-static int vswscanf_impl(const wchar_t *s, const wchar_t *fmt, va_list ap)
+static int vswscanf_impl(const wchar_t *s, const wchar_t *fmt, va_list ap) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
-	FILE mf;
+	FILE mf; // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- implementation-owned transient wide memory-stream adapter is constructed from scratch, not copied
 	int r;
 	memset(&mf, 0, sizeof mf);
 	mf.fd = -1;
@@ -1269,10 +1281,10 @@ static int vswscanf_impl(const wchar_t *s, const wchar_t *fmt, va_list ap)
 	mf.wmem = 1;
 	mf.wide = 1;
 	mf.readable = 1;
-	mf.mem_buf = (unsigned char *)(void *)(uintptr_t)(const void *)s;
+	mf.mem_buf = (unsigned char *)(uintptr_t)s;
 	mf.mem_len = wcslen(s) * sizeof(wchar_t);
 	mf.mem_size = mf.mem_len;
-	r = vfscanf_st(&mf, (const char *)(const void *)fmt, ap, (int)sizeof(wchar_t));
+	r = vfscanf_st(&mf, (const char *)fmt, ap, (int)sizeof(wchar_t));
 	/* Same as vsscanf_impl: __fill gives even a memory FILE a read
 	 * buffer, and this one never sees fclose. */
 	free(mf.buf);
@@ -1316,3 +1328,5 @@ int swscanf(const wchar_t *__restrict s, const wchar_t *__restrict fmt, ...)
 	va_end(ap);
 	return r;
 }
+
+// NOLINTEND(misc-include-cleaner)

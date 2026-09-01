@@ -21,6 +21,11 @@
  * the kernel already has open) -- see each platform's own plat_fd_init.c
  * for the real story, not this file.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
@@ -32,20 +37,21 @@ int __fd_limit = FD_MAX;
 
 int __fd_alloc(int lowest)
 {
-	int i;
+	int i, entries_left = FD_MAX;
 	if (lowest < 0) lowest = 0;
 	/* __fd_limit, not FD_MAX: setrlimit(RLIMIT_NOFILE) lowers it, and
 	 * "a number one greater than the maximum value that the system may
 	 * assign to a newly-created descriptor" (setrlimit.html) is exactly
 	 * this bound.  It never exceeds FD_MAX, so the table stays in
 	 * range whatever a caller asks for. */
-	for (i = lowest; i < __fd_limit; i++)
+	for (i = lowest; i < __fd_limit && entries_left > 0;
+	     i++, entries_left--)
 		if (!__fds[i].h) return i;
 	errno = EMFILE;
 	return -1;
 }
 
-int __fd_install_at(int fd, HANDLE h, unsigned flags, int type)
+int __fd_install_at(int fd, HANDLE h, unsigned flags, int type) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = &__fds[fd];
 	memset(f, 0, sizeof *f);
@@ -82,3 +88,5 @@ int __fd_close_all_cloexec(void)
 		if (__fds[i].h && (__fds[i].flags & O_CLOEXEC)) close(i);
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

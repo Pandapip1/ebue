@@ -14,6 +14,11 @@
  * value wording -- *result yields the stored key, matching glibc/BSD
  * behaviour that programs written against this API rely on.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <search.h>
 #include <stdlib.h>
 
@@ -59,6 +64,7 @@ void *tfind(const void *key, void *const *rootp, int (*compar)(const void *, con
 /* Recursively free a subtree's nodes without touching caller key storage
  * (tdelete.html says nothing about freeing keys -- they are the
  * application's, same contract as hdestroy() below). */
+// NOLINTNEXTLINE(misc-no-recursion) -- the operation intentionally follows the caller-provided binary-tree height
 static void free_subtree(struct node *n)
 {
 	if (!n) return;
@@ -108,10 +114,11 @@ void *tdelete(const void *__restrict key, void **__restrict rootp,
 	 * the search above, is exactly the node whose child link was just
 	 * rewritten. "... or an unspecified non-null pointer if the
 	 * deleted node was the root node" -- rootp itself qualifies. */
-	if (!parent) return rootp;
+	if (!parent) return (void *)rootp;
 	return parent;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- the operation intentionally follows the caller-provided binary-tree height
 static void trecurse(struct node *n, void (*action)(const void *, VISIT, int), int depth)
 {
 	if (!n->left && !n->right) {
@@ -129,3 +136,5 @@ void twalk(const void *root, void (*action)(const void *, VISIT, int))
 {
 	if (root) trecurse((struct node *)root, action, 0);
 }
+
+// NOLINTEND(misc-include-cleaner)

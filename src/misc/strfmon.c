@@ -174,7 +174,7 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 		unsigned long fw = 0, lp = 0, rp;
 		const char *sym, *sign, *radix, *thousep, *grouping;
 		char num[512], field[FIELD_MAX];
-		size_t fl = 0, ndigits, nlen, align_pad = 0;
+		size_t fl = 0, ndigits, numlen, nlen, align_pad = 0;
 		char *dot;
 		double x;
 		int n;
@@ -229,7 +229,6 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 		if (*fmt == '.') {
 			for (rp = 0, fmt++; *fmt >= '0' && *fmt <= '9'; fmt++)
 				rp = rp * 10 + (unsigned long)(*fmt - '0');
-			if (rp > PREC_MAX) { errno = E2BIG; return -1; }
 		}
 
 		if (*fmt == 'i') intl = 1;
@@ -239,9 +238,10 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 		if (rp == (unsigned long)-1) {
 			/* "If a right precision is not included, a default
 			 * specified by the current locale is used." */
-			char fd = intl ? lc->int_frac_digits : lc->frac_digits;
-			rp = (fd >= 0 && fd < CHAR_MAX) ? (unsigned long)fd : 2;
+			int fd = intl ? lc->int_frac_digits : lc->frac_digits;
+			rp = fd >= 0 && fd < CHAR_MAX ? (unsigned long)fd : 2;
 		}
+		if (rp > PREC_MAX) { errno = E2BIG; return -1; }
 
 		sym = nosym ? "" : (intl ? lc->int_curr_symbol : lc->currency_symbol);
 		radix = lc->mon_decimal_point;
@@ -257,9 +257,10 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 		n = snprintf(num, sizeof num, "%.*f", (int)rp,
 		             x < 0 ? -x : x);
 		if (n < 0 || (size_t)n >= sizeof num) { errno = E2BIG; return -1; }
+		numlen = (size_t)n;
 
-		dot = strchr(num, '.');
-		ndigits = dot ? (size_t)(dot - num) : (size_t)n;
+		dot = memchr(num, '.', numlen);
+		ndigits = dot ? (size_t)(dot - num) : numlen;
 
 		/* "#n ... This option causes an amount to be formatted as
 		 * if it has the number of digits specified by n. If more
@@ -345,7 +346,8 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 		 * character appears." */
 		if (dot) {
 			if (fappend(field, &fl, radix, strlen(radix)) < 0) goto e2big;
-			if (fappend(field, &fl, dot + 1, strlen(dot + 1)) < 0) goto e2big;
+			if (fappend(field, &fl, dot + 1, numlen - ndigits - 1) < 0)
+				goto e2big;
 		}
 
 		if (x < 0 && negpar)

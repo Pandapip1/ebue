@@ -14,6 +14,12 @@
  * __mq_fd_closed() so using close(mqdes), although not the POSIX interface,
  * cannot leave a stale descriptor association or notification registration.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- strnlen(): bound name validation before path construction
 #include <mqueue.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -93,31 +99,48 @@ static int name_char(unsigned char c)
 	       (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
 }
 
+withtok(heap_allocated)
 static char *mq_path(const char *name)
 {
 	const char *component, *dir;
-	size_t n, d, i;
+	size_t namelen, n, d, i, maxdir;
+	const size_t prefix = sizeof "/ntlibc-mq/" - 1;
+	size_t total;
 	char *path;
 	if (!name) { errno = EINVAL; return NULL; }
-	if (strlen(name) >= PATH_MAX) { errno = ENAMETOOLONG; return NULL; }
-	component = *name == '/' ? name + 1 : name;
-	n = strlen(component);
-	if (!n || !strcmp(component, ".") || !strcmp(component, "..")) {
+	/* PATH_MAX bytes already force ENAMETOOLONG; no rejected suffix needs
+	 * an unbounded scan.  Derive the component length from this one exact
+	 * measurement instead of traversing the same string again. */
+	namelen = strnlen(name, PATH_MAX);
+	if (namelen >= PATH_MAX) { errno = ENAMETOOLONG; return NULL; }
+	if (*name == '/') { component = name + 1; n = namelen - 1; }
+	else { component = name; n = namelen; }
+	if (!n || (n == 1 && component[0] == '.') ||
+	    (n == 2 && component[0] == '.' && component[1] == '.')) {
 		errno = EINVAL; return NULL;
 	}
 	if (n > NAME_MAX) { errno = ENAMETOOLONG; return NULL; }
 	for (i = 0; i < n; i++) if (!name_char((unsigned char)component[i])) {
 		errno = EINVAL; return NULL;
 	}
-	dir = mq_tmpdir(); d = strlen(dir);
-	if (d + sizeof "/ntlibc-mq/" - 1 + n >= PATH_MAX) {
+	if (n > (size_t)PATH_MAX - 1 - prefix) {
 		errno = ENAMETOOLONG; return NULL;
 	}
-	path = malloc(d + sizeof "/ntlibc-mq/" - 1 + n + 1);
+	/* The preceding guard makes computing the exact remaining room
+	 * non-wrapping.  Once maxdir + 1 bytes have been examined, the
+	 * path is known to be too long and no rejected suffix needs scanning. */
+	maxdir = (size_t)PATH_MAX - 1 - prefix - n;
+	dir = mq_tmpdir(); d = strnlen(dir, maxdir + 1);
+	if (d > maxdir) {
+		errno = ENAMETOOLONG; return NULL;
+	}
+	total = d + prefix + n + 1;
+	path = malloc(total);
 	if (!path) return NULL;
 	memcpy(path, dir, d);
-	memcpy(path + d, "/ntlibc-mq/", sizeof "/ntlibc-mq/" - 1);
-	memcpy(path + d + sizeof "/ntlibc-mq/" - 1, component, n + 1);
+	memcpy(path + d, "/ntlibc-mq/", prefix);
+	memcpy(path + d + prefix, component, n);
+	path[total - 1] = 0;
 	return path;
 }
 
@@ -174,7 +197,7 @@ static void give(__plat_handle_t h)
 	__plat_semaphore_post(h);
 }
 
-static int raw_io(__plat_handle_t h, void *buf, size_t len, off_t off, int write_op)
+static int raw_io(__plat_handle_t h, void *buf, size_t len, off_t off, int write_op) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned char *p = buf;
 	while (len) {
@@ -200,8 +223,9 @@ static int raw_write(__plat_handle_t h, const void *buf, size_t len, off_t off)
 
 static off_t slot_offset(const struct mq_desc *d, unsigned slot)
 {
+	/* Queue creation/read validation bounds slot to 255 and msgsize to 65536. */
 	return (off_t)sizeof(struct mq_header) +
-	       (off_t)slot * (sizeof(struct mq_slot) + d->msgsize);
+	       (off_t)slot * (off_t)(sizeof(struct mq_slot) + d->msgsize);
 }
 
 static struct mq_desc *get_desc(mqd_t mqdes)
@@ -239,7 +263,7 @@ mqd_t mq_open(const char *name, int oflag, ...)
 	struct mq_attr supplied, *attr = NULL;
 	struct mq_desc *d;
 	__plat_handle_t ns = 0, lock = 0, items = 0, spaces = 0;
-	int fd = -1, created = 0, saved = 0, access = oflag & O_ACCMODE;
+	int fd = -1, created = 0, saved = 0, access = oflag & O_ACCMODE, n;
 	mode_t mode = 0;
 	size_t file_size;
 
@@ -262,8 +286,12 @@ mqd_t mq_open(const char *name, int oflag, ...)
 	if (!path) return (mqd_t)-1;
 	if (ensure_dir(path) < 0) goto fail;
 	hash = path_hash(path);
-	snprintf(nsname, sizeof nsname, "\\BaseNamedObjects\\ntlibc.mq.name.%08x%08x",
+	n = snprintf(nsname, sizeof nsname, "\\BaseNamedObjects\\ntlibc.mq.name.%08x%08x",
 	         (unsigned)(hash >> 32), (unsigned)hash);
+	if (n < 0 || (size_t)n >= sizeof nsname) {
+		if (n >= 0) errno = ENAMETOOLONG;
+		goto fail;
+	}
 	if (create_sem(nsname, 1, 1, &ns) < 0 || take(ns) < 0) goto fail;
 
 	if (oflag & O_CREAT) {
@@ -285,12 +313,24 @@ mqd_t mq_open(const char *name, int oflag, ...)
 		h.msgsize = attr ? (unsigned)supplied.mq_msgsize : MQ_DEFAULT_MSGSIZE;
 		h.sequence = 1;
 		object_sequence++;
-		snprintf(h.lock_name, sizeof h.lock_name,
+		n = snprintf(h.lock_name, sizeof h.lock_name,
 		         "\\BaseNamedObjects\\ntlibc.mq.%d.%u.lock", (int)getpid(), object_sequence);
-		snprintf(h.items_name, sizeof h.items_name,
+		if (n < 0 || (size_t)n >= sizeof h.lock_name) {
+			if (n >= 0) errno = ENAMETOOLONG;
+			goto fail_created;
+		}
+		n = snprintf(h.items_name, sizeof h.items_name,
 		         "\\BaseNamedObjects\\ntlibc.mq.%d.%u.items", (int)getpid(), object_sequence);
-		snprintf(h.spaces_name, sizeof h.spaces_name,
+		if (n < 0 || (size_t)n >= sizeof h.items_name) {
+			if (n >= 0) errno = ENAMETOOLONG;
+			goto fail_created;
+		}
+		n = snprintf(h.spaces_name, sizeof h.spaces_name,
 		         "\\BaseNamedObjects\\ntlibc.mq.%d.%u.spaces", (int)getpid(), object_sequence);
+		if (n < 0 || (size_t)n >= sizeof h.spaces_name) {
+			if (n >= 0) errno = ENAMETOOLONG;
+			goto fail_created;
+		}
 		file_size = sizeof h + (size_t)h.maxmsg * (sizeof(struct mq_slot) + h.msgsize);
 		if (ftruncate(fd, (off_t)file_size) < 0 || raw_write(__fds[fd].h, &h, sizeof h, 0) < 0)
 			goto fail_created;
@@ -344,13 +384,13 @@ fail_qlocked:
 	give(lock);
 fail_fd:
 	saved = errno;
-	if (fd >= 0) close(fd);
-	if (created) unlink(path);
+	if (fd >= 0) (void)close(fd);
+	if (created) (void)unlink(path);
 	goto fail_locked_saved;
 fail_created:
 	saved = errno;
-	close(fd);
-	unlink(path);
+	(void)close(fd);
+	(void)unlink(path);
 	goto fail_locked_saved;
 fail_locked:
 	saved = errno;
@@ -368,7 +408,7 @@ fail:
 }
 
 static int wait_count(struct mq_desc *d, __plat_handle_t count, int nonblock,
-	const struct timespec *abstime, int timed, int receiver)
+	const struct timespec *abstime, int timed, int receiver) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct timespec now;
 	struct mq_header h;
@@ -434,7 +474,7 @@ static int wait_count(struct mq_desc *d, __plat_handle_t count, int nonblock,
 	return status == __PLAT_WAIT_OK ? 0 : -1;
 }
 
-int mq_timedsend(mqd_t mqdes, const char *msg, size_t len, unsigned prio,
+int mq_timedsend(mqd_t mqdes, const char *msg, size_t len, unsigned prio, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	const struct timespec *abstime)
 {
 	struct mq_desc *d = get_desc(mqdes);
@@ -447,7 +487,7 @@ int mq_timedsend(mqd_t mqdes, const char *msg, size_t len, unsigned prio,
 	if ((__fds[mqdes].flags & O_ACCMODE) == O_RDONLY) { errno = EBADF; return -1; }
 	if (len > d->msgsize) { errno = EMSGSIZE; return -1; }
 	if (prio >= MQ_PRIO_MAX) { errno = EINVAL; return -1; }
-	if (wait_count(d, d->spaces, __fds[mqdes].flags & O_NONBLOCK,
+	if (wait_count(d, d->spaces, (__fds[mqdes].flags & O_NONBLOCK) != 0,
 	               abstime, abstime != NULL, 0) < 0) return -1;
 	if (take(d->lock) < 0) { give(d->spaces); return -1; }
 	if (read_header(d, &h) < 0) goto rollback;
@@ -459,7 +499,7 @@ int mq_timedsend(mqd_t mqdes, const char *msg, size_t len, unsigned prio,
 	memset(&s, 0, sizeof s);
 	s.used = 1; s.priority = prio; s.length = (unsigned)len; s.sequence = h.sequence++;
 	if (len && raw_write(d->file, msg, len,
-	                     slot_offset(d, free_slot) + sizeof s) < 0) goto rollback;
+	                     slot_offset(d, free_slot) + (off_t)sizeof s) < 0) goto rollback;
 	if (raw_write(d->file, &s, sizeof s, slot_offset(d, free_slot)) < 0) goto rollback;
 	if (!h.curmsgs && h.notify_active && !h.receive_waiters) {
 		notify = 1; notify_kind = h.notify_kind; notify_pid = h.notify_pid;
@@ -494,7 +534,7 @@ ssize_t mq_timedreceive(mqd_t mqdes, char *msg, size_t len, unsigned *prio,
 	if (!d) return -1;
 	if ((__fds[mqdes].flags & O_ACCMODE) == O_WRONLY) { errno = EBADF; return -1; }
 	if (len < d->msgsize) { errno = EMSGSIZE; return -1; }
-	if (wait_count(d, d->items, __fds[mqdes].flags & O_NONBLOCK,
+	if (wait_count(d, d->items, (__fds[mqdes].flags & O_NONBLOCK) != 0,
 	               abstime, abstime != NULL, 1) < 0) return -1;
 	if (take(d->lock) < 0) { give(d->items); return -1; }
 	if (read_header(d, &h) < 0) goto rollback;
@@ -510,7 +550,7 @@ ssize_t mq_timedreceive(mqd_t mqdes, char *msg, size_t len, unsigned *prio,
 		errno = EIO; goto rollback;
 	}
 	if (best.length && raw_read(d->file, msg, best.length,
-	                            slot_offset(d, selected) + sizeof best) < 0) goto rollback;
+	                            slot_offset(d, selected) + (off_t)sizeof best) < 0) goto rollback;
 	memset(&s, 0, sizeof s);
 	if (raw_write(d->file, &s, sizeof s, slot_offset(d, selected)) < 0) goto rollback;
 	h.curmsgs--;
@@ -539,10 +579,11 @@ int mq_getattr(mqd_t mqdes, struct mq_attr *attr)
 	if (take(d->lock) < 0) return -1;
 	if (read_header(d, &h) < 0) { give(d->lock); return -1; }
 	memset(attr, 0, sizeof *attr);
-	attr->mq_flags = __fds[mqdes].flags & O_NONBLOCK;
-	attr->mq_maxmsg = h.maxmsg;
-	attr->mq_msgsize = h.msgsize;
-	attr->mq_curmsgs = h.curmsgs;
+	/* read_header() preserves creation-time limits before these ABI conversions. */
+	attr->mq_flags = (long)(__fds[mqdes].flags & O_NONBLOCK);
+	attr->mq_maxmsg = (long)h.maxmsg;
+	attr->mq_msgsize = (long)h.msgsize;
+	attr->mq_curmsgs = (long)h.curmsgs;
 	give(d->lock);
 	return 0;
 }
@@ -626,12 +667,17 @@ int mq_unlink(const char *name)
 	char *path = mq_path(name), nsname[96];
 	unsigned long long hash;
 	__plat_handle_t ns = 0;
-	int result, saved;
+	int result, saved, n;
 	if (!path) return -1;
 	if (ensure_dir(path) < 0) { free(path); return -1; }
 	hash = path_hash(path);
-	snprintf(nsname, sizeof nsname, "\\BaseNamedObjects\\ntlibc.mq.name.%08x%08x",
+	n = snprintf(nsname, sizeof nsname, "\\BaseNamedObjects\\ntlibc.mq.name.%08x%08x",
 	         (unsigned)(hash >> 32), (unsigned)hash);
+	if (n < 0 || (size_t)n >= sizeof nsname) {
+		if (n >= 0) errno = ENAMETOOLONG;
+		free(path);
+		return -1;
+	}
 	if (create_sem(nsname, 1, 1, &ns) < 0 || take(ns) < 0) {
 		saved = errno; if (ns) __plat_close(ns); free(path); errno = saved; return -1;
 	}
@@ -639,3 +685,5 @@ int mq_unlink(const char *name)
 	give(ns); __plat_close(ns); free(path); errno = saved;
 	return result;
 }
+
+// NOLINTEND(misc-include-cleaner)

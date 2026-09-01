@@ -7,6 +7,11 @@
  * only; ENTRY.key/.data are the caller's, never touched here (same
  * rule tdelete()/tsearch.c's free_subtree() follows for tree nodes).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <search.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -101,14 +106,19 @@ void hdestroy(void)
 ENTRY *hsearch(ENTRY item, ACTION action)
 {
 	unsigned long h;
-	size_t i, start;
+	size_t i, start, size, remaining;
 
-	if (!table) return NULL;
+	/* table_size is published and cleared with table.  Check both halves of
+	 * that invariant here so the modulo below is locally protected even if a
+	 * future initialization path is changed incompletely. */
+	if (!table || !table_size) return NULL;
+	size = table_size;
 
 	h = hash_str(item.key);
-	start = h % table_size;
-	i = start;
-	do {
+	start = h % size;
+	/* Linear probing visits each slot exactly once before the table is full. */
+	for (i = start, remaining = size; remaining-- > 0;
+	     i = (i + 1) % size) {
 		if (!table[i].used) {
 			if (action != ENTER) return NULL;
 			table[i].key = item.key;
@@ -119,8 +129,9 @@ ENTRY *hsearch(ENTRY item, ACTION action)
 		}
 		if (table[i].h == h && strcmp(table[i].key, item.key) == 0)
 			return (ENTRY *)&table[i];	/* ENTER on a hit: leave existing data alone */
-		i = (i + 1) % table_size;
-	} while (i != start);
+	}
 
 	return NULL;	/* table full */
 }
+
+// NOLINTEND(misc-include-cleaner)

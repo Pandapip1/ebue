@@ -537,6 +537,9 @@ static int bi_exit(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
 static int bi_exit(struct sh_builtin_ctx *ctx)
 {
 	int st;
+	/* Explicitly discarded stderr results in this file are secondary
+	 * diagnostics for a built-in status that is already determined; another
+	 * write to the same failed stream cannot report them more reliably. */
 
 	if (ctx->argc > 1) {
 		char *end;
@@ -546,7 +549,7 @@ static int bi_exit(struct sh_builtin_ctx *ctx)
 			 * shall cause a non-interactive shell to exit"; the
 			 * status is implementation-defined and 2 is what
 			 * bash/dash use for a numeric-argument error here. */
-			fprintf(stderr, "exit: %s: numeric argument required\n", ctx->argv[1]);
+			(void)fprintf(stderr, "exit: %s: numeric argument required\n", ctx->argv[1]);
 			st = 2;
 		} else {
 			st = (int)(v & 0xff);
@@ -586,15 +589,15 @@ static int bi_cd(struct sh_builtin_ctx *ctx)
 	}
 	oldcwd = getcwd(0, 0);
 	if (chdir(target) < 0) {
-		__free(oldcwd);
+		free(oldcwd);
 		ctx->status = 1;
 		return 0;
 	}
 	newcwd = getcwd(0, 0);
 	if (oldcwd) setenv("OLDPWD", oldcwd, 1);
 	if (newcwd) setenv("PWD", newcwd, 1);
-	__free(oldcwd);
-	__free(newcwd);
+	free(oldcwd);
+	free(newcwd);
 	ctx->status = 0;
 	return 0;
 }
@@ -622,29 +625,33 @@ static int bi_cd(struct sh_builtin_ctx *ctx)
  * only variable store is the real `environ` (see src/sh/execute.c), so
  * what is listed is the environment, not a separate set of unexported
  * shell variables, and there is no collation-order sort. */
-static void write_quoted(const char *v)
+static int write_quoted(const char *v)
 {
-	fputc('\'', stdout);
+	if (fputc('\'', stdout) == EOF) return -1;
 	for (; *v; v++) {
-		if (*v == '\'') fputs("'\\''", stdout);
-		else fputc(*v, stdout);
+		if (*v == '\'') {
+			if (fputs("'\\''", stdout) < 0) return -1;
+		} else if (fputc(*v, stdout) == EOF) return -1;
 	}
-	fputc('\'', stdout);
+	return fputc('\'', stdout) == EOF ? -1 : 0;
 }
 
-static void set_list_variables(void)
+static int set_list_variables(void)
 {
 	extern char **environ;
 	char **e;
 
 	for (e = environ; e && *e; e++) {
-		const char *eq = strchr(*e, '=');
-		if (!eq) { fputs(*e, stdout); fputc('\n', stdout); continue; }
-		fwrite(*e, 1, (size_t)(eq - *e), stdout);
-		fputc('=', stdout);
-		write_quoted(eq + 1);
-		fputc('\n', stdout);
+		size_t name_length = strcspn(*e, "=");
+		if (!(*e)[name_length]) {
+			if (fputs(*e, stdout) < 0 || fputc('\n', stdout) == EOF) return -1;
+			continue;
+		}
+		if (fwrite(*e, 1, name_length, stdout) != name_length ||
+		    fputc('=', stdout) == EOF || write_quoted(*e + name_length + 1) < 0 ||
+		    fputc('\n', stdout) == EOF) return -1;
 	}
+	return fflush(stdout) == 0 ? 0 : -1;
 }
 
 /* set(1p): "The remaining arguments shall be assigned in order to the
@@ -672,14 +679,13 @@ static int bi_set(struct sh_builtin_ctx *ctx)
 	int first = 1;
 
 	if (ctx->argc == 1) {
-		set_list_variables();
-		ctx->status = 0;
+		ctx->status = set_list_variables() == 0 ? 0 : 1;
 		return 0;
 	}
 	if (strcmp(ctx->argv[1], "--") == 0) {
 		first = 2;
 	} else if (ctx->argv[1][0] == '-' || ctx->argv[1][0] == '+') {
-		fprintf(stderr, "set: %s: options are not implemented -- see "
+		(void)fprintf(stderr, "set: %s: options are not implemented -- see "
 		                "test/sh-design.md\n", ctx->argv[1]);
 		ctx->status = 2;
 		return 0;
@@ -691,7 +697,7 @@ static int bi_set(struct sh_builtin_ctx *ctx)
 	 * indistinguishable from doing it in a discarded subshell. */
 	if (!ctx->env_mutate) { ctx->status = 0; return 0; }
 	if (__sh_params_replace(ctx->argv + first, ctx->argc - first) < 0) {
-		fprintf(stderr, "set: out of memory\n");
+		(void)fprintf(stderr, "set: out of memory\n");
 		ctx->status = 2;
 		return 0;
 	}
@@ -717,7 +723,7 @@ static int bi_shift(struct sh_builtin_ctx *ctx)
 	long n = 1;
 
 	if (ctx->argc > 2) {
-		fprintf(stderr, "shift: too many operands\n");
+		(void)fprintf(stderr, "shift: too many operands\n");
 		ctx->status = 2;
 		return 0;
 	}
@@ -725,19 +731,19 @@ static int bi_shift(struct sh_builtin_ctx *ctx)
 		const char *a = ctx->argv[1];
 		char *end;
 		if (!*a || !(*a >= '0' && *a <= '9')) {
-			fprintf(stderr, "shift: %s: not an unsigned decimal integer\n", a);
+			(void)fprintf(stderr, "shift: %s: not an unsigned decimal integer\n", a);
 			ctx->status = 2;
 			return 0;
 		}
 		n = strtol(a, &end, 10);
 		if (*end) {
-			fprintf(stderr, "shift: %s: not an unsigned decimal integer\n", a);
+			(void)fprintf(stderr, "shift: %s: not an unsigned decimal integer\n", a);
 			ctx->status = 2;
 			return 0;
 		}
 	}
 	if (n > __sh_param_count()) {
-		fprintf(stderr, "shift: can only shift %d positional parameter%s\n",
+		(void)fprintf(stderr, "shift: can only shift %d positional parameter%s\n",
 			__sh_param_count(), __sh_param_count() == 1 ? "" : "s");
 		ctx->status = 2;
 		return 0;
@@ -778,7 +784,7 @@ static int bi_return(struct sh_builtin_ctx *ctx)
 	int st = ctx->last_status;
 
 	if (ctx->argc > 2) {
-		fprintf(stderr, "return: too many operands\n");
+		(void)fprintf(stderr, "return: too many operands\n");
 		ctx->status = 2;
 		return 0;
 	}
@@ -787,13 +793,13 @@ static int bi_return(struct sh_builtin_ctx *ctx)
 		char *end;
 		long v;
 		if (!*a || !(*a >= '0' && *a <= '9')) {
-			fprintf(stderr, "return: %s: not an unsigned decimal integer\n", a);
+			(void)fprintf(stderr, "return: %s: not an unsigned decimal integer\n", a);
 			ctx->status = 2;
 			return 0;
 		}
 		v = strtol(a, &end, 10);
 		if (*end) {
-			fprintf(stderr, "return: %s: not an unsigned decimal integer\n", a);
+			(void)fprintf(stderr, "return: %s: not an unsigned decimal integer\n", a);
 			ctx->status = 2;
 			return 0;
 		}
@@ -804,7 +810,7 @@ static int bi_return(struct sh_builtin_ctx *ctx)
 		st = (int)(v & 0xff);
 	}
 	if (!__sh_in_function()) {
-		fprintf(stderr, "return: not currently executing a function\n");
+		(void)fprintf(stderr, "return: not currently executing a function\n");
 		ctx->status = 2;
 		return 0;
 	}

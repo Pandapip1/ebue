@@ -16,6 +16,11 @@
  * ntlibc_rpath_load() et al. in that build's unconditional link. A
  * plain native -fsyntax-only pass is unaffected, same as there.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #ifndef __has_feature
 #define __has_feature(x) 0 /* not clang: never claim a clang-only feature */
 #endif
@@ -67,3 +72,5 @@ void *ntlibc_delayLoadHelper2(ntlibc_delay_descr_t *descr, ntlibc_delay_thunk_t 
 	piat->function = proc;
 	return proc;
 }
+
+// NOLINTEND(misc-include-cleaner)

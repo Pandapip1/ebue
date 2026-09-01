@@ -1,3 +1,8 @@
+/* C library headers must use the implementation-reserved namespace for guards,
+ * type plumbing, and implementation extensions so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -9,6 +14,7 @@ extern "C" {
 #endif
 
 #include <features.h>
+#include <stdlib.h>
 
 #define __NEED_FILE
 #define __NEED___isoc_va_list
@@ -91,6 +97,7 @@ wchar_t *wmemchr (const wchar_t *, wchar_t, size_t) __attribute__((nonnull(1), _
 /* wcsnlen (src/string/wcsnlen.c) is wmemchr(s, 0, n) plus arithmetic --
  * reads only, same __pure__ reasoning as strnlen (string.h). */
 size_t wcsnlen (const wchar_t *, size_t) __attribute__((__pure__));
+withtok(heap_allocated)
 wchar_t *wcsdup (const wchar_t *);
 /* wcpcpy/wcpncpy dereference d/s the same unconditional way as
  * stpcpy/stpncpy above (their own header comment applies verbatim;
@@ -227,3 +234,5 @@ unsigned long long wcstoull (const wchar_t *__restrict, wchar_t **__restrict, in
 #endif
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

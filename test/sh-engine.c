@@ -648,7 +648,11 @@ static void check_roundtrip(const char *src)
 	if (!l1) return;
 	f1 = fmemopen(buf1, sizeof buf1, "w");
 	CHECK(f1 != 0);
-	if (f1) { __sh_print_list(f1, l1); fclose(f1); }
+	if (f1) {
+		int printed = __sh_print_list(f1, l1);
+		int closed = fclose(f1);
+		CHECK(printed == 0 && closed == 0);
+	}
 	__sh_list_free(l1);
 	if (!f1) return;
 
@@ -656,7 +660,11 @@ static void check_roundtrip(const char *src)
 	if (!l2) return;
 	f2 = fmemopen(buf2, sizeof buf2, "w");
 	CHECK(f2 != 0);
-	if (f2) { __sh_print_list(f2, l2); fclose(f2); }
+	if (f2) {
+		int printed = __sh_print_list(f2, l2);
+		int closed = fclose(f2);
+		CHECK(printed == 0 && closed == 0);
+	}
 	__sh_list_free(l2);
 	if (!f2) return;
 

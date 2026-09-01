@@ -95,8 +95,8 @@ int sched_get_priority_min(int policy)
 
 /* The rest of src/thread/pthread.c beyond __pthread_current() --
  * pthread_join()/_detach()/_exit()/_getschedparam()/_setschedparam()/
- * _setschedprio()/_getattr_np() and finish()'s TSD-destructor-running
- * path -- is explicitly out of scope for this pass (see
+ * _setschedprio() and finish()'s TSD-destructor-running path -- is
+ * explicitly out of scope for this pass (see
  * __pthread_current()'s own updated comment in pthread.c). None of it
  * is called by this test, but pthread.c is linked here as a whole
  * object (not pulled from a .a archive by need), so GNU ld resolves
@@ -125,14 +125,6 @@ void RtlReleasePebLock(void) { }
 void __pthread_cancel_defer_enter(void) { }
 void __pthread_cancel_defer_leave(void) { }
 void __pthread_run_specific_destructors(void) { }
-void __plat_thread_terminate_self(void) { for (;;) { } }
-__plat_handle_t __plat_thread_current_pseudo(void) { return __PLAT_HANDLE_NULL; }
-int __plat_thread_stack_extent(__plat_handle_t h, void **base, size_t *size)
-{
-	(void)h; (void)base; (void)size;
-	errno = ENOSYS;
-	return -1;
-}
 
 /* __sig_current_mask_install(): pthread_create()'s own path
  * (__pthread_adopt_current(), src/thread/pthread.c), out of scope for

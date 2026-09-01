@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John */
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 long same_array_difference(int *items) { return &items[3] - &items[1]; }

@@ -71,7 +71,7 @@ int __util_ln_main(int argc, char **argv)
 		const char *a = argv[i];
 		if (!strcmp(a, "--")) { i++; break; }
 		if (!strcmp(a, "-L") || !strcmp(a, "-P")) {
-			fprintf(stderr, "ln: %s: not implemented -- see src/util/ln.c\n", a);
+			__util_diagf("ln: %s: not implemented -- see src/util/ln.c\n", a);
 			return 1;
 		}
 		if (a[1] != 0 && strspn(a + 1, "fs") == strlen(a + 1)) {
@@ -79,13 +79,17 @@ int __util_ln_main(int argc, char **argv)
 			if (strchr(a, 's')) opt_s = 1;
 			continue;
 		}
-		fprintf(stderr, "ln: %s: invalid option\n", a);
+		__util_diagf("ln: %s: invalid option\n", a);
 		return 1;
 	}
 
+	if (i >= argc) {
+		__util_diagf("ln: missing operand\n");
+		return 1;
+	}
 	nsrc = argc - i;
 	if (nsrc < 2) {
-		fprintf(stderr, "ln: missing operand\n");
+		__util_diagf("ln: missing operand\n");
 		return 1;
 	}
 
@@ -101,7 +105,7 @@ int __util_ln_main(int argc, char **argv)
 
 	if (!dir_form) {
 		if (link_one(argv[i], argv[i + 1], opt_s, opt_f) != 0) {
-			fprintf(stderr, "ln: %s: %s\n", argv[i + 1], strerror(errno));
+			__util_diagf("ln: %s: %s\n", argv[i + 1], strerror(errno));
 			return 1;
 		}
 		return 0;
@@ -115,7 +119,7 @@ int __util_ln_main(int argc, char **argv)
 		int n;
 
 		if (sn >= sizeof base_copy) {
-			fprintf(stderr, "ln: %s: %s\n", argv[i], strerror(ENAMETOOLONG));
+			__util_diagf("ln: %s: %s\n", argv[i], strerror(ENAMETOOLONG));
 			fail = 1;
 			continue;
 		}
@@ -123,12 +127,12 @@ int __util_ln_main(int argc, char **argv)
 		base = basename(base_copy);
 		n = snprintf(target, sizeof target, "%s/%s", argv[di], base);
 		if (n < 0 || (size_t)n >= sizeof target) {
-			fprintf(stderr, "ln: %s: %s\n", argv[i], strerror(ENAMETOOLONG));
+			__util_diagf("ln: %s: %s\n", argv[i], strerror(ENAMETOOLONG));
 			fail = 1;
 			continue;
 		}
 		if (link_one(argv[i], target, opt_s, opt_f) != 0) {
-			fprintf(stderr, "ln: %s: %s\n", target, strerror(errno));
+			__util_diagf("ln: %s: %s\n", target, strerror(errno));
 			fail = 1;
 		}
 	}

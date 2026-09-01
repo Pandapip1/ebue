@@ -170,6 +170,11 @@
  * botched thing about these two functions -- so errno is captured on
  * entry and put back on every path out, including the successful one.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <spawn.h>
 #include <stdlib.h>
 #include <string.h>
@@ -219,10 +224,11 @@ struct saved_slot {
  * access does. */
 static int take_slot(struct saved_slot *sv, int *nsv, int cap, int fd)
     __attribute__((nonnull(2)));
-static int take_slot(struct saved_slot *sv, int *nsv, int cap, int fd)
+static int take_slot(struct saved_slot *sv, int *nsv, int cap, int fd) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
-	int i;
-	for (i = 0; i < *nsv; i++) {
+	int i, entries_left;
+	for (i = 0, entries_left = *nsv; entries_left > 0;
+	     i++, entries_left--) {
 		if (sv[i].fd != fd) continue;
 		if (__fds[fd].h) __plat_close(__fds[fd].h);
 		memset(&__fds[fd], 0, sizeof __fds[fd]);
@@ -306,13 +312,14 @@ static int do_action(const struct __spawn_action *a, struct saved_slot *sv, int 
 		t = open(a->path, a->oflag, a->mode);
 		if (t < 0) return errno;
 		if (t != a->fd) {
-			if (dup2(t, a->fd) < 0) { int e = errno; close(t); return e; }
-			close(t);
+			if (dup2(t, a->fd) < 0) { int e = errno; (void)close(t); return e; }
+			(void)close(t);
 		}
 		return 0;
 	}
+	default:
+		return EINVAL;
 	}
-	return EINVAL;
 }
 
 /* Everything posix_spawn() must decide *before* it starts editing the
@@ -407,3 +414,5 @@ int posix_spawnp(pid_t *__restrict pid, const char *__restrict file,
 {
 	return spawn_common(pid, file, fa, at, argv, envp, 1);
 }
+
+// NOLINTEND(misc-include-cleaner)

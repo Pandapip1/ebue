@@ -138,7 +138,13 @@
  * something this file should turn into a crash -- see __sig_delivery_init()
  * below for why that stays possible in principle and degrades instead
  * of failing __signal_init() outright. */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <signal.h>
+#include <unistd.h>
 #include <unistd.h>
 #include <string.h>
 #include "libc.h"
@@ -552,7 +558,7 @@ void __sig_delivery_reinit_after_fork(void)
  * snapshots its disposition under __sig_lock(), then replies zero when the
  * sender must use the default NtSuspendProcess action. A zero reply leaves
  * the packet undelivered and tells kill() to use that fallback. */
-static int sig_try_deliver_remote_info(int pid, int sig, const void *data,
+static int sig_try_deliver_remote_info(int pid, int sig, const void *data, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 				       int nondefault_only)
 {
 	const siginfo_t *si = data;
@@ -610,3 +616,5 @@ int __sig_try_deliver_remote_nondefault(int pid, int sig)
 {
 	return sig_try_deliver_remote_info(pid, sig, 0, 1);
 }
+
+// NOLINTEND(misc-include-cleaner)

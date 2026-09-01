@@ -11,6 +11,11 @@
  * notification is consumed. A blocked timer signal therefore coalesces and
  * its missed interval expirations become timer_getoverrun()'s count.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <time.h>
 #include <signal.h>
 #include <limits.h>
@@ -322,3 +327,5 @@ void __timer_reinit_after_fork(void)
 	manager_started = 0;
 	manager_wake = __PLAT_HANDLE_NULL;
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -22,7 +22,12 @@
  * No conversion sizes anything from the caller's precision, which C99
  * 7.19.6.1 leaves unbounded -- see PREC_MAX below.
  */
-#define _GNU_SOURCE
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -77,7 +82,7 @@ enum { LM_NONE, LM_hh, LM_h, LM_l, LM_ll, LM_j, LM_z, LM_t, LM_L };
  * is the whole hazard of a stride refactor.
  * ------------------------------------------------------------------ */
 #define gf(q, s) ((s) == 1 ? (unsigned)(unsigned char)*(q) \
-                           : (unsigned)*(const wchar_t *)(const void *)(q))
+	                           : (unsigned)*(const wchar_t *)(q))
 
 /* ------------------------------------------------------------------
  * THE SINK
@@ -167,7 +172,8 @@ static void out(struct sink *sk, const char *s, size_t n)
 	if (sk->bad) return;
 	if (!count_fits(sk, n)) return;
 	if (sk->widemem) {
-		while (n) {
+		size_t chunks_left = n / 32 + (n % 32 != 0);
+		for (; chunks_left > 0; chunks_left--) {
 			wchar_t stage[32];
 			size_t k = n < 32 ? n : 32, i;
 			for (i = 0; i < k; i++) stage[i] = (wchar_t)(unsigned char)s[i];
@@ -186,7 +192,7 @@ static void out(struct sink *sk, const char *s, size_t n)
 }
 
 static void pad(struct sink *sk, char c, size_t n) __attribute__((nonnull(1)));
-static void pad(struct sink *sk, char c, size_t n)
+static void pad(struct sink *sk, char c, size_t n) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	char buf[16];
 	size_t emit = n;
@@ -207,10 +213,15 @@ static void pad(struct sink *sk, char c, size_t n)
 		if (emit > avail) { skipped = emit - avail; emit = avail; }
 	}
 	memset(buf, c, sizeof buf);
-	while (emit && !sk->bad) {
-		size_t k = emit < sizeof buf ? emit : sizeof buf;
-		out(sk, buf, k);
-		emit -= k;
+	{
+		/* ceil(emit / sizeof buf), without an overflowing addition. */
+		size_t chunks = emit / sizeof buf + (emit % sizeof buf != 0);
+		while (chunks > 0 && !sk->bad) {
+			size_t k = emit < sizeof buf ? emit : sizeof buf;
+			out(sk, buf, k);
+			emit -= k;
+			chunks--;
+		}
 	}
 	/* count_fits() above proved this whole run representable.  out()
 	 * counted the stored prefix; account for the fixed buffer's discarded
@@ -287,7 +298,7 @@ static void out_units(struct sink *sk, const wchar_t *w, size_t n)
  * dereferences it, whichever is taken (strlen(s), w[n], *w, or *s). */
 static long str_arg(struct sink *sk, const void *arg, int wide_arg, int prec, int emit)
     __attribute__((nonnull(1, 2)));
-static long str_arg(struct sink *sk, const void *arg, int wide_arg, int prec, int emit)
+static long str_arg(struct sink *sk, const void *arg, int wide_arg, int prec, int emit) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	mbstate_t st;
 	long units = 0;
@@ -346,7 +357,7 @@ static long str_arg(struct sink *sk, const void *arg, int wide_arg, int prec, in
 }
 
 /* %s and %ls: measure, pad, emit, pad. */
-static void emit_str(struct sink *sk, const void *arg, int wide_arg, int prec,
+static void emit_str(struct sink *sk, const void *arg, int wide_arg, int prec, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                      int flags, int width)
 {
 	long n = str_arg(sk, arg, wide_arg, prec, 0);
@@ -373,7 +384,7 @@ static void emit_str(struct sink *sk, const void *arg, int wide_arg, int prec,
 
 /* a = a * m, for m small enough that limb * m + carry stays inside a
  * uint64 (every m used here is below 2^30). */
-static int mul_small(uint32_t *a, int n, uint32_t m)
+static int mul_small(uint32_t *a, int n, uint32_t m) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	uint64_t carry = 0;
 	int i;
@@ -406,7 +417,7 @@ static void dec_exact(double v, struct dec *D)
 	union { double f; uint64_t i; } u;
 	uint32_t bn[DEC_LIMBS];
 	uint64_t m;
-	int e2, bl = 0, k, i, j, nfrac = 0;
+	int e2, bl = 0, k, i, j, nfrac = 0, chunks;
 	char *p;
 
 	u.f = v;
@@ -422,14 +433,18 @@ static void dec_exact(double v, struct dec *D)
 	 * e2 < 0 it is m * 5^-e2 with the point -e2 places from the right,
 	 * since m / 2^k == m * 5^k / 10^k.  Either way one big integer
 	 * carries every digit, so no division is needed to produce them. */
-	while (e2 > 0) {
+	/* Finite double exponents bound both exact chunk counts below. */
+	chunks = e2 > 0 ? e2 / 29 + (e2 % 29 != 0) : 0;
+	while (chunks > 0) {
 		k = e2 > 29 ? 29 : e2;
 		bl = mul_small(bn, bl, 1u << k);
 		e2 -= k;
+		chunks--;
 	}
 	if (e2 < 0) {
 		nfrac = -e2;
-		for (k = nfrac; k > 0; ) {
+		chunks = nfrac / 12 + (nfrac % 12 != 0);
+		for (k = nfrac; chunks > 0; chunks--) {
 			if (k >= 12) { bl = mul_small(bn, bl, 244140625u); k -= 12; }  /* 5^12 */
 			else {
 				uint32_t f = 1;
@@ -445,7 +460,10 @@ static void dec_exact(double v, struct dec *D)
 		char t[10];
 		i = 0;
 		do { t[i++] = (char)('0' + (int)(hi % 10)); hi /= 10; } while (hi);
-		while (i) *p++ = t[--i];
+		while (i > 0) {
+			i--;
+			*p++ = t[i];
+		}
 	}
 	for (i = bl - 2; i >= 0; i--) {
 		uint32_t w = bn[i];
@@ -456,7 +474,14 @@ static void dec_exact(double v, struct dec *D)
 	D->decexp = D->nd - 1 - nfrac;
 	/* trailing zeros are implicit anyway, and dropping them keeps the
 	 * "is the discarded tail nonzero" test in dec_round short */
-	while (D->nd > 1 && D->d[D->nd - 1] == '0') D->nd--;
+	{
+		/* Keep the leading digit, so at most nd - 1 can be trimmed. */
+		int trim = D->nd - 1;
+		while (trim > 0 && D->d[D->nd - 1] == '0') {
+			D->nd--;
+			trim--;
+		}
+	}
 }
 
 /* Round D to want >= 1 significant digits, to nearest with ties to
@@ -476,7 +501,11 @@ static void dec_round(struct dec *D, int want)
 	}
 	D->nd = want;
 	if (!up) {
-		while (D->nd > 1 && D->d[D->nd - 1] == '0') D->nd--;
+		int trim = D->nd - 1;
+		while (trim > 0 && D->d[D->nd - 1] == '0') {
+			D->nd--;
+			trim--;
+		}
 		return;
 	}
 	for (i = want - 1; i >= 0; i--) {
@@ -514,11 +543,11 @@ static int fmt_f(char *buf, struct dec *D, int prec, int alt)
 		buf[n++] = '0';
 		if (prec > 0 || alt) buf[n++] = '.';
 		for (i = 0; i < -pos && i < prec; i++) buf[n++] = '0';
-		for (i = 0; i < prec + pos; i++) buf[n++] = i < D->nd ? D->d[i] : '0';
+		for (i = 0; i < prec + pos; i++) buf[n++] = (char)(i < D->nd ? D->d[i] : '0');
 	} else {
-		for (i = 0; i < pos; i++) buf[n++] = i < D->nd ? D->d[i] : '0';
+		for (i = 0; i < pos; i++) buf[n++] = (char)(i < D->nd ? D->d[i] : '0');
 		if (prec > 0 || alt) buf[n++] = '.';
-		for (i = 0; i < prec; i++) buf[n++] = pos + i < D->nd ? D->d[pos + i] : '0';
+		for (i = 0; i < prec; i++) buf[n++] = (char)(pos + i < D->nd ? D->d[pos + i] : '0');
 	}
 	return n;
 }
@@ -526,7 +555,7 @@ static int fmt_f(char *buf, struct dec *D, int prec, int alt)
 /* %e-style body (no sign).  *epos receives the offset of the 'e', the
  * point at which emit_float splices in any zeros a clamped precision
  * left out of the mantissa. */
-static int fmt_e(char *buf, struct dec *D, int prec, int alt, int upper, int *epos)
+static int fmt_e(char *buf, struct dec *D, int prec, int alt, int upper, int *epos) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int i, n = 0;
 
@@ -534,13 +563,13 @@ static int fmt_e(char *buf, struct dec *D, int prec, int alt, int upper, int *ep
 	buf[n++] = D->d[0];
 	if (prec > 0 || alt) {
 		buf[n++] = '.';
-		for (i = 1; i <= prec; i++) buf[n++] = i < D->nd ? D->d[i] : '0';
+		for (i = 1; i < prec + 1; i++) buf[n++] = (char)(i < D->nd ? D->d[i] : '0');
 	}
 	*epos = n;
 	buf[n++] = upper ? 'E' : 'e';
 	buf[n++] = D->decexp < 0 ? '-' : '+';
 	{
-		int ax = D->decexp < 0 ? -D->decexp : D->decexp;
+		unsigned ax = (unsigned)(D->decexp < 0 ? -D->decexp : D->decexp);
 		char eb[8]; int ei = 0;
 		if (ax == 0) eb[ei++] = '0';
 		while (ax) { eb[ei++] = (char)('0' + ax % 10); ax /= 10; }
@@ -552,7 +581,7 @@ static int fmt_e(char *buf, struct dec *D, int prec, int alt, int upper, int *ep
 
 /* strip trailing fractional zeros (and a bare trailing point) from a
  * body already formatted by fmt_f/fmt_e, for %g without '#'. */
-static int strip_g(char *buf, int n, int has_exp)
+static int strip_g(char *buf, int n, int has_exp) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int mant_end = n, i;
 	if (has_exp) { for (i = 0; i < n; i++) if (buf[i] == 'e' || buf[i] == 'E') { mant_end = i; break; } }
@@ -574,7 +603,7 @@ static int strip_g(char *buf, int n, int has_exp)
  * The 52 mantissa bits of a double are exactly 13 hex digits, so every
  * digit past the 13th is a zero whatever the value; a precision below
  * 13 rounds to nearest with ties to even, like the arithmetic itself. */
-static int fmt_a(char *buf, double v, int prec, int alt, int upper, int *epos)
+static int fmt_a(char *buf, double v, int prec, int alt, int upper, int *epos) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const char *hex = upper ? "0123456789ABCDEF" : "0123456789abcdef";
 	union { double f; uint64_t i; } u;
@@ -613,7 +642,7 @@ static int fmt_a(char *buf, double v, int prec, int alt, int upper, int *epos)
 	buf[n++] = upper ? 'P' : 'p';
 	buf[n++] = e < 0 ? '-' : '+';
 	{
-		int ax = e < 0 ? -e : e;
+		unsigned ax = (unsigned)(e < 0 ? -e : e);
 		char eb[8]; int ei = 0;
 		if (ax == 0) eb[ei++] = '0';
 		while (ax) { eb[ei++] = (char)('0' + ax % 10); ax /= 10; }
@@ -625,7 +654,7 @@ static int fmt_a(char *buf, double v, int prec, int alt, int upper, int *epos)
 /* Write a body of n bytes with `zeros` further '0' spliced in at offset
  * zpos (the end of the mantissa), which is where a precision clamped to
  * PREC_MAX left off. */
-static void out_body(struct sink *sk, const char *body, int n, int zpos, long zeros)
+static void out_body(struct sink *sk, const char *body, int n, int zpos, long zeros) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	out(sk, body, (size_t)zpos);
 	pad(sk, '0', (size_t)zeros);
@@ -634,14 +663,14 @@ static void out_body(struct sink *sk, const char *body, int n, int zpos, long ze
 
 static void emit_float(struct sink *sk, double v, int conv, int prec, int alt, int flags, int width)
     __attribute__((nonnull(1)));
-static void emit_float(struct sink *sk, double v, int conv, int prec, int alt, int flags, int width)
+static void emit_float(struct sink *sk, double v, int conv, int prec, int alt, int flags, int width) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	char body[BODYMAX];
 	struct dec D;
 	char pfx[3];
 	int n, neg = signbit(v);
 	int upper = conv == 'F' || conv == 'E' || conv == 'G' || conv == 'A';
-	char sign = neg ? '-' : (flags & 1 ? '+' : (flags & 2 ? ' ' : 0));
+	char sign = (char)(neg ? '-' : (flags & 1 ? '+' : (flags & 2 ? ' ' : 0)));
 	char av = (char)(conv == 'F' ? 'f' : conv == 'E' ? 'e' : conv == 'G' ? 'g' :
 	                 conv == 'A' ? 'a' : conv);
 	int prefixlen = 0;
@@ -820,7 +849,7 @@ static void pop_arg(union varg *a, int type, va_list *ap)
 	case A_LONG:    a->i = va_arg(*ap, long); break;
 	case A_ULONG:   a->u = va_arg(*ap, unsigned long); break;
 	case A_LLONG:   a->i = va_arg(*ap, long long); break;
-	case A_ULLONG:  a->u = va_arg(*ap, unsigned long long); break;
+	case A_ULLONG:  a->u = va_arg(*ap, unsigned long long); break; // NOLINT(bugprone-branch-clone) -- va_arg must name the exact unsigned long long source type; the following size_t case only canonicalizes identically on LLP64
 	/* LLP64: long is 32 bits here while size_t and ptrdiff_t are 64, so
 	 * `long` is simply the wrong type to pull these with -- "%zd" of a
 	 * value above 4G printed its low half.  fprintf.html: z "applies to
@@ -829,7 +858,7 @@ static void pop_arg(union varg *a, int type, va_list *ap)
 	 * src/stdio/scanf.c implements the same grammar and has always done
 	 * this correctly; printf.c was the only offender. */
 	case A_SIZE:    a->u = va_arg(*ap, size_t); break;
-	case A_SSIZE:   a->i = va_arg(*ap, ssize_t); break;
+	case A_SSIZE:   a->i = va_arg(*ap, ssize_t); break; // NOLINT(bugprone-branch-clone) -- va_arg must name the exact ssize_t source type; the following ptrdiff_t case only canonicalizes identically on this ABI
 	/* ptrdiff_t is a signed type whatever the conversion's signedness
 	 * is -- the length-modifier table gives t no unsigned counterpart --
 	 * so %tu/%to/%tx fetch it as one and reinterpret afterwards. */
@@ -845,7 +874,7 @@ static void pop_arg(union varg *a, int type, va_list *ap)
  * for one that fetches nothing: an unknown conversion (which this
  * formatter emits literally, consuming no argument) or a format that
  * ended before its conversion character. */
-static int arg_type(int lm, int conv)
+static int arg_type(int lm, int conv) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	switch (conv) {
 	case 'd': case 'i':
@@ -918,7 +947,10 @@ static const char *scan_argno(const char *fp, int st, int *n)
 	*n = 0;
 	if (gf(q, st) < '1' || gf(q, st) > '9') return fp;
 	while (gf(q, st) >= '0' && gf(q, st) <= '9') {
-		if (v <= NL_ARGMAX) v = v * 10 + (int)(gf(q, st) - '0');
+		if (v <= NL_ARGMAX) {
+			unsigned digit = (unsigned)(gf(q, st) - '0');
+			v = (int)((unsigned)v * 10u + digit);
+		}
 		q += st;
 	}
 	if (gf(q, st) != '$') return fp;
@@ -1009,7 +1041,8 @@ static const char *parse_spec(const char *fp, int st, struct spec *sp)
 			if (sp->width > (INT_MAX - digit) / 10) {
 				sp->width = INT_MAX;
 				sp->width_overflow = 1;
-			} else sp->width = sp->width * 10 + digit;
+			} else sp->width = (int)((unsigned)sp->width * 10u +
+				(unsigned)digit);
 			fp += st;
 		}
 	}
@@ -1022,7 +1055,8 @@ static const char *parse_spec(const char *fp, int st, struct spec *sp)
 				int digit = (int)(gf(fp, st) - '0');
 				if (sp->prec > (INT_MAX - digit) / 10)
 					sp->prec = INT_MAX;
-				else sp->prec = sp->prec * 10 + digit;
+				else sp->prec = (int)((unsigned)sp->prec * 10u +
+					(unsigned)digit);
 				fp += st;
 			}
 		}
@@ -1117,10 +1151,10 @@ static int build_argtab(const char *fmt, int st, union varg *tab, va_list *ap)
 	 * makes the guess unobservable there.  Filling the slot rather than
 	 * leaving it alone is the half that matters: after this loop every
 	 * entry in [1,max] has been written before anything can read one. */
-	for (i = 1; i <= max; i++)
+	for (i = 1; i < max + 1; i++)
 		if (types[i] == A_NONE) types[i] = A_INT;
 
-	for (i = 1; i <= max; i++) pop_arg(&tab[i], types[i], ap);
+	for (i = 1; i < max + 1; i++) pop_arg(&tab[i], types[i], ap);
 	return max;
 }
 
@@ -1156,6 +1190,12 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 {
 	struct sink sink, *sk = &sink;
 	const char *fp = fmt;
+	/* Internal callers use bytes or wchar_t units.  Keep that contract local
+	 * to the pointer-difference division as well as at the call sites. */
+	if (st != 1 && st != (int)sizeof(wchar_t)) {
+		errno = EINVAL;
+		return -1;
+	}
 	/* Only a numbered format ever touches these.  Eighty-odd bytes of
 	 * frame is what buys the common path its freedom from a malloc. */
 	union varg argv[NL_ARGMAX + 1];
@@ -1189,7 +1229,7 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 			const char *start = fp;
 			while (gf(fp, st) && gf(fp, st) != '%') fp += st;
 			if (st == 1) out(sk, start, (size_t)(fp - start));
-			else out_units(sk, (const wchar_t *)(const void *)start,
+			else out_units(sk, (const wchar_t *)start,
 			               (size_t)((fp - start) / st));
 			continue;
 		}
@@ -1295,7 +1335,7 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 					 * modifiers naming a type NARROWER than the int
 					 * their argument was promoted to. */
 					switch (sp.lm) {
-					case LM_hh: sv = (signed char)a.i; break; // NOLINT(cert-str34-c) -- deliberate sign extension of a %hhd argument, not a table index
+					case LM_hh: sv = (signed char)a.i; break; // NOLINT(bugprone-signed-char-misuse,cert-str34-c) -- deliberate sign extension of a %hhd argument, not a table index
 					case LM_h: sv = (short)a.i; break;
 					default: sv = a.i; break;
 					}
@@ -1323,7 +1363,15 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 				if (uv == 0 && prec == 0) { /* "" for 0 with explicit precision 0 */ }
 				else {
 					unsigned long long t = uv;
-					do { digbuf[dn++] = "0123456789abcdef"[t % (unsigned)base] ; if (upper && digbuf[dn-1] > '9') digbuf[dn-1] -= 32; t /= (unsigned)base; } while (t);
+					/* base is 8, 10, or 16, so a nonzero value reaches
+					 * zero well before this one-pass-per-value-bit guard. */
+					unsigned bits_left = (unsigned)(sizeof t * CHAR_BIT);
+					do {
+						digbuf[dn++] = "0123456789abcdef"[t % (unsigned)base];
+						if (upper && digbuf[dn-1] > '9') digbuf[dn-1] -= 32;
+						t /= (unsigned)base;
+						bits_left--;
+					} while (t && bits_left > 0);
 				}
 				/* A precision is a minimum digit count with no upper
 				 * bound (C99 7.19.6.1p5), so the leading zeros it
@@ -1477,7 +1525,7 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 				if (sp.conv) {
 					out(sk, "%", 1);
 					if (st == 1) out(sk, fp, 1);
-					else out_units(sk, (const wchar_t *)(const void *)fp, 1);
+					else out_units(sk, (const wchar_t *)fp, 1);
 				}
 				break;
 			}
@@ -1510,7 +1558,7 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 static int vxprintf_mem(char *s, size_t cap, const char *fmt, va_list ap) __attribute__((nonnull(3)));
 static int vxprintf_mem(char *s, size_t cap, const char *fmt, va_list ap)
 {
-	FILE mf;
+	FILE mf; // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- implementation-owned transient memory-stream adapter is constructed from scratch, not copied
 	int r;
 	memset(&mf, 0, sizeof mf);
 	mf.fd = -1;
@@ -1614,7 +1662,7 @@ int vdprintf(int fd, const char *__restrict fmt, __isoc_va_list ap)
 {
 	/* No FILE exists for fd; wrap it in one just for the call, the way
 	 * fdopen would, but without touching the descriptor table. */
-	FILE f;
+	FILE f; // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- implementation-owned transient descriptor-stream adapter is constructed from scratch, not copied
 	int r;
 	memset(&f, 0, sizeof f);
 	f.fd = fd;
@@ -1622,7 +1670,7 @@ int vdprintf(int fd, const char *__restrict fmt, __isoc_va_list ap)
 	f.writable = 1;
 	f.bufmode = _IONBF;
 	r = __vfprintf(&f, fmt, ap);
-	fflush(&f);
+	if (fflush(&f) < 0) r = -1;
 	/* __ensure_buf() allocated f.buf on the first write (one byte, for
 	 * _IONBF) and nothing else will ever free it: this FILE is a stack
 	 * object that never reaches fclose(), and fflush() only drains the
@@ -1675,7 +1723,7 @@ int asprintf(char **s, const char *fmt, ...)
 int __vfwprintf(FILE *f, const wchar_t *fmt, va_list ap)
 {
 	if (!f->wide) f->wide = 1;
-	return vfprintf_st(f, (const char *)(const void *)fmt, ap, (int)sizeof(wchar_t));
+	return vfprintf_st(f, (const char *)fmt, ap, (int)sizeof(wchar_t));
 }
 
 /* swprintf() is NOT snprintf() with a different unit, and the
@@ -1705,7 +1753,7 @@ static int vswprintf_impl(wchar_t *s, size_t n, const wchar_t *fmt, va_list ap)
     __attribute__((nonnull(1, 3)));
 static int vswprintf_impl(wchar_t *s, size_t n, const wchar_t *fmt, va_list ap)
 {
-	FILE mf;
+	FILE mf; // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- implementation-owned transient wide memory-stream adapter is constructed from scratch, not copied
 	int r;
 
 	if (!n) { errno = EOVERFLOW; return -1; }
@@ -1717,12 +1765,12 @@ static int vswprintf_impl(wchar_t *s, size_t n, const wchar_t *fmt, va_list ap)
 	mf.wide = 1;
 	mf.writable = 1;
 	mf.bufmode = _IONBF;
-	mf.mem_buf = (unsigned char *)(void *)s;
+	mf.mem_buf = (unsigned char *)s;
 	/* One unit short of the caller's array: the terminating null lives
 	 * in the unit this hides, so an overrun is detected as a short
 	 * write rather than by writing it. */
 	mf.mem_size = (n - 1) * sizeof(wchar_t);
-	r = vfprintf_st(&mf, (const char *)(const void *)fmt, ap, (int)sizeof(wchar_t));
+	r = vfprintf_st(&mf, (const char *)fmt, ap, (int)sizeof(wchar_t));
 	/* The terminating null is unconditional when n is nonzero, including
 	 * the truncation/error path.  mem_len is the prefix actually stored. */
 	s[mf.mem_len / sizeof(wchar_t)] = 0;
@@ -1771,3 +1819,5 @@ int wprintf(const wchar_t *__restrict fmt, ...)
 	va_end(ap);
 	return r;
 }
+
+// NOLINTEND(misc-include-cleaner)

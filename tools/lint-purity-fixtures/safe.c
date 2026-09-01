@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John */
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Every publicly-declared function below is genuinely pure and already
  * annotated as such; this fixture must produce zero *false-claim* findings.

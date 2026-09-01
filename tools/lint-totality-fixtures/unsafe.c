@@ -93,6 +93,45 @@ unsigned cancelled_for_increment(unsigned n)
 	return i;
 }
 
+unsigned unsigned_extra_progress_can_wrap(unsigned n)
+{
+	unsigned i;
+	for (i = 0; i < n; i++) { /* totality-expect */
+		i++;
+	}
+	return i;
+}
+
+unsigned division_by_one_does_not_progress(unsigned n)
+{
+	while (n) { /* totality-expect */
+		n /= 1;
+	}
+	return n;
+}
+
+unsigned cancelled_comma_increment(unsigned n)
+{
+	unsigned i;
+	for (i = 0; i < n; i++, i--) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned cancelled_condition_countdown(unsigned n)
+{
+	while (n-- > 0) { /* totality-expect */
+		n++;
+	}
+	return n;
+}
+
+void floating_condition_countdown(double n)
+{
+	while (n-- > 0) { /* totality-expect */
+	}
+}
+
 struct node *possibly_circular(struct node *node)
 {
 	while (node) { /* totality-expect */

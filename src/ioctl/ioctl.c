@@ -49,6 +49,11 @@
  * (a caller that checks the return value is fine; a caller that does
  * not gets silently wrong behaviour), so this never does that.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -88,7 +93,7 @@ static int fionread_file(struct __fd *f, int *out)
  * caller issuing a pointer-taking request (FIONREAD, FIONBIO,
  * TIOCGWINSZ) supplies a real pointer for it, not something this
  * function's own body could ever validate. */
-int ioctl(int fd, unsigned long req, ...)
+int ioctl(int fd, unsigned long req, ...) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = __fd_get(fd);
 	va_list ap;
@@ -148,3 +153,5 @@ int ioctl(int fd, unsigned long req, ...)
 		return -1;
 	}
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -33,7 +38,7 @@ int __plat_fionread_pipe(__plat_handle_t h, int *out)
  * FileStandardInformation's EndOfFile and FilePositionInformation's
  * CurrentByteOffset.  The front door does the actual subtraction (and
  * its own [EOVERFLOW] check, which has nothing to do with NT) via
- * __file_remaining_count(). 0/-1(errno) via *eof/*pos.
+	 * __file_remaining_count(). 0/-1(errno) via *eof and *pos.
  *
  * eof/pos are both required: both backends write through both
  * unconditionally on the success path (NT: `*eof = si.EndOfFile; *pos
@@ -45,3 +50,5 @@ int __plat_file_eof_and_pos(__plat_handle_t h, long long *eof, long long *pos)
     __attribute__((nonnull(2, 3)));
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

@@ -61,18 +61,18 @@
  * past its own last column. */
 #define MAX_COLUMN 132
 
-static void emit_uniform_tabs(int n)
+static int emit_uniform_tabs(int n)
 {
 	int col;
 
-	fputs("\033[3g", stdout); /* TBC: clear all existing tab stops */
-	fputc('\r', stdout);
-	for (col = n; col <= MAX_COLUMN; col += n) {
+	if (fputs("\033[3g", stdout) < 0 || fputc('\r', stdout) == EOF) return -1;
+	for (col = 0; col < MAX_COLUMN / n; col++) {
 		int i;
-		for (i = 0; i < n; i++) fputc(' ', stdout);
-		fputs("\033H", stdout); /* HTS: set a stop at the cursor's column */
+		for (i = 0; i < n; i++) if (fputc(' ', stdout) == EOF) return -1;
+		if (fputs("\033H", stdout) < 0) return -1; /* HTS: set a stop at the cursor's column */
 	}
-	fputc('\r', stdout);
+	if (fputc('\r', stdout) == EOF) return -1;
+	return fflush(stdout) == 0 ? 0 : -1;
 }
 
 int __util_tabs_main(int argc, char **argv)
@@ -86,28 +86,27 @@ int __util_tabs_main(int argc, char **argv)
 		if (a[0] == '-' && a[1] >= '0' && a[1] <= '9' && a[2] == 0) {
 			interval = a[1] - '0';
 			if (interval == 0) {
-				fprintf(stderr, "tabs: -0: clearing tab stops without setting new "
+				__util_diagf("tabs: -0: clearing tab stops without setting new "
 				                "ones is not implemented\n");
 				return 1;
 			}
 			continue;
 		}
 		if (!strcmp(a, "-T")) {
-			fprintf(stderr, "tabs: -T: terminal-type database lookups are not "
+			__util_diagf("tabs: -T: terminal-type database lookups are not "
 			                "supported by this build -- see src/util/tabs.c\n");
 			return 1;
 		}
 		if (a[0] == '-' && a[1] != 0) {
-			fprintf(stderr, "tabs: %s: not implemented -- this build only supports "
+			__util_diagf("tabs: %s: not implemented -- this build only supports "
 			                "the uniform-interval form (`tabs` or `tabs -N`); see "
 			                "src/util/tabs.c\n", a);
 			return 1;
 		}
-		fprintf(stderr, "tabs: %s: the explicit tab-stop-list form is not "
+		__util_diagf("tabs: %s: the explicit tab-stop-list form is not "
 		                "implemented -- see src/util/tabs.c\n", a);
 		return 1;
 	}
 
-	emit_uniform_tabs(interval);
-	return 0;
+	return emit_uniform_tabs(interval) == 0 ? 0 : 1;
 }

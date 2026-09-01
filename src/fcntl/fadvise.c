@@ -29,7 +29,7 @@
 #include "libc.h"
 #include "plat_fcntl.h"
 
-int posix_fadvise(int fd, off_t offset, off_t len, int advice)
+int posix_fadvise(int fd, off_t offset, off_t len, int advice) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = __fd_get(fd);
 	/* offset carries no constraint of its own: posix_fadvise.html's
@@ -138,7 +138,7 @@ int posix_fadvise(int fd, off_t offset, off_t len, int advice)
  * __plat_volume_max_file_size() (src/internal/plat_fcntl.h) -- this
  * comment stays here, where the decision it documents is made. */
 
-int posix_fallocate(int fd, off_t offset, off_t len)
+int posix_fallocate(int fd, off_t offset, off_t len) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = __fd_get(fd);
 	long long want, alloc_size, eof;

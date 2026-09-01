@@ -20,6 +20,11 @@
  * standard handles turned into descriptors 0, 1 and 2, and exit arranged
  * so that main's return value becomes the process's exit status.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdlib.h>
 #include <string.h>
 #include "libc.h"
@@ -106,7 +111,7 @@ static int split_cmdline(const WCHAR *p, size_t n, char ***argvp)
 	if (!__size_add_checked(n, 1, &units) ||
 	    !__size_mul_checked(units, sizeof(WCHAR), &bytes)) return -1;
 	buf = __malloc(bytes);
-	argv = __malloc(sizeof(char *[2]));
+	argv = (char **)__malloc(sizeof(char *[2]));
 
 	if (!buf || !argv) return -1;
 
@@ -158,10 +163,10 @@ static int split_cmdline(const WCHAR *p, size_t n, char ***argvp)
 			if (!__array_next_capacity(cap, (size_t)argc, 2, 2,
 			    sizeof *argv, &next) ||
 			    !__size_mul_checked(next, sizeof *argv, &bytes)) return -1;
-			nv = __malloc(bytes);
-			if (!nv) return -1;
-			memcpy(nv, argv, sizeof *argv * (size_t)argc);
-			__free(argv);
+				nv = (char **)__malloc(bytes);
+				if (!nv) return -1;
+				memcpy((void *)nv, (const void *)argv, sizeof *argv * (size_t)argc);
+				__free((void *)argv);
 			argv = nv;
 			cap = next;
 		}
@@ -184,14 +189,14 @@ static char **build_environ(const WCHAR *env)
 	char **ev;
 
 	if (!env) {
-		ev = __malloc(sizeof(char *));
+		ev = (char **)__malloc(sizeof(char *));
 		if (ev) ev[0] = 0;
 		return ev;
 	}
 	for (p = env; *p; p += wcslen_(p) + 1) count++;
 	if (!__size_add_checked(count, 1, &slots) ||
 	    !__size_mul_checked(slots, sizeof *ev, &bytes)) return 0;
-	ev = __malloc(bytes);
+	ev = (char **)__malloc(bytes);
 	if (!ev) return 0;
 	for (p = env, i = 0; *p; p += wcslen_(p) + 1)
 		ev[i++] = __utf16_to_utf8(p, wcslen_(p));
@@ -438,3 +443,5 @@ void _start(void *arg0, void *arg1)
 	__entry_arg1 = arg1;
 	__libc_start_main();
 }
+
+// NOLINTEND(misc-include-cleaner)

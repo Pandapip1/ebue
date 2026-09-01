@@ -1,6 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+
 /* Hard links and symbolic links.  Hard links are FileLinkInformation.
  * Symbolic links need SeCreateSymbolicLinkPrivilege or developer mode on
  * Windows, so symlink tries and reports EPERM when it cannot; readlink
@@ -52,3 +57,5 @@ int symlinkat(const char *target, int newdirfd, const char *linkpath)
 }
 
 int symlink(const char *target, const char *linkpath) { return symlinkat(target, AT_FDCWD, linkpath); }
+
+// NOLINTEND(misc-include-cleaner)

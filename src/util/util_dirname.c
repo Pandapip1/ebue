@@ -20,10 +20,9 @@
 int __util_dirname_main(int argc, char **argv)
 {
 	if (argc != 2) {
-		fprintf(stderr, "dirname: usage: dirname string\n");
+		__util_diagf("dirname: usage: dirname string\n");
 		return 2;
 	}
-	fputs(dirname(argv[1]), stdout);
-	fputc('\n', stdout);
-	return 0;
+	if (fputs(dirname(argv[1]), stdout) < 0 || fputc('\n', stdout) == EOF) return 1;
+	return fflush(stdout) == 0 ? 0 : 1;
 }

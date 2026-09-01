@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -24,11 +29,24 @@
 #ifndef _NTLIBC_PLAT_MALLOC_H
 #define _NTLIBC_PLAT_MALLOC_H
 
+#include <features.h>
+#include <ownership.h>
 #include <stddef.h>
 
+#ifndef tokdef
+#define tokdef __token_type
+#endif
+tokdef platform_heap_allocated
+	dynamic_storage;
+#undef tokdef
+
+withtok(platform_heap_allocated)
 void *__plat_alloc(size_t n, int zero);
-void *__plat_realloc(void *p, size_t n);
+withtok(platform_heap_allocated)
+void *__plat_realloc(void *p consume_if_nonnull_return(platform_heap_allocated), size_t n);
 size_t __plat_alloc_size(void *p);
-void __plat_dealloc(void *p);
+void __plat_dealloc(void *p consume(platform_heap_allocated));
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

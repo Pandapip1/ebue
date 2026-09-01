@@ -54,6 +54,11 @@
  * __plat_process_resume() (this header's own banner, and plat_signal.h)
  * already needed a follow-up reconciliation commit for once.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include <sys/resource.h>
 #include "plat_misc.h"
@@ -206,7 +211,7 @@ static __plat_handle_t box_fd(int fd) { return (__plat_handle_t)(long)(fd + 1); 
 static struct { int pidfd; pid_t pid; int used; } pidfd_pid_table[PIDFD_TABLE_MAX];
 static int pidfd_table_next;
 
-static void record_pidfd_pid(int pidfd, pid_t pid)
+static void record_pidfd_pid(int pidfd, pid_t pid) // NOLINT(bugprone-easily-swappable-parameters) -- descriptor and process ID have distinct bookkeeping roles
 {
 	pidfd_pid_table[pidfd_table_next].pidfd = pidfd;
 	pidfd_pid_table[pidfd_table_next].pid = pid;
@@ -257,7 +262,7 @@ void __plat_yield(void)
  * forward their own now-required out with no guard of their own. */
 static int open_process(pid_t pid, int checked, __plat_handle_t *out)
     __attribute__((nonnull(3)));
-static int open_process(pid_t pid, int checked, __plat_handle_t *out)
+static int open_process(pid_t pid, int checked, __plat_handle_t *out) // NOLINT(bugprone-easily-swappable-parameters) -- process ID and validation flag have distinct roles
 {
 	long fd;
 	if (checked) {
@@ -307,7 +312,7 @@ int __plat_process_alive(__plat_handle_t h)
 	return 1;
 }
 
-int __plat_process_times_self(unsigned long long *user100ns, unsigned long long *kernel100ns)
+int __plat_process_times_self(unsigned long long *user100ns, unsigned long long *kernel100ns) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; user and kernel outputs have distinct roles
 {
 	/* struct rusage's timeval fields (usec resolution) are this file's
 	 * own portable stand-in for KERNEL_USER_TIMES's 100ns fields -- the
@@ -350,7 +355,7 @@ int __plat_priority_get(__plat_handle_t h, int *nice_out)
 	return 0;
 }
 
-int __plat_priority_set(__plat_handle_t h, int foreground, int nice_value)
+int __plat_priority_set(__plat_handle_t h, int foreground, int nice_value) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; foreground mode and nice value have distinct roles
 {
 	long ret;
 	pid_t pid;
@@ -367,7 +372,7 @@ int __plat_priority_set(__plat_handle_t h, int foreground, int nice_value)
 	return 0;
 }
 
-int __plat_priority_set_self(int foreground, int nice_value)
+int __plat_priority_set_self(int foreground, int nice_value) // NOLINT(bugprone-easily-swappable-parameters) -- foreground mode and nice value have distinct roles
 {
 	(void)foreground;
 	{
@@ -422,7 +427,7 @@ int __plat_write_start_offset(__plat_handle_t h, int append, long long *out)
 #define RLIMIT_NPROC_LX 6
 #define RLIMIT_AS_LX    9
 
-static void apply_one(int resource, rlim_t cur)
+static void apply_one(int resource, rlim_t cur) // NOLINT(bugprone-easily-swappable-parameters) -- resource selector and limit value have distinct roles
 {
 	unsigned long long lim[2]; /* struct rlimit64 { rlim64_t cur, max; } */
 	lim[0] = (unsigned long long)cur;
@@ -452,3 +457,5 @@ void __plat_job_apply_limits(rlim_t nproc_cur, rlim_t cpu_cur, rlim_t as_cur, rl
 	if (as_cur != RLIM_INFINITY) apply_one(RLIMIT_AS_LX, as_cur);
 	if (data_cur != RLIM_INFINITY) apply_one(RLIMIT_DATA_LX, data_cur);
 }
+
+// NOLINTEND(misc-include-cleaner)

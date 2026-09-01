@@ -1,12 +1,17 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <pthread.h>
 #include <signal.h>
 #include <errno.h>
 #include "pthread_impl.h"
 #include "plat_thread.h"
 
-static void __PLAT_APC_CALL signal_apc(void *argument, void *signal_value, void *unused)
+static void __PLAT_APC_CALL signal_apc(void *argument, void *signal_value, void *unused) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __pthread *thread = argument;
 	(void)unused;
@@ -37,3 +42,5 @@ int pthread_kill(pthread_t thread, int sig)
 	return __plat_thread_queue_apc(thread->handle, signal_apc, thread,
 		(void *)(ULONG_PTR)sig) == 0 ? 0 : ESRCH;
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -18,7 +18,12 @@
  * %ComSpec% is the one every other Windows program trusts for the same
  * reason.
  */
-#define _GNU_SOURCE
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,9 +38,11 @@
 void perror(const char *s)
 {
 	int e = errno;
-	if (s && *s) { fputs(s, stderr); fputs(": ", stderr); }
-	fputs(strerror(e), stderr);
-	fputc('\n', stderr);
+	/* perror() is the diagnostic and returns void; a failure writing stderr
+	 * cannot be recursively reported or replace the caller's saved errno. */
+	if (s && *s) { (void)fputs(s, stderr); (void)fputs(": ", stderr); }
+	(void)fputs(strerror(e), stderr);
+	(void)fputc('\n', stderr);
 }
 
 int remove(const char *path)
@@ -87,22 +94,30 @@ static const char *tmpdir(void)
 
 FILE *tmpfile(void)
 {
+	const char *dir = tmpdir();
 	char *tmpl;
 	int fd;
 	FILE *f;
-	size_t n = strlen(tmpdir());
+	size_t n = strlen(dir);
 
+	if (n > (size_t)-1 - sizeof "/ntlibcXXXXXX") { errno = ENOMEM; return 0; }
 	tmpl = malloc(n + sizeof "/ntlibcXXXXXX");
 	if (!tmpl) return 0;
-	memcpy(tmpl, tmpdir(), n);
+	memcpy(tmpl, dir, n);
 	memcpy(tmpl + n, "/ntlibcXXXXXX", sizeof "/ntlibcXXXXXX");
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return 0; }
 	/* POSIX semantics: unlinked at once, gone the moment it is closed. */
-	unlink(tmpl);
+	if (unlink(tmpl) < 0) {
+		int e = errno;
+		(void)close(fd);
+		free(tmpl);
+		errno = e;
+		return 0;
+	}
 	free(tmpl);
 	f = __file_new(fd, O_RDWR);
-	if (!f) { int e = errno; close(fd); errno = e; return 0; }
+	if (!f) { int e = errno; (void)close(fd); errno = e; return 0; }
 	return f;
 }
 
@@ -179,7 +194,8 @@ char *tmpnam(char *s)
 	return s;
 }
 
-char *tempnam(const char *dir, const char *pfx)
+withtok(heap_allocated)
+char *tempnam(const char *dir, const char *pfx) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const char *d = dir ? dir : tmpdir();
 	size_t n = strlen(d), pn = pfx ? strlen(pfx) : 0;
@@ -192,19 +208,24 @@ char *tempnam(const char *dir, const char *pfx)
 	memcpy(tmpl + n + 1 + pn, "XXXXXX", sizeof "XXXXXX");
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return 0; }
-	close(fd);
-	unlink(tmpl);
+	if (close(fd) < 0 || unlink(tmpl) < 0) {
+		int e = errno;
+		(void)unlink(tmpl);
+		free(tmpl);
+		errno = e;
+		return 0;
+	}
 	return tmpl;
 }
 
 char *ctermid(char *s)
 {
 	static char buf[L_ctermid] = "/dev/tty";
-	if (s) { strcpy(s, "/dev/tty"); return s; }
+	if (s) { memcpy(s, "/dev/tty", sizeof "/dev/tty"); return s; }
 	return buf;
 }
 
-FILE *popen(const char *cmd, const char *mode)
+FILE *popen(const char *cmd, const char *mode) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int rw = mode[0] == 'w';
 	int fds[2], saved, child_std;
@@ -221,9 +242,16 @@ FILE *popen(const char *cmd, const char *mode)
 	 * swapped in for the duration of the spawn and put back after. */
 	child_std = rw ? 0 : 1;
 	saved = dup(child_std);
-	if (saved < 0) { close(fds[0]); close(fds[1]); return 0; }
+	if (saved < 0) {
+		int e = errno;
+		(void)close(fds[0]); (void)close(fds[1]);
+		errno = e;
+		return 0;
+	}
 	if (dup2(rw ? fds[0] : fds[1], child_std) < 0) {
-		close(saved); close(fds[0]); close(fds[1]);
+		int e = errno;
+		(void)close(saved); (void)close(fds[0]); (void)close(fds[1]);
+		errno = e;
 		return 0;
 	}
 
@@ -239,14 +267,21 @@ FILE *popen(const char *cmd, const char *mode)
 		free(shell);
 	}
 
-	dup2(saved, child_std);
-	close(saved);
-	close(rw ? fds[0] : fds[1]);
+	if (dup2(saved, child_std) < 0) {
+		int e = errno;
+		(void)close(saved);
+		(void)close(fds[0]);
+		(void)close(fds[1]);
+		errno = e;
+		return 0;
+	}
+	(void)close(saved);
+	(void)close(rw ? fds[0] : fds[1]);
 
-	if (pid < 0) { close(rw ? fds[1] : fds[0]); return 0; }
+	if (pid < 0) { (void)close(rw ? fds[1] : fds[0]); return 0; }
 
 	f = __file_new(rw ? fds[1] : fds[0], rw ? O_WRONLY : O_RDONLY);
-	if (!f) { int e = errno; close(rw ? fds[1] : fds[0]); errno = e; return 0; }
+	if (!f) { int e = errno; (void)close(rw ? fds[1] : fds[0]); errno = e; return 0; }
 	f->pid = pid;
 	return f;
 }
@@ -255,8 +290,10 @@ int pclose(FILE *f)
 {
 	int status;
 	pid_t pid = f->pid;
-	fclose(f);
+	(void)fclose(f);
 	if (pid < 0) { errno = ECHILD; return -1; }
 	if (waitpid(pid, &status, 0) < 0) return -1;
 	return status;
 }
+
+// NOLINTEND(misc-include-cleaner)

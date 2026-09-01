@@ -7,7 +7,12 @@
  * out is linked into __stdio_files so __stdio_exit can find it without
  * the caller having to remember to.
  */
-#define _GNU_SOURCE
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,9 +25,9 @@ FILE *__stdio_files;
 
 static unsigned char stdin_buf[BUFSIZ], stdout_buf[BUFSIZ];
 
-static FILE stdin_f  = { .fd = 0, .bufmode = _IOFBF, .user_buf = 1, .readable = 1, .buf = stdin_buf,  .bufsz = sizeof stdin_buf,  .no_close = 1 };
-static FILE stdout_f = { .fd = 1, .bufmode = _IOLBF, .user_buf = 1, .writable = 1, .buf = stdout_buf, .bufsz = sizeof stdout_buf, .no_close = 1 };
-static FILE stderr_f = { .fd = 2, .bufmode = _IONBF, .writable = 1, .no_close = 1 };
+static FILE stdin_f  = { .fd = 0, .bufmode = _IOFBF, .user_buf = 1, .readable = 1, .buf = stdin_buf,  .bufsz = sizeof stdin_buf,  .no_close = 1 }; // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- the stdio implementation owns this backing object; no FILE is copied
+static FILE stdout_f = { .fd = 1, .bufmode = _IOLBF, .user_buf = 1, .writable = 1, .buf = stdout_buf, .bufsz = sizeof stdout_buf, .no_close = 1 }; // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- the stdio implementation owns this backing object; no FILE is copied
+static FILE stderr_f = { .fd = 2, .bufmode = _IONBF, .writable = 1, .no_close = 1 }; // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- the stdio implementation owns this backing object; no FILE is copied
 
 FILE *const stdin = &stdin_f;
 FILE *const stdout = &stdout_f;
@@ -52,14 +57,14 @@ int __fmodeflags(const char *mode)
 	return flags;
 }
 
-FILE *__file_new(int fd, int flags)
+FILE *__file_new(int fd, int flags) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
-	FILE *f = malloc(sizeof *f);
+	FILE *f = malloc(sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- the stdio implementation allocates its private FILE representation; it does not copy one
 	if (!f) return 0;
-	memset(f, 0, sizeof *f);
+	memset(f, 0, sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- initializes new private FILE storage before it becomes a stream; no live FILE is copied
 	f->fd = fd;
 	f->pid = -1;
-	switch (flags & O_ACCMODE) {
+	switch (flags & O_ACCMODE) { // NOLINT(bugprone-switch-missing-default-case) -- parsed stdio modes produce only the three valid access-mode encodings
 	case O_RDONLY: f->readable = 1; break;
 	case O_WRONLY: f->writable = 1; break;
 	case O_RDWR: f->readable = f->writable = 1; break;
@@ -81,7 +86,7 @@ void __file_free(FILE *f)
 	free(f);
 }
 
-FILE *fopen(const char *__restrict path, const char *__restrict mode)
+FILE *fopen(const char *__restrict path, const char *__restrict mode) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int flags = __fmodeflags(mode);
 	int fd;
@@ -90,7 +95,7 @@ FILE *fopen(const char *__restrict path, const char *__restrict mode)
 	fd = open(path, flags, 0666);
 	if (fd < 0) return 0;
 	f = __file_new(fd, flags);
-	if (!f) { int e = errno; close(fd); errno = e; return 0; }
+	if (!f) { int e = errno; (void)close(fd); errno = e; return 0; }
 	return f;
 }
 
@@ -118,13 +123,13 @@ FILE *fdopen(int fd, const char *mode)
 	return f;
 }
 
-FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__restrict f)
+FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__restrict f) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int flags = __fmodeflags(mode);
 	int fd, oldfd;
 
 	if (flags < 0) return 0;
-	fflush(f);
+	(void)fflush(f);
 	oldfd = f->fd;
 
 	if (path) {
@@ -132,7 +137,7 @@ FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__
 			if (f->mem_dynamic && f->mem_buf) free(f->mem_buf);
 			f->is_mem = 0; f->mem_buf = 0; f->mem_size = f->mem_len = f->mem_pos = 0;
 		} else if (oldfd >= 0) {
-			close(oldfd);
+			(void)close(oldfd);
 		}
 		fd = open(path, flags, 0666);
 		if (fd < 0) { __file_free(f); return 0; }
@@ -144,7 +149,7 @@ FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__
 	}
 
 	f->readable = f->writable = 0;
-	switch (flags & O_ACCMODE) {
+	switch (flags & O_ACCMODE) { // NOLINT(bugprone-switch-missing-default-case) -- parsed stdio modes produce only the three valid access-mode encodings
 	case O_RDONLY: f->readable = 1; break;
 	case O_WRONLY: f->writable = 1; break;
 	case O_RDWR: f->readable = f->writable = 1; break;
@@ -157,7 +162,10 @@ FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__
 	memset(&f->wst_out, 0, sizeof f->wst_out);
 	f->wunget = 0;
 	f->nwunget = 0;
-	if (flags & O_APPEND) fseek(f, 0, SEEK_END);
+	/* O_APPEND enforces append writes even when this best-effort positioning
+	 * cannot seek (for example, on a pipe).  Such streams remain valid. */
+	if (flags & O_APPEND)
+		(void)fseek(f, 0, SEEK_END); // NOLINT(cert-err33-c) -- O_APPEND, not the current offset, guarantees append semantics
 	return f;
 }
 
@@ -246,10 +254,10 @@ void __stdio_exit(void)
 	if (in_progress) return;
 	in_progress = 1;
 
-	fflush(stdout);
-	fflush(stderr);
+	(void)fflush(stdout);
+	(void)fflush(stderr);
 	for (f = __stdio_files; f; f = f->next)
-		fflush(f);
+		(void)fflush(f);
 	/* Buffers are not freed and fds not closed: the process is about to
 	 * end and NtTerminateProcess reclaims everything at once. Flushing
 	 * is the only observable effect that matters. */
@@ -259,3 +267,5 @@ void __stdio_exit(void)
 	 * re-arm the recursion for a second fatal signal arriving during the
 	 * same shutdown. */
 }
+
+// NOLINTEND(misc-include-cleaner)

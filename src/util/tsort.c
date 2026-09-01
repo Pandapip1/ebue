@@ -48,7 +48,7 @@
 
 struct node {
 	char *name;
-	int indeg;
+	size_t indeg;
 	int *succ;
 	size_t nsucc, cap;
 	int done;
@@ -59,8 +59,8 @@ static size_t nnodes, nodecap;
 
 static int find_node(const char *name)
 {
-	size_t i;
-	for (i = 0; i < nnodes; i++)
+	size_t i, count = nnodes;
+	for (i = 0; i < count; i++)
 		if (!strcmp(nodes[i].name, name)) return (int)i;
 	return -1;
 }
@@ -71,8 +71,10 @@ static int get_or_add(const char *name)
 	if (idx >= 0) return idx;
 
 	if (nnodes >= nodecap) {
-		size_t newcap = nodecap ? nodecap * 2 : 64;
-		struct node *g = realloc(nodes, newcap * sizeof *nodes);
+		size_t newcap;
+		struct node *g;
+		if (!__util_array_capacity(nodecap, nnodes, 1, 64, sizeof *nodes, &newcap)) return -1;
+		g = __util_reallocarray(nodes, newcap, sizeof *nodes);
 		if (!g) return -1;
 		nodes = g;
 		nodecap = newcap;
@@ -86,19 +88,24 @@ static int get_or_add(const char *name)
 	return (int)nnodes++;
 }
 
-static void add_edge(int a, int b)
+static int add_edge(int a, int b)
 {
 	if (nodes[a].nsucc >= nodes[a].cap) {
-		size_t newcap = nodes[a].cap ? nodes[a].cap * 2 : 8;
-		int *g = realloc(nodes[a].succ, newcap * sizeof *nodes[a].succ);
-		if (!g) return;
+		size_t newcap;
+		int *g;
+		if (!__util_array_capacity(nodes[a].cap, nodes[a].nsucc, 1, 8,
+		    sizeof *nodes[a].succ, &newcap)) return -1;
+		g = __util_reallocarray(nodes[a].succ, newcap, sizeof *nodes[a].succ);
+		if (!g) return -1;
 		nodes[a].succ = g;
 		nodes[a].cap = newcap;
 	}
 	nodes[a].succ[nodes[a].nsucc++] = b;
 	nodes[b].indeg++;
+	return 0;
 }
 
+withtok(heap_allocated)
 static char *slurp(FILE *f, size_t *outlen)
 {
 	size_t cap = 65536, len = 0;
@@ -108,11 +115,15 @@ static char *slurp(FILE *f, size_t *outlen)
 	if (!buf) return 0;
 	for (;;) {
 		if (len == cap) {
-			cap *= 2;
+			size_t newcap;
+			if (!__util_array_capacity(cap, len, 1, 65536, 1, &newcap)) {
+				free(buf); return 0;
+			}
 			{
-				char *g = realloc(buf, cap);
+				char *g = realloc(buf, newcap);
 				if (!g) { free(buf); return 0; }
 				buf = g;
+				cap = newcap;
 			}
 		}
 		got = fread(buf + len, 1, cap - len, f);
@@ -136,7 +147,7 @@ int __util_tsort_main(int argc, char **argv)
 	size_t queue_head, ready_count;
 
 	if (argc > 2) {
-		fprintf(stderr, "tsort: too many operands\n");
+		__util_diagf("tsort: too many operands\n");
 		return 1;
 	}
 	if (argc == 2) {
@@ -144,14 +155,21 @@ int __util_tsort_main(int argc, char **argv)
 			f = stdin;
 		} else {
 			f = fopen(argv[1], "r");
-			if (!f) { fprintf(stderr, "tsort: %s: %s\n", argv[1], strerror(errno)); return 1; }
+			if (!f) { __util_diagf("tsort: %s: %s\n", argv[1], strerror(errno)); return 1; }
 			have_file = 1;
 		}
 	}
 
 	buf = slurp(f, &len);
-	if (have_file) fclose(f);
-	if (!buf) { fprintf(stderr, "tsort: out of memory\n"); return 1; }
+	if (!buf) {
+		int saved = errno ? errno : ENOMEM;
+		/* Allocation/read failure is primary; close only releases the input. */
+		if (have_file) (void)fclose(f);
+		errno = saved;
+		__util_diagf("tsort: out of memory\n");
+		return 1;
+	}
+	if (have_file && fclose(f) != 0) { free(buf); return 1; }
 
 	/* Tokenize on runs of whitespace. */
 	while (pos < len) {
@@ -161,9 +179,13 @@ int __util_tsort_main(int argc, char **argv)
 		start = pos;
 		while (pos < len && !isspace((unsigned char)buf[pos])) pos++;
 		if (ntok >= tokcap) {
-			size_t newcap = tokcap ? tokcap * 2 : 64;
-			char **g = realloc(tok, newcap * sizeof *tok);
-			if (!g) { fprintf(stderr, "tsort: out of memory\n"); free(buf); return 1; }
+			size_t newcap;
+			char **g;
+			if (!__util_array_capacity(tokcap, ntok, 1, 64, sizeof *tok, &newcap)) {
+				__util_diagf("tsort: out of memory\n"); free((void *)tok); free(buf); return 1;
+			}
+			g = (char **)__util_reallocarray((void *)tok, newcap, sizeof *tok);
+			if (!g) { __util_diagf("tsort: out of memory\n"); free((void *)tok); free(buf); return 1; }
 			tok = g;
 			tokcap = newcap;
 		}
@@ -178,40 +200,44 @@ int __util_tsort_main(int argc, char **argv)
 	}
 
 	if (ntok % 2) {
-		fprintf(stderr, "tsort: odd number of tokens (%lu) -- input is not pairs\n", (unsigned long)ntok);
-		free(tok);
+		__util_diagf("tsort: odd number of tokens (%lu) -- input is not pairs\n", (unsigned long)ntok);
+		free((void *)tok);
 		free(buf);
 		return 1;
 	}
 
-	for (i = 0; i < ntok; i += 2) {
-		int a = get_or_add(tok[i]);
-		int b = get_or_add(tok[i + 1]);
-		if (a < 0 || b < 0) { fprintf(stderr, "tsort: out of memory\n"); free(tok); free(buf); return 1; }
-		if (a != b) add_edge(a, b);
+	for (i = 0; i < ntok / 2; i++) {
+		int a = get_or_add(tok[2 * i]);
+		int b = get_or_add(tok[2 * i + 1]);
+		if (a < 0 || b < 0) { __util_diagf("tsort: out of memory\n"); free((void *)tok); free(buf); return 1; }
+		if (a != b && add_edge(a, b) < 0) {
+			__util_diagf("tsort: out of memory\n"); free((void *)tok); free(buf); return 1;
+		}
 	}
-	free(tok);
+	free((void *)tok);
 	free(buf);
 
 	{
-		int *queue = malloc((nnodes ? nnodes : 1) * sizeof *queue);
+		size_t node_count = nnodes;
+		int *queue = __util_mallocarray(node_count ? node_count : 1, sizeof *queue);
 		size_t qtail = 0;
-		size_t n;
+		size_t n, remaining;
 
-		if (!queue && nnodes) { fprintf(stderr, "tsort: out of memory\n"); return 1; }
+		if (!queue && node_count) { __util_diagf("tsort: out of memory\n"); return 1; }
 
-		for (n = 0; n < nnodes; n++)
+		for (n = 0; n < node_count; n++)
 			if (nodes[n].indeg == 0) queue[qtail++] = (int)n;
 
 		queue_head = 0;
 		ready_count = 0;
-		while (queue_head < qtail) {
+		for (remaining = node_count;
+		     remaining > 0 && queue_head < qtail; remaining--) {
 			int cur = queue[queue_head++];
-			size_t s;
+			size_t s, succ_count = nodes[cur].nsucc;
 			ready_count++;
 			nodes[cur].done = 1;
 			printf("%s\n", nodes[cur].name);
-			for (s = 0; s < nodes[cur].nsucc; s++) {
+			for (s = 0; s < succ_count; s++) {
 				int nb = nodes[cur].succ[s];
 				/* Each node's indegree reaches exactly zero at most
 				 * once, so it is pushed onto queue[] at most once --
@@ -224,16 +250,19 @@ int __util_tsort_main(int argc, char **argv)
 
 	cycle = ready_count < nnodes;
 	if (cycle) {
-		size_t n;
-		fprintf(stderr, "tsort: cycle in input; unresolved:");
-		for (n = 0; n < nnodes; n++)
-			if (!nodes[n].done) fprintf(stderr, " %s", nodes[n].name);
-		fprintf(stderr, "\n");
+		size_t n, node_count = nnodes;
+		__util_diagf("tsort: cycle in input; unresolved:");
+		for (n = 0; n < node_count; n++)
+			if (!nodes[n].done) __util_diagf(" %s", nodes[n].name);
+		__util_diagf("\n");
 	}
 
-	for (i = 0; i < nnodes; i++) {
-		free(nodes[i].name);
-		free(nodes[i].succ);
+	{
+		size_t node_count = nnodes;
+		for (i = 0; i < node_count; i++) {
+			free(nodes[i].name);
+			free(nodes[i].succ);
+		}
 	}
 	free(nodes);
 

@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -108,7 +113,7 @@
  * not. */
 
 #define NTLIBC_MALLOC_PAGE_SIZE 4096u
-#define NTLIBC_MALLOC_SLAB_BYTES (64u * 1024u)
+#define NTLIBC_MALLOC_SLAB_BYTES ((size_t)64 * 1024u)
 #define NTLIBC_MALLOC_HDR_SIZE 16u
 #define NTLIBC_MALLOC_NUM_CLASSES 12 /* 16, 32, 64, ..., 16 << 11 = 32768 */
 
@@ -198,7 +203,8 @@ static void ntlibc_malloc_refill_locked(int class)
 	}
 }
 
-void *__plat_alloc(size_t n, int zero)
+withtok(platform_heap_allocated)
+void *__plat_alloc(size_t n, int zero) // NOLINT(bugprone-easily-swappable-parameters) -- fixed allocator-backend contract; size and zero-fill flag have distinct roles
 {
 	struct ntlibc_malloc_chunk_hdr *h;
 	void *user;
@@ -242,7 +248,7 @@ size_t __plat_alloc_size(void *p)
 	return h->size;
 }
 
-void __plat_dealloc(void *p)
+void __plat_dealloc(void *p consume(platform_heap_allocated))
 {
 	struct ntlibc_malloc_chunk_hdr *h;
 	if (!p) return;
@@ -264,7 +270,8 @@ void __plat_dealloc(void *p)
  * the original. Simple, and the copy is bounded by real, exact sizes
  * both ends already track precisely, so there is no scope for an
  * over-read here even though it is not the fastest possible realloc. */
-void *__plat_realloc(void *p, size_t n)
+withtok(platform_heap_allocated)
+void *__plat_realloc(void *p consume_if_nonnull_return(platform_heap_allocated), size_t n)
 {
 	struct ntlibc_malloc_chunk_hdr *h;
 	void *q;
@@ -282,3 +289,5 @@ void *__plat_realloc(void *p, size_t n)
 }
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

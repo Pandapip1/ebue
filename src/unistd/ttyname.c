@@ -47,7 +47,7 @@ pid_t tcgetpgrp(int fd)
 	return getpgrp();
 }
 
-int tcsetpgrp(int fd, pid_t p)
+int tcsetpgrp(int fd, pid_t p) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	if (!__fd_get(fd)) return -1;	/* EBADF, already set */
 	(void)p;			/* the only group there is; nothing moves */

@@ -9,6 +9,11 @@
  * recursing.  Unrecognized conversions and the locale %E/%O modifiers
  * are not implemented.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <time.h>
 #include <ctype.h>
 #include <string.h>
@@ -60,28 +65,29 @@ static const char *read_num(const char *s, int maxdigits, long *out)
  * candidate first isn't necessary since none is a prefix of another
  * within the same table, but abbreviations ARE prefixes of the full
  * names, so try full names before abbreviations. */
-/* full/abbr/idx are required; s is deliberately NOT marked. full is
- * indexed directly (`strlen(full[i])`) as soon as the first loop runs at
- * all (n is always 7 or 12 at this file's two real call sites -- the day
- * and month name tables -- never 0), and abbr the same way in the second
- * loop whenever no full-name candidate matched first; idx is written
- * (`*idx = i;`) on every match. Neither table nor idx is ever NULL at
- * either real call site (__ntlibc_day_name/_abbr, __ntlibc_month_name/
- * _abbr, and parse()'s own on-stack `idx`). s, by contrast, is only ever
+/* full/abbr/full_len/idx are required; s is deliberately NOT marked. The
+ * three tables are indexed as soon as their respective loops run (n is
+ * always 7 or 12 at this file's two real call sites, never 0), and idx is
+ * written (`*idx = i;`) on every match. None is ever NULL at either call
+ * site (__ntlibc_day_name/_abbr, __ntlibc_month_name/_abbr, the matching
+ * literal-derived length table, and parse()'s on-stack `idx`). s is only
  * forwarded into strncasecmp() -- never dereferenced directly by this
  * function's own body -- so it is left unmarked, the same "purely
  * forwarded, the real callee already owns the contract" reasoning as
  * time.h's own ctime_r()/clock_gettime() comments. */
-static const char *match_name(const char *s, const char *const *full, const char *const *abbr, int n, int *idx)
-    __attribute__((nonnull(2, 3, 5)));
-static const char *match_name(const char *s, const char *const *full, const char *const *abbr, int n, int *idx)
+static const char *match_name(const char *s, const char *const *full,
+    const char *const *abbr, const unsigned char *full_len, int n, int *idx)
+    __attribute__((nonnull(2, 3, 4, 6)));
+static const char *match_name(const char *s, const char *const *full,
+    const char *const *abbr, const unsigned char *full_len, int n,
+    int *idx) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	for (int i = 0; i < n; i++) {
-		size_t len = strlen(full[i]);
+		size_t len = full_len[i];
 		if (!strncasecmp(s, full[i], len)) { *idx = i; return s + len; }
 	}
 	for (int i = 0; i < n; i++) {
-		size_t len = strlen(abbr[i]);
+		size_t len = 3;
 		if (!strncasecmp(s, abbr[i], len)) { *idx = i; return s + len; }
 	}
 	return NULL;
@@ -115,12 +121,14 @@ static const char *match_name(const char *s, const char *const *full, const char
  * inspection, incapable of returning NULL on any path this loop
  * actually takes (skip_ws() never returns NULL at all; read_num()/
  * match_name()'s NULL returns are always caught by this loop's own
- * `if (!(s = ...)) return NULL;` before `s` is used again). Sound by
+ * `s = ...; if (!s) return NULL;` before `s` is used again). Sound by
  * hand at every one of these sites; closing the class properly would
  * mean teaching the checker to trust `returns_nonnull`-shaped
  * functions, a real but separate lemma this pass did not attempt. */
+// NOLINTNEXTLINE(misc-no-recursion) -- composite directives recurse into fixed subformats with bounded expansion depth
 static const char *parse(const char *s, const char *f, struct tm *tm,
 	int *pm, int *century, int *year2) __attribute__((nonnull(1, 2, 3, 4, 5, 6)));
+// NOLINTNEXTLINE(misc-no-recursion) -- composite directives recurse into fixed subformats with bounded expansion depth
 static const char *parse(const char *s, const char *f, struct tm *tm,
 	int *pm, int *century, int *year2)
 {
@@ -145,19 +153,25 @@ static const char *parse(const char *s, const char *f, struct tm *tm,
 		case 'R': sub = "%H:%M"; goto expand;
 		case 'T': case 'X': sub = "%H:%M:%S"; goto expand;
 		expand:
-			if (!(s = parse(s, sub, tm, pm, century, year2))) return NULL;
+			s = parse(s, sub, tm, pm, century, year2);
+			if (!s) return NULL;
 			break;
 		/* Widths follow musl/glibc: %Y 4, %j 3, %u/%w 1, everything else 2,
 		 * so an unseparated "%Y%m%d" doesn't let %Y swallow later fields. */
-		case 'Y': if (!(s = read_num(s, 4, &v))) return NULL; tm->tm_year = (int)(v - 1900); break;
+		case 'Y':
+			s = read_num(s, 4, &v);
+			if (!s) return NULL;
+			tm->tm_year = (int)(v - 1900);
+			break;
 		case 'y':
-			if (!(s = read_num(s, 2, &v))) return NULL;
+			s = read_num(s, 2, &v);
+			if (!s) return NULL;
 			*year2 = (int)v;
 			if (*century >= 0) {
 				/* %C already ran (in either order relative to %y): the
 				 * century it set wins, %y only supplies the low two
 				 * digits. */
-				tm->tm_year = (int)(*century * 100 + v - 1900);
+				tm->tm_year = (int)((long)*century * 100 + v - 1900);
 			} else {
 				/* No %C in this format: fall back to the traditional
 				 * "%y-alone" pivot -- 69..99 is 1969..1999, 00..68 is
@@ -169,7 +183,8 @@ static const char *parse(const char *s, const char *f, struct tm *tm,
 			/* "All but the last two digits of the year" -- combines with a
 			 * %y elsewhere in the format to form the full year; on its own
 			 * it sets the century with the low two digits defaulting to 0. */
-			if (!(s = read_num(s, 2, &v))) return NULL;
+			s = read_num(s, 2, &v);
+			if (!s) return NULL;
 			*century = (int)v;
 			tm->tm_year = (int)(v * 100 + (*year2 >= 0 ? *year2 : 0) - 1900);
 			break;
@@ -185,25 +200,77 @@ static const char *parse(const char *s, const char *f, struct tm *tm,
 			 * field but not fed back into tm -- struct tm has no
 			 * week-number member, and mktime/gmtime never look at one,
 			 * so (as in glibc/musl) it's parsed and discarded. */
-			if (!(s = read_num(s, 2, &v))) return NULL;
+			s = read_num(s, 2, &v);
+			if (!s) return NULL;
 			break;
-		case 'm': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_mon = (int)v - 1; break;
-		case 'd': case 'e': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_mday = (int)v; break;
-		case 'H': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_hour = (int)v; break;
-		case 'I': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_hour = (int)v; break;
-		case 'M': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_min = (int)v; break;
-		case 'S': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_sec = (int)v; break;
-		case 'j': if (!(s = read_num(s, 3, &v))) return NULL; tm->tm_yday = (int)v - 1; break;
-		case 'u': if (!(s = read_num(s, 1, &v))) return NULL; tm->tm_wday = (int)(v == 7 ? 0 : v); break;
-		case 'w': if (!(s = read_num(s, 1, &v))) return NULL; tm->tm_wday = (int)v; break;
-		case 'a': case 'A':
-			if (!(s = match_name(s, __ntlibc_day_name, __ntlibc_day_name_abbr, 7, &idx))) return NULL;
+		case 'm':
+			s = read_num(s, 2, &v);
+			if (!s) return NULL;
+			tm->tm_mon = (int)v - 1;
+			break;
+		case 'd': case 'e':
+			s = read_num(s, 2, &v);
+			if (!s) return NULL;
+			tm->tm_mday = (int)v;
+			break;
+		case 'H': case 'I':
+			s = read_num(s, 2, &v);
+			if (!s) return NULL;
+			tm->tm_hour = (int)v;
+			break;
+		case 'M':
+			s = read_num(s, 2, &v);
+			if (!s) return NULL;
+			tm->tm_min = (int)v;
+			break;
+		case 'S':
+			s = read_num(s, 2, &v);
+			if (!s) return NULL;
+			tm->tm_sec = (int)v;
+			break;
+		case 'j':
+			s = read_num(s, 3, &v);
+			if (!s) return NULL;
+			tm->tm_yday = (int)v - 1;
+			break;
+		case 'u':
+			s = read_num(s, 1, &v);
+			if (!s) return NULL;
+			tm->tm_wday = (int)(v == 7 ? 0 : v);
+			break;
+		case 'w':
+			s = read_num(s, 1, &v);
+			if (!s) return NULL;
+			tm->tm_wday = (int)v;
+			break;
+		case 'a': case 'A': {
+			static const unsigned char lengths[7] = {
+				sizeof "Sunday" - 1, sizeof "Monday" - 1,
+				sizeof "Tuesday" - 1, sizeof "Wednesday" - 1,
+				sizeof "Thursday" - 1, sizeof "Friday" - 1,
+				sizeof "Saturday" - 1
+			};
+			s = match_name(s, __ntlibc_day_name, __ntlibc_day_name_abbr,
+			               lengths, 7, &idx);
+			if (!s) return NULL;
 			tm->tm_wday = idx;
 			break;
-		case 'b': case 'B': case 'h':
-			if (!(s = match_name(s, __ntlibc_month_name, __ntlibc_month_name_abbr, 12, &idx))) return NULL;
+		}
+		case 'b': case 'B': case 'h': {
+			static const unsigned char lengths[12] = {
+				sizeof "January" - 1, sizeof "February" - 1,
+				sizeof "March" - 1, sizeof "April" - 1,
+				sizeof "May" - 1, sizeof "June" - 1,
+				sizeof "July" - 1, sizeof "August" - 1,
+				sizeof "September" - 1, sizeof "October" - 1,
+				sizeof "November" - 1, sizeof "December" - 1
+			};
+			s = match_name(s, __ntlibc_month_name, __ntlibc_month_name_abbr,
+			               lengths, 12, &idx);
+			if (!s) return NULL;
 			tm->tm_mon = idx;
 			break;
+		}
 		case 'p':
 			if (!strncasecmp(s, "AM", 2)) { *pm = 0; s += 2; }
 			else if (!strncasecmp(s, "PM", 2)) { *pm = 1; s += 2; }
@@ -216,9 +283,13 @@ static const char *parse(const char *s, const char *f, struct tm *tm,
 				int sign = *s == '-' ? -1 : 1;
 				long h, mn = 0;
 				s++;
-				if (!(s = read_num(s, 2, &h))) return NULL;
+				s = read_num(s, 2, &h);
+				if (!s) return NULL;
 				if (*s == ':') s++;
-				if (isdigit((unsigned char)*s)) { if (!(s = read_num(s, 2, &mn))) return NULL; }
+				if (isdigit((unsigned char)*s)) {
+					s = read_num(s, 2, &mn);
+					if (!s) return NULL;
+				}
 				tm->__tm_gmtoff = sign * (h * 3600 + mn * 60);
 			} else return NULL;
 			break;
@@ -245,8 +316,11 @@ char *strptime(const char *restrict s, const char *restrict f, struct tm *restri
 	int century = -1;
 	int year2 = -1;
 
-	if (!(s = parse(s, f, tm, &pm, &century, &year2))) return NULL;
+	s = parse(s, f, tm, &pm, &century, &year2);
+	if (!s) return NULL;
 	if (pm == 1 && tm->tm_hour < 12) tm->tm_hour += 12;
 	else if (pm == 0 && tm->tm_hour == 12) tm->tm_hour = 0;
 	return (char *)s;
 }
+
+// NOLINTEND(misc-include-cleaner)

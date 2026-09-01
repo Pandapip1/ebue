@@ -9,6 +9,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ConstraintManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/SValBuilder.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
 #include "llvm/ADT/APSInt.h"
@@ -115,21 +116,11 @@ public:
   // SymbolRef that names no Expr of its own (the whole point of that
   // function is to be reachable from a materialized value that was
   // stored into a variable or field and read back later).
-  // State is a required, explicit parameter (never defaulted to
-  // C.getState() internally) precisely so a caller downstream of another
-  // checker's own PreStmt callback for the SAME statement -- Divisor/
-  // ShiftCountChecker's own div-by-zero/shift-count checks run in the
-  // same PreStmt<BinaryOperator> phase as clang's builtin core.DivideZero,
-  // which (like this codebase's own checkers) narrows the state by
-  // calling addTransition once it has proven a path condition, and
-  // checkers sharing one callback phase see each PRIOR checker's already-
-  // narrowed node -- can pass arithmeticInputState(C) (the state from
-  // BEFORE this phase's checker chain ran, the same "look behind the
-  // current node's predecessor" trick this file's own
-  // arithmeticInputState() already uses for its bug-report state) instead
-  // of silently trusting whatever core.DivideZero already assumed on this
-  // exact symbol. Passing C.getState() explicitly reproduces this
-  // function's old always-current-state behavior exactly.
+  // State is a required, explicit parameter so recursive interval proofs
+  // inspect one consistent program point.  The arithmetic-UB stage disables
+  // Clang's overlapping DivideZero and BitwiseShift checkers; consequently
+  // the current state retains genuine branch constraints without containing
+  // a same-operation assumption supplied by a built-in checker.
   static Interval bisectInterval(NonLoc Value, QualType Type,
                                  ProgramStateRef State, CheckerContext &C) {
     ASTContext &Ctx = C.getASTContext();
@@ -316,17 +307,23 @@ public:
         bisectInterval(nonloc::SymbolVal(Sym), Type, State, C), Bound);
   }
 
-  // State defaults to C.getState() -- the always-current-node behavior
-  // this function had before symbolInterval() and the explicit-State
-  // overload of bisectInterval() existed -- so every pre-existing caller
-  // is unaffected. Divisor/ShiftCountChecker pass arithmeticInputState(C)
-  // explicitly instead; see bisectInterval()'s own comment for why.
+  // State defaults to C.getState(); the explicit overload exists so every
+  // recursive query can be pinned to the same program point.
   static std::optional<Interval>
   constrainedInterval(const Expr *Expr, CheckerContext &C,
                       ProgramStateRef State = nullptr) {
     if (!State)
       State = C.getState();
     SVal Value = State->getSVal(Expr, C.getLocationContext());
+    // Unary ++/-- hand us their lvalue operand directly, rather than the
+    // ImplicitCastExpr(CK_LValueToRValue) that a binary arithmetic operand
+    // contains.  Load that location explicitly so the range solver sees the
+    // path constraints on the variable.  Treating the location as an unknown
+    // integer interval made every guarded loop induction step look capable of
+    // overflowing even at `i < 3`.
+    if (Expr->isLValue() && Expr->getType()->isIntegerType())
+      if (std::optional<Loc> Location = Value.getAs<Loc>())
+        Value = State->getSVal(*Location, Expr->getType());
     if (const llvm::APSInt *Integer = Value.getAsInteger()) {
       llvm::APSInt Exact = asMath(*Integer);
       return Interval{Exact, Exact};
@@ -341,13 +338,8 @@ public:
     return Result;
   }
 
-  // Same State-defaulting rule as constrainedInterval() just above, and
-  // for the same reason: this function recurses into itself and into
-  // constrainedInterval(), so the resolved (possibly caller-supplied)
-  // State has to be threaded through every recursive call explicitly --
-  // re-defaulting to C.getState() partway down the recursion would
-  // silently discard a caller's arithmeticInputState(C) the moment it
-  // reached a nested sub-expression.
+  // Same State-defaulting rule as constrainedInterval() just above: this
+  // function threads one program point through every recursive query.
   static Interval expressionInterval(const Expr *Expr, CheckerContext &C,
                                      ProgramStateRef State = nullptr) {
     if (!State)
@@ -689,11 +681,137 @@ static std::string arithmeticOrigin(const Expr *Expression, CheckerContext &C);
 static std::string arithmeticText(const Stmt *Statement, CheckerContext &C);
 static std::string arithmeticSite(const Expr *Expression, CheckerContext &C);
 static std::string arithmeticContext(CheckerContext &C);
-static ProgramStateRef arithmeticInputState(CheckerContext &C);
 
 class SignedArithmeticChecker : public Checker<check::PreStmt<BinaryOperator>,
                                                check::PreStmt<UnaryOperator>> {
   mutable std::unique_ptr<BugType> BT;
+
+  static std::optional<NonLoc> integerValue(const Expr *Expression,
+                                             ProgramStateRef State,
+                                             CheckerContext &C) {
+    SVal Value = State->getSVal(Expression, C.getLocationContext());
+    if (Expression->isLValue())
+      if (std::optional<Loc> Location = Value.getAs<Loc>())
+        Value = State->getSVal(*Location, Expression->getType());
+    return Value.getAs<NonLoc>();
+  }
+
+  static ProgramStateRef assumeComparison(ProgramStateRef State, NonLoc Left,
+                                          NonLoc Right,
+                                          BinaryOperator::Opcode Opcode,
+                                          CheckerContext &C) {
+    SVal Comparison = C.getSValBuilder().evalBinOpNN(
+        State, Opcode, Left, Right, C.getASTContext().IntTy);
+    std::optional<DefinedOrUnknownSVal> Defined =
+        Comparison.getAs<DefinedOrUnknownSVal>();
+    // An unmodelled comparison cannot establish safety.
+    return Defined ? State->assume(*Defined, true) : State;
+  }
+
+  static std::optional<NonLoc>
+  evaluate(ProgramStateRef State, NonLoc Left, NonLoc Right,
+           BinaryOperator::Opcode Opcode, QualType Type, CheckerContext &C) {
+    return C.getSValBuilder()
+        .evalBinOpNN(State, Opcode, Left, Right, Type)
+        .getAs<NonLoc>();
+  }
+
+  // Independent operand intervals lose relational facts such as `i < n`
+  // together with n's own type bound.  Ask the path solver the standard
+  // overflow predicates before reporting.  This is only an additional proof
+  // of safety: any predicate the solver cannot model remains feasible.
+  static bool addOrSubOverflowFeasible(const BinaryOperator *Operation,
+                                       CheckerContext &C, bool Subtract) {
+    ProgramStateRef Input = C.getState();
+    QualType Type = Operation->getType();
+    std::optional<NonLoc> Left =
+        integerValue(Operation->getLHS(), Input, C);
+    std::optional<NonLoc> Right =
+        integerValue(Operation->getRHS(), Input, C);
+    if (!Left || !Right)
+      return true;
+    SValBuilder &Builder = C.getSValBuilder();
+    NonLoc Zero = Builder.makeIntVal(0, Type).castAs<NonLoc>();
+    NonLoc Maximum = Builder.makeIntVal(
+        SizeCastChecker::typeMax(C.getASTContext(), Type));
+    NonLoc Minimum = Builder.makeIntVal(
+        SizeCastChecker::typeMin(C.getASTContext(), Type));
+
+    ProgramStateRef Positive =
+        assumeComparison(Input, *Right, Zero, BO_GT, C);
+    if (Positive) {
+      BinaryOperator::Opcode LimitOp = Subtract ? BO_Add : BO_Sub;
+      NonLoc BoundBase = Subtract ? Minimum : Maximum;
+      std::optional<NonLoc> Limit =
+          evaluate(Positive, BoundBase, *Right, LimitOp, Type, C);
+      if (!Limit || assumeComparison(Positive, *Left, *Limit,
+                                     Subtract ? BO_LT : BO_GT, C))
+        return true;
+    }
+
+    ProgramStateRef Negative =
+        assumeComparison(Input, *Right, Zero, BO_LT, C);
+    if (Negative) {
+      BinaryOperator::Opcode LimitOp = Subtract ? BO_Add : BO_Sub;
+      NonLoc BoundBase = Subtract ? Maximum : Minimum;
+      std::optional<NonLoc> Limit =
+          evaluate(Negative, BoundBase, *Right, LimitOp, Type, C);
+      if (!Limit || assumeComparison(Negative, *Left, *Limit,
+                                     Subtract ? BO_GT : BO_LT, C))
+        return true;
+    }
+    return false;
+  }
+
+  static bool multiplicationOverflowFeasible(const BinaryOperator *Operation,
+                                              CheckerContext &C) {
+    ProgramStateRef Input = C.getState();
+    QualType Type = Operation->getType();
+    std::optional<NonLoc> Left =
+        integerValue(Operation->getLHS(), Input, C);
+    std::optional<NonLoc> Right =
+        integerValue(Operation->getRHS(), Input, C);
+    if (!Left || !Right)
+      return true;
+    SValBuilder &Builder = C.getSValBuilder();
+    NonLoc Zero = Builder.makeIntVal(0, Type).castAs<NonLoc>();
+    NonLoc MinusOne = Builder.makeIntVal(llvm::APSInt(
+        llvm::APInt::getAllOnes(C.getASTContext().getIntWidth(Type)), false));
+    NonLoc Maximum = Builder.makeIntVal(
+        SizeCastChecker::typeMax(C.getASTContext(), Type));
+    NonLoc Minimum = Builder.makeIntVal(
+        SizeCastChecker::typeMin(C.getASTContext(), Type));
+
+    struct SignCase {
+      BinaryOperator::Opcode LeftSign;
+      BinaryOperator::Opcode RightSign;
+      NonLoc RightBound;
+      NonLoc Numerator;
+      BinaryOperator::Opcode OverflowComparison;
+    };
+    const SignCase Cases[] = {
+        {BO_GT, BO_GT, Zero, Maximum, BO_GT},
+        {BO_GT, BO_LT, MinusOne, Minimum, BO_GT},
+        {BO_LT, BO_GT, Zero, Minimum, BO_LT},
+        {BO_LT, BO_LT, Zero, Maximum, BO_LT},
+    };
+    for (const SignCase &Case : Cases) {
+      ProgramStateRef State =
+          assumeComparison(Input, *Left, Zero, Case.LeftSign, C);
+      if (!State)
+        continue;
+      State = assumeComparison(State, *Right, Case.RightBound, Case.RightSign,
+                               C);
+      if (!State)
+        continue;
+      std::optional<NonLoc> Limit =
+          evaluate(State, Case.Numerator, *Right, BO_Div, Type, C);
+      if (!Limit || assumeComparison(State, *Left, *Limit,
+                                     Case.OverflowComparison, C))
+        return true;
+    }
+    return false;
+  }
 
   static bool outside(const SizeCastChecker::Interval &Range,
                       const SizeCastChecker::Interval &Type) {
@@ -702,7 +820,7 @@ class SignedArithmeticChecker : public Checker<check::PreStmt<BinaryOperator>,
   }
 
   void report(const Expr *Expression, CheckerContext &C) const {
-    ExplodedNode *Node = C.generateNonFatalErrorNode(arithmeticInputState(C));
+    ExplodedNode *Node = C.generateNonFatalErrorNode(C.getState());
     if (!Node)
       return;
     if (!BT)
@@ -733,11 +851,17 @@ public:
     case BO_AddAssign:
       Result =
           SizeCastChecker::Interval{Left.Min + Right.Min, Left.Max + Right.Max};
+      if (outside(*Result, Bounds) &&
+          !addOrSubOverflowFeasible(Operation, C, false))
+        return;
       break;
     case BO_Sub:
     case BO_SubAssign:
       Result =
           SizeCastChecker::Interval{Left.Min - Right.Max, Left.Max - Right.Min};
+      if (outside(*Result, Bounds) &&
+          !addOrSubOverflowFeasible(Operation, C, true))
+        return;
       break;
     case BO_Mul:
     case BO_MulAssign: {
@@ -748,6 +872,9 @@ public:
       Result =
           SizeCastChecker::Interval{SizeCastChecker::minValue({A, B, D, E}),
                                     SizeCastChecker::maxValue({A, B, D, E})};
+      if (outside(*Result, Bounds) &&
+          !multiplicationOverflowFeasible(Operation, C))
+        return;
       break;
     }
     case BO_Shl:
@@ -866,13 +993,6 @@ static std::string arithmeticContext(CheckerContext &C) {
   return Current ? Current->getDeclKindName() : "unknown";
 }
 
-static ProgramStateRef arithmeticInputState(CheckerContext &C) {
-  ExplodedNode *Predecessor = C.getPredecessor();
-  if (Predecessor && !Predecessor->pred_empty())
-    return Predecessor->getFirstPred()->getState();
-  return C.getState();
-}
-
 class DivisorChecker : public Checker<check::PreStmt<BinaryOperator>> {
   mutable std::unique_ptr<BugType> BT;
 
@@ -885,7 +1005,7 @@ public:
     if (!Operation->getLHS()->getType()->isIntegerType() ||
         !Operation->getRHS()->getType()->isIntegerType())
       return;
-    ProgramStateRef Input = arithmeticInputState(C);
+    ProgramStateRef Input = C.getState();
     ProgramStateRef Violation = Input;
     if (std::optional<DefinedOrUnknownSVal> Divisor =
             C.getSVal(Operation->getRHS()).getAs<DefinedOrUnknownSVal>()) {
@@ -903,16 +1023,9 @@ public:
     // and applies just as soundly here: any divisor the solver alone
     // could not rule out zero for, but whose statically-computed range
     // provably excludes zero, is a second, independent, purely-additive
-    // proof this checker never tried before. Queried against
-    // arithmeticInputState(C), not C.getState(): clang's own builtin
-    // core.DivideZero shares this exact PreStmt<BinaryOperator> phase and
-    // narrows the CURRENT node's state (via its own addTransition) the
-    // moment it has proven a path where the divisor is nonzero, which
-    // would otherwise make an entirely UNCHECKED divisor look
-    // artificially safe here too (confirmed directly: querying
-    // C.getState() instead reported this checker's own fixtures'
-    // deliberately-unchecked divisors as already proven nonzero, which
-    // is exactly the false negative this must not reintroduce).
+    // proof this checker never tried before.  The stage disables Clang's
+    // core.DivideZero checker, so querying the current state cannot borrow a
+    // same-operation nonzero assumption from that overlapping checker.
     SizeCastChecker::Interval Range = SizeCastChecker::expressionInterval(
         Operation->getRHS(), C, Input);
     llvm::APSInt Zero(llvm::APInt(SizeCastChecker::MathBits, 0), false);
@@ -954,7 +1067,7 @@ public:
     bool CountUnsigned = CountType->isUnsignedIntegerOrEnumerationType();
     llvm::APSInt Low(llvm::APInt(CountBits, 0), CountUnsigned);
     llvm::APSInt High(llvm::APInt(CountBits, Width - 1), CountUnsigned);
-    ProgramStateRef Input = arithmeticInputState(C);
+    ProgramStateRef Input = C.getState();
     ProgramStateRef Violation = Input;
     if (std::optional<DefinedOrUnknownSVal> Count =
             C.getSVal(Operation->getRHS()).getAs<DefinedOrUnknownSVal>()) {
@@ -962,10 +1075,8 @@ public:
       if (!Violation)
         return;
     }
-    // Same second, independent proof avenue as DivisorChecker just above,
-    // queried against arithmeticInputState(C) for the same reason (a
-    // builtin core checker sharing this PreStmt<BinaryOperator> phase can
-    // narrow C.getState() before this callback runs): the raw solver's
+    // Same second, independent proof avenue as DivisorChecker just above.
+    // The stage likewise disables core.BitwiseShift, so the raw solver's
     // assumeInclusiveRange() only sees a shift count's own SVal, not the
     // Rem/And/Shr/Add/Sub/Mul structure expressionInterval() (and,
     // through it, symbolInterval() for a materialized local or field)

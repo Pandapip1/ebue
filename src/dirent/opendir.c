@@ -12,6 +12,11 @@
  * there, exactly as glibc's does, so the caller must not touch that fd
  * itself afterward and closedir() closes it.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -19,18 +24,19 @@
 #include <errno.h>
 #include "dirent_internal.h"
 
+withtok(directory_stream_open)
 static DIR *alloc_dir(int fd)
 {
-	DIR *dp = __malloc(sizeof *dp);
+	DIR *dp = __malloc(sizeof *dp + __DIRBUF_SIZE);
 	if (!dp) { errno = ENOMEM; return 0; }
 	memset(dp, 0, sizeof *dp);
-	dp->buf = __malloc(__DIRBUF_SIZE);
-	if (!dp->buf) { __free(dp); errno = ENOMEM; return 0; }
+	dp->buf = (unsigned char *)(dp + 1);
 	dp->fd = fd;
 	dp->restart = 1;
 	return dp;
 }
 
+withtok(directory_stream_open)
 DIR *fdopendir(int fd)
 {
 	struct __fd *f = __fd_get(fd);
@@ -39,6 +45,7 @@ DIR *fdopendir(int fd)
 	return alloc_dir(fd);
 }
 
+withtok(directory_stream_open)
 DIR *opendir(const char *path)
 {
 	int fd;
@@ -48,6 +55,13 @@ DIR *opendir(const char *path)
 	if (fd < 0) return 0;
 
 	dp = alloc_dir(fd);
-	if (!dp) { close(fd); return 0; }
+	if (!dp) {
+		int saved = errno;
+		(void)close(fd);
+		errno = saved;
+		return 0;
+	}
 	return dp;
 }
+
+// NOLINTEND(misc-include-cleaner)

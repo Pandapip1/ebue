@@ -53,6 +53,11 @@
  * around by duplicating __plat_mkdir()'s directory-creation logic in
  * src/util/.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
@@ -71,6 +76,7 @@
  * automatically-created ancestor's mode should be. Returns 0 on success
  * (including "already existed as a directory" under has_p), -1 with
  * errno set otherwise. */
+// NOLINTNEXTLINE(misc-no-recursion) -- parent creation recurses on a strictly shorter path prefix
 static int mkdir_p(char *path, mode_t leaf_mode, int is_leaf, int has_p)
 {
 	struct stat st;
@@ -95,7 +101,7 @@ static int mkdir_p(char *path, mode_t leaf_mode, int is_leaf, int has_p)
 		 * always exists -- nothing to create, go straight to retrying
 		 * `path` itself.  Otherwise the parent is a real path that
 		 * needs the same treatment, recursively. */
-		if (strcmp(p, ".") && mkdir_p(p, 0, 0, has_p) < 0) return -1;
+		if (strcmp(p, ".") && mkdir_p(p, 0, 0, has_p) < 0) return -1; // NOLINT(bugprone-suspicious-string-compare) -- nonzero intentionally means the parent is not the current-directory sentinel
 		if (mkdir(path, is_leaf ? leaf_mode : 0777) == 0) return 0;
 		if (errno == EEXIST && stat(path, &st) == 0 && S_ISDIR(st.st_mode)) return 0;
 		return -1;
@@ -114,17 +120,17 @@ int __util_mkdir_main(int argc, char **argv)
 		if (!strcmp(argv[i], "-p")) { opt_p = 1; continue; }
 		if (!strcmp(argv[i], "-m")) {
 			if (i + 1 >= argc) {
-				fprintf(stderr, "mkdir: -m: option requires an argument\n");
+				__util_diagf("mkdir: -m: option requires an argument\n");
 				return 1;
 			}
 			mode_spec = argv[++i];
 			continue;
 		}
-		fprintf(stderr, "mkdir: %s: invalid option\n", argv[i]);
+		__util_diagf("mkdir: %s: invalid option\n", argv[i]);
 		return 1;
 	}
 	if (i >= argc) {
-		fprintf(stderr, "mkdir: missing operand\n");
+		__util_diagf("mkdir: missing operand\n");
 		return 1;
 	}
 
@@ -139,15 +145,18 @@ int __util_mkdir_main(int argc, char **argv)
 		char path[PATH_MAX];
 		size_t n = strlen(argv[i]);
 		if (n >= sizeof path) {
-			fprintf(stderr, "mkdir: %s: %s\n", argv[i], strerror(ENAMETOOLONG));
+			__util_diagf("mkdir: %s: %s\n", argv[i], strerror(ENAMETOOLONG));
 			fail = 1;
 			continue;
 		}
 		memcpy(path, argv[i], n + 1);
 		if (mkdir_p(path, leaf_mode, 1, opt_p) < 0) {
-			fprintf(stderr, "mkdir: %s: %s\n", argv[i], strerror(errno));
+			int saved = errno;
+			__util_diagf("mkdir: %s: %s\n", argv[i], strerror(saved));
 			fail = 1;
 		}
 	}
 	return fail;
 }
+
+// NOLINTEND(misc-include-cleaner)

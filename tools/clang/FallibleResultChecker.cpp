@@ -122,7 +122,17 @@ class FallibleResultChecker : public Checker<check::PreStmt<CallExpr>> {
       const Stmt *Parent = Parents[0].get<Stmt>();
       if (!Parent)
         return false;
-      if (isa<ParenExpr, CastExpr, ExprWithCleanups>(Parent)) {
+      if (const auto *Cast = dyn_cast<CastExpr>(Parent)) {
+        /* An explicit conversion to void is the C spelling for a deliberate,
+         * best-effort operation.  Other casts only transform the value and do
+         * not count as handling it. */
+        if (Cast->getType()->isVoidType() &&
+            isa<CStyleCastExpr>(Cast))
+          return false;
+        Current = DynTypedNode::create(*Parent);
+        continue;
+      }
+      if (isa<ParenExpr, ExprWithCleanups>(Parent)) {
         Current = DynTypedNode::create(*Parent);
         continue;
       }

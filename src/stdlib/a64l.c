@@ -24,7 +24,7 @@ char *l64a(long v)
 	static char buf[7];
 	uint32_t x = (uint32_t)v;
 	char *p = buf;
-	while (x) { *p++ = digits[x & 63]; x >>= 6; }
+	while (x) { *p++ = digits[x & 63]; x /= 64; }
 	*p = 0;
 	return buf;
 }

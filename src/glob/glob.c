@@ -36,6 +36,7 @@ struct pv {
 	size_t n, cap;
 };
 
+withtok(internal_heap_allocated)
 static char *xstrdup(const char *s)
 {
 	size_t n = strlen(s) + 1;
@@ -62,10 +63,10 @@ static int pv_push(struct pv *p, char *s)
 		size_t nc;
 		if (!__array_next_capacity(p->cap, p->n, 1, 16,
 		    sizeof *p->v, &nc)) { __free(s); errno = ENOMEM; return -1; }
-		char **nv = __malloc(nc * sizeof *nv);
+		char **nv = (char **)__malloc(nc * sizeof *nv);
 		if (!nv) { __free(s); return -1; }
-		if (p->v) memcpy(nv, p->v, p->n * sizeof *nv);
-		__free(p->v);
+		if (p->v) memcpy((void *)nv, (const void *)p->v, p->n * sizeof *nv);
+		__free((void *)p->v);
 		p->v = nv;
 		p->cap = nc;
 	}
@@ -90,7 +91,7 @@ static void pv_free_from(struct pv *p, size_t from)
 {
 	size_t i;
 	for (i = from; i < p->n; i++) __free(p->v[i]);
-	__free(p->v);
+	__free((void *)p->v);
 	p->v = 0;
 	p->n = p->cap = 0;
 }
@@ -101,9 +102,16 @@ static void pv_free_from(struct pv *p, size_t from)
 static const char *find_slash(const char *p, int flags) __attribute__((nonnull(1)));
 static const char *find_slash(const char *p, int flags)
 {
-	for (; *p; p++) {
-		if (!(flags & GLOB_NOESCAPE) && *p == '\\' && p[1]) { p++; continue; }
+	/* Every pass consumes at least one byte, or two for an escaped byte.
+	 * The original string extent is therefore an independent exact upper
+	 * bound on the number of iterations. */
+	size_t remaining = strlen(p);
+
+	while (remaining > 0 && *p) {
+		remaining--;
+		if (!(flags & GLOB_NOESCAPE) && *p == '\\' && p[1]) { p += 2; continue; }
 		if (*p == '/') return p;
+		p++;
 	}
 	return 0;
 }
@@ -114,28 +122,40 @@ static const char *find_slash(const char *p, int flags)
 static int has_meta(const char *s, size_t len, int flags) __attribute__((nonnull(1)));
 static int has_meta(const char *s, size_t len, int flags)
 {
-	size_t i;
-	for (i = 0; i < len; i++) {
-		if (!(flags & GLOB_NOESCAPE) && s[i] == '\\' && i + 1 < len) { i++; continue; }
+	size_t i, steps;
+	for (i = 0, steps = 0; i < len && steps < len; steps++) {
+		if (!(flags & GLOB_NOESCAPE) && s[i] == '\\' && i + 1 < len) {
+			i += 2;
+			continue;
+		}
 		if (s[i] == '*' || s[i] == '?' || s[i] == '[') return 1;
+		i++;
 	}
 	return 0;
 }
 
 /* s required: subscripted unconditionally (`s[i]`) whenever len >= 1,
  * and its one real call site (do_glob()) passes pat, itself required,
- * never NULL. */
-static char *unescape(const char *s, size_t len, int flags) __attribute__((nonnull(1)));
-static char *unescape(const char *s, size_t len, int flags)
+ * never NULL.  On success outlen receives the number of output bytes. */
+withtok(internal_heap_allocated)
+static char *unescape(const char *s, size_t len, int flags, size_t *outlen)
+    __attribute__((nonnull(1)));
+withtok(internal_heap_allocated)
+static char *unescape(const char *s, size_t len, int flags, size_t *outlen)
 {
 	char *buf = __malloc(len + 1);
-	size_t i, j = 0;
+	size_t i = 0, j = 0, remaining = len;
 	if (!buf) return 0;
-	for (i = 0; i < len; i++) {
-		if (!(flags & GLOB_NOESCAPE) && s[i] == '\\' && i + 1 < len) i++;
-		buf[j++] = s[i];
+	while (remaining > 0) {
+		if (!(flags & GLOB_NOESCAPE) && s[i] == '\\' && remaining > 1) {
+			i++;
+			remaining--;
+		}
+		buf[j++] = s[i++];
+		remaining--;
 	}
 	buf[j] = 0;
+	*outlen = j;
 	return buf;
 }
 
@@ -153,16 +173,29 @@ static int cmpstrp(const void *a, const void *b)
 
 /* Join prefix (preflen bytes, already ending in '/' unless empty) with
  * name (namelen bytes) into out, appending a trailing '/' if
- * want_slash.  Returns 0, or -1 if it would not fit in PATH_MAX. */
+ * want_slash.  On success outlen receives the joined byte length.
+ * Returns 0, or -1 if it would not fit in PATH_MAX. */
 static int join(char *out, const char *prefix, size_t preflen,
-                 const char *name, size_t namelen, int want_slash)
+                 const char *name, size_t namelen, int want_slash,
+                 size_t *outlen)
 {
-	size_t need = preflen + namelen + (want_slash ? 1 : 0);
-	if (need + 1 > PATH_MAX) return -1;
+	size_t need;
+
+	/* Reserve the terminator first, then admit each component before
+	 * forming the corresponding sum.  Besides ordinary overlong paths,
+	 * this rejects wrapped attacker-sized lengths as the same no-match. */
+	if (preflen >= (size_t)PATH_MAX) return -1;
+	if (namelen > (size_t)PATH_MAX - 1 - preflen) return -1;
+	need = preflen + namelen;
+	if (want_slash) {
+		if (need >= (size_t)PATH_MAX - 1) return -1;
+		need++;
+	}
 	memcpy(out, prefix, preflen);
 	memcpy(out + preflen, name, namelen);
 	if (want_slash) out[preflen + namelen] = '/';
 	out[need] = 0;
+	*outlen = need;
 	return 0;
 }
 
@@ -182,14 +215,16 @@ static int join(char *out, const char *prefix, size_t preflen,
  * only read back conditionally per-branch (never unconditionally at
  * entry the way pat is), so there is no single unconditional dereference
  * this attribute could describe for it. */
+// NOLINTNEXTLINE(misc-no-recursion) -- component expansion mirrors the pathname hierarchy and is pattern/path-depth bounded
 static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
                     int (*errfunc)(const char *, int), struct pv *out)
     __attribute__((nonnull(3)));
+// NOLINTNEXTLINE(misc-no-recursion) -- component expansion mirrors the pathname hierarchy and is pattern/path-depth bounded
 static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
                     int (*errfunc)(const char *, int), struct pv *out)
 {
 	const char *slash, *rest;
-	size_t seglen;
+	size_t seglen, newlen;
 	int meta, want_slash;
 	char newprefix[PATH_MAX];
 
@@ -240,18 +275,28 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 	}
 
 	slash = find_slash(pat, flags);
-	seglen = slash ? (size_t)(slash - pat) : strlen(pat);
+	seglen = strlen(pat);
+	if (slash) {
+		size_t suffix_len = strlen(slash);
+		if (suffix_len > seglen) {
+			errno = EINVAL;
+			return -1;
+		}
+		seglen -= suffix_len;
+	}
 	rest = slash ? slash + 1 : 0;
 	meta = has_meta(pat, seglen, flags);
 	want_slash = rest != 0;
 
 	if (!meta) {
-		char *name = unescape(pat, seglen, flags);
+		size_t namelen;
+		char *name = unescape(pat, seglen, flags, &namelen);
 		struct stat st;
 		int isdir;
 
 		if (!name) return -1;
-		if (join(newprefix, prefix, preflen, name, strlen(name), want_slash)) {
+		if (join(newprefix, prefix, preflen, name, namelen, want_slash,
+		         &newlen)) {
 			__free(name);
 			return 0; /* too long to ever exist; not a match, not an error */
 		}
@@ -259,13 +304,15 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 
 		if (rest) {
 			if (stat(newprefix, &st) != 0 || !S_ISDIR(st.st_mode)) return 0;
-			return do_glob(newprefix, strlen(newprefix), rest, flags, errfunc, out);
+			return do_glob(newprefix, newlen, rest, flags, errfunc, out);
 		}
 		if (stat(newprefix, &st) != 0) return 0;
 		isdir = S_ISDIR(st.st_mode);
 		if ((flags & GLOB_MARK) && isdir) {
-			size_t l = strlen(newprefix);
-			if (l + 1 < PATH_MAX) { newprefix[l] = '/'; newprefix[l + 1] = 0; }
+			if (newlen + 1 < PATH_MAX) {
+				newprefix[newlen++] = '/';
+				newprefix[newlen] = 0;
+			}
 		}
 		return pv_push(out, xstrdup(newprefix)) ? -1 : 0;
 	} else {
@@ -295,25 +342,33 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 			size_t namelen;
 			struct stat st;
 
-			if (!strcmp(d->d_name, ".") || !strcmp(d->d_name, "..")) continue;
+			/* Validate the producer's fixed-size name member before any
+			 * string traversal or copy can leave that live object. */
+			namelen = strnlen(d->d_name, sizeof d->d_name);
+			if (namelen == sizeof d->d_name) { errno = EIO; break; }
+			if ((namelen == 1 && d->d_name[0] == '.') ||
+			    (namelen == 2 && d->d_name[0] == '.' && d->d_name[1] == '.'))
+				continue;
 			if (d->d_name[0] == '.' && !dot_ok) continue;
 			if (fnmatch(segbuf, d->d_name, (flags & GLOB_NOESCAPE) ? FNM_NOESCAPE : 0) != 0)
 				continue;
 
-			namelen = strlen(d->d_name);
-			if (join(newprefix, prefix, preflen, d->d_name, namelen, want_slash))
+			if (join(newprefix, prefix, preflen, d->d_name, namelen,
+			         want_slash, &newlen))
 				continue;
 
 			if (rest) {
 				if (stat(newprefix, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
-				rc = do_glob(newprefix, strlen(newprefix), rest, flags, errfunc, out);
+				rc = do_glob(newprefix, newlen, rest, flags, errfunc, out);
 				if (rc) break;
 			} else {
 				int isdir = 0;
 				if ((flags & GLOB_MARK) && stat(newprefix, &st) == 0) isdir = S_ISDIR(st.st_mode);
 				if (isdir) {
-					size_t l = strlen(newprefix);
-					if (l + 1 < PATH_MAX) { newprefix[l] = '/'; newprefix[l + 1] = 0; }
+					if (newlen + 1 < PATH_MAX) {
+						newprefix[newlen++] = '/';
+						newprefix[newlen] = 0;
+					}
 				}
 				if (pv_push(out, xstrdup(newprefix))) { rc = -1; break; }
 			}
@@ -324,7 +379,7 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 			if ((errfunc && errfunc(dirpath, e)) || (flags & GLOB_ERR)) rc = 1;
 		}
 		__free(segbuf);
-		closedir(dp);
+		(void)closedir(dp);
 		return rc;
 	}
 }
@@ -349,12 +404,12 @@ static int finish(struct pv *out, int flags, glob_t *pglob)
 	if (out->n == (size_t)-1 || offs > (size_t)-1 - out->n - 1) goto nospace;
 	total = offs + out->n + 1;
 	if (total > (size_t)-1 / sizeof *v) goto nospace;
-	v = __malloc(total * sizeof *v);
+	v = (char **)__malloc(total * sizeof *v);
 	if (!v) goto nospace;
 	for (i = 0; i < offs; i++) v[i] = 0;
 	for (i = 0; i < out->n; i++) v[offs + i] = out->v[i];
 	v[offs + out->n] = 0;
-	__free(out->v);
+	__free((void *)out->v);
 
 	pglob->gl_pathv = v;
 	pglob->gl_pathc = out->n;
@@ -386,11 +441,11 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
 	if (flags & GLOB_APPEND) {
 		out.n = out.cap = pglob->gl_pathc;
 		if (out.n) {
-			out.v = __malloc(out.n * sizeof *out.v);
+			out.v = (char **)__malloc(out.n * sizeof *out.v);
 			if (!out.v) { errno = ENOMEM; return GLOB_NOSPACE; }
-			memcpy(out.v, pglob->gl_pathv + pglob->gl_offs, out.n * sizeof *out.v);
+			memcpy((void *)out.v, (const void *)(pglob->gl_pathv + pglob->gl_offs), out.n * sizeof *out.v);
 		}
-		__free(pglob->gl_pathv);
+		__free((void *)pglob->gl_pathv);
 	}
 	base = out.n;
 
@@ -467,7 +522,7 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
 		 *
 		 * base is 0 for a non-GLOB_APPEND call, so this is the same
 		 * whole-vector sort as before in the ordinary case. */
-		qsort(out.v + base, out.n - base, sizeof *out.v, cmpstrp);
+		qsort((void *)(out.v + base), out.n - base, sizeof *out.v, cmpstrp);
 	}
 
 	if (out.n == base && !(flags & GLOB_NOCHECK)) {
@@ -497,7 +552,7 @@ void globfree(glob_t *pglob)
 	if (!pglob || !pglob->gl_pathv) return;
 	offs = pglob->gl_offs;
 	for (i = 0; i < pglob->gl_pathc; i++) __free(pglob->gl_pathv[offs + i]);
-	__free(pglob->gl_pathv);
+	__free((void *)pglob->gl_pathv);
 	pglob->gl_pathv = 0;
 	pglob->gl_pathc = 0;
 }

@@ -34,9 +34,8 @@
 #include "libc.h"
 
 extern int printf(const char *, ...);
-extern int snprintf(char *, unsigned long, const char *, ...);
+extern int snprintf(char *, size_t, const char *, ...);
 extern int strcmp(const char *, const char *);
-extern unsigned long strlen(const char *);
 
 #define SYS_mkdirat  34
 #define SYS_openat   56

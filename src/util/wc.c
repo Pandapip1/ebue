@@ -71,10 +71,16 @@
  *
  * Spec consulted: https://pubs.opengroup.org/onlinepubs/9699919799/utilities/wc.html
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <limits.h>
 #include <ctype.h>
 #include <wchar.h>
 #include <fcntl.h>
@@ -87,13 +93,26 @@ struct wc_counts {
 	long long bytes_or_chars;
 };
 
+static int add_count(long long *count, long long amount)
+{
+	if (*count < 0 || amount < 0 ||
+	    (unsigned long long)*count >
+	        (unsigned long long)LLONG_MAX - (unsigned long long)amount) {
+		errno = EOVERFLOW;
+		return -1;
+	}
+	*count = (long long)((unsigned long long)*count +
+	                     (unsigned long long)amount);
+	return 0;
+}
+
 /* Reads all of `fd`, filling `out` with exactly the newline/word/
  * byte-or-character counts count_stream() was asked for (`want_chars`
  * selects mbrtowc()-based character counting for the third field
  * instead of a raw byte count -- see this file's header on why that is
  * a real distinction here).  Returns 0 on success, -1 (with a
  * diagnostic already written) on a read failure partway through. */
-static int count_stream(int fd, int want_chars, struct wc_counts *out, const char *label)
+static int count_stream(int fd, int want_chars, struct wc_counts *out, const char *label) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned char buf[65536];
 	unsigned char carry[8];
@@ -171,18 +190,21 @@ static int count_stream(int fd, int want_chars, struct wc_counts *out, const cha
 		}
 	}
 	if (n < 0) {
-		fprintf(stderr, "wc: %s: %s\n", label, strerror(errno));
+		__util_diagf("wc: %s: %s\n", label, strerror(errno));
 		return -1;
 	}
 	if (want_chars && carry_len > 0) {
 		/* A sequence still incomplete at EOF: count what is left
 		 * one byte at a time rather than silently dropping it. */
-		out->bytes_or_chars += (long long)carry_len;
+		if (add_count(&out->bytes_or_chars, (long long)carry_len) < 0) {
+			__util_diagf("wc: %s: %s\n", label, strerror(errno));
+			return -1;
+		}
 	}
 	return 0;
 }
 
-static void print_counts(const struct wc_counts *c, int want_l, int want_w, int want_bc,
+static void print_counts(const struct wc_counts *c, int want_l, int want_w, int want_bc, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                           const char *name)
 {
 	int first = 1;
@@ -214,12 +236,12 @@ int __util_wc_main(int argc, char **argv)
 			if (*p == 'm') { opt_m = 1; continue; }
 			if (*p == 'l') { opt_l = 1; continue; }
 			if (*p == 'w') { opt_w = 1; continue; }
-			fprintf(stderr, "wc: invalid option -- '%c'\n", *p);
+			__util_diagf("wc: invalid option -- '%c'\n", *p);
 			return 1;
 		}
 	}
 	if (opt_c && opt_m) {
-		fprintf(stderr, "wc: -c and -m are mutually exclusive\n");
+		__util_diagf("wc: -c and -m are mutually exclusive\n");
 		return 1;
 	}
 
@@ -257,24 +279,29 @@ int __util_wc_main(int argc, char **argv)
 		} else {
 			fd = open(path, O_RDONLY);
 			if (fd < 0) {
-				fprintf(stderr, "wc: %s: %s\n", path, strerror(errno));
+				__util_diagf("wc: %s: %s\n", path, strerror(errno));
 				had_error = 1;
 				continue;
 			}
 			if (count_stream(fd, want_chars, &c, path) < 0) {
-				close(fd);
+				(void)close(fd);
 				had_error = 1;
 				continue;
 			}
-			close(fd);
+			(void)close(fd);
 		}
 		print_counts(&c, want_l, want_w, want_bc, path);
-		total.lines += c.lines;
-		total.words += c.words;
-		total.bytes_or_chars += c.bytes_or_chars;
+		if (add_count(&total.lines, c.lines) < 0 ||
+		    add_count(&total.words, c.words) < 0 ||
+		    add_count(&total.bytes_or_chars, c.bytes_or_chars) < 0) {
+			__util_diagf("wc: total: %s\n", strerror(errno));
+			return 1;
+		}
 	}
 
 	if (noperands > 1) print_counts(&total, want_l, want_w, want_bc, "total");
 
 	return had_error ? 1 : 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

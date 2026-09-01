@@ -1,0 +1,85 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+
+#include "../../include/ownership.h"
+
+tokdef heap_free;
+tokdef shared_access l_unlimited implicit_drop;
+tokdef strict_once l_strict implicit_drop;
+tokdef strict_view l_unlimited implicit_drop;
+#undef tokdef
+
+struct owner_box {
+	void *value withhandle(heap) withtok(heap_free);
+};
+
+withhandle(heap) withtok(heap_free)
+void *make_owner(void);
+void *make_plain(void);
+void inspect_owner(void *value withhandle(heap) withtok(heap_free));
+
+withhandle(strict) withtok(strict_once) withtok(strict_view)
+void *make_strict(void);
+void consume_strict(void *value withhandle(strict) consume(strict_once));
+void inspect_strict(void *value
+    withhandle(strict) withtok(strict_view));
+
+void manufacture_token(void)
+{
+	void *owner /* ownership-expect: type-manufacture */
+	    withhandle(heap) withtok(heap_free) = make_plain();
+	(void)owner;
+}
+
+void borrow_without_transferring_token(void)
+{
+	void *plain = make_owner();
+	(void)plain;
+}
+
+void store_wrong_type(void)
+{
+	struct owner_box box;
+	void *plain = make_plain();
+	box.value = plain; /* ownership-expect: type-field */
+}
+
+void pass_wrong_type(void)
+{
+	void *plain = make_plain();
+	inspect_owner(plain); /* ownership-expect: type-parameter */
+}
+
+withhandle(heap) withtok(heap_free)
+void *return_wrong_type(void)
+{
+	return make_plain(); /* ownership-expect: type-return */
+}
+
+void use_after_linear_move(void)
+{
+	void *first withhandle(heap) withtok(heap_free) = make_owner();
+	void *second withhandle(heap) withtok(heap_free) = first;
+	inspect_owner(first); /* ownership-expect: token-moved */
+	inspect_owner(second);
+}
+
+void move_linear_token_twice(void)
+{
+	void *first withhandle(heap) withtok(heap_free) = make_owner();
+	void *second withhandle(heap) withtok(heap_free) = first;
+	void *third /* ownership-expect: token-moved */
+	    withhandle(heap) withtok(heap_free) = first;
+	inspect_owner(second);
+	(void)third;
+}
+
+void copy_around_strict_linear_token(void)
+{
+	void *owner withhandle(strict) withtok(strict_once) withtok(strict_view) =
+	    make_strict();
+	void *copy withhandle(strict) withtok(strict_view) = owner;
+	consume_strict(owner);
+	inspect_strict(copy); /* ownership-expect: strict-loan-expired */
+}

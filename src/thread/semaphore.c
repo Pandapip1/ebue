@@ -6,6 +6,12 @@
  * NT object. unlink() can therefore remove the discoverable name while
  * already-open handles keep the dispatcher object alive.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- strnlen(): bound name validation before path construction
 #include <semaphore.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -55,30 +61,45 @@ static int name_char(unsigned char c)
 	       (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
 }
 
+withtok(heap_allocated)
 static char *sem_path(const char *name)
 {
 	const char *component, *dir;
-	size_t n, d, i;
+	size_t n, d, i, maxdir;
+	const size_t prefix = sizeof "/ntlibc-sem/" - 1;
+	size_t total;
 	char *path;
 	if (!name) { errno = EINVAL; return NULL; }
 	component = *name == '/' ? name + 1 : name;
-	n = strlen(component);
+	/* A longer name has the same ENAMETOOLONG result whatever follows
+	 * NAME_MAX, so do not scan an unbounded rejected suffix. */
+	n = strnlen(component, NAME_MAX + 1);
 	if (!n) { errno = EINVAL; return NULL; }
 	if (n > NAME_MAX) { errno = ENAMETOOLONG; return NULL; }
 	for (i = 0; i < n; i++) if (!name_char((unsigned char)component[i])) {
 		errno = EINVAL;
 		return NULL;
 	}
-	dir = tmpdir(); d = strlen(dir);
-	if (d + sizeof "/ntlibc-sem/" - 1 + n >= PATH_MAX) {
+	if (n > (size_t)PATH_MAX - 1 - prefix) {
 		errno = ENAMETOOLONG;
 		return NULL;
 	}
-	path = malloc(d + sizeof "/ntlibc-sem/" - 1 + n + 1);
+	/* The preceding guard makes computing the exact remaining room
+	 * non-wrapping.  Once maxdir + 1 bytes have been examined, the
+	 * path is known to be too long and no rejected suffix needs scanning. */
+	maxdir = (size_t)PATH_MAX - 1 - prefix - n;
+	dir = tmpdir(); d = strnlen(dir, maxdir + 1);
+	if (d > maxdir) {
+		errno = ENAMETOOLONG;
+		return NULL;
+	}
+	total = d + prefix + n + 1;
+	path = malloc(total);
 	if (!path) return NULL;
 	memcpy(path, dir, d);
-	memcpy(path + d, "/ntlibc-sem/", sizeof "/ntlibc-sem/" - 1);
-	memcpy(path + d + sizeof "/ntlibc-sem/" - 1, component, n + 1);
+	memcpy(path + d, "/ntlibc-sem/", prefix);
+	memcpy(path + d + prefix, component, n);
+	path[total - 1] = 0;
 	return path;
 }
 
@@ -130,9 +151,14 @@ static int namespace_lock(const char *path, __plat_handle_t *out)
 {
 	char name[96];
 	unsigned long long hash = path_hash(path);
+	int n;
 
-	snprintf(name, sizeof name, "\\BaseNamedObjects\\ntlibc.sem.name.%08x%08x",
+	n = snprintf(name, sizeof name, "\\BaseNamedObjects\\ntlibc.sem.name.%08x%08x",
 	         (unsigned)(hash >> 32), (unsigned)hash);
+	if (n < 0 || (size_t)n >= sizeof name) {
+		if (n >= 0) errno = ENAMETOOLONG;
+		return -1;
+	}
 	return __plat_named_mutant_acquire(name, out);
 }
 
@@ -164,7 +190,7 @@ static struct named_sem *free_slot(void)
 	return NULL;
 }
 
-int sem_init(sem_t *sem, int pshared, unsigned value)
+int sem_init(sem_t *sem construct(semaphore), int pshared, unsigned value) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	__plat_handle_t h;
 	(void)pshared;
@@ -190,7 +216,7 @@ int sem_init(sem_t *sem, int pshared, unsigned value)
 	return 0;
 }
 
-int sem_destroy(sem_t *sem)
+int sem_destroy(sem_t *sem destroy(semaphore))
 {
 	if (!valid(sem) || sem->__named) { errno = EINVAL; return -1; }
 	__plat_close(sem->__handle);
@@ -206,7 +232,7 @@ sem_t *sem_open(const char *name, int oflag, ...)
 	char *path, object[96];
 	struct named_sem *entry;
 	__plat_handle_t h, ns = 0;
-	int fd = -1, created = 0, saved, recover = 0;
+	int fd = -1, created = 0, saved, recover = 0, n;
 	unsigned value = 0;
 	mode_t mode = 0;
 	ssize_t got;
@@ -262,20 +288,26 @@ retry_record:
 	if (fd < 0) { saved = errno; goto fail_locked; }
 	if (created) {
 		int create_result;
-		snprintf(object, sizeof object, "\\BaseNamedObjects\\ntlibc.sem.%d.%u",
+		n = snprintf(object, sizeof object, "\\BaseNamedObjects\\ntlibc.sem.%d.%u",
 		         (int)getpid(), ++object_sequence);
+		if (n < 0 || (size_t)n >= sizeof object) {
+			saved = n < 0 ? errno : ENAMETOOLONG;
+			(void)close(fd);
+			(void)unlink(path);
+			goto fail_locked;
+		}
 		create_result = __plat_named_semaphore_create(object, (long)value, SEM_VALUE_MAX, &h);
 		if (create_result < 0 ||
-		    write(fd, object, strlen(object) + 1) != (ssize_t)strlen(object) + 1) {
+		    write(fd, object, (size_t)n + 1) != (ssize_t)n + 1) {
 			saved = create_result == 0 ? EIO : errno;
-			close(fd); unlink(path); goto fail_locked;
+			(void)close(fd); (void)unlink(path); goto fail_locked;
 		}
 	} else {
 		int open_result;
 		got = read(fd, object, sizeof object - 1);
 		if (got <= 0) {
 			saved = got < 0 ? errno : EIO;
-			close(fd);
+			(void)close(fd);
 			/* A creator can die after publishing the record but before
 			 * filling it.  O_CREAT without O_EXCL owns recovery while the
 			 * namespace lock proves nobody can still be publishing it. */
@@ -289,7 +321,7 @@ retry_record:
 		object[got] = 0;
 		open_result = __plat_named_semaphore_open(object, &h);
 		if (open_result < 0) {
-			close(fd);
+			(void)close(fd);
 			if ((oflag & O_CREAT) && !(oflag & O_EXCL) && !recover &&
 			    open_result == -2) {
 				recover = 1;
@@ -302,12 +334,12 @@ retry_record:
 			goto fail_locked;
 		}
 	}
-	close(fd);
+	(void)close(fd);
 	__plat_fast_lock();
 	entry = free_slot();
 	if (!entry) {
 		__plat_fast_unlock(); __plat_close(h);
-		if (created) unlink(path);
+		if (created) (void)unlink(path);
 		saved = EMFILE; goto fail_locked;
 	}
 	entry->sem.__handle = h; entry->sem.__magic = SEM_MAGIC; entry->sem.__named = 1;
@@ -375,7 +407,7 @@ static int wait_handle(sem_t *sem, long long ticks)
 	return -1; /* __PLAT_WAIT_ERROR: errno already set */
 }
 
-static int restartable_interruption(unsigned long *caught,
+static int restartable_interruption(unsigned long *caught, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	unsigned long *restarted)
 {
 	unsigned long now_caught = __sig_thread_caught_count();
@@ -391,12 +423,12 @@ static int restartable_interruption(unsigned long *caught,
 	return -1;
 }
 
-int sem_trywait(sem_t *sem)
+int sem_trywait(sem_t *sem handle(semaphore))
 {
 	return wait_handle(sem, 0);
 }
 
-int sem_wait(sem_t *sem)
+int sem_wait(sem_t *sem handle(semaphore))
 {
 	const long long slice = -500000; /* 50 ms: observe handlers run elsewhere. */
 	unsigned long caught;
@@ -417,7 +449,16 @@ int sem_wait(sem_t *sem)
 		__sig_drain_pending();
 		if (!r) return 0;
 		if (errno == EINTR) {
-			if (restartable_interruption(&caught, &restarted) > 0) continue;
+			/* wait_handle() reports EINTR for ANY __PLAT_WAIT_INTR wake,
+			 * and a deferred pthread_cancel() causes exactly such a wake
+			 * when the cancellation cannot be delivered yet
+			 * (__pthread_cancel_defer_enter() is still active) -- see
+			 * src/thread/pthread_cancel.c's redirect_async_cancel().
+			 * That wake delivers no signal at all, so
+			 * restartable_interruption() reports zero delivered here,
+			 * not a negative count; only a genuine, non-restarting
+			 * signal earns the EINTR this call reports to its caller. */
+			if (restartable_interruption(&caught, &restarted) >= 0) continue;
 			return -1;
 		}
 		if (errno != EAGAIN) return -1;
@@ -426,7 +467,7 @@ int sem_wait(sem_t *sem)
 	}
 }
 
-int sem_timedwait(sem_t *sem, const struct timespec *abstime)
+int sem_timedwait(sem_t *sem handle(semaphore), const struct timespec *abstime)
 {
 	struct timespec now;
 	long long ticks;
@@ -452,7 +493,11 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
 		__sig_drain_pending();
 		if (!r) return 0;
 		if (errno == EINTR) {
-			if (restartable_interruption(&caught, &restarted) > 0) continue;
+			/* See sem_wait()'s comment on this same check: a deferred
+			 * pthread_cancel()'s wake also delivers no signal, so a
+			 * zero (not negative) restartable_interruption() result
+			 * must retry too. */
+			if (restartable_interruption(&caught, &restarted) >= 0) continue;
 			return -1;
 		}
 		if (errno != EAGAIN) return -1;
@@ -461,14 +506,16 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
 	}
 }
 
-int sem_post(sem_t *sem)
+int sem_post(sem_t *sem handle(semaphore))
 {
 	if (!valid(sem)) { errno = EINVAL; return -1; }
 	return __plat_semaphore_post(sem->__handle);
 }
 
-int sem_getvalue(sem_t *sem, int *value)
+int sem_getvalue(sem_t *sem handle(semaphore), int *value)
 {
 	if (!valid(sem) || !value) { errno = EINVAL; return -1; }
 	return __plat_semaphore_getvalue(sem->__handle, value);
 }
+
+// NOLINTEND(misc-include-cleaner)

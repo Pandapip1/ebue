@@ -28,13 +28,17 @@ long double powl(long double x, long double y)
 
 	if (y == 0) return 1.0L;
 	if (x == 1.0L) return 1.0L;
+	/* Besides avoiding a needless log/exp round trip, this preserves the
+	 * correctly rounded square-root result on targets whose transcendental
+	 * helpers are implemented in software. */
+	if (y == 0.5L && x >= 0.0L) return sqrtl(x);
 	if (x != x || y != y) return x + y;
 	if (x == -1.0L && (y == HUGE_VALL || y == -HUGE_VALL)) return 1.0L;
 	if (y == HUGE_VALL) return fabsl(x) < 1 ? 0.0L : HUGE_VALL;
 	if (y == -HUGE_VALL) return fabsl(x) < 1 ? HUGE_VALL : 0.0L;
 	if (x == HUGE_VALL) return y < 0 ? 0.0L : HUGE_VALL;
 	if (x == -HUGE_VALL) {
-		r = powl(HUGE_VALL, y);
+		r = y < 0 ? 0.0L : HUGE_VALL;
 		return is_odd_int(y) ? -r : r;
 	}
 	if (x == 0) {

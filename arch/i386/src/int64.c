@@ -15,7 +15,7 @@ union u64 {
 };
 
 /* q = n / d, r = n % d, by plain binary long division on halves. */
-static void udivmod64(union u64 n, union u64 d, union u64 *q, union u64 *r)
+static void udivmod64(union u64 n, union u64 d, union u64 *q, union u64 *r) // NOLINT(bugprone-easily-swappable-parameters) -- dividend, divisor, quotient, and remainder have distinct arithmetic roles
 {
 	union u64 rem, quo;
 	int i;
@@ -53,7 +53,7 @@ static void neg64(union u64 *a)
 	if (!a->h.lo) a->h.hi++;
 }
 
-unsigned long long __udivdi3(unsigned long long u, unsigned long long v)
+unsigned long long __udivdi3(unsigned long long u, unsigned long long v) // NOLINT(bugprone-easily-swappable-parameters) -- fixed compiler-runtime helper contract
 {
 	union u64 n, d, q;
 	n.ll = u; d.ll = v;
@@ -61,7 +61,7 @@ unsigned long long __udivdi3(unsigned long long u, unsigned long long v)
 	return q.ll;
 }
 
-unsigned long long __umoddi3(unsigned long long u, unsigned long long v)
+unsigned long long __umoddi3(unsigned long long u, unsigned long long v) // NOLINT(bugprone-easily-swappable-parameters) -- fixed compiler-runtime helper contract
 {
 	union u64 n, d, r;
 	n.ll = u; d.ll = v;
@@ -69,7 +69,7 @@ unsigned long long __umoddi3(unsigned long long u, unsigned long long v)
 	return r.ll;
 }
 
-long long __divdi3(long long u, long long v)
+long long __divdi3(long long u, long long v) // NOLINT(bugprone-easily-swappable-parameters) -- fixed compiler-runtime helper contract
 {
 	union u64 n, d, q;
 	int neg = 0;
@@ -81,7 +81,7 @@ long long __divdi3(long long u, long long v)
 	return q.sll;
 }
 
-long long __moddi3(long long u, long long v)
+long long __moddi3(long long u, long long v) // NOLINT(bugprone-easily-swappable-parameters) -- fixed compiler-runtime helper contract
 {
 	union u64 n, d, r;
 	int neg = 0;
@@ -95,7 +95,7 @@ long long __moddi3(long long u, long long v)
 
 /* Shifts.  The count tcc passes may be any int; hardware behaviour for
  * counts >= 64 is unspecified, so just handle 0..63 sensibly. */
-long long __ashldi3(long long a, int b)
+long long __ashldi3(long long a, int b) // NOLINT(bugprone-easily-swappable-parameters) -- fixed compiler-runtime helper contract
 {
 	union u64 x;
 	x.sll = a;
@@ -110,7 +110,7 @@ long long __ashldi3(long long a, int b)
 	return x.sll;
 }
 
-unsigned long long __lshrdi3(unsigned long long a, int b)
+unsigned long long __lshrdi3(unsigned long long a, int b) // NOLINT(bugprone-easily-swappable-parameters) -- fixed compiler-runtime helper contract
 {
 	union u64 x;
 	x.ll = a;
@@ -125,7 +125,7 @@ unsigned long long __lshrdi3(unsigned long long a, int b)
 	return x.ll;
 }
 
-long long __ashrdi3(long long a, int b)
+long long __ashrdi3(long long a, int b) // NOLINT(bugprone-easily-swappable-parameters) -- fixed compiler-runtime helper contract
 {
 	union u64 x;
 	x.sll = a;

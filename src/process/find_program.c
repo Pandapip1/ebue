@@ -62,6 +62,11 @@
  * a cache to serve; the fix for Cygwin's problem is not to add a cache
  * here but to keep the sniff out of stat(), which src/stat/stat.c does.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -102,6 +107,7 @@ static int has_dir(const char *name)
 	return 0;
 }
 
+withtok(heap_allocated)
 static char *try_dir(const char *dir, size_t dlen, const char *name)
 {
 	size_t nlen = strlen(name);
@@ -124,9 +130,11 @@ static char *try_dir(const char *dir, size_t dlen, const char *name)
 	return 0;
 }
 
+withtok(heap_allocated) __attribute__((nonnull(1)))
 char *__find_program(const char *name, int use_path)
 {
 	const char *path, *p;
+	size_t components_left;
 	char *r;
 	/* The empty string names nothing, and it has to be answered here
 	 * rather than left to the search below.  exec.html's [ENOENT] is
@@ -143,16 +151,21 @@ char *__find_program(const char *name, int use_path)
 	 * empty string up front for the same reason.) */
 	if (!name[0]) { errno = ENOENT; return 0; }
 	if (!use_path || has_dir(name)) {
-		r = malloc(strlen(name) + 1);
-		if (r) strcpy(r, name);
+		size_t n = strlen(name) + 1;
+		r = malloc(n);
+		if (r) memcpy(r, name, n);
 		return r;
 	}
 	path = getenv("PATH");
 	if (!path) path = "";
 	p = path;
-	for (;;) {
+	/* A PATH of n bytes has at most n+1 semicolon-delimited
+	 * components, including the single empty component of "". */
+	components_left = strlen(path) + 1;
+	while (components_left > 0) {
 		const char *e = strchr(p, ';');
 		size_t len = e ? (size_t)(e - p) : strlen(p);
+		components_left--;
 		r = try_dir(p, len, name);
 		if (r) return r;
 		if (!e) break;
@@ -161,3 +174,5 @@ char *__find_program(const char *name, int use_path)
 	errno = ENOENT;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

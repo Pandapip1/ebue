@@ -362,6 +362,11 @@
  * self_symtab_load()'s init-once check, deferred here the same way
  * every other genuinely separable piece of hardening in this file is.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stddef.h>
 #include <stdint.h>
 #include <stdarg.h>
@@ -373,6 +378,13 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include "plat_dlfcn.h"
+
+static int table_bytes(size_t count, size_t element_size, size_t *out)
+{
+	if (element_size && count > (size_t)-1 / element_size) return -1;
+	*out = count * element_size;
+	return 0;
+}
 
 /* The real kernel page size -- NOT hardcoded, and deliberately not
  * reused from this tree's existing src/mman/mman.c (`MMAP_PAGE 4096u`)
@@ -411,7 +423,7 @@ static unsigned long real_page_size(void)
 		while (read(fd, pair, sizeof pair) == (ssize_t)sizeof pair && pair[0] != 0) {
 			if (pair[0] == AT_PAGESZ) { cached_page_size = pair[1]; break; }
 		}
-		close(fd);
+		(void)close(fd);
 	}
 	if (!cached_page_size) cached_page_size = 4096; /* conservative last resort */
 	return cached_page_size;
@@ -468,7 +480,7 @@ static unsigned long pgup(unsigned long v) { unsigned long p = real_page_size();
  * table -- seebelow's own banner update for exactly what a real i386
  * loader port would additionally need. */
 #if defined(__aarch64__)
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
 	register long x0 __asm__("x0") = a1;
@@ -649,10 +661,14 @@ static unsigned long err_seq;
 
 static void seterr(const char *fmt, ...)
 {
+	static const char fallback[] = "dynamic loader error";
 	va_list ap;
+	int rc;
+
 	va_start(ap, fmt);
-	vsnprintf(err_buf, sizeof err_buf, fmt, ap);
+	rc = vsnprintf(err_buf, sizeof err_buf, fmt, ap);
 	va_end(ap);
+	if (rc < 0) memcpy(err_buf, fallback, sizeof fallback);
 	err_seq++;
 }
 
@@ -688,6 +704,7 @@ static int self_symtab_load(void)
 	int fd;
 	Elf64_Ehdr eh;
 	Elf64_Shdr *shdrs = NULL;
+	size_t shdr_bytes;
 	size_t i;
 	int symtab_idx = -1;
 
@@ -705,10 +722,12 @@ static int self_symtab_load(void)
 		goto fail;
 	}
 
-	shdrs = malloc((size_t)eh.e_shnum * sizeof *shdrs);
+	if (table_bytes((size_t)eh.e_shnum, sizeof *shdrs, &shdr_bytes) < 0) {
+		seterr("dlopen: own section header table is too large"); goto fail;
+	}
+	shdrs = malloc(shdr_bytes);
 	if (!shdrs) { seterr("dlopen: out of memory reading own section headers"); goto fail; }
-	if (pread(fd, shdrs, (size_t)eh.e_shnum * sizeof *shdrs, (off_t)eh.e_shoff) !=
-	    (ssize_t)((size_t)eh.e_shnum * sizeof *shdrs)) {
+	if (pread(fd, shdrs, shdr_bytes, (off_t)eh.e_shoff) != (ssize_t)shdr_bytes) {
 		seterr("dlopen: short read on own section header table");
 		goto fail;
 	}
@@ -747,13 +766,13 @@ static int self_symtab_load(void)
 	}
 
 	free(shdrs);
-	close(fd);
+	(void)close(fd);
 	self_symtab_ready = 1;
 	return 0;
 
 fail:
 	free(shdrs);
-	if (fd >= 0) close(fd);
+	if (fd >= 0) (void)close(fd);
 	self_symtab_ready = -1;
 	return -1;
 }
@@ -895,7 +914,7 @@ static int apply_one_reloc(struct dlobj *obj, const Elf64_Rela *r,
 	}
 }
 
-static int apply_reloc_table(struct dlobj *obj, uint64_t tbl_vaddr, uint64_t tbl_size,
+static int apply_reloc_table(struct dlobj *obj, uint64_t tbl_vaddr, uint64_t tbl_size, // NOLINT(bugprone-easily-swappable-parameters) -- table address and size have distinct relocation roles
                               unsigned long lo, unsigned long hi)
 {
 	Elf64_Rela *relas;
@@ -913,6 +932,7 @@ void *__plat_dlopen(const char *file, int mode)
 	int fd = -1;
 	Elf64_Ehdr eh;
 	Elf64_Phdr *phdrs = NULL;
+	size_t phdr_bytes;
 	Elf64_Phdr *pt_dynamic = NULL;
 	unsigned long lo = (unsigned long)-1, hi = 0;
 	void *map_base = MAP_FAILED;
@@ -966,10 +986,12 @@ void *__plat_dlopen(const char *file, int mode)
 		goto fail;
 	}
 
-	phdrs = malloc((size_t)eh.e_phnum * sizeof *phdrs);
+	if (table_bytes((size_t)eh.e_phnum, sizeof *phdrs, &phdr_bytes) < 0) {
+		seterr("dlopen: %s: program header table is too large", file); errno = ENOEXEC; goto fail;
+	}
+	phdrs = malloc(phdr_bytes);
 	if (!phdrs) { seterr("dlopen: out of memory"); errno = ENOMEM; goto fail; }
-	if (pread(fd, phdrs, (size_t)eh.e_phnum * sizeof *phdrs, (off_t)eh.e_phoff) !=
-	    (ssize_t)((size_t)eh.e_phnum * sizeof *phdrs)) {
+	if (pread(fd, phdrs, phdr_bytes, (off_t)eh.e_phoff) != (ssize_t)phdr_bytes) {
 		seterr("dlopen: %s: short read on program header table", file);
 		goto fail;
 	}
@@ -996,9 +1018,10 @@ void *__plat_dlopen(const char *file, int mode)
 	hi = pgup(hi);
 	map_len = hi - lo;
 
-	map_base = raw_mmap(NULL, map_len, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	map_base = raw_mmap(NULL, map_len, PROT_NONE, MAP_PRIVATE | __MAP_ANONYMOUS, -1, 0);
 	if (map_base == MAP_FAILED) {
-		seterr("dlopen: %s: cannot reserve %zu bytes of address space: %s", file, map_len, strerror(errno));
+		int saved = errno;
+		seterr("dlopen: %s: cannot reserve %zu bytes of address space: %s", file, map_len, strerror(saved));
 		goto fail;
 	}
 
@@ -1031,7 +1054,8 @@ void *__plat_dlopen(const char *file, int mode)
 			void *r = raw_mmap(segbase, filelen, PROT_READ | PROT_WRITE,
 			               MAP_PRIVATE | MAP_FIXED, fd, (long)pgdown(ph->p_offset));
 			if (r == MAP_FAILED) {
-				seterr("dlopen: %s: cannot map PT_LOAD segment %u: %s", file, i, strerror(errno));
+				int saved = errno;
+				seterr("dlopen: %s: cannot map PT_LOAD segment %u: %s", file, i, strerror(saved));
 				goto fail;
 			}
 			/* Zero the tail of the last file-backed page past p_filesz
@@ -1050,9 +1074,10 @@ void *__plat_dlopen(const char *file, int mode)
 		alloclen = memend > filelen ? memend : filelen;
 		if (alloclen > filelen) {
 			void *r = raw_mmap((char *)segbase + filelen, alloclen - filelen, PROT_READ | PROT_WRITE,
-			               MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0);
+				               MAP_PRIVATE | MAP_FIXED | __MAP_ANONYMOUS, -1, 0);
 			if (r == MAP_FAILED) {
-				seterr("dlopen: %s: cannot map bss tail of segment %u: %s", file, i, strerror(errno));
+				int saved = errno;
+				seterr("dlopen: %s: cannot map bss tail of segment %u: %s", file, i, strerror(saved));
 				goto fail;
 			}
 		}
@@ -1094,7 +1119,7 @@ void *__plat_dlopen(const char *file, int mode)
 		 * the symbol table's own entry count by the SysV ELF hash
 		 * table's own specification, giving an exact count with no
 		 * GNU-hash bucket walk needed. */
-		obj->dynsym_count = ((uint32_t *)ADDR(obj, d_hash->d_val))[1];
+		obj->dynsym_count = ((uint32_t *)(uintptr_t)(obj->bias + d_hash->d_val))[1];
 
 		if (apply_reloc_table(obj, d_rela ? d_rela->d_val : 0, d_relasz ? d_relasz->d_val : 0, lo, hi) != 0)
 			goto fail;
@@ -1123,12 +1148,12 @@ void *__plat_dlopen(const char *file, int mode)
 	}
 
 	free(phdrs);
-	close(fd);
+	(void)close(fd);
 	return obj;
 
 fail:
 	free(phdrs);
-	if (fd >= 0) close(fd);
+	if (fd >= 0) (void)close(fd);
 	if (map_base != MAP_FAILED) raw_munmap(map_base, map_len);
 	free(obj);
 	return NULL;
@@ -1174,3 +1199,5 @@ int __plat_dlclose(void *handle)
 	free(obj);
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

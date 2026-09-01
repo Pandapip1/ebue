@@ -9,6 +9,11 @@
  * the addition of a POSIX-shaped return (0/-1 with errno set, or the small
  * __PLAT_WAIT_* enum for a wait) in place of a raw NTSTATUS.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <signal.h>
 #include <string.h>
 #include <errno.h>
@@ -27,7 +32,7 @@
  * under half this budget), so nothing that fit before can be truncated by
  * sharing one buffer size across every named-object call here. */
 static void build_object_attributes(const char *ascii, OBJECT_ATTRIBUTES *oa,
-	UNICODE_STRING *us, WCHAR *wide, size_t cap, int openif)
+	UNICODE_STRING *us, WCHAR *wide, size_t cap, int openif) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	size_t i, n = strlen(ascii);
 	if (n >= cap) n = cap - 1;
@@ -43,7 +48,7 @@ static void build_object_attributes(const char *ascii, OBJECT_ATTRIBUTES *oa,
 
 /* ---- waiting -------------------------------------------------------- */
 
-int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout,
+int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	long long relative_ticks)
 {
 	LARGE_INTEGER timeout, *tp = 0;
@@ -56,7 +61,7 @@ int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout,
 	return __PLAT_WAIT_OK;
 }
 
-int __plat_wait_any(__plat_handle_t *handles, unsigned count, int alertable,
+int __plat_wait_any(__plat_handle_t *handles, unsigned count, int alertable, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	int has_timeout, long long relative_ticks)
 {
 	LARGE_INTEGER timeout, *tp = 0;
@@ -94,7 +99,7 @@ int __plat_event_set(__plat_handle_t h)
 
 /* ---- unnamed semaphores ------------------------------------------------ */
 
-int __plat_semaphore_create(long initial, long maximum, int inheritable,
+int __plat_semaphore_create(long initial, long maximum, int inheritable, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	__plat_handle_t *out)
 {
 	OBJECT_ATTRIBUTES oa;
@@ -239,7 +244,7 @@ int __plat_thread_queue_apc(__plat_handle_t h, __plat_apc_fn fn, void *arg1,
 	return 0;
 }
 
-int __plat_thread_redirect_ip(__plat_handle_t h, void *target)
+int __plat_thread_redirect_ip(__plat_handle_t h, void *target) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 #if defined(__x86_64__)
 	unsigned char storage[0x4d0 + 15];
@@ -295,7 +300,11 @@ int __plat_thread_stack_extent(__plat_handle_t h, void **base, size_t *size)
 	if (!NT_SUCCESS(status)) return __set_errno_status(status);
 	teb = information.TebBaseAddress;
 	*base = teb->NtTib.StackLimit;
-	*size = (size_t)((char *)teb->NtTib.StackBase - (char *)teb->NtTib.StackLimit);
+	/* The kernel supplies these as the two numeric bounds of one stack.
+	 * Integer subtraction expresses that address-space fact without C's
+	 * same-array requirement for pointer subtraction. */
+	*size = (size_t)((uintptr_t)teb->NtTib.StackBase -
+	                 (uintptr_t)teb->NtTib.StackLimit);
 	return 0;
 }
 
@@ -363,7 +372,7 @@ long long __plat_query_system_time(void)
 
 /* ---- mqueue.c's queue-file I/O -------------------------------------------- */
 
-ssize_t __plat_thread_file_io(__plat_handle_t h, void *buf, size_t count,
+ssize_t __plat_thread_file_io(__plat_handle_t h, void *buf, size_t count, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	off_t off, int write_op)
 {
 	IO_STATUS_BLOCK io;
@@ -391,3 +400,5 @@ ssize_t __plat_thread_file_io(__plat_handle_t h, void *buf, size_t count,
  * being relocated here -- no behavior change, only relocation. */
 void __plat_fast_lock(void) { RtlAcquirePebLock(); }
 void __plat_fast_unlock(void) { RtlReleasePebLock(); }
+
+// NOLINTEND(misc-include-cleaner)

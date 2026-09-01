@@ -246,7 +246,7 @@ class PointerProvenanceChecker
       return false;
     StringRef Name = FD->getIdentifier()->getName();
     return Name == "NtQueueApcThread" || Name == "NtSetTimer" ||
-           Name == "signal_apc";
+           Name == "signal_apc" || Name == "__plat_thread_queue_apc";
   }
 
   // A short, explicit, auditable list of (file suffix, function) pairs
@@ -317,6 +317,25 @@ class PointerProvenanceChecker
   //     the general case of an arbitrary integer cast to a pointer type,
   //     so the exemption is scoped to these two named functions, not to
   //     the cast shape.
+  //   Linux kernel mapping-return functions listed below
+  //     mmap(2) returns an address in a signed machine-word syscall return
+  //     register.  The conversion from that ABI word to a pointer is the
+  //     operation these functions exist to perform; no C pointer exists
+  //     before the kernel creates the mapping from which provenance could
+  //     be derived.  The same applies to the initial stack/TLS/ELF image
+  //     addresses supplied by the kernel in crt1.c.
+  //   Linux box()/install/open/pipe/process functions listed below
+  //     __plat_handle_t is deliberately an opaque one-word carrier shared
+  //     with the NT backend.  Linux file descriptors, pids, and tids are
+  //     integers encoded in that carrier and are never dereferenced.  Each
+  //     listed function is an explicit ABI boundary, rather than a global
+  //     exemption for integer-to-pointer casts.
+  //   src/dlfcn/linux/plat_dlfcn.c loader functions listed below
+  //     ELF defines load addresses and symbol/relocation values as integer
+  //     virtual addresses.  Reconstructing pointers from the mapped image's
+  //     load bias is the dynamic loader's required ABI operation; the file
+  //     validates every range before use, but C-level provenance cannot be
+  //     carried through an ELF integer field.
   struct NamedException {
     const char *FileSuffix;
     const char *Function;
@@ -333,6 +352,33 @@ class PointerProvenanceChecker
         {"src/fcntl/fcntl.c", "fcntl"},
         {"src/stdio/scanf.c", "vfscanf_st"},
         {"src/stdio/scanf.c", "vswscanf_impl"},
+        {"crt/linux/crt1.c", "find_tls_phdr"},
+        {"crt/linux/crt1.c", "linux_setup_tls"},
+        {"src/dlfcn/linux/plat_dlfcn.c", "raw_mmap"},
+        {"src/dlfcn/linux/plat_dlfcn.c", "resolve_main_symbol"},
+        {"src/dlfcn/linux/plat_dlfcn.c", "apply_one_reloc"},
+        {"src/dlfcn/linux/plat_dlfcn.c", "apply_reloc_table"},
+        {"src/dlfcn/linux/plat_dlfcn.c", "__plat_dlopen"},
+        {"src/dlfcn/linux/plat_dlfcn.c", "__plat_dlsym"},
+        {"src/fcntl/linux/plat_fcntl.c", "__plat_open"},
+        {"src/internal/linux/plat_fd_init.c", "install_std"},
+        {"src/malloc/linux/plat_malloc.c", "__plat_pages_alloc"},
+        {"src/misc/linux/plat_misc.c", "box_fd"},
+        {"src/mman/linux/plat_mem.c", "__plat_mem_map_file"},
+        {"src/mman/linux/plat_mem.c", "__plat_mem_reserve"},
+        {"src/process/linux/plat_process.c", "__plat_process_fork"},
+        {"src/process/linux/plat_process.c", "__plat_process_spawn"},
+        {"src/signal/linux/plat_signal.c", "__plat_kill_open"},
+        {"src/signal/linux/plat_signal.c", "box"},
+        {"src/signal/linux/plat_signal.c", "open_shared_stop_event"},
+        {"src/socket/linux/plat_socket.c", "box"},
+        {"src/thread/linux/plat_thread.c", "alloc_sync"},
+        {"src/thread/linux/plat_thread.c", "map_named_sem"},
+        {"src/thread/linux/plat_thread.c", "__plat_thread_spawn"},
+        {"src/thread/linux/plat_thread.c", "__plat_thread_duplicate_self"},
+        {"src/thread/linux/plat_thread.c", "__plat_named_mutant_acquire"},
+        {"src/unistd/linux/plat_fd.c", "__plat_dup"},
+        {"src/unistd/linux/plat_unistd.c", "__plat_pipe"},
     };
     std::string Fn = context(C);
     const SourceManager &SM = C.getSourceManager();

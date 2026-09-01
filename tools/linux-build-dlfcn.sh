@@ -97,6 +97,9 @@ CFLAGS="-std=c99 -nostdinc -fno-builtin -fno-stack-protector -g -O0 \
 $INC -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -Wall -Wno-unused-function"
 
 echo "$TAG: compiling the test program ($CC, native ELF, ntlibc's own headers)..."
+# CFLAGS is deliberately a shell word list here: this script is POSIX sh,
+# and each flag must reach the compiler as a separate argument.
+# shellcheck disable=SC2086
 if ! $CC $CFLAGS -c -o "$BUILD/linux_pilot_test_dlopen.o" fuzz/linux_pilot_test_dlopen.c; then
 	echo "$TAG: FAILED compiling the test program" >&2
 	exit 1

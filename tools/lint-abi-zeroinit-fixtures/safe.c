@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John */
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 /* Minimal local stubs shaped like this project's src/internal/nt.h

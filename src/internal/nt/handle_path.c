@@ -27,12 +27,18 @@
  * (\Device\HarddiskVolume3\dir\file), and the drive is found by asking
  * each of A: through Z: for its target.  Returns a malloc'd UTF-8 path.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include "libc.h"
 
 NTSTATUS NTAPI NtOpenSymbolicLinkObject(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
 NTSTATUS NTAPI NtQuerySymbolicLinkObject(HANDLE, PUNICODE_STRING, PULONG);
 
+withtok(internal_heap_allocated)
 char *__handle_path(HANDLE h)
 {
 	char buf[sizeof(OBJECT_NAME_INFORMATION) + 2048 * sizeof(WCHAR)];
@@ -89,12 +95,16 @@ char *__handle_path(HANDLE h)
 		NtClose(lh);
 		if (!NT_SUCCESS(st)) continue;
 		tl = tus.Length / sizeof(WCHAR);
-		if (oni->Name.Length / sizeof(WCHAR) >= tl &&
+			if (oni->Name.Length / sizeof(WCHAR) >= tl &&
 		    !memcmp(oni->Name.Buffer, target, tl * sizeof(WCHAR)) &&
 		    (oni->Name.Length / sizeof(WCHAR) == tl || oni->Name.Buffer[tl] == '\\')) {
 			size_t rest = oni->Name.Length / sizeof(WCHAR) - tl;
-			WCHAR *w = __malloc((rest + 3) * sizeof(WCHAR));
-			char *r;
+				size_t units, bytes;
+				WCHAR *w;
+				char *r;
+				if (!__size_add_checked(rest, 3, &units) ||
+				    !__size_mul_checked(units, sizeof(WCHAR), &bytes)) return 0;
+				w = __malloc(bytes);
 			if (!w) return 0;
 			w[0] = (WCHAR)c; w[1] = ':';
 			memcpy(w + 2, oni->Name.Buffer + tl, rest * sizeof(WCHAR));
@@ -107,3 +117,5 @@ char *__handle_path(HANDLE h)
 	/* Not on a drive letter (a pipe, a UNC path): give the NT name. */
 	return __utf16_to_utf8(oni->Name.Buffer, oni->Name.Length / sizeof(WCHAR));
 }
+
+// NOLINTEND(misc-include-cleaner)

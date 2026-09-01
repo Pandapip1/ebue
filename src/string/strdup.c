@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+withtok(heap_allocated)
 char *strdup(const char *s)
 {
 	size_t l = strlen(s);

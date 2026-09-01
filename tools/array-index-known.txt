@@ -29,14 +29,38 @@ crt/delayload2.c	__delayLoadHelper2	nametable[index]	name = (const char *)(base 
 crt/delayload2.c	name_eq_ci	ascii[i]	unsigned char ca = (unsigned char)ascii[i]; @column 37	existing site; prove while completing the bounds audit
 crt/delayload2.c	name_eq_ci	ascii[wn]	return ascii[wn] == 0; /* same length too */ @column 9	existing site; prove while completing the bounds audit
 crt/delayload2.c	name_eq_ci	w[i]	WCHAR cb = w[i]; @column 14	existing site; prove while completing the bounds audit
+crt/linux/crt1.c	__linux_start_main	argv[0]	__progname_full = argc > 0 ? argv[0] : empty_progname; @column 31	existing site; prove while completing the bounds audit
+crt/linux/crt1.c	__linux_start_main	sp[0]	long argc = sp[0]; @column 14	existing site; prove while completing the bounds audit
+crt/linux/crt1.c	find_tls_phdr	auxv[0]	else if (auxv[0] == AT_PHENT) phent = (unsigned long)auxv[1]; @column 12	existing site; prove while completing the bounds audit
+crt/linux/crt1.c	find_tls_phdr	auxv[0]	else if (auxv[0] == AT_PHNUM) phnum = (unsigned long)auxv[1]; @column 12	existing site; prove while completing the bounds audit
+crt/linux/crt1.c	find_tls_phdr	auxv[0]	for (; auxv[0] != AT_NULL; auxv += 2) { @column 9	existing site; prove while completing the bounds audit
+crt/linux/crt1.c	find_tls_phdr	auxv[0]	if (auxv[0] == AT_PHDR) phdr = (unsigned long)auxv[1]; @column 7	existing site; prove while completing the bounds audit
+crt/linux/crt1.c	find_tls_phdr	auxv[1]	else if (auxv[0] == AT_PHENT) phent = (unsigned long)auxv[1]; @column 56	existing site; prove while completing the bounds audit
+crt/linux/crt1.c	find_tls_phdr	auxv[1]	else if (auxv[0] == AT_PHNUM) phnum = (unsigned long)auxv[1]; @column 56	existing site; prove while completing the bounds audit
+crt/linux/crt1.c	find_tls_phdr	auxv[1]	if (auxv[0] == AT_PHDR) phdr = (unsigned long)auxv[1]; @column 49	existing site; prove while completing the bounds audit
+crt/linux/crt1.c	linux_setup_tls	((void **)tp)[0]	((void **)tp)[0] = 0; /* dtv -- unused, single static module */ @column 3	existing site; prove while completing the bounds audit
+crt/linux/crt1.c	linux_setup_tls	((void **)tp)[1]	((void **)tp)[1] = 0; /* reserved */ @column 3	existing site; prove while completing the bounds audit
+src/dirent/linux/plat_dirent.c	__plat_dir_decode_one	d->d_name[i]	for (i = 0; i < namecap && d->d_name[i]; i++) @column 29	existing site; prove while completing the bounds audit
+src/dirent/linux/plat_dirent.c	__plat_dir_decode_one	d->d_name[i]	out->name[i] = d->d_name[i]; @column 18	existing site; prove while completing the bounds audit
+src/dirent/linux/plat_dirent.c	__plat_dir_decode_one	out->name[i]	out->name[i] = 0; @column 2	existing site; prove while completing the bounds audit
+src/dirent/linux/plat_dirent.c	__plat_dir_decode_one	out->name[i]	out->name[i] = d->d_name[i]; @column 3	existing site; prove while completing the bounds audit
 src/dirent/readdir.c	fill	names[dp->tell]	strcpy(out->d_name, names[dp->tell]); @column 23	existing site; prove while completing the bounds audit
 src/dirent/readdir.c	fill	types[dp->tell]	out->d_type = types[dp->tell]; @column 17	existing site; prove while completing the bounds audit
 src/dirent/scandir.c	scandir	list[i]	for (i = 0; i < n; i++) __free(list[i]); @column 34	existing site; prove while completing the bounds audit
 src/dirent/scandir.c	scandir	list[n++]	list[n++] = copy; @column 3	existing site; prove while completing the bounds audit
+src/dlfcn/linux/plat_dlfcn.c	__plat_dlopen	phdrs[i]	Elf64_Phdr *ph = &phdrs[i]; @column 21	existing site; prove while completing the bounds audit
+src/dlfcn/linux/plat_dlfcn.c	__plat_dlsym	obj->dynsym[i]	Elf64_Sym *s = &obj->dynsym[i]; @column 19	existing site; prove while completing the bounds audit
+src/dlfcn/linux/plat_dlfcn.c	apply_one_reloc	obj->dynsym[symidx]	obj->dynstr + obj->dynsym[symidx].st_name : "?"; @column 19	existing site; prove while completing the bounds audit
+src/dlfcn/linux/plat_dlfcn.c	apply_reloc_table	relas[i]	if (apply_one_reloc(obj, &relas[i], lo, hi) != 0) return -1; @column 29	existing site; prove while completing the bounds audit
+src/dlfcn/linux/plat_dlfcn.c	resolve_main_symbol	self_syms[i]	Elf64_Sym *s = &self_syms[i]; @column 19	existing site; prove while completing the bounds audit
+src/dlfcn/linux/plat_dlfcn.c	resolve_symref	obj->dynsym[symidx]	sym = &obj->dynsym[symidx]; @column 9	existing site; prove while completing the bounds audit
+src/dlfcn/linux/plat_dlfcn.c	self_symtab_load	shdrs[i]	if (shdrs[i].sh_type == SHT_SYMTAB) { symtab_idx = (int)i; break; } @column 7	existing site; prove while completing the bounds audit
+src/dlfcn/linux/plat_dlfcn.c	self_symtab_load	shdrs[symtab_idx]	Elf64_Shdr *symtab_sh = &shdrs[symtab_idx]; @column 28	existing site; prove while completing the bounds audit
+src/dlfcn/linux/plat_dlfcn.c	self_symtab_load	shdrs[symtab_sh->sh_link]	Elf64_Shdr *strtab_sh = &shdrs[symtab_sh->sh_link]; @column 28	existing site; prove while completing the bounds audit
 src/env/getenv.c	getenv	name[l]	if (!l || name[l]) return 0; @column 12	existing site; prove while completing the bounds audit
-src/env/getenv.c	name_eq	e[i]	int a = (unsigned char)e[i], b = (unsigned char)name[i]; @column 26	existing site; prove while completing the bounds audit
-src/env/getenv.c	name_eq	e[l]	return e[l] == '='; @column 9	existing site; prove while completing the bounds audit
-src/env/getenv.c	name_eq	name[i]	int a = (unsigned char)e[i], b = (unsigned char)name[i]; @column 51	existing site; prove while completing the bounds audit
+src/env/getenv.c	name_eq	entry[i]	int a = (unsigned char)entry[i], b = (unsigned char)name[i]; @column 26	existing site; prove while completing the bounds audit
+src/env/getenv.c	name_eq	entry[name_length]	return entry[name_length] == '='; @column 9	existing site; prove while completing the bounds audit
+src/env/getenv.c	name_eq	name[i]	int a = (unsigned char)entry[i], b = (unsigned char)name[i]; @column 55	existing site; prove while completing the bounds audit
 src/env/setenv.c	__putenv	ne[n+1]	ne[n+1] = 0; @column 3	existing site; prove while completing the bounds audit
 src/env/setenv.c	__putenv	ne[n]	ne[n] = s; @column 3	existing site; prove while completing the bounds audit
 src/env/setenv.c	env_count	__environ	if (__environ) while (__environ[n]) n++; @column 24	existing site; prove while completing the bounds audit
@@ -100,66 +124,72 @@ src/glob/glob.c	unescape	buf[j]	buf[j] = 0; @column 2	existing site; prove while
 src/glob/glob.c	unescape	s[i]	buf[j++] = s[i]; @column 14	existing site; prove while completing the bounds audit
 src/glob/glob.c	unescape	s[i]	if (!(flags & GLOB_NOESCAPE) && s[i] == '\\' && i + 1 < len) i++; @column 35	existing site; prove while completing the bounds audit
 src/internal/delayload.c	ntlibc_delayLoadHelper2	descr->nametable[index]	name = descr->nametable[index].name; @column 9	existing site; prove while completing the bounds audit
-src/internal/fd.c	__fd_init	osfile[i]	__fd_install_at(i, h, (osfile[i] & FAPPEND ? O_APPEND : 0) | @column 28	existing site; prove while completing the bounds audit
-src/internal/fd.c	__fd_init	osfile[i]	if (!(osfile[i] & FOPEN) || !h || h == (HANDLE)(LONG_PTR)-1) continue; @column 11	existing site; prove while completing the bounds audit
-src/internal/fd.c	__fd_init	vnext[count]	int cwd = vnext[count]; @column 16	existing site; prove while completing the bounds audit
-src/internal/fd.c	__fd_init	vnext[i]	__fds[i].vnext = vnext[i]; @column 23	existing site; prove while completing the bounds audit
-src/internal/fd.c	__fd_init	vnext[i]	__fds[i].vnext = vnext[i]; @column 24	existing site; prove while completing the bounds audit
 src/internal/fd.c	__fd_install_at	__fds[fd]	struct __fd *f = &__fds[fd]; @column 20	existing site; prove while completing the bounds audit
-src/internal/path.c	__handle_path	nb[0]	if (nlen >= 6 && nb[0] == '\\' && nb[1] == '?' && nb[2] == '?' && nb[3] == '\\' && @column 20	existing site; prove while completing the bounds audit
-src/internal/path.c	__handle_path	nb[1]	if (nlen >= 6 && nb[0] == '\\' && nb[1] == '?' && nb[2] == '?' && nb[3] == '\\' && @column 37	existing site; prove while completing the bounds audit
-src/internal/path.c	__handle_path	nb[2]	if (nlen >= 6 && nb[0] == '\\' && nb[1] == '?' && nb[2] == '?' && nb[3] == '\\' && @column 53	existing site; prove while completing the bounds audit
-src/internal/path.c	__handle_path	nb[3]	if (nlen >= 6 && nb[0] == '\\' && nb[1] == '?' && nb[2] == '?' && nb[3] == '\\' && @column 69	existing site; prove while completing the bounds audit
-src/internal/path.c	__handle_path	nb[4]	((nb[4] >= 'A' && nb[4] <= 'Z') || (nb[4] >= 'a' && nb[4] <= 'z')) && nb[5] == ':') { @column 25	existing site; prove while completing the bounds audit
-src/internal/path.c	__handle_path	nb[4]	((nb[4] >= 'A' && nb[4] <= 'Z') || (nb[4] >= 'a' && nb[4] <= 'z')) && nb[5] == ':') { @column 43	existing site; prove while completing the bounds audit
-src/internal/path.c	__handle_path	nb[4]	((nb[4] >= 'A' && nb[4] <= 'Z') || (nb[4] >= 'a' && nb[4] <= 'z')) && nb[5] == ':') { @column 59	existing site; prove while completing the bounds audit
-src/internal/path.c	__handle_path	nb[4]	((nb[4] >= 'A' && nb[4] <= 'Z') || (nb[4] >= 'a' && nb[4] <= 'z')) && nb[5] == ':') { @column 9	existing site; prove while completing the bounds audit
-src/internal/path.c	__handle_path	nb[5]	((nb[4] >= 'A' && nb[4] <= 'Z') || (nb[4] >= 'a' && nb[4] <= 'z')) && nb[5] == ':') { @column 77	existing site; prove while completing the bounds audit
-src/internal/path.c	__handle_path	oni->Name.Buffer[tl]	(oni->Name.Length / sizeof(WCHAR) == tl || oni->Name.Buffer[tl] == '\\')) { @column 50	existing site; prove while completing the bounds audit
-src/internal/path.c	__handle_path	w[0]	w[0] = (WCHAR)c; w[1] = ':'; @column 4	existing site; prove while completing the bounds audit
-src/internal/path.c	__handle_path	w[1]	w[0] = (WCHAR)c; w[1] = ':'; @column 21	existing site; prove while completing the bounds audit
-src/internal/path.c	__nt_prefix_not_dir	nt->Buffer[--i]	if (nt->Buffer[--i] != '\\') continue; @column 7	existing site; prove while completing the bounds audit
-src/internal/path.c	dos_from_posix	w[--n]	while (n > 1 && w[n-1] == '\\' && !(n == 3 && w[1] == ':')) w[--n] = 0; @column 62	existing site; prove while completing the bounds audit
-src/internal/path.c	dos_from_posix	w[1]	if (trailing) *trailing = n > 1 && w[n-1] == '\\' && !(n == 3 && w[1] == ':'); @column 67	existing site; prove while completing the bounds audit
-src/internal/path.c	dos_from_posix	w[1]	while (n > 1 && w[n-1] == '\\' && !(n == 3 && w[1] == ':')) w[--n] = 0; @column 48	existing site; prove while completing the bounds audit
-src/internal/path.c	dos_from_posix	w[i]	if (w[i] == '/') w[i] = '\\'; @column 20	existing site; prove while completing the bounds audit
-src/internal/path.c	dos_from_posix	w[i]	if (w[i] == '/') w[i] = '\\'; @column 7	existing site; prove while completing the bounds audit
-src/internal/path.c	dos_from_posix	w[n-1]	if (trailing) *trailing = n > 1 && w[n-1] == '\\' && !(n == 3 && w[1] == ':'); @column 37	existing site; prove while completing the bounds audit
-src/internal/path.c	dos_from_posix	w[n-1]	while (n > 1 && w[n-1] == '\\' && !(n == 3 && w[1] == ':')) w[--n] = 0; @column 18	existing site; prove while completing the bounds audit
-src/internal/path.c	normalize_rel	w[i+1]	} else if (len == 2 && w[i] == '.' && w[i+1] == '.') { @column 41	existing site; prove while completing the bounds audit
-src/internal/path.c	normalize_rel	w[i]	} else if (len == 1 && w[i] == '.') { @column 26	existing site; prove while completing the bounds audit
-src/internal/path.c	normalize_rel	w[i]	} else if (len == 2 && w[i] == '.' && w[i+1] == '.') { @column 26	existing site; prove while completing the bounds audit
-src/internal/path.c	normalize_rel	w[j]	while (j < n && w[j] != '\\') j++; @column 19	existing site; prove while completing the bounds audit
-src/internal/path.c	normalize_rel	w[out++]	if (out) w[out++] = '\\'; @column 13	existing site; prove while completing the bounds audit
-src/internal/path.c	normalize_rel	w[out]	w[out] = 0; @column 2	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_path_over_max_path	cur[curn-1]	while (curn > 2 && cur[curn-1] == '\\') curn--; @column 23	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_path_over_max_path	dos[0]	if (dos[0] == '\\') { @column 7	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_path_over_max_path	joined[bodyn]	joined[bodyn] = 0; @column 4	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_path_over_max_path	joined[curn - 2]	joined[curn - 2] = '\\'; @column 4	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_path_over_max_path	w[0]	w[0] = '\\'; w[1] = '?'; w[2] = '?'; w[3] = '\\'; @column 2	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_path_over_max_path	w[1]	w[0] = '\\'; w[1] = '?'; w[2] = '?'; w[3] = '\\'; @column 15	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_path_over_max_path	w[2]	w[0] = '\\'; w[1] = '?'; w[2] = '?'; w[3] = '\\'; @column 27	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_path_over_max_path	w[3]	w[0] = '\\'; w[1] = '?'; w[2] = '?'; w[3] = '\\'; @column 39	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_path_over_max_path	w[4]	w[4] = letter; w[5] = ':'; w[6] = '\\'; @column 2	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_path_over_max_path	w[5]	w[4] = letter; w[5] = ':'; w[6] = '\\'; @column 17	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_path_over_max_path	w[6]	w[4] = letter; w[5] = ':'; w[6] = '\\'; @column 29	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_path_over_max_path	w[len]	w[len] = 0; @column 2	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_prefix_root	b[0]	if (n < 7 || b[0] != '\\' || b[1] != '?' || b[2] != '?' || b[3] != '\\') return n; @column 15	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_prefix_root	b[1]	if (n < 7 || b[0] != '\\' || b[1] != '?' || b[2] != '?' || b[3] != '\\') return n; @column 31	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_prefix_root	b[2]	if (n < 7 || b[0] != '\\' || b[1] != '?' || b[2] != '?' || b[3] != '\\') return n; @column 46	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_prefix_root	b[3]	if (n < 7 || b[0] != '\\' || b[1] != '?' || b[2] != '?' || b[3] != '\\') return n; @column 61	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_prefix_root	b[4]	if (!(((b[4] | 0x20) >= 'a' && (b[4] | 0x20) <= 'z') && b[5] == ':' && b[6] == '\\')) return n; @column 10	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_prefix_root	b[4]	if (!(((b[4] | 0x20) >= 'a' && (b[4] | 0x20) <= 'z') && b[5] == ':' && b[6] == '\\')) return n; @column 34	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_prefix_root	b[5]	if (!(((b[4] | 0x20) >= 'a' && (b[4] | 0x20) <= 'z') && b[5] == ':' && b[6] == '\\')) return n; @column 58	existing site; prove while completing the bounds audit
-src/internal/path.c	nt_prefix_root	b[6]	if (!(((b[4] | 0x20) >= 'a' && (b[4] | 0x20) <= 'z') && b[5] == ':' && b[6] == '\\')) return n; @column 73	existing site; prove while completing the bounds audit
-src/internal/path.c	ntpath_at_impl	dir[dl-1]	if (dl && dir[dl-1] != '\\' && dir[dl-1] != '/') joined[dl++] = '\\'; @column 14	existing site; prove while completing the bounds audit
-src/internal/path.c	ntpath_at_impl	dir[dl-1]	if (dl && dir[dl-1] != '\\' && dir[dl-1] != '/') joined[dl++] = '\\'; @column 35	existing site; prove while completing the bounds audit
-src/internal/path.c	ntpath_at_impl	joined[dl++]	if (dl && dir[dl-1] != '\\' && dir[dl-1] != '/') joined[dl++] = '\\'; @column 53	existing site; prove while completing the bounds audit
-src/internal/path.c	ntpath_at_impl	path[0]	(((path[0] | 0x20) >= 'a' && (path[0] | 0x20) <= 'z') && path[1] == ':'); @column 33	existing site; prove while completing the bounds audit
-src/internal/path.c	ntpath_at_impl	path[0]	(((path[0] | 0x20) >= 'a' && (path[0] | 0x20) <= 'z') && path[1] == ':'); @column 6	existing site; prove while completing the bounds audit
-src/internal/path.c	ntpath_at_impl	path[0]	absolute = path[0] == '/' || path[0] == '\\' || @column 13	existing site; prove while completing the bounds audit
-src/internal/path.c	ntpath_at_impl	path[0]	absolute = path[0] == '/' || path[0] == '\\' || @column 31	existing site; prove while completing the bounds audit
-src/internal/path.c	ntpath_at_impl	path[1]	(((path[0] | 0x20) >= 'a' && (path[0] | 0x20) <= 'z') && path[1] == ':'); @column 60	existing site; prove while completing the bounds audit
+src/internal/linux/handle_path.c	__handle_path	r[n]	r[n] = 0; @column 2	existing site; prove while completing the bounds audit
+src/internal/nt/handle_path.c	__handle_path	nb[0]	if (nlen >= 6 && nb[0] == '\\' && nb[1] == '?' && nb[2] == '?' && nb[3] == '\\' && @column 20	existing site; prove while completing the bounds audit
+src/internal/nt/handle_path.c	__handle_path	nb[1]	if (nlen >= 6 && nb[0] == '\\' && nb[1] == '?' && nb[2] == '?' && nb[3] == '\\' && @column 37	existing site; prove while completing the bounds audit
+src/internal/nt/handle_path.c	__handle_path	nb[2]	if (nlen >= 6 && nb[0] == '\\' && nb[1] == '?' && nb[2] == '?' && nb[3] == '\\' && @column 53	existing site; prove while completing the bounds audit
+src/internal/nt/handle_path.c	__handle_path	nb[3]	if (nlen >= 6 && nb[0] == '\\' && nb[1] == '?' && nb[2] == '?' && nb[3] == '\\' && @column 69	existing site; prove while completing the bounds audit
+src/internal/nt/handle_path.c	__handle_path	nb[4]	((nb[4] >= 'A' && nb[4] <= 'Z') || (nb[4] >= 'a' && nb[4] <= 'z')) && nb[5] == ':') { @column 25	existing site; prove while completing the bounds audit
+src/internal/nt/handle_path.c	__handle_path	nb[4]	((nb[4] >= 'A' && nb[4] <= 'Z') || (nb[4] >= 'a' && nb[4] <= 'z')) && nb[5] == ':') { @column 43	existing site; prove while completing the bounds audit
+src/internal/nt/handle_path.c	__handle_path	nb[4]	((nb[4] >= 'A' && nb[4] <= 'Z') || (nb[4] >= 'a' && nb[4] <= 'z')) && nb[5] == ':') { @column 59	existing site; prove while completing the bounds audit
+src/internal/nt/handle_path.c	__handle_path	nb[4]	((nb[4] >= 'A' && nb[4] <= 'Z') || (nb[4] >= 'a' && nb[4] <= 'z')) && nb[5] == ':') { @column 9	existing site; prove while completing the bounds audit
+src/internal/nt/handle_path.c	__handle_path	nb[5]	((nb[4] >= 'A' && nb[4] <= 'Z') || (nb[4] >= 'a' && nb[4] <= 'z')) && nb[5] == ':') { @column 77	existing site; prove while completing the bounds audit
+src/internal/nt/handle_path.c	__handle_path	oni->Name.Buffer[tl]	(oni->Name.Length / sizeof(WCHAR) == tl || oni->Name.Buffer[tl] == '\\')) { @column 50	existing site; prove while completing the bounds audit
+src/internal/nt/handle_path.c	__handle_path	w[0]	w[0] = (WCHAR)c; w[1] = ':'; @column 4	existing site; prove while completing the bounds audit
+src/internal/nt/handle_path.c	__handle_path	w[1]	w[0] = (WCHAR)c; w[1] = ':'; @column 21	existing site; prove while completing the bounds audit
+src/internal/nt/handle_path.c	__handle_path	w[2]	if (!rest) { w[2] = '\\'; rest = 1; } @column 17	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	__nt_prefix_not_dir	nt->Buffer[--i]	if (nt->Buffer[--i] != '\\') continue; @column 7	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	dos_from_posix	w[--n]	while (n > 1 && w[n-1] == '\\' && !(n == 3 && w[1] == ':')) w[--n] = 0; @column 62	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	dos_from_posix	w[1]	if (trailing) *trailing = n > 1 && w[n-1] == '\\' && !(n == 3 && w[1] == ':'); @column 67	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	dos_from_posix	w[1]	while (n > 1 && w[n-1] == '\\' && !(n == 3 && w[1] == ':')) w[--n] = 0; @column 48	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	dos_from_posix	w[i]	if (w[i] == '/') w[i] = '\\'; @column 20	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	dos_from_posix	w[i]	if (w[i] == '/') w[i] = '\\'; @column 7	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	dos_from_posix	w[n-1]	if (trailing) *trailing = n > 1 && w[n-1] == '\\' && !(n == 3 && w[1] == ':'); @column 37	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	dos_from_posix	w[n-1]	while (n > 1 && w[n-1] == '\\' && !(n == 3 && w[1] == ':')) w[--n] = 0; @column 18	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	normalize_rel	w[i+1]	} else if (len == 2 && w[i] == '.' && w[i+1] == '.') { @column 41	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	normalize_rel	w[i]	} else if (len == 1 && w[i] == '.') { @column 26	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	normalize_rel	w[i]	} else if (len == 2 && w[i] == '.' && w[i+1] == '.') { @column 26	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	normalize_rel	w[j]	while (j < n && w[j] != '\\') j++; @column 19	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	normalize_rel	w[out++]	if (out) w[out++] = '\\'; @column 13	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	normalize_rel	w[out]	w[out] = 0; @column 2	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_path_over_max_path	cur[curn-1]	while (curn > 2 && cur[curn-1] == '\\') curn--; @column 23	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_path_over_max_path	dos[0]	if (dos[0] == '\\') { @column 7	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_path_over_max_path	joined[bodyn]	joined[bodyn] = 0; @column 4	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_path_over_max_path	joined[curn - 2]	joined[curn - 2] = '\\'; @column 4	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_path_over_max_path	w[0]	w[0] = '\\'; w[1] = '?'; w[2] = '?'; w[3] = '\\'; @column 2	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_path_over_max_path	w[1]	w[0] = '\\'; w[1] = '?'; w[2] = '?'; w[3] = '\\'; @column 15	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_path_over_max_path	w[2]	w[0] = '\\'; w[1] = '?'; w[2] = '?'; w[3] = '\\'; @column 27	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_path_over_max_path	w[3]	w[0] = '\\'; w[1] = '?'; w[2] = '?'; w[3] = '\\'; @column 39	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_path_over_max_path	w[4]	w[4] = letter; w[5] = ':'; w[6] = '\\'; @column 2	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_path_over_max_path	w[5]	w[4] = letter; w[5] = ':'; w[6] = '\\'; @column 17	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_path_over_max_path	w[6]	w[4] = letter; w[5] = ':'; w[6] = '\\'; @column 29	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_path_over_max_path	w[len]	w[len] = 0; @column 2	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_prefix_root	b[0]	if (n < 7 || b[0] != '\\' || b[1] != '?' || b[2] != '?' || b[3] != '\\') return n; @column 15	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_prefix_root	b[1]	if (n < 7 || b[0] != '\\' || b[1] != '?' || b[2] != '?' || b[3] != '\\') return n; @column 31	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_prefix_root	b[2]	if (n < 7 || b[0] != '\\' || b[1] != '?' || b[2] != '?' || b[3] != '\\') return n; @column 46	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_prefix_root	b[3]	if (n < 7 || b[0] != '\\' || b[1] != '?' || b[2] != '?' || b[3] != '\\') return n; @column 61	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_prefix_root	b[4]	if (!(((b[4] | 0x20) >= 'a' && (b[4] | 0x20) <= 'z') && b[5] == ':' && b[6] == '\\')) return n; @column 10	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_prefix_root	b[4]	if (!(((b[4] | 0x20) >= 'a' && (b[4] | 0x20) <= 'z') && b[5] == ':' && b[6] == '\\')) return n; @column 34	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_prefix_root	b[5]	if (!(((b[4] | 0x20) >= 'a' && (b[4] | 0x20) <= 'z') && b[5] == ':' && b[6] == '\\')) return n; @column 58	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	nt_prefix_root	b[6]	if (!(((b[4] | 0x20) >= 'a' && (b[4] | 0x20) <= 'z') && b[5] == ':' && b[6] == '\\')) return n; @column 73	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	ntpath_at_impl	dir[dl-1]	if (dl && dir[dl-1] != '\\' && dir[dl-1] != '/') joined[dl++] = '\\'; @column 14	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	ntpath_at_impl	dir[dl-1]	if (dl && dir[dl-1] != '\\' && dir[dl-1] != '/') joined[dl++] = '\\'; @column 35	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	ntpath_at_impl	joined[dl++]	if (dl && dir[dl-1] != '\\' && dir[dl-1] != '/') joined[dl++] = '\\'; @column 53	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	ntpath_at_impl	path[0]	(((path[0] | 0x20) >= 'a' && (path[0] | 0x20) <= 'z') && path[1] == ':'); @column 33	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	ntpath_at_impl	path[0]	(((path[0] | 0x20) >= 'a' && (path[0] | 0x20) <= 'z') && path[1] == ':'); @column 6	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	ntpath_at_impl	path[0]	absolute = path[0] == '/' || path[0] == '\\' || @column 13	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	ntpath_at_impl	path[0]	absolute = path[0] == '/' || path[0] == '\\' || @column 31	existing site; prove while completing the bounds audit
+src/internal/nt/path.c	ntpath_at_impl	path[1]	(((path[0] | 0x20) >= 'a' && (path[0] | 0x20) <= 'z') && path[1] == ':'); @column 60	existing site; prove while completing the bounds audit
+src/internal/nt/plat_fd_init.c	__fd_init	osfile[i]	__fd_install_at(i, h, (osfile[i] & FAPPEND ? O_APPEND : 0) | @column 28	existing site; prove while completing the bounds audit
+src/internal/nt/plat_fd_init.c	__fd_init	osfile[i]	if (!(osfile[i] & FOPEN) || !h || h == (HANDLE)(LONG_PTR)-1) continue; @column 11	existing site; prove while completing the bounds audit
+src/internal/nt/plat_fd_init.c	__fd_init	vnext[count]	int cwd = vnext[count]; @column 16	existing site; prove while completing the bounds audit
+src/internal/nt/plat_fd_init.c	__fd_init	vnext[i]	__fds[i].vnext = vnext[i]; @column 23	existing site; prove while completing the bounds audit
+src/internal/nt/plat_fd_init.c	__fd_init	vnext[i]	__fds[i].vnext = vnext[i]; @column 24	existing site; prove while completing the bounds audit
+src/internal/nt/vfs_resolve.c	__vfs_resolve_at	joined[dl - 1]	if (dl && !issep(joined[dl - 1])) joined[dl++] = '\\'; @column 21	existing site; prove while completing the bounds audit
+src/internal/nt/vfs_resolve.c	__vfs_resolve_at	joined[dl++]	if (dl && !issep(joined[dl - 1])) joined[dl++] = '\\'; @column 38	existing site; prove while completing the bounds audit
+src/internal/nt/vfs_resolve.c	__vfs_resolve_at	path[0]	if ((((unsigned char)path[0] | 0x20) >= 'a' && @column 23	existing site; prove while completing the bounds audit
+src/internal/nt/vfs_resolve.c	__vfs_resolve_at	path[pathlen - 1]	trailing = pathlen > 1 && issep(path[pathlen - 1]); @column 34	existing site; prove while completing the bounds audit
 src/internal/pe.c	ntlibc_pe_find_export	functions[ord]	return b + functions[ord]; @column 15	existing site; prove while completing the bounds audit
 src/internal/pe.c	ntlibc_pe_find_export	names[i]	const char *cand = (const char *)(b + names[i]); @column 41	existing site; prove while completing the bounds audit
 src/internal/pe.c	ntlibc_pe_find_export	nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]	exp_rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress; @column 12	existing site; prove while completing the bounds audit
@@ -184,12 +214,9 @@ src/internal/rpath.c	join	p[i]	if (p[i] == '/') p[i] = '\\'; @column 7	existing 
 src/internal/rpath.c	ntlibc_rpath_load	path[0]	if (path && path[0] == '\\') memmove(path, path + 1, strlen(path)); @column 16	existing site; prove while completing the bounds audit
 src/internal/utf.c	__utf16_to_utf8_buf	out[outlen]	out[outlen] = 0; @column 2	existing site; prove while completing the bounds audit
 src/internal/utf.c	__utf8_to_utf16	w[outlen / sizeof(WCHAR)]	w[outlen / sizeof(WCHAR)] = 0; @column 2	existing site; prove while completing the bounds audit
-src/internal/vfs.c	__vfs_resolve_at	joined[dl - 1]	if (dl && !issep(joined[dl - 1])) joined[dl++] = '\\'; @column 21	existing site; prove while completing the bounds audit
-src/internal/vfs.c	__vfs_resolve_at	joined[dl++]	if (dl && !issep(joined[dl - 1])) joined[dl++] = '\\'; @column 38	existing site; prove while completing the bounds audit
-src/internal/vfs.c	__vfs_resolve_at	path[0]	if ((((unsigned char)path[0] | 0x20) >= 'a' && @column 23	existing site; prove while completing the bounds audit
-src/internal/vfs.c	__vfs_resolve_at	path[pathlen - 1]	trailing = pathlen > 1 && issep(path[pathlen - 1]); @column 34	existing site; prove while completing the bounds audit
 src/internal/wcslen_.c	wcslen_	s[n]	while (s[n]) n++; @column 9	existing site; prove while completing the bounds audit
 src/misc/basename.c	basename	s[0]	if (((unsigned)(s[0] | 32) - 'a') < 26u && s[1] == ':') start = 2; @column 18	existing site; prove while completing the bounds audit
+src/misc/basename.c	basename	s[1]	if (((unsigned)(s[0] | 32) - 'a') < 26u && s[1] == ':') start = 2; @column 45	existing site; prove while completing the bounds audit
 src/misc/basename.c	basename	s[i-1]	for (; i > start && !ISSEP(s[i-1]); i--); @column 29	existing site; prove while completing the bounds audit
 src/misc/basename.c	basename	s[i]	for (; i > start && ISSEP(s[i]); i--) s[i] = 0; @column 28	existing site; prove while completing the bounds audit
 src/misc/basename.c	basename	s[i]	for (; i > start && ISSEP(s[i]); i--) s[i] = 0; @column 40	existing site; prove while completing the bounds audit
@@ -202,6 +229,7 @@ src/misc/catgets.c	V	p[3]	(uint32_t)p[2] << 8 | (uint32_t)p[3]; @column 41	exist
 src/misc/catgets.c	check_catalog	m[size - 1]	if (m[size - 1] != 0) return 0; @column 6	existing site; prove while completing the bounds audit
 src/misc/catgets.c	expand	buf[i]	buf[i] = 0; @column 2	existing site; prove while completing the bounds audit
 src/misc/dirname.c	dirname	s[0]	if (((unsigned)(s[0] | 32) - 'a') < 26u && s[1] == ':') start = 2; @column 18	existing site; prove while completing the bounds audit
+src/misc/dirname.c	dirname	s[1]	if (((unsigned)(s[0] | 32) - 'a') < 26u && s[1] == ':') start = 2; @column 45	existing site; prove while completing the bounds audit
 src/misc/dirname.c	dirname	s[i+1]	s[i+1] = 0; @column 2	existing site; prove while completing the bounds audit
 src/misc/dirname.c	dirname	s[i]	for (; i > start && !ISSEP(s[i]); i--); @column 29	existing site; prove while completing the bounds audit
 src/misc/dirname.c	dirname	s[i]	for (; i > start && ISSEP(s[i]); i--); @column 28	existing site; prove while completing the bounds audit
@@ -209,6 +237,7 @@ src/misc/dirname.c	dirname	s[i]	if (ISSEP(s[i])) { @column 13	existing site; pro
 src/misc/dirname.c	dirname	s[i]	if (i == start && ISSEP(s[i])) { @column 26	existing site; prove while completing the bounds audit
 src/misc/dirname.c	dirname	s[start+1]	s[start+1] = 0; @column 3	existing site; prove while completing the bounds audit
 src/misc/dirname.c	dirname	s[start+1]	s[start+1] = 0; @column 4	existing site; prove while completing the bounds audit
+src/misc/dirname.c	dirname	s[start]	s[start] = 0; @column 4	existing site; prove while completing the bounds audit
 src/misc/getopt.c	getopt	argv[optind++]	optarg = argv[optind++] + __optpos; @column 13	existing site; prove while completing the bounds audit
 src/misc/getopt.c	getopt	argv[optind++]	optarg = argv[optind++]; @column 13	existing site; prove while completing the bounds audit
 src/misc/getopt.c	getopt	argv[optind++]	optarg = argv[optind++]; @column 14	existing site; prove while completing the bounds audit
@@ -305,6 +334,9 @@ src/misc/iconv.c	encode_utf8	p[1]	p[1] = (unsigned char)(0x80 | (cp & 0x3f)); br
 src/misc/iconv.c	encode_utf8	p[2]	p[2] = (unsigned char)(0x80 | ((cp >> 6) & 0x3f)); @column 10	existing site; prove while completing the bounds audit
 src/misc/iconv.c	encode_utf8	p[2]	p[2] = (unsigned char)(0x80 | (cp & 0x3f)); break; @column 10	existing site; prove while completing the bounds audit
 src/misc/iconv.c	encode_utf8	p[3]	p[3] = (unsigned char)(0x80 | (cp & 0x3f)); break; @column 10	existing site; prove while completing the bounds audit
+src/misc/linux/plat_misc.c	record_pidfd_pid	pidfd_pid_table[pidfd_table_next]	pidfd_pid_table[pidfd_table_next].pid = pid; @column 2	existing site; prove while completing the bounds audit
+src/misc/linux/plat_misc.c	record_pidfd_pid	pidfd_pid_table[pidfd_table_next]	pidfd_pid_table[pidfd_table_next].pidfd = pidfd; @column 2	existing site; prove while completing the bounds audit
+src/misc/linux/plat_misc.c	record_pidfd_pid	pidfd_pid_table[pidfd_table_next]	pidfd_pid_table[pidfd_table_next].used = 1; @column 2	existing site; prove while completing the bounds audit
 src/misc/strfmon.c	vstrfmon	fmt[1]	if (!fmt[1]) { errno = EINVAL; return -1; } @column 10	existing site; prove while completing the bounds audit
 src/misc/strfmon.c	vstrfmon	g[1]	if (g[1]) { g++; run = (size_t)*g; } @column 9	existing site; prove while completing the bounds audit
 src/misc/uio.c	check_iov	iov[i]	if (iov[i].iov_len > (size_t)SSIZE_MAX - sum) { errno = EINVAL; return -1; } @column 7	existing site; prove while completing the bounds audit
@@ -369,54 +401,57 @@ src/process/find_program.c	has_dir	name[1]	if (((name[0] >= 'A' && name[0] <= 'Z
 src/process/find_program.c	try_dir	p[dlen++]	if (p[dlen-1] != '/' && p[dlen-1] != '\\') p[dlen++] = '\\'; // NOLINT(clang-analyzer-security.ArrayBound) @column 46	existing site; prove while completing the bounds audit
 src/process/find_program.c	try_dir	p[dlen-1]	if (p[dlen-1] != '/' && p[dlen-1] != '\\') p[dlen++] = '\\'; // NOLINT(clang-analyzer-security.ArrayBound) @column 27	existing site; prove while completing the bounds audit
 src/process/find_program.c	try_dir	p[dlen-1]	if (p[dlen-1] != '/' && p[dlen-1] != '\\') p[dlen++] = '\\'; // NOLINT(clang-analyzer-security.ArrayBound) @column 7	existing site; prove while completing the bounds audit
-src/process/fork.c	mark_children_inheritable	__children[i]	NtClose(__children[i].h); @column 12	existing site; prove while completing the bounds audit
 src/process/fork.c	mark_children_inheritable	__children[i]	__children[i].h = dup; @column 4	existing site; prove while completing the bounds audit
+src/process/fork.c	mark_children_inheritable	__children[i]	__plat_close(__children[i].h); @column 17	existing site; prove while completing the bounds audit
 src/process/fork.c	mark_children_inheritable	__children[i]	if (!__children[i].pid || !__children[i].h) continue; @column 30	existing site; prove while completing the bounds audit
 src/process/fork.c	mark_children_inheritable	__children[i]	if (!__children[i].pid || !__children[i].h) continue; @column 8	existing site; prove while completing the bounds audit
-src/process/fork.c	mark_children_inheritable	__children[i]	if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), __children[i].h, NtCurrentProcess(), &dup, @column 56	existing site; prove while completing the bounds audit
-src/process/posix_spawn.c	take_slot	__fds[fd]	if (__fds[fd].h) NtClose(__fds[fd].h); @column 28	existing site; prove while completing the bounds audit
-src/process/posix_spawn.c	take_slot	__fds[fd]	if (__fds[fd].h) NtClose(__fds[fd].h); @column 7	existing site; prove while completing the bounds audit
+src/process/fork.c	mark_children_inheritable	__children[i]	if (__plat_dup(__children[i].h, inherit, &dup) == 0) { @column 18	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	__plat_process_spawn	std[0]	__plat_handle_t inherited_std[3] = { std[0], std[1], std[2] }; @column 39	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	__plat_process_spawn	std[1]	__plat_handle_t inherited_std[3] = { std[0], std[1], std[2] }; @column 47	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	__plat_process_spawn	std[2]	__plat_handle_t inherited_std[3] = { std[0], std[1], std[2] }; @column 55	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	__plat_process_spawn	wimage[k]	{ size_t k; for (k = 0; wimage[k]; k++) if (wimage[k] == '/') wimage[k] = '\\'; } @column 26	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	__plat_process_spawn	wimage[k]	{ size_t k; for (k = 0; wimage[k]; k++) if (wimage[k] == '/') wimage[k] = '\\'; } @column 46	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	__plat_process_spawn	wimage[k]	{ size_t k; for (k = 0; wimage[k]; k++) if (wimage[k] == '/') wimage[k] = '\\'; } @column 64	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	(*buf)[(*len)++]	(*buf)[(*len)++] = '"'; @column 2	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	(*buf)[(*len)++]	(*buf)[(*len)++] = arg[i]; @column 4	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	(*buf)[(*len)++]	if (*len) (*buf)[(*len)++] = ' '; @column 12	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	(*buf)[(*len)++]	size_t k; for (k = 0; k < nb * 2 + 1; k++) (*buf)[(*len)++] = '\\'; @column 47	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	(*buf)[(*len)++]	size_t k; for (k = 0; k < nb * 2; k++) (*buf)[(*len)++] = '\\'; @column 43	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	(*buf)[(*len)++]	size_t k; for (k = 0; k < nb; k++) (*buf)[(*len)++] = '\\'; @column 39	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	arg[0]	int need_quote = arg[0] == 0; @column 19	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	arg[i]	(*buf)[(*len)++] = arg[i]; @column 23	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	arg[i]	for (i = 0; arg[i]; i++) if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"' || arg[i] == '\n' || arg[i] == '\v') need_quote = 1; @column 101	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	arg[i]	for (i = 0; arg[i]; i++) if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"' || arg[i] == '\n' || arg[i] == '\v') need_quote = 1; @column 14	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	arg[i]	for (i = 0; arg[i]; i++) if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"' || arg[i] == '\n' || arg[i] == '\v') need_quote = 1; @column 31	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	arg[i]	for (i = 0; arg[i]; i++) if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"' || arg[i] == '\n' || arg[i] == '\v') need_quote = 1; @column 48	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	arg[i]	for (i = 0; arg[i]; i++) if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"' || arg[i] == '\n' || arg[i] == '\v') need_quote = 1; @column 66	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	arg[i]	for (i = 0; arg[i]; i++) if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"' || arg[i] == '\n' || arg[i] == '\v') need_quote = 1; @column 83	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	arg[i]	while (i < n && arg[i] == '\\') { nb++; i++; } @column 19	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_arg	arg[i]	} else if (arg[i] == '"') { @column 14	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_prog	(*buf)[(*len)++]	if (need_quote) (*buf)[(*len)++] = '"'; @column 18	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_prog	arg[0]	int need_quote = arg[0] == 0; @column 19	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_prog	arg[i]	for (i = 0; arg[i]; i++) { @column 14	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_prog	arg[i]	if (arg[i] == ' ' || arg[i] == '\t') need_quote = 1; @column 24	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_prog	arg[i]	if (arg[i] == ' ' || arg[i] == '\t') need_quote = 1; @column 7	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	append_prog	arg[i]	if (arg[i] == '"') { errno = EINVAL; return -1; } @column 7	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	build_cmdline	argv[i]	WCHAR *w = __utf8_to_utf16(argv[i], &wl); @column 30	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	build_cmdline	argv[i]	for (i = 0; argv[i]; i++) { @column 14	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	build_cmdline	buf[len]	buf[len] = 0; @column 2	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	build_env_block	blk[len++]	blk[len++] = 0; /* terminating empty string */ @column 2	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	build_env_block	blk[len++]	blk[len++] = 0; @column 3	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	build_env_block	envp[i]	for (i = 0; envp && envp[i]; i++) { @column 22	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	build_env_block	envp[i]	if (!envp[i][0] || !strchr(envp[i], '=')) continue; @column 30	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	build_env_block	envp[i]	if (!envp[i][0] || !strchr(envp[i], '=')) continue; @column 8	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	build_env_block	envp[i]	w = __utf8_to_utf16(envp[i], &wl); @column 23	existing site; prove while completing the bounds audit
+src/process/nt/plat_process.c	build_env_block	envp[i][0]	if (!envp[i][0] || !strchr(envp[i], '=')) continue; @column 8	existing site; prove while completing the bounds audit
+src/process/posix_spawn.c	take_slot	__fds[fd]	if (__fds[fd].h) __plat_close(__fds[fd].h); @column 33	existing site; prove while completing the bounds audit
+src/process/posix_spawn.c	take_slot	__fds[fd]	if (__fds[fd].h) __plat_close(__fds[fd].h); @column 7	existing site; prove while completing the bounds audit
 src/process/posix_spawn.c	take_slot	__fds[fd]	memset(&__fds[fd], 0, sizeof __fds[fd]); @column 10	existing site; prove while completing the bounds audit
 src/process/posix_spawn.c	take_slot	__fds[fd]	memset(&__fds[fd], 0, sizeof __fds[fd]); @column 11	existing site; prove while completing the bounds audit
 src/process/posix_spawn.c	take_slot	__fds[fd]	sv[*nsv].slot = __fds[fd]; @column 18	existing site; prove while completing the bounds audit
 src/process/posix_spawn.c	take_slot	sv[*nsv]	sv[*nsv].fd = fd; @column 2	existing site; prove while completing the bounds audit
 src/process/posix_spawn.c	take_slot	sv[*nsv]	sv[*nsv].slot = __fds[fd]; @column 2	existing site; prove while completing the bounds audit
 src/process/posix_spawn.c	take_slot	sv[i]	if (sv[i].fd != fd) continue; @column 7	existing site; prove while completing the bounds audit
-src/process/spawn.c	__spawn	wimage[k]	{ size_t k; for (k = 0; wimage[k]; k++) if (wimage[k] == '/') wimage[k] = '\\'; } @column 26	existing site; prove while completing the bounds audit
-src/process/spawn.c	__spawn	wimage[k]	{ size_t k; for (k = 0; wimage[k]; k++) if (wimage[k] == '/') wimage[k] = '\\'; } @column 46	existing site; prove while completing the bounds audit
-src/process/spawn.c	__spawn	wimage[k]	{ size_t k; for (k = 0; wimage[k]; k++) if (wimage[k] == '/') wimage[k] = '\\'; } @column 64	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	(*buf)[(*len)++]	(*buf)[(*len)++] = '"'; @column 2	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	(*buf)[(*len)++]	(*buf)[(*len)++] = arg[i]; @column 4	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	(*buf)[(*len)++]	if (*len) (*buf)[(*len)++] = ' '; @column 12	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	(*buf)[(*len)++]	size_t k; for (k = 0; k < nb * 2 + 1; k++) (*buf)[(*len)++] = '\\'; @column 47	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	(*buf)[(*len)++]	size_t k; for (k = 0; k < nb * 2; k++) (*buf)[(*len)++] = '\\'; @column 43	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	(*buf)[(*len)++]	size_t k; for (k = 0; k < nb; k++) (*buf)[(*len)++] = '\\'; @column 39	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	arg[0]	int need_quote = arg[0] == 0; @column 19	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	arg[i]	(*buf)[(*len)++] = arg[i]; @column 23	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	arg[i]	for (i = 0; arg[i]; i++) if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"' || arg[i] == '\n' || arg[i] == '\v') need_quote = 1; @column 101	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	arg[i]	for (i = 0; arg[i]; i++) if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"' || arg[i] == '\n' || arg[i] == '\v') need_quote = 1; @column 14	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	arg[i]	for (i = 0; arg[i]; i++) if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"' || arg[i] == '\n' || arg[i] == '\v') need_quote = 1; @column 31	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	arg[i]	for (i = 0; arg[i]; i++) if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"' || arg[i] == '\n' || arg[i] == '\v') need_quote = 1; @column 48	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	arg[i]	for (i = 0; arg[i]; i++) if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"' || arg[i] == '\n' || arg[i] == '\v') need_quote = 1; @column 66	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	arg[i]	for (i = 0; arg[i]; i++) if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"' || arg[i] == '\n' || arg[i] == '\v') need_quote = 1; @column 83	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	arg[i]	while (i < n && arg[i] == '\\') { nb++; i++; } @column 19	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_arg	arg[i]	} else if (arg[i] == '"') { @column 14	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_prog	(*buf)[(*len)++]	if (need_quote) (*buf)[(*len)++] = '"'; @column 18	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_prog	arg[0]	int need_quote = arg[0] == 0; @column 19	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_prog	arg[i]	for (i = 0; arg[i]; i++) { @column 14	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_prog	arg[i]	if (arg[i] == ' ' || arg[i] == '\t') need_quote = 1; @column 24	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_prog	arg[i]	if (arg[i] == ' ' || arg[i] == '\t') need_quote = 1; @column 7	existing site; prove while completing the bounds audit
-src/process/spawn.c	append_prog	arg[i]	if (arg[i] == '"') { errno = EINVAL; return -1; } @column 7	existing site; prove while completing the bounds audit
-src/process/spawn.c	build_cmdline	argv[i]	WCHAR *w = __utf8_to_utf16(argv[i], &wl); @column 30	existing site; prove while completing the bounds audit
-src/process/spawn.c	build_cmdline	argv[i]	for (i = 0; argv[i]; i++) { @column 14	existing site; prove while completing the bounds audit
-src/process/spawn.c	build_cmdline	buf[len]	buf[len] = 0; @column 2	existing site; prove while completing the bounds audit
-src/process/spawn.c	build_env_block	blk[len++]	blk[len++] = 0; /* terminating empty string */ @column 2	existing site; prove while completing the bounds audit
-src/process/spawn.c	build_env_block	blk[len++]	blk[len++] = 0; @column 3	existing site; prove while completing the bounds audit
-src/process/spawn.c	build_env_block	envp[i]	for (i = 0; envp && envp[i]; i++) { @column 22	existing site; prove while completing the bounds audit
-src/process/spawn.c	build_env_block	envp[i]	if (!envp[i][0] || !strchr(envp[i], '=')) continue; @column 30	existing site; prove while completing the bounds audit
-src/process/spawn.c	build_env_block	envp[i]	if (!envp[i][0] || !strchr(envp[i], '=')) continue; @column 8	existing site; prove while completing the bounds audit
-src/process/spawn.c	build_env_block	envp[i]	w = __utf8_to_utf16(envp[i], &wl); @column 23	existing site; prove while completing the bounds audit
-src/process/spawn.c	build_env_block	envp[i][0]	if (!envp[i][0] || !strchr(envp[i], '=')) continue; @column 8	existing site; prove while completing the bounds audit
 src/process/spawn_file_actions.c	fa_push	fa->__actions[fa->__len++]	n = &fa->__actions[fa->__len++]; @column 7	existing site; prove while completing the bounds audit
 src/process/spawn_file_actions.c	posix_spawn_file_actions_destroy	fa->__actions[i]	for (i = 0; i < fa->__len; i++) free(fa->__actions[i].path); @column 39	existing site; prove while completing the bounds audit
 src/process/wait.c	discover_self_stops	__children[i]	struct __child *c = &__children[i]; @column 24	existing site; prove while completing the bounds audit
@@ -428,7 +463,7 @@ src/process/wait.c	do_waitpid	__children[i]	if (__children[i].pid && !__children
 src/process/wait.c	do_waitpid	__children[i]	if (__children[i].pid && !__children[i].done) { @column 8	existing site; prove while completing the bounds audit
 src/process/wait.c	do_waitpid	__children[i]	if (__children[i].pid && __children[i].done) { @column 29	existing site; prove while completing the bounds audit
 src/process/wait.c	do_waitpid	__children[i]	if (__children[i].pid && __children[i].done) { @column 8	existing site; prove while completing the bounds audit
-src/process/wait.c	do_waitpid	__children[i]	st = NtWaitForSingleObject(__children[i].h, 0, @column 31	existing site; prove while completing the bounds audit
+src/process/wait.c	do_waitpid	__children[i]	wr = __plat_process_wait(__children[i].h, wait_mode(options)); @column 29	existing site; prove while completing the bounds audit
 src/process/wait.c	job_report	__children[i]	struct __child *c = &__children[i]; @column 24	existing site; prove while completing the bounds audit
 src/regex/regex.c	apply_repeat	ps->p[0]	if (ps->p[0] != '\\' || ps->p[1] != '}') @column 10	existing site; prove while completing the bounds audit
 src/regex/regex.c	apply_repeat	ps->p[1]	if (ps->p[0] != '\\' || ps->p[1] != '}') @column 30	existing site; prove while completing the bounds audit
@@ -440,9 +475,15 @@ src/regex/regex.c	apply_repeat	ps->rx->prog[split]	if (split >= 0) { ps->rx->pro
 src/regex/regex.c	apply_repeat	ps->rx->prog[split]	if (split >= 0) { ps->rx->prog[split].x = split + 1; ps->rx->prog[split].y = ps->rx->nprog; } @column 60	existing site; prove while completing the bounds audit
 src/regex/regex.c	apply_repeat	ps->rx->prog[split]	ps->rx->prog[split].x = split + 1; @column 7	existing site; prove while completing the bounds audit
 src/regex/regex.c	apply_repeat	ps->rx->prog[split]	ps->rx->prog[split].y = ps->rx->nprog; @column 7	existing site; prove while completing the bounds audit
+src/regex/regex.c	bre_atom	ps->p[0]	if (ps->p[0] != '\\' || ps->p[1] != ')') { ps->err = REG_EPAREN; return; } @column 7	existing site; prove while completing the bounds audit
+src/regex/regex.c	bre_atom	ps->p[1]	if (c == '$' && ps->p[1] == '\0') { ps->p++; emit(ps, I_EOL, 0, 0, 0, 0); return; } @column 18	existing site; prove while completing the bounds audit
+src/regex/regex.c	bre_atom	ps->p[1]	if (c == '$' && ps->p[1] == '\\' && ps->p[2] == ')') { ps->p++; emit(ps, I_EOL, 0, 0, 0, 0); return; } /* end of a \(...\) */ @column 18	existing site; prove while completing the bounds audit
 src/regex/regex.c	bre_atom	ps->p[1]	if (c == '\\' && ps->p[1] == '(') { @column 19	existing site; prove while completing the bounds audit
 src/regex/regex.c	bre_atom	ps->p[1]	if (c == '\\' && ps->p[1] >= '1' && ps->p[1] <= '9') { @column 19	existing site; prove while completing the bounds audit
 src/regex/regex.c	bre_atom	ps->p[1]	if (c == '\\' && ps->p[1] >= '1' && ps->p[1] <= '9') { @column 38	existing site; prove while completing the bounds audit
+src/regex/regex.c	bre_atom	ps->p[1]	if (ps->p[0] != '\\' || ps->p[1] != ')') { ps->err = REG_EPAREN; return; } @column 27	existing site; prove while completing the bounds audit
+src/regex/regex.c	bre_atom	ps->p[1]	int g = ps->p[1] - '0'; @column 11	existing site; prove while completing the bounds audit
+src/regex/regex.c	bre_atom	ps->p[2]	if (c == '$' && ps->p[1] == '\\' && ps->p[2] == ')') { ps->p++; emit(ps, I_EOL, 0, 0, 0, 0); return; } /* end of a \(...\) */ @column 38	existing site; prove while completing the bounds audit
 src/regex/regex.c	bre_branch	ps->p[0]	int c0 = (unsigned char)ps->p[0]; @column 27	existing site; prove while completing the bounds audit
 src/regex/regex.c	bre_branch	ps->p[1]	int c1 = c0 ? (unsigned char)ps->p[1] : 0; /* short-circuit: never index past a NUL */ @column 32	existing site; prove while completing the bounds audit
 src/regex/regex.c	bt_push_try	ms->bt[ms->nbt++]	e = &ms->bt[ms->nbt++]; @column 7	existing site; prove while completing the bounds audit
@@ -485,6 +526,7 @@ src/search/hsearch.c	hsearch	table[i]	table[i].data = item.data; @column 4	exist
 src/search/hsearch.c	hsearch	table[i]	table[i].h = h; @column 4	existing site; prove while completing the bounds audit
 src/search/hsearch.c	hsearch	table[i]	table[i].key = item.key; @column 4	existing site; prove while completing the bounds audit
 src/search/hsearch.c	hsearch	table[i]	table[i].used = 1; @column 4	existing site; prove while completing the bounds audit
+src/select/linux/plat_select.c	__plat_wait_multiple	handles[i]	pfds[i].fd = unbox(handles[i]); @column 22	existing site; prove while completing the bounds audit
 src/select/poll.c	poll	pfds[console_idx[k]]	struct pollfd *p = &pfds[console_idx[k]]; @column 26	existing site; prove while completing the bounds audit
 src/select/poll.c	poll	pfds[i]	struct pollfd *p = &pfds[i]; @column 24	existing site; prove while completing the bounds audit
 src/select/select.c	__fd_wait_or_delay	console_handles[i]	for (i = 0; i < ncons; i++) handles[n++] = console_handles[i]; @column 45	existing site; prove while completing the bounds audit
@@ -504,48 +546,6 @@ src/sh/builtin.c	bi_set	ctx->argv[1]	} else if (ctx->argv[1][0] == '-' || ctx->a
 src/sh/builtin.c	bi_set	ctx->argv[1][0]	} else if (ctx->argv[1][0] == '-' || ctx->argv[1][0] == '+') { @column 13	existing site; prove while completing the bounds audit
 src/sh/builtin.c	bi_set	ctx->argv[1][0]	} else if (ctx->argv[1][0] == '-' || ctx->argv[1][0] == '+') { @column 39	existing site; prove while completing the bounds audit
 src/sh/builtin.c	bi_shift	ctx->argv[1]	const char *a = ctx->argv[1]; @column 19	existing site; prove while completing the bounds audit
-src/sh/builtin.c	bi_test	ctx->argv[0]	if (!strcmp(ctx->argv[0], "[")) { @column 14	existing site; prove while completing the bounds audit
-src/sh/builtin.c	bi_test	ctx->argv[ctx->argc - 1]	if (n < 1 || strcmp(ctx->argv[ctx->argc - 1], "]")) { @column 23	existing site; prove while completing the bounds audit
-src/sh/builtin.c	do_unary	arg[0]	case 'n': return arg[0] != 0 ? T_TRUE : T_FALSE; @column 19	existing site; prove while completing the bounds audit
-src/sh/builtin.c	do_unary	arg[0]	case 'z': return arg[0] == 0 ? T_TRUE : T_FALSE; @column 19	existing site; prove while completing the bounds audit
-src/sh/builtin.c	do_unary	op[1]	switch (op[1]) { @column 10	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	t->v[t->i]	if (!t->err && t->i != t->n) { terr(t, "unexpected argument", t->v[t->i]); return T_ERR; } @column 65	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[0]	if (!strcmp(v[0], "!")) return v[1][0] == 0 ? T_TRUE : T_FALSE; @column 15	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[0]	if (!strcmp(v[0], "!")) { @column 15	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[0]	if (!strcmp(v[0], "(") && !strcmp(v[2], ")")) return v[1][0] != 0 ? T_TRUE : T_FALSE; @column 15	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[0]	if (!strcmp(v[0], "(") && !strcmp(v[3], ")")) { @column 15	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[0]	if (is_binop(v[1])) return do_binary(t, v[0], v[1], v[2]); @column 43	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[0]	if (is_unop(v[0])) return do_unary(t, v[0], v[1]); @column 15	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[0]	if (is_unop(v[0])) return do_unary(t, v[0], v[1]); @column 41	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[0]	return v[0][0] != 0 ? T_TRUE : T_FALSE; @column 10	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[0]	terr(t, "unary operator expected", v[0]); @column 38	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[0][0]	return v[0][0] != 0 ? T_TRUE : T_FALSE; @column 10	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[1]	if (!strcmp(v[0], "!")) return v[1][0] == 0 ? T_TRUE : T_FALSE; @column 34	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[1]	if (!strcmp(v[0], "(") && !strcmp(v[2], ")")) return v[1][0] != 0 ? T_TRUE : T_FALSE; @column 56	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[1]	if (is_binop(v[1])) return do_binary(t, v[0], v[1], v[2]); @column 16	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[1]	if (is_binop(v[1])) return do_binary(t, v[0], v[1], v[2]); @column 49	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[1]	if (is_unop(v[0])) return do_unary(t, v[0], v[1]); @column 47	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[1]	terr(t, "binary operator expected", v[1]); @column 39	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[1][0]	if (!strcmp(v[0], "!")) return v[1][0] == 0 ? T_TRUE : T_FALSE; @column 34	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[1][0]	if (!strcmp(v[0], "(") && !strcmp(v[2], ")")) return v[1][0] != 0 ? T_TRUE : T_FALSE; @column 56	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[2]	if (!strcmp(v[0], "(") && !strcmp(v[2], ")")) return v[1][0] != 0 ? T_TRUE : T_FALSE; @column 37	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[2]	if (is_binop(v[1])) return do_binary(t, v[0], v[1], v[2]); @column 55	existing site; prove while completing the bounds audit
-src/sh/builtin.c	eval_argc	v[3]	if (!strcmp(v[0], "(") && !strcmp(v[3], ")")) { @column 37	existing site; prove while completing the bounds audit
-src/sh/builtin.c	is_unop	s[0]	if (s[0] != '-' || s[1] == 0 || s[2] != 0) return 0; @column 6	existing site; prove while completing the bounds audit
-src/sh/builtin.c	is_unop	s[1]	if (s[0] != '-' || s[1] == 0 || s[2] != 0) return 0; @column 21	existing site; prove while completing the bounds audit
-src/sh/builtin.c	is_unop	s[1]	return strchr("bcdefghLnprSstuwxz", s[1]) != 0; @column 38	existing site; prove while completing the bounds audit
-src/sh/builtin.c	is_unop	s[2]	if (s[0] != '-' || s[1] == 0 || s[2] != 0) return 0; @column 34	existing site; prove while completing the bounds audit
-src/sh/builtin.c	t_aexpr	t->v[t->i]	while (!t->err && t->i < t->n && !strcmp(t->v[t->i], "-a")) { @column 43	existing site; prove while completing the bounds audit
-src/sh/builtin.c	t_nexpr	t->v[t->i]	if (t->i < t->n && !strcmp(t->v[t->i], "!")) { @column 29	existing site; prove while completing the bounds audit
-src/sh/builtin.c	t_oexpr	t->v[t->i]	while (!t->err && t->i < t->n && !strcmp(t->v[t->i], "-o")) { @column 43	existing site; prove while completing the bounds audit
-src/sh/builtin.c	t_primary	t->v[t->i + 1]	if (t->i + 2 < t->n && is_binop(t->v[t->i + 1])) { @column 34	existing site; prove while completing the bounds audit
-src/sh/builtin.c	t_primary	t->v[t->i + 1]	int r = do_binary(t, t->v[t->i], t->v[t->i + 1], t->v[t->i + 2]); @column 36	existing site; prove while completing the bounds audit
-src/sh/builtin.c	t_primary	t->v[t->i + 1]	int r = do_unary(t, tok, t->v[t->i + 1]); @column 28	existing site; prove while completing the bounds audit
-src/sh/builtin.c	t_primary	t->v[t->i + 2]	int r = do_binary(t, t->v[t->i], t->v[t->i + 1], t->v[t->i + 2]); @column 52	existing site; prove while completing the bounds audit
-src/sh/builtin.c	t_primary	t->v[t->i]	if (t->i >= t->n || strcmp(t->v[t->i], ")")) { terr(t, "')' expected", 0); return T_ERR; } @column 30	existing site; prove while completing the bounds audit
-src/sh/builtin.c	t_primary	t->v[t->i]	int r = do_binary(t, t->v[t->i], t->v[t->i + 1], t->v[t->i + 2]); @column 24	existing site; prove while completing the bounds audit
-src/sh/builtin.c	t_primary	t->v[t->i]	tok = t->v[t->i]; @column 8	existing site; prove while completing the bounds audit
-src/sh/builtin.c	t_primary	tok[0]	return tok[0] != 0 ? T_TRUE : T_FALSE; @column 9	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_cmdsub	buf[len - 1]	while (len && buf[len - 1] == '\n') len--; @column 16	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_cmdsub	buf[len]	buf[len] = 0; @column 2	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	deferred[i]	deferred[i] = 1; @column 4	existing site; prove while completing the bounds audit
@@ -553,15 +553,15 @@ src/sh/execute.c	__sh_exec_pipeline	deferred[i]	if (!deferred[i]) continue; @col
 src/sh/execute.c	__sh_exec_pipeline	pids[i]	if (pids[i] < 0) continue; @column 7	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	pids[i]	pids[i] = -1; @column 3	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	pids[i]	pids[i] = sr.kind ? -1 : sr.normal; @column 3	existing site; prove while completing the bounds audit
-src/sh/execute.c	__sh_exec_pipeline	pipes[i - 1]	if (i > 0) close(pipes[i - 1][0]); @column 20	existing site; prove while completing the bounds audit
-src/sh/execute.c	__sh_exec_pipeline	pipes[i - 1][0]	if (i > 0) close(pipes[i - 1][0]); @column 20	existing site; prove while completing the bounds audit
-src/sh/execute.c	__sh_exec_pipeline	pipes[i]	if (i + 1 < n) close(pipes[i][1]); @column 24	existing site; prove while completing the bounds audit
+src/sh/execute.c	__sh_exec_pipeline	pipes[i - 1]	if (i > 0) (void)close(pipes[i - 1][0]); @column 26	existing site; prove while completing the bounds audit
+src/sh/execute.c	__sh_exec_pipeline	pipes[i - 1][0]	if (i > 0) (void)close(pipes[i - 1][0]); @column 26	existing site; prove while completing the bounds audit
+src/sh/execute.c	__sh_exec_pipeline	pipes[i]	if (i + 1 < n) (void)close(pipes[i][1]); @column 30	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	pipes[i]	if (pipe2(pipes[i], O_CLOEXEC) < 0) { @column 13	existing site; prove while completing the bounds audit
-src/sh/execute.c	__sh_exec_pipeline	pipes[i][1]	if (i + 1 < n) close(pipes[i][1]); @column 24	existing site; prove while completing the bounds audit
-src/sh/execute.c	__sh_exec_pipeline	pipes[j]	for (j = 0; j < i; j++) { close(pipes[j][0]); close(pipes[j][1]); } @column 36	existing site; prove while completing the bounds audit
-src/sh/execute.c	__sh_exec_pipeline	pipes[j]	for (j = 0; j < i; j++) { close(pipes[j][0]); close(pipes[j][1]); } @column 56	existing site; prove while completing the bounds audit
-src/sh/execute.c	__sh_exec_pipeline	pipes[j][0]	for (j = 0; j < i; j++) { close(pipes[j][0]); close(pipes[j][1]); } @column 36	existing site; prove while completing the bounds audit
-src/sh/execute.c	__sh_exec_pipeline	pipes[j][1]	for (j = 0; j < i; j++) { close(pipes[j][0]); close(pipes[j][1]); } @column 56	existing site; prove while completing the bounds audit
+src/sh/execute.c	__sh_exec_pipeline	pipes[i][1]	if (i + 1 < n) (void)close(pipes[i][1]); @column 30	existing site; prove while completing the bounds audit
+src/sh/execute.c	__sh_exec_pipeline	pipes[j]	for (j = 0; j < i; j++) { (void)close(pipes[j][0]); (void)close(pipes[j][1]); } @column 42	existing site; prove while completing the bounds audit
+src/sh/execute.c	__sh_exec_pipeline	pipes[j]	for (j = 0; j < i; j++) { (void)close(pipes[j][0]); (void)close(pipes[j][1]); } @column 68	existing site; prove while completing the bounds audit
+src/sh/execute.c	__sh_exec_pipeline	pipes[j][0]	for (j = 0; j < i; j++) { (void)close(pipes[j][0]); (void)close(pipes[j][1]); } @column 42	existing site; prove while completing the bounds audit
+src/sh/execute.c	__sh_exec_pipeline	pipes[j][1]	for (j = 0; j < i; j++) { (void)close(pipes[j][0]); (void)close(pipes[j][1]); } @column 68	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	pl->commands[0]	rc = __sh_exec_command(&pl->commands[0], status); @column 27	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	pl->commands[i + 1]	if (pl->commands[i].kind != SH_CMD_SIMPLE && pl->commands[i + 1].kind != SH_CMD_SIMPLE) @column 48	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	pl->commands[i]	if (pl->commands[i].kind != SH_CMD_SIMPLE && pl->commands[i + 1].kind != SH_CMD_SIMPLE) @column 7	existing site; prove while completing the bounds audit
@@ -617,10 +617,10 @@ src/sh/execute.c	expand_redir_word	we.we_wordv[0]	r = xstrdup(we.we_wordc ? we.w
 src/sh/execute.c	free_env_snapshot	es->names[i]	for (i = 0; i < es->n; i++) { __free(es->names[i]); __free(es->vals[i]); } @column 39	existing site; prove while completing the bounds audit
 src/sh/execute.c	free_env_snapshot	es->vals[i]	for (i = 0; i < es->n; i++) { __free(es->names[i]); __free(es->vals[i]); } @column 61	existing site; prove while completing the bounds audit
 src/sh/execute.c	free_strv	v[i]	for (i = 0; i < n; i++) __free(v[i]); @column 33	existing site; prove while completing the bounds audit
-src/sh/execute.c	restore_fds	rs->saves[i]	close(rs->saves[i].dup); @column 10	existing site; prove while completing the bounds audit
-src/sh/execute.c	restore_fds	rs->saves[i]	close(rs->saves[i].fd); @column 10	existing site; prove while completing the bounds audit
-src/sh/execute.c	restore_fds	rs->saves[i]	dup2(rs->saves[i].dup, rs->saves[i].fd); @column 27	existing site; prove while completing the bounds audit
-src/sh/execute.c	restore_fds	rs->saves[i]	dup2(rs->saves[i].dup, rs->saves[i].fd); @column 9	existing site; prove while completing the bounds audit
+src/sh/execute.c	restore_fds	rs->saves[i]	(void)close(rs->saves[i].dup); @column 16	existing site; prove while completing the bounds audit
+src/sh/execute.c	restore_fds	rs->saves[i]	(void)close(rs->saves[i].fd); @column 16	existing site; prove while completing the bounds audit
+src/sh/execute.c	restore_fds	rs->saves[i]	(void)dup2(rs->saves[i].dup, rs->saves[i].fd); @column 15	existing site; prove while completing the bounds audit
+src/sh/execute.c	restore_fds	rs->saves[i]	(void)dup2(rs->saves[i].dup, rs->saves[i].fd); @column 33	existing site; prove while completing the bounds audit
 src/sh/execute.c	restore_fds	rs->saves[i]	if (rs->saves[i].have) { @column 7	existing site; prove while completing the bounds audit
 src/sh/execute.c	run_interpreted	av[0]	av[0] = n ? we->we_wordv[0] : (char *)"sh"; @column 2	existing site; prove while completing the bounds audit
 src/sh/execute.c	run_interpreted	av[1]	av[1] = (char *)resolved; @column 2	existing site; prove while completing the bounds audit
@@ -640,10 +640,10 @@ src/sh/execute.c	split_assignment	(*name)[nlen]	(*name)[nlen] = 0; @column 2	exi
 src/sh/execute.c	split_assignment	eq[1]	*val = xstrdup(eq[1] ? eq + 1 : ""); @column 18	existing site; prove while completing the bounds audit
 src/sh/execute.c	split_assignment	eq[1]	if (eq[1] && __wordexp_sh(eq + 1, &we, 0) == 0) { @column 6	existing site; prove while completing the bounds audit
 src/sh/execute.c	split_assignment	we.we_wordv[0]	*val = xstrdup(we.we_wordc ? we.we_wordv[0] : ""); @column 32	existing site; prove while completing the bounds audit
-src/sh/execute.c	wire_stage_stdio	pipes[i - 1]	dup2(pipes[i - 1][0], 0); @column 8	existing site; prove while completing the bounds audit
-src/sh/execute.c	wire_stage_stdio	pipes[i - 1][0]	dup2(pipes[i - 1][0], 0); @column 8	existing site; prove while completing the bounds audit
-src/sh/execute.c	wire_stage_stdio	pipes[i]	dup2(pipes[i][1], 1); @column 8	existing site; prove while completing the bounds audit
-src/sh/execute.c	wire_stage_stdio	pipes[i][1]	dup2(pipes[i][1], 1); @column 8	existing site; prove while completing the bounds audit
+src/sh/execute.c	wire_stage_stdio	pipes[i - 1]	if (dup2(pipes[i - 1][0], 0) < 0) return -1; @column 12	existing site; prove while completing the bounds audit
+src/sh/execute.c	wire_stage_stdio	pipes[i - 1][0]	if (dup2(pipes[i - 1][0], 0) < 0) return -1; @column 12	existing site; prove while completing the bounds audit
+src/sh/execute.c	wire_stage_stdio	pipes[i]	if (dup2(pipes[i][1], 1) < 0) return -1; @column 12	existing site; prove while completing the bounds audit
+src/sh/execute.c	wire_stage_stdio	pipes[i][1]	if (dup2(pipes[i][1], 1) < 0) return -1; @column 12	existing site; prove while completing the bounds audit
 src/sh/free.c	free_pipeline_contents	pl->commands[i]	for (i = 0; i < pl->ncommands; i++) __sh_free_command_contents(&pl->commands[i]); @column 66	existing site; prove while completing the bounds audit
 src/sh/param.c	__sh_param_get	pv[n - 1]	return pv[n - 1]; @column 9	existing site; prove while completing the bounds audit
 src/sh/param.c	__sh_params_replace	argv[i]	nv[i] = dup_str(argv[i]); @column 20	existing site; prove while completing the bounds audit
@@ -673,6 +673,7 @@ src/sh/parse.c	next_raw_token	lx->p[1]	OP3('<', '<', '-', T_DLESSDASH) @column 3
 src/sh/parse.c	next_raw_token	lx->p[1]	if (c == '\\' && lx->p[1] == '\n') { lx->p += 2; continue; } @column 20	existing site; prove while completing the bounds audit
 src/sh/parse.c	next_raw_token	lx->p[2]	OP3('<', '<', '-', T_DLESSDASH) @column 3	existing site; prove while completing the bounds audit
 src/sh/parse.c	next_raw_token	w[i]	for (i = 0; i < len; i++) if (!isdigit((unsigned char)w[i])) { alldig = 0; break; } @column 58	existing site; prove while completing the bounds audit
+src/sh/parse.c	next_raw_token	w[i]	int d = w[i] - '0'; @column 14	existing site; prove while completing the bounds audit
 src/sh/parse.c	parse_funcdef	end[-1]	while (end > start && isspace((unsigned char)end[-1])) end--; @column 47	existing site; prove while completing the bounds audit
 src/sh/parse.c	parse_pipeline	arr[i]	for (i = 0; i < n; i++) __sh_free_command_contents(&arr[i]); @column 55	existing site; prove while completing the bounds audit
 src/sh/parse.c	parse_pipeline	arr[n++]	arr[n++] = *cmd; @column 3	existing site; prove while completing the bounds audit
@@ -717,6 +718,7 @@ src/sh/script.c	bad_expansion	what[n++]	if (bad[1]) what[n++] = bad[1]; @column 
 src/sh/script.c	bad_expansion	what[n++]	what[n++] = '$'; @column 5	existing site; prove while completing the bounds audit
 src/sh/script.c	bad_expansion	what[n]	what[n] = 0; @column 5	existing site; prove while completing the bounds audit
 src/sh/script.c	check_list	a->pipeline.commands[i]	if (check_command(&a->pipeline.commands[i])) return -1; @column 24	existing site; prove while completing the bounds audit
+src/sh/script.c	slurp	buf[len]	buf[len] = 0; @column 2	existing site; prove while completing the bounds audit
 src/signal/signal.c	exception_handler	ep->ExceptionRecord->ExceptionInformation[1]	? (void *)ep->ExceptionRecord->ExceptionInformation[1] : NULL; @column 23	existing site; prove while completing the bounds audit
 src/signal/signal.c	exception_handler	ep->ExceptionRecord->ExceptionInformation[1]	code = segv_code((void *)ep->ExceptionRecord->ExceptionInformation[1]); @column 28	existing site; prove while completing the bounds audit
 src/signal/signal.c	queue_pending_to	state->info[state->count++]	state->info[state->count++] = *si; @column 2	existing site; prove while completing the bounds audit
@@ -742,31 +744,35 @@ src/socket/inet.c	pton4	p[1]	if (p[0] == '0' && p[1] >= '0' && p[1] <= '9') retu
 src/socket/inet.c	pton4	p[1]	if (p[0] == '0' && p[1] >= '0' && p[1] <= '9') return 0; @column 37	existing site; prove while completing the bounds audit
 src/socket/socketpair.c	socketpair	pair[0]	pair[0] = client; @column 2	existing site; prove while completing the bounds audit
 src/socket/socketpair.c	socketpair	pair[1]	pair[1] = server; @column 2	existing site; prove while completing the bounds audit
-src/stat/stat.c	fnv1a64	p[i]	for (i = 0; i < n; i++) { h ^= p[i]; h *= 0x100000001b3ULL; } @column 33	existing site; prove while completing the bounds audit
+src/stat/lxmod.c	putle32	p[0]	p[0] = (unsigned char)v; @column 2	existing site; prove while completing the bounds audit
+src/stat/lxmod.c	putle32	p[1]	p[1] = (unsigned char)(v >> 8); @column 2	existing site; prove while completing the bounds audit
+src/stat/lxmod.c	putle32	p[2]	p[2] = (unsigned char)(v >> 16); @column 2	existing site; prove while completing the bounds audit
+src/stat/lxmod.c	putle32	p[3]	p[3] = (unsigned char)(v >> 24); @column 2	existing site; prove while completing the bounds audit
+src/stat/nt/plat_stat.c	__plat_set_times	ts[0]	else if (ts[0].tv_nsec != UTIME_OMIT) bi.LastAccessTime = converted[0]; @column 12	existing site; prove while completing the bounds audit
+src/stat/nt/plat_stat.c	__plat_set_times	ts[0]	if (ts[0].tv_nsec == UTIME_NOW) bi.LastAccessTime = now; @column 7	existing site; prove while completing the bounds audit
+src/stat/nt/plat_stat.c	__plat_set_times	ts[1]	else if (ts[1].tv_nsec != UTIME_OMIT) bi.LastWriteTime = converted[1]; @column 12	existing site; prove while completing the bounds audit
+src/stat/nt/plat_stat.c	__plat_set_times	ts[1]	if (ts[1].tv_nsec == UTIME_NOW) bi.LastWriteTime = now; @column 7	existing site; prove while completing the bounds audit
+src/stat/nt/plat_stat.c	__plat_set_times	ts[i]	if (!__unix_to_nt(ts[i].tv_sec, ts[i].tv_nsec, @column 22	existing site; prove while completing the bounds audit
+src/stat/nt/plat_stat.c	__plat_set_times	ts[i]	if (!__unix_to_nt(ts[i].tv_sec, ts[i].tv_nsec, @column 36	existing site; prove while completing the bounds audit
+src/stat/nt/plat_stat.c	__plat_set_times	ts[i]	if (ts[i].tv_nsec < 0 || ts[i].tv_nsec >= 1000000000L) { @column 29	existing site; prove while completing the bounds audit
+src/stat/nt/plat_stat.c	__plat_set_times	ts[i]	if (ts[i].tv_nsec < 0 || ts[i].tv_nsec >= 1000000000L) { @column 8	existing site; prove while completing the bounds audit
+src/stat/nt/plat_stat.c	__plat_set_times	ts[i]	if (ts[i].tv_nsec == UTIME_NOW || ts[i].tv_nsec == UTIME_OMIT) @column 38	existing site; prove while completing the bounds audit
+src/stat/nt/plat_stat.c	__plat_set_times	ts[i]	if (ts[i].tv_nsec == UTIME_NOW || ts[i].tv_nsec == UTIME_OMIT) @column 8	existing site; prove while completing the bounds audit
+src/stat/nt/plat_stat.c	fnv1a64	p[i]	for (i = 0; i < n; i++) { h ^= p[i]; h *= 0x100000001b3ULL; } @column 33	existing site; prove while completing the bounds audit
 src/stat/utimensat.c	futimesat	tv[0]	if (tv[0].tv_usec < 0 || tv[0].tv_usec >= 1000000 || @column 27	existing site; prove while completing the bounds audit
 src/stat/utimensat.c	futimesat	tv[0]	if (tv[0].tv_usec < 0 || tv[0].tv_usec >= 1000000 || @column 6	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	futimesat	tv[0]	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = tv[0].tv_usec * 1000; @column 17	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	futimesat	tv[0]	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = tv[0].tv_usec * 1000; @column 47	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	futimesat	tv[1]	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = tv[1].tv_usec * 1000; @column 17	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	futimesat	tv[1]	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = tv[1].tv_usec * 1000; @column 47	existing site; prove while completing the bounds audit
+src/stat/utimensat.c	futimesat	tv[0]	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = (long)(tv[0].tv_usec * 1000); @column 17	existing site; prove while completing the bounds audit
+src/stat/utimensat.c	futimesat	tv[0]	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = (long)(tv[0].tv_usec * 1000); @column 54	existing site; prove while completing the bounds audit
+src/stat/utimensat.c	futimesat	tv[1]	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = (long)(tv[1].tv_usec * 1000); @column 17	existing site; prove while completing the bounds audit
+src/stat/utimensat.c	futimesat	tv[1]	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = (long)(tv[1].tv_usec * 1000); @column 54	existing site; prove while completing the bounds audit
 src/stat/utimensat.c	futimesat	tv[1]	tv[1].tv_usec < 0 || tv[1].tv_usec >= 1000000) { @column 27	existing site; prove while completing the bounds audit
 src/stat/utimensat.c	futimesat	tv[1]	tv[1].tv_usec < 0 || tv[1].tv_usec >= 1000000) { @column 6	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	set_times_handle	ts[0]	else if (ts[0].tv_nsec != UTIME_OMIT) bi.LastAccessTime = converted[0]; @column 12	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	set_times_handle	ts[0]	if (ts[0].tv_nsec == UTIME_NOW) bi.LastAccessTime = now; @column 7	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	set_times_handle	ts[1]	else if (ts[1].tv_nsec != UTIME_OMIT) bi.LastWriteTime = converted[1]; @column 12	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	set_times_handle	ts[1]	if (ts[1].tv_nsec == UTIME_NOW) bi.LastWriteTime = now; @column 7	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	set_times_handle	ts[i]	if (!__unix_to_nt(ts[i].tv_sec, ts[i].tv_nsec, @column 22	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	set_times_handle	ts[i]	if (!__unix_to_nt(ts[i].tv_sec, ts[i].tv_nsec, @column 36	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	set_times_handle	ts[i]	if (ts[i].tv_nsec < 0 || ts[i].tv_nsec >= 1000000000L) { @column 29	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	set_times_handle	ts[i]	if (ts[i].tv_nsec < 0 || ts[i].tv_nsec >= 1000000000L) { @column 8	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	set_times_handle	ts[i]	if (ts[i].tv_nsec == UTIME_NOW || ts[i].tv_nsec == UTIME_OMIT) @column 38	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	set_times_handle	ts[i]	if (ts[i].tv_nsec == UTIME_NOW || ts[i].tv_nsec == UTIME_OMIT) @column 8	existing site; prove while completing the bounds audit
 src/stat/utimensat.c	utimes	tv[0]	if (tv[0].tv_usec < 0 || tv[0].tv_usec >= 1000000 || @column 27	existing site; prove while completing the bounds audit
 src/stat/utimensat.c	utimes	tv[0]	if (tv[0].tv_usec < 0 || tv[0].tv_usec >= 1000000 || @column 6	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	utimes	tv[0]	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = tv[0].tv_usec * 1000; @column 17	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	utimes	tv[0]	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = tv[0].tv_usec * 1000; @column 47	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	utimes	tv[1]	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = tv[1].tv_usec * 1000; @column 17	existing site; prove while completing the bounds audit
-src/stat/utimensat.c	utimes	tv[1]	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = tv[1].tv_usec * 1000; @column 47	existing site; prove while completing the bounds audit
+src/stat/utimensat.c	utimes	tv[0]	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = (long)(tv[0].tv_usec * 1000); @column 17	existing site; prove while completing the bounds audit
+src/stat/utimensat.c	utimes	tv[0]	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = (long)(tv[0].tv_usec * 1000); @column 54	existing site; prove while completing the bounds audit
+src/stat/utimensat.c	utimes	tv[1]	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = (long)(tv[1].tv_usec * 1000); @column 17	existing site; prove while completing the bounds audit
+src/stat/utimensat.c	utimes	tv[1]	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = (long)(tv[1].tv_usec * 1000); @column 54	existing site; prove while completing the bounds audit
 src/stat/utimensat.c	utimes	tv[1]	tv[1].tv_usec < 0 || tv[1].tv_usec >= 1000000) { @column 27	existing site; prove while completing the bounds audit
 src/stat/utimensat.c	utimes	tv[1]	tv[1].tv_usec < 0 || tv[1].tv_usec >= 1000000) { @column 6	existing site; prove while completing the bounds audit
 src/stdio/file.c	__fmodeflags	mode[0]	switch (mode[0]) { @column 10	existing site; prove while completing the bounds audit
@@ -780,14 +786,14 @@ src/stdio/misc.c	final_dot_component	start[-1]	while (start > path && start[-1] 
 src/stdio/misc.c	final_dot_component	start[0]	(end - start == 2 && start[0] == '.' && start[1] == '.'); @column 30	existing site; prove while completing the bounds audit
 src/stdio/misc.c	final_dot_component	start[0]	return (end - start == 1 && start[0] == '.') || @column 30	existing site; prove while completing the bounds audit
 src/stdio/misc.c	final_dot_component	start[1]	(end - start == 2 && start[0] == '.' && start[1] == '.'); @column 49	existing site; prove while completing the bounds audit
-src/stdio/misc.c	ntpath_is_ancestor	new->nt.Buffer[i]	WCHAR a = old->nt.Buffer[i], b = new->nt.Buffer[i]; @column 36	existing site; prove while completing the bounds audit
-src/stdio/misc.c	ntpath_is_ancestor	new->nt.Buffer[on]	return new->nt.Buffer[on] == '\\' || new->nt.Buffer[on] == '/'; @column 39	existing site; prove while completing the bounds audit
-src/stdio/misc.c	ntpath_is_ancestor	new->nt.Buffer[on]	return new->nt.Buffer[on] == '\\' || new->nt.Buffer[on] == '/'; @column 9	existing site; prove while completing the bounds audit
-src/stdio/misc.c	ntpath_is_ancestor	old->nt.Buffer[i]	WCHAR a = old->nt.Buffer[i], b = new->nt.Buffer[i]; @column 13	existing site; prove while completing the bounds audit
 src/stdio/misc.c	popen	mode[0]	if (mode[0] != 'r' && mode[0] != 'w') { errno = EINVAL; return 0; } @column 24	existing site; prove while completing the bounds audit
 src/stdio/misc.c	popen	mode[0]	if (mode[0] != 'r' && mode[0] != 'w') { errno = EINVAL; return 0; } @column 6	existing site; prove while completing the bounds audit
 src/stdio/misc.c	popen	mode[0]	int rw = mode[0] == 'w'; @column 11	existing site; prove while completing the bounds audit
 src/stdio/misc.c	tempnam	tmpl[n]	tmpl[n] = '/'; @column 2	existing site; prove while completing the bounds audit
+src/stdio/nt/plat_stdio.c	ntpath_is_ancestor	new->nt.Buffer[i]	WCHAR a = old->nt.Buffer[i], b = new->nt.Buffer[i]; @column 36	existing site; prove while completing the bounds audit
+src/stdio/nt/plat_stdio.c	ntpath_is_ancestor	new->nt.Buffer[on]	return new->nt.Buffer[on] == '\\' || new->nt.Buffer[on] == '/'; @column 39	existing site; prove while completing the bounds audit
+src/stdio/nt/plat_stdio.c	ntpath_is_ancestor	new->nt.Buffer[on]	return new->nt.Buffer[on] == '\\' || new->nt.Buffer[on] == '/'; @column 9	existing site; prove while completing the bounds audit
+src/stdio/nt/plat_stdio.c	ntpath_is_ancestor	old->nt.Buffer[i]	WCHAR a = old->nt.Buffer[i], b = new->nt.Buffer[i]; @column 13	existing site; prove while completing the bounds audit
 src/stdio/printf.c	build_argtab	types[sp.argpos]	types[sp.argpos] = (unsigned char)sp.type; @column 4	existing site; prove while completing the bounds audit
 src/stdio/printf.c	dec_exact	bn[bl - 1]	uint32_t hi = bn[bl - 1]; @column 17	existing site; prove while completing the bounds audit
 src/stdio/printf.c	dec_exact	bn[i]	uint32_t w = bn[i]; @column 16	existing site; prove while completing the bounds audit
@@ -824,10 +830,12 @@ src/stdio/rw.c	ungetc	f->unget[f->nunget++]	f->unget[f->nunget++] = (unsigned ch
 src/stdio/scanf.c	sc_done	sc->pb[i]	for (i = 0; i < sc->npb; i++) bytes += sc->pb[i].nb; @column 42	existing site; prove while completing the bounds audit
 src/stdio/scanf.c	store_term	((char *)dst)[nn]	else ((char *)dst)[nn] = 0; @column 7	existing site; prove while completing the bounds audit
 src/stdio/scanf.c	store_unit	((char *)dst)[*nn]	if (assign) ((char *)dst)[*nn] = (char)c; @column 15	existing site; prove while completing the bounds audit
+src/stdio/scanf.c	store_unit	((wchar_t *)dst)[*nn]	if (assign) ((wchar_t *)dst)[*nn] = (wchar_t)c; @column 15	existing site; prove while completing the bounds audit
 src/stdio/scanf.c	unrd	sc->pb[sc->npb]	sc->pb[sc->npb].nb = (unsigned char)sc->lastnb; @column 2	existing site; prove while completing the bounds audit
 src/stdio/scanf.c	unrd	sc->pb[sc->npb]	sc->pb[sc->npb].wc = (wchar_t)c; @column 2	existing site; prove while completing the bounds audit
 src/stdio/scanf.c	vfscanf_st	nb.p[nb.len]	nb.p[nb.len] = 0; @column 5	existing site; prove while completing the bounds audit
 src/stdio/scanf.c	vfscanf_st	set[gf(fp, st)]	if (gf(fp, st) < 256) set[gf(fp, st)] = 1; @column 30	existing site; prove while completing the bounds audit
+src/stdio/scanf.c	vfscanf_st	set[k]	if (a < 256 && b < 256) for (k = a; k <= b; k++) set[k] = 1; @column 57	existing site; prove while completing the bounds audit
 src/stdio/scanf.c	wide_put	ws[*nn]	if (assign) ws[*nn] = wc; @column 14	existing site; prove while completing the bounds audit
 src/stdio/scanf.c	wide_put	ws[*nn]	if (assign) ws[*nn] = wc; @column 15	existing site; prove while completing the bounds audit
 src/stdlib/a64l.c	a64l	s[i]	d = strchr(digits, s[i]); @column 22	existing site; prove while completing the bounds audit
@@ -875,6 +883,12 @@ src/stdlib/strtod.c	bn_sub	a->d[a->n - 1]	while (a->n && !a->d[a->n - 1]) a->n--
 src/stdlib/strtol.c	parse	s[0]	else if (s[0] == '0') base = 8; @column 12	existing site; prove while completing the bounds audit
 src/stdlib/strtol.c	parse	s[0]	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && isxdigit((unsigned char)s[2])) s += 2; @column 7	existing site; prove while completing the bounds audit
 src/stdlib/strtol.c	parse	s[0]	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && isxdigit((unsigned char)s[2])) { base = 16; s += 2; } @column 7	existing site; prove while completing the bounds audit
+src/stdlib/strtol.c	parse	s[1]	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && isxdigit((unsigned char)s[2])) s += 2; @column 23	existing site; prove while completing the bounds audit
+src/stdlib/strtol.c	parse	s[1]	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && isxdigit((unsigned char)s[2])) s += 2; @column 38	existing site; prove while completing the bounds audit
+src/stdlib/strtol.c	parse	s[1]	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && isxdigit((unsigned char)s[2])) { base = 16; s += 2; } @column 23	existing site; prove while completing the bounds audit
+src/stdlib/strtol.c	parse	s[1]	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && isxdigit((unsigned char)s[2])) { base = 16; s += 2; } @column 38	existing site; prove while completing the bounds audit
+src/stdlib/strtol.c	parse	s[2]	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && isxdigit((unsigned char)s[2])) s += 2; @column 78	existing site; prove while completing the bounds audit
+src/stdlib/strtol.c	parse	s[2]	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && isxdigit((unsigned char)s[2])) { base = 16; s += 2; } @column 78	existing site; prove while completing the bounds audit
 src/stdlib/wcstol.c	wparse	s[0]	else if (s[0] == L'0') base = 8; @column 12	existing site; prove while completing the bounds audit
 src/stdlib/wcstol.c	wparse	s[0]	if (s[0] == L'0' && (s[1] == L'x' || s[1] == L'X') @column 7	existing site; prove while completing the bounds audit
 src/stdlib/wcstol.c	wparse	s[1]	if (s[0] == L'0' && (s[1] == L'x' || s[1] == L'X') @column 24	existing site; prove while completing the bounds audit
@@ -926,8 +940,17 @@ src/thread/aio.c	lio_listio	list[i]	if (list[i] && (list[i]->aio_lio_opcode == L
 src/thread/aio.c	lio_listio	list[i]	list[i]->aio_lio_opcode == LIO_WRITE)) candidates++; @column 19	existing site; prove while completing the bounds audit
 src/thread/aio.c	lio_listio	list[i]	struct aiocb *cb = list[i]; @column 22	existing site; prove while completing the bounds audit
 src/thread/aio.c	wake_waiters_locked	waiter->list[i]	if (waiter->list[i] != request->cb) continue; @column 8	existing site; prove while completing the bounds audit
+src/thread/linux/plat_thread.c	__plat_cancel_unsafe_abort	region[len]	while (region[len]) len++; @column 9	existing site; prove while completing the bounds audit
+src/thread/linux/plat_thread.c	__plat_wait_any	handles[i]	struct ntlibc_linux_sync *obj = (struct ntlibc_linux_sync *)handles[i]; @column 64	existing site; prove while completing the bounds audit
+src/thread/mqueue.c	mq_open	__fds[fd]	__fds[fd].flags = (unsigned)access | (oflag & O_NONBLOCK) | O_CLOEXEC; @column 2	existing site; prove while completing the bounds audit
+src/thread/mqueue.c	mq_open	__fds[fd]	d->file = __fds[fd].h; @column 12	existing site; prove while completing the bounds audit
+src/thread/mqueue.c	mq_open	__fds[fd]	if (ftruncate(fd, (off_t)file_size) < 0 || raw_write(__fds[fd].h, &h, sizeof h, 0) < 0) @column 56	existing site; prove while completing the bounds audit
+src/thread/mqueue.c	mq_open	__fds[fd]	if (raw_read(__fds[fd].h, &h, sizeof h, 0) < 0) goto fail_qlocked; @column 15	existing site; prove while completing the bounds audit
+src/thread/mqueue.c	mq_open	__fds[fd]	int io_failed = raw_read(__fds[fd].h, &h, sizeof h, 0) < 0; @column 28	existing site; prove while completing the bounds audit
+src/thread/mqueue.c	mq_open	mqds[fd]	d = &mqds[fd]; @column 7	existing site; prove while completing the bounds audit
 src/thread/mqueue.c	mq_path	component[i]	for (i = 0; i < n; i++) if (!name_char((unsigned char)component[i])) { @column 56	existing site; prove while completing the bounds audit
-src/thread/mqueue.c	object_attributes	ascii[i]	for (i = 0; i < n; i++) wide[i] = (unsigned char)ascii[i]; @column 51	existing site; prove while completing the bounds audit
+src/thread/nt/plat_thread.c	__plat_cancel_unsafe_abort	region[length]	while (region[length]) length++; @column 9	existing site; prove while completing the bounds audit
+src/thread/nt/plat_thread.c	build_object_attributes	ascii[i]	for (i = 0; i < n; i++) wide[i] = (unsigned char)ascii[i]; @column 51	existing site; prove while completing the bounds audit
 src/thread/pthread_atfork.c	__pthread_atfork_child	handlers[i]	if (handlers[i].child) handlers[i].child(); @column 26	existing site; prove while completing the bounds audit
 src/thread/pthread_atfork.c	__pthread_atfork_child	handlers[i]	if (handlers[i].child) handlers[i].child(); @column 7	existing site; prove while completing the bounds audit
 src/thread/pthread_atfork.c	__pthread_atfork_parent	handlers[i]	if (handlers[i].parent) handlers[i].parent(); @column 27	existing site; prove while completing the bounds audit
@@ -937,12 +960,12 @@ src/thread/pthread_atfork.c	__pthread_atfork_prepare	handlers[i - 1]	if (handler
 src/thread/pthread_atfork.c	pthread_atfork	handlers[handler_count]	handlers[handler_count].child = child; @column 2	existing site; prove while completing the bounds audit
 src/thread/pthread_atfork.c	pthread_atfork	handlers[handler_count]	handlers[handler_count].parent = parent; @column 2	existing site; prove while completing the bounds audit
 src/thread/pthread_atfork.c	pthread_atfork	handlers[handler_count]	handlers[handler_count].prepare = prepare; @column 2	existing site; prove while completing the bounds audit
-src/thread/pthread_cancel.c	cancel_unsafe_abort	region[length]	while (region[length]) length++; @column 9	existing site; prove while completing the bounds audit
 src/thread/pthread_tsd.c	__pthread_run_specific_destructors	self->specific[index]	struct __pthread_specific *specific = &self->specific[index]; @column 43	existing site; prove while completing the bounds audit
 src/thread/pthread_tsd.c	pthread_getspecific	self->specific[index]	if (!self || !self->specific || self->specific[index].key != key) @column 34	existing site; prove while completing the bounds audit
 src/thread/pthread_tsd.c	pthread_getspecific	self->specific[index]	return self->specific[index].value; @column 9	existing site; prove while completing the bounds audit
 src/thread/pthread_tsd.c	pthread_setspecific	self->specific[index]	self->specific[index].key = key; @column 2	existing site; prove while completing the bounds audit
 src/thread/pthread_tsd.c	pthread_setspecific	self->specific[index]	self->specific[index].value = (void *)value; @column 2	existing site; prove while completing the bounds audit
+src/thread/semaphore.c	sem_open	object[got]	object[got] = 0; @column 3	existing site; prove while completing the bounds audit
 src/thread/semaphore.c	sem_path	component[i]	for (i = 0; i < n; i++) if (!name_char((unsigned char)component[i])) { @column 56	existing site; prove while completing the bounds audit
 src/time/getdate.c	read_templates	storage[n][--l]	while (l && (storage[n][l - 1] == '\n' || storage[n][l - 1] == '\r')) storage[n][--l] = 0; @column 73	existing site; prove while completing the bounds audit
 src/time/getdate.c	read_templates	storage[n][l - 1]	while (l && (storage[n][l - 1] == '\n' || storage[n][l - 1] == '\r')) storage[n][--l] = 0; @column 16	existing site; prove while completing the bounds audit
@@ -1019,8 +1042,6 @@ src/time/wcsftime.c	wcsftime	s[pos++]	PUT_WC(L'%'); @column 4	existing site; pro
 src/time/wcsftime.c	wcsftime	s[pos++]	PUT_WC(wc); @column 4	existing site; prove while completing the bounds audit
 src/time/wcsftime.c	wcsftime	s[pos++]	if (*f != L'%') { PUT_WC(*f); continue; } @column 21	existing site; prove while completing the bounds audit
 src/time/wcsftime.c	wcsftime	s[pos]	s[pos] = 0; @column 2	existing site; prove while completing the bounds audit
-src/unistd/chdir.c	chdir	w[i]	for (i = 0; i < n; i++) if (w[i] == '/') w[i] = '\\'; @column 30	existing site; prove while completing the bounds audit
-src/unistd/chdir.c	chdir	w[i]	for (i = 0; i < n; i++) if (w[i] == '/') w[i] = '\\'; @column 43	existing site; prove while completing the bounds audit
 src/unistd/dup.c	dup_to	__fds[newfd]	__fds[newfd].pad = state.pad; @column 2	existing site; prove while completing the bounds audit
 src/unistd/dup.c	dup_to	__fds[newfd]	__fds[newfd].peer_len = state.peer_len; @column 2	existing site; prove while completing the bounds audit
 src/unistd/dup.c	dup_to	__fds[newfd]	__fds[newfd].shm_mode = state.shm_mode; @column 2	existing site; prove while completing the bounds audit
@@ -1029,8 +1050,8 @@ src/unistd/dup.c	dup_to	__fds[newfd]	__fds[newfd].vfs = state.vfs; @column 2	exi
 src/unistd/dup.c	dup_to	__fds[newfd]	__fds[newfd].vfs_native = state.vfs_native; @column 2	existing site; prove while completing the bounds audit
 src/unistd/dup.c	dup_to	__fds[newfd]	__fds[newfd].vnext = state.vnext; @column 2	existing site; prove while completing the bounds audit
 src/unistd/dup.c	dup_to	__fds[newfd]	__fds[newfd].vseen = state.vseen; @column 2	existing site; prove while completing the bounds audit
-src/unistd/dup.c	dup_to	__fds[newfd]	if (__fds[newfd].h) NtClose(__fds[newfd].h); @column 30	existing site; prove while completing the bounds audit
-src/unistd/dup.c	dup_to	__fds[newfd]	if (__fds[newfd].h) NtClose(__fds[newfd].h); @column 6	existing site; prove while completing the bounds audit
+src/unistd/dup.c	dup_to	__fds[newfd]	if (__fds[newfd].h) __plat_close(__fds[newfd].h); @column 35	existing site; prove while completing the bounds audit
+src/unistd/dup.c	dup_to	__fds[newfd]	if (__fds[newfd].h) __plat_close(__fds[newfd].h); @column 6	existing site; prove while completing the bounds audit
 src/unistd/dup.c	dup_to	__fds[newfd]	memcpy(__fds[newfd].peer, state.peer, sizeof state.peer); @column 9	existing site; prove while completing the bounds audit
 src/unistd/ids.c	getgroups	g[0]	if (n != 0) g[0] = getegid(); @column 14	existing site; prove while completing the bounds audit
 src/unistd/ids.c	getlogin_r	buf[i]	buf[i] = 0; @column 2	existing site; prove while completing the bounds audit
@@ -1038,28 +1059,30 @@ src/unistd/ids.c	getlogin_r	buf[i]	for (i = 0; l[i] && i + 1 < n; i++) buf[i] = 
 src/unistd/ids.c	getlogin_r	l[i]	for (i = 0; l[i] && i + 1 < n; i++) buf[i] = l[i]; @column 14	existing site; prove while completing the bounds audit
 src/unistd/ids.c	getlogin_r	l[i]	for (i = 0; l[i] && i + 1 < n; i++) buf[i] = l[i]; @column 47	existing site; prove while completing the bounds audit
 src/unistd/ids.c	getlogin_r	l[i]	if (l[i]) return ERANGE; @column 6	existing site; prove while completing the bounds audit
-src/unistd/ids.c	sid_authority	sid->IdentifierAuthority.Value[i]	if (sid->IdentifierAuthority.Value[i]) return -1; @column 7	existing site; prove while completing the bounds audit
-src/unistd/ids.c	sid_uid	sid->SubAuthority[0]	(sid->SubAuthorityCount == 1 || sid->SubAuthority[0] == 32)) @column 38	existing site; prove while completing the bounds audit
-src/unistd/ids.c	sid_uid	sid->SubAuthority[0]	sid->SubAuthority[0] == 21) { @column 6	existing site; prove while completing the bounds audit
-src/unistd/ids.c	sid_uid	sid->SubAuthority[0]	uid = (uid_t)(0x1000u * sid->SubAuthority[0] + (rid & 0xffffu)); @column 27	existing site; prove while completing the bounds audit
-src/unistd/ids.c	sid_uid	sid->SubAuthority[sid->SubAuthorityCount - 1]	rid = sid->SubAuthority[sid->SubAuthorityCount - 1]; @column 8	existing site; prove while completing the bounds audit
-src/unistd/link.c	readlinkat	name[0]	if (nlen >= 4 && name[0] == '\\' && name[1] == '?' && name[2] == '?' && name[3] == '\\') { name += 4; nlen -= 4; } @column 19	existing site; prove while completing the bounds audit
-src/unistd/link.c	readlinkat	name[1]	if (nlen >= 4 && name[0] == '\\' && name[1] == '?' && name[2] == '?' && name[3] == '\\') { name += 4; nlen -= 4; } @column 38	existing site; prove while completing the bounds audit
-src/unistd/link.c	readlinkat	name[2]	if (nlen >= 4 && name[0] == '\\' && name[1] == '?' && name[2] == '?' && name[3] == '\\') { name += 4; nlen -= 4; } @column 56	existing site; prove while completing the bounds audit
-src/unistd/link.c	readlinkat	name[3]	if (nlen >= 4 && name[0] == '\\' && name[1] == '?' && name[2] == '?' && name[3] == '\\') { name += 4; nlen -= 4; } @column 74	existing site; prove while completing the bounds audit
-src/unistd/link.c	readlinkat	name[i]	for (i = 0; i < nlen; i++) tmp[i] = name[i] == '\\' ? '/' : name[i]; @column 38	existing site; prove while completing the bounds audit
-src/unistd/link.c	readlinkat	name[i]	for (i = 0; i < nlen; i++) tmp[i] = name[i] == '\\' ? '/' : name[i]; @column 62	existing site; prove while completing the bounds audit
-src/unistd/link.c	readlinkat	tmp[i]	for (i = 0; i < nlen; i++) tmp[i] = name[i] == '\\' ? '/' : name[i]; @column 29	existing site; prove while completing the bounds audit
-src/unistd/link.c	symlinkat	pb[0]	if (!relative) { pb[0] = '\\'; pb[1] = '?'; pb[2] = '?'; pb[3] = '\\'; } @column 20	existing site; prove while completing the bounds audit
-src/unistd/link.c	symlinkat	pb[1]	if (!relative) { pb[0] = '\\'; pb[1] = '?'; pb[2] = '?'; pb[3] = '\\'; } @column 34	existing site; prove while completing the bounds audit
-src/unistd/link.c	symlinkat	pb[2]	if (!relative) { pb[0] = '\\'; pb[1] = '?'; pb[2] = '?'; pb[3] = '\\'; } @column 47	existing site; prove while completing the bounds audit
-src/unistd/link.c	symlinkat	pb[3]	if (!relative) { pb[0] = '\\'; pb[1] = '?'; pb[2] = '?'; pb[3] = '\\'; } @column 60	existing site; prove while completing the bounds audit
-src/unistd/link.c	symlinkat	target[0]	relative = !(target[0] == '/' || target[0] == '\\' || (target[0] && target[1] == ':')); @column 15	existing site; prove while completing the bounds audit
-src/unistd/link.c	symlinkat	target[0]	relative = !(target[0] == '/' || target[0] == '\\' || (target[0] && target[1] == ':')); @column 35	existing site; prove while completing the bounds audit
-src/unistd/link.c	symlinkat	target[0]	relative = !(target[0] == '/' || target[0] == '\\' || (target[0] && target[1] == ':')); @column 57	existing site; prove while completing the bounds audit
-src/unistd/link.c	symlinkat	target[1]	relative = !(target[0] == '/' || target[0] == '\\' || (target[0] && target[1] == ':')); @column 70	existing site; prove while completing the bounds audit
-src/unistd/link.c	symlinkat	wt[i]	for (i = 0; i < tl; i++) if (wt[i] == '/') wt[i] = '\\'; @column 31	existing site; prove while completing the bounds audit
-src/unistd/link.c	symlinkat	wt[i]	for (i = 0; i < tl; i++) if (wt[i] == '/') wt[i] = '\\'; @column 45	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_chdir	w[i]	for (i = 0; i < n; i++) if (w[i] == '/') w[i] = '\\'; @column 30	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_chdir	w[i]	for (i = 0; i < n; i++) if (w[i] == '/') w[i] = '\\'; @column 43	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_readlink	name[0]	if (nlen >= 4 && name[0] == '\\' && name[1] == '?' && name[2] == '?' && name[3] == '\\') { name += 4; nlen -= 4; } @column 19	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_readlink	name[1]	if (nlen >= 4 && name[0] == '\\' && name[1] == '?' && name[2] == '?' && name[3] == '\\') { name += 4; nlen -= 4; } @column 38	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_readlink	name[2]	if (nlen >= 4 && name[0] == '\\' && name[1] == '?' && name[2] == '?' && name[3] == '\\') { name += 4; nlen -= 4; } @column 56	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_readlink	name[3]	if (nlen >= 4 && name[0] == '\\' && name[1] == '?' && name[2] == '?' && name[3] == '\\') { name += 4; nlen -= 4; } @column 74	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_readlink	name[i]	for (i = 0; i < nlen; i++) tmp[i] = name[i] == '\\' ? '/' : name[i]; @column 38	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_readlink	name[i]	for (i = 0; i < nlen; i++) tmp[i] = name[i] == '\\' ? '/' : name[i]; @column 62	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_readlink	tmp[i]	for (i = 0; i < nlen; i++) tmp[i] = name[i] == '\\' ? '/' : name[i]; @column 29	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_symlink	pb[0]	if (!relative) { pb[0] = '\\'; pb[1] = '?'; pb[2] = '?'; pb[3] = '\\'; } @column 20	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_symlink	pb[1]	if (!relative) { pb[0] = '\\'; pb[1] = '?'; pb[2] = '?'; pb[3] = '\\'; } @column 34	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_symlink	pb[2]	if (!relative) { pb[0] = '\\'; pb[1] = '?'; pb[2] = '?'; pb[3] = '\\'; } @column 47	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_symlink	pb[3]	if (!relative) { pb[0] = '\\'; pb[1] = '?'; pb[2] = '?'; pb[3] = '\\'; } @column 60	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_symlink	target[0]	relative = !(target[0] == '/' || target[0] == '\\' || (target[0] && target[1] == ':')); @column 15	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_symlink	target[0]	relative = !(target[0] == '/' || target[0] == '\\' || (target[0] && target[1] == ':')); @column 35	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_symlink	target[0]	relative = !(target[0] == '/' || target[0] == '\\' || (target[0] && target[1] == ':')); @column 57	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_symlink	target[1]	relative = !(target[0] == '/' || target[0] == '\\' || (target[0] && target[1] == ':')); @column 70	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_symlink	wt[i]	for (i = 0; i < tl; i++) if (wt[i] == '/') wt[i] = '\\'; @column 31	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	__plat_symlink	wt[i]	for (i = 0; i < tl; i++) if (wt[i] == '/') wt[i] = '\\'; @column 45	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	sid_authority	sid->IdentifierAuthority.Value[i]	if (sid->IdentifierAuthority.Value[i]) return -1; @column 7	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	sid_uid	sid->SubAuthority[0]	(sid->SubAuthorityCount == 1 || sid->SubAuthority[0] == 32)) @column 38	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	sid_uid	sid->SubAuthority[0]	sid->SubAuthority[0] == 21) { @column 6	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	sid_uid	sid->SubAuthority[0]	uid = (uid_t)(0x1000u * sid->SubAuthority[0] + (rid & 0xffffu)); @column 27	existing site; prove while completing the bounds audit
+src/unistd/nt/plat_unistd.c	sid_uid	sid->SubAuthority[sid->SubAuthorityCount - 1]	rid = sid->SubAuthority[sid->SubAuthorityCount - 1]; @column 8	existing site; prove while completing the bounds audit
 src/unistd/pipe.c	pipe2	fds[0]	fds[0] = rfd; @column 2	existing site; prove while completing the bounds audit
 src/unistd/pipe.c	pipe2	fds[1]	fds[1] = wfd; @column 2	existing site; prove while completing the bounds audit
 src/unistd/swab.c	swab	d[i + 1]	d[i + 1] = s[i]; @column 3	existing site; prove while completing the bounds audit
@@ -1074,6 +1097,489 @@ src/unistd/unlink.c	final_component_is_dot	end[-1]	while (end > path && (end[-1]
 src/unistd/unlink.c	final_component_is_dot	end[-1]	while (end > path && (end[-1] == '/' || end[-1] == '\\')) end--; @column 42	existing site; prove while completing the bounds audit
 src/unistd/unlink.c	final_component_is_dot	start[-1]	while (start > path && start[-1] != '/' && start[-1] != '\\') start--; @column 25	existing site; prove while completing the bounds audit
 src/unistd/unlink.c	final_component_is_dot	start[-1]	while (start > path && start[-1] != '/' && start[-1] != '\\') start--; @column 45	existing site; prove while completing the bounds audit
+src/util/cat.c	__util_cat_main	argv[i]	const char *path = argv[i]; @column 22	existing site; prove while completing the bounds audit
+src/util/cat.c	__util_cat_main	argv[i]	if (!strcmp(argv[i], "-u")) continue; /* real no-op -- see header */ @column 15	existing site; prove while completing the bounds audit
+src/util/chmod_util.c	__util_chmod_main	argv[1]	if (argc > 1 && !strcmp(argv[1], "-R")) { @column 26	existing site; prove while completing the bounds audit
+src/util/chmod_util.c	__util_chmod_main	argv[1]	mode_spec = argv[1]; @column 14	existing site; prove while completing the bounds audit
+src/util/chmod_util.c	__util_chmod_main	argv[i]	fprintf(stderr, "chmod: %s: %s\n", argv[i], strerror(errno)); @column 39	existing site; prove while completing the bounds audit
+src/util/chmod_util.c	__util_chmod_main	argv[i]	if (chmod(argv[i], newmode) != 0) { @column 13	existing site; prove while completing the bounds audit
+src/util/chmod_util.c	__util_chmod_main	argv[i]	if (stat(argv[i], &st) != 0) { @column 12	existing site; prove while completing the bounds audit
+src/util/cksum.c	__util_cksum_main	argv[i]	const char *path = strcmp(argv[i], "-") == 0 ? 0 : argv[i]; @column 29	existing site; prove while completing the bounds audit
+src/util/cksum.c	__util_cksum_main	argv[i]	const char *path = strcmp(argv[i], "-") == 0 ? 0 : argv[i]; @column 54	existing site; prove while completing the bounds audit
+src/util/comm.c	__util_comm_main	arg[0]	if (arg[0] != '-' || arg[1] == 0) break; @column 7	existing site; prove while completing the bounds audit
+src/util/comm.c	__util_comm_main	arg[1]	if (arg[0] != '-' || arg[1] == 0) break; @column 24	existing site; prove while completing the bounds audit
+src/util/comm.c	__util_comm_main	argv[i]	char *arg = argv[i]; @column 15	existing site; prove while completing the bounds audit
+src/util/comm.c	__util_comm_main	argv[i]	paths[npaths++] = argv[i]; @column 21	existing site; prove while completing the bounds audit
+src/util/comm.c	read_line	(*buf)[*len - 1]	if (*len && (*buf)[*len - 1] == '\n') (*buf)[--*len] = 0; @column 14	existing site; prove while completing the bounds audit
+src/util/comm.c	read_line	(*buf)[--*len]	if (*len && (*buf)[*len - 1] == '\n') (*buf)[--*len] = 0; @column 40	existing site; prove while completing the bounds audit
+src/util/cp.c	__util_cp_main	a[0]	if (a[0] != '-' || a[1] == 0) break; @column 7	existing site; prove while completing the bounds audit
+src/util/cp.c	__util_cp_main	a[1]	if (a[0] != '-' || a[1] == 0) break; @column 22	existing site; prove while completing the bounds audit
+src/util/cp.c	__util_cp_main	argv[argc - 1]	target = argv[argc - 1]; @column 11	existing site; prove while completing the bounds audit
+src/util/cp.c	__util_cp_main	argv[i]	char *a = argv[i]; @column 13	existing site; prove while completing the bounds audit
+src/util/cp.c	__util_cp_main	argv[i]	const char *src = argv[i]; @column 21	existing site; prove while completing the bounds audit
+src/util/cp.c	__util_join_basename	dir[dirlen - 1]	need_slash = dirlen > 0 && dir[dirlen - 1] != '/' && dir[dirlen - 1] != '\\'; @column 29	existing site; prove while completing the bounds audit
+src/util/cp.c	__util_join_basename	dir[dirlen - 1]	need_slash = dirlen > 0 && dir[dirlen - 1] != '/' && dir[dirlen - 1] != '\\'; @column 55	existing site; prove while completing the bounds audit
+src/util/cp.c	path_is_under_or_same	child[i]	char a = child[i], b = parent[i]; @column 12	existing site; prove while completing the bounds audit
+src/util/cp.c	path_is_under_or_same	child[plen]	return child[plen] == 0 || child[plen] == '/' || child[plen] == '\\'; @column 29	existing site; prove while completing the bounds audit
+src/util/cp.c	path_is_under_or_same	child[plen]	return child[plen] == 0 || child[plen] == '/' || child[plen] == '\\'; @column 51	existing site; prove while completing the bounds audit
+src/util/cp.c	path_is_under_or_same	child[plen]	return child[plen] == 0 || child[plen] == '/' || child[plen] == '\\'; @column 9	existing site; prove while completing the bounds audit
+src/util/cp.c	path_is_under_or_same	parent[i]	char a = child[i], b = parent[i]; @column 26	existing site; prove while completing the bounds audit
+src/util/csplit.c	__util_csplit_main	a[0]	if (a[0] != '-' || a[1] == 0) break; @column 7	existing site; prove while completing the bounds audit
+src/util/csplit.c	__util_csplit_main	a[0]	if (a[0] == '/' || a[0] == '%') { @column 22	existing site; prove while completing the bounds audit
+src/util/csplit.c	__util_csplit_main	a[0]	if (a[0] == '/' || a[0] == '%') { @column 7	existing site; prove while completing the bounds audit
+src/util/csplit.c	__util_csplit_main	a[0]	if (a[0] == '/') { @column 8	existing site; prove while completing the bounds audit
+src/util/csplit.c	__util_csplit_main	a[0]	if (a[0] == '{') { @column 7	existing site; prove while completing the bounds audit
+src/util/csplit.c	__util_csplit_main	a[0]	if (extract_delimited(a, a[0], pat, sizeof pat, &offset) < 0) { @column 29	existing site; prove while completing the bounds audit
+src/util/csplit.c	__util_csplit_main	a[1]	if (a[0] != '-' || a[1] == 0) break; @column 22	existing site; prove while completing the bounds audit
+src/util/csplit.c	__util_csplit_main	argv[++i]	ndigits = (int)strtol(argv[++i], &end, 10); @column 26	existing site; prove while completing the bounds audit
+src/util/csplit.c	__util_csplit_main	argv[++i]	prefix = argv[++i]; @column 13	existing site; prove while completing the bounds audit
+src/util/csplit.c	__util_csplit_main	argv[i++]	filename = argv[i++]; @column 13	existing site; prove while completing the bounds audit
+src/util/csplit.c	__util_csplit_main	argv[i]	char *a = argv[i]; @column 13	existing site; prove while completing the bounds audit
+src/util/csplit.c	__util_csplit_main	argv[i]	const char *a = argv[i]; @column 19	existing site; prove while completing the bounds audit
+src/util/csplit.c	cleanup_created	c->names[i]	for (i = 0; i < c->n; i++) free(c->names[i]); @column 34	existing site; prove while completing the bounds audit
+src/util/csplit.c	cleanup_created	c->names[i]	if (!keep) for (i = 0; i < c->n; i++) unlink(c->names[i]); @column 47	existing site; prove while completing the bounds audit
+src/util/csplit.c	extract_delimited	arg[i + 1]	if (arg[i] == '\\' && arg[i + 1]) { @column 25	existing site; prove while completing the bounds audit
+src/util/csplit.c	extract_delimited	arg[i + 1]	if (o + 1 < patsz) pat[o++] = arg[i + 1]; @column 34	existing site; prove while completing the bounds audit
+src/util/csplit.c	extract_delimited	arg[i]	if (arg[i] != delim) return -1; /* unterminated */ @column 6	existing site; prove while completing the bounds audit
+src/util/csplit.c	extract_delimited	arg[i]	if (arg[i] == '\\' && arg[i + 1]) { @column 7	existing site; prove while completing the bounds audit
+src/util/csplit.c	extract_delimited	arg[i]	if (arg[i]) { @column 6	existing site; prove while completing the bounds audit
+src/util/csplit.c	extract_delimited	arg[i]	if (o + 1 < patsz) pat[o++] = arg[i]; @column 33	existing site; prove while completing the bounds audit
+src/util/csplit.c	extract_delimited	arg[i]	while (arg[i] && arg[i] != delim) { @column 19	existing site; prove while completing the bounds audit
+src/util/csplit.c	extract_delimited	arg[i]	while (arg[i] && arg[i] != delim) { @column 9	existing site; prove while completing the bounds audit
+src/util/csplit.c	find_match	L->text[i]	if (regexec(&re, L->text[i], 0, 0, 0) == 0) { found = i; break; } @column 20	existing site; prove while completing the bounds audit
+src/util/csplit.c	free_lines	L->text[i]	for (i = 0; i < L->n; i++) free(L->text[i]); @column 34	existing site; prove while completing the bounds audit
+src/util/csplit.c	read_all_lines	L->len[L->n]	L->len[L->n] = (size_t)got; @column 3	existing site; prove while completing the bounds audit
+src/util/csplit.c	read_all_lines	L->text[L->n]	L->text[L->n] = malloc(bytes); @column 4	existing site; prove while completing the bounds audit
+src/util/csplit.c	read_all_lines	L->text[L->n]	if (!L->text[L->n]) { free(buf); return -1; } @column 8	existing site; prove while completing the bounds audit
+src/util/csplit.c	read_all_lines	L->text[L->n]	memcpy(L->text[L->n], buf, (size_t)got + 1); @column 10	existing site; prove while completing the bounds audit
+src/util/csplit.c	remember_created	c->names[c->n]	c->names[c->n] = strdup(name); @column 2	existing site; prove while completing the bounds audit
+src/util/csplit.c	remember_created	c->names[c->n]	if (!c->names[c->n]) return -1; @column 7	existing site; prove while completing the bounds audit
+src/util/csplit.c	write_piece	L->len[i]	if (fwrite(L->text[i], 1, L->len[i], f) != L->len[i]) { @column 29	existing site; prove while completing the bounds audit
+src/util/csplit.c	write_piece	L->len[i]	if (fwrite(L->text[i], 1, L->len[i], f) != L->len[i]) { @column 46	existing site; prove while completing the bounds audit
+src/util/csplit.c	write_piece	L->len[i]	size += (long)L->len[i]; @column 17	existing site; prove while completing the bounds audit
+src/util/csplit.c	write_piece	L->text[i]	if (fwrite(L->text[i], 1, L->len[i], f) != L->len[i]) { @column 14	existing site; prove while completing the bounds audit
+src/util/dd.c	__util_dd_main	argv[i]	char *a = argv[i]; @column 13	existing site; prove while completing the bounds audit
+src/util/df.c	__util_df_main	a[0]	if (a[0] != '-' || a[1] == 0) break; @column 7	existing site; prove while completing the bounds audit
+src/util/df.c	__util_df_main	a[1]	if (a[0] != '-' || a[1] == 0) break; @column 22	existing site; prove while completing the bounds audit
+src/util/df.c	__util_df_main	argv[i]	char *a = argv[i]; @column 13	existing site; prove while completing the bounds audit
+src/util/df.c	__util_df_main	argv[i]	if (df_report(argv[i], blocksize) < 0) had_error = 1; @column 18	existing site; prove while completing the bounds audit
+src/util/du.c	__util_du_main	a[0]	if (a[0] != '-' || a[1] == 0) break; @column 7	existing site; prove while completing the bounds audit
+src/util/du.c	__util_du_main	a[1]	if (a[0] != '-' || a[1] == 0) break; @column 22	existing site; prove while completing the bounds audit
+src/util/du.c	__util_du_main	argv[i]	char *a = argv[i]; @column 13	existing site; prove while completing the bounds audit
+src/util/du.c	__util_du_main	argv[i]	if (du_one(argv[i]) < 0) du_had_error = 1; @column 14	existing site; prove while completing the bounds audit
+src/util/du.c	du_cb	level_sum[lvl]	if (lvl < DU_MAXLEVEL) level_sum[lvl] = 0; @column 26	existing site; prove while completing the bounds audit
+src/util/du.c	du_cb	level_sum[lvl]	uintmax_t total = (lvl < DU_MAXLEVEL) ? level_sum[lvl] : 0; @column 43	existing site; prove while completing the bounds audit
+src/util/echo.c	__util_echo_main	argv[1]	if (argc > 1 && !strcmp(argv[1], "-n")) { @column 26	existing site; prove while completing the bounds audit
+src/util/echo.c	__util_echo_main	argv[i]	if (fputs(argv[i], stdout) == EOF) return 1; @column 13	existing site; prove while completing the bounds audit
+src/util/head.c	__util_head_main	a[0]	if (a[0] == '-' && a[1] != 0) { @column 7	existing site; prove while completing the bounds audit
+src/util/head.c	__util_head_main	a[1]	if (a[0] == '-' && a[1] != 0) { @column 22	existing site; prove while completing the bounds audit
+src/util/head.c	__util_head_main	argv[++i]	v = strtol(argv[++i], &end, 10); @column 15	existing site; prove while completing the bounds audit
+src/util/head.c	__util_head_main	argv[i]	char *a = argv[i]; @column 13	existing site; prove while completing the bounds audit
+src/util/head.c	__util_head_main	argv[i]	const char *path = argv[i]; @column 23	existing site; prove while completing the bounds audit
+src/util/head.c	__util_head_main	argv[i]	fprintf(stderr, "head: %s: invalid number of lines\n", argv[i]); @column 60	existing site; prove while completing the bounds audit
+src/util/head.c	__util_head_main	argv[i]	if (*end || end == argv[i] || v <= 0) { @column 23	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	L1[g1s]	while (i1 < n1 && keys_equal(&L1[i1], jf1, &L1[g1s], jf1)) i1++; @column 49	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	L1[i1]	int cmp = keys_cmp(&L1[i1], jf1, &L2[i2], jf2); @column 24	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	L1[i1]	while (i1 < n1 && keys_equal(&L1[i1], jf1, &L1[g1s], jf1)) i1++; @column 35	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	L1[x]	else print_default(&L1[x], jf1, &L2[y], jf2, outsep); @column 27	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	L2[g2s]	while (i2 < n2 && keys_equal(&L2[i2], jf2, &L2[g2s], jf2)) i2++; @column 49	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	L2[i2]	int cmp = keys_cmp(&L1[i1], jf1, &L2[i2], jf2); @column 38	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	L2[i2]	while (i2 < n2 && keys_equal(&L2[i2], jf2, &L2[g2s], jf2)) i2++; @column 35	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	L2[y]	else print_default(&L1[x], jf1, &L2[y], jf2, outsep); @column 40	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	arg[0]	if (arg[0] != '-' || arg[1] == 0) break; @column 7	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	arg[1]	if (arg[0] != '-' || arg[1] == 0) break; @column 24	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	arg[2]	if (arg[2]) empty_repl = arg + 2; @column 8	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	arg[2]	if (arg[2]) val = arg + 2; @column 8	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	argv[i]	char *arg = argv[i]; @column 15	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	argv[i]	else { if (++i >= argc) { fprintf(stderr, "join: -1: option requires an argument\n"); goto bad; } val = argv[i]; } @column 108	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	argv[i]	else { if (++i >= argc) { fprintf(stderr, "join: -2: option requires an argument\n"); goto bad; } val = argv[i]; } @column 108	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	argv[i]	else { if (++i >= argc) { fprintf(stderr, "join: -a: option requires an argument\n"); goto bad; } val = argv[i]; } @column 108	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	argv[i]	else { if (++i >= argc) { fprintf(stderr, "join: -e: option requires an argument\n"); goto bad; } empty_repl = argv[i]; } @column 115	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	argv[i]	else { if (++i >= argc) { fprintf(stderr, "join: -o: option requires an argument\n"); goto bad; } val = argv[i]; } @column 108	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	argv[i]	else { if (++i >= argc) { fprintf(stderr, "join: -t: option requires an argument\n"); goto bad; } val = argv[i]; } @column 108	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	argv[i]	paths[npaths++] = argv[i]; @column 21	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	val[0]	delim = val[0]; @column 12	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	val[0]	if (val[0] == 0 || val[1] != 0) { fprintf(stderr, "join: -t: field separator must be exactly one character\n"); goto bad; } @column 8	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	val[0]	outsep = val[0]; @column 13	existing site; prove while completing the bounds audit
+src/util/join.c	__util_join_main	val[1]	if (val[0] == 0 || val[1] != 0) { fprintf(stderr, "join: -t: field separator must be exactly one character\n"); goto bad; } @column 23	existing site; prove while completing the bounds audit
+src/util/join.c	field_ptr	l->fields[field1based - 1]	struct field fl = l->fields[field1based - 1]; @column 21	existing site; prove while completing the bounds audit
+src/util/join.c	free_jlines	l[i]	free(l[i].fields); @column 8	existing site; prove while completing the bounds audit
+src/util/join.c	free_jlines	l[i]	free(l[i].text); @column 8	existing site; prove while completing the bounds audit
+src/util/join.c	parse_o_list	(*specs)[(*nspecs)++]	(*specs)[(*nspecs)++] = s; @column 3	existing site; prove while completing the bounds audit
+src/util/join.c	parse_o_list	p[1]	if (*p == '0' && (p[1] == 0 || p[1] == ',' || isblank((unsigned char)p[1]))) { @column 21	existing site; prove while completing the bounds audit
+src/util/join.c	parse_o_list	p[1]	if (*p == '0' && (p[1] == 0 || p[1] == ',' || isblank((unsigned char)p[1]))) { @column 34	existing site; prove while completing the bounds audit
+src/util/join.c	parse_o_list	p[1]	if (*p == '0' && (p[1] == 0 || p[1] == ',' || isblank((unsigned char)p[1]))) { @column 72	existing site; prove while completing the bounds audit
+src/util/join.c	print_o	specs[i]	if (specs[i].file == 0) { @column 7	existing site; prove while completing the bounds audit
+src/util/join.c	print_o	specs[i]	p = l1 ? field_ptr(l1, specs[i].field, &len) : (len = 0, ""); @column 27	existing site; prove while completing the bounds audit
+src/util/join.c	print_o	specs[i]	p = l2 ? field_ptr(l2, specs[i].field, &len) : (len = 0, ""); @column 27	existing site; prove while completing the bounds audit
+src/util/join.c	print_o	specs[i]	} else if (specs[i].file == 1) { @column 14	existing site; prove while completing the bounds audit
+src/util/join.c	read_all	(*out)[*nout]	(*out)[*nout].fields = split_fields(text, len, have_delim, delim, &(*out)[*nout].nfields); @column 3	existing site; prove while completing the bounds audit
+src/util/join.c	read_all	(*out)[*nout]	(*out)[*nout].fields = split_fields(text, len, have_delim, delim, &(*out)[*nout].nfields); @column 70	existing site; prove while completing the bounds audit
+src/util/join.c	read_all	(*out)[*nout]	(*out)[*nout].len = len; @column 3	existing site; prove while completing the bounds audit
+src/util/join.c	read_all	(*out)[*nout]	(*out)[*nout].text = text; @column 3	existing site; prove while completing the bounds audit
+src/util/join.c	read_all	buf[len - 1]	if (len && buf[len - 1] == '\n') len--; @column 14	existing site; prove while completing the bounds audit
+src/util/join.c	read_all	text[len]	text[len] = 0; @column 3	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	a[1]	if (a[1] != 0 && strspn(a + 1, "fs") == strlen(a + 1)) { @column 7	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	argv[di]	if (!dir_form && stat(argv[di], &dst_st) == 0 && S_ISDIR(dst_st.st_mode)) @column 24	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	argv[di]	n = snprintf(target, sizeof target, "%s/%s", argv[di], base); @column 48	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	argv[i + 1]	fprintf(stderr, "ln: %s: %s\n", argv[i + 1], strerror(errno)); @column 36	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	argv[i + 1]	if (link_one(argv[i], argv[i + 1], opt_s, opt_f) != 0) { @column 25	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	argv[i]	const char *a = argv[i]; @column 19	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	argv[i]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 26	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	argv[i]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 47	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	argv[i]	fprintf(stderr, "ln: %s: %s\n", argv[i], strerror(ENAMETOOLONG)); @column 36	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	argv[i]	if (link_one(argv[i], argv[i + 1], opt_s, opt_f) != 0) { @column 16	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	argv[i]	if (link_one(argv[i], target, opt_s, opt_f) != 0) { @column 16	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	argv[i]	memcpy(base_copy, argv[i], sn + 1); @column 21	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	argv[i]	size_t sn = strlen(argv[i]); @column 22	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	argv[i][0]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 26	existing site; prove while completing the bounds audit
+src/util/ln.c	__util_ln_main	argv[i][1]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 47	existing site; prove while completing the bounds audit
+src/util/mkdir_util.c	__util_mkdir_main	argv[++i]	mode_spec = argv[++i]; @column 16	existing site; prove while completing the bounds audit
+src/util/mkdir_util.c	__util_mkdir_main	argv[i]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 26	existing site; prove while completing the bounds audit
+src/util/mkdir_util.c	__util_mkdir_main	argv[i]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 47	existing site; prove while completing the bounds audit
+src/util/mkdir_util.c	__util_mkdir_main	argv[i]	fprintf(stderr, "mkdir: %s: %s\n", argv[i], strerror(ENAMETOOLONG)); @column 39	existing site; prove while completing the bounds audit
+src/util/mkdir_util.c	__util_mkdir_main	argv[i]	fprintf(stderr, "mkdir: %s: %s\n", argv[i], strerror(saved)); @column 39	existing site; prove while completing the bounds audit
+src/util/mkdir_util.c	__util_mkdir_main	argv[i]	fprintf(stderr, "mkdir: %s: invalid option\n", argv[i]); @column 50	existing site; prove while completing the bounds audit
+src/util/mkdir_util.c	__util_mkdir_main	argv[i]	if (!strcmp(argv[i], "--")) { i++; break; } @column 15	existing site; prove while completing the bounds audit
+src/util/mkdir_util.c	__util_mkdir_main	argv[i]	if (!strcmp(argv[i], "-m")) { @column 15	existing site; prove while completing the bounds audit
+src/util/mkdir_util.c	__util_mkdir_main	argv[i]	if (!strcmp(argv[i], "-p")) { opt_p = 1; continue; } @column 15	existing site; prove while completing the bounds audit
+src/util/mkdir_util.c	__util_mkdir_main	argv[i]	memcpy(path, argv[i], n + 1); @column 16	existing site; prove while completing the bounds audit
+src/util/mkdir_util.c	__util_mkdir_main	argv[i]	size_t n = strlen(argv[i]); @column 21	existing site; prove while completing the bounds audit
+src/util/mkdir_util.c	__util_mkdir_main	argv[i][0]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 26	existing site; prove while completing the bounds audit
+src/util/mkdir_util.c	__util_mkdir_main	argv[i][1]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 47	existing site; prove while completing the bounds audit
+src/util/mkfifo.c	__util_mkfifo_main	argv[++i]	mode_spec = argv[++i]; @column 16	existing site; prove while completing the bounds audit
+src/util/mkfifo.c	__util_mkfifo_main	argv[i]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 26	existing site; prove while completing the bounds audit
+src/util/mkfifo.c	__util_mkfifo_main	argv[i]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 47	existing site; prove while completing the bounds audit
+src/util/mkfifo.c	__util_mkfifo_main	argv[i]	fprintf(stderr, "mkfifo: %s: %s\n", argv[i], strerror(errno)); @column 40	existing site; prove while completing the bounds audit
+src/util/mkfifo.c	__util_mkfifo_main	argv[i]	fprintf(stderr, "mkfifo: %s: invalid option\n", argv[i]); @column 51	existing site; prove while completing the bounds audit
+src/util/mkfifo.c	__util_mkfifo_main	argv[i]	if (!strcmp(argv[i], "--")) { i++; break; } @column 15	existing site; prove while completing the bounds audit
+src/util/mkfifo.c	__util_mkfifo_main	argv[i]	if (!strcmp(argv[i], "-m")) { @column 15	existing site; prove while completing the bounds audit
+src/util/mkfifo.c	__util_mkfifo_main	argv[i]	if (mkfifo(argv[i], mode) != 0) { @column 14	existing site; prove while completing the bounds audit
+src/util/mkfifo.c	__util_mkfifo_main	argv[i][0]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 26	existing site; prove while completing the bounds audit
+src/util/mkfifo.c	__util_mkfifo_main	argv[i][1]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 47	existing site; prove while completing the bounds audit
+src/util/mv.c	__util_mv_main	a[0]	if (a[0] != '-' || a[1] == 0) break; @column 7	existing site; prove while completing the bounds audit
+src/util/mv.c	__util_mv_main	a[1]	if (a[0] != '-' || a[1] == 0) break; @column 22	existing site; prove while completing the bounds audit
+src/util/mv.c	__util_mv_main	argv[argc - 1]	target = argv[argc - 1]; @column 11	existing site; prove while completing the bounds audit
+src/util/mv.c	__util_mv_main	argv[i]	char *a = argv[i]; @column 13	existing site; prove while completing the bounds audit
+src/util/mv.c	__util_mv_main	argv[i]	const char *src = argv[i]; @column 21	existing site; prove while completing the bounds audit
+src/util/od.c	__util_od_main	a[0]	if (a[0] != '-' || a[1] == 0) break; @column 7	existing site; prove while completing the bounds audit
+src/util/od.c	__util_od_main	a[0]	if (strlen(a) != 1 || !strchr("doxn", a[0])) { @column 42	existing site; prove while completing the bounds audit
+src/util/od.c	__util_od_main	a[0]	o.abase = a[0]; @column 14	existing site; prove while completing the bounds audit
+src/util/od.c	__util_od_main	a[1]	if (a[0] != '-' || a[1] == 0) break; @column 22	existing site; prove while completing the bounds audit
+src/util/od.c	__util_od_main	argv[++i]	a = argv[++i]; @column 8	existing site; prove while completing the bounds audit
+src/util/od.c	__util_od_main	argv[i]	char *a = argv[i]; @column 13	existing site; prove while completing the bounds audit
+src/util/od.c	__util_od_main	argv[i]	if (parse_odnum(argv[i], &o.count) < 0) { @column 20	existing site; prove while completing the bounds audit
+src/util/od.c	__util_od_main	argv[i]	if (parse_odnum(argv[i], &o.skip) < 0) { @column 20	existing site; prove while completing the bounds audit
+src/util/od.c	__util_od_main	argv[i]	if (parse_type(argv[i], &o.type, &o.size) < 0) { @column 19	existing site; prove while completing the bounds audit
+src/util/od.c	char_field	tmp[0]	if (b >= 0x20 && b < 0x7f) { tmp[0] = (char)b; tmp[1] = 0; return tmp; } @column 32	existing site; prove while completing the bounds audit
+src/util/od.c	char_field	tmp[1]	if (b >= 0x20 && b < 0x7f) { tmp[0] = (char)b; tmp[1] = 0; return tmp; } @column 50	existing site; prove while completing the bounds audit
+src/util/od.c	instream_read	is->files[is->idx]	fprintf(stderr, "od: %s: %s\n", is->files[is->idx], strerror(errno)); @column 38	existing site; prove while completing the bounds audit
+src/util/od.c	instream_read	is->files[is->idx]	is->cur = fopen(is->files[is->idx], "rb"); @column 21	existing site; prove while completing the bounds audit
+src/util/od.c	parse_odnum	s[n - 1]	else if (s[n - 1] == 'k') { mult = 1024; n--; } @column 11	existing site; prove while completing the bounds audit
+src/util/od.c	parse_odnum	s[n - 1]	else if (s[n - 1] == 'm') { mult = 1048576; n--; } @column 11	existing site; prove while completing the bounds audit
+src/util/od.c	parse_odnum	s[n - 1]	if (s[n - 1] == 'b') { mult = 512; n--; } @column 6	existing site; prove while completing the bounds audit
+src/util/od.c	parse_type	s[0]	*type = s[0]; @column 11	existing site; prove while completing the bounds audit
+src/util/od.c	parse_type	s[0]	if ((s[0] == 'x' || s[0] == 'o' || s[0] == 'd' || s[0] == 'u') && s[1]) { @column 22	existing site; prove while completing the bounds audit
+src/util/od.c	parse_type	s[0]	if ((s[0] == 'x' || s[0] == 'o' || s[0] == 'd' || s[0] == 'u') && s[1]) { @column 37	existing site; prove while completing the bounds audit
+src/util/od.c	parse_type	s[0]	if ((s[0] == 'x' || s[0] == 'o' || s[0] == 'd' || s[0] == 'u') && s[1]) { @column 52	existing site; prove while completing the bounds audit
+src/util/od.c	parse_type	s[0]	if ((s[0] == 'x' || s[0] == 'o' || s[0] == 'd' || s[0] == 'u') && s[1]) { @column 7	existing site; prove while completing the bounds audit
+src/util/od.c	parse_type	s[1]	if ((s[0] == 'x' || s[0] == 'o' || s[0] == 'd' || s[0] == 'u') && s[1]) { @column 68	existing site; prove while completing the bounds audit
+src/util/pathchk.c	__util_pathchk_main	argv[i]	"(no-option) pathchk(1p) check set is\n", argv[i]); @column 62	existing site; prove while completing the bounds audit
+src/util/pathchk.c	__util_pathchk_main	argv[i]	fprintf(stderr, "pathchk: %s: unsupported option\n", argv[i]); @column 56	existing site; prove while completing the bounds audit
+src/util/pathchk.c	__util_pathchk_main	argv[i]	if (!strcmp(argv[i], "--")) { i++; break; } @column 15	existing site; prove while completing the bounds audit
+src/util/pathchk.c	__util_pathchk_main	argv[i]	if (!strcmp(argv[i], "-p") || !strcmp(argv[i], "-P")) { @column 15	existing site; prove while completing the bounds audit
+src/util/pathchk.c	__util_pathchk_main	argv[i]	if (!strcmp(argv[i], "-p") || !strcmp(argv[i], "-P")) { @column 41	existing site; prove while completing the bounds audit
+src/util/pathchk.c	__util_pathchk_main	argv[i]	if (argv[i][0] != '-' || !strcmp(argv[i], "-")) break; @column 36	existing site; prove while completing the bounds audit
+src/util/pathchk.c	__util_pathchk_main	argv[i]	if (argv[i][0] != '-' || !strcmp(argv[i], "-")) break; @column 7	existing site; prove while completing the bounds audit
+src/util/pathchk.c	__util_pathchk_main	argv[i]	if (check_one(argv[i])) status = 1; @column 17	existing site; prove while completing the bounds audit
+src/util/pathchk.c	__util_pathchk_main	argv[i][0]	if (argv[i][0] != '-' || !strcmp(argv[i], "-")) break; @column 7	existing site; prove while completing the bounds audit
+src/util/pathchk.c	check_one	path[0]	if (((unsigned)(path[0] | 32) - 'a') < 26u && path[1] == ':') { @column 18	existing site; prove while completing the bounds audit
+src/util/pathchk.c	check_one	path[0]	prefix[0] = path[0]; @column 15	existing site; prove while completing the bounds audit
+src/util/pathchk.c	check_one	path[1]	if (((unsigned)(path[0] | 32) - 'a') < 26u && path[1] == ':') { @column 48	existing site; prove while completing the bounds audit
+src/util/pathchk.c	check_one	start[k]	if (byte_is_invalid(start[k])) { @column 25	existing site; prove while completing the bounds audit
+src/util/pr.c	__util_pr_main	a[0]	if (a[0] != '-' || a[1] == 0) break; @column 7	existing site; prove while completing the bounds audit
+src/util/pr.c	__util_pr_main	a[0]	if (a[0] == '+') { @column 7	existing site; prove while completing the bounds audit
+src/util/pr.c	__util_pr_main	a[1]	if (a[0] != '-' || a[1] == 0) break; @column 22	existing site; prove while completing the bounds audit
+src/util/pr.c	__util_pr_main	a[1]	if (a[1] == 'n') { @column 7	existing site; prove while completing the bounds audit
+src/util/pr.c	__util_pr_main	a[1]	if (a[1] >= '0' && a[1] <= '9') { @column 22	existing site; prove while completing the bounds audit
+src/util/pr.c	__util_pr_main	a[1]	if (a[1] >= '0' && a[1] <= '9') { @column 7	existing site; prove while completing the bounds audit
+src/util/pr.c	__util_pr_main	argv[++i]	o.header = argv[++i]; @column 15	existing site; prove while completing the bounds audit
+src/util/pr.c	__util_pr_main	argv[++i]	o.offset = (int)strtol(argv[++i], &end, 10); @column 27	existing site; prove while completing the bounds audit
+src/util/pr.c	__util_pr_main	argv[++i]	o.page_len = (int)strtol(argv[++i], &end, 10); @column 29	existing site; prove while completing the bounds audit
+src/util/pr.c	__util_pr_main	argv[++i]	o.width = (int)strtol(argv[++i], &end, 10); @column 26	existing site; prove while completing the bounds audit
+src/util/pr.c	__util_pr_main	argv[i]	char *a = argv[i]; @column 13	existing site; prove while completing the bounds audit
+src/util/pr.c	__util_pr_main	argv[i]	if (process_file(&o, argv[i]) < 0) had_error = 1; @column 24	existing site; prove while completing the bounds audit
+src/util/pr.c	process_stream	line[len - 1]	if (len > 0 && line[len - 1] == '\n') { line[len - 1] = 0; len--; } @column 18	existing site; prove while completing the bounds audit
+src/util/pr.c	process_stream	line[len - 1]	if (len > 0 && line[len - 1] == '\n') { line[len - 1] = 0; len--; } @column 43	existing site; prove while completing the bounds audit
+src/util/readlink.c	__util_readlink_main	argv[i]	fprintf(stderr, "readlink: %s: %s\n", argv[i], strerror(errno)); @column 42	existing site; prove while completing the bounds audit
+src/util/readlink.c	__util_readlink_main	argv[i]	ssize_t n = readlink(argv[i], buf, sizeof buf - 1); @column 24	existing site; prove while completing the bounds audit
+src/util/readlink.c	__util_readlink_main	buf[n]	buf[n] = 0; @column 3	existing site; prove while completing the bounds audit
+src/util/rm.c	__util_rm_main	a[0]	if (a[0] != '-' || a[1] == 0) break; /* not an option; a bare "-" is an operand */ @column 7	existing site; prove while completing the bounds audit
+src/util/rm.c	__util_rm_main	a[1]	if (a[0] != '-' || a[1] == 0) break; /* not an option; a bare "-" is an operand */ @column 22	existing site; prove while completing the bounds audit
+src/util/rm.c	__util_rm_main	argv[i]	char *a = argv[i]; @column 13	existing site; prove while completing the bounds audit
+src/util/rm.c	__util_rm_main	argv[i]	if (rm_one(argv[i], recursive, force) < 0) had_error = 1; @column 14	existing site; prove while completing the bounds audit
+src/util/rm.c	names_dot_or_dotdot	path[n - 1]	while (n > 0 && (path[n - 1] == '/' || path[n - 1] == '\\')) n--; @column 19	existing site; prove while completing the bounds audit
+src/util/rm.c	names_dot_or_dotdot	path[n - 1]	while (n > 0 && (path[n - 1] == '/' || path[n - 1] == '\\')) n--; @column 41	existing site; prove while completing the bounds audit
+src/util/rm.c	names_dot_or_dotdot	path[start + 1]	(len == 2 && path[start] == '.' && path[start + 1] == '.'); @column 44	existing site; prove while completing the bounds audit
+src/util/rm.c	names_dot_or_dotdot	path[start - 1]	while (start > 0 && path[start - 1] != '/' && path[start - 1] != '\\') start--; @column 22	existing site; prove while completing the bounds audit
+src/util/rm.c	names_dot_or_dotdot	path[start - 1]	while (start > 0 && path[start - 1] != '/' && path[start - 1] != '\\') start--; @column 48	existing site; prove while completing the bounds audit
+src/util/rm.c	names_dot_or_dotdot	path[start]	(len == 2 && path[start] == '.' && path[start + 1] == '.'); @column 22	existing site; prove while completing the bounds audit
+src/util/rm.c	names_dot_or_dotdot	path[start]	return (len == 1 && path[start] == '.') || @column 22	existing site; prove while completing the bounds audit
+src/util/rmdir.c	__util_rmdir_main	argv[i]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 26	existing site; prove while completing the bounds audit
+src/util/rmdir.c	__util_rmdir_main	argv[i]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 47	existing site; prove while completing the bounds audit
+src/util/rmdir.c	__util_rmdir_main	argv[i]	fprintf(stderr, "rmdir: %s: %s\n", argv[i], strerror(errno)); @column 39	existing site; prove while completing the bounds audit
+src/util/rmdir.c	__util_rmdir_main	argv[i]	fprintf(stderr, "rmdir: %s: invalid option\n", argv[i]); @column 50	existing site; prove while completing the bounds audit
+src/util/rmdir.c	__util_rmdir_main	argv[i]	if (!strcmp(argv[i], "--")) { i++; break; } @column 15	existing site; prove while completing the bounds audit
+src/util/rmdir.c	__util_rmdir_main	argv[i]	if (!strcmp(argv[i], "-p")) { opt_p = 1; continue; } @column 15	existing site; prove while completing the bounds audit
+src/util/rmdir.c	__util_rmdir_main	argv[i]	if (opt_p && rmdir_ascend(argv[i]) < 0) fail = 1; @column 29	existing site; prove while completing the bounds audit
+src/util/rmdir.c	__util_rmdir_main	argv[i]	if (rmdir(argv[i]) != 0) { @column 13	existing site; prove while completing the bounds audit
+src/util/rmdir.c	__util_rmdir_main	argv[i][0]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 26	existing site; prove while completing the bounds audit
+src/util/rmdir.c	__util_rmdir_main	argv[i][1]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 47	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	arg[0]	if (arg[0] != '-' || arg[1] == 0) break; @column 7	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	arg[1]	if (arg[0] != '-' || arg[1] == 0) break; @column 24	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	argv[i]	char *arg = argv[i]; @column 15	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	argv[i]	files[nfiles++] = argv[i]; @column 21	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	argv[i]	outfile = argv[i]; @column 16	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	argv[i]	val = argv[i]; @column 12	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	lines[keep - 1]	if (o.u && keep > 0 && line_compare(&o, &lines[keep - 1], &lines[write_i]) == 0) @column 45	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	lines[keep++]	lines[keep++] = lines[write_i]; @column 4	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	lines[li - 1]	int cmp = line_compare(&o, &lines[li - 1], &lines[li]); @column 32	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	lines[li]	fprintf(stderr, "sort: %s: disorder: %s\n", srcname, lines[li].text); @column 59	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	lines[li]	int cmp = line_compare(&o, &lines[li - 1], &lines[li]); @column 48	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	lines[li]	lines[li].fields = split_fields(lines[li].text, lines[li].len, &o, &lines[li].nfields); @column 36	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	lines[li]	lines[li].fields = split_fields(lines[li].text, lines[li].len, &o, &lines[li].nfields); @column 4	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	lines[li]	lines[li].fields = split_fields(lines[li].text, lines[li].len, &o, &lines[li].nfields); @column 52	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	lines[li]	lines[li].fields = split_fields(lines[li].text, lines[li].len, &o, &lines[li].nfields); @column 72	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	lines[write_i]	fprintf(outf, "%s\n", lines[write_i].text); @column 26	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	lines[write_i]	if (o.u && keep > 0 && line_compare(&o, &lines[keep - 1], &lines[write_i]) == 0) @column 63	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	lines[write_i]	lines[keep++] = lines[write_i]; @column 20	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	val[0]	if (val[0] == 0 || val[1] != 0) { @column 9	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	val[0]	o.delim = val[0]; @column 15	existing site; prove while completing the bounds audit
+src/util/sort.c	__util_sort_main	val[1]	if (val[0] == 0 || val[1] != 0) { @column 24	existing site; prove while completing the bounds audit
+src/util/sort.c	free_lines	lines[i]	free(lines[i].fields); @column 8	existing site; prove while completing the bounds audit
+src/util/sort.c	free_lines	lines[i]	free(lines[i].text); @column 8	existing site; prove while completing the bounds audit
+src/util/sort.c	key_end_off	fields[f - 1]	fl = fields[f - 1]; @column 7	existing site; prove while completing the bounds audit
+src/util/sort.c	key_end_off	line[fstart]	if (bflag) while (fstart < fl.end && isblank((unsigned char)line[fstart])) fstart++; @column 62	existing site; prove while completing the bounds audit
+src/util/sort.c	key_start_off	fields[f - 1]	fl = fields[f - 1]; @column 7	existing site; prove while completing the bounds audit
+src/util/sort.c	key_start_off	line[start]	if (bflag) while (start < fl.end && isblank((unsigned char)line[start])) start++; @column 61	existing site; prove while completing the bounds audit
+src/util/sort.c	merge_sort	lines[a++]	if (line_compare(o, &lines[a], &lines[b]) <= 0) tmp[k++] = lines[a++]; @column 64	existing site; prove while completing the bounds audit
+src/util/sort.c	merge_sort	lines[a++]	while (a < mid) tmp[k++] = lines[a++]; @column 31	existing site; prove while completing the bounds audit
+src/util/sort.c	merge_sort	lines[a]	if (line_compare(o, &lines[a], &lines[b]) <= 0) tmp[k++] = lines[a++]; @column 26	existing site; prove while completing the bounds audit
+src/util/sort.c	merge_sort	lines[b++]	else tmp[k++] = lines[b++]; @column 21	existing site; prove while completing the bounds audit
+src/util/sort.c	merge_sort	lines[b++]	while (b < hi) tmp[k++] = lines[b++]; @column 30	existing site; prove while completing the bounds audit
+src/util/sort.c	merge_sort	lines[b]	if (line_compare(o, &lines[a], &lines[b]) <= 0) tmp[k++] = lines[a++]; @column 37	existing site; prove while completing the bounds audit
+src/util/sort.c	merge_sort	tmp[k++]	else tmp[k++] = lines[b++]; @column 10	existing site; prove while completing the bounds audit
+src/util/sort.c	merge_sort	tmp[k++]	if (line_compare(o, &lines[a], &lines[b]) <= 0) tmp[k++] = lines[a++]; @column 53	existing site; prove while completing the bounds audit
+src/util/sort.c	merge_sort	tmp[k++]	while (a < mid) tmp[k++] = lines[a++]; @column 20	existing site; prove while completing the bounds audit
+src/util/sort.c	merge_sort	tmp[k++]	while (b < hi) tmp[k++] = lines[b++]; @column 19	existing site; prove while completing the bounds audit
+src/util/sort.c	parse_numeric	s[i]	for (; i < len && s[i] >= '0' && s[i] <= '9'; i++) v = v * 10 + (s[i] - '0'); @column 20	existing site; prove while completing the bounds audit
+src/util/sort.c	parse_numeric	s[i]	for (; i < len && s[i] >= '0' && s[i] <= '9'; i++) v = v * 10 + (s[i] - '0'); @column 35	existing site; prove while completing the bounds audit
+src/util/sort.c	parse_numeric	s[i]	for (; i < len && s[i] >= '0' && s[i] <= '9'; i++) v = v * 10 + (s[i] - '0'); @column 67	existing site; prove while completing the bounds audit
+src/util/sort.c	parse_numeric	s[i]	if (i < len && s[i] == '-') { neg = 1; i++; } @column 17	existing site; prove while completing the bounds audit
+src/util/sort.c	parse_numeric	s[i]	while (i < len && isblank((unsigned char)s[i])) i++; @column 43	existing site; prove while completing the bounds audit
+src/util/sort.c	read_all_lines	(*out)[*nout]	(*out)[*nout].fields = 0; @column 3	existing site; prove while completing the bounds audit
+src/util/sort.c	read_all_lines	(*out)[*nout]	(*out)[*nout].len = len; @column 3	existing site; prove while completing the bounds audit
+src/util/sort.c	read_all_lines	(*out)[*nout]	(*out)[*nout].nfields = 0; @column 3	existing site; prove while completing the bounds audit
+src/util/sort.c	read_all_lines	(*out)[*nout]	(*out)[*nout].text = text; @column 3	existing site; prove while completing the bounds audit
+src/util/sort.c	read_all_lines	buf[len - 1]	if (len && buf[len - 1] == '\n') len--; @column 14	existing site; prove while completing the bounds audit
+src/util/sort.c	read_all_lines	text[len]	text[len] = 0; @column 3	existing site; prove while completing the bounds audit
+src/util/sort.c	split_fields	line[i]	if (i == len || line[i] == o->delim) { @column 20	existing site; prove while completing the bounds audit
+src/util/sort.c	split_fields	line[i]	if (isblank((unsigned char)line[i])) { @column 31	existing site; prove while completing the bounds audit
+src/util/split.c	__util_split_main	a[0]	if (a[0] != '-' || a[1] == 0) break; @column 7	existing site; prove while completing the bounds audit
+src/util/split.c	__util_split_main	a[1]	if (a[0] != '-' || a[1] == 0) break; @column 22	existing site; prove while completing the bounds audit
+src/util/split.c	__util_split_main	argv[++i]	lcount = strtol(argv[++i], &end, 10); @column 20	existing site; prove while completing the bounds audit
+src/util/split.c	__util_split_main	argv[++i]	suflen = (int)strtol(argv[++i], &end, 10); @column 25	existing site; prove while completing the bounds audit
+src/util/split.c	__util_split_main	argv[i++]	if (i < argc) file = argv[i++]; @column 23	existing site; prove while completing the bounds audit
+src/util/split.c	__util_split_main	argv[i++]	if (i < argc) prefix = argv[i++]; @column 25	existing site; prove while completing the bounds audit
+src/util/split.c	__util_split_main	argv[i]	char *a = argv[i]; @column 13	existing site; prove while completing the bounds audit
+src/util/split.c	__util_split_main	argv[i]	fprintf(stderr, "split: extra operand '%s'\n", argv[i]); @column 50	existing site; prove while completing the bounds audit
+src/util/split.c	__util_split_main	argv[i]	if (parse_bytecount(argv[i], &bcount) < 0) { @column 24	existing site; prove while completing the bounds audit
+src/util/split.c	parse_bytecount	s[n - 1]	else if (s[n - 1] == 'm') { mult = 1048576; n--; } @column 11	existing site; prove while completing the bounds audit
+src/util/split.c	parse_bytecount	s[n - 1]	if (s[n - 1] == 'k') { mult = 1024; n--; } @column 6	existing site; prove while completing the bounds audit
+src/util/tabs.c	__util_tabs_main	a[0]	if (a[0] == '-' && a[1] != 0) { @column 7	existing site; prove while completing the bounds audit
+src/util/tabs.c	__util_tabs_main	a[0]	if (a[0] == '-' && a[1] >= '0' && a[1] <= '9' && a[2] == 0) { @column 7	existing site; prove while completing the bounds audit
+src/util/tabs.c	__util_tabs_main	a[1]	if (a[0] == '-' && a[1] != 0) { @column 22	existing site; prove while completing the bounds audit
+src/util/tabs.c	__util_tabs_main	a[1]	if (a[0] == '-' && a[1] >= '0' && a[1] <= '9' && a[2] == 0) { @column 22	existing site; prove while completing the bounds audit
+src/util/tabs.c	__util_tabs_main	a[1]	if (a[0] == '-' && a[1] >= '0' && a[1] <= '9' && a[2] == 0) { @column 37	existing site; prove while completing the bounds audit
+src/util/tabs.c	__util_tabs_main	a[1]	interval = a[1] - '0'; @column 15	existing site; prove while completing the bounds audit
+src/util/tabs.c	__util_tabs_main	a[2]	if (a[0] == '-' && a[1] >= '0' && a[1] <= '9' && a[2] == 0) { @column 52	existing site; prove while completing the bounds audit
+src/util/tabs.c	__util_tabs_main	argv[i]	const char *a = argv[i]; @column 19	existing site; prove while completing the bounds audit
+src/util/tail.c	__util_tail_main	a[0]	if (a[0] == '-' && a[1] != 0) { @column 7	existing site; prove while completing the bounds audit
+src/util/tail.c	__util_tail_main	a[1]	enum tail_mode m = (a[1] == 'c') ? TAIL_BYTES : TAIL_LINES; @column 24	existing site; prove while completing the bounds audit
+src/util/tail.c	__util_tail_main	a[1]	if (a[0] == '-' && a[1] != 0) { @column 22	existing site; prove while completing the bounds audit
+src/util/tail.c	__util_tail_main	argv[++i]	if (parse_signed_number(argv[++i], &fe, &num) < 0) { @column 28	existing site; prove while completing the bounds audit
+src/util/tail.c	__util_tail_main	argv[i]	char *a = argv[i]; @column 13	existing site; prove while completing the bounds audit
+src/util/tail.c	__util_tail_main	argv[i]	const char *path = argv[i]; @column 23	existing site; prove while completing the bounds audit
+src/util/tail.c	__util_tail_main	argv[i]	fprintf(stderr, "tail: %s: invalid number\n", argv[i]); @column 51	existing site; prove while completing the bounds audit
+src/util/tail.c	nth_line_offset	buf[i]	if (buf[i] != '\n') continue; @column 7	existing site; prove while completing the bounds audit
+src/util/tee.c	__util_tee_main	a[0]	if (a[0] != '-' || a[1] == 0) break; @column 7	existing site; prove while completing the bounds audit
+src/util/tee.c	__util_tee_main	a[1]	if (a[0] != '-' || a[1] == 0) break; @column 22	existing site; prove while completing the bounds audit
+src/util/tee.c	__util_tee_main	argv[i]	char *a = argv[i]; @column 13	existing site; prove while completing the bounds audit
+src/util/tee.c	__util_tee_main	argv[i]	fprintf(stderr, "tee: %s: %s\n", argv[i], strerror(errno)); @column 38	existing site; prove while completing the bounds audit
+src/util/tee.c	__util_tee_main	argv[i]	int fd = open(argv[i], flags, 0666); @column 18	existing site; prove while completing the bounds audit
+src/util/tee.c	__util_tee_main	argv[i]	paths[nfiles] = argv[i]; @column 20	existing site; prove while completing the bounds audit
+src/util/tee.c	__util_tee_main	fds[nfiles]	fds[nfiles] = fd; @column 4	existing site; prove while completing the bounds audit
+src/util/tee.c	__util_tee_main	paths[nfiles]	paths[nfiles] = argv[i]; @column 4	existing site; prove while completing the bounds audit
+src/util/test.c	__util_test_main	argv[0]	if (!strcmp(argv[0], "[")) { @column 14	existing site; prove while completing the bounds audit
+src/util/test.c	__util_test_main	argv[argc - 1]	if (n < 1 || strcmp(argv[argc - 1], "]")) { @column 23	existing site; prove while completing the bounds audit
+src/util/test.c	do_unary	arg[0]	case 'n': return arg[0] != 0 ? T_TRUE : T_FALSE; @column 19	existing site; prove while completing the bounds audit
+src/util/test.c	do_unary	arg[0]	case 'z': return arg[0] == 0 ? T_TRUE : T_FALSE; @column 19	existing site; prove while completing the bounds audit
+src/util/test.c	do_unary	op[1]	switch (op[1]) { @column 10	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	t->v[t->i]	if (!t->err && t->i != t->n) { terr(t, "unexpected argument", t->v[t->i]); return T_ERR; } @column 65	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[0]	if (!strcmp(v[0], "!")) return v[1][0] == 0 ? T_TRUE : T_FALSE; @column 15	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[0]	if (!strcmp(v[0], "!")) { @column 15	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[0]	if (!strcmp(v[0], "(") && !strcmp(v[2], ")")) return v[1][0] != 0 ? T_TRUE : T_FALSE; @column 15	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[0]	if (!strcmp(v[0], "(") && !strcmp(v[3], ")")) { @column 15	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[0]	if (is_binop(v[1])) return do_binary(t, v[0], v[1], v[2]); @column 43	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[0]	if (is_unop(v[0])) return do_unary(t, v[0], v[1]); @column 15	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[0]	if (is_unop(v[0])) return do_unary(t, v[0], v[1]); @column 41	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[0]	return v[0][0] != 0 ? T_TRUE : T_FALSE; @column 10	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[0]	terr(t, "unary operator expected", v[0]); @column 38	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[0][0]	return v[0][0] != 0 ? T_TRUE : T_FALSE; @column 10	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[1]	if (!strcmp(v[0], "!")) return v[1][0] == 0 ? T_TRUE : T_FALSE; @column 34	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[1]	if (!strcmp(v[0], "(") && !strcmp(v[2], ")")) return v[1][0] != 0 ? T_TRUE : T_FALSE; @column 56	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[1]	if (is_binop(v[1])) return do_binary(t, v[0], v[1], v[2]); @column 16	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[1]	if (is_binop(v[1])) return do_binary(t, v[0], v[1], v[2]); @column 49	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[1]	if (is_unop(v[0])) return do_unary(t, v[0], v[1]); @column 47	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[1]	terr(t, "binary operator expected", v[1]); @column 39	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[1][0]	if (!strcmp(v[0], "!")) return v[1][0] == 0 ? T_TRUE : T_FALSE; @column 34	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[1][0]	if (!strcmp(v[0], "(") && !strcmp(v[2], ")")) return v[1][0] != 0 ? T_TRUE : T_FALSE; @column 56	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[2]	if (!strcmp(v[0], "(") && !strcmp(v[2], ")")) return v[1][0] != 0 ? T_TRUE : T_FALSE; @column 37	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[2]	if (is_binop(v[1])) return do_binary(t, v[0], v[1], v[2]); @column 55	existing site; prove while completing the bounds audit
+src/util/test.c	eval_argc	v[3]	if (!strcmp(v[0], "(") && !strcmp(v[3], ")")) { @column 37	existing site; prove while completing the bounds audit
+src/util/test.c	is_unop	s[0]	if (s[0] != '-' || s[1] == 0 || s[2] != 0) return 0; @column 6	existing site; prove while completing the bounds audit
+src/util/test.c	is_unop	s[1]	if (s[0] != '-' || s[1] == 0 || s[2] != 0) return 0; @column 21	existing site; prove while completing the bounds audit
+src/util/test.c	is_unop	s[1]	return strchr("bcdefghLnprSstuwxz", s[1]) != 0; @column 38	existing site; prove while completing the bounds audit
+src/util/test.c	is_unop	s[2]	if (s[0] != '-' || s[1] == 0 || s[2] != 0) return 0; @column 34	existing site; prove while completing the bounds audit
+src/util/test.c	t_aexpr	t->v[t->i]	while (!t->err && t->i < t->n && !strcmp(t->v[t->i], "-a")) { @column 43	existing site; prove while completing the bounds audit
+src/util/test.c	t_nexpr	t->v[t->i]	if (t->i < t->n && !strcmp(t->v[t->i], "!")) { @column 29	existing site; prove while completing the bounds audit
+src/util/test.c	t_oexpr	t->v[t->i]	while (!t->err && t->i < t->n && !strcmp(t->v[t->i], "-o")) { @column 43	existing site; prove while completing the bounds audit
+src/util/test.c	t_primary	t->v[t->i + 1]	if (t->i + 2 < t->n && is_binop(t->v[t->i + 1])) { @column 34	existing site; prove while completing the bounds audit
+src/util/test.c	t_primary	t->v[t->i + 1]	int r = do_binary(t, t->v[t->i], t->v[t->i + 1], t->v[t->i + 2]); @column 36	existing site; prove while completing the bounds audit
+src/util/test.c	t_primary	t->v[t->i + 1]	int r = do_unary(t, tok, t->v[t->i + 1]); @column 28	existing site; prove while completing the bounds audit
+src/util/test.c	t_primary	t->v[t->i + 2]	int r = do_binary(t, t->v[t->i], t->v[t->i + 1], t->v[t->i + 2]); @column 52	existing site; prove while completing the bounds audit
+src/util/test.c	t_primary	t->v[t->i]	if (t->i >= t->n || strcmp(t->v[t->i], ")")) { terr(t, "')' expected", 0); return T_ERR; } @column 30	existing site; prove while completing the bounds audit
+src/util/test.c	t_primary	t->v[t->i]	int r = do_binary(t, t->v[t->i], t->v[t->i + 1], t->v[t->i + 2]); @column 24	existing site; prove while completing the bounds audit
+src/util/test.c	t_primary	t->v[t->i]	tok = t->v[t->i]; @column 8	existing site; prove while completing the bounds audit
+src/util/test.c	t_primary	tok[0]	return tok[0] != 0 ? T_TRUE : T_FALSE; @column 9	existing site; prove while completing the bounds audit
+src/util/touch.c	__util_touch_main	a[1]	if (a[1] != 0 && strspn(a + 1, "acm") == strlen(a + 1)) { @column 7	existing site; prove while completing the bounds audit
+src/util/touch.c	__util_touch_main	argv[++i]	ref = argv[++i]; @column 10	existing site; prove while completing the bounds audit
+src/util/touch.c	__util_touch_main	argv[++i]	tspec = argv[++i]; @column 12	existing site; prove while completing the bounds audit
+src/util/touch.c	__util_touch_main	argv[i]	const char *a = argv[i]; @column 19	existing site; prove while completing the bounds audit
+src/util/touch.c	__util_touch_main	argv[i]	fd = open(argv[i], O_CREAT | O_WRONLY, 0666); @column 14	existing site; prove while completing the bounds audit
+src/util/touch.c	__util_touch_main	argv[i]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 26	existing site; prove while completing the bounds audit
+src/util/touch.c	__util_touch_main	argv[i]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 47	existing site; prove while completing the bounds audit
+src/util/touch.c	__util_touch_main	argv[i]	fprintf(stderr, "touch: %s: %s\n", argv[i], strerror(errno)); @column 39	existing site; prove while completing the bounds audit
+src/util/touch.c	__util_touch_main	argv[i]	fprintf(stderr, "touch: %s: %s\n", argv[i], strerror(errno)); @column 40	existing site; prove while completing the bounds audit
+src/util/touch.c	__util_touch_main	argv[i]	if (access(argv[i], F_OK) != 0) { @column 14	existing site; prove while completing the bounds audit
+src/util/touch.c	__util_touch_main	argv[i]	if (utimensat(AT_FDCWD, argv[i], ts, 0) != 0) { @column 27	existing site; prove while completing the bounds audit
+src/util/touch.c	__util_touch_main	argv[i][0]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 26	existing site; prove while completing the bounds audit
+src/util/touch.c	__util_touch_main	argv[i][1]	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 47	existing site; prove while completing the bounds audit
+src/util/touch.c	read_digits	s[i]	if (s[i] < '0' || s[i] > '9') return -1; @column 21	existing site; prove while completing the bounds audit
+src/util/touch.c	read_digits	s[i]	if (s[i] < '0' || s[i] > '9') return -1; @column 7	existing site; prove while completing the bounds audit
+src/util/touch.c	read_digits	s[i]	v = v * 10 + (s[i] - '0'); @column 17	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	argv[1]	f = fopen(argv[1], "r"); @column 14	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	argv[1]	if (!f) { fprintf(stderr, "tsort: %s: %s\n", argv[1], strerror(errno)); return 1; } @column 49	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	argv[1]	if (!strcmp(argv[1], "-")) { @column 15	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	buf[pos]	buf[pos] = 0; /* pos < len guaranteed unless pos==len already, in which @column 3	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	buf[pos]	while (pos < len && !isspace((unsigned char)buf[pos])) pos++; @column 47	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	buf[pos]	while (pos < len && isspace((unsigned char)buf[pos])) pos++; @column 46	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	nodes[cur]	for (s = 0; s < nodes[cur].nsucc; s++) { @column 20	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	nodes[cur]	int nb = nodes[cur].succ[s]; @column 14	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	nodes[cur]	nodes[cur].done = 1; @column 4	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	nodes[cur]	printf("%s\n", nodes[cur].name); @column 19	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	nodes[cur].succ[s]	int nb = nodes[cur].succ[s]; @column 14	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	nodes[i]	free(nodes[i].name); @column 8	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	nodes[i]	free(nodes[i].succ); @column 8	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	nodes[n]	if (!nodes[n].done) fprintf(stderr, " %s", nodes[n].name); @column 47	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	nodes[n]	if (!nodes[n].done) fprintf(stderr, " %s", nodes[n].name); @column 9	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	nodes[n]	if (nodes[n].indeg == 0) queue[qtail++] = (int)n; @column 8	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	nodes[nb]	if (--nodes[nb].indeg == 0) queue[qtail++] = nb; @column 11	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	queue[qtail++]	if (--nodes[nb].indeg == 0) queue[qtail++] = nb; @column 33	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	queue[qtail++]	if (nodes[n].indeg == 0) queue[qtail++] = (int)n; @column 29	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	queue[queue_head++]	int cur = queue[queue_head++]; @column 14	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	tok[i + 1]	int b = get_or_add(tok[i + 1]); @column 22	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	tok[i]	int a = get_or_add(tok[i]); @column 22	existing site; prove while completing the bounds audit
+src/util/tsort.c	__util_tsort_main	tok[ntok++]	tok[ntok++] = buf + start; @column 3	existing site; prove while completing the bounds audit
+src/util/tsort.c	add_edge	nodes[a]	g = __util_reallocarray(nodes[a].succ, newcap, sizeof *nodes[a].succ); @column 27	existing site; prove while completing the bounds audit
+src/util/tsort.c	add_edge	nodes[a]	if (!__util_array_capacity(nodes[a].cap, nodes[a].nsucc, 1, 8, @column 30	existing site; prove while completing the bounds audit
+src/util/tsort.c	add_edge	nodes[a]	if (!__util_array_capacity(nodes[a].cap, nodes[a].nsucc, 1, 8, @column 44	existing site; prove while completing the bounds audit
+src/util/tsort.c	add_edge	nodes[a]	if (nodes[a].nsucc >= nodes[a].cap) { @column 24	existing site; prove while completing the bounds audit
+src/util/tsort.c	add_edge	nodes[a]	if (nodes[a].nsucc >= nodes[a].cap) { @column 6	existing site; prove while completing the bounds audit
+src/util/tsort.c	add_edge	nodes[a]	nodes[a].cap = newcap; @column 3	existing site; prove while completing the bounds audit
+src/util/tsort.c	add_edge	nodes[a]	nodes[a].succ = g; @column 3	existing site; prove while completing the bounds audit
+src/util/tsort.c	add_edge	nodes[a]	nodes[a].succ[nodes[a].nsucc++] = b; @column 16	existing site; prove while completing the bounds audit
+src/util/tsort.c	add_edge	nodes[a]	nodes[a].succ[nodes[a].nsucc++] = b; @column 2	existing site; prove while completing the bounds audit
+src/util/tsort.c	add_edge	nodes[a].succ[nodes[a].nsucc++]	nodes[a].succ[nodes[a].nsucc++] = b; @column 2	existing site; prove while completing the bounds audit
+src/util/tsort.c	add_edge	nodes[b]	nodes[b].indeg++; @column 2	existing site; prove while completing the bounds audit
+src/util/tsort.c	find_node	nodes[i]	if (!strcmp(nodes[i].name, name)) return (int)i; @column 15	existing site; prove while completing the bounds audit
+src/util/tsort.c	get_or_add	nodes[nnodes]	nodes[nnodes].cap = 0; @column 2	existing site; prove while completing the bounds audit
+src/util/tsort.c	get_or_add	nodes[nnodes]	nodes[nnodes].done = 0; @column 2	existing site; prove while completing the bounds audit
+src/util/tsort.c	get_or_add	nodes[nnodes]	nodes[nnodes].indeg = 0; @column 2	existing site; prove while completing the bounds audit
+src/util/tsort.c	get_or_add	nodes[nnodes]	nodes[nnodes].name = strdup(name); @column 2	existing site; prove while completing the bounds audit
+src/util/tsort.c	get_or_add	nodes[nnodes]	nodes[nnodes].nsucc = 0; @column 2	existing site; prove while completing the bounds audit
+src/util/tsort.c	get_or_add	nodes[nnodes]	nodes[nnodes].succ = 0; @column 2	existing site; prove while completing the bounds audit
+src/util/uniq.c	__util_uniq_main	arg[0]	if (arg[0] != '-' || arg[1] == 0) break; @column 7	existing site; prove while completing the bounds audit
+src/util/uniq.c	__util_uniq_main	arg[1]	if (arg[0] != '-' || arg[1] == 0) break; @column 24	existing site; prove while completing the bounds audit
+src/util/uniq.c	__util_uniq_main	arg[2]	if (arg[2]) val = arg + 2; @column 8	existing site; prove while completing the bounds audit
+src/util/uniq.c	__util_uniq_main	argv[i++]	if (i < argc) infile = argv[i++]; @column 25	existing site; prove while completing the bounds audit
+src/util/uniq.c	__util_uniq_main	argv[i++]	if (i < argc) outfile = argv[i++]; @column 26	existing site; prove while completing the bounds audit
+src/util/uniq.c	__util_uniq_main	argv[i]	char *arg = argv[i]; @column 15	existing site; prove while completing the bounds audit
+src/util/uniq.c	__util_uniq_main	argv[i]	else { if (++i >= argc) { fprintf(stderr, "uniq: -f: option requires an argument\n"); return 1; } val = argv[i]; } @column 108	existing site; prove while completing the bounds audit
+src/util/uniq.c	__util_uniq_main	argv[i]	else { if (++i >= argc) { fprintf(stderr, "uniq: -s: option requires an argument\n"); return 1; } val = argv[i]; } @column 108	existing site; prove while completing the bounds audit
+src/util/uniq.c	__util_uniq_main	cur[--curlen]	if (curlen && cur[curlen - 1] == '\n') cur[--curlen] = 0; @column 41	existing site; prove while completing the bounds audit
+src/util/uniq.c	__util_uniq_main	cur[curlen - 1]	if (curlen && cur[curlen - 1] == '\n') cur[--curlen] = 0; @column 16	existing site; prove while completing the bounds audit
+src/util/uniq.c	__util_uniq_main	next[--nextlen]	if (nextlen && next[nextlen - 1] == '\n') next[--nextlen] = 0; @column 45	existing site; prove while completing the bounds audit
+src/util/uniq.c	__util_uniq_main	next[nextlen - 1]	if (nextlen && next[nextlen - 1] == '\n') next[--nextlen] = 0; @column 18	existing site; prove while completing the bounds audit
+src/util/util_basename.c	__util_basename_main	argv[1]	base = basename(argv[1]); @column 18	existing site; prove while completing the bounds audit
+src/util/util_basename.c	__util_basename_main	argv[2]	const char *suffix = argv[2]; @column 24	existing site; prove while completing the bounds audit
+src/util/util_basename.c	__util_basename_main	base[blen - slen]	base[blen - slen] = 0; @column 4	existing site; prove while completing the bounds audit
+src/util/util_dirname.c	__util_dirname_main	argv[1]	fputs(dirname(argv[1]), stdout); @column 16	existing site; prove while completing the bounds audit
+src/util/util_printf.c	__util_printf_main	argv[1]	format = argv[1]; @column 11	existing site; prove while completing the bounds audit
+src/util/util_printf.c	arg_take	a->argv[a->i++]	*out = a->argv[a->i++]; @column 9	existing site; prove while completing the bounds audit
+src/util/util_printf.c	expand_b_arg	s[1]	switch (s[1]) { @column 11	existing site; prove while completing the bounds audit
+src/util/util_printf.c	format_char	arg[0]	c[0] = arg[0]; @column 9	existing site; prove while completing the bounds audit
+src/util/util_printf.c	format_char	arg[0]	if (!arg[0]) { /* exhausted argument: empty, per the standard's "null string" case */ @column 7	existing site; prove while completing the bounds audit
+src/util/util_printf.c	format_escape	s[1]	if (s[1] >= '0' && s[1] <= '7') { @column 22	existing site; prove while completing the bounds audit
+src/util/util_printf.c	format_escape	s[1]	if (s[1] >= '0' && s[1] <= '7') { @column 7	existing site; prove while completing the bounds audit
+src/util/util_printf.c	format_escape	s[1]	switch (s[1]) { @column 10	existing site; prove while completing the bounds audit
+src/util/util_printf.c	format_unsigned	hex[v % (unsigned)base]	do { tmp[t++] = hex[v % (unsigned)base]; v /= (unsigned)base; } while (v); @column 19	existing site; prove while completing the bounds audit
+src/util/util_printf.c	leading_quote_char	s[0]	if ((s[0] == '\'' || s[0] == '"') && s[1] != 0) { @column 23	existing site; prove while completing the bounds audit
+src/util/util_printf.c	leading_quote_char	s[0]	if ((s[0] == '\'' || s[0] == '"') && s[1] != 0) { @column 7	existing site; prove while completing the bounds audit
+src/util/util_printf.c	leading_quote_char	s[1]	*out = (long)(unsigned char)s[1]; @column 31	existing site; prove while completing the bounds audit
+src/util/util_printf.c	leading_quote_char	s[1]	if ((s[0] == '\'' || s[0] == '"') && s[1] != 0) { @column 39	existing site; prove while completing the bounds audit
+src/util/util_printf.c	run_one_pass	p[1]	if (p[1] == '%') { putchar('%'); p += 2; continue; } @column 7	existing site; prove while completing the bounds audit
+src/util/util_pwd.c	__util_pwd_main	argv[i]	"pwd(1p) takes no operands\n", argv[i]); @column 51	existing site; prove while completing the bounds audit
+src/util/util_pwd.c	__util_pwd_main	argv[i]	if (strcmp(argv[i], "-L") && strcmp(argv[i], "-P")) { @column 14	existing site; prove while completing the bounds audit
+src/util/util_pwd.c	__util_pwd_main	argv[i]	if (strcmp(argv[i], "-L") && strcmp(argv[i], "-P")) { @column 39	existing site; prove while completing the bounds audit
+src/util/util_realpath.c	__util_realpath_main	argv[i]	char *r = realpath(argv[i], 0); @column 22	existing site; prove while completing the bounds audit
+src/util/util_realpath.c	__util_realpath_main	argv[i]	fprintf(stderr, "realpath: %s: %s\n", argv[i], strerror(errno)); @column 42	existing site; prove while completing the bounds audit
+src/util/uudecode.c	__util_uudecode_main	argv[++i]	out_override = argv[++i]; @column 19	existing site; prove while completing the bounds audit
+src/util/uudecode.c	__util_uudecode_main	argv[i++]	if (i < argc) in_path = argv[i++]; @column 26	existing site; prove while completing the bounds audit
+src/util/uudecode.c	__util_uudecode_main	argv[i]	for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 21	existing site; prove while completing the bounds audit
+src/util/uudecode.c	__util_uudecode_main	argv[i]	for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 42	existing site; prove while completing the bounds audit
+src/util/uudecode.c	__util_uudecode_main	argv[i]	fprintf(stderr, "uudecode: %s: invalid option\n", argv[i]); @column 53	existing site; prove while completing the bounds audit
+src/util/uudecode.c	__util_uudecode_main	argv[i]	if (!strcmp(argv[i], "--")) { i++; break; } @column 15	existing site; prove while completing the bounds audit
+src/util/uudecode.c	__util_uudecode_main	argv[i]	if (!strcmp(argv[i], "-o")) { @column 15	existing site; prove while completing the bounds audit
+src/util/uudecode.c	__util_uudecode_main	argv[i][0]	for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 21	existing site; prove while completing the bounds audit
+src/util/uudecode.c	__util_uudecode_main	argv[i][1]	for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 42	existing site; prove while completing the bounds audit
+src/util/uudecode.c	chomp	s[--n]	while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r')) s[--n] = 0; @column 58	existing site; prove while completing the bounds audit
+src/util/uudecode.c	chomp	s[n - 1]	while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r')) s[--n] = 0; @column 19	existing site; prove while completing the bounds audit
+src/util/uudecode.c	chomp	s[n - 1]	while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r')) s[--n] = 0; @column 39	existing site; prove while completing the bounds audit
+src/util/uuencode.c	__util_uuencode_main	argv[i + 1]	decode_name = argv[i + 1]; @column 17	existing site; prove while completing the bounds audit
+src/util/uuencode.c	__util_uuencode_main	argv[i]	decode_name = argv[i]; @column 17	existing site; prove while completing the bounds audit
+src/util/uuencode.c	__util_uuencode_main	argv[i]	for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 21	existing site; prove while completing the bounds audit
+src/util/uuencode.c	__util_uuencode_main	argv[i]	for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 42	existing site; prove while completing the bounds audit
+src/util/uuencode.c	__util_uuencode_main	argv[i]	fprintf(stderr, "uuencode: %s: invalid option\n", argv[i]); @column 53	existing site; prove while completing the bounds audit
+src/util/uuencode.c	__util_uuencode_main	argv[i]	if (!strcmp(argv[i], "--")) { i++; break; } @column 15	existing site; prove while completing the bounds audit
+src/util/uuencode.c	__util_uuencode_main	argv[i]	if (!strcmp(argv[i], "-m")) { @column 15	existing site; prove while completing the bounds audit
+src/util/uuencode.c	__util_uuencode_main	argv[i]	src_path = argv[i]; @column 14	existing site; prove while completing the bounds audit
+src/util/uuencode.c	__util_uuencode_main	argv[i][0]	for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 21	existing site; prove while completing the bounds audit
+src/util/uuencode.c	__util_uuencode_main	argv[i][1]	for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) { @column 42	existing site; prove while completing the bounds audit
+src/util/wc.c	__util_wc_main	a[0]	if (a[0] != '-' || a[1] == 0) break; @column 7	existing site; prove while completing the bounds audit
+src/util/wc.c	__util_wc_main	a[1]	if (a[0] != '-' || a[1] == 0) break; @column 22	existing site; prove while completing the bounds audit
+src/util/wc.c	__util_wc_main	argv[i]	char *a = argv[i]; @column 13	existing site; prove while completing the bounds audit
+src/util/wc.c	__util_wc_main	argv[i]	const char *path = argv[i]; @column 22	existing site; prove while completing the bounds audit
 src/wordexp/arith.c	arith_band	a->p[0]	if (a->p[0] != '&' || a->p[1] == '&') return v; @column 7	existing site; prove while completing the bounds audit
 src/wordexp/arith.c	arith_band	a->p[1]	if (a->p[0] != '&' || a->p[1] == '&') return v; @column 25	existing site; prove while completing the bounds audit
 src/wordexp/arith.c	arith_bor	a->p[0]	if (a->p[0] != '|' || a->p[1] == '|') return v; @column 7	existing site; prove while completing the bounds audit
@@ -1142,9 +1648,16 @@ src/wordexp/wordexp.c	expand_impl	p[1]	if (c == '\\' && p[1] && strchr("\"\\$`\n
 src/wordexp/wordexp.c	expand_impl	p[1]	if (fbuf_push(&field, p[1], 1)) { rc = WRDE_NOSPACE; goto fail; } @column 27	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_impl	p[1]	if (p[1] == '\n') { p += 2; continue; } @column 9	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_impl	p[2]	if (c == '$' && p[1] == '(' && p[2] == '(') { @column 35	existing site; prove while completing the bounds audit
+src/wordexp/wordexp.c	expand_param	candidate[i]	candidate[i] = 0; @column 7	existing site; prove while completing the bounds audit
+src/wordexp/wordexp.c	expand_param	candidate[i]	candidate[i] = val[i]; @column 7	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_param	p[1]	if (*p == '#' && (!braced || p[1] == '}')) { @column 31	existing site; prove while completing the bounds audit
+src/wordexp/wordexp.c	expand_param	p[1]	if (*p == ':' && p[1] && strchr("-+=?", p[1])) { colon = 1; op = p[1]; word = p + 2; } @column 20	existing site; prove while completing the bounds audit
+src/wordexp/wordexp.c	expand_param	p[1]	if (*p == ':' && p[1] && strchr("-+=?", p[1])) { colon = 1; op = p[1]; word = p + 2; } @column 43	existing site; prove while completing the bounds audit
+src/wordexp/wordexp.c	expand_param	p[1]	if (*p == ':' && p[1] && strchr("-+=?", p[1])) { colon = 1; op = p[1]; word = p + 2; } @column 68	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_param	p[1]	if (braced && *p == '#' && is_namestart(p[1])) { @column 42	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_param	p[1]	if (sh && *p == '?' && (!braced || p[1] == '}')) { @column 37	existing site; prove while completing the bounds audit
+src/wordexp/wordexp.c	expand_param	val[i]	candidate[i] = val[i]; @column 22	existing site; prove while completing the bounds audit
+src/wordexp/wordexp.c	expand_param	val[i]	if (fbuf_push(b, val[i], quoted)) { rc = WRDE_NOSPACE; break; } @column 23	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_param_word	s[n++]	if (!quoted && input_len && is_split_char(start[input_len - 1])) s[n++] = start[input_len - 1]; @column 67	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_param_word	s[n++]	if (i && *ifs) s[n++] = *ifs; @column 18	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_param_word	s[n]	s[n] = 0; @column 2	existing site; prove while completing the bounds audit

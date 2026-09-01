@@ -1,17 +1,17 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#define _GNU_SOURCE
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <string.h>
 #include <getopt.h>
 #include "libc.h"
 
-extern int __optpos;
+extern int __optpos; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
 /* argv required: `av[src]` is dereferenced unconditionally at entry
  * with no guard; its one real call site (__getopt_long() below) always
  * passes its own now-required argv. */
 static void permute(char *const *argv, int dest, int src) __attribute__((nonnull(1)));
-static void permute(char *const *argv, int dest, int src)
+static void permute(char *const *argv, int dest, int src) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	char **av = (char **)argv;
 	char *tmp = av[src];
@@ -27,7 +27,7 @@ static void permute(char *const *argv, int dest, int src)
  * the fallthrough return. longopts/idx are deliberately NOT marked --
  * see include/getopt.h's own comment on getopt_long()/
  * getopt_long_only() for why. */
-static int __getopt_long_core(int argc, char *const *argv, const char *optstring, const struct option *longopts, int *idx, int longonly)
+static int __getopt_long_core(int argc, char *const *argv, const char *optstring, const struct option *longopts, int *idx, int longonly) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
     __attribute__((nonnull(2, 3)));
 static int __getopt_long_core(int argc, char *const *argv, const char *optstring, const struct option *longopts, int *idx, int longonly)
 {
@@ -76,9 +76,10 @@ static int __getopt_long_core(int argc, char *const *argv, const char *optstring
 					__getopt_msg("option does not take an argument", argv[optind-1], strlen(argv[optind-1]));
 					return '?';
 				}
-				optarg = opt + 1;
-			} else if (longopts[i].has_arg == required_argument) {
-				if (!(optarg = argv[optind])) {
+					optarg = opt + 1;
+				} else if (longopts[i].has_arg == required_argument) {
+					optarg = argv[optind];
+					if (!optarg) {
 					optopt = longopts[i].val;
 					if (colon) return ':';
 					if (!opterr) return '?';
@@ -109,7 +110,7 @@ static int __getopt_long_core(int argc, char *const *argv, const char *optstring
  * above: `argv[optind]`/`optstring[0]` are both dereferenced
  * unconditionally past the `optind >= argc` bound check, which says
  * nothing about either pointer's own nullness. */
-static int __getopt_long(int argc, char *const *argv, const char *optstring, const struct option *longopts, int *idx, int longonly)
+static int __getopt_long(int argc, char *const *argv, const char *optstring, const struct option *longopts, int *idx, int longonly) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
     __attribute__((nonnull(2, 3)));
 static int __getopt_long(int argc, char *const *argv, const char *optstring, const struct option *longopts, int *idx, int longonly)
 {
@@ -123,10 +124,11 @@ static int __getopt_long(int argc, char *const *argv, const char *optstring, con
 	skipped = optind;
 	if (optstring[0] != '+' && optstring[0] != '-') {
 		int i;
-		for (i = optind; ; i++) {
-			if (i >= argc || !argv[i]) return -1;
+		for (i = optind; i < argc; i++) {
+			if (!argv[i]) return -1;
 			if (argv[i][0] == '-' && argv[i][1]) break;
 		}
+		if (i >= argc) return -1;
 		optind = i;
 	}
 	resumed = optind;

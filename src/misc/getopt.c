@@ -10,25 +10,25 @@ int optind = 1, opterr = 1, optopt, optreset;
 
 /* The position within the current argv element, for clustered
  * short options (-abc). */
-int __optpos;
+int __optpos; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
 extern char *__progname;
 
 static void writestr(const char *s)
 {
-	write(2, s, strlen(s));
+	(void)write(2, s, strlen(s));
 }
 
 /* "prog: msg: -c\n", or "prog: msg: --name\n" for getopt_long. */
-void __getopt_msg(const char *msg, const char *optname, size_t l)
+void __getopt_msg(const char *msg, const char *optname, size_t l) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const char *p = __progname ? __progname : "";
 	writestr(p);
 	writestr(": ");
 	writestr(msg);
 	writestr(": ");
-	write(2, optname, l);
-	write(2, "\n", 1);
+	(void)write(2, optname, l);
+	(void)write(2, "\n", 1);
 }
 
 int getopt(int argc, char *const argv[], const char *optstring)

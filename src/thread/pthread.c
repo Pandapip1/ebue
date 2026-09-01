@@ -6,6 +6,11 @@
  * or detached termination and supplies the kernel-signalled completion
  * object.  Control blocks remain as tombstones after resource reclamation,
  * which makes stale IDs diagnosable without dereferencing freed storage. */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <pthread.h>
 #include <errno.h>
 #include <sched.h>
@@ -26,12 +31,12 @@ __thread struct __pthread *__pthread_self_control;
 
 static struct __pthread_attr_data *attr_data(pthread_attr_t *attr)
 {
-	return (struct __pthread_attr_data *)(void *)attr;
+	return (struct __pthread_attr_data *)(void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_attr_t is opaque storage for this ABI-defined internal layout
 }
 
 static const struct __pthread_attr_data *const_attr_data(const pthread_attr_t *attr)
 {
-	return (const struct __pthread_attr_data *)(const void *)attr;
+	return (const struct __pthread_attr_data *)(const void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_attr_t is opaque storage for this ABI-defined internal layout
 }
 
 static int valid_attr(const pthread_attr_t *attr)
@@ -163,7 +168,7 @@ int __pthread_is_current(struct __pthread *thread)
 }
 
 int pthread_create(pthread_t *__restrict output,
-	const pthread_attr_t *__restrict attr, void *(*start)(void *),
+	const pthread_attr_t *__restrict attr handle(pthread_attr), void *(*start)(void *),
 	void *__restrict argument)
 {
 	const struct __pthread_attr_data *data = 0;
@@ -287,7 +292,7 @@ _Noreturn void pthread_exit(void *result)
 	__plat_thread_terminate_self();
 }
 
-int pthread_attr_init(pthread_attr_t *attr)
+int pthread_attr_init(pthread_attr_t *attr construct(pthread_attr))
 {
 	struct __pthread_attr_data *data;
 	if (!attr) return EINVAL;
@@ -303,14 +308,14 @@ int pthread_attr_init(pthread_attr_t *attr)
 	return 0;
 }
 
-int pthread_attr_destroy(pthread_attr_t *attr)
+int pthread_attr_destroy(pthread_attr_t *attr destroy(pthread_attr))
 {
 	if (!valid_attr(attr)) return EINVAL;
 	memset(attr, 0, sizeof *attr);
 	return 0;
 }
 
-int pthread_attr_getdetachstate(const pthread_attr_t *__restrict attr,
+int pthread_attr_getdetachstate(const pthread_attr_t *__restrict attr handle(pthread_attr),
 	int *__restrict value)
 {
 	if (!valid_attr(attr) || !value) return EINVAL;
@@ -318,7 +323,7 @@ int pthread_attr_getdetachstate(const pthread_attr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_attr_getguardsize(const pthread_attr_t *__restrict attr,
+int pthread_attr_getguardsize(const pthread_attr_t *__restrict attr handle(pthread_attr),
 	size_t *__restrict value)
 {
 	if (!valid_attr(attr) || !value) return EINVAL;
@@ -326,7 +331,7 @@ int pthread_attr_getguardsize(const pthread_attr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_attr_getinheritsched(const pthread_attr_t *__restrict attr,
+int pthread_attr_getinheritsched(const pthread_attr_t *__restrict attr handle(pthread_attr),
 	int *__restrict value)
 {
 	if (!valid_attr(attr) || !value) return EINVAL;
@@ -334,7 +339,7 @@ int pthread_attr_getinheritsched(const pthread_attr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_attr_getschedpolicy(const pthread_attr_t *__restrict attr,
+int pthread_attr_getschedpolicy(const pthread_attr_t *__restrict attr handle(pthread_attr),
 	int *__restrict value)
 {
 	if (!valid_attr(attr) || !value) return EINVAL;
@@ -342,7 +347,7 @@ int pthread_attr_getschedpolicy(const pthread_attr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_attr_getscope(const pthread_attr_t *__restrict attr,
+int pthread_attr_getscope(const pthread_attr_t *__restrict attr handle(pthread_attr),
 	int *__restrict value)
 {
 	if (!valid_attr(attr) || !value) return EINVAL;
@@ -350,7 +355,7 @@ int pthread_attr_getscope(const pthread_attr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_attr_getstacksize(const pthread_attr_t *__restrict attr,
+int pthread_attr_getstacksize(const pthread_attr_t *__restrict attr handle(pthread_attr),
 	size_t *__restrict value)
 {
 	if (!valid_attr(attr) || !value) return EINVAL;
@@ -358,7 +363,7 @@ int pthread_attr_getstacksize(const pthread_attr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_attr_setdetachstate(pthread_attr_t *attr, int value)
+int pthread_attr_setdetachstate(pthread_attr_t *attr handle(pthread_attr), int value)
 {
 	if (!valid_attr(attr) || (value != PTHREAD_CREATE_JOINABLE &&
 	    value != PTHREAD_CREATE_DETACHED)) return EINVAL;
@@ -366,14 +371,14 @@ int pthread_attr_setdetachstate(pthread_attr_t *attr, int value)
 	return 0;
 }
 
-int pthread_attr_setguardsize(pthread_attr_t *attr, size_t value)
+int pthread_attr_setguardsize(pthread_attr_t *attr handle(pthread_attr), size_t value)
 {
 	if (!valid_attr(attr)) return EINVAL;
 	attr_data(attr)->guard_size = value;
 	return 0;
 }
 
-int pthread_attr_setinheritsched(pthread_attr_t *attr, int value)
+int pthread_attr_setinheritsched(pthread_attr_t *attr handle(pthread_attr), int value)
 {
 	if (!valid_attr(attr) || (value != PTHREAD_INHERIT_SCHED &&
 	    value != PTHREAD_EXPLICIT_SCHED)) return EINVAL;
@@ -381,7 +386,7 @@ int pthread_attr_setinheritsched(pthread_attr_t *attr, int value)
 	return 0;
 }
 
-int pthread_attr_setschedpolicy(pthread_attr_t *attr, int value)
+int pthread_attr_setschedpolicy(pthread_attr_t *attr handle(pthread_attr), int value)
 {
 	if (!valid_attr(attr) || value < SCHED_OTHER || value > SCHED_SPORADIC)
 		return EINVAL;
@@ -389,7 +394,7 @@ int pthread_attr_setschedpolicy(pthread_attr_t *attr, int value)
 	return 0;
 }
 
-int pthread_attr_setscope(pthread_attr_t *attr, int value)
+int pthread_attr_setscope(pthread_attr_t *attr handle(pthread_attr), int value)
 {
 	if (!valid_attr(attr)) return EINVAL;
 	if (value == PTHREAD_SCOPE_PROCESS) return ENOTSUP;
@@ -398,7 +403,7 @@ int pthread_attr_setscope(pthread_attr_t *attr, int value)
 	return 0;
 }
 
-int pthread_attr_getschedparam(const pthread_attr_t *__restrict attr,
+int pthread_attr_getschedparam(const pthread_attr_t *__restrict attr handle(pthread_attr),
 	struct sched_param *__restrict parameter)
 {
 	if (!valid_attr(attr) || !parameter) return EINVAL;
@@ -406,7 +411,7 @@ int pthread_attr_getschedparam(const pthread_attr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_attr_setschedparam(pthread_attr_t *__restrict attr,
+int pthread_attr_setschedparam(pthread_attr_t *__restrict attr handle(pthread_attr),
 	const struct sched_param *__restrict parameter)
 {
 	const struct __pthread_attr_data *data;
@@ -421,7 +426,7 @@ int pthread_attr_setschedparam(pthread_attr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_attr_getstack(const pthread_attr_t *__restrict attr,
+int pthread_attr_getstack(const pthread_attr_t *__restrict attr handle(pthread_attr),
 	void **__restrict address, size_t *__restrict size)
 {
 	if (!valid_attr(attr) || !address || !size) return EINVAL;
@@ -430,7 +435,7 @@ int pthread_attr_getstack(const pthread_attr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_attr_setstack(pthread_attr_t *attr, void *address, size_t size)
+int pthread_attr_setstack(pthread_attr_t *attr handle(pthread_attr), void *address, size_t size)
 {
 	if (!valid_attr(attr) || !address || size < PTHREAD_STACK_MIN) return EINVAL;
 	attr_data(attr)->stack_address = address;
@@ -438,14 +443,14 @@ int pthread_attr_setstack(pthread_attr_t *attr, void *address, size_t size)
 	return 0;
 }
 
-int pthread_attr_setstacksize(pthread_attr_t *attr, size_t size)
+int pthread_attr_setstacksize(pthread_attr_t *attr handle(pthread_attr), size_t size)
 {
 	if (!valid_attr(attr) || size < PTHREAD_STACK_MIN) return EINVAL;
 	attr_data(attr)->stack_size = size;
 	return 0;
 }
 
-int pthread_attr_getstackaddr(const pthread_attr_t *__restrict attr,
+int pthread_attr_getstackaddr(const pthread_attr_t *__restrict attr handle(pthread_attr),
 	void **__restrict address)
 {
 	if (!valid_attr(attr) || !address) return EINVAL;
@@ -453,7 +458,7 @@ int pthread_attr_getstackaddr(const pthread_attr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_attr_setstackaddr(pthread_attr_t *attr, void *address)
+int pthread_attr_setstackaddr(pthread_attr_t *attr handle(pthread_attr), void *address)
 {
 	if (!valid_attr(attr) || !address) return EINVAL;
 	attr_data(attr)->stack_address = address;
@@ -483,7 +488,7 @@ static int valid_policy(int policy)
 	       policy == SCHED_RR || policy == SCHED_SPORADIC;
 }
 
-static int valid_priority(int policy, int priority)
+static int valid_priority(int policy, int priority) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int minimum = sched_get_priority_min(policy);
 	int maximum = sched_get_priority_max(policy);
@@ -554,3 +559,5 @@ int pthread_setconcurrency(int level)
 	concurrency = level;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

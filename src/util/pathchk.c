@@ -76,7 +76,7 @@ static int check_one(const char *path)
 	if (path_max < 0) path_max = PATH_MAX;
 
 	if (len > (size_t)path_max) {
-		fprintf(stderr, "pathchk: %s: pathname longer than %ld bytes\n", path, path_max);
+		__util_diagf("pathchk: %s: pathname longer than %ld bytes\n", path, path_max);
 		err = 1;
 	}
 
@@ -108,12 +108,11 @@ static int check_one(const char *path)
 		}
 		if (!*start) break;
 
-		p = start;
-		while (*p && !ISSEP(*p)) p++;
-		clen = (size_t)(p - start);
+		clen = strcspn(start, "/\\");
+		p = start + clen;
 
 		if (clen > (size_t)name_max) {
-			fprintf(stderr, "pathchk: %s: component \"%.*s\" longer than %ld bytes\n",
+			__util_diagf("pathchk: %s: component \"%.*s\" longer than %ld bytes\n",
 				path, (int)clen, start, name_max);
 			err = 1;
 		}
@@ -121,7 +120,7 @@ static int check_one(const char *path)
 			size_t k;
 			for (k = 0; k < clen; k++) {
 				if (byte_is_invalid(start[k])) {
-					fprintf(stderr, "pathchk: %s: component \"%.*s\" contains a "
+					__util_diagf("pathchk: %s: component \"%.*s\" contains a "
 					                "byte not valid in its containing directory\n",
 						path, (int)clen, start);
 					err = 1;
@@ -138,7 +137,7 @@ static int check_one(const char *path)
 		if (plen > 0) {
 			prefix[plen] = 0;
 			if (access(prefix, F_OK) == 0 && access(prefix, X_OK) != 0) {
-				fprintf(stderr, "pathchk: %s: %s: directory not searchable\n", path, prefix);
+				__util_diagf("pathchk: %s: %s: directory not searchable\n", path, prefix);
 				err = 1;
 			}
 		}
@@ -165,16 +164,16 @@ int __util_pathchk_main(int argc, char **argv)
 		if (argv[i][0] != '-' || !strcmp(argv[i], "-")) break;
 		if (!strcmp(argv[i], "--")) { i++; break; }
 		if (!strcmp(argv[i], "-p") || !strcmp(argv[i], "-P")) {
-			fprintf(stderr, "pathchk: %s: not implemented -- only the default "
+			__util_diagf("pathchk: %s: not implemented -- only the default "
 			                "(no-option) pathchk(1p) check set is\n", argv[i]);
 			return 2;
 		}
-		fprintf(stderr, "pathchk: %s: unsupported option\n", argv[i]);
+		__util_diagf("pathchk: %s: unsupported option\n", argv[i]);
 		return 2;
 	}
 
 	if (i >= argc) {
-		fprintf(stderr, "pathchk: missing pathname operand\n");
+		__util_diagf("pathchk: missing pathname operand\n");
 		return 2;
 	}
 

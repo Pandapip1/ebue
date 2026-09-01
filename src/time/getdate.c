@@ -56,6 +56,11 @@
  *     range is code 8 immediately, not silently normalized forward the
  *     way mktime() would.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -121,7 +126,11 @@ static int try_templates(const char *const *tpl, size_t n, const char *s, struct
 			return -1;
 		}
 
-		mktime(&t);       /* normalize, and fill tm_wday/tm_yday */
+		errno = 0;
+		if (mktime(&t) == (time_t)-1 && errno == EOVERFLOW) {
+			getdate_err = 8;
+			return -1;
+		}
 		*out = t;
 		return 1;
 	}
@@ -144,13 +153,13 @@ static int read_templates(const char *path, char storage[][MAX_DATEMSK_LINE], co
 	if (!f) { getdate_err = 2; return -1; }
 
 	while (n < MAX_DATEMSK_TEMPLATES && fgets(storage[n], MAX_DATEMSK_LINE, f)) {
-		size_t l = strlen(storage[n]);
+		size_t l = strnlen(storage[n], MAX_DATEMSK_LINE);
 		while (l && (storage[n][l - 1] == '\n' || storage[n][l - 1] == '\r')) storage[n][--l] = 0;
 		if (!l) continue;   /* blank line: not a template */
 		out[n] = storage[n];
 		n++;
 	}
-	fclose(f);
+	(void)fclose(f);
 	return n;
 }
 
@@ -184,3 +193,5 @@ struct tm *getdate(const char *s)
 	getdate_err = 7;
 	return NULL;
 }
+
+// NOLINTEND(misc-include-cleaner)

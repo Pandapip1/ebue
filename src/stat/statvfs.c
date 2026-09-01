@@ -69,6 +69,11 @@
  *      bit is *true here*, on every volume, and omitting it would be
  *      the inaccurate choice.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/statvfs.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -98,3 +103,5 @@ int statvfs(const char *__restrict path, struct statvfs *__restrict buf)
 	if (!buf) { errno = EFAULT; return -1; }
 	return __plat_statvfs_path(path, buf);
 }
+
+// NOLINTEND(misc-include-cleaner)

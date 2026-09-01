@@ -1,11 +1,7 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-typedef __SIZE_TYPE__ size_t;
-void *malloc(size_t);
-void *calloc(size_t, size_t);
-void *realloc(void *, size_t);
-void free(void *);
+#include "allocator-fixture.h"
 
 void direct_owner(void)
 {

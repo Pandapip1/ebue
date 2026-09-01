@@ -17,12 +17,18 @@
  * raw heap call, so they needed no change at all from the split that
  * produced this file's own shape.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include "libc.h"
 #include "plat_malloc.h"
 
+withtok(heap_allocated)
 void *malloc(size_t n)
 {
 	void *p = __plat_alloc(n, 0);
@@ -30,6 +36,7 @@ void *malloc(size_t n)
 	return p;
 }
 
+withtok(heap_allocated)
 void *calloc(size_t m, size_t n)
 {
 	void *p;
@@ -39,7 +46,8 @@ void *calloc(size_t m, size_t n)
 	return p;
 }
 
-void *realloc(void *p, size_t n)
+withtok(heap_allocated)
+void *realloc(void *p consume_if_nonnull_return(heap_allocated), size_t n)
 {
 	void *q;
 	if (!p) return malloc(n);
@@ -48,15 +56,17 @@ void *realloc(void *p, size_t n)
 	return q;
 }
 
+withtok(internal_heap_allocated)
 void *__malloc(size_t n) { return malloc(n); }
-void __free(void *p) { free(p); }
+void __free(void *p consume(internal_heap_allocated)) { free(p); }
 
 size_t malloc_usable_size(void *p)
 {
 	return p ? __plat_alloc_size(p) : 0;
 }
 
-void *reallocarray(void *p, size_t m, size_t n)
+withtok(heap_allocated)
+void *reallocarray(void *p consume_if_nonnull_return(heap_allocated), size_t m, size_t n)
 {
 	if (n && m > (size_t)-1 / n) { errno = ENOMEM; return 0; }
 	return realloc(p, m * n); // NOLINT(clang-analyzer-optin.portability.UnixAPI) -- realloc(p, 0) is a deliberate, defined passthrough here
@@ -91,6 +101,7 @@ int posix_memalign(void **res, size_t align, size_t len)
 	return 0;
 }
 
+withtok(heap_allocated)
 void *aligned_alloc(size_t align, size_t len)
 {
 	void *p;
@@ -99,10 +110,12 @@ void *aligned_alloc(size_t align, size_t len)
 	return p;
 }
 
+withtok(heap_allocated)
 void *memalign(size_t align, size_t len) { return aligned_alloc(align, len); }
+withtok(heap_allocated)
 void *valloc(size_t len) { return aligned_alloc(4096, len); }
 
-void free(void *p)
+void free(void *p consume(heap_allocated))
 {
 	struct aligned_rec **pp;
 	if (!p) return;
@@ -117,3 +130,5 @@ void free(void *p)
 	}
 	__plat_dealloc(p);
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -314,6 +314,13 @@ mkdir -p "$OBJ/obj" "$OBJ/test"
 #
 # Excluded by hand, with a reason each:
 #   src/*/<other-arch>/*  -- wrong architecture, not an NT dependency
+#   src/*/linux/*         -- this native harness exercises the NT backend
+#                           through fuzz/ntstubs.c
+#   src/dlfcn/dlfcn.c     -- the native harness's allocator bootstrap uses
+#                           the host dlopen/dlsym; linking ntlibc's front
+#                           door would intercept those calls recursively
+#   src/signal/nt/sigdelivery.c -- ntstubs supplies the native harness's
+#                                  deliberately non-delivering stand-ins
 #   src/internal/$ARCH/teb.c -- reads gs:0x30; ntstubs.c supplies __teb()
 
 : > "$OBJ/compiled.txt"
@@ -353,15 +360,34 @@ for f in $(cd "$srcdir" && { find src -name '*.c';
 	[ ! -f "arch/$ARCH/src/fpconv.c" ] || echo "arch/$ARCH/src/fpconv.c";
 } | sort); do
 	cidx=$((cidx + 1))
-	# src/<area>/<arch>/<file>.c overrides src/<area>/<file>.c; keep only ours
+	# A third path component can name either an architecture or a platform.
+	# Keep our architecture and the NT backend exercised by ntstubs; skip
+	# other architectures and the real-Linux backend.  Treating every such
+	# directory as an architecture used to skip both nt/ and linux/, leaving
+	# every __plat_* reference unresolved after the platform split.
 	sub=$(echo "$f" | awk -F/ '$1 == "src" && NF == 4 { print $3 }')
-	if [ -n "$sub" ] && [ "$sub" != "$ARCH" ]; then
-		printf '%06d\t%s\tskip\t(other architecture)\n' "$cidx" "$f" >> "$cwork"
-		continue
-	fi
+	case $sub in
+	i386|x86_64|aarch64)
+		if [ "$sub" != "$ARCH" ]; then
+			printf '%06d\t%s\tskip\t(other architecture)\n' "$cidx" "$f" >> "$cwork"
+			continue
+		fi ;;
+	linux)
+		printf '%06d\t%s\tskip\t(other platform; native harness exercises NT through ntstubs.c)\n' \
+			"$cidx" "$f" >> "$cwork"
+		continue ;;
+	esac
 	case $f in
+	src/dlfcn/dlfcn.c)
+		printf '%06d\t%s\tskip\t(host dlopen/dlsym are required by the native allocator bootstrap)\n' \
+			"$cidx" "$f" >> "$cwork"
+		continue ;;
 	*/teb.c)
 		printf '%06d\t%s\tskip\t(reads gs:0x30; __teb() comes from ntstubs.c)\n' \
+			"$cidx" "$f" >> "$cwork"
+		continue ;;
+	src/signal/nt/sigdelivery.c)
+		printf '%06d\t%s\tskip\t(native signal-delivery stand-ins come from ntstubs.c)\n' \
 			"$cidx" "$f" >> "$cwork"
 		continue ;;
 	esac
@@ -712,7 +738,8 @@ link_one() {
 	l_exe="$OBJ/test/$l_n"
 	# $SAN/$LTOFLAGS/$TINC/$LINKFLAGS/$SHIMOBJS/$LIBOBJS are flag and object lists.
 	# shellcheck disable=SC2086
-	if $CC $SAN $LTOFLAGS -g -O1 -std=c99 -nostdinc -fno-builtin -D_XOPEN_SOURCE=700 -D_GNU_SOURCE -w \
+	if $CC $SAN $LTOFLAGS -g -O1 -std=c99 -nostdinc -fno-builtin -D_XOPEN_SOURCE=700 -D_GNU_SOURCE \
+	     -D_NTLIBC_NATIVE_BUILD -w \
 	     $TINC $LINKFLAGS "$srcdir/$l_t" $SHIMOBJS $LIBOBJS -o "$l_exe" \
 	     2> "$l_exe.link.err"; then
 		echo ok > "$lpar/$l_idx.rc"

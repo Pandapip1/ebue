@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -69,7 +74,7 @@ struct __dirstream {
 #define __DT_LNK 10
 #define __DT_REG 8
 
-static inline int __dirent_ascii_casecmp(const char *a, const char *b)
+static inline int __dirent_ascii_casecmp(const char *a, const char *b) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	for (;;) {
 		unsigned char ac = (unsigned char)*a++, bc = (unsigned char)*b++;
@@ -122,3 +127,5 @@ int __dirstream_next(DIR *dp, struct __dirent_raw *out)
     __attribute__((nonnull(1, 2)));
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

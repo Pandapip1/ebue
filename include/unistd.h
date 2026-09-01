@@ -1,3 +1,8 @@
+/* C library headers must use the implementation-reserved namespace for guards,
+ * type plumbing, and implementation extensions so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -5,6 +10,7 @@
 #define	_UNISTD_H
 
 #include <features.h>
+#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -85,7 +91,8 @@ int faccessat(int, const char *, int, int);
 
 int chdir(const char *);
 int fchdir(int);
-char *getcwd(char *, size_t);
+withtok(heap_allocated)
+char *getcwd(char * withtok(heap_allocated), size_t);
 
 unsigned alarm(unsigned);
 unsigned sleep(unsigned);
@@ -251,6 +258,7 @@ int setresuid(uid_t, uid_t, uid_t);  /* undefined-ok: real/effective/saved
 int setresgid(gid_t, gid_t, gid_t);  /* undefined-ok: see setresuid */
 int getresuid(uid_t *, uid_t *, uid_t *);  /* undefined-ok: see setresuid */
 int getresgid(gid_t *, gid_t *, gid_t *);  /* undefined-ok: see setresuid */
+withtok(heap_allocated)
 char *get_current_dir_name(void);
 int syncfs(int);  /* undefined-ok: syncs an entire filesystem by fd; NT has
 	no per-volume sync primitive this library wires up, and fsync()
@@ -573,3 +581,5 @@ pid_t gettid(void);
 #endif
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

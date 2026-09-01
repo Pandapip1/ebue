@@ -48,6 +48,11 @@
  * of the walk's filesystem access (chdir, lstat, stat, opendir), not
  * just the chdir; see its comment.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <ftw.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -55,6 +60,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <limits.h>
 #include "libc.h"
 
 struct level {
@@ -166,13 +172,18 @@ static void lru_push_tail(struct lru *lru, struct level *lv)
 	lru->tail = lv;
 }
 
-static void close_one(struct walkstate *ws, struct lru *lru, struct level *lv)
+static int close_one(struct walkstate *ws, struct lru *lru, struct level *lv)
 {
 	lv->pos = telldir(lv->dp);
-	closedir(lv->dp);
+	(void)closedir(lv->dp);
 	lv->dp = NULL;
 	lru_unlink(lru, lv);
+	if (ws->open_count <= 0) {
+		errno = EOVERFLOW;
+		return -1;
+	}
 	ws->open_count--;
+	return 0;
 }
 
 /* Reopen lv if it is currently closed, evicting the LRU ancestor first
@@ -184,8 +195,13 @@ static int level_open(struct walkstate *ws, struct lru *lru, struct level *lv)
 	const char *p;
 
 	if (lv->dp) return 0;
-	if (ws->nopenfd >= 1 && ws->open_count >= ws->nopenfd && lru->head)
-		close_one(ws, lru, lru->head);
+	if (ws->nopenfd >= 1 && ws->open_count >= ws->nopenfd && lru->head) {
+		if (close_one(ws, lru, lru->head) < 0) return -1;
+	}
+	if (ws->open_count < 0 || ws->open_count >= INT_MAX) {
+		errno = EMFILE;
+		return -1;
+	}
 	/* lv->path is an accumulated walk path, so an FTW_CHDIR walk has to
 	 * resolve it too -- this reopen happens *after* the process has
 	 * chdir'd into a descendant. */
@@ -195,7 +211,7 @@ static int level_open(struct walkstate *ws, struct lru *lru, struct level *lv)
 	free(tmp);
 	if (!lv->dp) return -1;
 	if (lv->pos) seekdir(lv->dp, lv->pos);
-	ws->open_count++;
+	ws->open_count = (int)((unsigned)ws->open_count + 1U);
 	lru_push_tail(lru, lv);
 	return 0;
 }
@@ -203,10 +219,18 @@ static int level_open(struct walkstate *ws, struct lru *lru, struct level *lv)
 static int base_offset(const char *path)
 {
 	const char *slash = strrchr(path, '/');
-	return slash ? (int)(slash - path + 1) : 0;
+	size_t offset;
+
+	if (!slash) return 0;
+	offset = strlen(path) - strlen(slash + 1);
+	if (offset > INT_MAX) {
+		errno = EOVERFLOW;
+		return -1;
+	}
+	return (int)offset;
 }
 
-static int report(struct walkstate *ws, const char *path, const struct stat *st, int type, int level)
+static int report(struct walkstate *ws, const char *path, const struct stat *st, int type, int level) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct FTW f;
 	int saved_errno, r;
@@ -216,6 +240,7 @@ static int report(struct walkstate *ws, const char *path, const struct stat *st,
 
 	if (ws->fn3) return ws->fn3(path, st, type);
 	f.base = base_offset(path);
+	if (f.base < 0) return -1;
 	f.level = level;
 	saved_errno = errno;
 	r = ws->fn4(path, st, type, &f);
@@ -248,7 +273,8 @@ static int is_own_ancestor(const struct ancestor *anc, const struct stat *st)
 	return 0;
 }
 
-static int walk(struct walkstate *ws, struct lru *lru, const char *path, int level, int is_root,
+// NOLINTNEXTLINE(misc-no-recursion) -- the directory walk mirrors the filesystem hierarchy and is path-depth bounded
+static int walk(struct walkstate *ws, struct lru *lru, const char *path, int level, int is_root, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 		const struct ancestor *anc)
 {
 	struct stat lst, st, zero;
@@ -357,15 +383,33 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 		r = 0;
 		while ((de = readdir(lv.dp)) != NULL) {
 			char *child;
-			size_t clen;
+			size_t clen, namelen, off, separator;
 
-			if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+			/* readdir() returns a fixed struct dirent.  Validate its name
+			 * within that physical member before traversing or copying it. */
+			namelen = strnlen(de->d_name, sizeof de->d_name);
+			if (namelen == sizeof de->d_name) { r = -1; errno = EIO; break; }
+			if ((namelen == 1 && de->d_name[0] == '.') ||
+			    (namelen == 2 && de->d_name[0] == '.' &&
+			     de->d_name[1] == '.')) continue;
 
-			clen = plen + (had_trailing_slash ? 0 : 1) + strlen(de->d_name) + 1;
+			separator = had_trailing_slash ? 0 : 1;
+			if (plen > (size_t)-1 - separator) {
+				r = -1; errno = ENOMEM; break;
+			}
+			off = plen + separator;
+			if (namelen > (size_t)-1 - off) {
+				r = -1; errno = ENOMEM; break;
+			}
+			clen = off + namelen;
+			if (clen == (size_t)-1) { r = -1; errno = ENOMEM; break; }
+			clen++;
 			child = malloc(clen);
 			if (!child) { r = -1; errno = ENOMEM; break; }
-			if (had_trailing_slash) snprintf(child, clen, "%s%s", path, de->d_name);
-			else snprintf(child, clen, "%s/%s", path, de->d_name);
+			memcpy(child, path, plen);
+			if (separator) child[plen] = '/';
+			memcpy(child + off, de->d_name, namelen);
+			child[off + namelen] = 0;
 
 			/* level_open() may have closed lv.dp to make room for a
 			 * descendant's own directory; reopen (and replay via
@@ -387,7 +431,7 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 		/* Tell the level above that the cwd is no longer its own. */
 		if (ws->flags & FTW_CHDIR) ws->cwd_moved = 1;
 
-		if (lv.dp) close_one(ws, lru, &lv);
+		if (lv.dp && close_one(ws, lru, &lv) < 0 && !r) r = -1;
 		free(lv.path);
 		if (r) return r;
 	}
@@ -414,7 +458,7 @@ int ftw(const char *path, int (*fn)(const char *, const struct stat *, int), int
 }
 
 int nftw(const char *path, int (*fn)(const char *, const struct stat *, int, struct FTW *),
-	 int nopenfd, int flags)
+	 int nopenfd, int flags) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct walkstate ws;
 	struct lru lru;
@@ -447,11 +491,26 @@ int nftw(const char *path, int (*fn)(const char *, const struct stat *, int, str
 				cap = next;
 			}
 		}
+		if (!ws.cwd0) return -1;
 	}
 
 	{
 		int r = walk(&ws, &lru, path, 0, 1, NULL);
+		int saved = errno;
+
+		/* FTW_CHDIR may leave walk() in any directory it visited, but the
+		 * caller's working directory must be restored before nftw() returns.
+		 * A restoration failure becomes the result only when the walk itself
+		 * succeeded; otherwise retain the original failure and its errno. */
+		if (ws.cwd0 && chdir(ws.cwd0) < 0) {
+			if (r != 0) errno = saved;
+			else r = -1;
+		} else if (r != 0) {
+			errno = saved;
+		}
 		free(ws.cwd0);
 		return r;
 	}
 }
+
+// NOLINTEND(misc-include-cleaner)

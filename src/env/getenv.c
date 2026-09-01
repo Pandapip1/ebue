@@ -8,23 +8,23 @@
 /* Windows environment names are case-insensitive, and a program asking
  * for "PATH" must find "Path", which is how Windows spells it.
  *
- * e/name are both required: __env_find's only caller of this helper
- * already checked *e truthy (the loop's own `*e` condition) before
- * passing it as e, and name is __env_find's own now-nonnull parameter
+ * entry/name are both required: __env_find's only caller of this helper
+ * already checked *entry truthy (the loop's own `*entry` condition) before
+ * passing it as entry, and name is __env_find's own now-nonnull parameter
  * (see src/internal/libc.h). */
-static int name_eq(const char *e, const char *name, size_t l)
+static int name_eq(const char *entry, const char *name, size_t name_length)
     __attribute__((nonnull(1, 2)));
-static int name_eq(const char *e, const char *name, size_t l)
+static int name_eq(const char *entry, const char *name, size_t name_length) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	size_t i;
-	for (i = 0; i < l; i++) {
-		int a = (unsigned char)e[i], b = (unsigned char)name[i];
+	for (i = 0; i < name_length; i++) {
+		int a = (unsigned char)entry[i], b = (unsigned char)name[i];
 		if (!a) return 0;
 		if (a >= 'a' && a <= 'z') a -= 32;
 		if (b >= 'a' && b <= 'z') b -= 32;
 		if (a != b) return 0;
 	}
-	return e[l] == '=';
+	return entry[name_length] == '=';
 }
 
 char **__env_find(const char *name, size_t l)
@@ -44,4 +44,3 @@ char *getenv(const char *name)
 	e = __env_find(name, l);
 	return e ? *e + l + 1 : 0;
 }
-

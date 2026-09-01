@@ -40,6 +40,11 @@
  * confirmed with a throwaway host oracle program rather than assumed
  * from "it's just seconds and nanoseconds".
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <time.h>
 #include <sys/resource.h>
 #include <errno.h>
@@ -76,7 +81,7 @@
  * hit the identical bug and is this fix's model. aarch64's syscall
  * calling convention: x8 = syscall number, x0..x5 = up to 6 arguments,
  * result (or -errno in [-4095,-1]) in x0. */
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
 	register long x0 __asm__("x0") = a1;
@@ -128,7 +133,7 @@ int __plat_realtime_set(long long nt_ticks)
 	return 0;
 }
 
-int __plat_perfcounter_get(long long *count, long long *freq)
+int __plat_perfcounter_get(long long *count, long long *freq) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; counter and frequency outputs have distinct roles
 {
 	struct timespec ts = {0, 0};
 	long ret = raw_syscall(SYS_clock_gettime, (long)CLOCK_MONOTONIC, (long)&ts, 0L, 0L, 0L, 0L);
@@ -151,7 +156,7 @@ int __plat_perfcounter_get(long long *count, long long *freq)
 	return 0;
 }
 
-int __plat_process_cpu_ticks(long long *kernel, long long *user)
+int __plat_process_cpu_ticks(long long *kernel, long long *user) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; kernel and user outputs have distinct roles
 {
 	/* include/sys/resource.h's own struct rusage banner already commits
 	 * to reporting exactly the raw kernel ABI's fields, in the kernel's
@@ -163,7 +168,7 @@ int __plat_process_cpu_ticks(long long *kernel, long long *user)
 	 * sys/resource.h struct rusage/getrusage() prototype directly. Its
 	 * 144-byte size was confirmed to match this host's raw
 	 * SYS_getrusage output exactly via the same oracle program. */
-	struct rusage ru;
+	struct rusage ru = {0};
 	long ret = raw_syscall(SYS_getrusage, (long)RUSAGE_SELF, (long)&ru, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	/* getrusage() reports microsecond resolution; the interface wants
@@ -254,9 +259,11 @@ void __plat_timer_wake(__plat_handle_t wake)
 	(void)wake;
 }
 
-void __plat_timer_manager_wait(__plat_handle_t wake, long long ticks, int has_deadline)
+void __plat_timer_manager_wait(__plat_handle_t wake, long long ticks, int has_deadline) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; duration and deadline flag have distinct roles
 {
 	(void)wake;
 	(void)ticks;
 	(void)has_deadline;
 }
+
+// NOLINTEND(misc-include-cleaner)

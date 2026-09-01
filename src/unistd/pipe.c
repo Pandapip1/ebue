@@ -10,6 +10,11 @@
  * (and for __pipe_handles(), the lower-level HANDLE-returning form
  * src/select/select.c's own one-shot pipe still calls directly).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -27,7 +32,13 @@ int pipe2(int fds[2], int flags)
 	rfd = __fd_install(r, O_RDONLY | (flags & (O_CLOEXEC | O_NONBLOCK)), __FD_PIPE);
 	if (rfd < 0) { __plat_close(r); __plat_close(w); return -1; }
 	wfd = __fd_install(w, O_WRONLY | (flags & (O_CLOEXEC | O_NONBLOCK)), __FD_PIPE);
-	if (wfd < 0) { close(rfd); __plat_close(w); return -1; }
+	if (wfd < 0) {
+		int saved = errno;
+		(void)close(rfd);
+		__plat_close(w);
+		errno = saved;
+		return -1;
+	}
 	fds[0] = rfd;
 	fds[1] = wfd;
 	return 0;
@@ -37,3 +48,5 @@ int pipe(int fds[2])
 {
 	return pipe2(fds, 0);
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -7,7 +7,7 @@
 #include "libc.h"
 #include "plat_unistd.h"
 
-int ftruncate(int fd, off_t len)
+int ftruncate(int fd, off_t len) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = __fd_get(fd);
 	if (!f) return -1;
@@ -32,6 +32,12 @@ int truncate(const char *path, off_t len)
 	int r;
 	if (fd < 0) return -1;
 	r = ftruncate(fd, len);
-	close(fd);
+	if (r < 0) {
+		int saved = errno;
+		(void)close(fd);
+		errno = saved;
+	} else if (close(fd) < 0) {
+		return -1;
+	}
 	return r;
 }

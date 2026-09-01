@@ -101,6 +101,27 @@ static void test_mmap_shared_and_private_both_accepted(void)
 	if (b != MAP_FAILED) CHECK(munmap(b, PG) == 0);
 }
 
+/* Regression: the registry used to impose a fixed 256-live-mapping ceiling
+ * and return EMFILE even while the process had ample address space. Keep the
+ * count just above that old boundary so this stays cheap while proving the
+ * implementation now grows its bookkeeping. */
+static void test_mmap_more_than_old_registry_limit(void)
+{
+	void *p[320];
+	size_t i, made = 0;
+	for (i = 0; i < sizeof p / sizeof p[0]; i++) {
+		p[i] = mmap(0, PG, PROT_NONE,
+		            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (p[i] == MAP_FAILED) break;
+		made++;
+	}
+	CHECK(made == sizeof p / sizeof p[0]);
+	while (made) {
+		made--;
+		CHECK(munmap(p[made], PG) == 0);
+	}
+}
+
 /* ---------------------------------------------------------------- */
 /* mmap.html ERRORS -- the two refusals, kept apart                  */
 /* ---------------------------------------------------------------- */
@@ -384,6 +405,16 @@ static void test_mprotect_roundtrip(void)
 	CHECK(p[0] == 'r');
 	CHECK(mprotect(p, PG, PROT_NONE) == 0);   /* PROT_NONE is a real state */
 	CHECK(mprotect(p, PG, PROT_READ | PROT_WRITE) == 0);
+	CHECK(munmap(p, PG) == 0);
+
+	/* PROT_NONE starts as a reservation-only mapping on NT. Raising its
+	 * protection must transparently commit it and preserve mmap semantics. */
+	p = mmap(0, PG, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	CHECK(p != MAP_FAILED);
+	if (p == MAP_FAILED) return;
+	CHECK(mprotect(p, PG, PROT_READ | PROT_WRITE) == 0);
+	p[0] = 's';
+	CHECK(p[0] == 's');
 	CHECK(munmap(p, PG) == 0);
 }
 
@@ -882,6 +913,7 @@ int main(int argc, char **argv)
 
 	test_mmap_anonymous_basic();
 	test_mmap_shared_and_private_both_accepted();
+	test_mmap_more_than_old_registry_limit();
 
 	test_mmap_no_anon_flag_is_ebadf();
 	test_mmap_directory_is_enodev();

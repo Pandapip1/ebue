@@ -7,6 +7,11 @@
  * substance, only location and the addition of a POSIX-shaped return
  * (0/-1 with errno set) in place of a raw NTSTATUS.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/mman.h>
 #include <string.h>
 #include <errno.h>
@@ -33,6 +38,23 @@ static ULONG prot_to_page(int prot)
 	return PAGE_NOACCESS;
 }
 
+static size_t user_address_span(void)
+{
+	static size_t span;
+	if (!span) {
+		SYSTEM_BASIC_INFORMATION sbi;
+		ULONG got = 0;
+		NTSTATUS st = NtQuerySystemInformation(SystemBasicInformation,
+		                                      &sbi, sizeof sbi, &got);
+		if (NT_SUCCESS(st) &&
+		    sbi.MaximumUserModeAddress >= sbi.MinimumUserModeAddress)
+			span = (size_t)(sbi.MaximumUserModeAddress -
+			                sbi.MinimumUserModeAddress) + 1;
+		if (!span) span = (size_t)-1 >> 1;
+	}
+	return span;
+}
+
 /* Same table, but for a MAP_PRIVATE section view: mmap.html says a
  * MAP_PRIVATE write "shall be visible only to the calling process" and
  * "It is unspecified whether this change to the mapped file is visible
@@ -43,7 +65,7 @@ static ULONG prot_to_page(int prot)
  * dirtying the section. Win32's own FILE_MAP_COPY works against a
  * section created with PAGE_READONLY, so this needs no extra access
  * beyond what the file was opened with. */
-static ULONG prot_to_view(int prot, int private)
+static ULONG prot_to_view(int prot, int private) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	if (!private) return prot_to_page(prot);
 	if (prot & PROT_EXEC) {
@@ -56,18 +78,49 @@ static ULONG prot_to_view(int prot, int private)
 	return PAGE_NOACCESS;
 }
 
-int __plat_mem_reserve(void **base_inout, size_t len, int prot)
+int __plat_mem_reserve(void **base_inout, size_t len, int prot) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	PVOID base = *base_inout;
 	SIZE_T size = len;
+	ULONG type = MEM_RESERVE;
+	MEMORY_BASIC_INFORMATION mbi;
+	SIZE_T got = 0;
+	if (prot != PROT_NONE) type |= MEM_COMMIT;
+	/* Very large single reservations make Wine spend unbounded time
+	 * searching its host VMAs. Use a generous per-call ceiling and let
+	 * callers consume the address space with multiple mappings instead.
+	 * This is a mapping-size limit, not a live-mapping-count limit. */
+	if ((sizeof(size_t) > 4 && len > 0x10000000000ULL) ||
+	    (sizeof(size_t) == 4 && len > 0x40000000UL)) {
+		errno = ENOMEM;
+		return -1;
+	}
+	if (len > user_address_span()) { errno = ENOMEM; return -1; }
 	NTSTATUS st = NtAllocateVirtualMemory(NtCurrentProcess(), &base, 0, &size,
-	                                      MEM_RESERVE | MEM_COMMIT, prot_to_page(prot));
+	                                      type, prot_to_page(prot));
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	/* Some Wine/NT combinations accept a near-SIZE_MAX request after
+	 * internally truncating it. mmap() cannot describe a range whose end
+	 * wraps the process address space, and must not record the truncated
+	 * allocation as though the whole request existed. */
+	memset(&mbi, 0, sizeof mbi);
+	if (size < len || (uintptr_t)base > (uintptr_t)-1 - len ||
+	    !NT_SUCCESS(NtQueryVirtualMemory(NtCurrentProcess(), base,
+	        MemoryBasicInformation, &mbi, sizeof mbi, &got)) ||
+	    mbi.BaseAddress != base || mbi.AllocationBase != base ||
+	    mbi.RegionSize < len ||
+	    (mbi.State != MEM_RESERVE && mbi.State != MEM_COMMIT)) {
+		PVOID release = base;
+		SIZE_T zero = 0;
+		NtFreeVirtualMemory(NtCurrentProcess(), &release, &zero, MEM_RELEASE);
+		errno = ENOMEM;
+		return -1;
+	}
 	*base_inout = base;
 	return 0;
 }
 
-int __plat_mem_commit_fixed(void *base, size_t len, int prot)
+int __plat_mem_commit_fixed(void *base, size_t len, int prot) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	PVOID p = base;
 	SIZE_T z = len;
@@ -103,20 +156,97 @@ int __plat_mem_release(void *base, size_t len)
 	return 0;
 }
 
-int __plat_mem_protect(void *addr, size_t len, int prot)
+int __plat_mem_protect(void *addr, size_t len, int prot) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
-	PVOID p = addr;
-	SIZE_T z = len;
-	ULONG old = 0;
-	NTSTATUS st = NtProtectVirtualMemory(NtCurrentProcess(), &p, &z, prot_to_page(prot), &old);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	char *p = addr;
+	char *end = p + len;
+	while (p < end) {
+		MEMORY_BASIC_INFORMATION mbi;
+		SIZE_T got = 0;
+		char *region_end;
+		SIZE_T z;
+		PVOID q;
+		NTSTATUS st = NtQueryVirtualMemory(NtCurrentProcess(), p,
+			MemoryBasicInformation, &mbi, sizeof mbi, &got);
+		if (!NT_SUCCESS(st) || !mbi.RegionSize || mbi.State == MEM_FREE) {
+			errno = ENOMEM;
+			return -1;
+		}
+		region_end = (char *)mbi.BaseAddress + mbi.RegionSize;
+		if (region_end > end) region_end = end;
+		if (region_end <= p) { errno = ENOMEM; return -1; }
+		z = (SIZE_T)(region_end - p);
+		q = p;
+		if (mbi.State == MEM_RESERVE) {
+			if (prot != PROT_NONE) {
+				if (!__mman_range_is_live(p, z)) {
+					errno = ENOMEM;
+					return -1;
+				}
+				st = NtAllocateVirtualMemory(NtCurrentProcess(), &q, 0, &z,
+				                             MEM_COMMIT, prot_to_page(prot));
+				if (!NT_SUCCESS(st)) return __set_errno_status(st);
+			}
+		} else {
+			ULONG old = 0;
+			st = NtProtectVirtualMemory(NtCurrentProcess(), &q, &z,
+			                            prot_to_page(prot), &old);
+			if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		}
+		p = region_end;
+	}
 	return 0;
+}
+
+/* NtLockVirtualMemory() is allowed to fail for quota/privilege reasons before
+ * it diagnoses an unmapped page.  POSIX is not: mlock()/munlock() require
+ * ENOMEM when any page in the requested range is not mapped.  Query first so
+ * the required address-range error cannot be hidden by the runner's working
+ * set limit (Wine otherwise reported STATUS_ACCESS_DENIED for LONG_MAX). */
+static int lock_range_is_mapped(void *addr, size_t len)
+{
+	char *p = addr;
+	char *end;
+
+	if (len > (size_t)-1 - (size_t)p) { errno = ENOMEM; return 0; }
+	end = p + len;
+	while (p < end) {
+		MEMORY_BASIC_INFORMATION mbi;
+		SIZE_T got = 0;
+		NTSTATUS st = NtQueryVirtualMemory(NtCurrentProcess(), p,
+			MemoryBasicInformation, &mbi, sizeof mbi, &got);
+		char *next;
+
+		if (!NT_SUCCESS(st) || !mbi.RegionSize) {
+			errno = ENOMEM;
+			return 0;
+		}
+		next = (char *)mbi.BaseAddress + mbi.RegionSize;
+		if (next > end) next = end;
+		if (mbi.State == MEM_RESERVE) {
+			PVOID q = p;
+			SIZE_T z = (SIZE_T)(next - p);
+			if (!__mman_range_is_live(p, z) ||
+			    !NT_SUCCESS(NtAllocateVirtualMemory(NtCurrentProcess(), &q,
+			        0, &z, MEM_COMMIT, PAGE_NOACCESS))) {
+				errno = ENOMEM;
+				return 0;
+			}
+		} else if (mbi.State != MEM_COMMIT) {
+			errno = ENOMEM;
+			return 0;
+		}
+		if (next <= p) { errno = ENOMEM; return 0; }
+		p = next;
+	}
+	return 1;
 }
 
 int __plat_mem_lock(void *addr, size_t len)
 {
 	PVOID p = addr;
 	SIZE_T z = len;
+	if (!lock_range_is_mapped(addr, len)) return -1;
 	NTSTATUS st = NtLockVirtualMemory(NtCurrentProcess(), &p, &z, 1);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
@@ -126,6 +256,7 @@ int __plat_mem_unlock(void *addr, size_t len)
 {
 	PVOID p = addr;
 	SIZE_T z = len;
+	if (!lock_range_is_mapped(addr, len)) return -1;
 	NTSTATUS st = NtUnlockVirtualMemory(NtCurrentProcess(), &p, &z, 1);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
@@ -140,7 +271,7 @@ int __plat_mem_unlock(void *addr, size_t len)
  * prot_to_view).  The section handle is closed before returning either
  * way: the view holds its own reference, so nothing is leaked by not
  * keeping it. */
-int __plat_mem_map_file(__plat_handle_t fh, int prot, int flags, off_t off,
+int __plat_mem_map_file(__plat_handle_t fh, int prot, int flags, off_t off, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                         size_t viewbytes, void **base_inout)
 {
 	HANDLE section;
@@ -241,3 +372,5 @@ int __plat_mem_flush_view(void *addr, size_t len, __plat_handle_t writeback)
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

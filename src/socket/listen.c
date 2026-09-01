@@ -21,7 +21,7 @@
 #include "libc.h"
 #include "plat_socket.h"
 
-int listen(int fd, int backlog)
+int listen(int fd, int backlog) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = __fd_get(fd);
 

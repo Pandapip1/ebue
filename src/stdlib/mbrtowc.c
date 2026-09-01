@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 /* UTF-8 <-> UTF-16 conversion with state.  wchar_t is a 16-bit UTF-16
  * code unit, so a 4-byte UTF-8 sequence yields two wchar_t: mbrtowc
  * returns the high surrogate and consumes the bytes, remembering the low
@@ -57,7 +62,10 @@ size_t mbrtowc(wchar_t *__restrict wc, const char *__restrict s, size_t n, mbsta
 		else { cp = c & 0x07; need = 3; }
 		seen = 1;
 	}
-	while (need) {
+	/* A saved state stores need in four bits; newly started UTF-8 needs
+	 * at most three continuation bytes. */
+	for (unsigned steps_left = 15; need > 0 && steps_left > 0;
+	     steps_left--) {
 		if (used >= n) {
 			st->__opaque1 = (cp << 8) | (need << 4) | seen;
 			return (size_t)-2;
@@ -172,8 +180,10 @@ size_t wcsrtombs(char *__restrict s, const wchar_t **__restrict src, size_t n, m
 		 * that we never write a partial character. */
 		if (SURR_HI(ws[0]) && SURR_LO(ws[1])) {
 			if (s && out + 4 > n) break;
-			wcrtomb(buf, ws[0], st);
-			wcrtomb(buf, ws[1], st);
+			r = wcrtomb(buf, ws[0], st);
+			if (r == (size_t)-1) { st->__opaque1 = 0; if (s) *src = ws; errno = EILSEQ; return (size_t)-1; }
+			r = wcrtomb(buf, ws[1], st);
+			if (r == (size_t)-1) { st->__opaque1 = 0; if (s) *src = ws; errno = EILSEQ; return (size_t)-1; }
 			if (s) memcpy(s + out, buf, 4);
 			out += 4; ws += 2;
 			continue;
@@ -216,7 +226,7 @@ size_t wcsrtombs(char *__restrict s, const wchar_t **__restrict src, size_t n, m
  * nmc == 0 it returns -2 and the loop ends, which is the same outcome an
  * up-front test would have given.
  */
-size_t mbsnrtowcs(wchar_t *__restrict ws, const char **__restrict src, size_t nmc, size_t n, mbstate_t *__restrict st)
+size_t mbsnrtowcs(wchar_t *__restrict ws, const char **__restrict src, size_t nmc, size_t n, mbstate_t *__restrict st) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	static mbstate_t internal;
 	const char *s = *src;
@@ -270,7 +280,7 @@ size_t mbsnrtowcs(wchar_t *__restrict ws, const char **__restrict src, size_t nm
  * is not an option, and silently stopping would make a truncated pair
  * indistinguishable from a completed conversion.
  */
-size_t wcsnrtombs(char *__restrict s, const wchar_t **__restrict src, size_t nwc, size_t n, mbstate_t *__restrict st)
+size_t wcsnrtombs(char *__restrict s, const wchar_t **__restrict src, size_t nwc, size_t n, mbstate_t *__restrict st) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	static mbstate_t internal;
 	const wchar_t *ws = *src;
@@ -282,8 +292,10 @@ size_t wcsnrtombs(char *__restrict s, const wchar_t **__restrict src, size_t nwc
 		if (!nwc) break;
 		if (nwc >= 2 && SURR_HI(ws[0]) && SURR_LO(ws[1])) {
 			if (s && out + 4 > n) break;
-			wcrtomb(buf, ws[0], st);
-			wcrtomb(buf, ws[1], st);
+			r = wcrtomb(buf, ws[0], st);
+			if (r == (size_t)-1) { st->__opaque1 = 0; if (s) *src = ws; errno = EILSEQ; return (size_t)-1; }
+			r = wcrtomb(buf, ws[1], st);
+			if (r == (size_t)-1) { st->__opaque1 = 0; if (s) *src = ws; errno = EILSEQ; return (size_t)-1; }
 			if (s) memcpy(s + out, buf, 4);
 			out += 4; ws += 2; nwc -= 2;
 			continue;
@@ -310,3 +322,5 @@ int wctob(wint_t c)
 {
 	return c < 0x80 ? (int)c : -1;
 }
+
+// NOLINTEND(misc-include-cleaner)

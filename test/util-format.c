@@ -176,6 +176,21 @@ static void test_printf_argument_cycling(void)
 	CHECK(out_is("a\nb\nc\n"));
 }
 
+/* Width and precision are deliberately capped at 1000.  In particular,
+ * accumulating one more digit after 999 must clamp rather than briefly
+ * producing 9999: precision controls writes into a fixed-size digit buffer. */
+static void test_printf_large_width_and_precision_are_clamped(void)
+{
+	struct stat st;
+	char *width_argv[] = { (char *)"printf", (char *)"%9999s", (char *)"x", 0 };
+	char *prec_argv[] = { (char *)"printf", (char *)"%.9999d", (char *)"1", 0 };
+
+	CHECK(run(printf_path, width_argv) == 0);
+	CHECK(stat(OUTFILE, &st) == 0 && st.st_size == 1000);
+	CHECK(run(printf_path, prec_argv) == 0);
+	CHECK(stat(OUTFILE, &st) == 0 && st.st_size == 1000);
+}
+
 /* %b: backslash escapes inside the *argument*, distinct from \-escapes
  * written directly in the format string. The C string "a\\tb" is the
  * four bytes a, backslash, t, b -- exactly what a shell would pass for
@@ -519,6 +534,7 @@ int main(int argc, char **argv)
 
 	test_printf_basic_conversions();
 	test_printf_argument_cycling();
+	test_printf_large_width_and_precision_are_clamped();
 	test_printf_percent_b_expands_escapes();
 	test_printf_invalid_numeric_argument_is_an_error();
 	test_printf_missing_operand();

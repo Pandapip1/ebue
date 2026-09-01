@@ -4,6 +4,17 @@
 # Existing explicit integer casts not yet proved by the Clang analyzer.
 # Fields: ORIGIN<TAB>CONTEXT<TAB>CAST<TAB>SITE<TAB>REASON.
 # New and stale entries both fail; remove entries as casts are proved.
+arch/aarch64/src/ld128_convert.c	__trunctfdf2	(int)exp15	live_exp = (int)exp15 - 16383; @column 13	existing site; prove while completing the cast audit
+arch/aarch64/src/ld128_convert.c	__trunctfdf2	(uint64_t)(live_exp + 1023)	exp15 = (total_shift == 60) ? (uint64_t)(live_exp + 1023) : 0; @column 32	existing site; prove while completing the cast audit
+arch/aarch64/src/ld128_convert.c	__trunctfsf2	(int)exp15	live_exp = (int)exp15 - 16383; @column 13	existing site; prove while completing the cast audit
+arch/aarch64/src/ld128_convert.c	__trunctfsf2	(uint32_t)((frac_hi48 << 4 | frac_lo64 >> 60) >> 29)	nan_frac = (uint32_t)((frac_hi48 << 4 | frac_lo64 >> 60) >> 29); @column 14	existing site; prove while completing the cast audit
+arch/aarch64/src/ld128_convert.c	__trunctfsf2	(uint32_t)exp15	r.i = ((uint32_t)sign << 31) | ((uint32_t)exp15 << 23) | mant; @column 34	existing site; prove while completing the cast audit
+arch/aarch64/src/ld128_convert.c	__trunctfsf2	(uint32_t)sign	r.i = ((uint32_t)sign << 31) | ((uint32_t)exp15 << 23) | mant; @column 9	existing site; prove while completing the cast audit
+arch/aarch64/src/ld128_convert.c	__trunctfsf2	(uint32_t)sign	r.i = ((uint32_t)sign << 31) | (0xFFUL << 23) | (uint32_t)nan_frac; @column 10	existing site; prove while completing the cast audit
+arch/aarch64/src/ld128_convert.c	__trunctfsf2	(uint32_t)sign	r.i = ((uint32_t)sign << 31) | (0xFFUL << 23); @column 10	existing site; prove while completing the cast audit
+arch/aarch64/src/ld128_convert.c	__trunctfsf2	(uint32_t)sign	r.i = ((uint32_t)sign << 31) | (0xFFUL << 23); @column 11	existing site; prove while completing the cast audit
+arch/aarch64/src/ld128_convert.c	__trunctfsf2	(uint32_t)sign	r.i = (uint32_t)sign << 31; @column 9	existing site; prove while completing the cast audit
+arch/aarch64/src/ld128_convert.c	__trunctfsf2	(uint64_t)(live_exp + 127)	exp15 = (total_shift == 89) ? (uint64_t)(live_exp + 127) : 0; @column 32	existing site; prove while completing the cast audit
 arch/i386/src/int64.c	__ashrdi3	(int)x.h.hi	x.h.hi = (unsigned)((int)x.h.hi >> 31); @column 23	existing site; prove while completing the cast audit
 arch/i386/src/int64.c	__ashrdi3	(int)x.h.hi	x.h.hi = (unsigned)((int)x.h.hi >> b); @column 23	existing site; prove while completing the cast audit
 arch/i386/src/int64.c	__ashrdi3	(int)x.h.hi	x.h.lo = (unsigned)((int)x.h.hi >> (b - 32)); @column 23	existing site; prove while completing the cast audit
@@ -14,8 +25,17 @@ arch/i386/src/wow64_fixup.c	gate_call	(ULONG)-1	if (gate_init()) return (ULONG)-
 arch/i386/src/wow64_fixup.c	wow64_module_base	(char)wide[i * 2]	for (i = 0; i * 2 < namelen; i++) namebuf[i] = (char)wide[i * 2]; @column 51	existing site; prove while completing the cast audit
 crt/crt1.c	__libc_start_main	(NTSTATUS)0xC0000017L	if (!__environ) NtTerminateProcess(NtCurrentProcess(), STATUS_NO_MEMORY); @column 57	existing site; prove while completing the cast audit
 crt/crt1.c	__libc_start_main	(NTSTATUS)0xC0000017L	if (__argc < 0) NtTerminateProcess(NtCurrentProcess(), STATUS_NO_MEMORY); @column 57	existing site; prove while completing the cast audit
+crt/crt1.c	__libc_start_main	(NTSTATUS)0xC000007BL	NtTerminateProcess(NtCurrentProcess(), STATUS_INVALID_IMAGE_FORMAT); @column 42	existing site; prove while completing the cast audit
 crt/delayload2.c	__delayLoadHelper2	(unsigned long)(piat - iat)	index = (unsigned long)(piat - iat); @column 10	existing site; prove while completing the cast audit
 crt/delayload2.c	name_eq_ci	(unsigned char)ascii[i]	unsigned char ca = (unsigned char)ascii[i]; @column 22	existing site; prove while completing the cast audit
+crt/linux/crt1.c	__linux_start_main	(int)argc	__argc = (int)argc; @column 11	existing site; prove while completing the cast audit
+crt/linux/crt1.c	__linux_start_main	(int)argc	rc = main((int)argc, argv, envp); @column 12	existing site; prove while completing the cast audit
+crt/linux/crt1.c	find_tls_phdr	(unsigned long)auxv[1]	else if (auxv[0] == AT_PHENT) phent = (unsigned long)auxv[1]; @column 41	existing site; prove while completing the cast audit
+crt/linux/crt1.c	find_tls_phdr	(unsigned long)auxv[1]	else if (auxv[0] == AT_PHNUM) phnum = (unsigned long)auxv[1]; @column 41	existing site; prove while completing the cast audit
+crt/linux/crt1.c	find_tls_phdr	(unsigned long)auxv[1]	if (auxv[0] == AT_PHDR) phdr = (unsigned long)auxv[1]; @column 34	existing site; prove while completing the cast audit
+crt/linux/crt1.c	linux_setup_tls	(long)alloc_size	mm = raw_syscall(SYS_mmap, 0, (long)alloc_size, PROT_READ | PROT_WRITE, @column 32	existing site; prove while completing the cast audit
+crt/linux/crt1.c	linux_setup_tls	(unsigned long)-4095L	if ((unsigned long)mm >= (unsigned long)-4095L) return; /* bootstrap alloc failed -- leave tp at 0 */ @column 27	existing site; prove while completing the cast audit
+crt/linux/crt1.c	linux_setup_tls	(unsigned long)mm	if ((unsigned long)mm >= (unsigned long)-4095L) return; /* bootstrap alloc failed -- leave tp at 0 */ @column 6	existing site; prove while completing the cast audit
 src/ctype/isalpha.c	isalpha	(unsigned)c	return ((unsigned)c|32)-'a' < 26; @column 10	existing site; prove while completing the cast audit
 src/ctype/iscntrl.c	iscntrl	(unsigned)c	return (unsigned)c < 0x20 || c == 0x7f; @column 9	existing site; prove while completing the cast audit
 src/ctype/isdigit.c	isdigit	(unsigned)c	return (unsigned)c-'0' < 10; @column 9	existing site; prove while completing the cast audit
@@ -38,26 +58,52 @@ src/ctype/iswupper.c	iswupper	(int)wc	return isupper((int)wc); @column 17	existi
 src/ctype/iswxdigit.c	iswxdigit	(int)wc	return isxdigit((int)wc); @column 18	existing site; prove while completing the cast audit
 src/ctype/isxdigit.c	isxdigit	(unsigned)c	return isdigit(c) || ((unsigned)c|32)-'a' < 6; @column 24	existing site; prove while completing the cast audit
 src/dirent/dirent_internal.h	__dirent_ascii_casecmp	(unsigned char)*a++	unsigned char ac = (unsigned char)*a++, bc = (unsigned char)*b++; @column 22	existing site; prove while completing the cast audit
-src/dirent/getdents.c	getdents	(NTSTATUS)0x80000006L	if (st == STATUS_NO_MORE_FILES) @column 12	existing site; prove while completing the cast audit
-src/dirent/getdents.c	getdents	(ino_t)fi->FileId	d->d_ino = (ino_t)fi->FileId; @column 14	existing site; prove while completing the cast audit
 src/dirent/getdents.c	getdents	(size_t)f->pos	size_t index = f->pos < 0 ? 0 : (size_t)f->pos; @column 35	existing site; prove while completing the cast audit
-src/dirent/readdir.c	__dirstream_next	(NTSTATUS)0x80000006L	if (st == STATUS_NO_MORE_FILES) { dp->done = 1; return 0; } @column 12	existing site; prove while completing the cast audit
+src/dirent/linux/plat_dirent.c	__plat_dir_read	(long)bufsize	ret = raw_syscall(SYS_getdents64, (long)fd, (long)buf, (long)bufsize, 0L, 0L, 0L); @column 57	existing site; prove while completing the cast audit
+src/dirent/linux/plat_dirent.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/dirent/linux/plat_dirent.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/dirent/linux/plat_dirent.c	unbox	(int)((long)h - 1)	return (int)((long)h - 1); @column 9	existing site; prove while completing the cast audit
+src/dirent/nt/plat_dirent.c	__plat_dir_decode_one	(ino_t)fi->FileId	out->ino = (ino_t)fi->FileId; @column 13	existing site; prove while completing the cast audit
+src/dirent/nt/plat_dirent.c	__plat_dir_read	(NTSTATUS)0x80000006L	if (st == STATUS_NO_MORE_FILES) return 0; @column 12	existing site; prove while completing the cast audit
+src/dirent/nt/plat_dirent.c	__plat_dir_read	(ULONG)bufsize	st = NtQueryDirectoryFile(h, 0, 0, 0, &io, buf, (ULONG)bufsize, @column 50	existing site; prove while completing the cast audit
+src/dirent/nt/plat_dirent.c	__plat_dir_read	(ssize_t)io.Information	return (ssize_t)io.Information; @column 9	existing site; prove while completing the cast audit
 src/dirent/readdir.c	fill	(size_t)dp->tell	if ((size_t)dp->tell >= count) { dp->done = 1; return 1; } @column 7	existing site; prove while completing the cast audit
-src/dirent/readdir.c	make_real	(ino_t)fi->FileId	out->d_ino = (ino_t)fi->FileId; @column 15	existing site; prove while completing the cast audit
-src/env/getenv.c	name_eq	(unsigned char)e[i]	int a = (unsigned char)e[i], b = (unsigned char)name[i]; @column 11	existing site; prove while completing the cast audit
-src/env/getenv.c	name_eq	(unsigned char)name[i]	int a = (unsigned char)e[i], b = (unsigned char)name[i]; @column 36	existing site; prove while completing the cast audit
+src/dlfcn/linux/plat_dlfcn.c	__plat_dlopen	(off_t)eh.e_phoff	if (pread(fd, phdrs, phdr_bytes, (off_t)eh.e_phoff) != (ssize_t)phdr_bytes) { @column 35	existing site; prove while completing the cast audit
+src/dlfcn/linux/plat_dlfcn.c	__plat_dlopen	(unsigned long)-1	unsigned long lo = (unsigned long)-1, hi = 0; @column 21	existing site; prove while completing the cast audit
+src/dlfcn/linux/plat_dlfcn.c	apply_one_reloc	(uint64_t)r->r_addend	*loc = obj->bias + (uint64_t)r->r_addend; @column 22	existing site; prove while completing the cast audit
+src/dlfcn/linux/plat_dlfcn.c	apply_one_reloc	(uint64_t)r->r_addend	*loc = sym_addr + (type == R_AARCH64_ABS64 ? (uint64_t)r->r_addend : 0); @column 48	existing site; prove while completing the cast audit
+src/dlfcn/linux/plat_dlfcn.c	is_sys_error	(unsigned long)-4095L	static int is_sys_error(long ret) { return (unsigned long)ret >= (unsigned long)-4095L; } @column 66	existing site; prove while completing the cast audit
+src/dlfcn/linux/plat_dlfcn.c	is_sys_error	(unsigned long)ret	static int is_sys_error(long ret) { return (unsigned long)ret >= (unsigned long)-4095L; } @column 44	existing site; prove while completing the cast audit
+src/dlfcn/linux/plat_dlfcn.c	raw_mmap	(long)len	long ret = raw_syscall(SYS_mmap, (long)addr, (long)len, (long)prot, (long)flags, (long)fd, off); @column 47	existing site; prove while completing the cast audit
+src/dlfcn/linux/plat_dlfcn.c	raw_mprotect	(long)len	long ret = raw_syscall(SYS_mprotect, (long)addr, (long)len, (long)prot, 0, 0, 0); @column 51	existing site; prove while completing the cast audit
+src/dlfcn/linux/plat_dlfcn.c	raw_munmap	(long)len	long ret = raw_syscall(SYS_munmap, (long)addr, (long)len, 0, 0, 0, 0); @column 49	existing site; prove while completing the cast audit
+src/dlfcn/linux/plat_dlfcn.c	self_symtab_load	(off_t)eh.e_shoff	if (pread(fd, shdrs, shdr_bytes, (off_t)eh.e_shoff) != (ssize_t)shdr_bytes) { @column 35	existing site; prove while completing the cast audit
+src/dlfcn/linux/plat_dlfcn.c	self_symtab_load	(off_t)symtab_sh->sh_offset	if (pread(fd, syms, symtab_sh->sh_size, (off_t)symtab_sh->sh_offset) != (ssize_t)symtab_sh->sh_size || @column 43	existing site; prove while completing the cast audit
+src/dlfcn/linux/plat_dlfcn.c	self_symtab_load	(ssize_t)symtab_sh->sh_size	if (pread(fd, syms, symtab_sh->sh_size, (off_t)symtab_sh->sh_offset) != (ssize_t)symtab_sh->sh_size || @column 75	existing site; prove while completing the cast audit
+src/dlfcn/linux/plat_dlfcn.c	table_bytes	(size_t)-1	if (element_size && count > (size_t)-1 / element_size) return -1; @column 30	existing site; prove while completing the cast audit
+src/env/getenv.c	name_eq	(unsigned char)entry[i]	int a = (unsigned char)entry[i], b = (unsigned char)name[i]; @column 11	existing site; prove while completing the cast audit
+src/env/getenv.c	name_eq	(unsigned char)name[i]	int a = (unsigned char)entry[i], b = (unsigned char)name[i]; @column 40	existing site; prove while completing the cast audit
 src/exit/abort.c	abort	(int)(__NT_SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu))	__nt_exit(__NT_SIGNAL_EXIT(SIGABRT)); @column 12	existing site; prove while completing the cast audit
-src/fcntl/fadvise.c	posix_fallocate	(NTSTATUS)0xC0000002L	&& st != STATUS_NOT_IMPLEMENTED @column 16	existing site; prove while completing the cast audit
-src/fcntl/fadvise.c	posix_fallocate	(NTSTATUS)0xC0000003L	&& st != STATUS_INVALID_INFO_CLASS) @column 16	existing site; prove while completing the cast audit
-src/fcntl/fadvise.c	posix_fallocate	(NTSTATUS)0xC0000010L	&& st != STATUS_INVALID_DEVICE_REQUEST @column 16	existing site; prove while completing the cast audit
-src/fcntl/fadvise.c	posix_fallocate	(NTSTATUS)0xC00000BBL	&& st != STATUS_NOT_SUPPORTED @column 16	existing site; prove while completing the cast audit
-src/fcntl/fcntl.c	record_lock	(NTSTATUS)0xC0000054L	if (st == STATUS_FILE_LOCK_CONFLICT || st == STATUS_LOCK_NOT_GRANTED) { @column 13	existing site; prove while completing the cast audit
-src/fcntl/fcntl.c	record_lock	(NTSTATUS)0xC0000055L	if (st == STATUS_FILE_LOCK_CONFLICT || st == STATUS_LOCK_NOT_GRANTED) { @column 48	existing site; prove while completing the cast audit
-src/fcntl/open.c	__open_handle	(NTSTATUS)0xC0000035L	if (st == STATUS_OBJECT_NAME_COLLISION) errno = EEXIST; @column 13	existing site; prove while completing the cast audit
-src/fcntl/open.c	__open_handle	(NTSTATUS)0xC00000BAL	if (st == STATUS_FILE_IS_A_DIRECTORY && (flags & O_ACCMODE) == O_RDONLY && !(flags & O_CREAT)) { @column 12	existing site; prove while completing the cast audit
-src/fcntl/open.c	__open_handle	(NTSTATUS)0xC00000BAL	if (st == STATUS_FILE_IS_A_DIRECTORY) { __ntpath_free(&np); errno = EISDIR; return -1; } @column 12	existing site; prove while completing the cast audit
+src/fcntl/linux/plat_fcntl.c	__plat_open	(int)ret	fd = (int)ret; @column 7	existing site; prove while completing the cast audit
+src/fcntl/linux/plat_fcntl.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/fcntl/linux/plat_fcntl.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/fcntl/linux/plat_fcntl.c	unbox	(int)((long)h - 1)	return (int)((long)h - 1); @column 9	existing site; prove while completing the cast audit
+src/fcntl/nt/plat_fcntl.c	__plat_fallocate	(NTSTATUS)0xC0000002L	missing_allocation_api = st == STATUS_NOT_IMPLEMENTED @column 35	existing site; prove while completing the cast audit
+src/fcntl/nt/plat_fcntl.c	__plat_fallocate	(NTSTATUS)0xC0000003L	|| st == STATUS_INVALID_INFO_CLASS; @column 35	existing site; prove while completing the cast audit
+src/fcntl/nt/plat_fcntl.c	__plat_fallocate	(NTSTATUS)0xC0000010L	|| st == STATUS_INVALID_DEVICE_REQUEST @column 35	existing site; prove while completing the cast audit
+src/fcntl/nt/plat_fcntl.c	__plat_fallocate	(NTSTATUS)0xC00000BBL	|| st == STATUS_NOT_SUPPORTED @column 35	existing site; prove while completing the cast audit
+src/fcntl/nt/plat_fcntl.c	__plat_lock_probe	(NTSTATUS)0xC0000054L	if (st == STATUS_FILE_LOCK_CONFLICT || st == STATUS_LOCK_NOT_GRANTED) { @column 12	existing site; prove while completing the cast audit
+src/fcntl/nt/plat_fcntl.c	__plat_lock_probe	(NTSTATUS)0xC0000055L	if (st == STATUS_FILE_LOCK_CONFLICT || st == STATUS_LOCK_NOT_GRANTED) { @column 47	existing site; prove while completing the cast audit
+src/fcntl/nt/plat_fcntl.c	__plat_open	(NTSTATUS)0xC0000035L	if (st == STATUS_OBJECT_NAME_COLLISION) errno = EEXIST; @column 13	existing site; prove while completing the cast audit
+src/fcntl/nt/plat_fcntl.c	__plat_open	(NTSTATUS)0xC00000BAL	if (st == STATUS_FILE_IS_A_DIRECTORY && (flags & O_ACCMODE) == O_RDONLY && !(flags & O_CREAT)) { @column 12	existing site; prove while completing the cast audit
+src/fcntl/nt/plat_fcntl.c	__plat_open	(NTSTATUS)0xC00000BAL	if (st == STATUS_FILE_IS_A_DIRECTORY) { errno = EISDIR; return -1; } @column 12	existing site; prove while completing the cast audit
+src/fcntl/nt/plat_fcntl.c	materialize_zero_tail	(ULONG)(to - from)	? (ULONG)sizeof zeroes : (ULONG)(to - from); @column 33	existing site; prove while completing the cast audit
+src/fcntl/nt/plat_fcntl.c	materialize_zero_tail	(long long)io.Information	from += (long long)io.Information; @column 11	existing site; prove while completing the cast audit
 src/fcntl/open.c	openat	(unsigned char)vfs	__fds[fd].vfs = (unsigned char)vfs; @column 18	existing site; prove while completing the cast audit
 src/fcntl/open.c	openat	(unsigned char)vfs_native	__fds[fd].vfs_native = (unsigned char)vfs_native; @column 25	existing site; prove while completing the cast audit
+src/file/linux/plat_flock.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/file/linux/plat_flock.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/file/linux/plat_flock.c	unbox	(int)((long)h - 1)	return (int)((long)h - 1); @column 9	existing site; prove while completing the cast audit
 src/fnmatch/fnmatch.c	bracket_match	(size_t)(q - (p + 2))	if (class_match(p + 2, (size_t)(q - (p + 2)), c)) @column 28	existing site; prove while completing the cast audit
 src/fnmatch/fnmatch.c	bracket_match	(unsigned char)*p	hi = (unsigned char)*p; @column 10	existing site; prove while completing the cast audit
 src/fnmatch/fnmatch.c	bracket_match	(unsigned char)*p	unsigned char lo = (unsigned char)*p; @column 23	existing site; prove while completing the cast audit
@@ -69,8 +115,6 @@ src/glob/glob.c	finish	(size_t)-1	if (out->n == (size_t)-1 || offs > (size_t)-1 
 src/glob/glob.c	finish	(size_t)-1	if (out->n == (size_t)-1 || offs > (size_t)-1 - out->n - 1) goto nospace; @column 37	existing site; prove while completing the cast audit
 src/glob/glob.c	finish	(size_t)-1	if (total > (size_t)-1 / sizeof *v) goto nospace; @column 14	existing site; prove while completing the cast audit
 src/internal/delayload.c	ntlibc_delayLoadHelper2	(unsigned long)(piat - descr->iat)	index = (unsigned long)(piat - descr->iat); @column 10	existing site; prove while completing the cast audit
-src/internal/fd.c	__fd_init	(size_t)count	if ((size_t)pp->RuntimeData.Length >= base + 9 + 4 * (size_t)count) { @column 57	existing site; prove while completing the cast audit
-src/internal/fd.c	__fd_init	(unsigned)count	if (magic == VFS_RUNTIME_MAGIC && trailer_count == (unsigned)count) { @column 56	existing site; prove while completing the cast audit
 src/internal/fd.c	__fd_install_at	(unsigned char)(type ? type : __handle_type(h))	f->type = (unsigned char)(type ? type : __handle_type(h)); @column 12	existing site; prove while completing the cast audit
 src/internal/libc.h	__array_next_capacity	(size_t)-1	maximum = (size_t)-1 / element_size; @column 12	existing site; prove while completing the cast audit
 src/internal/libc.h	__clock_qpc_resolution	(long)(1000000000LL / freq)	: (long)(1000000000LL / freq); @column 6	existing site; prove while completing the cast audit
@@ -86,14 +130,33 @@ src/internal/libc.h	__timespec_diff_ticks	(long long)seconds	return (long long)s
 src/internal/libc.h	__timespec_diff_ticks	(unsigned long long)(INT64_MAX - subsecond)	if (seconds > (unsigned long long)(INT64_MAX - subsecond) / @column 16	existing site; prove while completing the cast audit
 src/internal/libc.h	__timespec_diff_ticks	(unsigned long long)end_sec	seconds = (unsigned long long)end_sec - (unsigned long long)start_sec; @column 12	existing site; prove while completing the cast audit
 src/internal/libc.h	__timespec_diff_ticks	(unsigned long long)start_sec	seconds = (unsigned long long)end_sec - (unsigned long long)start_sec; @column 42	existing site; prove while completing the cast audit
-src/internal/path.c	__name_too_long	(size_t)(p - start)	if ((size_t)(p - start) > NAME_MAX) return 1; @column 7	existing site; prove while completing the cast audit
-src/internal/path.c	__nt_prefix_not_dir	(NTSTATUS)0xC0000034L	if (st != STATUS_OBJECT_NAME_NOT_FOUND && st != STATUS_OBJECT_PATH_NOT_FOUND) @column 13	existing site; prove while completing the cast audit
-src/internal/path.c	__nt_prefix_not_dir	(NTSTATUS)0xC000003AL	if (st != STATUS_OBJECT_NAME_NOT_FOUND && st != STATUS_OBJECT_PATH_NOT_FOUND) @column 51	existing site; prove while completing the cast audit
-src/internal/path.c	nt_path_over_max_path	(USHORT)(out->nt.Length + sizeof(WCHAR))	out->nt.MaximumLength = (USHORT)(out->nt.Length + sizeof(WCHAR)); @column 26	existing site; prove while completing the cast audit
-src/internal/path.c	ntpath_at_impl	(USHORT)(out->nt.Length + sizeof(WCHAR))	out->nt.MaximumLength = (USHORT)(out->nt.Length + sizeof(WCHAR)); @column 27	existing site; prove while completing the cast audit
-src/internal/path.c	ntpath_impl	(NTSTATUS)0xC0000017L	errno = st == STATUS_NO_MEMORY ? ENOMEM : @column 17	existing site; prove while completing the cast audit
-src/internal/path.c	ntpath_impl	(NTSTATUS)0xC0000106L	st == STATUS_NAME_TOO_LONG ? ENAMETOOLONG : ENOENT; @column 10	existing site; prove while completing the cast audit
-src/internal/path.c	ntpath_impl	(NTSTATUS)0xC0000106L	} else if (st == STATUS_NAME_TOO_LONG && @column 19	existing site; prove while completing the cast audit
+src/internal/linux/handle_path.c	__handle_path	(size_t)n	if (!__size_add_checked((size_t)n, 1, &bytes)) { errno = ENOMEM; return 0; } @column 26	existing site; prove while completing the cast audit
+src/internal/linux/handle_path.c	__handle_path	(size_t)n	if (n) memcpy(r, buf, (size_t)n); @column 24	existing site; prove while completing the cast audit
+src/internal/linux/handle_path.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/internal/linux/handle_path.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/internal/linux/handle_path.c	unbox	(int)((long)h - 1)	return (int)((long)h - 1); @column 9	existing site; prove while completing the cast audit
+src/internal/linux/plat_fd_init.c	__handle_type	(int)fd	return classify_fd((int)fd); @column 21	existing site; prove while completing the cast audit
+src/internal/linux/plat_fd_init.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/internal/linux/plat_fd_init.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/internal/nt/path.c	__name_too_long	(size_t)(p - start)	if ((size_t)(p - start) > NAME_MAX) return 1; @column 7	existing site; prove while completing the cast audit
+src/internal/nt/path.c	__nt_prefix_not_dir	(NTSTATUS)0xC0000034L	if (st != STATUS_OBJECT_NAME_NOT_FOUND && st != STATUS_OBJECT_PATH_NOT_FOUND) @column 13	existing site; prove while completing the cast audit
+src/internal/nt/path.c	__nt_prefix_not_dir	(NTSTATUS)0xC000003AL	if (st != STATUS_OBJECT_NAME_NOT_FOUND && st != STATUS_OBJECT_PATH_NOT_FOUND) @column 51	existing site; prove while completing the cast audit
+src/internal/nt/path.c	nt_path_over_max_path	(USHORT)(out->nt.Length + sizeof(WCHAR))	out->nt.MaximumLength = (USHORT)(out->nt.Length + sizeof(WCHAR)); @column 26	existing site; prove while completing the cast audit
+src/internal/nt/path.c	ntpath_impl	(NTSTATUS)0xC0000017L	errno = st == STATUS_NO_MEMORY ? ENOMEM : @column 17	existing site; prove while completing the cast audit
+src/internal/nt/path.c	ntpath_impl	(NTSTATUS)0xC0000106L	st == STATUS_NAME_TOO_LONG ? ENAMETOOLONG : ENOENT; @column 10	existing site; prove while completing the cast audit
+src/internal/nt/path.c	ntpath_impl	(NTSTATUS)0xC0000106L	} else if (st == STATUS_NAME_TOO_LONG && @column 19	existing site; prove while completing the cast audit
+src/internal/nt/plat_fd_init.c	__fd_init	(size_t)count	if ((size_t)pp->RuntimeData.Length >= base + 9 + 4 * (size_t)count) { @column 57	existing site; prove while completing the cast audit
+src/internal/nt/plat_fd_init.c	__fd_init	(unsigned)count	if (magic == VFS_RUNTIME_MAGIC && trailer_count == (unsigned)count) { @column 56	existing site; prove while completing the cast audit
+src/internal/nt/vfs_resolve.c	__vfs_resolve_at	(unsigned char)path[0]	if ((((unsigned char)path[0] | 0x20) >= 'a' && @column 8	existing site; prove while completing the cast audit
+src/internal/nt/vfs_resolve.c	component	(int)(p - *start)	n = (int)(p - *start); @column 6	existing site; prove while completing the cast audit
+src/internal/nt/vfs_resolve.c	native_fallback_status	(NTSTATUS)0xC0000002L	status == STATUS_NOT_IMPLEMENTED; @column 19	existing site; prove while completing the cast audit
+src/internal/nt/vfs_resolve.c	native_fallback_status	(NTSTATUS)0xC0000003L	status == STATUS_INVALID_INFO_CLASS || status == STATUS_NOT_SUPPORTED || @column 19	existing site; prove while completing the cast audit
+src/internal/nt/vfs_resolve.c	native_fallback_status	(NTSTATUS)0xC000000FL	return status == STATUS_NO_SUCH_FILE || status == STATUS_NOT_FOUND || @column 19	existing site; prove while completing the cast audit
+src/internal/nt/vfs_resolve.c	native_fallback_status	(NTSTATUS)0xC0000034L	status == STATUS_OBJECT_NAME_NOT_FOUND || status == STATUS_OBJECT_PATH_NOT_FOUND || @column 19	existing site; prove while completing the cast audit
+src/internal/nt/vfs_resolve.c	native_fallback_status	(NTSTATUS)0xC000003AL	status == STATUS_OBJECT_NAME_NOT_FOUND || status == STATUS_OBJECT_PATH_NOT_FOUND || @column 61	existing site; prove while completing the cast audit
+src/internal/nt/vfs_resolve.c	native_fallback_status	(NTSTATUS)0xC00000BBL	status == STATUS_INVALID_INFO_CLASS || status == STATUS_NOT_SUPPORTED || @column 58	existing site; prove while completing the cast audit
+src/internal/nt/vfs_resolve.c	native_fallback_status	(NTSTATUS)0xC0000225L	return status == STATUS_NO_SUCH_FILE || status == STATUS_NOT_FOUND || @column 52	existing site; prove while completing the cast audit
+src/internal/nt/vfs_resolve.c	same	(size_t)n	return strlen(word) == (size_t)n && !memcmp(s, word, (size_t)n); @column 25	existing site; prove while completing the cast audit
 src/internal/rpath.c	ntlibc_rpath_error	(unsigned long)last_err.status	snprintf(buf, sizeof buf, "%s: %s (NTSTATUS 0x%08lx)", last_err.what, reason, (unsigned long)last_err.status); @column 81	existing site; prove while completing the cast audit
 src/internal/rpath.c	ntlibc_rpath_error	(unsigned long)last_err.status	snprintf(buf, sizeof buf, "%s: NTSTATUS 0x%08lx", last_err.what, (unsigned long)last_err.status); @column 68	existing site; prove while completing the cast audit
 src/internal/rpath.c	ntlibc_rpath_load	(NTSTATUS)0xC0000017L	if (!dir) { set_err(STATUS_NO_MEMORY, dllname); return 0; } @column 24	existing site; prove while completing the cast audit
@@ -106,31 +169,41 @@ src/internal/rpath.c	ntlibc_rpath_sym	(NTSTATUS)0xC0000139L	if (!dll || !symbol)
 src/internal/rpath.c	ntlibc_rpath_unload	(NTSTATUS)0xC000000DL	if (!dll) { set_err(STATUS_INVALID_PARAMETER, ""); return -1; } @column 22	existing site; prove while completing the cast audit
 src/internal/rpath.c	try_load	(NTSTATUS)0xC0000017L	if (!w) return STATUS_NO_MEMORY; @column 17	existing site; prove while completing the cast audit
 src/internal/rpath.c	try_load	(NTSTATUS)0xC0000106L	if (wn > __US_MAX_WCHARS) { __free(w); return STATUS_NAME_TOO_LONG; } @column 48	existing site; prove while completing the cast audit
-src/internal/rpath.c	try_load	(USHORT)(us.Length + sizeof(WCHAR))	us.MaximumLength = (USHORT)(us.Length + sizeof(WCHAR)); @column 21	existing site; prove while completing the cast audit
 src/internal/utf.c	__utf16_to_utf8_buf	(NTSTATUS)0xC0000023L	if (st == STATUS_BUFFER_TOO_SMALL) { errno = ERANGE; return -1; } @column 13	existing site; prove while completing the cast audit
-src/internal/utf.c	__utf16_to_utf8_buf	(ULONG)input_bytes	(ULONG)input_bytes); @column 26	existing site; prove while completing the cast audit
 src/internal/utf.c	__utf16_to_utf8_buf	(int)outlen	return (int)outlen; @column 9	existing site; prove while completing the cast audit
-src/internal/utf.c	__utf8_to_utf16	(ULONG)(allocation - sizeof(WCHAR))	st = RtlUTF8ToUnicodeN(w, (ULONG)(allocation - sizeof(WCHAR)), @column 29	existing site; prove while completing the cast audit
-src/internal/vfs.c	__vfs_resolve_at	(unsigned char)path[0]	if ((((unsigned char)path[0] | 0x20) >= 'a' && @column 8	existing site; prove while completing the cast audit
+src/internal/util.h	__util_array_capacity	(size_t)-1	maximum = (size_t)-1 / element_size; @column 12	existing site; prove while completing the cast audit
+src/internal/util.h	__util_size_add	(size_t)-1	if (b > (size_t)-1 - a) return 0; @column 10	existing site; prove while completing the cast audit
+src/internal/util.h	__util_size_mul	(size_t)-1	if (b && a > (size_t)-1 / b) return 0; @column 15	existing site; prove while completing the cast audit
 src/internal/vfs.c	__vfs_stat	(ino_t)kind	st->st_ino = (ino_t)kind; @column 15	existing site; prove while completing the cast audit
-src/internal/vfs.c	component	(int)(p - *start)	n = (int)(p - *start); @column 6	existing site; prove while completing the cast audit
-src/internal/vfs.c	native_fallback_status	(NTSTATUS)0xC0000002L	status == STATUS_NOT_IMPLEMENTED; @column 19	existing site; prove while completing the cast audit
-src/internal/vfs.c	native_fallback_status	(NTSTATUS)0xC0000003L	status == STATUS_INVALID_INFO_CLASS || status == STATUS_NOT_SUPPORTED || @column 19	existing site; prove while completing the cast audit
-src/internal/vfs.c	native_fallback_status	(NTSTATUS)0xC000000FL	return status == STATUS_NO_SUCH_FILE || status == STATUS_NOT_FOUND || @column 19	existing site; prove while completing the cast audit
-src/internal/vfs.c	native_fallback_status	(NTSTATUS)0xC0000034L	status == STATUS_OBJECT_NAME_NOT_FOUND || status == STATUS_OBJECT_PATH_NOT_FOUND || @column 19	existing site; prove while completing the cast audit
-src/internal/vfs.c	native_fallback_status	(NTSTATUS)0xC000003AL	status == STATUS_OBJECT_NAME_NOT_FOUND || status == STATUS_OBJECT_PATH_NOT_FOUND || @column 61	existing site; prove while completing the cast audit
-src/internal/vfs.c	native_fallback_status	(NTSTATUS)0xC00000BBL	status == STATUS_INVALID_INFO_CLASS || status == STATUS_NOT_SUPPORTED || @column 58	existing site; prove while completing the cast audit
-src/internal/vfs.c	native_fallback_status	(NTSTATUS)0xC0000225L	return status == STATUS_NO_SUCH_FILE || status == STATUS_NOT_FOUND || @column 52	existing site; prove while completing the cast audit
-src/internal/vfs.c	same	(size_t)n	return strlen(word) == (size_t)n && !memcmp(s, word, (size_t)n); @column 25	existing site; prove while completing the cast audit
+src/ioctl/linux/plat_ioctl.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/ioctl/linux/plat_ioctl.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/ioctl/linux/plat_ioctl.c	unbox	(int)((long)h - 1)	return (int)((long)h - 1); @column 9	existing site; prove while completing the cast audit
+src/malloc/linux/plat_malloc.c	__plat_pages_alloc	(long)n	long ret = raw_syscall(SYS_mmap, 0, (long)n, PROT_READ_LX | PROT_WRITE_LX, @column 38	existing site; prove while completing the cast audit
+src/malloc/linux/plat_malloc.c	__plat_pages_free	(long)n	raw_syscall(SYS_munmap, (long)p, (long)n, 0, 0, 0, 0); @column 35	existing site; prove while completing the cast audit
+src/malloc/linux/plat_malloc.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/malloc/linux/plat_malloc.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
 src/malloc/malloc.c	calloc	(size_t)-1	if (n && m > (size_t)-1 / n) { errno = ENOMEM; return 0; } @column 15	existing site; prove while completing the cast audit
 src/malloc/malloc.c	posix_memalign	(size_t)-1	if (len > (size_t)-1 - align) return ENOMEM; @column 12	existing site; prove while completing the cast audit
 src/malloc/malloc.c	reallocarray	(size_t)-1	if (n && m > (size_t)-1 / n) { errno = ENOMEM; return 0; } @column 15	existing site; prove while completing the cast audit
+src/math/aarch64_math.h	__aa64_atan	(uint32_t)__aa64_asuint64(x)	if (ix > 0x7ff00000 || (ix == 0x7ff00000 && (uint32_t)__aa64_asuint64(x))) @column 47	existing site; prove while completing the cast audit
+src/math/aarch64_math.h	__aa64_atan2	(uint32_t)__aa64_asuint64(x)	if (ix == 0 && (uint32_t)__aa64_asuint64(x) == 0) @column 17	existing site; prove while completing the cast audit
+src/math/aarch64_math.h	__aa64_atan2	(uint32_t)__aa64_asuint64(x)	if (ix == 0x3ff00000 && (uint32_t)__aa64_asuint64(x) == 0) return __aa64_atan(y); @column 26	existing site; prove while completing the cast audit
+src/math/aarch64_math.h	__aa64_atan2	(uint32_t)__aa64_asuint64(y)	if (iy == 0 && (uint32_t)__aa64_asuint64(y) == 0) { @column 17	existing site; prove while completing the cast audit
+src/math/aarch64_math.h	__aa64_cos	(unsigned)__aa64_rem_pio2(x, y)	n = (unsigned)__aa64_rem_pio2(x, y); @column 6	existing site; prove while completing the cast audit
+src/math/aarch64_math.h	__aa64_fmod	(uint64_t)-1	uxi &= (uint64_t)-1 >> 12; @column 10	existing site; prove while completing the cast audit
+src/math/aarch64_math.h	__aa64_fmod	(uint64_t)-1	uy.i &= (uint64_t)-1 >> 12; @column 11	existing site; prove while completing the cast audit
+src/math/aarch64_math.h	__aa64_fmod	(uint64_t)sx	uxi |= (uint64_t)sx << 63; @column 9	existing site; prove while completing the cast audit
+src/math/aarch64_math.h	__aa64_remquo	(uint64_t)-1	uxi &= (uint64_t)-1 >> 12; @column 10	existing site; prove while completing the cast audit
+src/math/aarch64_math.h	__aa64_remquo	(uint64_t)-1	uy.i &= (uint64_t)-1 >> 12; @column 11	existing site; prove while completing the cast audit
+src/math/aarch64_math.h	__aa64_sin	(unsigned)__aa64_rem_pio2(x, y)	n = (unsigned)__aa64_rem_pio2(x, y); @column 6	existing site; prove while completing the cast audit
 src/math/copysign.c	copysign	(uint64_t)-1	ux.i = (ux.i & ((uint64_t)-1 >> 1)) | (uy.i & (uint64_t)1 << 63); @column 18	existing site; prove while completing the cast audit
 src/math/fabs.c	fabs	(uint64_t)-1	u.i &= (uint64_t)-1 >> 1; @column 9	existing site; prove while completing the cast audit
+src/math/fenv.c	read_fpcr	(unsigned int)v	return (unsigned int)v; @column 9	existing site; prove while completing the cast audit
+src/math/fenv.c	read_fpsr	(unsigned int)v	return (unsigned int)v; @column 9	existing site; prove while completing the cast audit
+src/math/ldbl_math.h	__x87_rndint	(unsigned short)((cw & ~0x0c00) | (rc << 10))	cw2 = (unsigned short)((cw & ~0x0c00) | (rc << 10)); @column 8	existing site; prove while completing the cast audit
 src/math/nextafter.c	nextafterl	(uint16_t)((ux.i.se & 0x8000) | e)	ux.i.se = (uint16_t)((ux.i.se & 0x8000) | e); @column 14	existing site; prove while completing the cast audit
 src/math/nextafter.c	nextafterl	(uint16_t)(uy.i.se & 0x8000)	ux.i.se = (uint16_t)(uy.i.se & 0x8000); @column 13	existing site; prove while completing the cast audit
 src/math/nextafter.c	nextafterl	(uint64_t)-1	ux.i.m = e ? (uint64_t)-1 : LDBL_M_LOW63; @column 17	existing site; prove while completing the cast audit
-src/math/x87.h	__x87_rndint	(unsigned short)((cw & ~0x0c00) | (rc << 10))	cw2 = (unsigned short)((cw & ~0x0c00) | (rc << 10)); @column 8	existing site; prove while completing the cast audit
 src/misc/basename.c	basename	(unsigned)(s[0] | 32)	if (((unsigned)(s[0] | 32) - 'a') < 26u && s[1] == ':') start = 2; @column 7	existing site; prove while completing the cast audit
 src/misc/catgets.c	catgets	(uint32_t)msg_id	if ((uint32_t)msg_id < mid_id) hi = k; @column 9	existing site; prove while completing the cast audit
 src/misc/catgets.c	catgets	(uint32_t)msg_id	if ((uint32_t)msg_id == mid_id) @column 9	existing site; prove while completing the cast audit
@@ -161,6 +234,24 @@ src/misc/iconv.c	encode_utf8	(unsigned char)(0xe0 | (cp >> 12))	case 3: p[0] = (
 src/misc/iconv.c	encode_utf8	(unsigned char)(0xf0 | (cp >> 18))	default: p[0] = (unsigned char)(0xf0 | (cp >> 18)); @column 18	existing site; prove while completing the cast audit
 src/misc/iconv.c	iconv	(size_t)-1	if (!st || cd == (iconv_t)-1) { errno = EBADF; return (size_t)-1; } @column 56	existing site; prove while completing the cast audit
 src/misc/iconv.c	iconv	(size_t)-1	return (size_t)-1; @column 10	existing site; prove while completing the cast audit
+src/misc/linux/plat_misc.c	__plat_priority_get	(int)ret	*nice_out = 20 - (int)ret; @column 19	existing site; prove while completing the cast audit
+src/misc/linux/plat_misc.c	__plat_process_times_self	(unsigned long long)ru.ru_stime.tv_sec	*kernel100ns = (unsigned long long)ru.ru_stime.tv_sec * 10000000ULL + @column 17	existing site; prove while completing the cast audit
+src/misc/linux/plat_misc.c	__plat_process_times_self	(unsigned long long)ru.ru_stime.tv_usec	(unsigned long long)ru.ru_stime.tv_usec * 10ULL; @column 17	existing site; prove while completing the cast audit
+src/misc/linux/plat_misc.c	__plat_process_times_self	(unsigned long long)ru.ru_utime.tv_sec	*user100ns = (unsigned long long)ru.ru_utime.tv_sec * 10000000ULL + @column 15	existing site; prove while completing the cast audit
+src/misc/linux/plat_misc.c	__plat_process_times_self	(unsigned long long)ru.ru_utime.tv_usec	(unsigned long long)ru.ru_utime.tv_usec * 10ULL; @column 15	existing site; prove while completing the cast audit
+src/misc/linux/plat_misc.c	__plat_write_start_offset	(int)((long)h - 1)	int fd = (int)((long)h - 1); @column 11	existing site; prove while completing the cast audit
+src/misc/linux/plat_misc.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/misc/linux/plat_misc.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/misc/linux/plat_misc.c	open_process	(int)fd	*out = box_fd((int)fd); @column 16	existing site; prove while completing the cast audit
+src/misc/linux/plat_misc.c	open_process	(int)fd	record_pidfd_pid((int)fd, pid); @column 19	existing site; prove while completing the cast audit
+src/misc/linux/plat_misc.c	unbox_fd	(int)((long)h - 1)	static int unbox_fd(__plat_handle_t h) { return (int)((long)h - 1); } @column 49	existing site; prove while completing the cast audit
+src/misc/nt/plat_misc.c	__plat_job_apply_limits	(LARGE_INTEGER)(cpu_cur * 10000000ULL)	eli.BasicLimitInformation.PerProcessUserTimeLimit = (LARGE_INTEGER)(cpu_cur * 10000000ULL); @column 55	existing site; prove while completing the cast audit
+src/misc/nt/plat_misc.c	__plat_job_apply_limits	(SIZE_T)lim	eli.ProcessMemoryLimit = (SIZE_T)lim; @column 28	existing site; prove while completing the cast audit
+src/misc/nt/plat_misc.c	__plat_priority_set	(BOOLEAN)foreground	pc.Foreground = (BOOLEAN)foreground; @column 18	existing site; prove while completing the cast audit
+src/misc/nt/plat_misc.c	__plat_process_times_self	(unsigned long long)kt.KernelTime	*kernel100ns = (unsigned long long)kt.KernelTime; @column 17	existing site; prove while completing the cast audit
+src/misc/nt/plat_misc.c	__plat_process_times_self	(unsigned long long)kt.UserTime	*user100ns = (unsigned long long)kt.UserTime; @column 15	existing site; prove while completing the cast audit
+src/misc/nt/plat_misc.c	open_process	(NTSTATUS)0xC0000022L	if (!NT_SUCCESS(st)) return st == (NTSTATUS)STATUS_ACCESS_DENIED ? -2 : -1; @column 46	existing site; prove while completing the cast audit
+src/misc/nt/plat_misc.c	open_process	(ULONG_PTR)pid	cid.UniqueProcess = (HANDLE)(ULONG_PTR)pid; @column 30	existing site; prove while completing the cast audit
 src/misc/resource.c	__fsize_allow	(long long)fsize_cur	if (size > (long long)fsize_cur) return __fsize_exceeded(); @column 13	existing site; prove while completing the cast audit
 src/misc/resource.c	__fsize_clamp	(long long)count	if (!__fsize_limited()) return (long long)count; @column 33	existing site; prove while completing the cast audit
 src/misc/resource.c	__fsize_clamp	(long long)count	if (fsize_start(h, append, &off) < 0) return (long long)count; @column 47	existing site; prove while completing the cast audit
@@ -168,11 +259,11 @@ src/misc/resource.c	__fsize_clamp	(long long)count	return (long long)count < roo
 src/misc/resource.c	__fsize_clamp	(long long)count	return (long long)count < room ? (long long)count : room; @column 9	existing site; prove while completing the cast audit
 src/misc/resource.c	__fsize_clamp	(long long)fsize_cur	room = (long long)fsize_cur - off; @column 9	existing site; prove while completing the cast audit
 src/misc/resource.c	__fsize_room_at	(long long)fsize_cur	return (long long)fsize_cur - off; @column 9	existing site; prove while completing the cast audit
-src/misc/resource.c	apply_job_limits	(LARGE_INTEGER)(cpu_cur * 10000000ULL)	eli.BasicLimitInformation.PerProcessUserTimeLimit = (LARGE_INTEGER)(cpu_cur * 10000000ULL); @column 55	existing site; prove while completing the cast audit
-src/misc/resource.c	apply_job_limits	(SIZE_T)lim	eli.ProcessMemoryLimit = (SIZE_T)lim; @column 28	existing site; prove while completing the cast audit
 src/misc/resource.c	getrlimit	(rlim_t)__fd_limit	rl->rlim_cur = (rlim_t)__fd_limit; @column 18	existing site; prove while completing the cast audit
-src/misc/resource.c	nice	(int)v	if (setpriority(PRIO_PROCESS, 0, (int)v) != 0) return -1; @column 35	existing site; prove while completing the cast audit
-src/misc/sched.c	process_exists	(NTSTATUS)0xC0000022L	errno = status == STATUS_ACCESS_DENIED ? EPERM : ESRCH; @column 22	existing site; prove while completing the cast audit
+src/misc/resource.c	getrusage	(suseconds_t)((kernel100ns % 10000000ULL) / 10)	ru->ru_stime.tv_usec = (suseconds_t)((kernel100ns % 10000000ULL) / 10); @column 25	existing site; prove while completing the cast audit
+src/misc/resource.c	getrusage	(suseconds_t)((user100ns % 10000000ULL) / 10)	ru->ru_utime.tv_usec = (suseconds_t)((user100ns % 10000000ULL) / 10); @column 25	existing site; prove while completing the cast audit
+src/misc/resource.c	getrusage	(time_t)(kernel100ns / 10000000ULL)	ru->ru_stime.tv_sec = (time_t)(kernel100ns / 10000000ULL); @column 24	existing site; prove while completing the cast audit
+src/misc/resource.c	getrusage	(time_t)(user100ns / 10000000ULL)	ru->ru_utime.tv_sec = (time_t)(user100ns / 10000000ULL); @column 24	existing site; prove while completing the cast audit
 src/misc/strfmon.c	vstrfmon	(size_t)(dot - num)	ndigits = dot ? (size_t)(dot - num) : (size_t)n; @column 19	existing site; prove while completing the cast audit
 src/misc/strfmon.c	vstrfmon	(size_t)*g	if (g[1]) { g++; run = (size_t)*g; } @column 28	existing site; prove while completing the cast audit
 src/misc/strfmon.c	vstrfmon	(size_t)*g	run = (size_t)*g; @column 10	existing site; prove while completing the cast audit
@@ -182,17 +273,28 @@ src/misc/strfmon.c	vstrfmon	(unsigned long)-1	if (fw > (unsigned long)-1 / 16) {
 src/misc/strfmon.c	vstrfmon	(unsigned long)-1	if (rp == (unsigned long)-1) { @column 13	existing site; prove while completing the cast audit
 src/misc/strfmon.c	vstrfmon	(unsigned long)-1	rp = (unsigned long)-1; @column 8	existing site; prove while completing the cast audit
 src/misc/times.c	nt100ns_to_ticks	(clock_t)(t100ns / (__TICKS_PER_SEC / 100))	return (clock_t)(t100ns / (__TICKS_PER_SEC / 100)); @column 9	existing site; prove while completing the cast audit
-src/misc/times.c	times	(unsigned long long)kt.KernelTime	buf->tms_stime = nt100ns_to_ticks((unsigned long long)kt.KernelTime); @column 37	existing site; prove while completing the cast audit
-src/misc/times.c	times	(unsigned long long)kt.UserTime	buf->tms_utime = nt100ns_to_ticks((unsigned long long)kt.UserTime); @column 37	existing site; prove while completing the cast audit
 src/misc/times.c	times	(unsigned long long)mono.tv_nsec	+ (unsigned long long)mono.tv_nsec / 100); @column 8	existing site; prove while completing the cast audit
 src/misc/times.c	times	(unsigned long long)mono.tv_sec	return nt100ns_to_ticks((unsigned long long)mono.tv_sec * __TICKS_PER_SEC @column 26	existing site; prove while completing the cast audit
 src/misc/times.c	timeval_to_ticks	(unsigned long long)tv->tv_sec	unsigned long long t100ns = (unsigned long long)tv->tv_sec * __TICKS_PER_SEC @column 30	existing site; prove while completing the cast audit
 src/misc/times.c	timeval_to_ticks	(unsigned long long)tv->tv_usec	+ (unsigned long long)tv->tv_usec * 10; @column 8	existing site; prove while completing the cast audit
-src/mman/mman.c	map_file	(NTSTATUS)0xC0000022L	if (st == (NTSTATUS)STATUS_ACCESS_DENIED) { @column 22	existing site; prove while completing the cast audit
-src/mman/mman.c	map_file	(size_t)(eof - off)	size_t tail = (size_t)(eof - off); @column 17	existing site; prove while completing the cast audit
-src/mman/mman.c	map_file	(unsigned long long)(eof - off)	(unsigned long long)(eof - off) < viewbytes) { @column 6	existing site; prove while completing the cast audit
-src/mman/mman.c	mmap	(NTSTATUS)0xC0000017L	if (st == (NTSTATUS)STATUS_NO_MEMORY) @column 25	existing site; prove while completing the cast audit
-src/mman/mman.c	mmap	(NTSTATUS)0xC0000017L	if (st == (NTSTATUS)STATUS_NO_MEMORY) errno = ENOMEM; @column 24	existing site; prove while completing the cast audit
+src/mman/linux/plat_mem.c	__plat_mem_commit_fixed	(long)len	long ret = raw_syscall(SYS_mmap, (long)base, (long)len, (long)prot, @column 47	existing site; prove while completing the cast audit
+src/mman/linux/plat_mem.c	__plat_mem_decommit	(long)len	long ret = raw_syscall(SYS_munmap, (long)base, (long)len, 0L, 0L, 0L, 0L); @column 49	existing site; prove while completing the cast audit
+src/mman/linux/plat_mem.c	__plat_mem_flush_view	(long)len	ret = raw_syscall(SYS_msync, (long)addr, (long)len, (long)MS_SYNC, 0L, 0L, 0L); @column 43	existing site; prove while completing the cast audit
+src/mman/linux/plat_mem.c	__plat_mem_lock	(long)len	long ret = raw_syscall(SYS_mlock, (long)addr, (long)len, 0L, 0L, 0L, 0L); @column 48	existing site; prove while completing the cast audit
+src/mman/linux/plat_mem.c	__plat_mem_map_file	(int)((long)fh - 1)	int fd = (int)((long)fh - 1); @column 11	existing site; prove while completing the cast audit
+src/mman/linux/plat_mem.c	__plat_mem_map_file	(long)viewbytes	long ret = raw_syscall(SYS_mmap, (long)*base_inout, (long)viewbytes, (long)prot, @column 54	existing site; prove while completing the cast audit
+src/mman/linux/plat_mem.c	__plat_mem_protect	(long)len	long ret = raw_syscall(SYS_mprotect, (long)addr, (long)len, (long)prot, 0L, 0L, 0L); @column 51	existing site; prove while completing the cast audit
+src/mman/linux/plat_mem.c	__plat_mem_release	(long)len	long ret = raw_syscall(SYS_munmap, (long)base, (long)len, 0L, 0L, 0L, 0L); @column 49	existing site; prove while completing the cast audit
+src/mman/linux/plat_mem.c	__plat_mem_reserve	(long)len	long ret = raw_syscall(SYS_mmap, (long)*base_inout, (long)len, (long)prot, @column 54	existing site; prove while completing the cast audit
+src/mman/linux/plat_mem.c	__plat_mem_unlock	(long)len	long ret = raw_syscall(SYS_munlock, (long)addr, (long)len, 0L, 0L, 0L, 0L); @column 50	existing site; prove while completing the cast audit
+src/mman/linux/plat_mem.c	__plat_mem_unmap_view	(long)len	long ret = raw_syscall(SYS_munmap, (long)base, (long)len, 0L, 0L, 0L, 0L); @column 49	existing site; prove while completing the cast audit
+src/mman/linux/plat_mem.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/mman/linux/plat_mem.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/mman/nt/plat_mem.c	__plat_mem_map_file	(NTSTATUS)0xC0000017L	if (!NT_SUCCESS(st)) { errno = st == (NTSTATUS)STATUS_NO_MEMORY ? ENOMEM : ENOTSUP; return -1; } @column 49	existing site; prove while completing the cast audit
+src/mman/nt/plat_mem.c	__plat_mem_map_file	(NTSTATUS)0xC0000017L	if (!NT_SUCCESS(st)) { errno = st == (NTSTATUS)STATUS_NO_MEMORY ? ENOMEM : ENOTSUP; return -1; } @column 50	existing site; prove while completing the cast audit
+src/mman/nt/plat_mem.c	__plat_mem_map_file	(NTSTATUS)0xC0000022L	if (st == (NTSTATUS)STATUS_ACCESS_DENIED) { @column 22	existing site; prove while completing the cast audit
+src/mman/nt/plat_mem.c	__plat_mem_map_file	(size_t)(eof - off)	size_t tail = (size_t)(eof - off); @column 17	existing site; prove while completing the cast audit
+src/mman/nt/plat_mem.c	__plat_mem_map_file	(unsigned long long)(eof - off)	(unsigned long long)(eof - off) < viewbytes) { @column 6	existing site; prove while completing the cast audit
 src/mman/shm.c	rename_mapped_away	(size_t)(slash - path + 1)	size_t dirlen = slash ? (size_t)(slash - path + 1) : 0; @column 26	existing site; prove while completing the cast audit
 src/mman/shm.c	rename_mapped_away	(unsigned)getpid()	"%s%08x-%08x-%08x", stem, (unsigned)getpid(), @column 38	existing site; prove while completing the cast audit
 src/mman/shm.c	rename_mapped_away	(unsigned)gettid()	(unsigned)gettid(), serial); @column 12	existing site; prove while completing the cast audit
@@ -200,29 +302,37 @@ src/mman/shm.c	shm_mode_path	(size_t)(slash - path)	prefix = (size_t)(slash - pa
 src/mman/shm.c	shm_mode_write	(unsigned char)(mode >> 16)	value[2] = (unsigned char)(mode >> 16); @column 13	existing site; prove while completing the cast audit
 src/mman/shm.c	shm_mode_write	(unsigned char)(mode >> 8)	value[1] = (unsigned char)(mode >> 8); @column 13	existing site; prove while completing the cast audit
 src/mman/shm.c	shm_mode_write	(unsigned char)mode	value[0] = (unsigned char)mode; @column 13	existing site; prove while completing the cast audit
+src/mman/shm.c	shm_open	(unsigned short)stored	f->shm_mode = (unsigned short)stored; @column 18	existing site; prove while completing the cast audit
 src/mman/shm.c	shm_path	(unsigned char)component[i]	if (!portable_name_char((unsigned char)component[i])) { @column 27	existing site; prove while completing the cast audit
 src/process/children.c	child_grow	(size_t)(cap - __child_cap)	memset(n + __child_cap, 0, (size_t)(cap - __child_cap) * sizeof *n); @column 29	existing site; prove while completing the cast audit
 src/process/children.c	child_grow	(size_t)__child_cap	memcpy(n, __children, (size_t)__child_cap * sizeof *n); @column 24	existing site; prove while completing the cast audit
 src/process/children.c	child_grow	(size_t)cap	n = __malloc((size_t)cap * sizeof *n); @column 15	existing site; prove while completing the cast audit
 src/process/exec.c	execve	(int)(__NT_SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu))	__nt_exit(__NT_SIGNAL_EXIT(WTERMSIG(status))); @column 12	existing site; prove while completing the cast audit
 src/process/find_program.c	__find_program	(size_t)(e - p)	size_t len = e ? (size_t)(e - p) : strlen(p); @column 20	existing site; prove while completing the cast audit
-src/process/fork.c	fork_impl	(int)(ULONG_PTR)info.ClientId.UniqueProcess	pid = (int)(ULONG_PTR)info.ClientId.UniqueProcess; @column 8	existing site; prove while completing the cast audit
+src/process/linux/plat_process.c	__plat_process_fork	(int)pid	out->pid = (int)pid; @column 13	existing site; prove while completing the cast audit
+src/process/linux/plat_process.c	__plat_process_fork	(int)pid	out->process = (__plat_handle_t)(long)box_pid((int)pid); @column 48	existing site; prove while completing the cast audit
+src/process/linux/plat_process.c	__plat_process_spawn	(int)pid	*out_process = (__plat_handle_t)(long)box_pid((int)pid); @column 48	existing site; prove while completing the cast audit
+src/process/linux/plat_process.c	__plat_process_spawn	(int)pid	return (int)pid; @column 9	existing site; prove while completing the cast audit
+src/process/linux/plat_process.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/process/linux/plat_process.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/process/linux/plat_process.c	tv_to_100ns	(unsigned long long)tv->tv_sec	return (unsigned long long)tv->tv_sec * 10000000ULL + @column 9	existing site; prove while completing the cast audit
+src/process/linux/plat_process.c	tv_to_100ns	(unsigned long long)tv->tv_usec	(unsigned long long)tv->tv_usec * 10ULL; @column 9	existing site; prove while completing the cast audit
+src/process/linux/plat_process.c	unbox_fd	(int)((long)h - 1)	static int unbox_fd(__plat_handle_t h) { return (int)((long)h - 1); } @column 49	existing site; prove while completing the cast audit
+src/process/linux/plat_process.c	unbox_pid	(int)(long)h	static int unbox_pid(__plat_handle_t h) { return (int)(long)h; } @column 50	existing site; prove while completing the cast audit
+src/process/nt/plat_process.c	__plat_process_fork	(int)(ULONG_PTR)info.ClientId.UniqueProcess	out->pid = (int)(ULONG_PTR)info.ClientId.UniqueProcess; @column 13	existing site; prove while completing the cast audit
+src/process/nt/plat_process.c	__plat_process_spawn	(NTSTATUS)0xC0000020L	st == STATUS_INVALID_FILE_FOR_SECTION) errno = ENOEXEC; @column 18	existing site; prove while completing the cast audit
+src/process/nt/plat_process.c	__plat_process_spawn	(NTSTATUS)0xC0000034L	if (st == STATUS_OBJECT_NAME_NOT_FOUND || st == STATUS_OBJECT_PATH_NOT_FOUND) errno = ENOENT; @column 13	existing site; prove while completing the cast audit
+src/process/nt/plat_process.c	__plat_process_spawn	(NTSTATUS)0xC000003AL	if (st == STATUS_OBJECT_NAME_NOT_FOUND || st == STATUS_OBJECT_PATH_NOT_FOUND) errno = ENOENT; @column 51	existing site; prove while completing the cast audit
+src/process/nt/plat_process.c	__plat_process_spawn	(NTSTATUS)0xC000007BL	else if (st == STATUS_INVALID_IMAGE_FORMAT || st == STATUS_INVALID_IMAGE_NOT_MZ || @column 18	existing site; prove while completing the cast audit
+src/process/nt/plat_process.c	__plat_process_spawn	(NTSTATUS)0xC000012FL	else if (st == STATUS_INVALID_IMAGE_FORMAT || st == STATUS_INVALID_IMAGE_NOT_MZ || @column 55	existing site; prove while completing the cast audit
+src/process/nt/plat_process.c	__plat_process_spawn	(USHORT)runtime_len	runtimeUS.Length = (USHORT)runtime_len; @column 21	existing site; prove while completing the cast audit
+src/process/nt/plat_process.c	__plat_process_spawn	(USHORT)runtime_len	runtimeUS.MaximumLength = (USHORT)runtime_len; @column 28	existing site; prove while completing the cast audit
+src/process/nt/plat_process.c	__plat_process_spawn	(int)(ULONG_PTR)info.ClientId.UniqueProcess	pid = (int)(ULONG_PTR)info.ClientId.UniqueProcess; @column 8	existing site; prove while completing the cast audit
+src/process/nt/plat_process.c	__plat_process_times	(unsigned long long)kt.KernelTime	*ktime100ns = (unsigned long long)kt.KernelTime; @column 16	existing site; prove while completing the cast audit
+src/process/nt/plat_process.c	__plat_process_times	(unsigned long long)kt.UserTime	*utime100ns = (unsigned long long)kt.UserTime; @column 16	existing site; prove while completing the cast audit
 src/process/posix_spawn.c	spawn_common	(size_t)cap	sv = malloc((size_t)cap * sizeof *sv); @column 15	existing site; prove while completing the cast audit
-src/process/spawn.c	__spawn	(NTSTATUS)0xC0000020L	st == STATUS_INVALID_FILE_FOR_SECTION) errno = ENOEXEC; @column 18	existing site; prove while completing the cast audit
-src/process/spawn.c	__spawn	(NTSTATUS)0xC0000034L	if (st == STATUS_OBJECT_NAME_NOT_FOUND || st == STATUS_OBJECT_PATH_NOT_FOUND) errno = ENOENT; @column 13	existing site; prove while completing the cast audit
-src/process/spawn.c	__spawn	(NTSTATUS)0xC000003AL	if (st == STATUS_OBJECT_NAME_NOT_FOUND || st == STATUS_OBJECT_PATH_NOT_FOUND) errno = ENOENT; @column 51	existing site; prove while completing the cast audit
-src/process/spawn.c	__spawn	(NTSTATUS)0xC000007BL	else if (st == STATUS_INVALID_IMAGE_FORMAT || st == STATUS_INVALID_IMAGE_NOT_MZ || @column 18	existing site; prove while completing the cast audit
-src/process/spawn.c	__spawn	(NTSTATUS)0xC000012FL	else if (st == STATUS_INVALID_IMAGE_FORMAT || st == STATUS_INVALID_IMAGE_NOT_MZ || @column 55	existing site; prove while completing the cast audit
-src/process/spawn.c	__spawn	(USHORT)(cmdLine.Length + sizeof(WCHAR))	cmdLine.MaximumLength = (USHORT)(cmdLine.Length + sizeof(WCHAR)); @column 26	existing site; prove while completing the cast audit
-src/process/spawn.c	__spawn	(USHORT)runtime_len	runtimeUS.Length = (USHORT)runtime_len; @column 21	existing site; prove while completing the cast audit
-src/process/spawn.c	__spawn	(USHORT)runtime_len	runtimeUS.MaximumLength = (USHORT)runtime_len; @column 28	existing site; prove while completing the cast audit
-src/process/spawn.c	__spawn	(int)(ULONG_PTR)info.ClientId.UniqueProcess	pid = (int)(ULONG_PTR)info.ClientId.UniqueProcess; @column 8	existing site; prove while completing the cast audit
 src/process/spawn_file_actions.c	fa_push	(size_t)cap	n = realloc(fa->__actions, (size_t)cap * sizeof *n); @column 30	existing site; prove while completing the cast audit
 src/process/wait.c	__wait_encode_status	(unsigned)exitcode	unsigned code = (unsigned)exitcode; @column 18	existing site; prove while completing the cast audit
-src/process/wait.c	fill_child_rusage	(unsigned long long)kt.KernelTime	children_ktime100ns += (unsigned long long)kt.KernelTime; @column 25	existing site; prove while completing the cast audit
-src/process/wait.c	fill_child_rusage	(unsigned long long)kt.KernelTime	ticks_to_timeval((unsigned long long)kt.KernelTime, &ru->ru_stime); @column 19	existing site; prove while completing the cast audit
-src/process/wait.c	fill_child_rusage	(unsigned long long)kt.UserTime	children_utime100ns += (unsigned long long)kt.UserTime; @column 25	existing site; prove while completing the cast audit
-src/process/wait.c	fill_child_rusage	(unsigned long long)kt.UserTime	ticks_to_timeval((unsigned long long)kt.UserTime, &ru->ru_utime); @column 19	existing site; prove while completing the cast audit
 src/process/wait.c	ticks_to_timeval	(suseconds_t)((t100ns % 10000000ULL) / 10)	tv->tv_usec = (suseconds_t)((t100ns % 10000000ULL) / 10); @column 16	existing site; prove while completing the cast audit
 src/process/wait.c	ticks_to_timeval	(time_t)(t100ns / 10000000ULL)	tv->tv_sec = (time_t)(t100ns / 10000000ULL); @column 15	existing site; prove while completing the cast audit
 src/process/wait.c	waitid	(pid_t)id	case P_PGID: want = (pid_t)id; break; @column 22	existing site; prove while completing the cast audit
@@ -260,6 +370,15 @@ src/regex/regex.c	testbit	(unsigned char)c	unsigned char cc = (unsigned char)c; 
 src/regex/regex.c	testbit	(unsigned char)tolower(cc)	if (icase) cc = (unsigned char)tolower(cc); @column 18	existing site; prove while completing the cast audit
 src/search/hsearch.c	hash_str	(unsigned char)*s++	h ^= (unsigned char)*s++; @column 8	existing site; prove while completing the cast audit
 src/search/hsearch.c	hcreate	(size_t)-1	if (nel > (((size_t)-1 - 8) / 3) * 2) { errno = ENOMEM; return 0; } @column 14	existing site; prove while completing the cast audit
+src/select/linux/plat_select.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/select/linux/plat_select.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/select/linux/plat_select.c	unbox	(int)((long)h - 1)	static int unbox(__plat_handle_t h) { return (int)((long)h - 1); } @column 46	existing site; prove while completing the cast audit
+src/select/nt/plat_select.c	__plat_wait_multiple	(ULONG)nhandles	NtWaitForMultipleObjects((ULONG)nhandles, (HANDLE *)handles, 1 /* WaitAny */, 0, &t); @column 27	existing site; prove while completing the cast audit
+src/select/nt/plat_select.c	__plat_wait_multiple	(ULONG)nhandles	NtWaitForMultipleObjects((ULONG)nhandles, (HANDLE *)handles, 1 /* WaitAny */, 0, 0); @column 28	existing site; prove while completing the cast audit
+src/select/poll.c	poll	(short)(p->revents | (p->events & (POLLIN | POLLRDNORM)))	if (cr) p->revents = (short)(p->revents | (p->events & (POLLIN | POLLRDNORM))); @column 26	existing site; prove while completing the cast audit
+src/select/poll.c	poll	(short)(p->revents | (p->events & (POLLIN | POLLRDNORM)))	p->revents = (short)(p->revents | (p->events & (POLLIN | POLLRDNORM))); @column 19	existing site; prove while completing the cast audit
+src/select/poll.c	poll	(short)(p->revents | (p->events & (POLLOUT | POLLWRNORM)))	if (cw && !hup) p->revents = (short)(p->revents | (p->events & (POLLOUT | POLLWRNORM))); @column 34	existing site; prove while completing the cast audit
+src/sh/builtin.c	bi_shift	(int)n	if (__sh_params_shift((int)n) < 0) { ctx->status = 2; return 0; } @column 24	existing site; prove while completing the cast audit
 src/sh/builtin.c	set_list_variables	(size_t)(eq - *e)	fwrite(*e, 1, (size_t)(eq - *e), stdout); @column 17	existing site; prove while completing the cast audit
 src/sh/execute.c	env_snapshot_restore	(size_t)(eq - e)	size_t nlen = eq ? (size_t)(eq - e) : strlen(e); @column 23	existing site; prove while completing the cast audit
 src/sh/execute.c	env_snapshot_take	(size_t)(eq - e)	size_t nlen = eq ? (size_t)(eq - e) : strlen(e); @column 22	existing site; prove while completing the cast audit
@@ -273,48 +392,77 @@ src/sh/parse.c	next_raw_token	(unsigned char)w[i]	for (i = 0; i < len; i++) if (
 src/sh/parse.c	parse_funcdef	(size_t)(end - start)	cmd->func_text = xstrndup(start, (size_t)(end - start)); @column 35	existing site; prove while completing the cast audit
 src/sh/parse.c	parse_funcdef	(unsigned char)end[-1]	while (end > start && isspace((unsigned char)end[-1])) end--; @column 32	existing site; prove while completing the cast audit
 src/sh/script.c	slurp	(size_t)-1	if (cap > (size_t)-1 / 2) { free(buf); return -1; } @column 14	existing site; prove while completing the cast audit
-src/signal/sigdelivery.c	sig_delivery_thread	(NTSTATUS)0xC00000B2L	if (st == STATUS_PIPE_CONNECTED) st = STATUS_SUCCESS; @column 13	existing site; prove while completing the cast audit
-src/signal/sigdelivery.c	sig_delivery_thread	(pid_t)pkt.sender_pid	si.si_pid = (pid_t)pkt.sender_pid; @column 18	existing site; prove while completing the cast audit
-src/signal/sigdelivery.c	sig_pipe_name	(unsigned)pid	unsigned upid = (unsigned)pid; @column 18	existing site; prove while completing the cast audit
-src/signal/sigdelivery.c	sig_send_lock_name	(unsigned)pid	unsigned upid = (unsigned)pid; @column 18	existing site; prove while completing the cast audit
-src/signal/sigdelivery.c	sig_try_deliver_remote_info	(ULONG)(si ? si->si_pid : getpid())	pkt.sender_pid = (ULONG)(si ? si->si_pid : getpid()); @column 19	existing site; prove while completing the cast audit
-src/signal/sigdelivery.c	sig_try_deliver_remote_info	(ULONG)sig	pkt.signo = (ULONG)sig; @column 14	existing site; prove while completing the cast audit
-src/signal/signal.c	__raise_internal_info	(int)(__NT_SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu))	__nt_exit(__NT_SIGNAL_EXIT(sig)); @column 13	existing site; prove while completing the cast audit
+src/signal/linux/plat_signal.c	__plat_kill_terminate	(int)(long)h	long pid = (long)(int)(long)h; @column 19	existing site; prove while completing the cast audit
+src/signal/linux/plat_signal.c	__plat_process_suspend	(int)(long)h	long pid = (long)(int)(long)h; @column 19	existing site; prove while completing the cast audit
+src/signal/linux/plat_signal.c	__plat_sigevent_create	(int)ret	return box((int)ret); @column 13	existing site; prove while completing the cast audit
+src/signal/linux/plat_signal.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/signal/linux/plat_signal.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/signal/linux/plat_signal.c	unbox	(int)((long)h - 1)	static int unbox(__plat_handle_t h) { return (int)((long)h - 1); } @column 46	existing site; prove while completing the cast audit
+src/signal/nt/plat_signal.c	__plat_kill_open	(NTSTATUS)0xC0000022L	errno = st == (NTSTATUS)STATUS_ACCESS_DENIED ? EPERM : ESRCH; @column 27	existing site; prove while completing the cast audit
+src/signal/nt/plat_signal.c	__plat_kill_open	(ULONG_PTR)pid	cid.UniqueProcess = (HANDLE)(ULONG_PTR)pid; @column 30	existing site; prove while completing the cast audit
+src/signal/nt/plat_signal.c	__plat_kill_terminate	(NTSTATUS)0xC000010AL	if (!NT_SUCCESS(st) && st != (NTSTATUS)STATUS_PROCESS_IS_TERMINATING) @column 41	existing site; prove while completing the cast audit
+src/signal/nt/plat_signal.c	__plat_signal_pipe_listen	(NTSTATUS)0xC00000B2L	if (st == STATUS_PIPE_CONNECTED) st = STATUS_SUCCESS; @column 12	existing site; prove while completing the cast audit
+src/signal/nt/plat_signal.c	__plat_signal_pipe_read	(ULONG)len	NTSTATUS st = NtReadFile(h, 0, 0, 0, &io, buf, (ULONG)len, 0, 0); @column 49	existing site; prove while completing the cast audit
+src/signal/nt/plat_signal.c	__plat_signal_pipe_write	(ULONG)len	NTSTATUS st = NtWriteFile(h, 0, 0, 0, &io, buf, (ULONG)len, 0, 0); @column 50	existing site; prove while completing the cast audit
+src/signal/nt/sigdelivery.c	sig_delivery_thread	(pid_t)pkt.sender_pid	si.si_pid = (pid_t)pkt.sender_pid; @column 18	existing site; prove while completing the cast audit
+src/signal/nt/sigdelivery.c	sig_pipe_name	(unsigned)pid	unsigned upid = (unsigned)pid; @column 18	existing site; prove while completing the cast audit
+src/signal/nt/sigdelivery.c	sig_send_lock_name	(unsigned)pid	unsigned upid = (unsigned)pid; @column 18	existing site; prove while completing the cast audit
+src/signal/nt/sigdelivery.c	sig_try_deliver_remote_info	(ULONG)(si ? si->si_pid : getpid())	pkt.sender_pid = (ULONG)(si ? si->si_pid : getpid()); @column 19	existing site; prove while completing the cast audit
+src/signal/nt/sigdelivery.c	sig_try_deliver_remote_info	(ULONG)sig	pkt.signo = (ULONG)sig; @column 14	existing site; prove while completing the cast audit
 src/signal/signal.c	exception_handler	(int)(__NT_SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu))	__nt_exit(__NT_SIGNAL_EXIT(sig)); @column 13	existing site; prove while completing the cast audit
 src/signal/signal.c	exception_handler	(int)(__NT_SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu))	if (sig != SIGINT && sig != SIGTRAP) __nt_exit(__NT_SIGNAL_EXIT(sig)); @column 50	existing site; prove while completing the cast audit
-src/signal/signal.c	kill	(NTSTATUS)0xC0000022L	if (!NT_SUCCESS(st)) { errno = st == STATUS_ACCESS_DENIED ? EPERM : ESRCH; return -1; } @column 40	existing site; prove while completing the cast audit
-src/signal/signal.c	kill	(NTSTATUS)0xC000010AL	if (!NT_SUCCESS(st) && st != STATUS_PROCESS_IS_TERMINATING) return __set_errno_status(st); @column 31	existing site; prove while completing the cast audit
-src/signal/signal.c	kill	(int)(__NT_SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu))	st = NtTerminateProcess(h, __NT_SIGNAL_EXIT(sig)); @column 29	existing site; prove while completing the cast audit
+src/signal/signal.c	kill	(int)(__NT_SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu))	int r = __plat_kill_terminate(h, __NT_SIGNAL_EXIT(sig)); @column 36	existing site; prove while completing the cast audit
 src/signal/signal.c	stop_event_name	(unsigned)pid	unsigned upid = (unsigned)pid; @column 18	existing site; prove while completing the cast audit
+src/socket/afdsupport.c	__afd_build_bind_request	(uint32_t)share_type	bd->ShareType = (uint32_t)share_type; @column 18	existing site; prove while completing the cast audit
+src/socket/afdsupport.c	__afd_build_poll_request	(uint32_t)nhandles	uint32_t count = (uint32_t)nhandles; @column 19	existing site; prove while completing the cast audit
+src/socket/afdsupport.c	__afd_poll_events_for	(uint32_t)nrequested	count = (uint32_t)nrequested; @column 11	existing site; prove while completing the cast audit
 src/socket/afdsupport.c	__afd_poll_request_size	CStyleCastExpr	return (unsigned long)AFD_POLL_REQ_SIZE(nhandles); @column 9	existing site; prove while completing the cast audit
+src/socket/getname.c	getsockname	(ULONG)__afd_sockname_reply_size()	(ULONG)__afd_sockname_reply_size(), 0); @column 19	existing site; prove while completing the cast audit
 src/socket/inet.c	htons	(uint16_t)(((h & 0x00ffU) << 8) | ((h & 0xff00U) >> 8))	return (uint16_t)(((h & 0x00ffU) << 8) | ((h & 0xff00U) >> 8)); @column 9	existing site; prove while completing the cast audit
+src/socket/inet.c	pton6	(unsigned char)(value >> 8)	*p++ = (unsigned char)(value >> 8); @column 10	existing site; prove while completing the cast audit
+src/socket/inet.c	pton6	(unsigned char)(value >> 8)	*p++ = (unsigned char)(value >> 8); @column 11	existing site; prove while completing the cast audit
 src/socket/inet.c	pton6	(unsigned char)*src	int h = hexval((unsigned char)*src); @column 18	existing site; prove while completing the cast audit
-src/socket/sendrecv.c	recv	(NTSTATUS)0xC000013BL	if (st == STATUS_CONNECTION_DISCONNECTED || st == STATUS_LOCAL_DISCONNECT || st == STATUS_REMOTE_DISCONNECT) @column 52	existing site; prove while completing the cast audit
-src/socket/sendrecv.c	recv	(NTSTATUS)0xC000013CL	if (st == STATUS_CONNECTION_DISCONNECTED || st == STATUS_LOCAL_DISCONNECT || st == STATUS_REMOTE_DISCONNECT) @column 85	existing site; prove while completing the cast audit
-src/socket/sendrecv.c	recv	(NTSTATUS)0xC000020CL	if (st == STATUS_CONNECTION_DISCONNECTED || st == STATUS_LOCAL_DISCONNECT || st == STATUS_REMOTE_DISCONNECT) @column 12	existing site; prove while completing the cast audit
-src/socket/sendrecv.c	recv	(ssize_t)io.Information	return (ssize_t)io.Information; @column 9	existing site; prove while completing the cast audit
-src/socket/sendrecv.c	send	(NTSTATUS)0xC000013BL	if (st == STATUS_CONNECTION_DISCONNECTED || st == STATUS_LOCAL_DISCONNECT || @column 52	existing site; prove while completing the cast audit
-src/socket/sendrecv.c	send	(NTSTATUS)0xC000013CL	st == STATUS_REMOTE_DISCONNECT || st == STATUS_CONNECTION_RESET || st == STATUS_CONNECTION_ABORTED) { @column 12	existing site; prove while completing the cast audit
-src/socket/sendrecv.c	send	(NTSTATUS)0xC000020CL	if (st == STATUS_CONNECTION_DISCONNECTED || st == STATUS_LOCAL_DISCONNECT || @column 12	existing site; prove while completing the cast audit
-src/socket/sendrecv.c	send	(NTSTATUS)0xC000020DL	st == STATUS_REMOTE_DISCONNECT || st == STATUS_CONNECTION_RESET || st == STATUS_CONNECTION_ABORTED) { @column 46	existing site; prove while completing the cast audit
-src/socket/sendrecv.c	send	(NTSTATUS)0xC0000241L	st == STATUS_REMOTE_DISCONNECT || st == STATUS_CONNECTION_RESET || st == STATUS_CONNECTION_ABORTED) { @column 79	existing site; prove while completing the cast audit
-src/socket/sendrecv.c	send	(ssize_t)io.Information	return (ssize_t)io.Information; @column 9	existing site; prove while completing the cast audit
-src/stat/chmod.c	fchmodat	(NTSTATUS)0xC0000022L	if (st == STATUS_ACCESS_DENIED) { @column 12	existing site; prove while completing the cast audit
+src/socket/inet.c	pton6	(unsigned char)value	*p++ = (unsigned char)value; @column 10	existing site; prove while completing the cast audit
+src/socket/inet.c	pton6	(unsigned char)value	*p++ = (unsigned char)value; @column 11	existing site; prove while completing the cast audit
+src/socket/linux/plat_socket.c	__plat_sock_recv	(long)len	long ret = raw_syscall(SYS_recvfrom, (long)unbox(h), (long)buf, (long)len, @column 66	existing site; prove while completing the cast audit
+src/socket/linux/plat_socket.c	__plat_sock_send	(long)len	long ret = raw_syscall(SYS_sendto, (long)unbox(h), (long)buf, (long)len, @column 64	existing site; prove while completing the cast audit
+src/socket/linux/plat_socket.c	__plat_socket_accept	(int)fd	*out = box((int)fd); @column 13	existing site; prove while completing the cast audit
+src/socket/linux/plat_socket.c	__plat_socket_listen	(long)backlog	long ret = raw_syscall(SYS_listen, (long)unbox(h), (long)backlog, 0L, 0L, 0L, 0L); @column 53	existing site; prove while completing the cast audit
+src/socket/linux/plat_socket.c	__plat_socket_open	(int)fd	*out = box((int)fd); @column 13	existing site; prove while completing the cast audit
+src/socket/linux/plat_socket.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/socket/linux/plat_socket.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/socket/linux/plat_socket.c	unbox	(int)((long)h - 1)	return (int)((long)h - 1); @column 9	existing site; prove while completing the cast audit
+src/socket/nt/plat_socket.c	__plat_sock_recv	(NTSTATUS)0xC000013BL	if (st == STATUS_CONNECTION_DISCONNECTED || st == STATUS_LOCAL_DISCONNECT || st == STATUS_REMOTE_DISCONNECT) @column 52	existing site; prove while completing the cast audit
+src/socket/nt/plat_socket.c	__plat_sock_recv	(NTSTATUS)0xC000013CL	if (st == STATUS_CONNECTION_DISCONNECTED || st == STATUS_LOCAL_DISCONNECT || st == STATUS_REMOTE_DISCONNECT) @column 85	existing site; prove while completing the cast audit
+src/socket/nt/plat_socket.c	__plat_sock_recv	(NTSTATUS)0xC000020CL	if (st == STATUS_CONNECTION_DISCONNECTED || st == STATUS_LOCAL_DISCONNECT || st == STATUS_REMOTE_DISCONNECT) @column 12	existing site; prove while completing the cast audit
+src/socket/nt/plat_socket.c	__plat_sock_recv	(ssize_t)io.Information	return (ssize_t)io.Information; @column 9	existing site; prove while completing the cast audit
+src/socket/nt/plat_socket.c	__plat_sock_recv	(unsigned int)len	wb.len = (unsigned int)len; @column 11	existing site; prove while completing the cast audit
+src/socket/nt/plat_socket.c	__plat_sock_send	(NTSTATUS)0xC000013BL	if (st == STATUS_CONNECTION_DISCONNECTED || st == STATUS_LOCAL_DISCONNECT || @column 52	existing site; prove while completing the cast audit
+src/socket/nt/plat_socket.c	__plat_sock_send	(NTSTATUS)0xC000013CL	st == STATUS_REMOTE_DISCONNECT || st == STATUS_CONNECTION_RESET || st == STATUS_CONNECTION_ABORTED) { @column 12	existing site; prove while completing the cast audit
+src/socket/nt/plat_socket.c	__plat_sock_send	(NTSTATUS)0xC000020CL	if (st == STATUS_CONNECTION_DISCONNECTED || st == STATUS_LOCAL_DISCONNECT || @column 12	existing site; prove while completing the cast audit
+src/socket/nt/plat_socket.c	__plat_sock_send	(NTSTATUS)0xC000020DL	st == STATUS_REMOTE_DISCONNECT || st == STATUS_CONNECTION_RESET || st == STATUS_CONNECTION_ABORTED) { @column 46	existing site; prove while completing the cast audit
+src/socket/nt/plat_socket.c	__plat_sock_send	(NTSTATUS)0xC0000241L	st == STATUS_REMOTE_DISCONNECT || st == STATUS_CONNECTION_RESET || st == STATUS_CONNECTION_ABORTED) { @column 79	existing site; prove while completing the cast audit
+src/socket/nt/plat_socket.c	__plat_sock_send	(ssize_t)io.Information	return (ssize_t)io.Information; @column 9	existing site; prove while completing the cast audit
+src/socket/nt/plat_socket.c	__plat_sock_send	(unsigned int)len	wb.len = (unsigned int)len; @column 11	existing site; prove while completing the cast audit
+src/stat/linux/plat_stat.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/stat/linux/plat_stat.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/stat/linux/plat_stat.c	unbox	(int)((long)h - 1)	return (int)((long)h - 1); @column 9	existing site; prove while completing the cast audit
 src/stat/lxmod.c	putle32	(unsigned char)(v >> 16)	p[2] = (unsigned char)(v >> 16); @column 9	existing site; prove while completing the cast audit
 src/stat/lxmod.c	putle32	(unsigned char)(v >> 8)	p[1] = (unsigned char)(v >> 8); @column 9	existing site; prove while completing the cast audit
 src/stat/lxmod.c	putle32	(unsigned char)v	p[0] = (unsigned char)v; @column 9	existing site; prove while completing the cast audit
-src/stat/mkdir.c	mkdirat	(NTSTATUS)0xC0000035L	if (st == STATUS_OBJECT_NAME_COLLISION) { errno = EEXIST; return -1; } @column 12	existing site; prove while completing the cast audit
-src/stat/stat.c	__fstat_handle	(ino_t)ii.IndexNumber	st->st_ino = (ino_t)ii.IndexNumber; @column 15	existing site; prove while completing the cast audit
-src/stat/stat.c	__fstat_synthetic_ino	(ino_t)ii.IndexNumber	if (NT_SUCCESS(s) && ii.IndexNumber != 0) return (ino_t)ii.IndexNumber; @column 51	existing site; prove while completing the cast audit
-src/stat/stat.c	fstatat	(NTSTATUS)0xC0000279L	if (!NT_SUCCESS(s) && s != STATUS_IO_REPARSE_TAG_NOT_HANDLED) @column 29	existing site; prove while completing the cast audit
-src/stat/stat.c	fstatat	(NTSTATUS)0xC0000279L	if (s == STATUS_IO_REPARSE_TAG_NOT_HANDLED && !(flags & AT_SYMLINK_NOFOLLOW)) { @column 11	existing site; prove while completing the cast audit
-src/stat/statvfs.c	statvfs_handle	(fsblkcnt_t)fsi.ActualAvailableAllocationUnits	buf->f_bfree = (fsblkcnt_t)fsi.ActualAvailableAllocationUnits; @column 18	existing site; prove while completing the cast audit
-src/stat/statvfs.c	statvfs_handle	(fsblkcnt_t)fsi.CallerAvailableAllocationUnits	buf->f_bavail = (fsblkcnt_t)fsi.CallerAvailableAllocationUnits; @column 19	existing site; prove while completing the cast audit
-src/stat/statvfs.c	statvfs_handle	(fsblkcnt_t)fsi.TotalAllocationUnits	buf->f_blocks = (fsblkcnt_t)fsi.TotalAllocationUnits; @column 19	existing site; prove while completing the cast audit
-src/stat/statvfs.c	statvfs_handle	(fsblkcnt_t)si.AvailableAllocationUnits	buf->f_bavail = buf->f_bfree = (fsblkcnt_t)si.AvailableAllocationUnits; @column 34	existing site; prove while completing the cast audit
-src/stat/statvfs.c	statvfs_handle	(fsblkcnt_t)si.TotalAllocationUnits	buf->f_blocks = (fsblkcnt_t)si.TotalAllocationUnits; @column 19	existing site; prove while completing the cast audit
-src/stat/statvfs.c	statvfs_handle	(unsigned long)-1	if (cluster > (unsigned long)-1) { errno = EOVERFLOW; return -1; } @column 16	existing site; prove while completing the cast audit
-src/stat/utimensat.c	utimensat	(NTSTATUS)0xC0000022L	if (st == STATUS_ACCESS_DENIED) { @column 12	existing site; prove while completing the cast audit
+src/stat/nt/plat_stat.c	__fstat_synthetic_ino	(ino_t)ii.IndexNumber	if (NT_SUCCESS(s) && ii.IndexNumber != 0) return (ino_t)ii.IndexNumber; @column 51	existing site; prove while completing the cast audit
+src/stat/nt/plat_stat.c	__plat_chmodat	(NTSTATUS)0xC0000022L	if (st == STATUS_ACCESS_DENIED) { @column 12	existing site; prove while completing the cast audit
+src/stat/nt/plat_stat.c	__plat_fstat	(ino_t)ii.IndexNumber	st->st_ino = (ino_t)ii.IndexNumber; @column 15	existing site; prove while completing the cast audit
+src/stat/nt/plat_stat.c	__plat_fstatat	(NTSTATUS)0xC0000279L	if (!NT_SUCCESS(s) && s != STATUS_IO_REPARSE_TAG_NOT_HANDLED) @column 29	existing site; prove while completing the cast audit
+src/stat/nt/plat_stat.c	__plat_fstatat	(NTSTATUS)0xC0000279L	if (s == STATUS_IO_REPARSE_TAG_NOT_HANDLED && !(flags & AT_SYMLINK_NOFOLLOW)) { @column 11	existing site; prove while completing the cast audit
+src/stat/nt/plat_stat.c	__plat_mkdir	(NTSTATUS)0xC0000035L	if (st == STATUS_OBJECT_NAME_COLLISION) { errno = EEXIST; return -1; } @column 12	existing site; prove while completing the cast audit
+src/stat/nt/plat_stat.c	__plat_set_times_at	(NTSTATUS)0xC0000022L	if (st == STATUS_ACCESS_DENIED) { @column 12	existing site; prove while completing the cast audit
+src/stat/nt/plat_stat.c	__plat_statvfs	(fsblkcnt_t)fsi.ActualAvailableAllocationUnits	buf->f_bfree = (fsblkcnt_t)fsi.ActualAvailableAllocationUnits; @column 18	existing site; prove while completing the cast audit
+src/stat/nt/plat_stat.c	__plat_statvfs	(fsblkcnt_t)fsi.CallerAvailableAllocationUnits	buf->f_bavail = (fsblkcnt_t)fsi.CallerAvailableAllocationUnits; @column 19	existing site; prove while completing the cast audit
+src/stat/nt/plat_stat.c	__plat_statvfs	(fsblkcnt_t)fsi.TotalAllocationUnits	buf->f_blocks = (fsblkcnt_t)fsi.TotalAllocationUnits; @column 19	existing site; prove while completing the cast audit
+src/stat/nt/plat_stat.c	__plat_statvfs	(fsblkcnt_t)si.AvailableAllocationUnits	buf->f_bavail = buf->f_bfree = (fsblkcnt_t)si.AvailableAllocationUnits; @column 34	existing site; prove while completing the cast audit
+src/stat/nt/plat_stat.c	__plat_statvfs	(fsblkcnt_t)si.TotalAllocationUnits	buf->f_blocks = (fsblkcnt_t)si.TotalAllocationUnits; @column 19	existing site; prove while completing the cast audit
+src/stat/nt/plat_stat.c	__plat_statvfs	(unsigned long)-1	if (cluster > (unsigned long)-1) { errno = EOVERFLOW; return -1; } @column 16	existing site; prove while completing the cast audit
 src/stdio/buf.c	__fflush_locked	(long long)(f->rend - f->rpos)	long long ahead = (long long)(f->rend - f->rpos); @column 21	existing site; prove while completing the cast audit
 src/stdio/buf.c	__fflush_locked	(size_t)n	off += (size_t)n; @column 11	existing site; prove while completing the cast audit
 src/stdio/buf.c	__file_read	(ssize_t)n	return (ssize_t)n; @column 10	existing site; prove while completing the cast audit
@@ -324,15 +472,19 @@ src/stdio/buf.c	__file_write	CStyleCastExpr	n > (size_t)LLONG_MAX - f->mem_pos) 
 src/stdio/buf.c	__fill	(int)n	return (int)n; @column 9	existing site; prove while completing the cast audit
 src/stdio/buf.c	__fill	(size_t)n	f->rend = (size_t)n; @column 12	existing site; prove while completing the cast audit
 src/stdio/buf.c	__towrite	(long long)(f->rend - f->rpos)	long long unread = (long long)(f->rend - f->rpos) + f->nunget; @column 22	existing site; prove while completing the cast audit
-src/stdio/misc.c	renameat	(NTSTATUS)0xC0000002L	st == STATUS_NOT_SUPPORTED || st == STATUS_NOT_IMPLEMENTED) { @column 42	existing site; prove while completing the cast audit
-src/stdio/misc.c	renameat	(NTSTATUS)0xC0000003L	if (st == STATUS_INVALID_PARAMETER || st == STATUS_INVALID_INFO_CLASS || @column 46	existing site; prove while completing the cast audit
-src/stdio/misc.c	renameat	(NTSTATUS)0xC000000DL	if (st == STATUS_INVALID_PARAMETER || st == STATUS_INVALID_INFO_CLASS || @column 12	existing site; prove while completing the cast audit
-src/stdio/misc.c	renameat	(NTSTATUS)0xC0000022L	if (st == STATUS_ACCESS_DENIED && new_isdir) { @column 12	existing site; prove while completing the cast audit
-src/stdio/misc.c	renameat	(NTSTATUS)0xC00000BBL	st == STATUS_NOT_SUPPORTED || st == STATUS_NOT_IMPLEMENTED) { @column 12	existing site; prove while completing the cast audit
-src/stdio/misc.c	renameat	(NTSTATUS)0xC00000D4L	if (st == STATUS_NOT_SAME_DEVICE) { errno = EXDEV; return -1; } @column 12	existing site; prove while completing the cast audit
+src/stdio/linux/plat_stdio.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/stdio/linux/plat_stdio.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/stdio/linux/plat_stdio.c	unbox	(int)((long)h - 1)	return (int)((long)h - 1); @column 9	existing site; prove while completing the cast audit
+src/stdio/nt/plat_stdio.c	rename_set	(NTSTATUS)0xC0000002L	st == STATUS_NOT_SUPPORTED || st == STATUS_NOT_IMPLEMENTED) { @column 42	existing site; prove while completing the cast audit
+src/stdio/nt/plat_stdio.c	rename_set	(NTSTATUS)0xC0000003L	if (st == STATUS_INVALID_PARAMETER || st == STATUS_INVALID_INFO_CLASS || @column 46	existing site; prove while completing the cast audit
+src/stdio/nt/plat_stdio.c	rename_set	(NTSTATUS)0xC000000DL	if (st == STATUS_INVALID_PARAMETER || st == STATUS_INVALID_INFO_CLASS || @column 12	existing site; prove while completing the cast audit
+src/stdio/nt/plat_stdio.c	rename_set	(NTSTATUS)0xC0000022L	if (st == STATUS_ACCESS_DENIED && new_isdir) { @column 12	existing site; prove while completing the cast audit
+src/stdio/nt/plat_stdio.c	rename_set	(NTSTATUS)0xC00000BBL	st == STATUS_NOT_SUPPORTED || st == STATUS_NOT_IMPLEMENTED) { @column 12	existing site; prove while completing the cast audit
+src/stdio/nt/plat_stdio.c	rename_set	(NTSTATUS)0xC00000D4L	if (st == STATUS_NOT_SAME_DEVICE) { errno = EXDEV; return -1; } @column 12	existing site; prove while completing the cast audit
 src/stdio/printf.c	build_argtab	(unsigned char)sp.type	types[sp.argpos] = (unsigned char)sp.type; @column 23	existing site; prove while completing the cast audit
 src/stdio/printf.c	count_fits	(size_t)(INT_MAX - sk->count)	if (n <= (size_t)(INT_MAX - sk->count)) return 1; @column 11	existing site; prove while completing the cast audit
 src/stdio/printf.c	emit_float	(char)(conv == 'F' ? 'f' : conv == 'E' ? 'e' : conv == 'G' ? 'g' : conv == 'A' ? 'a' : conv)	char av = (char)(conv == 'F' ? 'f' : conv == 'E' ? 'e' : conv == 'G' ? 'g' : @column 12	existing site; prove while completing the cast audit
+src/stdio/printf.c	emit_str	(size_t)padn	if (flags & 4) { str_arg(sk, arg, wide_arg, prec, 1); pad(sk, ' ', (size_t)padn); } @column 69	existing site; prove while completing the cast audit
 src/stdio/printf.c	out	(unsigned char)s[i]	for (i = 0; i < k; i++) stage[i] = (wchar_t)(unsigned char)s[i]; @column 48	existing site; prove while completing the cast audit
 src/stdio/printf.c	out_body	(size_t)(n - zpos)	out(sk, body + zpos, (size_t)(n - zpos)); @column 23	existing site; prove while completing the cast audit
 src/stdio/printf.c	out_body	(size_t)zpos	out(sk, body, (size_t)zpos); @column 16	existing site; prove while completing the cast audit
@@ -360,15 +512,19 @@ src/stdio/printf.c	parse_spec	(unsigned char)*(q)	while (gf(fp, st) >= '0' && gf
 src/stdio/printf.c	parse_spec	CStyleCastExpr	sp->conv = (int)gf(fp, st); @column 13	existing site; prove while completing the cast audit
 src/stdio/printf.c	scan_argno	(int)(gf(q, st) - '0')	if (v <= NL_ARGMAX) v = v * 10 + (int)(gf(q, st) - '0'); @column 36	existing site; prove while completing the cast audit
 src/stdio/printf.c	str_arg	(long)n	return (long)n; @column 10	existing site; prove while completing the cast audit
+src/stdio/printf.c	str_arg	(long)r	if (prec >= 0 && units + (long)r > prec) break; @column 29	existing site; prove while completing the cast audit
 src/stdio/printf.c	str_arg	(long)r	units += (long)r; @column 13	existing site; prove while completing the cast audit
 src/stdio/printf.c	str_arg	(size_t)-1	if (r == (size_t)-1 || r == (size_t)-2) break; @column 13	existing site; prove while completing the cast audit
 src/stdio/printf.c	str_arg	(size_t)-1	if (r == (size_t)-1) break; /* [EILSEQ]: stop here */ @column 13	existing site; prove while completing the cast audit
 src/stdio/printf.c	str_arg	(size_t)-2	if (r == (size_t)-1 || r == (size_t)-2) break; @column 32	existing site; prove while completing the cast audit
 src/stdio/printf.c	str_arg	(size_t)-3	used = r == (size_t)-3 ? 0 : r; @column 16	existing site; prove while completing the cast audit
+src/stdio/printf.c	vfprintf_st	(char)a.i	char c = (char)a.i; @column 15	existing site; prove while completing the cast audit
 src/stdio/printf.c	vfprintf_st	(int)a.i	prec = (int)a.i; @column 12	existing site; prove while completing the cast audit
 src/stdio/printf.c	vfprintf_st	(int)a.i	width = (int)a.i; @column 13	existing site; prove while completing the cast audit
 src/stdio/printf.c	vfprintf_st	(int)a.i	wint_t b = btowc((int)a.i); @column 23	existing site; prove while completing the cast audit
+src/stdio/printf.c	vfprintf_st	(int)sk->count	return sk->bad ? -1 : (int)sk->count; @column 24	existing site; prove while completing the cast audit
 src/stdio/printf.c	vfprintf_st	(size_t)((fp - start) / st)	(size_t)((fp - start) / st)); @column 19	existing site; prove while completing the cast audit
+src/stdio/printf.c	vfprintf_st	(size_t)(fp - start)	if (st == 1) out(sk, start, (size_t)(fp - start)); @column 32	existing site; prove while completing the cast audit
 src/stdio/printf.c	vfprintf_st	(unsigned char)*(q)	if (gf(fp, st) != '%') { @column 7	existing site; prove while completing the cast audit
 src/stdio/printf.c	vfprintf_st	(unsigned char)*(q)	while (gf(fp, st) && !sk->bad) { @column 9	existing site; prove while completing the cast audit
 src/stdio/printf.c	vfprintf_st	(unsigned char)*(q)	while (gf(fp, st) && gf(fp, st) != '%') fp += st; @column 11	existing site; prove while completing the cast audit
@@ -391,13 +547,13 @@ src/stdio/scanf.c	rd	(int)w	return (int)w; @column 10	existing site; prove while
 src/stdio/scanf.c	store_unit	(char)c	if (assign) ((char *)dst)[*nn] = (char)c; @column 36	existing site; prove while completing the cast audit
 src/stdio/scanf.c	store_unit	(int)r	*nn += (int)r; @column 10	existing site; prove while completing the cast audit
 src/stdio/scanf.c	store_unit	(size_t)-1	if (r == (size_t)-1) return -1; @column 12	existing site; prove while completing the cast audit
+src/stdio/scanf.c	store_unit	(wchar_t)c	if (assign) ((wchar_t *)dst)[*nn] = (wchar_t)c; @column 39	existing site; prove while completing the cast audit
 src/stdio/scanf.c	store_unit	(wchar_t)c	size_t r = wcrtomb(buf, (wchar_t)c, mbs); @column 27	existing site; prove while completing the cast audit
 src/stdio/scanf.c	unrd	(size_t)cap	: realloc(sc->pb, (size_t)cap * sizeof *q); @column 46	existing site; prove while completing the cast audit
 src/stdio/scanf.c	unrd	(unsigned char)sc->lastnb	sc->pb[sc->npb].nb = (unsigned char)sc->lastnb; @column 23	existing site; prove while completing the cast audit
 src/stdio/scanf.c	unrd	(wchar_t)c	sc->pb[sc->npb].wc = (wchar_t)c; @column 23	existing site; prove while completing the cast audit
 src/stdio/scanf.c	vfscanf_st	(int)(gf(fp, st) - '0')	int digit = (int)(gf(fp, st) - '0'); @column 17	existing site; prove while completing the cast audit
 src/stdio/scanf.c	vfscanf_st	(size_t)(setend - setstart)	: anyhigh && wset_has(setstart, (size_t)(setend - setstart), st, (unsigned)c)) != neg) @column 49	existing site; prove while completing the cast audit
-src/stdio/scanf.c	vfscanf_st	(uintptr_t)uv	if (assign) { *pp = (void *)(uintptr_t)uv; nmatched++; } @column 33	existing site; prove while completing the cast audit
 src/stdio/scanf.c	vfscanf_st	(unsigned char)*(q)	for (; gf(fp, st); fp += st) { @column 9	existing site; prove while completing the cast audit
 src/stdio/scanf.c	vfscanf_st	(unsigned char)*(q)	if ((unsigned)c != gf(fp, st)) { unrd(&sc, c); goto done; } @column 23	existing site; prove while completing the cast audit
 src/stdio/scanf.c	vfscanf_st	(unsigned char)*(q)	if (gf(fp, st) != '%') { @column 7	existing site; prove while completing the cast audit
@@ -434,6 +590,7 @@ src/stdio/wide.c	ungetwc	(wchar_t)wc	f->wunget = (wchar_t)wc; @column 14	existin
 src/stdlib/a64l.c	a64l	(int32_t)x	return (long)(int32_t)x; @column 15	existing site; prove while completing the cast audit
 src/stdlib/a64l.c	a64l	(uint32_t)(d - digits)	x |= (uint32_t)(d - digits) << (6 * i); @column 8	existing site; prove while completing the cast audit
 src/stdlib/a64l.c	l64a	(uint32_t)v	uint32_t x = (uint32_t)v; @column 15	existing site; prove while completing the cast audit
+src/stdlib/atoi.c	atoi	(int)strtol(s, 0, 10)	int atoi(const char *s) { return (int)strtol(s, 0, 10); } @column 34	existing site; prove while completing the cast audit
 src/stdlib/ecvt.c	ecvt	(unsigned char)tmp[i]	if (isdigit((unsigned char)tmp[i])) buf[j++] = tmp[i]; @column 15	existing site; prove while completing the cast audit
 src/stdlib/mbrtowc.c	btowc	(unsigned char)c	unsigned char b = (unsigned char)c; @column 20	existing site; prove while completing the cast audit
 src/stdlib/mbrtowc.c	mbrtowc	(size_t)-1	return (size_t)-1; @column 9	existing site; prove while completing the cast audit
@@ -478,16 +635,15 @@ src/stdlib/rand48.c	jrand48	(int32_t)(uint32_t)(step(s) >> 16)	long jrand48(unsi
 src/stdlib/rand48.c	jrand48	(uint32_t)(step(s) >> 16)	long jrand48(unsigned short s[3]) { return (long)(int32_t)(uint32_t)(step(s) >> 16); } @column 59	existing site; prove while completing the cast audit
 src/stdlib/rand48.c	nrand48	(long)(step(s) >> 17)	long nrand48(unsigned short s[3]) { return (long)(step(s) >> 17); } @column 44	existing site; prove while completing the cast audit
 src/stdlib/rand48.c	srand48	(unsigned long)seed	xsubi_default[2] = (unsigned short)((unsigned long)seed >> 16); @column 38	existing site; prove while completing the cast audit
+src/stdlib/rand48.c	srand48	(unsigned short)((unsigned long)seed >> 16)	xsubi_default[2] = (unsigned short)((unsigned long)seed >> 16); @column 21	existing site; prove while completing the cast audit
 src/stdlib/rand48.c	srand48	(unsigned short)seed	xsubi_default[1] = (unsigned short)seed; @column 21	existing site; prove while completing the cast audit
 src/stdlib/rand48.c	step	(unsigned short)(x >> 16)	xi[0] = (unsigned short)x; xi[1] = (unsigned short)(x >> 16); xi[2] = (unsigned short)(x >> 32); @column 37	existing site; prove while completing the cast audit
 src/stdlib/rand48.c	step	(unsigned short)(x >> 32)	xi[0] = (unsigned short)x; xi[1] = (unsigned short)(x >> 16); xi[2] = (unsigned short)(x >> 32); @column 72	existing site; prove while completing the cast audit
 src/stdlib/rand48.c	step	(unsigned short)x	xi[0] = (unsigned short)x; xi[1] = (unsigned short)(x >> 16); xi[2] = (unsigned short)(x >> 32); @column 10	existing site; prove while completing the cast audit
 src/stdlib/random.c	initstate	(unsigned)i	x[-1] = (uint32_t)((n << 16) | ((unsigned)i << 8) | (unsigned)j); @column 34	existing site; prove while completing the cast audit
 src/stdlib/random.c	initstate	(unsigned)j	x[-1] = (uint32_t)((n << 16) | ((unsigned)i << 8) | (unsigned)j); @column 54	existing site; prove while completing the cast audit
-src/stdlib/random.c	random	(long)k	return (long)k; @column 9	existing site; prove while completing the cast audit
 src/stdlib/random.c	setstate	(unsigned)i	x[-1] = (uint32_t)((n << 16) | ((unsigned)i << 8) | (unsigned)j); @column 34	existing site; prove while completing the cast audit
 src/stdlib/random.c	setstate	(unsigned)j	x[-1] = (uint32_t)((n << 16) | ((unsigned)i << 8) | (unsigned)j); @column 54	existing site; prove while completing the cast audit
-src/stdlib/strtod.c	bn_muladd	(uint32_t)carry	a->d[a->n++] = (uint32_t)carry; @column 18	existing site; prove while completing the cast audit
 src/stdlib/strtod.c	bn_sub	(uint32_t)t	a->d[i] = (uint32_t)t; @column 13	existing site; prove while completing the cast audit
 src/stdlib/strtod.c	parse_hex	(uint32_t)m	bn_setu32(&N, (uint32_t)m); @column 16	existing site; prove while completing the cast audit
 src/stdlib/strtod.c	strtox	(int)(c = gc(q, st))	while (isalnum((int)(c = gc(q, st))) || c == '_') q += st; @column 19	existing site; prove while completing the cast audit
@@ -495,6 +651,9 @@ src/stdlib/strtod.c	strtox	(size_t)(n2 ? n2 : n)	end = s + (size_t)(n2 ? n2 : n)
 src/stdlib/strtod.c	strtox	(size_t)n	end = s + (size_t)n * st; @column 13	existing site; prove while completing the cast audit
 src/stdlib/strtol.c	parse	(unsigned char)*s	c = (unsigned char)*s; @column 7	existing site; prove while completing the cast audit
 src/stdlib/strtol.c	parse	(unsigned char)*s	while (isspace((unsigned char)*s)) s++; @column 17	existing site; prove while completing the cast audit
+src/stdlib/strtol.c	strtoimax	(intmax_t)strtox(s, e, b, INTMAX_MAX)	{ return (intmax_t)strtox(s, e, b, INTMAX_MAX); } @column 10	existing site; prove while completing the cast audit
+src/stdlib/strtol.c	strtol	(intmax_t)strtox(s, e, b, LONG_MAX)	{ return (long)(intmax_t)strtox(s, e, b, LONG_MAX); } @column 16	existing site; prove while completing the cast audit
+src/stdlib/strtol.c	strtoll	(long long)strtox(s, e, b, LLONG_MAX)	{ return (long long)strtox(s, e, b, LLONG_MAX); } @column 10	existing site; prove while completing the cast audit
 src/stdlib/wcstol.c	wcstoimax	(intmax_t)wcstox(s, e, b, INTMAX_MAX)	{ return (intmax_t)wcstox(s, e, b, INTMAX_MAX); } @column 10	existing site; prove while completing the cast audit
 src/stdlib/wcstol.c	wcstol	(intmax_t)wcstox(s, e, b, LONG_MAX)	{ return (long)(intmax_t)wcstox(s, e, b, LONG_MAX); } @column 16	existing site; prove while completing the cast audit
 src/stdlib/wcstol.c	wcstol	(long)(intmax_t)wcstox(s, e, b, LONG_MAX)	{ return (long)(intmax_t)wcstox(s, e, b, LONG_MAX); } @column 10	existing site; prove while completing the cast audit
@@ -518,25 +677,48 @@ src/string/wcscasecmp.c	wcsncasecmp	(int)towlower(*r)	return (int)towlower(*l) -
 src/string/wcsnlen.c	wcsnlen	(size_t)(p - s)	return p ? (size_t)(p - s) : n; @column 13	existing site; prove while completing the cast audit
 src/string/wcsspn.c	wcscspn	(size_t)(s - a)	return (size_t)(s - a); @column 9	existing site; prove while completing the cast audit
 src/string/wcsspn.c	wcsspn	(size_t)(s - a)	return (size_t)(s - a); @column 9	existing site; prove while completing the cast audit
-src/thread/aio.c	start_worker	(NTSTATUS)0xC0000002L	if (status == STATUS_NOT_IMPLEMENTED) { @column 16	existing site; prove while completing the cast audit
-src/thread/aio.c	start_worker	(NTSTATUS)0xC0000002L	if (status == STATUS_NOT_IMPLEMENTED) { @column 17	existing site; prove while completing the cast audit
-src/thread/mqueue.c	create_sem	(NTSTATUS)0xC0000035L	if (st == STATUS_OBJECT_NAME_COLLISION) @column 12	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	__plat_named_semaphore_create	(int)initial	obj->futex = (int)initial; @column 15	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	__plat_named_semaphore_create	(int)maximum	obj->max = (int)maximum; @column 13	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	__plat_named_semaphore_open_or_create	(int)initial	obj->futex = (int)initial; @column 16	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	__plat_named_semaphore_open_or_create	(int)maximum	obj->max = (int)maximum; @column 14	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	__plat_semaphore_create	(int)initial	obj->futex = (int)initial; @column 15	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	__plat_semaphore_create	(int)maximum	obj->max = (int)maximum; @column 13	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	__plat_thread_file_io	(long)count	: raw_syscall(SYS_pread64_lx, fd, (long)buf, (long)count, (long)off, 0, 0); @column 48	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	__plat_thread_file_io	(long)count	? raw_syscall(SYS_pwrite64_lx, fd, (long)buf, (long)count, (long)off, 0, 0) @column 49	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	__plat_thread_spawn	(int)-pid	int e = (int)-pid; @column 11	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	__plat_thread_spawn	(long)sz	raw_syscall(SYS_munmap, stack_ret, (long)sz, 0, 0, 0, 0); @column 38	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	__plat_thread_spawn	(long)sz	stack_ret = raw_syscall(SYS_mmap, 0, (long)sz, PROT_READ | PROT_WRITE, @column 39	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	__plat_thread_spawn	(long)sz	top = (void *)(stack_ret + (long)sz); @column 29	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	__plat_wait_one	(int)-r	errno = (int)-r; @column 11	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/thread/linux/plat_thread.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/thread/mqueue.c	mq_getattr	(long)h.curmsgs	attr->mq_curmsgs = (long)h.curmsgs; @column 21	existing site; prove while completing the cast audit
+src/thread/mqueue.c	mq_getattr	(long)h.maxmsg	attr->mq_maxmsg = (long)h.maxmsg; @column 20	existing site; prove while completing the cast audit
+src/thread/mqueue.c	mq_getattr	(long)h.msgsize	attr->mq_msgsize = (long)h.msgsize; @column 21	existing site; prove while completing the cast audit
+src/thread/mqueue.c	mq_open	(off_t)file_size	if (ftruncate(fd, (off_t)file_size) < 0 || raw_write(__fds[fd].h, &h, sizeof h, 0) < 0) @column 21	existing site; prove while completing the cast audit
+src/thread/mqueue.c	mq_open	(unsigned)hash	(unsigned)(hash >> 32), (unsigned)hash); @column 35	existing site; prove while completing the cast audit
 src/thread/mqueue.c	mq_open	CStyleCastExpr	mode = (mode_t)va_arg(ap, int); @column 10	existing site; prove while completing the cast audit
 src/thread/mqueue.c	mq_path	(unsigned char)component[i]	for (i = 0; i < n; i++) if (!name_char((unsigned char)component[i])) { @column 41	existing site; prove while completing the cast audit
 src/thread/mqueue.c	mq_timedreceive	(ssize_t)best.length	return (ssize_t)best.length; @column 9	existing site; prove while completing the cast audit
 src/thread/mqueue.c	mq_timedsend	(unsigned)len	s.used = 1; s.priority = prio; s.length = (unsigned)len; s.sequence = h.sequence++; @column 44	existing site; prove while completing the cast audit
-src/thread/mqueue.c	object_attributes	(unsigned char)ascii[i]	for (i = 0; i < n; i++) wide[i] = (unsigned char)ascii[i]; @column 36	existing site; prove while completing the cast audit
+src/thread/mqueue.c	mq_unlink	(unsigned)hash	(unsigned)(hash >> 32), (unsigned)hash); @column 35	existing site; prove while completing the cast audit
 src/thread/mqueue.c	path_hash	(unsigned char)*s++	while (*s) { h ^= (unsigned char)*s++; h *= 1099511628211ULL; } @column 20	existing site; prove while completing the cast audit
-src/thread/pthread.c	pthread_getattr_np	(size_t)((char *)teb->NtTib.StackBase - (char *)teb->NtTib.StackLimit)	attr_data(attr)->stack_size = (size_t)((char *)teb->NtTib.StackBase - @column 32	existing site; prove while completing the cast audit
-src/thread/pthread_cancel.c	cancel_unsafe_abort	(int)(__NT_SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu))	NtTerminateProcess(NtCurrentProcess(), __NT_SIGNAL_EXIT(SIGABRT)); @column 41	existing site; prove while completing the cast audit
-src/thread/pthread_cancel.c	cancel_unsafe_abort	(int)(__NT_SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu))	__NT_SIGNAL_EXIT(SIGABRT)); @column 3	existing site; prove while completing the cast audit
+src/thread/nt/plat_thread.c	__plat_cancel_unsafe_abort	(int)(__NT_SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu))	NtTerminateProcess(NtCurrentProcess(), __NT_SIGNAL_EXIT(SIGABRT)); @column 41	existing site; prove while completing the cast audit
+src/thread/nt/plat_thread.c	__plat_cancel_unsafe_abort	(int)(__NT_SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu))	__NT_SIGNAL_EXIT(SIGABRT)); @column 3	existing site; prove while completing the cast audit
+src/thread/nt/plat_thread.c	__plat_event_create	(NTSTATUS)0xC0000002L	if (status == STATUS_NOT_IMPLEMENTED) return -2; @column 16	existing site; prove while completing the cast audit
+src/thread/nt/plat_thread.c	__plat_named_semaphore_open	(NTSTATUS)0xC0000034L	if (st == STATUS_OBJECT_NAME_NOT_FOUND) return -2; @column 12	existing site; prove while completing the cast audit
+src/thread/nt/plat_thread.c	__plat_named_semaphore_open_or_create	(NTSTATUS)0xC0000035L	if (st == STATUS_OBJECT_NAME_COLLISION) @column 12	existing site; prove while completing the cast audit
+src/thread/nt/plat_thread.c	__plat_semaphore_post	(NTSTATUS)0xC0000047L	if (st == STATUS_SEMAPHORE_LIMIT_EXCEEDED) { errno = EOVERFLOW; return -1; } @column 12	existing site; prove while completing the cast audit
+src/thread/nt/plat_thread.c	__plat_thread_file_io	(ssize_t)io.Information	return (ssize_t)io.Information; @column 9	existing site; prove while completing the cast audit
+src/thread/nt/plat_thread.c	__plat_thread_spawn	(NTSTATUS)0xC0000002L	if (status == STATUS_NOT_IMPLEMENTED) return -2; @column 16	existing site; prove while completing the cast audit
+src/thread/nt/plat_thread.c	__plat_wait_any	(BOOLEAN)alertable	1 /* WaitAny */, (BOOLEAN)alertable, tp); @column 49	existing site; prove while completing the cast audit
+src/thread/nt/plat_thread.c	__plat_wait_one	(BOOLEAN)alertable	st = NtWaitForSingleObject(h, (BOOLEAN)alertable, tp); @column 32	existing site; prove while completing the cast audit
+src/thread/nt/plat_thread.c	build_object_attributes	(unsigned char)ascii[i]	for (i = 0; i < n; i++) wide[i] = (unsigned char)ascii[i]; @column 36	existing site; prove while completing the cast audit
 src/thread/pthread_signal.c	signal_apc	(int)(ULONG_PTR)signal_value	__raise_thread_internal((int)(ULONG_PTR)signal_value); @column 26	existing site; prove while completing the cast audit
 src/thread/semaphore.c	namespace_lock	(unsigned)hash	(unsigned)(hash >> 32), (unsigned)hash); @column 35	existing site; prove while completing the cast audit
-src/thread/semaphore.c	object_attributes	(unsigned char)ascii[i]	for (i = 0; i < n; i++) wide[i] = (unsigned char)ascii[i]; @column 36	existing site; prove while completing the cast audit
 src/thread/semaphore.c	path_hash	(unsigned char)*s++	while (*s) { h ^= (unsigned char)*s++; h *= 1099511628211ULL; } @column 20	existing site; prove while completing the cast audit
 src/thread/semaphore.c	sem_open	CStyleCastExpr	va_start(ap, oflag); mode = (mode_t)va_arg(ap, int); value = va_arg(ap, unsigned); va_end(ap); @column 31	existing site; prove while completing the cast audit
 src/thread/semaphore.c	sem_path	(unsigned char)component[i]	for (i = 0; i < n; i++) if (!name_char((unsigned char)component[i])) { @column 41	existing site; prove while completing the cast audit
-src/thread/semaphore.c	sem_post	(NTSTATUS)0xC0000047L	if (st == STATUS_SEMAPHORE_LIMIT_EXCEEDED) { errno = EOVERFLOW; return -1; } @column 12	existing site; prove while completing the cast audit
 src/time/asctime.c	asctime_r	(unsigned long)((long long)tm->tm_year + 1900)	n = __num_digits(p, 8, (unsigned long)((long long)tm->tm_year + 1900), 4, '0'); p += n; @column 25	existing site; prove while completing the cast audit
 src/time/asctime.c	asctime_r	(unsigned)tm->tm_hour	n = __num_digits(p, 2, (unsigned)tm->tm_hour, 2, '0'); p += n; *p++ = ':'; @column 25	existing site; prove while completing the cast audit
 src/time/asctime.c	asctime_r	(unsigned)tm->tm_mday	n = __num_digits(p, 2, (unsigned)tm->tm_mday, 2, ' '); p += n; *p++ = ' '; @column 25	existing site; prove while completing the cast audit
@@ -550,6 +732,8 @@ src/time/gmtime.c	gmtime_r	(int)(rem % 3600 / 60)	result->tm_min = (int)(rem % 3
 src/time/gmtime.c	gmtime_r	(int)(rem / 3600)	result->tm_hour = (int)(rem / 3600); @column 20	existing site; prove while completing the cast audit
 src/time/gmtime.c	gmtime_r	(int)d	result->tm_mday = (int)d; @column 20	existing site; prove while completing the cast audit
 src/time/gmtime.c	gmtime_r	(int)m	result->tm_mon = (int)m - 1; @column 19	existing site; prove while completing the cast audit
+src/time/linux/plat_time.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/time/linux/plat_time.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
 src/time/strftime.c	do_strftime	(unsigned long)(-(_v + 1))	PUT_NUM(off % 3600 / 60, 2, '0'); @column 4	existing site; prove while completing the cast audit
 src/time/strftime.c	do_strftime	(unsigned long)(-(_v + 1))	PUT_NUM(off / 3600, 2, '0'); @column 4	existing site; prove while completing the cast audit
 src/time/strftime.c	do_strftime	(unsigned long)(-(_v + 1))	case 'U': PUT_NUM(((long long)tm->tm_yday + 7 - wday) / 7, 2, '0'); break; @column 13	existing site; prove while completing the cast audit
@@ -560,6 +744,21 @@ src/time/strftime.c	do_strftime	(unsigned long)_v	case 'U': PUT_NUM(((long long)
 src/time/strftime.c	do_strftime	(unsigned long)_v	case 'W': PUT_NUM(((long long)tm->tm_yday + 7 - (wday ? wday - 1 : 6)) / 7, 2, '0'); break; @column 13	existing site; prove while completing the cast audit
 src/time/strftime.c	do_strftime	(unsigned)tm->tm_mon	mon = (unsigned)tm->tm_mon < 12 ? tm->tm_mon : 0; @column 9	existing site; prove while completing the cast audit
 src/time/strftime.c	do_strftime	(unsigned)tm->tm_wday	wday = (unsigned)tm->tm_wday < 7 ? tm->tm_wday : 0; @column 10	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)((long)*century * 100 + v - 1900)	tm->tm_year = (int)((long)*century * 100 + v - 1900); @column 19	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)(v * 100 + (*year2 >= 0 ? *year2 : 0) - 1900)	tm->tm_year = (int)(v * 100 + (*year2 >= 0 ? *year2 : 0) - 1900); @column 18	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)(v - 1900)	case 'Y': if (!(s = read_num(s, 4, &v))) return NULL; tm->tm_year = (int)(v - 1900); break; @column 71	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)(v < 69 ? v + 100 : v)	tm->tm_year = (int)(v < 69 ? v + 100 : v); @column 19	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)(v == 7 ? 0 : v)	case 'u': if (!(s = read_num(s, 1, &v))) return NULL; tm->tm_wday = (int)(v == 7 ? 0 : v); break; @column 71	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)v	*century = (int)v; @column 15	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)v	*year2 = (int)v; @column 13	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)v	case 'H': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_hour = (int)v; break; @column 71	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)v	case 'I': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_hour = (int)v; break; @column 71	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)v	case 'M': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_min = (int)v; break; @column 70	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)v	case 'S': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_sec = (int)v; break; @column 70	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)v	case 'd': case 'e': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_mday = (int)v; break; @column 81	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)v	case 'j': if (!(s = read_num(s, 3, &v))) return NULL; tm->tm_yday = (int)v - 1; break; @column 71	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)v	case 'm': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_mon = (int)v - 1; break; @column 70	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)v	case 'w': if (!(s = read_num(s, 1, &v))) return NULL; tm->tm_wday = (int)v; break; @column 71	existing site; prove while completing the cast audit
 src/time/strptime.c	parse	(unsigned char)*f	if (isspace((unsigned char)*f)) { s = skip_ws(s); continue; } @column 16	existing site; prove while completing the cast audit
 src/time/strptime.c	parse	(unsigned char)*s	if (isdigit((unsigned char)*s)) { if (!(s = read_num(s, 2, &mn))) return NULL; } @column 17	existing site; prove while completing the cast audit
 src/time/strptime.c	parse	(unsigned char)*s	while (isalpha((unsigned char)*s)) s++; @column 19	existing site; prove while completing the cast audit
@@ -575,68 +774,170 @@ src/time/tzset.c	tzset	(unsigned char)*tz	if (isdigit((unsigned char)*tz)) { @co
 src/time/wcsftime.c	wcsftime	(size_t)-1	else if (k == (size_t)-1 || k == (size_t)-2) return 0; @column 18	existing site; prove while completing the cast audit
 src/time/wcsftime.c	wcsftime	(size_t)-2	else if (k == (size_t)-1 || k == (size_t)-2) return 0; @column 37	existing site; prove while completing the cast audit
 src/time/wcsftime.c	wcsftime	(size_t)-3	if (k == (size_t)-3) used = 0; @column 13	existing site; prove while completing the cast audit
-src/unistd/chdir.c	chdir	(NTSTATUS)0xC000003AL	if (st == STATUS_OBJECT_PATH_NOT_FOUND) { @column 12	existing site; prove while completing the cast audit
-src/unistd/getpid.c	getpid	(pid_t)(ULONG_PTR)__teb()->ClientId.UniqueProcess	return (pid_t)(ULONG_PTR)__teb()->ClientId.UniqueProcess; @column 9	existing site; prove while completing the cast audit
-src/unistd/getpid.c	getppid	(pid_t)pbi.InheritedFromUniqueProcessId	return (pid_t)pbi.InheritedFromUniqueProcessId; @column 9	existing site; prove while completing the cast audit
-src/unistd/getpid.c	gettid	(pid_t)(ULONG_PTR)__teb()->ClientId.UniqueThread	return (pid_t)(ULONG_PTR)__teb()->ClientId.UniqueThread; @column 9	existing site; prove while completing the cast audit
-src/unistd/ids.c	ascii_case_equal	(unsigned char)*a++	x = (unsigned char)*a++; @column 7	existing site; prove while completing the cast audit
-src/unistd/ids.c	ascii_case_equal	(unsigned char)*b++	y = (unsigned char)*b++; @column 7	existing site; prove while completing the cast audit
-src/unistd/ids.c	getuid	(uid_t)-1	if (uid == (uid_t)-1) cached_uid = uid = detect_uid(); @column 13	existing site; prove while completing the cast audit
+src/unistd/ids.c	getuid	(uid_t)-1	if (uid == (uid_t)-1) cached_uid = uid = __plat_detect_uid(); @column 13	existing site; prove while completing the cast audit
 src/unistd/ids.c	id_supported	(uid_t)-1	return id != (uid_t)-1; @column 15	existing site; prove while completing the cast audit
-src/unistd/ids.c	pgid_event_name	(unsigned)pid	unsigned upid = (unsigned)pid; @column 18	existing site; prove while completing the cast audit
-src/unistd/ids.c	pid_exists	(NTSTATUS)0xC0000022L	if (!NT_SUCCESS(st)) return st == STATUS_ACCESS_DENIED; @column 36	existing site; prove while completing the cast audit
 src/unistd/ids.c	set_two_ids	(uid_t)-1	if (e != (uid_t)-1 && set_one_id(e, self) < 0) return -1; @column 11	existing site; prove while completing the cast audit
 src/unistd/ids.c	set_two_ids	(uid_t)-1	if (r != (uid_t)-1 && set_one_id(r, self) < 0) return -1; @column 11	existing site; prove while completing the cast audit
-src/unistd/ids.c	sid_uid	(uid_t)-1	return uid == (uid_t)-1 ? UID_FALLBACK : uid; @column 16	existing site; prove while completing the cast audit
-src/unistd/ids.c	sid_uid	(uid_t)-1	return uid == (uid_t)-1 ? UID_FALLBACK : uid; @column 17	existing site; prove while completing the cast audit
-src/unistd/link.c	linkat	(NTSTATUS)0xC00000BAL	if (st == STATUS_FILE_IS_A_DIRECTORY) { errno = EPERM; return -1; } @column 13	existing site; prove while completing the cast audit
-src/unistd/link.c	readlinkat	(NTSTATUS)0xC0000275L	if (st == STATUS_NOT_A_REPARSE_POINT) { errno = EINVAL; return -1; } @column 12	existing site; prove while completing the cast audit
-src/unistd/link.c	readlinkat	(int)bufsz	if ((size_t)n > bufsz) n = (int)bufsz; @column 30	existing site; prove while completing the cast audit
-src/unistd/link.c	readlinkat	(int)strlen(u)	n = (int)strlen(u); @column 7	existing site; prove while completing the cast audit
-src/unistd/link.c	readlinkat	(size_t)n	if ((size_t)n > bufsz) n = (int)bufsz; @column 7	existing site; prove while completing the cast audit
-src/unistd/link.c	readlinkat	(ssize_t)tl	return (ssize_t)tl; @column 10	existing site; prove while completing the cast audit
-src/unistd/link.c	symlinkat	(NTSTATUS)0xC0000022L	if (st == STATUS_PRIVILEGE_NOT_HELD || st == STATUS_ACCESS_DENIED) { errno = EPERM; return -1; } @column 48	existing site; prove while completing the cast audit
-src/unistd/link.c	symlinkat	(NTSTATUS)0xC0000061L	if (st == STATUS_PRIVILEGE_NOT_HELD || st == STATUS_ACCESS_DENIED) { errno = EPERM; return -1; } @column 13	existing site; prove while completing the cast audit
-src/unistd/link.c	symlinkat	(NTSTATUS)0xC00000BAL	if (st == STATUS_FILE_IS_A_DIRECTORY) { errno = EEXIST; return -1; } @column 13	existing site; prove while completing the cast audit
-src/unistd/pipe.c	__pipe_handles	(unsigned)(ULONG_PTR)__teb()->ClientId.UniqueProcess	unsigned pid = (unsigned)(ULONG_PTR)__teb()->ClientId.UniqueProcess; @column 17	existing site; prove while completing the cast audit
-src/unistd/read.c	pread	(NTSTATUS)0xC0000011L	if (st == STATUS_END_OF_FILE) return 0; @column 12	existing site; prove while completing the cast audit
-src/unistd/read.c	pread	(ssize_t)io.Information	return (ssize_t)io.Information; @column 9	existing site; prove while completing the cast audit
-src/unistd/read.c	read	(NTSTATUS)0xC0000011L	if (st == STATUS_END_OF_FILE || st == STATUS_PIPE_BROKEN || st == STATUS_PIPE_DISCONNECTED) return 0; @column 12	existing site; prove while completing the cast audit
-src/unistd/read.c	read	(NTSTATUS)0xC00000B0L	if (st == STATUS_END_OF_FILE || st == STATUS_PIPE_BROKEN || st == STATUS_PIPE_DISCONNECTED) return 0; @column 68	existing site; prove while completing the cast audit
-src/unistd/read.c	read	(NTSTATUS)0xC00000D9L	if (st == STATUS_PIPE_EMPTY) { errno = EAGAIN; return -1; } @column 12	existing site; prove while completing the cast audit
-src/unistd/read.c	read	(NTSTATUS)0xC000014BL	if (st == STATUS_END_OF_FILE || st == STATUS_PIPE_BROKEN || st == STATUS_PIPE_DISCONNECTED) return 0; @column 40	existing site; prove while completing the cast audit
-src/unistd/read.c	read	(ssize_t)io.Information	return (ssize_t)io.Information; @column 9	existing site; prove while completing the cast audit
-src/unistd/sleep.c	alarm_apc	(unsigned long)(ULONG_PTR)ctx	if (!alarm_due || (unsigned long)(ULONG_PTR)ctx != alarm_seq) return; @column 20	existing site; prove while completing the cast audit
+src/unistd/linux/plat_fd.c	__plat_pread	(long)count	ret = raw_syscall(SYS_pread64, (long)unbox(h), (long)buf, (long)count, (long)off, 0L, 0L); @column 60	existing site; prove while completing the cast audit
+src/unistd/linux/plat_fd.c	__plat_pwrite	(long)count	ret = raw_syscall(SYS_pwrite64, (long)unbox(h), (long)buf, (long)count, (long)off, 0L, 0L); @column 61	existing site; prove while completing the cast audit
+src/unistd/linux/plat_fd.c	__plat_read	(long)count	long ret = raw_syscall(SYS_read, (long)unbox(h), (long)buf, (long)count, 0L, 0L, 0L); @column 62	existing site; prove while completing the cast audit
+src/unistd/linux/plat_fd.c	__plat_write	(long)count	ret = raw_syscall(SYS_write, (long)unbox(h), (long)buf, (long)count, 0L, 0L, 0L); @column 58	existing site; prove while completing the cast audit
+src/unistd/linux/plat_fd.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/unistd/linux/plat_fd.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/unistd/linux/plat_fd.c	unbox	(int)((long)h - 1)	return (int)((long)h - 1); @column 9	existing site; prove while completing the cast audit
+src/unistd/linux/plat_unistd.c	__plat_detect_uid	(uid_t)raw_syscall(SYS_getuid, 0L, 0L, 0L, 0L, 0L, 0L)	return (uid_t)raw_syscall(SYS_getuid, 0L, 0L, 0L, 0L, 0L, 0L); @column 9	existing site; prove while completing the cast audit
+src/unistd/linux/plat_unistd.c	__plat_getpid	(pid_t)raw_syscall(SYS_getpid, 0L, 0L, 0L, 0L, 0L, 0L)	return (pid_t)raw_syscall(SYS_getpid, 0L, 0L, 0L, 0L, 0L, 0L); @column 9	existing site; prove while completing the cast audit
+src/unistd/linux/plat_unistd.c	__plat_getppid	(pid_t)ret	return is_sys_error(ret) ? (pid_t)1 : (pid_t)ret; @column 40	existing site; prove while completing the cast audit
+src/unistd/linux/plat_unistd.c	__plat_gettid	(pid_t)raw_syscall(SYS_gettid, 0L, 0L, 0L, 0L, 0L, 0L)	return (pid_t)raw_syscall(SYS_gettid, 0L, 0L, 0L, 0L, 0L, 0L); @column 9	existing site; prove while completing the cast audit
+src/unistd/linux/plat_unistd.c	__plat_readlink	(long)bufsz	ret = raw_syscall(SYS_readlinkat, (long)rd, (long)path, (long)buf, (long)bufsz, 0L, 0L); @column 69	existing site; prove while completing the cast audit
+src/unistd/linux/plat_unistd.c	is_sys_error	(unsigned long)-4095L	return (unsigned long)ret >= (unsigned long)-4095L; @column 31	existing site; prove while completing the cast audit
+src/unistd/linux/plat_unistd.c	is_sys_error	(unsigned long)ret	return (unsigned long)ret >= (unsigned long)-4095L; @column 9	existing site; prove while completing the cast audit
+src/unistd/linux/plat_unistd.c	unbox	(int)((long)h - 1)	return (int)((long)h - 1); @column 9	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_pread	(NTSTATUS)0xC0000011L	if (st == STATUS_END_OF_FILE) return 0; @column 12	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_pread	(ULONG)count	st = NtReadFile(h, 0, 0, 0, &io, buf, (ULONG)count, &pos, 0); @column 40	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_pread	(ssize_t)io.Information	return (ssize_t)io.Information; @column 9	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_pwrite	(ULONG)count	st = NtWriteFile(h, 0, 0, 0, &io, buf, (ULONG)count, &pos, 0); @column 41	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_pwrite	(ssize_t)io.Information	return (ssize_t)io.Information; @column 9	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_read	(NTSTATUS)0xC0000011L	if (st == STATUS_END_OF_FILE || st == STATUS_PIPE_BROKEN || st == STATUS_PIPE_DISCONNECTED) return 0; @column 12	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_read	(NTSTATUS)0xC00000B0L	if (st == STATUS_END_OF_FILE || st == STATUS_PIPE_BROKEN || st == STATUS_PIPE_DISCONNECTED) return 0; @column 68	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_read	(NTSTATUS)0xC00000D9L	if (st == STATUS_PIPE_EMPTY) { errno = EAGAIN; return -1; } @column 12	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_read	(NTSTATUS)0xC000014BL	if (st == STATUS_END_OF_FILE || st == STATUS_PIPE_BROKEN || st == STATUS_PIPE_DISCONNECTED) return 0; @column 40	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_read	(ULONG)count	st = NtReadFile(h, 0, 0, 0, &io, buf, (ULONG)count, 0, 0); @column 40	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_read	(ssize_t)io.Information	return (ssize_t)io.Information; @column 9	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_write	(NTSTATUS)0xC00000B0L	if (st == STATUS_PIPE_BROKEN || st == STATUS_PIPE_DISCONNECTED || st == STATUS_PIPE_CLOSING) { @column 40	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_write	(NTSTATUS)0xC00000B1L	if (st == STATUS_PIPE_BROKEN || st == STATUS_PIPE_DISCONNECTED || st == STATUS_PIPE_CLOSING) { @column 74	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_write	(NTSTATUS)0xC000014BL	if (st == STATUS_PIPE_BROKEN || st == STATUS_PIPE_DISCONNECTED || st == STATUS_PIPE_CLOSING) { @column 12	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_write	(ULONG)count	st = NtWriteFile(h, 0, 0, 0, &io, buf, (ULONG)count, pp, 0); @column 41	existing site; prove while completing the cast audit
+src/unistd/nt/plat_fd.c	__plat_write	(ssize_t)io.Information	return (ssize_t)io.Information; @column 9	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__pipe_handles	(unsigned)(ULONG_PTR)__teb()->ClientId.UniqueProcess	unsigned pid = (unsigned)(ULONG_PTR)__teb()->ClientId.UniqueProcess; @column 17	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_chdir	(NTSTATUS)0xC000003AL	if (st == STATUS_OBJECT_PATH_NOT_FOUND) { @column 12	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_getpid	(pid_t)(ULONG_PTR)__teb()->ClientId.UniqueProcess	return (pid_t)(ULONG_PTR)__teb()->ClientId.UniqueProcess; @column 9	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_getppid	(pid_t)pbi.InheritedFromUniqueProcessId	return (pid_t)pbi.InheritedFromUniqueProcessId; @column 9	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_gettid	(pid_t)(ULONG_PTR)__teb()->ClientId.UniqueThread	return (pid_t)(ULONG_PTR)__teb()->ClientId.UniqueThread; @column 9	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_link	(NTSTATUS)0xC00000BAL	if (st == STATUS_FILE_IS_A_DIRECTORY) { errno = EPERM; return -1; } @column 13	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_phys_pages	(long)((unsigned long long)sbi.NumberOfPhysicalPages * sbi.PageSize / 4096)	return (long)((unsigned long long)sbi.NumberOfPhysicalPages * sbi.PageSize / 4096); @column 10	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_process_exists	(NTSTATUS)0xC0000022L	if (!NT_SUCCESS(st)) return st == STATUS_ACCESS_DENIED; @column 36	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_process_exists	(ULONG_PTR)p	cid.UniqueProcess = (HANDLE)(ULONG_PTR)p; @column 30	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_readlink	(NTSTATUS)0xC0000275L	if (st == STATUS_NOT_A_REPARSE_POINT) { errno = EINVAL; return -1; } @column 12	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_readlink	(int)bufsz	if ((size_t)n > bufsz) n = (int)bufsz; @column 30	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_readlink	(int)strlen(u)	n = (int)strlen(u); @column 7	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_readlink	(size_t)n	if ((size_t)n > bufsz) n = (int)bufsz; @column 7	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_readlink	(ssize_t)tl	return (ssize_t)tl; @column 10	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_symlink	(NTSTATUS)0xC0000022L	if (st == STATUS_PRIVILEGE_NOT_HELD || st == STATUS_ACCESS_DENIED) { errno = EPERM; return -1; } @column 48	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_symlink	(NTSTATUS)0xC0000061L	if (st == STATUS_PRIVILEGE_NOT_HELD || st == STATUS_ACCESS_DENIED) { errno = EPERM; return -1; } @column 13	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_symlink	(NTSTATUS)0xC00000BAL	if (st == STATUS_FILE_IS_A_DIRECTORY) { errno = EEXIST; return -1; } @column 13	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_unlink	(NTSTATUS)0xC0000002L	if (st == STATUS_INVALID_PARAMETER || st == STATUS_INVALID_INFO_CLASS || st == STATUS_NOT_SUPPORTED || st == STATUS_NOT_IMPLEMENTED) { @column 111	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_unlink	(NTSTATUS)0xC0000003L	if (st == STATUS_INVALID_PARAMETER || st == STATUS_INVALID_INFO_CLASS || st == STATUS_NOT_SUPPORTED || st == STATUS_NOT_IMPLEMENTED) { @column 46	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_unlink	(NTSTATUS)0xC000000DL	if (st == STATUS_INVALID_PARAMETER || st == STATUS_INVALID_INFO_CLASS || st == STATUS_NOT_SUPPORTED || st == STATUS_NOT_IMPLEMENTED) { @column 12	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_unlink	(NTSTATUS)0xC00000BAL	if (st == STATUS_FILE_IS_A_DIRECTORY) { errno = EISDIR; return -1; } @column 12	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_unlink	(NTSTATUS)0xC00000BBL	if (st == STATUS_INVALID_PARAMETER || st == STATUS_INVALID_INFO_CLASS || st == STATUS_NOT_SUPPORTED || st == STATUS_NOT_IMPLEMENTED) { @column 81	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_unlink	(NTSTATUS)0xC0000101L	if (st == STATUS_DIRECTORY_NOT_EMPTY) { errno = ENOTEMPTY; return -1; } @column 12	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	__plat_unlink	(NTSTATUS)0xC0000103L	if (st == STATUS_NOT_A_DIRECTORY) { errno = ENOTDIR; return -1; } @column 12	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	alarm_apc	(unsigned long)(ULONG_PTR)ctx	if (alarm_deliver) alarm_deliver((unsigned long)(ULONG_PTR)ctx); @column 35	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	ascii_case_equal	(unsigned char)*a++	x = (unsigned char)*a++; @column 7	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	ascii_case_equal	(unsigned char)*b++	y = (unsigned char)*b++; @column 7	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	pgid_event_name	(unsigned)pid	unsigned upid = (unsigned)pid; @column 18	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	sid_uid	(uid_t)-1	return uid == (uid_t)-1 ? UID_FALLBACK : uid; @column 16	existing site; prove while completing the cast audit
+src/unistd/nt/plat_unistd.c	sid_uid	(uid_t)-1	return uid == (uid_t)-1 ? UID_FALLBACK : uid; @column 17	existing site; prove while completing the cast audit
 src/unistd/sleep.c	alarm_remaining	(unsigned)((left + __TICKS_PER_SEC - 1) / __TICKS_PER_SEC)	return (unsigned)((left + __TICKS_PER_SEC - 1) / __TICKS_PER_SEC); @column 9	existing site; prove while completing the cast audit
 src/unistd/sleep.c	sleep	(unsigned)((owed + __TICKS_PER_SEC - 1) / __TICKS_PER_SEC)	return (unsigned)((owed + __TICKS_PER_SEC - 1) / __TICKS_PER_SEC); @column 10	existing site; prove while completing the cast audit
-src/unistd/sysconf.c	sysconf	(long)((unsigned long long)sbi.NumberOfPhysicalPages * sbi.PageSize / 4096)	return (long)((unsigned long long)sbi.NumberOfPhysicalPages * sbi.PageSize / 4096); @column 11	existing site; prove while completing the cast audit
-src/unistd/unlink.c	__unlink_at	(NTSTATUS)0xC0000002L	if (st == STATUS_INVALID_PARAMETER || st == STATUS_INVALID_INFO_CLASS || st == STATUS_NOT_SUPPORTED || st == STATUS_NOT_IMPLEMENTED) { @column 111	existing site; prove while completing the cast audit
-src/unistd/unlink.c	__unlink_at	(NTSTATUS)0xC0000003L	if (st == STATUS_INVALID_PARAMETER || st == STATUS_INVALID_INFO_CLASS || st == STATUS_NOT_SUPPORTED || st == STATUS_NOT_IMPLEMENTED) { @column 46	existing site; prove while completing the cast audit
-src/unistd/unlink.c	__unlink_at	(NTSTATUS)0xC000000DL	if (st == STATUS_INVALID_PARAMETER || st == STATUS_INVALID_INFO_CLASS || st == STATUS_NOT_SUPPORTED || st == STATUS_NOT_IMPLEMENTED) { @column 12	existing site; prove while completing the cast audit
-src/unistd/unlink.c	__unlink_at	(NTSTATUS)0xC00000BAL	if (st == STATUS_FILE_IS_A_DIRECTORY) { errno = EISDIR; return -1; } @column 12	existing site; prove while completing the cast audit
-src/unistd/unlink.c	__unlink_at	(NTSTATUS)0xC00000BBL	if (st == STATUS_INVALID_PARAMETER || st == STATUS_INVALID_INFO_CLASS || st == STATUS_NOT_SUPPORTED || st == STATUS_NOT_IMPLEMENTED) { @column 81	existing site; prove while completing the cast audit
-src/unistd/unlink.c	__unlink_at	(NTSTATUS)0xC0000101L	if (st == STATUS_DIRECTORY_NOT_EMPTY) { errno = ENOTEMPTY; return -1; } @column 12	existing site; prove while completing the cast audit
-src/unistd/unlink.c	__unlink_at	(NTSTATUS)0xC0000103L	if (st == STATUS_NOT_A_DIRECTORY) { errno = ENOTDIR; return -1; } @column 12	existing site; prove while completing the cast audit
 src/unistd/unlink.c	final_component_is_dot	(size_t)(end - start)	n = (size_t)(end - start); @column 6	existing site; prove while completing the cast audit
-src/unistd/write.c	pwrite	(ULONG)count	st = NtWriteFile(f->h, 0, 0, 0, &io, buf, (ULONG)count, &pos, 0); @column 44	existing site; prove while completing the cast audit
-src/unistd/write.c	pwrite	(long long)count	if ((long long)count > room) count = (size_t)room; @column 7	existing site; prove while completing the cast audit
 src/unistd/write.c	pwrite	(size_t)(__OFF_MAX - off)	count = (size_t)(__OFF_MAX - off); @column 11	existing site; prove while completing the cast audit
 src/unistd/write.c	pwrite	(size_t)room	if ((long long)count > room) count = (size_t)room; @column 40	existing site; prove while completing the cast audit
-src/unistd/write.c	pwrite	(ssize_t)io.Information	return (ssize_t)io.Information; @column 9	existing site; prove while completing the cast audit
-src/unistd/write.c	write	(NTSTATUS)0xC00000B0L	if (st == STATUS_PIPE_BROKEN || st == STATUS_PIPE_DISCONNECTED || st == STATUS_PIPE_CLOSING) { @column 40	existing site; prove while completing the cast audit
-src/unistd/write.c	write	(NTSTATUS)0xC00000B1L	if (st == STATUS_PIPE_BROKEN || st == STATUS_PIPE_DISCONNECTED || st == STATUS_PIPE_CLOSING) { @column 74	existing site; prove while completing the cast audit
-src/unistd/write.c	write	(NTSTATUS)0xC000014BL	if (st == STATUS_PIPE_BROKEN || st == STATUS_PIPE_DISCONNECTED || st == STATUS_PIPE_CLOSING) { @column 12	existing site; prove while completing the cast audit
-src/unistd/write.c	write	(ULONG)count	st = NtWriteFile(f->h, 0, 0, 0, &io, buf, (ULONG)count, pp, 0); @column 44	existing site; prove while completing the cast audit
 src/unistd/write.c	write	(size_t)room	count = (size_t)room; @column 11	existing site; prove while completing the cast audit
-src/unistd/write.c	write	(ssize_t)io.Information	return (ssize_t)io.Information; @column 9	existing site; prove while completing the cast audit
+src/util/csplit.c	__util_csplit_main	(int)lineno	target = (int)lineno - 1; @column 13	existing site; prove while completing the cast audit
+src/util/csplit.c	__util_csplit_main	(int)offset	target = m + (int)offset; @column 17	existing site; prove while completing the cast audit
+src/util/csplit.c	__util_csplit_main	(int)strtol(argv[++i], &end, 10)	ndigits = (int)strtol(argv[++i], &end, 10); @column 14	existing site; prove while completing the cast audit
+src/util/csplit.c	write_piece	(long)L->len[i]	size += (long)L->len[i]; @column 11	existing site; prove while completing the cast audit
+src/util/dd.c	__util_dd_main	(int)klen	fprintf(stderr, "dd: %.*s=%s: unrecognized operand\n", (int)klen, a, val); @column 59	existing site; prove while completing the cast audit
+src/util/dd.c	__util_dd_main	(size_t)(eq - a)	klen = (size_t)(eq - a); @column 10	existing site; prove while completing the cast audit
+src/util/dd.c	dd_copy_direct	(size_t)(o->ibs - (uintmax_t)n)	if (o->sync && (uintmax_t)n < o->ibs) { memset(buf + n, 0, (size_t)(o->ibs - (uintmax_t)n)); n = (ssize_t)o->ibs; } @column 62	existing site; prove while completing the cast audit
+src/util/dd.c	dd_copy_direct	(size_t)n	if (write_all(ofd, buf, (size_t)n, o->of_path ? o->of_path : "stdout") < 0) { *had_error = 1; break; } @column 27	existing site; prove while completing the cast audit
+src/util/dd.c	dd_copy_direct	(size_t)o->ibs	char *buf = malloc((size_t)o->ibs); @column 21	existing site; prove while completing the cast audit
+src/util/dd.c	dd_copy_direct	(size_t)o->ibs	if (write_all(ofd, buf, (size_t)o->ibs, o->of_path ? o->of_path : "stdout") < 0) { *had_error = 1; break; } @column 30	existing site; prove while completing the cast audit
+src/util/dd.c	dd_copy_direct	(size_t)o->ibs	memset(buf, 0, (size_t)o->ibs); @column 21	existing site; prove while completing the cast audit
+src/util/dd.c	dd_copy_direct	(size_t)o->ibs	n = read(ifd, buf, (size_t)o->ibs); @column 22	existing site; prove while completing the cast audit
+src/util/dd.c	dd_copy_direct	(ssize_t)o->ibs	if (o->sync && (uintmax_t)n < o->ibs) { memset(buf + n, 0, (size_t)(o->ibs - (uintmax_t)n)); n = (ssize_t)o->ibs; } @column 100	existing site; prove while completing the cast audit
+src/util/dd.c	dd_copy_direct	(uintmax_t)n	if ((uintmax_t)n == o->obs) (*out_full)++; else (*out_partial)++; @column 7	existing site; prove while completing the cast audit
+src/util/du.c	du_cb	(uintmax_t)st->st_blocks	total += (uintmax_t)st->st_blocks; /* the directory entry's own allocation, if any */ @column 12	existing site; prove while completing the cast audit
+src/util/du.c	du_cb	(uintmax_t)st->st_blocks	uintmax_t blocks = (uintmax_t)st->st_blocks; @column 22	existing site; prove while completing the cast audit
+src/util/join.c	__util_join_main	(int)v	jf1 = (int)v; @column 10	existing site; prove while completing the cast audit
+src/util/join.c	__util_join_main	(int)v	jf2 = (int)v; @column 10	existing site; prove while completing the cast audit
+src/util/join.c	parse_o_list	(int)v	s.field = (int)v; @column 14	existing site; prove while completing the cast audit
+src/util/join.c	parse_o_list	(unsigned char)*p	while (*p == ',' || isblank((unsigned char)*p)) p++; @column 31	existing site; prove while completing the cast audit
+src/util/join.c	split_fields	(unsigned char)line[i]	while (i < len && !isblank((unsigned char)line[i])) i++; @column 31	existing site; prove while completing the cast audit
+src/util/join.c	split_fields	(unsigned char)line[i]	while (i < len && isblank((unsigned char)line[i])) i++; @column 30	existing site; prove while completing the cast audit
+src/util/od.c	od_run	(long long)got	if (remaining >= 0) remaining -= (long long)got; @column 36	existing site; prove while completing the cast audit
+src/util/od.c	od_run	(long long)got	left -= (long long)got; @column 12	existing site; prove while completing the cast audit
+src/util/pathchk.c	byte_is_invalid	(unsigned char)c	if ((unsigned char)c < 0x20) return 1; @column 6	existing site; prove while completing the cast audit
+src/util/pathchk.c	check_one	(int)clen	path, (int)clen, start); @column 13	existing site; prove while completing the cast audit
+src/util/pathchk.c	check_one	(int)clen	path, (int)clen, start, name_max); @column 11	existing site; prove while completing the cast audit
+src/util/pathchk.c	check_one	(size_t)(p - start)	clen = (size_t)(p - start); @column 10	existing site; prove while completing the cast audit
+src/util/pathchk.c	check_one	(unsigned)(path[0] | 32)	if (((unsigned)(path[0] | 32) - 'a') < 26u && path[1] == ':') { @column 7	existing site; prove while completing the cast audit
+src/util/pr.c	__util_pr_main	(int)strtol(argv[++i], &end, 10)	o.offset = (int)strtol(argv[++i], &end, 10); @column 15	existing site; prove while completing the cast audit
+src/util/pr.c	__util_pr_main	(int)strtol(argv[++i], &end, 10)	o.page_len = (int)strtol(argv[++i], &end, 10); @column 17	existing site; prove while completing the cast audit
+src/util/pr.c	__util_pr_main	(int)strtol(argv[++i], &end, 10)	o.width = (int)strtol(argv[++i], &end, 10); @column 14	existing site; prove while completing the cast audit
+src/util/pr.c	parse_n_opt	(int)w	o->n_width = (int)w; @column 16	existing site; prove while completing the cast audit
+src/util/sort.c	compare_range	(unsigned char)a[pa]	int ca = (unsigned char)a[pa], cb = (unsigned char)b[pb]; @column 14	existing site; prove while completing the cast audit
+src/util/sort.c	compare_range	(unsigned char)a[pa]	while (pa < ae && !char_passes((unsigned char)a[pa], d, i)) pa++; @column 35	existing site; prove while completing the cast audit
+src/util/sort.c	compare_range	(unsigned char)b[pb]	int ca = (unsigned char)a[pa], cb = (unsigned char)b[pb]; @column 41	existing site; prove while completing the cast audit
+src/util/sort.c	compare_range	(unsigned char)b[pb]	while (pb < be && !char_passes((unsigned char)b[pb], d, i)) pb++; @column 35	existing site; prove while completing the cast audit
+src/util/sort.c	key_end_off	(unsigned char)line[fstart]	if (bflag) while (fstart < fl.end && isblank((unsigned char)line[fstart])) fstart++; @column 47	existing site; prove while completing the cast audit
+src/util/sort.c	key_start_off	(unsigned char)line[start]	if (bflag) while (start < fl.end && isblank((unsigned char)line[start])) start++; @column 46	existing site; prove while completing the cast audit
+src/util/sort.c	parse_keydef	(int)v	k->c1 = (int)v; @column 11	existing site; prove while completing the cast audit
+src/util/sort.c	parse_keydef	(int)v	k->c2 = (int)v; @column 12	existing site; prove while completing the cast audit
+src/util/sort.c	parse_keydef	(int)v	k->f1 = (int)v; @column 10	existing site; prove while completing the cast audit
+src/util/sort.c	parse_keydef	(int)v	k->f2 = (int)v; @column 11	existing site; prove while completing the cast audit
+src/util/sort.c	parse_keydef	(unsigned char)*p	if (!isdigit((unsigned char)*p)) return -1; @column 15	existing site; prove while completing the cast audit
+src/util/sort.c	parse_numeric	(unsigned char)s[i]	while (i < len && isblank((unsigned char)s[i])) i++; @column 28	existing site; prove while completing the cast audit
+src/util/sort.c	split_fields	(unsigned char)line[i]	if (isblank((unsigned char)line[i])) { @column 16	existing site; prove while completing the cast audit
+src/util/split.c	__util_split_main	(int)strtol(argv[++i], &end, 10)	suflen = (int)strtol(argv[++i], &end, 10); @column 13	existing site; prove while completing the cast audit
+src/util/tail.c	read_all	(size_t)-1	free(buf); *out = 0; return (size_t)-1; @column 33	existing site; prove while completing the cast audit
+src/util/tail.c	read_all	(size_t)-1	if (!buf) { *out = 0; return (size_t)-1; } @column 31	existing site; prove while completing the cast audit
+src/util/tail.c	read_all	(size_t)-1	if (!nb) { free(buf); *out = 0; return (size_t)-1; } @column 43	existing site; prove while completing the cast audit
+src/util/tail.c	read_all	(size_t)-1	if (r < 0) { free(buf); *out = 0; return (size_t)-1; } @column 44	existing site; prove while completing the cast audit
+src/util/tail.c	tail_one	(long long)len	if (number > (long long)len + 1) number = (long long)len + 1; @column 15	existing site; prove while completing the cast audit
+src/util/tail.c	tail_one	(long long)len	if (number > (long long)len + 1) number = (long long)len + 1; @column 44	existing site; prove while completing the cast audit
+src/util/tail.c	tail_one	(size_t)(number - 1)	size_t k = (size_t)(number - 1); @column 15	existing site; prove while completing the cast audit
+src/util/tail.c	tail_one	(size_t)-1	if (len == (size_t)-1) { @column 13	existing site; prove while completing the cast audit
+src/util/tail.c	tail_one	(size_t)number	else start = nth_line_offset(buf, len, nlines - (size_t)number, &nlines); @column 53	existing site; prove while completing the cast audit
+src/util/tail.c	tail_one	(size_t)number	if ((size_t)number >= nlines) start = 0; @column 9	existing site; prove while completing the cast audit
+src/util/tail.c	tail_one	(size_t)number	start = (number <= 0) ? len : ((size_t)number >= len ? 0 : len - (size_t)number); @column 35	existing site; prove while completing the cast audit
+src/util/tail.c	tail_one	(size_t)number	start = (number <= 0) ? len : ((size_t)number >= len ? 0 : len - (size_t)number); @column 69	existing site; prove while completing the cast audit
+src/util/touch.c	parse_touch_t	(size_t)(dot - spec)	size_t mainlen = dot ? (size_t)(dot - spec) : strlen(spec); @column 25	existing site; prove while completing the cast audit
+src/util/tsort.c	__util_tsort_main	(unsigned char)buf[pos]	while (pos < len && !isspace((unsigned char)buf[pos])) pos++; @column 32	existing site; prove while completing the cast audit
+src/util/tsort.c	__util_tsort_main	(unsigned char)buf[pos]	while (pos < len && isspace((unsigned char)buf[pos])) pos++; @column 31	existing site; prove while completing the cast audit
+src/util/tsort.c	get_or_add	(int)nnodes++	return (int)nnodes++; @column 9	existing site; prove while completing the cast audit
+src/util/util_printf.c	arg_unsigned	(unsigned long)qv	if (leading_quote_char(s, &qv)) { *out = (unsigned long)qv; return 0; } @column 43	existing site; prove while completing the cast audit
+src/util/util_printf.c	emit_padded	(int)strlen(body)	int blen = (int)strlen(body); @column 13	existing site; prove while completing the cast audit
+src/util/util_printf.c	expand_b_arg	(unsigned char)*s	if (*s != '\\') { putchar((unsigned char)*s); continue; } @column 29	existing site; prove while completing the cast audit
+src/util/util_printf.c	format_str	(int)len	pad = sp->width > (int)len ? sp->width - (int)len : 0; @column 20	existing site; prove while completing the cast audit
+src/util/util_printf.c	format_str	(int)len	pad = sp->width > (int)len ? sp->width - (int)len : 0; @column 43	existing site; prove while completing the cast audit
+src/util/util_printf.c	leading_quote_char	(unsigned char)s[1]	*out = (long)(unsigned char)s[1]; @column 16	existing site; prove while completing the cast audit
+src/util/util_printf.c	run_one_pass	(unsigned char)*p	if (*p != '%') { putchar((unsigned char)*p); p++; continue; } @column 28	existing site; prove while completing the cast audit
+src/util/uudecode.c	__util_uudecode_main	CStyleCastExpr	n = (unsigned)UUDEC(line[0]); @column 7	existing site; prove while completing the cast audit
+src/util/uudecode.c	decode_line	(unsigned char)(((d2 & 0xf) << 4) | (d3 >> 2))	outbuf[1] = (unsigned char)(((d2 & 0xf) << 4) | (d3 >> 2)); @column 16	existing site; prove while completing the cast audit
+src/util/uudecode.c	decode_line	(unsigned char)(((d3 & 0x3) << 6) | d4)	outbuf[2] = (unsigned char)(((d3 & 0x3) << 6) | d4); @column 16	existing site; prove while completing the cast audit
+src/util/uudecode.c	decode_line	(unsigned char)((d1 << 2) | (d2 >> 4))	outbuf[0] = (unsigned char)((d1 << 2) | (d2 >> 4)); @column 16	existing site; prove while completing the cast audit
+src/util/uuencode.c	emit_line	(int)n	putchar(UUENC((int)n)); @column 16	existing site; prove while completing the cast audit
+src/util/wc.c	count_stream	(size_t)-1	if (r == (size_t)-1) { @column 14	existing site; prove while completing the cast audit
+src/util/wc.c	count_stream	(size_t)-2	if (r == (size_t)-2) { @column 14	existing site; prove while completing the cast audit
+src/util/wc.c	count_stream	(size_t)-3	if (r == (size_t)-3) { @column 14	existing site; prove while completing the cast audit
+src/wordexp/arith.c	apply_binop	(unsigned long)cur	return wrap_to_long((unsigned long)cur << rhs); /* "<<="/"<<" */ @column 25	existing site; prove while completing the cast audit
 src/wordexp/arith.c	arith_primary	(unsigned char)*a->p	if (isdigit((unsigned char)*a->p)) { @column 14	existing site; prove while completing the cast audit
+src/wordexp/arith.c	assign_var	(unsigned long)v	u = neg ? (unsigned long)(-(v + 1)) + 1UL : (unsigned long)v; @column 46	existing site; prove while completing the cast audit
 src/wordexp/arith.c	is_namechar	(unsigned char)c	static int is_namechar(char c) { return isalnum((unsigned char)c) || c == '_'; } @column 49	existing site; prove while completing the cast audit
 src/wordexp/arith.c	is_namestart	(unsigned char)c	static int is_namestart(char c) { return isalpha((unsigned char)c) || c == '_'; } @column 50	existing site; prove while completing the cast audit
 src/wordexp/arith.c	negate	(unsigned long)v	return wrap_to_long(0UL - (unsigned long)v); @column 28	existing site; prove while completing the cast audit
+src/wordexp/arith.c	read_name	(size_t)(p - start)	len = (size_t)(p - start); @column 8	existing site; prove while completing the cast audit
 src/wordexp/wordexp.c	expand_arith	(size_t)(end - start)	len = (size_t)(end - start); @column 8	existing site; prove while completing the cast audit
 src/wordexp/wordexp.c	expand_dollar_single	(char)c	if (fbuf_push(b, (char)c, 1)) return WRDE_NOSPACE; @column 20	existing site; prove while completing the cast audit
 src/wordexp/wordexp.c	expand_dollar_single	(unsigned char)*p++	unsigned char c = (unsigned char)*p++; @column 21	existing site; prove while completing the cast audit
+src/wordexp/wordexp.c	expand_dollar_single	(unsigned char)value	c = (unsigned char)value; @column 9	existing site; prove while completing the cast audit
+src/wordexp/wordexp.c	expand_param	(int)idx	val = sh ? (idx == 0 ? __sh_param_zero() : __sh_param_get((int)idx)) : 0; @column 61	existing site; prove while completing the cast audit
 src/wordexp/wordexp.c	expand_param	(size_t)(end - word)	rc = expand_param_word(word, (size_t)(end - word), flags, sh, quoted, ctx, &replacement); @column 32	existing site; prove while completing the cast audit
+src/wordexp/wordexp.c	expand_param	(size_t)(end - word)	rc = expand_trim_pattern(word, (size_t)(end - word), flags, sh, ctx, &pattern); @column 35	existing site; prove while completing the cast audit
+src/wordexp/wordexp.c	fbuf_push	(unsigned char)literal	b->lit[b->n] = (unsigned char)literal; @column 17	existing site; prove while completing the cast audit
 src/wordexp/wordexp.c	is_namechar	(unsigned char)c	static int is_namechar(char c) { return isalnum((unsigned char)c) || c == '_'; } @column 49	existing site; prove while completing the cast audit
 src/wordexp/wordexp.c	is_namestart	(unsigned char)c	static int is_namestart(char c) { return isalpha((unsigned char)c) || c == '_'; } @column 50	existing site; prove while completing the cast audit
 src/wordexp/wordexp.c	pv_pack	(size_t)-1	if (p->n == (size_t)-1 || offs > (size_t)-1 - p->n - 1) return 0; @column 14	existing site; prove while completing the cast audit

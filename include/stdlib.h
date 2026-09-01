@@ -1,3 +1,8 @@
+/* C library headers must use the implementation-reserved namespace for guards,
+ * type plumbing, and implementation extensions so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -5,6 +10,14 @@
 #define _STDLIB_H
 
 #include <features.h>
+#include <ownership.h>
+
+#ifndef tokdef
+#define tokdef __token_type
+#endif
+tokdef heap_allocated
+	dynamic_storage;
+#undef tokdef
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,10 +51,14 @@ unsigned long long strtoull (const char *__restrict, char **__restrict, int);
 int rand (void);
 void srand (unsigned);
 
+withtok(heap_allocated)
 void *malloc (size_t);
+withtok(heap_allocated)
 void *calloc (size_t, size_t);
-void *realloc (void *, size_t);
-void free (void *);
+withtok(heap_allocated)
+void *realloc (void * consume_if_nonnull_return(heap_allocated), size_t);
+void free (void * consume(heap_allocated));
+withtok(heap_allocated)
 void *aligned_alloc(size_t, size_t);
 
 _Noreturn void abort (void);
@@ -142,7 +159,9 @@ int rand_r (unsigned *) __attribute__((nonnull(1)));
 
 
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
-char *realpath (const char *__restrict, char *__restrict);
+withtok(heap_allocated)
+char *realpath (const char *__restrict,
+	char *__restrict withtok(heap_allocated));
 long int random (void);
 void srandom (unsigned int);
 char *initstate (unsigned int, char *, size_t);
@@ -194,13 +213,16 @@ void lcong48 (unsigned short [7]);
 char *mktemp (char *) __attribute__((nonnull(1)));
 int mkstemps (char *, int);
 int mkostemps (char *, int, int);
+withtok(heap_allocated)
 void *valloc (size_t);
+withtok(heap_allocated)
 void *memalign(size_t, size_t);
 size_t malloc_usable_size(void *);
 int getloadavg(double *, int);
 #define WCOREDUMP(s) ((s) & 0x80)
 #define WIFCONTINUED(s) ((s) == 0xffff)
-void *reallocarray (void *, size_t, size_t);
+withtok(heap_allocated)
+void *reallocarray (void * consume_if_nonnull_return(heap_allocated), size_t, size_t);
 void qsort_r (void *, size_t, size_t, int (*)(const void *, const void *, void *), void *);
 #endif
 
@@ -228,3 +250,5 @@ char *gcvt(double, int, char *);
 #endif
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

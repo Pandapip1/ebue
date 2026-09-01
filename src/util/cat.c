@@ -55,7 +55,7 @@ static int copy_stream(int in, const char *label)
 		while (left > 0) {
 			ssize_t w = write(STDOUT_FILENO, p, (size_t)left);
 			if (w < 0) {
-				fprintf(stderr, "cat: %s: %s\n", label, strerror(errno));
+				__util_diagf("cat: %s: %s\n", label, strerror(errno));
 				return -1;
 			}
 			p += w;
@@ -63,7 +63,7 @@ static int copy_stream(int in, const char *label)
 		}
 	}
 	if (n < 0) {
-		fprintf(stderr, "cat: %s: %s\n", label, strerror(errno));
+		__util_diagf("cat: %s: %s\n", label, strerror(errno));
 		return -1;
 	}
 	return 0;
@@ -94,12 +94,12 @@ int __util_cat_main(int argc, char **argv)
 
 		fd = open(path, O_RDONLY);
 		if (fd < 0) {
-			fprintf(stderr, "cat: %s: %s\n", path, strerror(errno));
+			__util_diagf("cat: %s: %s\n", path, strerror(errno));
 			had_error = 1;
 			continue;
 		}
 		if (copy_stream(fd, path) < 0) had_error = 1;
-		close(fd);
+		(void)close(fd);
 	}
 
 	return had_error ? 1 : 0;

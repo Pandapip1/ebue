@@ -1,3 +1,8 @@
+/* C library headers must use the implementation-reserved namespace for guards,
+ * type plumbing, and implementation extensions so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -116,7 +121,8 @@ int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *) __attribute__
 int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t *, int);
 int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *, int, int);
 int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t *__restrict,
-	int, const char *__restrict, int, mode_t) __attribute__((nonnull(3)));
+	int, const char *__restrict __NTLIBC_STRING, int, mode_t)
+	__attribute__((nonnull(3)));
 
 /* Every one of these (destroy() excepted) unconditionally dereferences
  * its posix_spawnattr_t *a -- a plain read/write of one of a's own
@@ -157,3 +163,5 @@ int posix_spawnattr_setschedpolicy(posix_spawnattr_t *, int) __attribute__((nonn
 #endif
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

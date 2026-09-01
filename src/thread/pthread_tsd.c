@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <pthread.h>
 #include <errno.h>
 #include <sched.h>
@@ -29,6 +34,8 @@ static pthread_key_t key_value(unsigned index, unsigned generation)
 	return generation * PTHREAD_KEYS_MAX + index;
 }
 
+static int valid_key(pthread_key_t key)
+    NTLIBC_REQUIRES(__ntlibc_peb_lock_token);
 static int valid_key(pthread_key_t key)
 {
 	unsigned index = key_index(key);
@@ -152,6 +159,8 @@ static struct once_waiter *once_waiters NTLIBC_GUARDED_BY(__ntlibc_peb_lock_toke
  * waiter can consume a shared auto-reset wake intended for another once
  * control. */
 static void wake_once_waiters_locked(pthread_once_t *control)
+    NTLIBC_REQUIRES(__ntlibc_peb_lock_token);
+static void wake_once_waiters_locked(pthread_once_t *control)
 {
 	struct once_waiter *waiter;
 	for (waiter = once_waiters; waiter; waiter = waiter->next) {
@@ -160,6 +169,8 @@ static void wake_once_waiters_locked(pthread_once_t *control)
 	}
 }
 
+static void remove_once_waiter_locked(struct once_waiter *waiter)
+    NTLIBC_REQUIRES(__ntlibc_peb_lock_token);
 static void remove_once_waiter_locked(struct once_waiter *waiter)
 {
 	struct once_waiter **link = &once_waiters;
@@ -238,3 +249,5 @@ int pthread_once(pthread_once_t *control, void (*initialize)(void))
 		}
 	}
 }
+
+// NOLINTEND(misc-include-cleaner)

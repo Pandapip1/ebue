@@ -29,7 +29,12 @@
  * DIR does, which is a real behavior change out of scope for a
  * redesign whose job is to keep every backend's observable behavior
  * exactly as it was, just decoded through a shared, portable step. */
-#define _GNU_SOURCE
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <dirent.h>
 #include <string.h>
 #include <errno.h>
@@ -39,16 +44,23 @@ static int append_missing(struct __fd *f, struct dirent *out, size_t size)
 {
 	size_t used = 0;
 	int total = __vfs_mandatory_count(f->vfs);
-	while (f->vnext < total && used + sizeof(struct dirent) <= size) {
+	/* vnext is an unsigned byte and starts at zero; mandatory_count is
+	 * exactly 0, 1 or 3.  Snapshot that finite maximum independently of
+	 * the descriptor member which records progress across calls. */
+	unsigned remaining = (unsigned)total;
+	while (remaining > 0 && f->vnext < total &&
+	       used + sizeof(struct dirent) <= size) {
 		int i = f->vnext++;
 		struct dirent *d;
+		remaining--;
 		if (f->vseen & (1u << i)) continue;
 		d = (struct dirent *)((char *)out + used);
 		memset(d, 0, sizeof *d);
 		d->d_ino = (ino_t)__vfs_mandatory_kind(f->vfs, i);
 		d->d_type = f->vfs == __VFS_ROOT ? __DT_DIR : __DT_CHR;
 		d->d_reclen = sizeof *d;
-		strcpy(d->d_name, __vfs_mandatory_name(f->vfs, i));
+		(void)strlcpy(d->d_name, __vfs_mandatory_name(f->vfs, i),
+		              sizeof d->d_name);
 		used += sizeof *d;
 		d->d_off = (off_t)f->vnext;
 	}
@@ -84,7 +96,7 @@ int getdents(int fd, struct dirent *out, size_t size)
 			             (f->vfs == __VFS_ROOT ? __VFS_DEV : __VFS_CONSOLE + index - 2));
 			d->d_type = types[index];
 			d->d_reclen = sizeof *d;
-			strcpy(d->d_name, names[index]);
+			(void)strlcpy(d->d_name, names[index], sizeof d->d_name);
 			index++;
 			used += sizeof *d;
 			d->d_off = (off_t)index;
@@ -114,3 +126,5 @@ int getdents(int fd, struct dirent *out, size_t size)
 	}
 	return (int)used;
 }
+
+// NOLINTEND(misc-include-cleaner)

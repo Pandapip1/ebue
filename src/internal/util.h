@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -36,6 +41,83 @@
  */
 #ifndef _NTLIBC_UTIL_H
 #define _NTLIBC_UTIL_H
+
+#include <stdlib.h>
+
+#include <errno.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/* Diagnostics are always secondary to an error status the utility is
+ * already returning.  Check the write, but preserve the primary errno and
+ * outcome because a diagnostic failure has no more useful status to report. */
+static inline void __util_diagf(const char *fmt, ...)
+	__attribute__((format(printf, 1, 2), nonnull(1)));
+static inline void __util_diagf(const char *fmt, ...)
+{
+	int saved_errno = errno;
+	va_list ap;
+	va_start(ap, fmt);
+	if (vfprintf(stderr, fmt, ap) < 0) {
+		/* The utility's primary failure remains authoritative. */
+	}
+	va_end(ap);
+	errno = saved_errno;
+}
+
+/* Shared checked sizing for the utility implementations below.  Keep the
+ * arithmetic out of malloc/realloc arguments so an untrusted input length
+ * cannot wrap into a small allocation. */
+static inline int __util_size_add(size_t a, size_t b, size_t *out)
+{
+	if (b > (size_t)-1 - a) return 0;
+	*out = a + b;
+	return 1;
+}
+
+static inline int __util_size_mul(size_t a, size_t b, size_t *out)
+{
+	if (b && a > (size_t)-1 / b) return 0;
+	*out = a * b;
+	return 1;
+}
+
+withtok(heap_allocated)
+static inline void *__util_mallocarray(size_t count, size_t element_size)
+{
+	size_t bytes;
+	if (!__util_size_mul(count, element_size, &bytes)) return NULL;
+	return malloc(bytes);
+}
+
+withtok(heap_allocated)
+static inline void *__util_reallocarray(
+	void *ptr consume_if_nonnull_return(heap_allocated), size_t count,
+	size_t element_size)
+{
+	size_t bytes;
+	if (!__util_size_mul(count, element_size, &bytes)) return NULL;
+	return realloc(ptr, bytes);
+}
+
+static inline int __util_array_capacity(size_t current, size_t used, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+	size_t additional, size_t initial, size_t element_size, size_t *out)
+{
+	size_t minimum, maximum, capacity;
+	if (!initial || !element_size ||
+	    !__util_size_add(used, additional, &minimum)) return 0;
+	maximum = (size_t)-1 / element_size;
+	if (minimum > maximum || current > maximum) return 0;
+	capacity = current < initial ? initial : current;
+	while (capacity < minimum) {
+		if (capacity > maximum / 2) { capacity = minimum; break; }
+		capacity *= 2;
+	}
+	*out = capacity;
+	return 1;
+}
 
 /* Tier 1: pathname utilities (XCU basename(1p), dirname(1p), pathchk(1p),
  * pwd(1p)), plus readlink and realpath -- both real GNU/BSD utilities this
@@ -178,6 +260,9 @@ int __util_unexpand_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_copy_regular_file(const char *src, const char *dst, int force) __attribute__((nonnull(1, 2)));
 int __util_copy_tree(const char *src, const char *dst, int force) __attribute__((nonnull(1, 2)));
 int __util_remove_tree(const char *path) __attribute__((nonnull(1)));
-char *__util_join_basename(const char *dir, const char *src) __attribute__((nonnull(1, 2)));
+withtok(heap_allocated) __attribute__((nonnull(1, 2)))
+char *__util_join_basename(const char *dir, const char *src);
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

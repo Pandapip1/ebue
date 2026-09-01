@@ -23,6 +23,11 @@
  * into a running total so getrusage(RUSAGE_CHILDREN) has something to
  * report even when the caller only ever called wait()/waitpid().
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/wait.h>
 #include <sys/resource.h>
 #include <signal.h>
@@ -79,6 +84,7 @@ int __wait_encode_status(int exitcode)
 	case (unsigned)STATUS_CONTROL_C_EXIT:
 	case DBG_CONTROL_C:
 	case DBG_CONTROL_BREAK:             return sig_status(SIGINT);
+	default:                            break;
 	}
 
 	return (exitcode & 0xff) << 8;       /* WIFEXITED, WEXITSTATUS */
@@ -161,7 +167,7 @@ static void fill_child_rusage(__plat_handle_t h, struct rusage *ru)
  * and/or WCONTINUED.  Consuming is the caller's job -- it clears
  * c->jobstat, which is what "has not yet been reported" turns on, unless
  * WNOWAIT asked for the report to stay available. */
-static struct __child *job_report(pid_t want, int which)
+static struct __child *job_report(pid_t want, int which) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int i;
 
@@ -418,7 +424,7 @@ pid_t wait(int *status)
  * releasing the entry, so the child remains waitable and a following
  * wait/waitpid/waitid returns the same status again.
  */
-int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options)
+int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int status = 0;
 	pid_t pid, want;
@@ -545,3 +551,5 @@ pid_t wait4(pid_t pid, int *status, int options, struct rusage *ru)
 	return do_waitpid(pid, status, options, ru, 0);
 }
 #endif
+
+// NOLINTEND(misc-include-cleaner)

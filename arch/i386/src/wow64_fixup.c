@@ -83,6 +83,11 @@
  * gate" idiom this file's header comment and M2libc's both refer to by
  * that name; gate_call() below is the whole of it.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include "libc.h"
 
@@ -276,7 +281,7 @@ static int gate_init(void)
  * this WOW64 process's own thread, no other threads involved, and
  * return its result truncated to 32 bits (every status this file cares
  * about fits in 32 bits regardless of RAX's full width). */
-static ULONG gate_call(ULONGLONG target, ULONG arg1, ULONG arg2)
+static ULONG gate_call(ULONGLONG target, ULONG arg1, ULONG arg2) // NOLINT(bugprone-easily-swappable-parameters) -- target and argument slots have fixed gate-call roles
 {
 	unsigned char blob[] = {
 		0x49, 0x89, 0xE4,                         /* mov r12, rsp        -- save, so the far return's stack position doesn't depend on incoming alignment */
@@ -297,7 +302,7 @@ static ULONG gate_call(ULONGLONG target, ULONG arg1, ULONG arg2)
 	return gate_result;
 }
 
-void __wow64_fixup_clone(HANDLE process, HANDLE thread)
+void __wow64_fixup_clone(HANDLE process, HANDLE thread) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; process and thread handles have distinct roles
 {
 	unsigned char pbi[48];
 	ULONGLONG peb64, ntdll64, wow64cpu64;
@@ -376,8 +381,11 @@ void __wow64_fixup_clone(HANDLE process, HANDLE thread)
 	{
 		unsigned char zero[4] = { 0, 0, 0, 0 };
 		SIZE_T written;
+		// NOLINTNEXTLINE(bugprone-casting-through-void) -- WOW64 repair computes an object address from the ABI function entry address
 		unsigned char *lock = (unsigned char *)(void *)RtlCloneUserProcess
 		                     - WOW64_RTLCLONEUSERPROCESS_RVA + WOW64_STUCK_SRWLOCK_RVA;
 		NtWriteVirtualMemory(process, lock, zero, 4, &written);
 	}
 }
+
+// NOLINTEND(misc-include-cleaner)

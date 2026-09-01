@@ -1,6 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -8,7 +13,7 @@
 #include "libc.h"
 #include "plat_fd.h"
 
-static int dup_to(int fd, int newfd, int cloexec)
+static int dup_to(int fd, int newfd, int cloexec) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = __fd_get(fd);
 	struct __fd state;
@@ -51,3 +56,5 @@ int dup2(int fd, int newfd)
 	if (newfd < 0 || newfd >= FD_MAX) { errno = EBADF; return -1; }
 	return dup_to(fd, newfd, 0);
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -9,6 +9,11 @@
  * place of a raw NTSTATUS where one of these calls used to leave that
  * for its caller to interpret.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include "libc.h"
 #include "plat_time.h"
@@ -28,7 +33,7 @@ int __plat_realtime_set(long long nt_ticks)
 	return 0;
 }
 
-int __plat_perfcounter_get(long long *count, long long *freq)
+int __plat_perfcounter_get(long long *count, long long *freq) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	LARGE_INTEGER c, f;
 	NTSTATUS st = NtQueryPerformanceCounter(&c, &f);
@@ -38,7 +43,7 @@ int __plat_perfcounter_get(long long *count, long long *freq)
 	return 0;
 }
 
-int __plat_process_cpu_ticks(long long *kernel, long long *user)
+int __plat_process_cpu_ticks(long long *kernel, long long *user) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	KERNEL_USER_TIMES kt;
 	NTSTATUS st = NtQueryInformationProcess(NtCurrentProcess(), ProcessTimes,
@@ -103,7 +108,7 @@ void __plat_timer_wake(__plat_handle_t wake)
 	NtSetEvent(wake, &previous);
 }
 
-void __plat_timer_manager_wait(__plat_handle_t wake, long long ticks, int has_deadline)
+void __plat_timer_manager_wait(__plat_handle_t wake, long long ticks, int has_deadline) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	LARGE_INTEGER timeout, *wait = 0;
 	if (has_deadline) {
@@ -116,3 +121,5 @@ void __plat_timer_manager_wait(__plat_handle_t wake, long long ticks, int has_de
 	 * recomputes state instead of blocking through the change. */
 	NtWaitForSingleObject(wake, FALSE, wait);
 }
+
+// NOLINTEND(misc-include-cleaner)

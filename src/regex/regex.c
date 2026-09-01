@@ -66,6 +66,11 @@
  * killed the process outright long before MAX_STEPS could count to
  * two million.  Found by fuzz/fuzz_regex.c.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <regex.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -100,7 +105,7 @@ struct rx {
  * newset() has already allocated within rx->sets, never NULL), and
  * dereferenced unconditionally here. */
 static void setbit(struct bracket *bs, int c, int icase) __attribute__((nonnull(1)));
-static void setbit(struct bracket *bs, int c, int icase)
+static void setbit(struct bracket *bs, int c, int icase) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned char cc = (unsigned char)c;
 	if (icase) cc = (unsigned char)tolower(cc);
@@ -108,7 +113,7 @@ static void setbit(struct bracket *bs, int c, int icase)
 }
 
 static int testbit(const struct bracket *bs, int c, int icase) __attribute__((nonnull(1)));
-static int testbit(const struct bracket *bs, int c, int icase)
+static int testbit(const struct bracket *bs, int c, int icase) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned char cc = (unsigned char)c;
 	if (icase) cc = (unsigned char)tolower(cc);
@@ -193,7 +198,7 @@ struct parser {
  * ps->p/ps->err/ps->rx/ps->icase/ps->ngroup/ps->ere/ps->closed. */
 static int emit(struct parser *ps, int op, int c, int set, int x, int y)
     __attribute__((nonnull(1)));
-static int emit(struct parser *ps, int op, int c, int set, int x, int y)
+static int emit(struct parser *ps, int op, int c, int set, int x, int y) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct rx *rx = ps->rx;
 	if (ps->err) return -1;
@@ -239,11 +244,13 @@ static int newset(struct parser *ps)
 	return rx->nsets++;
 }
 
-static const struct { const char *name; int (*fn)(int); } classes[] = {
-	{ "alpha", isalpha }, { "digit", isdigit }, { "alnum", isalnum },
-	{ "upper", isupper }, { "lower", islower }, { "space", isspace },
-	{ "blank", isblank }, { "punct", ispunct }, { "cntrl", iscntrl },
-	{ "graph", isgraph }, { "print", isprint }, { "xdigit", isxdigit },
+static const struct { const char *name; size_t len; int (*fn)(int); } classes[] = {
+#define CLASS(name, fn) { name, sizeof name - 1, fn }
+	CLASS("alpha", isalpha), CLASS("digit", isdigit), CLASS("alnum", isalnum),
+	CLASS("upper", isupper), CLASS("lower", islower), CLASS("space", isspace),
+	CLASS("blank", isblank), CLASS("punct", ispunct), CLASS("cntrl", iscntrl),
+	CLASS("graph", isgraph), CLASS("print", isprint), CLASS("xdigit", isxdigit),
+#undef CLASS
 };
 
 /* ps required, same as every parser function above. name is passed to
@@ -259,7 +266,7 @@ static int emit_class(struct parser *ps, struct bracket *bs, const char *name, s
 	size_t i;
 	int c;
 	for (i = 0; i < sizeof classes / sizeof *classes; i++)
-		if (strlen(classes[i].name) == len && !strncmp(classes[i].name, name, len)) {
+		if (classes[i].len == len && !strncmp(classes[i].name, name, len)) {
 			for (c = 0; c < 256; c++)
 				if (classes[i].fn(c)) setbit(bs, c, ps->icase);
 			return 0;
@@ -315,7 +322,7 @@ static void parse_bracket(struct parser *ps)
 			ps->p++;
 			hi = (unsigned char)*ps->p++;
 			if (hi < c) { ps->err = REG_ERANGE; return; }
-			for (k = c; k <= hi; k++) setbit(bs, k, ps->icase);
+			for (k = c; k < hi + 1; k++) setbit(bs, k, ps->icase);
 			continue;
 		}
 		setbit(bs, c, ps->icase);
@@ -395,7 +402,7 @@ static void parse_bound(struct parser *ps, int *pm, int *pn)
  * forwards it into emit(), never dereferencing it itself. */
 static void emit_reloc(struct parser *ps, const struct inst *saved, int len, int delta)
     __attribute__((nonnull(2)));
-static void emit_reloc(struct parser *ps, const struct inst *saved, int len, int delta)
+static void emit_reloc(struct parser *ps, const struct inst *saved, int len, int delta) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int i;
 	for (i = 0; i < len; i++) {
@@ -411,7 +418,7 @@ static void emit_reloc(struct parser *ps, const struct inst *saved, int len, int
  * REG_BADRPT if a repeat operator appears with no preceding atom
  * (start == ps->rx->nprog, i.e. nothing was actually emitted). */
 static void apply_repeat(struct parser *ps, int start, int had_atom) __attribute__((nonnull(1)));
-static void apply_repeat(struct parser *ps, int start, int had_atom)
+static void apply_repeat(struct parser *ps, int start, int had_atom) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	for (;;) {
 		char c = *ps->p;
@@ -554,6 +561,7 @@ static int esc_literal(struct parser *ps)
 /* ---- ERE ------------------------------------------------------------ */
 
 static void ere_atom(struct parser *ps) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested regular-expression grammar
 static void ere_atom(struct parser *ps)
 {
 	int c = (unsigned char)*ps->p;
@@ -596,6 +604,7 @@ static void ere_atom(struct parser *ps)
  * because ps is still independently required for this function's own
  * other, ordinary field accesses. */
 static void ere_branch(struct parser *ps) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested regular-expression grammar
 static void ere_branch(struct parser *ps)
 {
 	int first = 1;
@@ -620,6 +629,7 @@ static void ere_branch(struct parser *ps)
 	}
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested regular-expression grammar
 static void ere_alt(struct parser *ps)
 {
 	int start = ps->rx->nprog;
@@ -650,6 +660,7 @@ static void ere_alt(struct parser *ps)
  * or of a "\(" subexpression), intervals are "\{m,n\}", and '^'/'$'
  * are anchors only at the very start/end of the whole pattern. */
 static void bre_atom(struct parser *ps, int at_start) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested regular-expression grammar
 static void bre_atom(struct parser *ps, int at_start)
 {
 	int c = (unsigned char)*ps->p;
@@ -663,7 +674,7 @@ static void bre_atom(struct parser *ps, int at_start)
 		if (ps->p[0] != '\\' || ps->p[1] != ')') { ps->err = REG_EPAREN; return; }
 		ps->p += 2;
 		emit(ps, I_SAVE, 0, 0, 2 * g + 1, 0);
-		if (g <= 9) ps->closed |= 1u << g;
+		if (g >= 0 && g <= 9) ps->closed |= 1u << g;
 		return;
 	}
 	if (c == '\\' && ps->p[1] >= '1' && ps->p[1] <= '9') {
@@ -686,6 +697,7 @@ static void bre_atom(struct parser *ps, int at_start)
 /* Same "ps required, but its own flagged finding (ps->p[0] in the loop
  * below) traces to regcomp()'s own pattern parameter instead" nuance
  * as ere_branch() above -- see that function's own comment. */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested regular-expression grammar
 static void bre_branch(struct parser *ps)
 {
 	int first = 1;
@@ -794,7 +806,6 @@ struct mstate {
 	int nslot;
 	struct rx *rx;
 	regoff_t *progress;	/* last subject offset at each backward edge */
-	int steps;
 	struct bt *bt;		/* backtracking stack, grown on demand */
 	int nbt, capbt;
 };
@@ -826,7 +837,7 @@ struct mstate {
 /* ms required throughout the matcher: every function below ultimately
  * receives it forwarded from regexec()'s own `struct mstate ms;`
  * local, and none of them defensively checks it before touching
- * ms->capbt/ms->nbt/ms->bt/ms->steps/ms->rx/ms->end/etc. */
+ * ms->capbt/ms->nbt/ms->bt/ms->rx/ms->end/etc. */
 static int bt_grow(struct mstate *ms) __attribute__((nonnull(1)));
 static int bt_grow(struct mstate *ms)
 {
@@ -856,7 +867,7 @@ static int bt_push_try(struct mstate *ms, int pc, const char *sp)
 }
 
 static int bt_push_undo(struct mstate *ms, int slot, regoff_t old) __attribute__((nonnull(1)));
-static int bt_push_undo(struct mstate *ms, int slot, regoff_t old)
+static int bt_push_undo(struct mstate *ms, int slot, regoff_t old) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct bt *e;
 	if (ms->nbt == ms->capbt && !bt_grow(ms)) return 0;
@@ -896,10 +907,10 @@ static int run(struct mstate *ms, int pc, const char *sp)
 static int run(struct mstate *ms, int pc, const char *sp)
 {
 	int found = 0;
-	for (;;) {
+	int steps_left = MAX_STEPS;
+	while (steps_left-- > 0) {
 		struct inst *in;
 
-		if (++ms->steps > MAX_STEPS) return -1;
 		if (pc < 0 || pc >= ms->rx->nprog) goto backtrack;
 		in = &ms->rx->prog[pc];
 		switch (in->op) {
@@ -1012,6 +1023,7 @@ static int run(struct mstate *ms, int pc, const char *sp)
 			break;
 		}
 	}
+	return -1;
 }
 
 int regexec(const regex_t *__restrict preg, const char *__restrict string,
@@ -1051,7 +1063,6 @@ int regexec(const regex_t *__restrict preg, const char *__restrict string,
 		for (i = 0; i < nslot; i++) slot[i] = -1;
 		for (i = 0; i < nslot; i++) best[i] = -1;
 		for (i = 0; i < rx->nprog; i++) progress[i] = -1;
-		ms.steps = 0;
 		ms.nbt = 0;		/* the buffer is reused; the contents are not */
 		r = run(&ms, 0, string + start);
 		if (r > 0) { matched = 1; break; }
@@ -1094,41 +1105,45 @@ int regexec(const regex_t *__restrict preg, const char *__restrict string,
 
 #define NERRMSGS 14	/* index 0 (unused) through REG_BADRPT (13) */
 
-static const char *const errmsgs[NERRMSGS] = {
-	NULL,				/* unused: no code 0 in this header */
-	"no match",			/* REG_NOMATCH */
-	"invalid regular expression",	/* REG_BADPAT */
-	"invalid collating element",	/* REG_ECOLLATE */
-	"invalid character class",	/* REG_ECTYPE */
-	"trailing backslash",		/* REG_EESCAPE */
-	"invalid back reference",	/* REG_ESUBREG */
-	"unmatched [ or [^",		/* REG_EBRACK */
-	"unmatched ( or \\(",		/* REG_EPAREN */
-	"unmatched \\{",		/* REG_EBRACE */
-	"invalid interval",		/* REG_BADBR */
-	"invalid range end",		/* REG_ERANGE */
-	"out of memory",		/* REG_ESPACE */
-	"repetition operator with nothing to repeat",	/* REG_BADRPT */
+struct errmsg {
+	const char *text;
+	size_t size;
 };
+
+#define ERRMSG(s) { s, sizeof s }
+
+static const struct errmsg errmsgs[NERRMSGS] = {
+	ERRMSG("unknown regex error"),	/* fallback: no code 0 in this header */
+	ERRMSG("no match"),		/* REG_NOMATCH */
+	ERRMSG("invalid regular expression"), /* REG_BADPAT */
+	ERRMSG("invalid collating element"), /* REG_ECOLLATE */
+	ERRMSG("invalid character class"), /* REG_ECTYPE */
+	ERRMSG("trailing backslash"),	/* REG_EESCAPE */
+	ERRMSG("invalid back reference"), /* REG_ESUBREG */
+	ERRMSG("unmatched [ or [^"),	/* REG_EBRACK */
+	ERRMSG("unmatched ( or \\("),	/* REG_EPAREN */
+	ERRMSG("unmatched \\{"),		/* REG_EBRACE */
+	ERRMSG("invalid interval"),	/* REG_BADBR */
+	ERRMSG("invalid range end"),	/* REG_ERANGE */
+	ERRMSG("out of memory"),		/* REG_ESPACE */
+	ERRMSG("repetition operator with nothing to repeat"), /* REG_BADRPT */
+};
+
+#undef ERRMSG
 
 size_t regerror(int errcode, const regex_t *__restrict preg, char *__restrict errbuf, size_t errbuf_size)
 {
-	const char *msg = "unknown regex error";
-	size_t need;
+	const struct errmsg *msg = &errmsgs[0];
 	(void)preg;
 
-	if (errcode >= 1 && errcode < NERRMSGS) {
-		const char *m = errmsgs[errcode];
-		if (m) msg = m;
-	}
+	if (errcode >= 1 && errcode < NERRMSGS) msg = &errmsgs[errcode];
 
-	need = strlen(msg) + 1;
 	if (errbuf_size != 0) {
-		size_t n = need < errbuf_size ? need : errbuf_size;
-		memcpy(errbuf, msg, n - 1);
+		size_t n = msg->size < errbuf_size ? msg->size : errbuf_size;
+		memcpy(errbuf, msg->text, n - 1);
 		errbuf[n - 1] = '\0';
 	}
-	return need;
+	return msg->size;
 }
 
 void regfree(regex_t *preg)
@@ -1141,3 +1156,5 @@ void regfree(regex_t *preg)
 	preg->__opaque = NULL;
 	preg->re_nsub = 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

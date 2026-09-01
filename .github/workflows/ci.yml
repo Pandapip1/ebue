@@ -88,8 +88,53 @@ jobs:
           revision: ${{ env.WINE_SHA }}
           build-on-miss: "true"
 
-  # This produces the exact PE files consumed on real Windows.  Wine jobs
-  # rebuild independently so they can run in parallel with this hand-off.
+  # Linux is complete on aarch64; x86_64 and i386 currently have curated
+  # CRT build/run coverage, plus the ELF-loader subset on x86_64.  Keep each
+  # architecture visible as its own matrix leg even though the x86 legs run
+  # under qemu on the arm64 host.
+  linux-builds:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64, x86_64, i386]
+    name: Linux build (${{ matrix.arch }})
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld qemu-user
+      - name: Configure
+        if: matrix.arch == 'aarch64'
+        run: >-
+          ./configure --platform=linux CC=clang
+          CFLAGS="-fno-stack-protector -mno-outline-atomics"
+      - name: Build library and CRT
+        if: matrix.arch == 'aarch64'
+        run: make -j"$(nproc)"
+      - name: Run native Linux build suites
+        if: matrix.arch == 'aarch64'
+        env:
+          NTLIBC_ARCH: aarch64
+        run: |
+          for script in tools/linux-build*.sh; do
+            case "$script" in
+              *-cross.sh) continue ;;
+            esac
+            "$script"
+          done
+      - name: Build and run cross-architecture CRT
+        if: matrix.arch != 'aarch64'
+        run: tools/linux-build-crt-cross.sh ${{ matrix.arch }}
+      - name: Build and run x86_64 ELF loader
+        if: matrix.arch == 'x86_64'
+        run: tools/linux-build-dlfcn-cross.sh x86_64
+
+  # Every row produces the exact PE files consumed by its matching native
+  # Windows runner below, including arm64 rather than treating that row as a
+  # compile-only archive check.
   build-test-exes:
     needs: build-toolchain
     runs-on: ubuntu-24.04
@@ -98,9 +143,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { host: i386-win32, cc: i386-win32-tcc, kernel32: disable, name: i386 }
-          - { host: x86_64-win32, cc: x86_64-win32-tcc, kernel32: disable, name: x86_64 }
-          - { host: x86_64-win32, cc: x86_64-win32-tcc, kernel32: enable, name: x86_64-kernel32 }
+          - { host: i386-win32, cc: i386-win32-tcc, kernel32: disable, name: i386, target: test-exes, upload: true }
+          - { host: x86_64-win32, cc: x86_64-win32-tcc, kernel32: disable, name: x86_64, target: test-exes, upload: true }
+          - { host: x86_64-win32, cc: x86_64-win32-tcc, kernel32: enable, name: x86_64-kernel32, target: test-exes, upload: true }
+          - { host: arm64-win32, cc: arm64-win32-tcc, kernel32: disable, name: arm64, target: test-exes, upload: true }
+    name: Windows build (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v7
       - name: Set up tinycc
@@ -110,9 +157,10 @@ jobs:
           revision: ${{ env.TINYCC_SHA }}
       - name: Configure
         run: ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }} --${{ matrix.kernel32 }}-kernel32
-      - name: Build test binaries
-        run: make -j"$(nproc)" test-exes
+      - name: Build ${{ matrix.name }} artifacts
+        run: make -j"$(nproc)" ${{ matrix.target }}
       - name: Upload test binaries
+        if: matrix.upload
         uses: actions/upload-artifact@v7
         with:
           name: test-exes-${{ matrix.name }}
@@ -187,7 +235,7 @@ jobs:
   posix-optsrun:
     needs: [build-toolchain, build-wine]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -214,15 +262,16 @@ jobs:
 
   windows-test:
     needs: build-test-exes
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: i386, arch: i386, kernel32: no }
-          - { name: x86_64, arch: x86_64, kernel32: no }
-          - { name: x86_64-kernel32, arch: x86_64, kernel32: yes }
+          - { name: i386, arch: i386, kernel32: no, runner: windows-latest }
+          - { name: x86_64, arch: x86_64, kernel32: no, runner: windows-latest }
+          - { name: x86_64-kernel32, arch: x86_64, kernel32: yes, runner: windows-latest }
+          - { name: arm64, arch: aarch64, kernel32: no, runner: windows-11-arm }
     steps:
       - uses: actions/checkout@v7
       - name: Download test binaries
@@ -296,17 +345,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { stage: warn, packages: "clang gcc-mingw-w64-i686 gcc-mingw-w64-x86-64" }
+          - { stage: warn, packages: "clang gcc-aarch64-linux-gnu gcc-mingw-w64-i686 gcc-mingw-w64-x86-64" }
           - { stage: analyze, packages: "clang clang-tidy-18" }
           - { stage: cppcheck, packages: cppcheck }
           - { stage: shell, packages: shellcheck }
           - { stage: sizearith, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: fallible, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: locks, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: lockset, packages: clang-18 }
+          - { stage: provenance, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: reentrancy, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: variadic, packages: clang-18 }
           - { stage: signals, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: abizeroinit, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: initproof, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: errno, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: purity, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: undefined, packages: "" }
           - { stage: unreferenced, packages: clang }
           - { stage: widthmod, packages: "" }

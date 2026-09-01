@@ -83,7 +83,7 @@ static int df_report(const char *path, unsigned long blocksize)
 	uintmax_t total, avail, used, capacity_pct;
 
 	if (statvfs(path, &vfs) != 0) {
-		fprintf(stderr, "df: %s: %s\n", path, strerror(errno));
+		__util_diagf("df: %s: %s\n", path, strerror(errno));
 		return -1;
 	}
 
@@ -123,7 +123,7 @@ int __util_df_main(int argc, char **argv)
 		if (a[0] != '-' || a[1] == 0) break;
 		if (!strcmp(a, "--")) { i++; break; }
 		if (!strcmp(a, "-k")) { blocksize = 1024; continue; }
-		fprintf(stderr, "df: invalid option -- '%s'\n", a);
+		__util_diagf("df: invalid option -- '%s'\n", a);
 		return 1;
 	}
 

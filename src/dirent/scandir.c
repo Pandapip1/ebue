@@ -6,7 +6,7 @@
  * directly.  Each surviving entry is copied into a malloc'd block sized
  * to its actual name, not a full struct dirent, the way musl does it.
  */
-#define _GNU_SOURCE
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <dirent.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -24,7 +24,7 @@
  * and does the reinterpretation on the *arguments* -- an ordinary object
  * pointer conversion, not a function-pointer one -- before calling compar
  * through its own, correct type. */
-static int scandir_cmp(const void *a, const void *b, void *arg)
+static int scandir_cmp(const void *a, const void *b, void *arg) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int (*compar)(const struct dirent **, const struct dirent **) = arg;
 	return compar((const struct dirent **)a, (const struct dirent **)b);
@@ -36,7 +36,7 @@ int scandir(const char *path, struct dirent ***res,
 {
 	DIR *dp;
 	struct dirent *d, **list = 0;
-	size_t n = 0, cap = 0;
+	size_t n = 0, cap = 0, i;
 
 	dp = opendir(path);
 	if (!dp) return -1;
@@ -44,46 +44,60 @@ int scandir(const char *path, struct dirent ***res,
 	errno = 0;
 	while ((d = readdir(dp))) {
 		struct dirent *copy;
-		size_t namelen;
+		size_t copylen, namelen;
 
+		/* Validate the producer's fixed-size name member before either
+		 * this function or an application filter is allowed to traverse it. */
+		namelen = strnlen(d->d_name, sizeof d->d_name);
+		if (namelen == sizeof d->d_name) { errno = EIO; goto fail; }
 		if (filter && !filter(d)) continue;
 
 		if (n == cap) {
 			size_t newcap;
 			if (!__array_next_capacity(cap, n, 1, 16,
 			    sizeof *list, &newcap)) { errno = ENOMEM; goto fail; } // NOLINT(bugprone-sizeof-expression) -- list is dirent**, *list is dirent*, the array holds pointers
-			struct dirent **nl = __malloc(newcap * sizeof *nl); // NOLINT(bugprone-sizeof-expression) -- nl is dirent**, *nl is dirent*, the array holds pointers
+			struct dirent **nl = (struct dirent **)__malloc(newcap * sizeof *nl); // NOLINT(bugprone-sizeof-expression) -- nl is dirent**, *nl is dirent*, the array holds pointers
 			if (!nl) goto fail;
-			if (list) memcpy(nl, list, n * sizeof *nl); // NOLINT(bugprone-sizeof-expression)
-			__free(list);
+			if (list) memcpy((void *)nl, (const void *)list, n * sizeof *nl); // NOLINT(bugprone-sizeof-expression)
+			__free((void *)list);
 			list = nl;
 			cap = newcap;
 		}
 
-		namelen = strlen(d->d_name);
-		copy = __malloc(offsetof(struct dirent, d_name) + namelen + 1);
+		copylen = offsetof(struct dirent, d_name) + namelen + 1;
+		copy = __malloc(copylen);
 		if (!copy) goto fail;
-		memcpy(copy, d, offsetof(struct dirent, d_name) + namelen + 1);
+		copy->d_ino = d->d_ino;
+		copy->d_off = d->d_off;
+		copy->d_reclen = d->d_reclen;
+		copy->d_type = d->d_type;
+		memcpy(copy->d_name, d->d_name, namelen);
+		copy->d_name[namelen] = 0;
 		list[n++] = copy;
 	}
 	if (errno) goto fail;
-	closedir(dp);
+	if (closedir(dp) < 0) {
+		int e = errno;
+		for (i = 0; i < n; i++) __free(list[i]);
+		__free((void *)list);
+		errno = e;
+		return -1;
+	}
 
 	/* list is struct dirent **, so *list is a pointer and sizeof *list is
 	 * deliberately a pointer size: the array being sorted holds pointers,
 	 * not structs. */
 	/* NOLINTNEXTLINE(bugprone-sizeof-expression) */
-	if (compar) qsort_r(list, n, sizeof *list, scandir_cmp, (void *)compar);
+	if (compar) qsort_r((void *)list, n, sizeof *list, scandir_cmp, (void *)compar);
 	*res = list;
 	return (int)n;
 
 fail:
 	{
-		size_t i;
 		int e = errno ? errno : ENOMEM;
 		for (i = 0; i < n; i++) __free(list[i]);
-		__free(list);
-		closedir(dp);
+		__free((void *)list);
+		(void)closedir(dp);
 		errno = e;
 		return -1;
 	}

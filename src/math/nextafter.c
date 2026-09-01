@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 /* nextafter.html/nexttoward.html: the adjacent representable value of
  * x towards y. Implemented via integer bit-twiddling on the IEEE
  * representation, the same style as src/math/copysign.c/fabs.c: for a
@@ -242,3 +247,5 @@ float nexttowardf(float x, long double y)
 
 /* Same type for both arguments -- nexttowardl is nextafterl. */
 long double nexttowardl(long double x, long double y) { return nextafterl(x, y); }
+
+// NOLINTEND(misc-include-cleaner)

@@ -75,6 +75,7 @@
 #include <locale.h>
 #include <unistd.h>
 #include <stdarg.h>
+#include <math.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -2472,7 +2473,12 @@ static void wcstod_same_as_strtod(const char *ascii)
 
 	errno = 0; bl = strtold(ascii, &be); berr = errno;
 	errno = 0; wl = wcstold(wide, &we); werr = errno;
-	CHECK(!memcmp(&bl, &wl, sizeof bl));
+	/* Native x86_64 long double stores an 80-bit value in a 16-byte
+	 * object; its six padding bytes are unspecified and cannot be compared
+	 * with memcmp.  Compare the value, while retaining signed-zero and NaN
+	 * equivalence explicitly. */
+	CHECK((isnan(bl) && isnan(wl)) ||
+	      (bl == wl && (bl != 0.0L || signbit(bl) == signbit(wl))));
 	CHECK((size_t)(be - ascii) == (size_t)(we - wide));
 	CHECK(berr == werr);
 }

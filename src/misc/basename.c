@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <libgen.h>
 
@@ -22,3 +27,5 @@ __wraps char *basename(char *s)
 	for (; i > start && !ISSEP(s[i-1]); i--);
 	return s + i;
 }
+
+// NOLINTEND(misc-include-cleaner)

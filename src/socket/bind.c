@@ -21,6 +21,11 @@
  * becomes is each backend's own affair (src/socket/{nt,linux}/
  * plat_socket.c).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <errno.h>
@@ -40,3 +45,5 @@ int bind(int fd, const struct sockaddr *addr, socklen_t len)
 	f->pad |= __SOCK_ST_BOUND;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

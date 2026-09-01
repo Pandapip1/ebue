@@ -1,3 +1,8 @@
+/* C library headers must use the implementation-reserved namespace for guards,
+ * type plumbing, and implementation extensions so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -58,9 +63,11 @@ extern "C" {
 
 int      catclose(nl_catd);
 char    *catgets(nl_catd, int, int, const char *);
-nl_catd  catopen(const char *, int);
+nl_catd  catopen(const char * __NTLIBC_STRING, int);
 
 #ifdef __cplusplus
 }
 #endif
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

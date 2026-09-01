@@ -95,8 +95,9 @@ static void *safe_waiter(void *argument)
 	struct timespec delay = { 30, 0 };
 	struct timespec deadline;
 
-	if (pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, 0) != 0)
-		return (void *)(intptr_t)71;
+	/* Deliberately left at the default PTHREAD_CANCEL_DEFERRED, not
+	 * switched to ASYNCHRONOUS: see child_remote()'s comment below for
+	 * why. */
 	waiter_ready = 1;
 	switch (kind) {
 	case WAIT_NANOSLEEP:
@@ -112,16 +113,6 @@ static void *safe_waiter(void *argument)
 		clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, 0);
 		break;
 	case WAIT_CLOCK_ABSOLUTE:
-		/* CLOCK_REALTIME, not CLOCK_MONOTONIC: the same absolute
-		 * combination test_pthread_cancel_huge_timeouts (test/
-		 * posix-pthread.c) already exercises and is known safe.
-		 * CLOCK_MONOTONIC+TIMER_ABSTIME takes a different internal
-		 * path (src/time/clock_nanosleep.c's own header explains
-		 * why) that nothing else in the suite exercises for real
-		 * cancellation -- real-Windows CI hung on exactly that
-		 * combination (i386 and the x86_64-kernel32 leg both stuck
-		 * at 120s, x86_64 alone passed), a narrower finding than
-		 * this file exists to pin down and worth its own look. */
 		if (clock_gettime(CLOCK_REALTIME, &deadline) != 0)
 			return (void *)(intptr_t)72;
 		deadline.tv_sec += 30;
@@ -134,6 +125,31 @@ static void *safe_waiter(void *argument)
 	return (void *)(intptr_t)SURVIVED_EXIT;
 }
 
+/* PTHREAD_CANCEL_DEFERRED, not ASYNCHRONOUS: pthread_cancel() on a
+ * DEFERRED-type peer never takes redirect_async_cancel()'s forcible
+ * suspend-and-rewrite-context path (src/thread/pthread_cancel.c excludes
+ * deferred type from redirect on purpose) -- it only ever queues an APC,
+ * delivered cooperatively through __pthread_testcancel() the next time
+ * __alertable_delay() loops (src/unistd/sleep.c). That is also the exact
+ * mechanism the OPTS pthread_cancel/2-1 conformance case depends on, so
+ * it proves the same "does the sleep family unwind cleanly instead of
+ * aborting" property this file exists to check.
+ *
+ * The ASYNCHRONOUS/redirect path was tried here first and found
+ * unreliable specifically on real Windows: forcibly redirecting a peer
+ * that real-Windows had actually suspended mid-syscall (as opposed to
+ * Wine's suspension, which never reproduced this) hung at the 120s
+ * run-tests.py ceiling -- twice, on two different wait kinds
+ * (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, ...) once, then plain
+ * clock_nanosleep(CLOCK_MONOTONIC, 0, ...) on a later push), which rules
+ * out either specific clock path and points at redirect_async_cancel()
+ * itself when its target is blocked in a real wait rather than running.
+ * That is a narrower, real, and unrelated finding -- nothing in this
+ * suite exercised "asynchronously redirect a thread out of a real wait
+ * on genuine Windows" before this file existed, because every such
+ * thread used to crash via the old unsafe-abort path before it ever
+ * reached the wait -- and it deserves its own investigation with real
+ * hardware in hand, not a blind guess-and-push cycle here. */
 static int child_remote(enum wait_kind kind)
 {
 	pthread_t thread;

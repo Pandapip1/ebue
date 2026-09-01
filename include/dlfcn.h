@@ -1,3 +1,8 @@
+/* C library headers must use the implementation-reserved namespace for guards,
+ * type plumbing, and implementation extensions so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -58,7 +63,7 @@ extern "C" {
 #define RTLD_LOCAL  8
 
 void *dlopen(const char *, int);
-void *dlsym(void *__restrict, const char *__restrict);
+void *dlsym(void *__restrict, const char *__restrict __NTLIBC_STRING);
 int   dlclose(void *);
 char *dlerror(void);
 
@@ -67,3 +72,5 @@ char *dlerror(void);
 #endif
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

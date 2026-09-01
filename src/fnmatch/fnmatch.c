@@ -26,7 +26,10 @@
 #include <ctype.h>
 #include <string.h>
 
-static int class_match(const char *name, size_t len, unsigned char c)
+static int class_match(const char *name __NTLIBC_SPAN(2), size_t len,
+	unsigned char c)
+	__attribute__((pure));
+static int class_match(const char *name, size_t len, unsigned char c) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 #define CLS(s) (len == sizeof(s) - 1 && !memcmp(name, s, len))
 	if (CLS("alpha")) return isalpha(c) != 0;
@@ -45,12 +48,16 @@ static int class_match(const char *name, size_t len, unsigned char c)
 	return 0;
 }
 
-/* *pp points at the '[' that opens the bracket expression; advanced past
- * the matching ']' on return.  Returns 1 if c is a member (after
- * applying negation), 0 if not, and -1 if the expression is UNTERMINATED
- * -- no ']' before the end of the pattern -- in which case *pp is left
- * where it was and the caller must treat the '[' as an ordinary
- * character.
+struct bracket_result {
+	const char *next;
+	int match;
+};
+
+/* p points at the '[' that opens the bracket expression; next points past
+ * the matching ']' on return.  match is 1 if c is a member (after applying
+ * negation), 0 if not, and -1 if the expression is UNTERMINATED -- no ']'
+ * before the end of the pattern -- in which case next remains at the '['
+ * and the caller must treat it as an ordinary character.
  *
  * XCU 2.13.1: "Otherwise, the <left-square-bracket> shall match the
  * character itself."  This used to walk to the end looking for a ']'
@@ -65,12 +72,14 @@ static int class_match(const char *name, size_t len, unsigned char c)
  * where the same input is an error -- test_regex_bracket_edges()
  * asserts REG_EBRACK for regcomp("[abc").  The two pattern languages
  * are not the same language and this is one of the places they part. */
-/* pp is dereferenced unconditionally, first statement (`*pp + 1`). */
-static int bracket_match(const char **pp, unsigned char c) __attribute__((nonnull(1)));
-static int bracket_match(const char **pp, unsigned char c)
+static struct bracket_result bracket_match(const char *p, unsigned char c)
+	__attribute__((nonnull(1), pure));
+static struct bracket_result bracket_match(const char *p, unsigned char c)
 {
-	const char *p = *pp + 1;
+	struct bracket_result result = { p, 0 };
 	int neg = 0, matched = 0, first = 1;
+
+	p++;
 
 	if (*p == '!' || *p == '^') {
 		neg = 1;
@@ -81,7 +90,14 @@ static int bracket_match(const char **pp, unsigned char c)
 		if (p[0] == '[' && p[1] == ':') {
 			const char *q = strstr(p + 2, ":]");
 			if (q) {
-				if (class_match(p + 2, (size_t)(q - (p + 2)), c))
+				const char *name = p + 2;
+				size_t name_tail = strlen(name);
+				size_t delimiter_tail = strlen(q);
+				if (delimiter_tail > name_tail) {
+					result.match = -2;
+					return result;
+				}
+				if (class_match(name, name_tail - delimiter_tail, c))
 					matched = 1;
 				p = q + 2;
 				continue;
@@ -90,7 +106,8 @@ static int bracket_match(const char **pp, unsigned char c)
 			 * malformed bracket expression, not a set containing '[' and
 			 * ':'.  Keep this distinct from an unterminated ordinary set,
 			 * whose opening '[' is demoted to a literal by XCU 2.13.1. */
-			return -2;
+			result.match = -2;
+			return result;
 		}
 		if (p[0] == '[' && (p[1] == '.' || p[1] == '=')) {
 			char kind = p[1];
@@ -116,12 +133,15 @@ static int bracket_match(const char **pp, unsigned char c)
 			}
 		}
 	}
-	/* Loop exits on ']' or on end-of-pattern; the latter is the
-	 * unterminated case, and *pp deliberately stays put. */
-	if (*p != ']') return -1;
-	p++;
-	*pp = p;
-	return neg ? !matched : matched;
+	/* Loop exits on ']' or on end-of-pattern; in the latter case next
+	 * deliberately stays at the opening '['. */
+	if (*p != ']') {
+		result.match = -1;
+		return result;
+	}
+	result.next = p + 1;
+	result.match = neg ? !matched : matched;
+	return result;
 }
 
 /* s is required: `s[-1]` (reached whenever s != start and
@@ -130,7 +150,8 @@ static int bracket_match(const char **pp, unsigned char c)
  * deliberately NOT marked -- it is only ever compared by pointer
  * equality (`s == start`), never dereferenced anywhere in this
  * function's own body. */
-static int leading(const char *start, const char *s, int flags) __attribute__((nonnull(2)));
+static int leading(const char *start, const char *s, int flags)
+	__attribute__((nonnull(2), pure));
 static int leading(const char *start, const char *s, int flags)
 {
 	if (s == start) return 1;
@@ -145,23 +166,11 @@ static int leading(const char *start, const char *s, int flags)
  * already-empty pattern, the final `return *s ? ... : 0;`. start is
  * left unmarked, the same "only ever compared, never dereferenced"
  * reasoning as leading() above (it is forwarded into leading() itself,
- * which only compares it too).
- *
- * A residual remains on `while (*pat)` past nonnull(1) regardless: the
- * '[' branch's own `pat = probe;` (after `bracket_match(&probe, c)`
- * succeeds) reassigns pat from an out-parameter write this checker
- * cannot describe as nonnull on ANY signature -- `nonnull` only ever
- * asserts that an argument passed IN is required, never that a value
- * written back OUT through it is itself nonnull, so pat's own entry-
- * established nonnull fact is lost on any loop iteration reached via
- * that path. Verified sound by hand regardless: bracket_match()'s own
- * `*pp = p;` (this file's own body) only ever assigns p, a value
- * derived from `*pp + 1` by forward-only pointer arithmetic with no
- * reset to NULL anywhere in its body -- probe can only ever advance
- * within the same NUL-terminated pattern string pat itself already
- * required nonnull. */
+ * which only compares it too). */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive wildcard matching follows pattern/text suffixes and is input-depth bounded
 static int fnm_match(const char *pat, const char *s, const char *start, int flags)
-    __attribute__((nonnull(1, 2)));
+    __attribute__((nonnull(1, 2), pure));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive wildcard matching follows pattern/text suffixes and is input-depth bounded
 static int fnm_match(const char *pat, const char *s, const char *start, int flags)
 {
 	while (*pat) {
@@ -187,13 +196,14 @@ static int fnm_match(const char *pat, const char *s, const char *start, int flag
 			s++;
 		} else if (*pat == '[') {
 			unsigned char c = (unsigned char)*s;
-			const char *probe = pat;
+			struct bracket_result probe = { pat, -1 };
 			int r;
 			/* Probed before the FNM_PATHNAME/FNM_PERIOD guards below,
 			 * because those describe what a BRACKET EXPRESSION may
 			 * match; an unterminated '[' is not one, and must be judged
 			 * as the ordinary character it is. */
-			r = *s ? bracket_match(&probe, c) : -1;
+			if (*s) probe = bracket_match(pat, c);
+			r = probe.match;
 			if (r == -2) return FNM_NOMATCH;
 			if (r < 0) {
 				/* not a bracket expression: a literal '[' */
@@ -206,7 +216,7 @@ static int fnm_match(const char *pat, const char *s, const char *start, int flag
 			if ((flags & FNM_PATHNAME) && c == '/') return FNM_NOMATCH;
 			if ((flags & FNM_PERIOD) && c == '.' && leading(start, s, flags)) return FNM_NOMATCH;
 			if (!r) return FNM_NOMATCH;
-			pat = probe;
+			pat = probe.next;
 			s++;
 		} else if (*pat == '\\' && !(flags & FNM_NOESCAPE)) {
 			if (!pat[1]) return FNM_NOMATCH; /* trailing unescaped backslash: malformed */

@@ -134,7 +134,7 @@ static unsigned nt_version(void)
 
 /* See libc.h.  Returns 1 when the numbers came from a real PEB, 0 when
  * they are the assumed fallback; *major and *minor are always set. */
-int __nt_os_version(unsigned *major, unsigned *minor)
+int __nt_os_version(unsigned *major, unsigned *minor) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned v = nt_version();
 
@@ -145,7 +145,7 @@ int __nt_os_version(unsigned *major, unsigned *minor)
 
 /* See libc.h.  The comparison is on the (major, minor) pair, not on a
  * flattened number: 6.1 is not "61", and 10.0 must compare above 6.3. */
-int __nt_version_at_least(unsigned major, unsigned minor)
+int __nt_version_at_least(unsigned major, unsigned minor) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned maj, min;
 

@@ -51,7 +51,7 @@ static int dfl_env_ok;
  * matching declaration lives beside __fd_init() and __signal_init():
  * libc.h includes nt.h, which is NT-specific, and this file is also
  * compiled natively by tools/asan-build.sh.  Keep the two in step. */
-void __fenv_init(void);
+void __fenv_init(void); // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
 #if defined(__i386__) || defined(__x86_64__)
 

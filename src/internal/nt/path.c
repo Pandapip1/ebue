@@ -35,6 +35,11 @@
  * with "\usr\bin\sh".  Fixed POSIX objects are resolved before this layer;
  * native paths that win that resolution are passed through unchanged.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -90,16 +95,23 @@
 int __name_too_long(const char *path)
 {
 	const char *p = path;
+	size_t remaining = strlen(path);
+	size_t component = 0;
 
-	while (*p) {
-		const char *start = p;
-		while (*p && *p != '/' && *p != '\\') p++;
-		if ((size_t)(p - start) > NAME_MAX) return 1;
-		if (*p) p++;
+	while (remaining > 0) {
+		if (*p == '/' || *p == '\\') {
+			if (component > NAME_MAX) return 1;
+			component = 0;
+		} else {
+			component++;
+		}
+		p++;
+		remaining--;
 	}
-	return 0;
+	return component > NAME_MAX;
 }
 
+withtok(internal_heap_allocated)
 static WCHAR *dos_from_posix(const char *path, size_t *wlen, int *trailing)
 {
 	WCHAR *w;
@@ -270,7 +282,7 @@ static int reject_if_prefix_not_dir(struct __ntpath *out, HANDLE root)
 static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
                                  struct __ntpath *out, ULONG attributes);
 
-static int ntpath_impl(const char *path, struct __ntpath *out, ULONG attributes,
+static int ntpath_impl(const char *path, struct __ntpath *out, ULONG attributes, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                        int overlay)
 {
 	int vfs;
@@ -642,18 +654,19 @@ static int ntpath_at_impl(int dirfd, const char *path, struct __ntpath *out,
 			 * out from under the caller -- so it is the fallback for the
 			 * one shape that cannot be expressed, not the strategy. */
 			char *dir, *joined;
-			size_t dl;
+			size_t dl, pl;
 			int rc;
 			__free(w);
 			dir = __handle_path(f->h);
 			if (!dir) return -1;
 			dl = strlen(dir);
-			joined = __malloc(dl + 1 + strlen(path) + 1);
+			pl = strlen(path);
+			joined = __malloc(dl + 1 + pl + 1);
 			if (!joined) { __free(dir); errno = ENOMEM; return -1; }
 			memcpy(joined, dir, dl);
 			/* "C:\\" already ends in one */
 			if (dl && dir[dl-1] != '\\' && dir[dl-1] != '/') joined[dl++] = '\\';
-			strcpy(joined + dl, path);
+			memcpy(joined + dl, path, pl + 1);
 			__free(dir);
 			rc = ntpath_impl(joined, out, attributes, overlay);
 			__free(joined);
@@ -700,3 +713,5 @@ void __ntpath_free(struct __ntpath *p)
 	if (p->dos) __free(p->dos);
 	p->buf = 0; p->dos = 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

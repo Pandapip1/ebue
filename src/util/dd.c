@@ -105,6 +105,11 @@
  * which is exactly the class of mistake src/sh/builtin.c's own header
  * comment warns about for a builtin's effect on its host process.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -124,6 +129,7 @@ static void dd_sigint_handler(int sig)
 }
 
 /* dd(1p)'s block-size expression grammar -- see this file's header. */
+// NOLINTNEXTLINE(misc-no-recursion) -- suffix-expression parsing consumes input on every recursive step
 static int parse_dd_num(const char *s, uintmax_t *out)
 {
 	char *end;
@@ -161,7 +167,7 @@ struct dd_opts {
 };
 
 /* conv=value[,value...] -- see this file's header for the implemented
- * subset. *notrunc/*sync/*noerror are set (never left untouched) on a
+ * subset. *notrunc, *sync, and *noerror are set (never left untouched) on a
  * 0 return; on -1 a diagnostic is already on stderr and the caller must
  * not trust any of the three. */
 static int parse_conv(const char *val, int *notrunc, int *sync, int *noerror)
@@ -170,7 +176,7 @@ static int parse_conv(const char *val, int *notrunc, int *sync, int *noerror)
 	char *tok;
 	size_t n = strlen(val);
 
-	if (n >= sizeof buf) { fprintf(stderr, "dd: conv=%s: too long\n", val); return -1; }
+	if (n >= sizeof buf) { __util_diagf("dd: conv=%s: too long\n", val); return -1; }
 	memcpy(buf, val, n + 1);
 
 	*notrunc = *sync = *noerror = 0;
@@ -179,7 +185,7 @@ static int parse_conv(const char *val, int *notrunc, int *sync, int *noerror)
 		else if (!strcmp(tok, "sync")) *sync = 1;
 		else if (!strcmp(tok, "noerror")) *noerror = 1;
 		else {
-			fprintf(stderr, "dd: conv=%s: not supported by this build "
+			__util_diagf("dd: conv=%s: not supported by this build "
 			                "-- see src/util/dd.c\n", tok);
 			return -1;
 		}
@@ -194,7 +200,7 @@ static int write_all(int fd, const char *buf, size_t n, const char *what)
 		ssize_t w = write(fd, buf + off, n - off);
 		if (w < 0) {
 			if (errno == EINTR) continue;
-			fprintf(stderr, "dd: writing '%s': %s\n", what, strerror(errno));
+			__util_diagf("dd: writing '%s': %s\n", what, strerror(errno));
 			return -1;
 		}
 		off += (size_t)w;
@@ -206,13 +212,13 @@ static int write_all(int fd, const char *buf, size_t n, const char *what)
  * was actually read -- see this file's header on why this differs from
  * dd_copy_blocked() below. */
 static int dd_copy_direct(int ifd, int ofd, const struct dd_opts *o,
-	uintmax_t *in_full, uintmax_t *in_partial, uintmax_t *out_full, uintmax_t *out_partial,
+	uintmax_t *in_full, uintmax_t *in_partial, uintmax_t *out_full, uintmax_t *out_partial, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	int *had_error)
 {
 	char *buf = malloc((size_t)o->ibs);
 	uintmax_t blocks = 0;
 
-	if (!buf) { fprintf(stderr, "dd: out of memory\n"); return -1; }
+	if (!buf) { __util_diagf("dd: out of memory\n"); return -1; }
 
 	for (;;) {
 		ssize_t n;
@@ -222,7 +228,7 @@ static int dd_copy_direct(int ifd, int ofd, const struct dd_opts *o,
 		n = read(ifd, buf, (size_t)o->ibs);
 		if (n < 0) {
 			if (errno == EINTR) { if (dd_interrupted) break; continue; }
-			fprintf(stderr, "dd: reading '%s': %s\n", o->if_path ? o->if_path : "stdin", strerror(errno));
+			__util_diagf("dd: reading '%s': %s\n", o->if_path ? o->if_path : "stdin", strerror(errno));
 			if (o->noerror) {
 				*in_partial += 1;
 				blocks++;
@@ -253,7 +259,7 @@ static int dd_copy_direct(int ifd, int ofd, const struct dd_opts *o,
  * multiple reads exactly the way historical dd's own blocking/
  * deblocking behaviour works. */
 static int dd_copy_blocked(int ifd, int ofd, const struct dd_opts *o,
-	uintmax_t *in_full, uintmax_t *in_partial, uintmax_t *out_full, uintmax_t *out_partial,
+	uintmax_t *in_full, uintmax_t *in_partial, uintmax_t *out_full, uintmax_t *out_partial, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	int *had_error)
 {
 	char *ibuf = malloc((size_t)o->ibs);
@@ -261,7 +267,7 @@ static int dd_copy_blocked(int ifd, int ofd, const struct dd_opts *o,
 	size_t obuf_used = 0;
 	uintmax_t blocks = 0;
 
-	if (!ibuf || !obuf) { free(ibuf); free(obuf); fprintf(stderr, "dd: out of memory\n"); return -1; }
+	if (!ibuf || !obuf) { free(ibuf); free(obuf); __util_diagf("dd: out of memory\n"); return -1; }
 
 	for (;;) {
 		ssize_t n;
@@ -272,7 +278,7 @@ static int dd_copy_blocked(int ifd, int ofd, const struct dd_opts *o,
 		n = read(ifd, ibuf, (size_t)o->ibs);
 		if (n < 0) {
 			if (errno == EINTR) { if (dd_interrupted) break; continue; }
-			fprintf(stderr, "dd: reading '%s': %s\n", o->if_path ? o->if_path : "stdin", strerror(errno));
+			__util_diagf("dd: reading '%s': %s\n", o->if_path ? o->if_path : "stdin", strerror(errno));
 			if (o->noerror) {
 				*in_partial += 1;
 				blocks++;
@@ -319,7 +325,7 @@ out:
  * (dd(1p)'s own documented fallback is for skip=, not seek= -- see this
  * file's header). Returns 0 on success, -1 (diagnostic already written)
  * on failure. */
-static int dd_position(int fd, uintmax_t n, uintmax_t unit, int is_input, const char *what)
+static int dd_position(int fd, uintmax_t n, uintmax_t unit, int is_input, const char *what) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	uintmax_t bytes = n * unit;
 
@@ -333,7 +339,7 @@ static int dd_position(int fd, uintmax_t n, uintmax_t unit, int is_input, const 
 			ssize_t r = read(fd, buf, chunk);
 			if (r < 0) {
 				if (errno == EINTR) continue;
-				fprintf(stderr, "dd: skip: reading '%s': %s\n", what, strerror(errno));
+				__util_diagf("dd: skip: reading '%s': %s\n", what, strerror(errno));
 				return -1;
 			}
 			if (r == 0) break; /* skip past EOF: nothing left to copy, not an error */
@@ -341,7 +347,7 @@ static int dd_position(int fd, uintmax_t n, uintmax_t unit, int is_input, const 
 		}
 		return 0;
 	}
-	fprintf(stderr, "dd: seek: '%s' is not seekable: %s\n", what, strerror(errno));
+	__util_diagf("dd: seek: '%s' is not seekable: %s\n", what, strerror(errno));
 	return -1;
 }
 
@@ -357,46 +363,47 @@ int __util_dd_main(int argc, char **argv)
 
 	for (i = 1; i < argc; i++) {
 		char *a = argv[i];
-		char *eq = strchr(a, '=');
+		char *eq;
 		size_t klen;
 		const char *val;
 
-		if (!eq) {
-			fprintf(stderr, "dd: %s: not an operand=value pair\n", a);
+		klen = strcspn(a, "=");
+		if (!a[klen]) {
+			__util_diagf("dd: %s: not an operand=value pair\n", a);
 			return 2;
 		}
-		klen = (size_t)(eq - a);
+		eq = a + klen;
 		val = eq + 1;
 
 #define KEYIS(k) (klen == strlen(k) && !strncmp(a, k, klen))
 		if (KEYIS("if")) { o.if_path = val; }
 		else if (KEYIS("of")) { o.of_path = val; }
 		else if (KEYIS("bs")) {
-			if (parse_dd_num(val, &o.ibs) < 0 || o.ibs == 0) { fprintf(stderr, "dd: bs=%s: invalid block size\n", val); return 2; }
+			if (parse_dd_num(val, &o.ibs) < 0 || o.ibs == 0) { __util_diagf("dd: bs=%s: invalid block size\n", val); return 2; }
 			o.obs = o.ibs;
 			o.bs_mode = 1;
 		} else if (KEYIS("ibs")) {
-			if (parse_dd_num(val, &o.ibs) < 0 || o.ibs == 0) { fprintf(stderr, "dd: ibs=%s: invalid block size\n", val); return 2; }
+			if (parse_dd_num(val, &o.ibs) < 0 || o.ibs == 0) { __util_diagf("dd: ibs=%s: invalid block size\n", val); return 2; }
 		} else if (KEYIS("obs")) {
-			if (parse_dd_num(val, &o.obs) < 0 || o.obs == 0) { fprintf(stderr, "dd: obs=%s: invalid block size\n", val); return 2; }
+			if (parse_dd_num(val, &o.obs) < 0 || o.obs == 0) { __util_diagf("dd: obs=%s: invalid block size\n", val); return 2; }
 		} else if (KEYIS("count")) {
-			if (parse_dd_num(val, &o.count) < 0) { fprintf(stderr, "dd: count=%s: invalid count\n", val); return 2; }
+			if (parse_dd_num(val, &o.count) < 0) { __util_diagf("dd: count=%s: invalid count\n", val); return 2; }
 			o.have_count = 1;
 		} else if (KEYIS("skip")) {
-			if (parse_dd_num(val, &o.skip) < 0) { fprintf(stderr, "dd: skip=%s: invalid count\n", val); return 2; }
+			if (parse_dd_num(val, &o.skip) < 0) { __util_diagf("dd: skip=%s: invalid count\n", val); return 2; }
 		} else if (KEYIS("seek")) {
-			if (parse_dd_num(val, &o.seek) < 0) { fprintf(stderr, "dd: seek=%s: invalid count\n", val); return 2; }
+			if (parse_dd_num(val, &o.seek) < 0) { __util_diagf("dd: seek=%s: invalid count\n", val); return 2; }
 		} else if (KEYIS("conv")) {
 			if (parse_conv(val, &o.notrunc, &o.sync, &o.noerror) < 0) return 2;
 		} else {
-			fprintf(stderr, "dd: %.*s=%s: unrecognized operand\n", (int)klen, a, val);
+			__util_diagf("dd: %.*s=%s: unrecognized operand\n", (int)klen, a, val);
 			return 2;
 		}
 #undef KEYIS
 	}
 
 	ifd = o.if_path ? open(o.if_path, O_RDONLY) : 0;
-	if (ifd < 0) { fprintf(stderr, "dd: %s: %s\n", o.if_path, strerror(errno)); return 1; }
+	if (ifd < 0) { __util_diagf("dd: %s: %s\n", o.if_path, strerror(errno)); return 1; }
 
 	if (o.of_path) {
 		int oflags = O_WRONLY | O_CREAT | (o.notrunc ? 0 : O_TRUNC);
@@ -404,7 +411,7 @@ int __util_dd_main(int argc, char **argv)
 	} else {
 		ofd = 1;
 	}
-	if (ofd < 0) { fprintf(stderr, "dd: %s: %s\n", o.of_path, strerror(errno)); if (ifd > 0) close(ifd); return 1; }
+	if (ofd < 0) { __util_diagf("dd: %s: %s\n", o.of_path, strerror(errno)); if (ifd > 0) close(ifd); return 1; }
 
 	if (dd_position(ifd, o.skip, o.ibs, 1, o.if_path ? o.if_path : "stdin") < 0) { had_error = 1; goto summary; }
 	if (dd_position(ofd, o.seek, o.obs, 0, o.of_path ? o.of_path : "stdout") < 0) { had_error = 1; goto summary; }
@@ -423,7 +430,7 @@ int __util_dd_main(int argc, char **argv)
 	sigaction(SIGINT, &old_sa, 0);
 
 summary:
-	fprintf(stderr, "%ju+%ju records in\n%ju+%ju records out\n", in_full, in_partial, out_full, out_partial);
+	__util_diagf("%ju+%ju records in\n%ju+%ju records out\n", in_full, in_partial, out_full, out_partial);
 
 	if (ifd > 0) close(ifd);
 	if (ofd > 1) close(ofd);
@@ -432,3 +439,5 @@ summary:
 	else if (had_error) status = 1;
 	return status;
 }
+
+// NOLINTEND(misc-include-cleaner)

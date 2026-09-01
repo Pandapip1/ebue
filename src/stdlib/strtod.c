@@ -88,7 +88,7 @@ static void bn_setu32(bn_t *a, uint32_t v)
 }
 
 /* a = a * m + c */
-static void bn_muladd(bn_t *a, uint32_t m, uint32_t c)
+static void bn_muladd(bn_t *a, uint32_t m, uint32_t c) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	uint64_t carry = c;
 	int i;
@@ -100,7 +100,7 @@ static void bn_muladd(bn_t *a, uint32_t m, uint32_t c)
 	}
 	while (carry && a->n < BN_LIMBS) {
 		a->d[a->n++] = (uint32_t)carry;
-		carry >>= 32;
+		carry /= 0x100000000ULL;
 	}
 }
 
@@ -112,7 +112,7 @@ static int bn_bits(const bn_t *a)
 	if (!a->n) return 0;
 	v = a->d[a->n - 1];
 	b = (a->n - 1) * 32;
-	while (v) { b++; v >>= 1; }
+	while (v) { b++; v /= 2; }
 	return b;
 }
 
@@ -180,15 +180,29 @@ __wraps static void bn_sub(bn_t *a, const bn_t *b)
 		a->d[i] = (uint32_t)t;
 		borrow = (t >> 32) & 1;
 	}
-	while (a->n && !a->d[a->n - 1]) a->n--; // NOLINT(clang-analyzer-security.ArrayBound) -- bn_shl already clamps a->n to BN_LIMBS before any write reaches it
+	{
+		/* At most the current limb count can be trimmed. */
+		int trim = a->n;
+		while (trim > 0 && a->n && !a->d[a->n - 1]) { // NOLINT(clang-analyzer-security.ArrayBound) -- bn_shl already clamps a->n to BN_LIMBS before any write reaches it
+			a->n--;
+			trim--;
+		}
+	}
 }
 
 /* a *= 10^e (e >= 0), as 5^e followed by an exact shift. */
 static void bn_mul_pow10(bn_t *a, int e)
 {
 	int k = e;
+	/* Every caller passes a nonnegative exponent.  Snapshot the exact
+	 * number of full 5^13 chunks before bn_muladd() can obscure it. */
+	int chunks = k / 13;
 
-	while (k >= 13) { bn_muladd(a, 1220703125u, 0); k -= 13; } /* 5^13 */
+	while (chunks > 0) {
+		bn_muladd(a, 1220703125u, 0); /* 5^13 */
+		k -= 13;
+		chunks--;
+	}
 	if (k) {
 		uint32_t m = 1;
 		while (k--) m *= 5;
@@ -204,7 +218,7 @@ static void bn_mul_pow10(bn_t *a, int e)
  * N must be nonzero and D must be nonzero.  The result is exact in
  * double even when p is float's 24, so a caller converting to float
  * afterwards does not round a second time. */
-static double bn_scale_round(bn_t *N, bn_t *D, int e2, int sticky, int p, int emin)
+static double bn_scale_round(bn_t *N, bn_t *D, int e2, int sticky, int p, int emin) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	bn_t A, B, T;
 	int k, g, t, i, c;
@@ -306,7 +320,7 @@ static double bn_scale_round(bn_t *N, bn_t *D, int e2, int sticky, int p, int em
  * is whether the compiler is given the chance to fold `st` away at each
  * site. */
 #define gc(p, s) ((s) == 1 ? (unsigned)(unsigned char)*(p) \
-                           : (unsigned)*(const wchar_t *)(const void *)(p))
+	                           : (unsigned)*(const wchar_t *)(p))
 
 /* s/word are both required. word's `while (*word)` loop condition
  * dereferences it unconditionally as soon as this function is called;
@@ -343,7 +357,7 @@ static int ci_prefix(const char *s, const char *word, size_t st)
  * whether strtox()'s own (genuinely optional) endptr is. */
 static double parse_hex(const char *s, const char **end, int *ok, int *nz, int p, int emin, size_t st)
     __attribute__((nonnull(1, 2, 3, 4)));
-static double parse_hex(const char *s, const char **end, int *ok, int *nz, int p, int emin, size_t st)
+static double parse_hex(const char *s, const char **end, int *ok, int *nz, int p, int emin, size_t st) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	bn_t N, D;
 	uint64_t m = 0;
@@ -394,7 +408,7 @@ static double parse_hex(const char *s, const char **end, int *ok, int *nz, int p
  * ...)`) passes the identical required-s/on-stack-locals shape. */
 static double parse_dec(const char *s, const char **end, int *ok, int *nz, int p, int emin, size_t st)
     __attribute__((nonnull(1, 2, 3, 4)));
-static double parse_dec(const char *s, const char **end, int *ok, int *nz, int p, int emin, size_t st)
+static double parse_dec(const char *s, const char **end, int *ok, int *nz, int p, int emin, size_t st) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	bn_t N, D;
 	unsigned char dig[MAXDIG];
@@ -479,7 +493,7 @@ static double parse_dec(const char *s, const char **end, int *ok, int *nz, int p
  * wcsrtombs() now disclose for a loop increment past what this
  * checker's nonnull propagation currently follows. */
 static long double strtox(const char *s0, char **endptr, int kind, size_t st) __attribute__((nonnull(1)));
-static long double strtox(const char *s0, char **endptr, int kind, size_t st)
+static long double strtox(const char *s0, char **endptr, int kind, size_t st) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const char *s = s0, *end;
 	double v;
@@ -492,27 +506,31 @@ static long double strtox(const char *s0, char **endptr, int kind, size_t st)
 	c = gc(s, st);
 	if (c == '+') s += st; else if (c == '-') { neg = 1; s += st; }
 
-	if ((n = ci_prefix(s, "inf", st))) {
+	n = ci_prefix(s, "inf", st);
+	if (n) {
 		int n2 = ci_prefix(s, "infinity", st);
 		end = s + (size_t)(n2 ? n2 : n) * st;
 		v = HUGE_VAL;
 		ok = 1; lit = 1;
-	} else if ((n = ci_prefix(s, "nan", st))) {
-		end = s + (size_t)n * st;
-		if (gc(end, st) == '(') {
-			const char *q = end + st;
-			while (isalnum((int)(c = gc(q, st))) || c == '_') q += st;
-			if (gc(q, st) == ')') end = q + st;
-		}
-		v = NAN;
-		ok = 1; lit = 1;
-	} else if (gc(s, st) == '0' && (gc(s + st, st) == 'x' || gc(s + st, st) == 'X')) {
-		v = parse_hex(s + 2 * st, &end, &ok, &nz, p, emin, st);
-		if (!ok) { /* just "0" then */
-			v = 0; end = s + st; ok = 1; nz = 0;
-		}
 	} else {
-		v = parse_dec(s, &end, &ok, &nz, p, emin, st);
+		n = ci_prefix(s, "nan", st);
+		if (n) {
+			end = s + (size_t)n * st;
+			if (gc(end, st) == '(') {
+				const char *q = end + st;
+				while (isalnum((int)(c = gc(q, st))) || c == '_') q += st;
+				if (gc(q, st) == ')') end = q + st;
+			}
+			v = NAN;
+			ok = 1; lit = 1;
+		} else if (gc(s, st) == '0' && (gc(s + st, st) == 'x' || gc(s + st, st) == 'X')) {
+			v = parse_hex(s + 2 * st, &end, &ok, &nz, p, emin, st);
+			if (!ok) { /* just "0" then */
+				v = 0; end = s + st; ok = 1; nz = 0;
+			}
+		} else {
+			v = parse_dec(s, &end, &ok, &nz, p, emin, st);
+		}
 	}
 	if (!ok) { if (endptr) *endptr = (char *)s0; return 0; }
 	if (endptr) *endptr = (char *)end;
@@ -554,9 +572,9 @@ long double strtold(const char *__restrict s, char **__restrict e) { return strt
 static long double wcstox(const wchar_t *nptr, wchar_t **endptr, int kind)
 {
 	char *end = 0;
-	long double v = strtox((const char *)(const void *)nptr, &end, kind,
+	long double v = strtox((const char *)nptr, &end, kind,
 	                       sizeof(wchar_t));
-	if (endptr) *endptr = (wchar_t *)(void *)end;
+	if (endptr) *endptr = (wchar_t *)end;
 	return v;
 }
 

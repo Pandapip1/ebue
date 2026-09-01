@@ -1,6 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+
 /* getcwd returns the DOS form, C:\dir, with backslashes turned into
  * forward slashes so that programs that split paths on '/' (which is
  * most of them) keep working.  A trailing slash is removed except at a
@@ -11,7 +16,8 @@
 #include <errno.h>
 #include "libc.h"
 
-char *getcwd(char *buf, size_t size)
+withtok(heap_allocated)
+char *getcwd(char *buf withtok(heap_allocated), size_t size)
 {
 	WCHAR w[4096];
 	char tmp[4096 * 3];
@@ -55,7 +61,10 @@ char *getcwd(char *buf, size_t size)
 	return buf;
 }
 
+withtok(heap_allocated)
 char *get_current_dir_name(void)
 {
 	return getcwd(0, 0);
 }
+
+// NOLINTEND(misc-include-cleaner)

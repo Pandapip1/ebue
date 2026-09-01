@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -15,9 +20,17 @@
 #ifndef _NTLIBC_NT_H
 #define _NTLIBC_NT_H
 
+#include <features.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+
+#ifndef tokdef
+#define tokdef __token_type
+#endif
+tokdef rtl_heap_allocated
+	dynamic_storage;
+#undef tokdef
 
 #ifdef __i386__
 #define NTAPI __attribute__((stdcall))
@@ -1504,9 +1517,11 @@ NTSTATUS NTAPI NtSetInformationJobObject(HANDLE, JOBOBJECTINFOCLASS, PVOID, ULON
 NTSTATUS NTAPI NtWow64QueryInformationProcess64(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
 NTSTATUS NTAPI NtWow64ReadVirtualMemory64(HANDLE, ULONGLONG, PVOID, ULONGLONG, ULONGLONG *);
 
+withtok(rtl_heap_allocated)
 PVOID    NTAPI RtlAllocateHeap(PVOID, ULONG, SIZE_T);
-BOOLEAN  NTAPI RtlFreeHeap(PVOID, ULONG, PVOID);
-PVOID    NTAPI RtlReAllocateHeap(PVOID, ULONG, PVOID, SIZE_T);
+BOOLEAN  NTAPI RtlFreeHeap(PVOID, ULONG, PVOID consume(rtl_heap_allocated));
+withtok(rtl_heap_allocated)
+PVOID    NTAPI RtlReAllocateHeap(PVOID, ULONG, PVOID consume_if_nonnull_return(rtl_heap_allocated), SIZE_T);
 SIZE_T   NTAPI RtlSizeHeap(PVOID, ULONG, PVOID);
 PVOID    NTAPI RtlCreateHeap(ULONG, PVOID, SIZE_T, SIZE_T, PVOID, PVOID);
 PPEB     NTAPI RtlGetCurrentPeb(void);
@@ -2189,3 +2204,5 @@ NT_LAYOUT_OFFSET(EXCEPTION_POINTERS, ExceptionRecord, 0);
 NT_LAYOUT_OFFSET(EXCEPTION_POINTERS, ContextRecord, NT_PTR);
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

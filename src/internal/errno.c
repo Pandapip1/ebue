@@ -16,6 +16,11 @@
  * kernel's own already-POSIX -errno value (see src/mman/linux/
  * plat_mem.c's banner), so there is no status table to translate.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include "libc.h"
 
 /* errno must be a per-thread, modifiable lvalue (C11 7.5p2, POSIX XSH 2.3).
@@ -40,9 +45,11 @@
  * Those builds are effectively single-threaded except for tools/tsan-probe.sh,
  * which specifically wants per-thread storage here -- so __thread is
  * correct there too, not merely tolerated. */
-static __thread int __errno_val;
+static __thread int __errno_val; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
 int *__errno_location(void)
 {
 	return &__errno_val;
 }
+
+// NOLINTEND(misc-include-cleaner)

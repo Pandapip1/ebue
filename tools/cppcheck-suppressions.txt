@@ -24,6 +24,7 @@ missingIncludeSystem
 # cppcheck's value-flow engine has no model for that and reports the
 # results as uninitialised reads.
 uninitvar:src/math/x87.h
+uninitvar:src/math/aarch64_math.h
 uninitvar:arch/i386/src/*.c
 uninitvar:arch/x86_64/src/*.c
 uninitvar:src/setjmp/*
@@ -39,6 +40,17 @@ unmatchedSuppression
 # that is never started and reports every use of it.  Applies to every
 # variadic function in the tree, not to any particular one.
 va_list_usedBeforeStarted
+
+# Ubuntu 24.04's cppcheck 2.13 unwraps uintmax_t to unsigned long long,
+# then paradoxically rejects that exact underlying type for %ju.  Every
+# affected argument is explicitly uintmax_t (or returned as uintmax_t),
+# so these are checker-version false positives; newer cppcheck accepts
+# the same calls.  Scope the suppression to the four audited utilities
+# rather than disabling printf type checking tree-wide.
+invalidPrintfArgType_uint:src/util/cksum.c
+invalidPrintfArgType_uint:src/util/dd.c
+invalidPrintfArgType_uint:src/util/df.c
+invalidPrintfArgType_uint:src/util/du.c
 
 # printf.c reverses a digit buffer into a local (`rev`, `b2`) and emits
 # exactly as many bytes as it wrote.  The digit count comes from a
@@ -64,7 +76,11 @@ intToPointerCast:src/util/tee.c
 # small integer ids, which is what a pid_t is; the cast back is the
 # documented way to read them.  Nothing is truncated: pid_t and the id
 # space are both 32-bit on either win32 target.
-CastAddressToIntegerAtReturn:src/unistd/getpid.c
+CastAddressToIntegerAtReturn:src/unistd/nt/plat_unistd.c
+# Linux process handles deliberately box a pid in the otherwise opaque
+# pointer-shaped platform handle type.  The backend banner documents why
+# pid 0 is the null sentinel and why the conversion cannot truncate.
+CastAddressToIntegerAtReturn:src/process/linux/plat_process.c
 
 # memmove's overlap test is musl's: the unsigned wrap in `- 2*n` is the
 # point of it, computing the "distance is at least n in either direction"

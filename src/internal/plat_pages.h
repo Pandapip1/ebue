@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -25,14 +30,26 @@
 #ifndef _NTLIBC_PLAT_PAGES_H
 #define _NTLIBC_PLAT_PAGES_H
 
+#include <features.h>
+#include <ownership.h>
 #include <stddef.h>
 
+#ifndef tokdef
+#define tokdef __token_type
+#endif
+tokdef platform_pages_allocated
+	dynamic_storage;
+#undef tokdef
+
 /* Returns freshly zeroed memory, or NULL on failure. */
+withtok(platform_pages_allocated)
 void *__plat_pages_alloc(size_t n);
 
 /* `n` must be the exact size a matching __plat_pages_alloc() call
  * returned (or was rounded up to) -- implementations are free to
  * assume it, the same way munmap(2) itself does. */
-void __plat_pages_free(void *p, size_t n);
+void __plat_pages_free(void *p consume(platform_pages_allocated), size_t n);
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

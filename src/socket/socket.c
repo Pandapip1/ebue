@@ -8,6 +8,11 @@
  * everything else is EAFNOSUPPORT/EPROTOTYPE/EPROTONOSUPPORT
  * (mandatory ERRORS).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <errno.h>
@@ -15,7 +20,7 @@
 #include "plat_socket.h"
 #include "plat_fd.h"
 
-int socket(int domain, int type, int protocol)
+int socket(int domain, int type, int protocol) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	__plat_handle_t h;
 	int fd;
@@ -35,3 +40,5 @@ int socket(int domain, int type, int protocol)
 	__fd_get(fd)->pad = 0;
 	return fd;
 }
+
+// NOLINTEND(misc-include-cleaner)

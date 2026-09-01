@@ -11,7 +11,7 @@
 #include "libc.h"
 #include "plat_stat.h"
 
-int fchmod(int fd, mode_t mode)
+int fchmod(int fd, mode_t mode) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = __fd_get(fd);
 	char *path;
@@ -57,5 +57,5 @@ unsigned __umask_get(void) { return umask_value; }
 
 int mkfifo(const char *p, mode_t m) { (void)p; (void)m; errno = ENOSYS; return -1; }
 int mkfifoat(int d, const char *p, mode_t m) { (void)d; (void)p; (void)m; errno = ENOSYS; return -1; }
-int mknod(const char *p, mode_t m, dev_t dv) { (void)p; (void)m; (void)dv; errno = EPERM; return -1; }
-int mknodat(int d, const char *p, mode_t m, dev_t dv) { (void)d; (void)p; (void)m; (void)dv; errno = EPERM; return -1; }
+int mknod(const char *p, mode_t m, dev_t dv) { (void)p; (void)m; (void)dv; errno = EPERM; return -1; } // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+int mknodat(int d, const char *p, mode_t m, dev_t dv) { (void)d; (void)p; (void)m; (void)dv; errno = EPERM; return -1; } // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles

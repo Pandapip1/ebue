@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -319,7 +324,7 @@ static inline double __aa64_sqrt(double x)
  * real AArch64 instructions, one per mode -- no control-word save/
  * restore dance like x87's frndint needs, since the mode is encoded in
  * the instruction itself rather than in shared FPU state. */
-static inline double __aa64_rndint(double x, int rc)
+static inline double __aa64_rndint(double x, int rc) // NOLINT(bugprone-easily-swappable-parameters) -- value and rounding-control fields have distinct roles
 {
 	double r;
 	switch (rc) {
@@ -351,7 +356,7 @@ static inline double __aa64_rndint(double x, int rc)
  * technique musl's own scalbn.c uses, for the same reason: a single
  * hardware multiply already gets the hard cases right, a hand-rolled
  * bit-field write has to reimplement them one by one. */
-static inline double __aa64_scalbn(double x, int n)
+static inline double __aa64_scalbn(double x, int n) // NOLINT(bugprone-easily-swappable-parameters) -- value and exponent have distinct arithmetic roles
 {
 	union __aa64_bits u;
 
@@ -380,9 +385,9 @@ static inline double __aa64_scalbn(double x, int n)
 static double __aa64_fmod(double x, double y)
 {
 	union __aa64_bits ux = {x}, uy = {y};
-	int ex = ux.i >> 52 & 0x7ff;
-	int ey = uy.i >> 52 & 0x7ff;
-	int sx = ux.i >> 63;
+	int ex = (int)(ux.i >> 52 & 0x7ff);
+	int ey = (int)(uy.i >> 52 & 0x7ff);
+	int sx = (int)(ux.i >> 63);
 	uint64_t i;
 	uint64_t uxi = ux.i;
 
@@ -427,7 +432,10 @@ static double __aa64_fmod(double x, double y)
 		uxi -= (uint64_t)1 << 52;
 		uxi |= (uint64_t)ex << 52;
 	} else {
-		uxi >>= -ex + 1;
+		/* Normalization above can lower ex only to -52.  Keep the bound
+		 * explicit at the shift as a defensive invariant. */
+		if (ex < -62) return 0 * x;
+		uxi >>= (unsigned)(1 - ex);
 	}
 	uxi |= (uint64_t)sx << 63;
 	ux.i = uxi;
@@ -440,10 +448,10 @@ static double __aa64_remquo(double x, double y, int *quo) __attribute__((nonnull
 static double __aa64_remquo(double x, double y, int *quo)
 {
 	union __aa64_bits ux = {x}, uy = {y};
-	int ex = ux.i >> 52 & 0x7ff;
-	int ey = uy.i >> 52 & 0x7ff;
-	int sx = ux.i >> 63;
-	int sy = uy.i >> 63;
+	int ex = (int)(ux.i >> 52 & 0x7ff);
+	int ey = (int)(uy.i >> 52 & 0x7ff);
+	int sx = (int)(ux.i >> 63);
+	int sy = (int)(uy.i >> 63);
 	uint32_t q;
 	uint64_t i;
 	uint64_t uxi = ux.i;
@@ -488,7 +496,10 @@ static double __aa64_remquo(double x, double y, int *quo)
 		uxi -= (uint64_t)1 << 52;
 		uxi |= (uint64_t)ex << 52;
 	} else {
-		uxi >>= -ex + 1;
+		/* ex is -60 for an exact zero or no lower than -52 after
+		 * normalization; spell out the bound required by the shift. */
+		if (ex < -62) return 0 * x;
+		uxi >>= (unsigned)(1 - ex);
 	}
 	ux.i = uxi;
 	x = ux.f;
@@ -548,7 +559,7 @@ static double __aa64_cos_kernel(double x, double y)
 	return w + (((1.0 - w) - hz) + (z * r - x * y));
 }
 
-static double __aa64_tan_kernel(double x, double y, int odd)
+static double __aa64_tan_kernel(double x, double y, int odd) // NOLINT(bugprone-easily-swappable-parameters) -- reduced high/low parts and parity flag have distinct roles
 {
 	static const double T[] = {
 		3.33333333333334091986e-01, 1.33333333333201242699e-01,
@@ -569,7 +580,7 @@ static double __aa64_tan_kernel(double x, double y, int odd)
 	hxbits = __aa64_asuint64(x) >> 32;
 	big = (hxbits & 0x7fffffff) >= 0x3FE59428;
 	if (big) {
-		sign = hxbits >> 31;
+		sign = (int)(hxbits >> 31);
 		if (sign) { x = -x; y = -y; }
 		x = (pio4 - x) + (pio4lo - y);
 		y = 0.0;
@@ -612,7 +623,7 @@ static int __aa64_rem_pio2(double x, double *y)
 	uint32_t ix;
 	int sign, n, ex, ey;
 
-	sign = u.i >> 63;
+	sign = (int)(u.i >> 63);
 	ix = u.i >> 32 & 0x7fffffff;
 	if (ix <= 0x400f6a7a) { /* |x| ~<= 5pi/4 */
 		if ((ix & 0xfffff) == 0x921fb) goto medium;
@@ -643,11 +654,11 @@ medium:
 		else if (r - w > pio4) { n++; fn++; r = x - fn * pio2_1; w = fn * pio2_1t; }
 		y[0] = r - w;
 		u.f = y[0];
-		ey = u.i >> 52 & 0x7ff;
-		ex = ix >> 20;
+		ey = (int)(u.i >> 52 & 0x7ff);
+		ex = (int)(ix >> 20);
 		if (ex - ey > 16) {
 			t = r; w = fn * pio2_2; r = t - w; w = fn * pio2_2t - ((t - r) - w);
-			y[0] = r - w; u.f = y[0]; ey = u.i >> 52 & 0x7ff;
+			y[0] = r - w; u.f = y[0]; ey = (int)(u.i >> 52 & 0x7ff);
 			if (ex - ey > 49) {
 				t = r; w = fn * pio2_3; r = t - w; w = fn * pio2_3t - ((t - r) - w);
 				y[0] = r - w;
@@ -906,7 +917,7 @@ static double __aa64_exp2(double t)
 	int k, ni;
 
 	if (t != t) return t;
-	if (t >= 1024.0) return t + t; /* overflow -> +inf */
+	if (t >= 1024.0) return 1.0 / 0.0; /* overflow -> +inf */
 	if (t <= -1100.0) return 0.0 * t; /* underflow -> 0 (signed) */
 
 	n = __aa64_rndint(t, 0);
@@ -980,3 +991,5 @@ static double __aa64_expm1(double t)
 }
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

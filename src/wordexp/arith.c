@@ -134,6 +134,11 @@
  * [32,64), which are undefined on every real target even though the
  * host's long could have performed them.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -262,7 +267,7 @@ static void assign_var(struct arith *a, const char *name, long v)
 {
 	/* sign + up to 20 digits (64-bit LONG_MIN) + NUL, rounded up */
 	char buf[32];
-	int n = 0, i, j;
+	int n = 0, i;
 	unsigned long u;
 	int neg = v < 0;
 
@@ -272,7 +277,11 @@ static void assign_var(struct arith *a, const char *name, long v)
 	while (u) { buf[n++] = (char)('0' + (u % 10)); u /= 10; }
 	if (neg) buf[n++] = '-';
 	buf[n] = 0;
-	for (i = 0, j = n - 1; i < j; i++, j--) { char t = buf[i]; buf[i] = buf[j]; buf[j] = t; }
+	for (i = 0; i < n / 2; i++) {
+		char t = buf[i];
+		buf[i] = buf[n - 1 - i];
+		buf[n - 1 - i] = t;
+	}
 	if (setenv(name, buf, 1) < 0) fail(a, WRDE_NOSPACE);
 }
 
@@ -319,30 +328,6 @@ static long wrap_to_long(unsigned long u)
 	return (long)(u - half) - (long)(half - 1UL) - 1L;
 }
 
-/* ISO C 6.5.7p3's bound on a shift count, reached from 2.6.4 by way of
- * 1.1.2: the count must be non-negative and strictly less than the
- * width of the promoted left operand, or the shift is undefined and
- * there is no result to return. Returns 1 if the shift may be
- * performed; otherwise records the failure (WRDE_SYNTAX, exactly as
- * '/' and '%' do for a zero divisor) and returns 0.
- *
- * fail() is already a no-op while !a->live, so a count inside a
- * short-circuited branch -- $((0 && (1 << -1))) -- is parsed and
- * ignored rather than failing the whole expansion, which is the same
- * treatment division by zero gets one arm below.
- *
- * LONG_BIT rather than sizeof(long) * CHAR_BIT: see the file header's
- * note on shift counts for why the ceiling is the target's width in
- * the native sanitizer build too. */
-static int shift_count_ok(struct arith *a, long rhs)
-{
-	if (rhs < 0 || rhs >= LONG_BIT) {
-		fail(a, WRDE_SYNTAX);
-		return 0;
-	}
-	return 1;
-}
-
 /* Unary minus, and the quotient of the one division that overflows.
  * __wraps (include/features.h) because the modular subtraction below is
  * the specified behaviour here, not an accident: tools/asan-build.sh
@@ -355,7 +340,7 @@ __wraps static long negate(long v)
 
 /* __wraps for the same reason as negate() above: '+', '-' and '*' below
  * are deliberately modular. */
-__wraps static long apply_binop(struct arith *a, int op, long cur, long rhs)
+__wraps static long apply_binop(struct arith *a, int op, long cur, long rhs) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	switch (op) {
 	case '=': return rhs;
@@ -377,8 +362,12 @@ __wraps static long apply_binop(struct arith *a, int op, long cur, long rhs)
 	case '&': return cur & rhs;
 	case '^': return cur ^ rhs;
 	case '|': return cur | rhs;
-	/* Both shifts refuse an out-of-range count up front (6.5.7p3);
-	 * see shift_count_ok() above. With the count in range, the left
+	/* Both shifts refuse an out-of-range count up front (6.5.7p3).
+	 * fail() is already a no-op while !a->live, so a count inside a
+	 * short-circuited branch is parsed and ignored rather than failing
+	 * the expansion, just like division by zero above. LONG_BIT is the
+	 * target width even in a native sanitizer build; see the file banner.
+	 * With the count in range, the left
 	 * shift still goes through unsigned long, because 6.5.7p4 makes
 	 * `cur << rhs` undefined a second time when cur is negative or
 	 * the result does not fit -- 1L << 31 on this target's 32-bit
@@ -387,9 +376,13 @@ __wraps static long apply_binop(struct arith *a, int op, long cur, long rhs)
 	 * The right shift is left as written: a negative left operand
 	 * there is implementation-defined (6.5.7p5), not undefined, and
 	 * every compiler this library is built with shifts arithmetically. */
-	case 'L': if (!shift_count_ok(a, rhs)) return 0;
+	case 'L': if (rhs < 0 || rhs >= LONG_BIT) {
+			  fail(a, WRDE_SYNTAX); return 0;
+		  }
 		  return wrap_to_long((unsigned long)cur << rhs);	/* "<<="/"<<" */
-	case 'R': if (!shift_count_ok(a, rhs)) return 0;
+	case 'R': if (rhs < 0 || rhs >= LONG_BIT) {
+			  fail(a, WRDE_SYNTAX); return 0;
+		  }
 		  return cur >> rhs;	/* ">>="/">>" */
 	case '<': return cur < rhs;
 	case '>': return cur > rhs;
@@ -397,8 +390,8 @@ __wraps static long apply_binop(struct arith *a, int op, long cur, long rhs)
 	case 'g': return cur >= rhs;	/* ">=" */
 	case 'e': return cur == rhs;	/* "==" */
 	case 'n': return cur != rhs;	/* "!=" */
+	default: fail(a, WRDE_SYNTAX); return 0;
 	}
-	return 0; /* unreachable */
 }
 
 /* a required throughout: see fail()'s own comment above for why every
@@ -408,6 +401,7 @@ static long arith_cond(struct arith *a) __attribute__((nonnull(1)));
 
 /* primary: '(' assignment-expression ')' | constant | [$]NAME */
 static long arith_primary(struct arith *a) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors arithmetic precedence and nesting
 static long arith_primary(struct arith *a)
 {
 	long v;
@@ -445,6 +439,7 @@ static long arith_primary(struct arith *a)
 
 /* unary: ('+' | '-' | '~' | '!')* primary */
 static long arith_unary(struct arith *a) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors arithmetic precedence and nesting
 static long arith_unary(struct arith *a)
 {
 	skip_ws(a);
@@ -459,6 +454,7 @@ static long arith_unary(struct arith *a)
 
 /* multiplicative: unary (('*'|'/'|'%') unary)* */
 static long arith_mul(struct arith *a) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors arithmetic precedence and nesting
 static long arith_mul(struct arith *a)
 {
 	long v = arith_unary(a);
@@ -476,6 +472,7 @@ static long arith_mul(struct arith *a)
 
 /* additive: multiplicative (('+'|'-') multiplicative)* */
 static long arith_add(struct arith *a) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors arithmetic precedence and nesting
 static long arith_add(struct arith *a)
 {
 	long v = arith_mul(a);
@@ -492,6 +489,7 @@ static long arith_add(struct arith *a)
 
 /* shift: additive (('<<'|'>>') additive)* */
 static long arith_shift(struct arith *a) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors arithmetic precedence and nesting
 static long arith_shift(struct arith *a)
 {
 	long v = arith_add(a);
@@ -509,6 +507,7 @@ static long arith_shift(struct arith *a)
 /* relational: shift (('<='|'>='|'<'|'>') shift)* -- two-character
  * spellings checked first so "<=" is never read as "<" then "=". */
 static long arith_rel(struct arith *a) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors arithmetic precedence and nesting
 static long arith_rel(struct arith *a)
 {
 	long v = arith_shift(a);
@@ -526,6 +525,7 @@ static long arith_rel(struct arith *a)
 
 /* equality: relational (('=='|'!=') relational)* */
 static long arith_eq(struct arith *a) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors arithmetic precedence and nesting
 static long arith_eq(struct arith *a)
 {
 	long v = arith_rel(a);
@@ -544,6 +544,7 @@ static long arith_eq(struct arith *a)
  * into two bitwise-ANDs, so a lone '&' is only consumed when the next
  * byte is not itself '&'. */
 static long arith_band(struct arith *a) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors arithmetic precedence and nesting
 static long arith_band(struct arith *a)
 {
 	long v = arith_eq(a);
@@ -557,6 +558,7 @@ static long arith_band(struct arith *a)
 
 /* bitwise-XOR: bitwise-AND ('^' bitwise-AND)* */
 static long arith_bxor(struct arith *a) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors arithmetic precedence and nesting
 static long arith_bxor(struct arith *a)
 {
 	long v = arith_band(a);
@@ -571,6 +573,7 @@ static long arith_bxor(struct arith *a)
 /* bitwise-OR: bitwise-XOR ('|' bitwise-XOR)* -- same "don't split ||"
  * guard as arith_band() above. */
 static long arith_bor(struct arith *a) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors arithmetic precedence and nesting
 static long arith_bor(struct arith *a)
 {
 	long v = arith_bxor(a);
@@ -587,6 +590,7 @@ static long arith_bor(struct arith *a)
  * a->live cleared so its own side effects/errors are suppressed, per
  * this file's header comment. */
 static long arith_land(struct arith *a) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors arithmetic precedence and nesting
 static long arith_land(struct arith *a)
 {
 	long v = arith_bor(a);
@@ -607,6 +611,7 @@ static long arith_land(struct arith *a)
 /* logical-OR: logical-AND ('||' logical-AND)*, short-circuiting the
  * same way once v is known true. */
 static long arith_lor(struct arith *a) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors arithmetic precedence and nesting
 static long arith_lor(struct arith *a)
 {
 	long v = arith_land(a);
@@ -628,6 +633,7 @@ static long arith_lor(struct arith *a)
  * -- right-associative (a ?: chained into the false branch), and only
  * the taken branch is evaluated live, matching every other
  * short-circuit point in this file. */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors arithmetic precedence and nesting
 static long arith_cond(struct arith *a)
 {
 	long c = arith_lor(a);
@@ -655,6 +661,7 @@ static long arith_cond(struct arith *a)
  * or "x" with no operator at all) is never partially consumed on a
  * failed attempt. Assignment itself is right-associative, matching C's
  * "a = b = c" grouping. */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors arithmetic precedence and nesting
 static long arith_assign(struct arith *a)
 {
 	const char *q = a->p;
@@ -712,3 +719,5 @@ int __wordexp_arith(const char *expr, long *result, int flags)
 	if (*a.p) return WRDE_SYNTAX;	/* trailing garbage after a complete expression */
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

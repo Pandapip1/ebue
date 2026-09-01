@@ -50,6 +50,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include <unistd.h>
 #include <regex.h>
 #include "util.h"
@@ -70,7 +71,7 @@ static void free_lines(struct lines *L)
 {
 	int i;
 	for (i = 0; i < L->n; i++) free(L->text[i]);
-	free(L->text);
+	free((void *)L->text);
 	free(L->len);
 	L->text = 0;
 	L->len = 0;
@@ -90,6 +91,7 @@ static int read_all_lines(FILE *f, struct lines *L)
 		ssize_t got = getline(&buf, &cap, f);
 		if (got < 0) break;
 		if (L->n >= alloc) {
+			if (alloc > INT_MAX / 2) { free(buf); return -1; }
 			int newalloc = alloc ? alloc * 2 : 64;
 			/* realloc()'s own contract: on success the old block is
 			 * gone (freed or moved) regardless of what the caller does
@@ -98,16 +100,20 @@ static int read_all_lines(FILE *f, struct lines *L)
 			 * never left holding a stale pointer to memory realloc()
 			 * has already invalidated while a *second* realloc() (for
 			 * the other array) is still pending and might fail. */
-			char **nt = realloc(L->text, (size_t)newalloc * sizeof *nt);
+			char **nt = (char **)__util_reallocarray((void *)L->text, (size_t)newalloc, sizeof *nt);
 			size_t *nl;
 			if (!nt) { free(buf); return -1; }
 			L->text = nt;
-			nl = realloc(L->len, (size_t)newalloc * sizeof *nl);
+			nl = __util_reallocarray(L->len, (size_t)newalloc, sizeof *nl);
 			if (!nl) { free(buf); return -1; }
 			L->len = nl;
 			alloc = newalloc;
 		}
-		L->text[L->n] = malloc((size_t)got + 1);
+		{
+			size_t bytes;
+			if (!__util_size_add((size_t)got, 1, &bytes)) { free(buf); return -1; }
+			L->text[L->n] = malloc(bytes);
+		}
 		if (!L->text[L->n]) { free(buf); return -1; }
 		memcpy(L->text[L->n], buf, (size_t)got + 1);
 		L->len[L->n] = (size_t)got;
@@ -161,6 +167,22 @@ static int find_match(struct lines *L, int from, const char *pattern)
 	return found;
 }
 
+static int apply_offset(int base, long offset, int maximum, int *result)
+{
+	size_t sum;
+
+	if (base < 0 || maximum < base) return 0;
+	if (offset < 0) {
+		if (offset < -(long)base) return 0;
+		*result = (int)((size_t)base - (size_t)(-offset));
+		return 1;
+	}
+	if (!__util_size_add((size_t)base, (size_t)offset, &sum) ||
+	    sum > (size_t)maximum) return 0;
+	*result = (int)sum;
+	return 1;
+}
+
 struct created {
 	char **names;
 	int n, cap;
@@ -169,8 +191,12 @@ struct created {
 static int remember_created(struct created *c, const char *name)
 {
 	if (c->n >= c->cap) {
-		int newcap = c->cap ? c->cap * 2 : 16;
-		char **nn = realloc(c->names, (size_t)newcap * sizeof *nn);
+		size_t grown;
+		int newcap;
+		if (!__util_array_capacity((size_t)c->cap, (size_t)c->n, 1, 16,
+		    sizeof *c->names, &grown) || grown > INT_MAX) return -1;
+		newcap = (int)grown;
+		char **nn = (char **)__util_reallocarray((void *)c->names, (size_t)newcap, sizeof *nn);
 		if (!nn) return -1;
 		c->names = nn;
 		c->cap = newcap;
@@ -186,32 +212,60 @@ static void cleanup_created(struct created *c, int keep)
 	int i;
 	if (!keep) for (i = 0; i < c->n; i++) unlink(c->names[i]);
 	for (i = 0; i < c->n; i++) free(c->names[i]);
-	free(c->names);
+	free((void *)c->names);
 }
 
 /* Writes lines[from..to) to a new piece file, records it, and reports
  * its size unless -s. Returns 0 on success, -1 on a real I/O error. */
-static int write_piece(struct lines *L, int from, int to, const char *prefix, int ndigits,
-                        int piece_no, int quiet, struct created *created)
+static int write_piece(struct lines *L, int from, int to, const char *prefix, int ndigits, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+                        int piece_no, int quiet, struct created *created) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	char name[512];
 	FILE *f;
 	long size = 0;
-	int i;
+	int i, n;
 
-	snprintf(name, sizeof name, "%s%0*d", prefix, ndigits, piece_no);
+	n = snprintf(name, sizeof name, "%s%0*d", prefix, ndigits, piece_no);
+	if (n < 0 || (size_t)n >= sizeof name) {
+		if (n >= 0) errno = ENAMETOOLONG;
+		return -1;
+	}
 	f = fopen(name, "wb");
 	if (!f) {
-		fprintf(stderr, "csplit: %s: %s\n", name, strerror(errno));
+		int saved = errno;
+		__util_diagf("csplit: %s: %s\n", name, strerror(saved));
 		return -1;
 	}
 	for (i = from; i < to; i++) {
-		fwrite(L->text[i], 1, L->len[i], f);
-		size += (long)L->len[i];
+		size_t next_size;
+		if (!__util_size_add((size_t)size, L->len[i], &next_size) ||
+		    next_size > LONG_MAX) {
+			int saved = EFBIG;
+			(void)fclose(f);
+			(void)unlink(name);
+			errno = saved;
+			__util_diagf("csplit: %s: %s\n", name, strerror(errno));
+			return -1;
+		}
+		if (fwrite(L->text[i], 1, L->len[i], f) != L->len[i]) {
+			int saved = errno;
+			(void)fclose(f);
+			(void)unlink(name);
+			errno = saved;
+			__util_diagf("csplit: %s: %s\n", name, strerror(errno));
+			return -1;
+		}
+		size = (long)next_size;
 	}
-	fclose(f);
+	if (fclose(f) < 0) {
+		int saved = errno;
+		(void)unlink(name);
+		errno = saved;
+		__util_diagf("csplit: %s: %s\n", name, strerror(errno));
+		return -1;
+	}
 	if (remember_created(created, name) < 0) {
-		fprintf(stderr, "csplit: out of memory\n");
+		__util_diagf("csplit: out of memory\n");
 		return -1;
 	}
 	if (!quiet) printf("%ld\n", size);
@@ -238,37 +292,43 @@ int __util_csplit_main(int argc, char **argv)
 		if (!strcmp(a, "-k")) { opt_k = 1; continue; }
 		if (!strcmp(a, "-s")) { opt_s = 1; continue; }
 		if (!strcmp(a, "-f")) {
-			if (i + 1 >= argc) { fprintf(stderr, "csplit: -f: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("csplit: -f: option requires an argument\n"); return 1; }
 			prefix = argv[++i];
 			continue;
 		}
 		if (!strcmp(a, "-n")) {
 			char *end;
-			if (i + 1 >= argc) { fprintf(stderr, "csplit: -n: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("csplit: -n: option requires an argument\n"); return 1; }
 			ndigits = (int)strtol(argv[++i], &end, 10);
-			if (*end || ndigits <= 0) { fprintf(stderr, "csplit: -n: invalid digit count\n"); return 1; }
+			if (*end || ndigits <= 0) { __util_diagf("csplit: -n: invalid digit count\n"); return 1; }
 			continue;
 		}
-		fprintf(stderr, "csplit: %s: invalid option\n", a);
+		__util_diagf("csplit: %s: invalid option\n", a);
 		return 1;
 	}
 
-	if (i >= argc) { fprintf(stderr, "csplit: missing file operand\n"); return 1; }
+	if (i >= argc) { __util_diagf("csplit: missing file operand\n"); return 1; }
 	filename = argv[i++];
-	if (i >= argc) { fprintf(stderr, "csplit: missing arg operand\n"); return 1; }
+	if (i >= argc) { __util_diagf("csplit: missing arg operand\n"); return 1; }
 
 	f = strcmp(filename, "-") == 0 ? stdin : fopen(filename, "rb");
 	if (!f) {
-		fprintf(stderr, "csplit: %s: %s\n", filename, strerror(errno));
+		int saved = errno;
+		__util_diagf("csplit: %s: %s\n", filename, strerror(saved));
 		return 1;
 	}
 	if (read_all_lines(f, &L) < 0) {
-		if (f != stdin) fclose(f);
+		/* The allocation/read failure is primary; close is cleanup only. */
+		if (f != stdin) (void)fclose(f);
 		free_lines(&L); /* frees whatever lines were read before the allocation failure */
-		fprintf(stderr, "csplit: %s: out of memory reading file\n", filename);
+		__util_diagf("csplit: %s: out of memory reading file\n", filename);
 		return 1;
 	}
-	if (f != stdin) fclose(f);
+	if (f != stdin && fclose(f) != 0) {
+		free_lines(&L);
+		__util_diagf("csplit: %s: %s\n", filename, strerror(errno));
+		return 1;
+	}
 
 	memset(&created, 0, sizeof created);
 
@@ -277,7 +337,7 @@ int __util_csplit_main(int argc, char **argv)
 		int target;
 
 		if (a[0] == '{') {
-			fprintf(stderr, "csplit: %s: the '{num}' repeat operand is not "
+			__util_diagf("csplit: %s: the '{num}' repeat operand is not "
 			                "implemented -- see src/util/csplit.c\n", a);
 			had_error = 1;
 			break;
@@ -288,24 +348,23 @@ int __util_csplit_main(int argc, char **argv)
 			int m;
 
 			if (extract_delimited(a, a[0], pat, sizeof pat, &offset) < 0) {
-				fprintf(stderr, "csplit: %s: unterminated or malformed pattern\n", a);
+				__util_diagf("csplit: %s: unterminated or malformed pattern\n", a);
 				had_error = 1;
 				break;
 			}
 			m = find_match(&L, cur, pat);
 			if (m == -2) {
-				fprintf(stderr, "csplit: %s: invalid regular expression\n", pat);
+				__util_diagf("csplit: %s: invalid regular expression\n", pat);
 				had_error = 1;
 				break;
 			}
 			if (m < 0) {
-				fprintf(stderr, "csplit: %s: no match\n", pat);
+				__util_diagf("csplit: %s: no match\n", pat);
 				had_error = 1;
 				break;
 			}
-			target = m + (int)offset;
-			if (target < cur || target > L.n) {
-				fprintf(stderr, "csplit: %s: match plus offset is out of range\n", a);
+			if (!apply_offset(m, offset, L.n, &target) || target < cur) {
+				__util_diagf("csplit: %s: match plus offset is out of range\n", a);
 				had_error = 1;
 				break;
 			}
@@ -325,14 +384,14 @@ int __util_csplit_main(int argc, char **argv)
 			char *end;
 			long lineno = strtol(a, &end, 10);
 			if (*end || lineno <= 0) {
-				fprintf(stderr, "csplit: %s: invalid arg (expected a line number, "
+				__util_diagf("csplit: %s: invalid arg (expected a line number, "
 				                "/regexp/[offset], or %%regexp%%[offset])\n", a);
 				had_error = 1;
 				break;
 			}
 			target = (int)lineno - 1;
 			if (target < cur || target > L.n) {
-				fprintf(stderr, "csplit: %s: line number is out of range\n", a);
+				__util_diagf("csplit: %s: line number is out of range\n", a);
 				had_error = 1;
 				break;
 			}

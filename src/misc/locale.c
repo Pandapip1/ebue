@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <locale.h>
 #include <string.h>
 #include <errno.h>
@@ -8,7 +13,7 @@
 /* ntlibc supports exactly one locale, "C".  locale_t is an opaque
  * pointer; we hand out the address of one static object for it. */
 struct __locale_struct { int dummy; };
-static struct __locale_struct __c_locale;
+static struct __locale_struct __c_locale; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
 /* Tagged struct rather than an output-pointer parameter: writing
  * through an out-param would just reintroduce the "writes through a
@@ -37,7 +42,7 @@ char *setlocale(int cat, const char *name)
 	return r.value;
 }
 
-static struct lconv __posix_lconv = {
+static struct lconv __posix_lconv = { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 	.decimal_point = (char *)".",
 	.thousands_sep = (char *)"",
 	.grouping = (char *)"",
@@ -97,7 +102,7 @@ static struct newlocale_result newlocale_compute(int mask, const char *name)
 	 * part of the contract a caller relies on to detect its own bad
 	 * argument. */
 	if (mask & ~LC_ALL_MASK) { r.err = EINVAL; return r; }
-	if (name && *name && strcmp(name, "C") && strcmp(name, "POSIX")) {
+	if (name && *name && strcmp(name, "C") && strcmp(name, "POSIX")) { // NOLINT(bugprone-suspicious-string-compare) -- nonzero from both calls intentionally means neither locale name matches
 		r.err = ENOENT;
 		return r;
 	}
@@ -166,3 +171,5 @@ locale_t uselocale(locale_t l)
 	if (l) current_locale = l;
 	return prev;
 }
+
+// NOLINTEND(misc-include-cleaner)

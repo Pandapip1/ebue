@@ -39,6 +39,7 @@ int main(void)
 	strcpy(buf, "hello"); CHECK(memrchr(buf, 'l', 5) == buf + 3);
 	CHECK(memmem("abcabcd", 7, "abcd", 4) == (void *)0 || streq(memmem("abcabcd", 7, "abcd", 4), "abcd"));
 	strcpy(buf, "abcabcd"); CHECK(memmem(buf, 7, "abcd", 4) == buf + 3 && !memmem(buf, 7, "abce", 4) && memmem(buf, 7, "", 0) == buf);
+	CHECK(memmem(buf, 7, "d", 1) == buf + 6 && memmem(buf, 7, "cd", 2) == buf + 5 && !memmem(buf, 3, "abcd", 4));
 	CHECK(mempcpy(buf2, "xy", 2) == buf2 + 2);
 	CHECK(memccpy(buf2, "hello", 'l', 5) == buf2 + 3 && !memccpy(buf2, "hello", 'z', 5));
 

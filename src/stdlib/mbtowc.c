@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 /* The stateless conversions, on top of the restartable ones.  Because a
  * non-BMP character is two wchar_t, mbtowc cannot return it in one
  * wchar_t: it returns the high surrogate and a byte count of 4, and the
@@ -50,3 +55,5 @@ size_t wcstombs(char *__restrict s, const wchar_t *__restrict ws, size_t n)
 	memset(&st, 0, sizeof st);
 	return wcsrtombs(s, &src, n, &st);
 }
+
+// NOLINTEND(misc-include-cleaner)

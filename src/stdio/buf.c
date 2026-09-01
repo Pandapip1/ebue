@@ -12,7 +12,12 @@
  * fmemopen/open_memstream block look the same: everything above this
  * file only ever touches a FILE through them.
  */
-#define _GNU_SOURCE
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -108,9 +113,13 @@ ssize_t __file_write(FILE *f, const void *buf, size_t n)
 			}
 			if (need > f->mem_size) {
 				size_t ns = f->mem_size ? f->mem_size : 128;
-				while (ns < need) {
+				/* Each doubling consumes another value bit; the overflow
+				 * guard may finish the growth one iteration earlier. */
+				unsigned steps = sizeof(size_t) * CHAR_BIT;
+				while (ns < need && steps > 0) {
 					if (ns > (size_t)PTRDIFF_MAX / 2) { ns = need; break; }
 					ns *= 2;
+					steps--;
 				}
 				{
 					unsigned char *nb = realloc(f->mem_buf, ns);
@@ -279,7 +288,7 @@ int fflush(FILE *f)
 	return __fflush_locked(f) < 0 ? EOF : 0;
 }
 
-int setvbuf(FILE *__restrict f, char *__restrict buf, int mode, size_t size)
+int setvbuf(FILE *__restrict f, char *__restrict buf, int mode, size_t size) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	/* setvbuf.html RETURN VALUE: "Otherwise, it shall return a non-zero
 	 * value if an invalid value is given for type ...".  _IOLBF is a
@@ -290,7 +299,7 @@ int setvbuf(FILE *__restrict f, char *__restrict buf, int mode, size_t size)
 		errno = EINVAL;
 		return -1;
 	}
-	fflush(f);
+	if (fflush(f) < 0) return -1;
 	if (f->buf && !f->user_buf) free(f->buf);
 	f->buf = 0;
 	f->bufsz = 0;
@@ -311,10 +320,14 @@ int setvbuf(FILE *__restrict f, char *__restrict buf, int mode, size_t size)
 
 void setbuf(FILE *__restrict f, char *__restrict buf)
 {
-	setvbuf(f, buf, buf ? _IOFBF : _IONBF, BUFSIZ);
+	/* ISO C gives this void wrapper no channel for setvbuf() failure. */
+	(void)setvbuf(f, buf, buf ? _IOFBF : _IONBF, BUFSIZ);
 }
 
 void setlinebuf(FILE *f)
 {
-	setvbuf(f, 0, _IOLBF, 0);
+	/* BSD's void wrapper likewise cannot propagate setvbuf() failure. */
+	(void)setvbuf(f, 0, _IOLBF, 0);
 }
+
+// NOLINTEND(misc-include-cleaner)

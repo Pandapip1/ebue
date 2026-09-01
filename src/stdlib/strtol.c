@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 /* Integer conversions, C99 7.20.1.4.  One worker parses an unsigned
  * magnitude clamped to a limit; the typed wrappers apply the sign and
  * their own ranges.  long is 32 bits on both Windows arches. */
@@ -7,6 +12,7 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <ctype.h>
+#include <string.h>
 #include <errno.h>
 #include <features.h>
 
@@ -29,6 +35,7 @@ static int parse(const char *nptr, const char **end, int base, int *neg, uintmax
 {
 	const char *s = nptr, *start;
 	uintmax_t v = 0, cutoff;
+	size_t chars_left;
 	int any = 0, ovf = 0, cutlim, d;
 	unsigned char c;
 
@@ -47,7 +54,11 @@ static int parse(const char *nptr, const char **end, int base, int *neg, uintmax
 	start = s;
 	cutoff = UINTMAX_MAX / (unsigned)base;
 	cutlim = (int)(UINTMAX_MAX % (unsigned)base);
-	for (;; s++) {
+	/* Include the terminating NUL in the exact readable extent: every
+	 * successful digit consumes one byte, and the first non-digit (at
+	 * latest that NUL) leaves the loop without consuming it. */
+	chars_left = strlen(s) + 1;
+	for (; chars_left > 0; s++, chars_left--) {
 		c = (unsigned char)*s;
 		if (c >= '0' && c <= '9') d = c - '0';
 		else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
@@ -71,7 +82,7 @@ static int parse(const char *nptr, const char **end, int base, int *neg, uintmax
  * wrapping modulo 2**N (C99 6.2.5p9) -- including for x == 0 - (lim+1),
  * the one negative magnitude (e.g. LONG_MIN) a signed destination type
  * cannot represent positively. */
-__wraps static uintmax_t strtox(const char *nptr, char **endptr, int base, uintmax_t lim)
+__wraps static uintmax_t strtox(const char *nptr, char **endptr, int base, uintmax_t lim) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const char *end;
 	uintmax_t v;
@@ -105,3 +116,5 @@ intmax_t strtoimax(const char *__restrict s, char **__restrict e, int b)
 { return (intmax_t)strtox(s, e, b, INTMAX_MAX); }
 uintmax_t strtoumax(const char *__restrict s, char **__restrict e, int b)
 { return strtox(s, e, b, UINTMAX_MAX); }
+
+// NOLINTEND(misc-include-cleaner)

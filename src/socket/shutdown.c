@@ -10,12 +10,17 @@
  * shutdown (no AFD_DISCONNECT_ABORT), not a wait for queued data to
  * drain.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/socket.h>
 #include <errno.h>
 #include "libc.h"
 #include "afd.h"
 
-int shutdown(int fd, int how)
+int shutdown(int fd, int how) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = __fd_get(fd);
 	AFD_DISCONNECT_INFO di;
@@ -37,3 +42,5 @@ int shutdown(int fd, int how)
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

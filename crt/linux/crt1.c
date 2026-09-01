@@ -60,6 +60,11 @@
  * end to end, which is what this file exists to prove -- see
  * tools/linux-build-crt.sh's verification program.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/mman.h>
 #include <string.h>
 #include "libc.h"
@@ -97,7 +102,7 @@ char *__progname_full;
  * point (a different instruction set and calling convention, not just
  * different register names) needs one. */
 #if defined(__aarch64__)
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x0 __asm__("x0") = a1;
 	register long x1 __asm__("x1") = a2;
@@ -498,10 +503,11 @@ static void linux_setup_tls(long *auxv)
  * own process-startup contract -- an external, non-in-tree caller with
  * a documented platform contract, the same class as this file's own
  * NT-side sibling crt/crt1.c's exception_handler() precedent. */
-_Noreturn void __linux_start_main(long *sp)
+_Noreturn void __linux_start_main(long *sp) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
     __attribute__((nonnull(1)));
 _Noreturn void __linux_start_main(long *sp)
 {
+	static char empty_progname[] = "";
 	long argc = sp[0];
 	char **argv = (char **)(sp + 1);
 	char **envp = argv + argc + 1;
@@ -550,7 +556,7 @@ _Noreturn void __linux_start_main(long *sp)
 	__argc = (int)argc;
 	__argv = argv;
 	environ = envp;
-	__progname_full = argc > 0 ? argv[0] : "";
+	__progname_full = argc > 0 ? argv[0] : empty_progname;
 	slash = __progname_full;
 	for (char *p = __progname_full; *p; p++)
 		if (*p == '/') slash = p + 1;
@@ -561,3 +567,5 @@ _Noreturn void __linux_start_main(long *sp)
 	rc = main((int)argc, argv, envp);
 	__plat_terminate(rc);
 }
+
+// NOLINTEND(misc-include-cleaner)

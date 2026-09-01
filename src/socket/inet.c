@@ -9,6 +9,11 @@
  * is no third architecture here for a compile-time endianness probe to
  * matter for.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -41,6 +46,7 @@ in_addr_t inet_addr(const char *s)
 {
 	unsigned long parts[4];
 	int nparts = 0;
+	int parts_left;
 	const char *p;
 	in_addr_t result = INADDR_NONE;
 	int saved_errno = errno;
@@ -63,20 +69,24 @@ in_addr_t inet_addr(const char *s)
 	 * bigger change than this one call site justifies. */
 	if (!s) goto done;
 	p = s;
-	for (;;) {
+	for (parts_left = 4; parts_left > 0; parts_left--) {
 		char *end;
 		unsigned long v;
-		if (nparts == 4 || *p < '0' || *p > '9') goto done;
+		if (*p < '0' || *p > '9') goto done;
 		v = strtoul(p, &end, 0); /* base 0: honours "0x"/"0" prefixes, per inet_addr.html */
 		if (end == p) goto done;
 		parts[nparts++] = v;
 		p = end;
-		if (*p == '.') { p++; continue; }
+		if (*p == '.') {
+			p++;
+			if (parts_left == 1) goto done;
+			continue;
+		}
 		break;
 	}
 	if (*p) goto done; /* trailing garbage */
 
-	switch (nparts) {
+	switch (nparts) { // NOLINT(bugprone-switch-missing-default-case) -- the parser admits only one through four address parts here
 	case 1:
 		if (parts[0] <= 0xffffffffUL) result = htonl((uint32_t)parts[0]);
 		break;
@@ -109,7 +119,9 @@ char *inet_ntoa(struct in_addr in)
 {
 	static char buf[INET_ADDRSTRLEN];
 	unsigned char *b = (unsigned char *)&in.s_addr;
-	snprintf(buf, sizeof buf, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
+	/* INET_ADDRSTRLEN exactly covers four decimal uint8 octets and separators;
+	 * inet_ntoa() has no failure return for an impossible truncation. */
+	(void)snprintf(buf, sizeof buf, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
 	return buf;
 }
 
@@ -226,7 +238,7 @@ const char *inet_ntop(int af, const void *__restrict src, char *__restrict dst, 
 		n = snprintf(buf, sizeof buf, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
 	} else if (af == AF_INET6) {
 		unsigned words[8];
-		int i, best = -1, bestlen = 0;
+		int i, steps, best = -1, bestlen = 0;
 		char *q = buf;
 		size_t left = sizeof buf;
 
@@ -238,7 +250,7 @@ const char *inet_ntop(int af, const void *__restrict src, char *__restrict dst, 
 				size_t offset = 2 * (size_t)i;
 				words[i] = (unsigned)b[offset] << 8 | b[offset + 1];
 			}
-			for (i = 0; i < 8;) {
+			for (i = 0, steps = 0; i < 8 && steps < 8; steps++) {
 				int j;
 				if (words[i]) { i++; continue; }
 				for (j = i; j < 8 && !words[j]; j++);
@@ -246,7 +258,7 @@ const char *inet_ntop(int af, const void *__restrict src, char *__restrict dst, 
 				i = j;
 			}
 			if (bestlen < 2) best = -1;
-			for (i = 0; i < 8;) {
+			for (i = 0, steps = 0; i < 8 && steps < 8; steps++) {
 				if (i == best) {
 					if (left < 3) { errno = ENOSPC; return 0; }
 					*q++ = ':'; *q++ = ':'; left -= 2;
@@ -293,3 +305,5 @@ int inet_pton(int af, const char *__restrict src, void *__restrict dst)
 	memcpy(dst, tmp, 16);
 	return 1;
 }
+
+// NOLINTEND(misc-include-cleaner)

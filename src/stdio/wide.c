@@ -26,6 +26,11 @@
  * clause; both are forced by the wchar_t width and are the only reason
  * this file is not a dozen one-liners.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdio.h>
 #include <wchar.h>
 #include <limits.h>
@@ -215,3 +220,5 @@ int fwide(FILE *f, int mode)
 	}
 	return f->wide;
 }
+
+// NOLINTEND(misc-include-cleaner)

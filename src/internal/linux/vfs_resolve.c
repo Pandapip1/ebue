@@ -18,6 +18,11 @@
  * the portable src/internal/libc.h declaration has something to link
  * against on every platform.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include "libc.h"
 
@@ -29,9 +34,11 @@ int __vfs_resolve_at(int dirfd, const char *path)
 	return __VFS_NONE;
 }
 
-int __vfs_open_dir(int kind, int cloexec, HANDLE *out)
+int __vfs_open_dir(int kind, int cloexec, HANDLE *out) // NOLINT(bugprone-easily-swappable-parameters) -- fixed VFS contract; object kind and close-on-exec flag have distinct roles
 {
 	(void)kind; (void)cloexec; (void)out;
 	errno = ENOTDIR;
 	return -1;
 }
+
+// NOLINTEND(misc-include-cleaner)

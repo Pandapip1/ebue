@@ -28,6 +28,11 @@
  * primary.  A silent "false" for a malformed expression would be the
  * same undiagnosable wrongness this project keeps refusing.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,8 +49,8 @@
 
 struct texpr {
 	char **v;      /* the arguments being evaluated, v[0] is the first */
-	int n;         /* how many there are */
-	int i;         /* cursor for the >4-argument grammar */
+	size_t n;      /* how many there are */
+	size_t i;      /* cursor for the >4-argument grammar */
 	int err;       /* set once a diagnostic has been issued */
 };
 
@@ -61,8 +66,8 @@ static void terr(struct texpr *t, const char *msg, const char *arg)
 {
 	if (t->err) return;
 	t->err = 1;
-	if (arg) fprintf(stderr, "test: %s: %s\n", arg, msg);
-	else fprintf(stderr, "test: %s\n", msg);
+	if (arg) __util_diagf("test: %s: %s\n", arg, msg);
+	else __util_diagf("test: %s\n", msg);
 }
 
 /* An integer operand of -eq/-ne/-lt/-le/-gt/-ge.  test(1p) calls these
@@ -120,7 +125,7 @@ static int is_unop(const char *s)
  * forwarded to terr(). */
 static int do_unary(struct texpr *t, const char *op, const char *arg)
     __attribute__((nonnull(2, 3)));
-static int do_unary(struct texpr *t, const char *op, const char *arg)
+static int do_unary(struct texpr *t, const char *op, const char *arg) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct stat st;
 
@@ -167,7 +172,7 @@ static int do_unary(struct texpr *t, const char *op, const char *arg)
 	return T_ERR;
 }
 
-static int do_binary(struct texpr *t, const char *a, const char *op, const char *b)
+static int do_binary(struct texpr *t, const char *a, const char *op, const char *b) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	long x, y;
 	if (!strcmp(op, "=")) return strcmp(a, b) == 0 ? T_TRUE : T_FALSE;
@@ -200,6 +205,7 @@ static int do_binary(struct texpr *t, const char *a, const char *op, const char 
 static int t_oexpr(struct texpr *t);
 
 static int t_primary(struct texpr *t) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested test-expression grammar
 static int t_primary(struct texpr *t)
 {
 	const char *tok;
@@ -212,7 +218,7 @@ static int t_primary(struct texpr *t)
 		t->i++;
 		r = t_oexpr(t);
 		if (t->err) return T_ERR;
-		if (t->i >= t->n || strcmp(t->v[t->i], ")")) { terr(t, "')' expected", 0); return T_ERR; }
+		if (t->i >= t->n || strcmp(t->v[t->i], ")")) { terr(t, "')' expected", 0); return T_ERR; } // NOLINT(bugprone-suspicious-string-compare) -- nonzero intentionally detects a mismatched closing token
 		t->i++;
 		return r;
 	}
@@ -233,6 +239,7 @@ static int t_primary(struct texpr *t)
 }
 
 static int t_nexpr(struct texpr *t) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested test-expression grammar
 static int t_nexpr(struct texpr *t)
 {
 	if (t->i < t->n && !strcmp(t->v[t->i], "!")) {
@@ -245,11 +252,15 @@ static int t_nexpr(struct texpr *t)
 	return t_primary(t);
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested test-expression grammar
 static int t_aexpr(struct texpr *t)
 {
 	int r = t_nexpr(t);
-	while (!t->err && t->i < t->n && !strcmp(t->v[t->i], "-a")) {
+	size_t remaining = t->i < t->n ? t->n - t->i : 0;
+	while (remaining > 0 && !t->err && t->i < t->n &&
+	       !strcmp(t->v[t->i], "-a")) {
 		int rhs;
+		remaining--;
 		t->i++;
 		rhs = t_nexpr(t);
 		/* Evaluated, not short-circuited: an error in either operand
@@ -261,11 +272,15 @@ static int t_aexpr(struct texpr *t)
 	return t->err ? T_ERR : r;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested test-expression grammar
 static int t_oexpr(struct texpr *t)
 {
 	int r = t_aexpr(t);
-	while (!t->err && t->i < t->n && !strcmp(t->v[t->i], "-o")) {
+	size_t remaining = t->i < t->n ? t->n - t->i : 0;
+	while (remaining > 0 && !t->err && t->i < t->n &&
+	       !strcmp(t->v[t->i], "-o")) {
 		int rhs;
+		remaining--;
 		t->i++;
 		rhs = t_aexpr(t);
 		if (r == T_ERR || rhs == T_ERR) r = T_ERR;
@@ -279,10 +294,11 @@ static int t_oexpr(struct texpr *t)
  * the return value that shall be generated is based on the number of
  * arguments presented to test." */
 static int eval_argc(struct texpr *t) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested test-expression grammar
 static int eval_argc(struct texpr *t)
 {
 	char **v = t->v;
-	int n = t->n;
+	size_t n = t->n;
 
 	switch (n) {
 	case 0:
@@ -366,7 +382,8 @@ static int eval_argc(struct texpr *t)
 int __util_test_main(int argc, char **argv)
 {
 	struct texpr t;
-	int n = argc - 1;
+	size_t n = (size_t)argc;
+	if (n) n--;
 
 	/* "In the second form of the utility, where the utility name used
 	 * is [ rather than test, the application shall ensure that the
@@ -374,8 +391,8 @@ int __util_test_main(int argc, char **argv)
 	 * an error, and the bracket itself is "not ... counted in this
 	 * algorithm". */
 	if (!strcmp(argv[0], "[")) {
-		if (n < 1 || strcmp(argv[argc - 1], "]")) {
-			fprintf(stderr, "[: missing `]'\n");
+		if (n < 1 || strcmp(argv[n], "]")) { // NOLINT(bugprone-suspicious-string-compare) -- nonzero intentionally detects a mismatched closing bracket argument
+			__util_diagf("[: missing `]'\n");
 			return T_ERR;
 		}
 		n--;
@@ -387,3 +404,5 @@ int __util_test_main(int argc, char **argv)
 	t.err = 0;
 	return eval_argc(&t);
 }
+
+// NOLINTEND(misc-include-cleaner)

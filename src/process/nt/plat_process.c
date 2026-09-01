@@ -9,6 +9,11 @@
  * __plat_process_fork() needs) in place of a raw NTSTATUS or NT struct
  * for the front door to interpret.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -231,25 +236,12 @@ static int append_prog(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 		if (!nb) { errno = ENOMEM; return -1; }
 		*buf = nb; *cap = nc;
 	}
-	if (need_quote) (*buf)[(*len)++] = '"'; // NOLINT(clang-analyzer-core.NullDereference) -- the analyzer
-		// considers *buf == NULL reachable here without the realloc above having run, but
-		// __array_next_capacity's initial-capacity floor (32 above) makes nc >= 32 > 0
-		// whenever *cap starts at 0, so nc != *cap is always true on that path and the
-		// realloc always runs first; it cannot reason through that arithmetic.
-		//
-		// The NOLINTs above suppress clang-tidy's own bundled checks; this
-		// project's own ownership stage (tools/clang/OwnershipChecker.cpp,
-		// a separate --analyze pass with no NOLINT support) still reports
-		// this same site as "pointer dereference is not proven nonnull in
-		// append_prog: (*buf)[(*len)++]" for the identical reason -- it is
-		// about *buf (this function's own buf is already required, see
-		// this function's forward declaration above), a value the
-		// realloc-and-reassign pattern sets, not a parameter, so nonnull
-		// cannot describe it. Left as a disclosed residual rather than a
-		// checker lemma fix: this is the only site in this file the
-		// pattern applies to, and the arithmetic argument above already
-		// makes the proof by hand.
-	memcpy(*buf + *len, arg, n * sizeof(WCHAR)); // NOLINT(clang-analyzer-unix.cstring.NullArg) -- same reachability the note above rules out
+	/* The growth helper guarantees allocation from the initial zero-capacity
+	 * state. Keep that invariant explicit at the use site as a defensive
+	 * fallback if its contract ever changes. */
+	if (!*buf) { errno = ENOMEM; return -1; }
+	if (need_quote) (*buf)[(*len)++] = '"';
+	memcpy(*buf + *len, arg, n * sizeof(WCHAR));
 	*len += n;
 	if (need_quote) (*buf)[(*len)++] = '"';
 	return 0;
@@ -258,7 +250,9 @@ static int append_prog(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 /* argv required: subscripted unconditionally (`argv[i]`) at loop
  * entry, matching every execve-family argv contract this tree already
  * treats as required elsewhere. */
-static WCHAR *build_cmdline(char *const argv[]) __attribute__((nonnull(1)));
+withtok(heap_allocated) __attribute__((nonnull(1)))
+static WCHAR *build_cmdline(char *const argv[]);
+withtok(heap_allocated) __attribute__((nonnull(1)))
 static WCHAR *build_cmdline(char *const argv[])
 {
 	WCHAR *buf = 0;
@@ -288,6 +282,7 @@ static WCHAR *build_cmdline(char *const argv[])
  * zero-length entry and an entry with no '=' are both dropped rather
  * than passed on, and why a leading '=' (Windows' own per-drive
  * current-directory shape) is kept. */
+withtok(heap_allocated)
 static WCHAR *build_env_block(char *const envp[])
 {
 	size_t cap = 256, len = 0;
@@ -348,10 +343,11 @@ static HANDLE closed_placeholder(HANDLE *out)
 	return *out;
 }
 
-int __plat_process_spawn(const char *path, char *const argv[], char *const envp[],
+int __plat_process_spawn(const char *path, char *const argv[], char *const envp[], // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                          const __plat_handle_t std[3], __plat_handle_t *out_process)
 {
 	struct __ntpath np;
+	__plat_handle_t inherited_std[3] = { std[0], std[1], std[2] };
 	RTL_USER_PROCESS_PARAMETERS *pp = 0;
 	RTL_USER_PROCESS_INFORMATION info;
 	UNICODE_STRING imageDos, cmdLine, cur, runtimeUS;
@@ -403,7 +399,7 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 	 * (moved from here) for why a field set *after* creation to point
 	 * outside the block is not safe -- the intermittent parent-address
 	 * bug that used to be. */
-	runtime = __fd_runtime_data(&runtime_len);
+	runtime = __fd_runtime_data(&runtime_len, inherited_std);
 	runtimeUS.Buffer = (PWSTR)runtime;
 	runtimeUS.Length = (USHORT)runtime_len;
 	runtimeUS.MaximumLength = (USHORT)runtime_len;
@@ -418,7 +414,9 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 	 * for the measurements behind closed_placeholder() and why a
 	 * close-on-exec standard descriptor never reaches here (the front
 	 * door already turned it into __PLAT_HANDLE_NULL before calling
-	 * this).
+	 * this).  RuntimeData construction can replace a descriptor's handle
+	 * while making it inheritable; inherited_std tracks those replacements
+	 * so these by-value fields always receive the live handle.
 	 *
 	 * pp->StandardInput: not expressible via nonnull -- pp is a LOCAL
 	 * (`RTL_USER_PROCESS_PARAMETERS *pp = 0;` above), not a parameter of
@@ -427,9 +425,9 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 	 * (the `if (!NT_SUCCESS(st)) {...goto out;}` immediately above sets
 	 * *pp on success, per RtlCreateProcessParametersEx's own contract) --
 	 * a fact this function's own signature has no way to restate. */
-	pp->StandardInput = std[0] ? std[0] : closed_placeholder(&ph[0]);
-	pp->StandardOutput = std[1] ? std[1] : closed_placeholder(&ph[1]);
-	pp->StandardError = std[2] ? std[2] : closed_placeholder(&ph[2]);
+	pp->StandardInput = inherited_std[0] ? inherited_std[0] : closed_placeholder(&ph[0]);
+	pp->StandardOutput = inherited_std[1] ? inherited_std[1] : closed_placeholder(&ph[1]);
+	pp->StandardError = inherited_std[2] ? inherited_std[2] : closed_placeholder(&ph[2]);
 	pp->WindowFlags |= STARTF_USESTDHANDLES;
 
 	memset(&info, 0, sizeof info);
@@ -471,3 +469,5 @@ out:
 	if (runtime) __free(runtime);
 	return pid;
 }
+
+// NOLINTEND(misc-include-cleaner)

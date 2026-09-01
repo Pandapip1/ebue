@@ -36,5 +36,5 @@ char *asctime_r(const struct tm *tm, char *buf)
 char *asctime(const struct tm *tm)
 {
 	static char buf[32];
-	return asctime_r(tm, buf);
+	return asctime_r(tm, buf); // NOLINT(bugprone-unsafe-functions,cert-msc24-c,cert-msc33-c) -- asctime must expose the same fixed-format conversion; its implementation-owned buffer is sized for this implementation's bounded output
 }

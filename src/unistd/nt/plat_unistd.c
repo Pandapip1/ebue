@@ -9,6 +9,11 @@
  * POSIX-shaped return (0/-1 or a value with errno already set) in place
  * of a raw NTSTATUS/HANDLE for the front door to interpret.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <unistd.h>
 #include <fcntl.h>
 #include <stddef.h>
@@ -43,13 +48,13 @@ static HANDLE alarm_timer;
  * only from alarm_apc. */
 static __plat_alarm_fn alarm_deliver;
 
-static void NTAPI alarm_apc(PVOID ctx, ULONG lo, LONG hi)
+static void NTAPI alarm_apc(PVOID ctx, ULONG lo, LONG hi) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	(void)lo; (void)hi;
 	if (alarm_deliver) alarm_deliver((unsigned long)(ULONG_PTR)ctx);
 }
 
-int __plat_alarm_arm(long long due, unsigned long seq, __plat_alarm_fn deliver)
+int __plat_alarm_arm(long long due, unsigned long seq, __plat_alarm_fn deliver) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	LARGE_INTEGER at = due;
 
@@ -379,7 +384,7 @@ int __plat_chdir(const char *path, int *vfsout)
 #define RDB_HDR offsetof(REPARSE_DATA_BUFFER, SymbolicLinkReparseBuffer)
 #define SL_HDR  (offsetof(REPARSE_DATA_BUFFER, SymbolicLinkReparseBuffer.PathBuffer) - RDB_HDR)
 
-typedef struct _FILE_LINK_INFORMATION {
+typedef struct _FILE_LINK_INFORMATION { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling follows the NT ABI
 	BOOLEAN ReplaceIfExists;
 	HANDLE RootDirectory;
 	ULONG FileNameLength;
@@ -557,7 +562,14 @@ ssize_t __plat_readlink(int dirfd, const char *path, char *buf, size_t bufsz)
 	}
 	/* Strip a \??\ prefix and turn backslashes into slashes. */
 	if (nlen >= 4 && name[0] == '\\' && name[1] == '?' && name[2] == '?' && name[3] == '\\') { name += 4; nlen -= 4; }
-	tmp = __malloc((nlen + 1) * sizeof(WCHAR));
+	{
+		size_t units, bytes;
+		if (!__size_add_checked(nlen, 1, &units) ||
+		    !__size_mul_checked(units, sizeof(WCHAR), &bytes)) {
+			errno = ENOMEM; return -1;
+		}
+		tmp = __malloc(bytes);
+	}
 	if (!tmp) return -1;
 	for (i = 0; i < nlen; i++) tmp[i] = name[i] == '\\' ? '/' : name[i];
 	{
@@ -1055,3 +1067,5 @@ int __plat_chown_probe(int dirfd, const char *path, int flags)
 	NtClose(h);
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

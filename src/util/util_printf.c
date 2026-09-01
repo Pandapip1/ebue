@@ -101,6 +101,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include "util.h"
 
 /* ---- argument cursor ---------------------------------------------- */
@@ -192,7 +193,7 @@ static int g_status; /* sticky: any per-conversion error makes the whole run fai
 
 static void numeric_error(const char *arg)
 {
-	fprintf(stderr, "printf: %s: expected a numeric value\n", arg);
+	__util_diagf("printf: %s: expected a numeric value\n", arg);
 	g_status = 1;
 }
 
@@ -296,7 +297,11 @@ static const char *parse_spec(const char *p, struct spec *sp)
 	if (*p >= '0' && *p <= '9') {
 		int w = 0;
 		while (*p >= '0' && *p <= '9') {
-			if (w < SPEC_MAX) w = w * 10 + (*p - '0');
+			int digit = *p - '0';
+			if (w <= (SPEC_MAX - digit) / 10)
+				w = w * 10 + digit;
+			else
+				w = SPEC_MAX;
 			p++;
 		}
 		sp->width = w;
@@ -305,7 +310,11 @@ static const char *parse_spec(const char *p, struct spec *sp)
 		int pr = 0;
 		p++;
 		while (*p >= '0' && *p <= '9') {
-			if (pr < SPEC_MAX) pr = pr * 10 + (*p - '0');
+			int digit = *p - '0';
+			if (pr <= (SPEC_MAX - digit) / 10)
+				pr = pr * 10 + digit;
+			else
+				pr = SPEC_MAX;
 			p++;
 		}
 		sp->prec = pr;
@@ -321,28 +330,29 @@ static const char *parse_spec(const char *p, struct spec *sp)
  * same C rule src/stdio/printf.c's own formatter follows). */
 static void emit_padded(const char *sign, const char *body, const struct spec *sp, int zero_ok)
 {
-	int slen = sign ? (int)strlen(sign) : 0;
-	int blen = (int)strlen(body);
-	int total = slen + blen;
-	int pad = sp->width > total ? sp->width - total : 0;
+	size_t slen = sign ? strlen(sign) : 0;
+	size_t blen = strlen(body);
+	size_t total = slen + blen;
+	size_t pad = sp->width > 0 && (size_t)sp->width > total ?
+		(size_t)sp->width - total : 0;
 
 	if (sp->left) {
-		if (sign) fputs(sign, stdout);
-		fputs(body, stdout);
-		while (pad-- > 0) putchar(' ');
+		if (sign && fputs(sign, stdout) < 0) g_status = 1;
+		if (fputs(body, stdout) < 0) g_status = 1;
+		while (pad > 0) { putchar(' '); pad--; }
 	} else if (zero_ok && sp->zero) {
-		if (sign) fputs(sign, stdout);
-		while (pad-- > 0) putchar('0');
-		fputs(body, stdout);
+		if (sign && fputs(sign, stdout) < 0) g_status = 1;
+		while (pad > 0) { putchar('0'); pad--; }
+		if (fputs(body, stdout) < 0) g_status = 1;
 	} else {
-		while (pad-- > 0) putchar(' ');
-		if (sign) fputs(sign, stdout);
-		fputs(body, stdout);
+		while (pad > 0) { putchar(' '); pad--; }
+		if (sign && fputs(sign, stdout) < 0) g_status = 1;
+		if (fputs(body, stdout) < 0) g_status = 1;
 	}
 }
 
 /* Sized for SPEC_MAX (parse_spec()'s clamp): a precision up to
- * SPEC_MAX-1 zero-pads the digit buffer out to that many characters, so
+ * SPEC_MAX zero-pads the digit buffer out to that many characters, so
  * the buffer has to be at least that big, not just big enough for a
  * 64-bit value's own ~20 digits. */
 #define DIGBUF_MAX (SPEC_MAX + 32)
@@ -374,7 +384,7 @@ static void format_signed(const char *arg, const struct spec *sp)
 	emit_padded(sign, digs, sp, sp->prec < 0);
 }
 
-static void format_unsigned(const char *arg, const struct spec *sp, int base, int upper)
+static void format_unsigned(const char *arg, const struct spec *sp, int base, int upper) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned long v, orig;
 	char tmp[DIGBUF_MAX], digs[DIGBUF_MAX];
@@ -388,7 +398,14 @@ static void format_unsigned(const char *arg, const struct spec *sp, int base, in
 	if (v == 0 && sp->prec == 0) {
 		digs[0] = 0;
 	} else {
-		do { tmp[t++] = hex[v % (unsigned)base]; v /= (unsigned)base; } while (v);
+		/* All callers use base 8, 10, or 16, so a nonzero value reaches
+		 * zero well before this one-pass-per-value-bit guard. */
+		unsigned bits_left = (unsigned)(sizeof v * CHAR_BIT);
+		do {
+			tmp[t++] = hex[v % (unsigned)base];
+			v /= (unsigned)base;
+			bits_left--;
+		} while (v && bits_left > 0);
 		while (sp->prec > t) tmp[t++] = '0';
 		while (t > 0) digs[n++] = tmp[--t];
 		digs[n] = 0;
@@ -408,7 +425,11 @@ static void format_unsigned(const char *arg, const struct spec *sp, int base, in
 		 * grew to fill DIGBUF_MAX (a large -- but SPEC_MAX-clamped,
 		 * so still bounded -- precision). */
 		char withpfx[DIGBUF_MAX + 4];
-		snprintf(withpfx, sizeof withpfx, "%s%s", prefix, digs);
+		int n = snprintf(withpfx, sizeof withpfx, "%s%s", prefix, digs);
+		if (n < 0 || (size_t)n >= sizeof withpfx) {
+			withpfx[0] = 0;
+			g_status = 1;
+		}
 		emit_padded("", withpfx, sp, sp->prec < 0);
 	}
 }
@@ -420,16 +441,17 @@ static void format_unsigned(const char *arg, const struct spec *sp, int base, in
 static void format_str(const char *arg, const struct spec *sp)
 {
 	size_t len = strlen(arg);
-	int pad;
+	size_t pad;
 
 	if (sp->prec >= 0 && (size_t)sp->prec < len) len = (size_t)sp->prec;
-	pad = sp->width > (int)len ? sp->width - (int)len : 0;
+	pad = sp->width > 0 && (size_t)sp->width > len ?
+		(size_t)sp->width - len : 0;
 	if (sp->left) {
-		fwrite(arg, 1, len, stdout);
-		while (pad-- > 0) putchar(' ');
+		if (fwrite(arg, 1, len, stdout) != len) g_status = 1;
+		while (pad > 0) { putchar(' '); pad--; }
 	} else {
-		while (pad-- > 0) putchar(' ');
-		fwrite(arg, 1, len, stdout);
+		while (pad > 0) { putchar(' '); pad--; }
+		if (fwrite(arg, 1, len, stdout) != len) g_status = 1;
 	}
 }
 
@@ -462,6 +484,7 @@ static void format_float(const char *arg, const struct spec *sp, char conv)
 	int prec = sp->prec < 0 ? 6 : sp->prec;
 	const char *sign = "";
 	const char *body = buf;
+	int n;
 
 	if (arg_double(arg, &v) < 0) numeric_error(arg);
 
@@ -469,8 +492,17 @@ static void format_float(const char *arg, const struct spec *sp, char conv)
 	else if (sp->plus) sign = "+";
 	else if (sp->space) sign = " ";
 
-	snprintf(subfmt, sizeof subfmt, "%%.%d%c", prec, conv);
-	snprintf(buf, sizeof buf, subfmt, v);
+	n = snprintf(subfmt, sizeof subfmt, "%%.%d%c", prec, conv);
+	if (n < 0 || (size_t)n >= sizeof subfmt) {
+		buf[0] = 0;
+		g_status = 1;
+	} else {
+		n = snprintf(buf, sizeof buf, subfmt, v);
+		if (n < 0 || (size_t)n >= sizeof buf) {
+			buf[0] = 0;
+			g_status = 1;
+		}
+	}
 	emit_padded(sign, body, sp, sp->prec >= 0 ? 0 : 1);
 }
 
@@ -527,7 +559,7 @@ static int run_one_pass(const char *format, struct argcur *a)
 				if (expand_b_arg(arg)) return 1; /* \c: stop everything */
 				break;
 			default:
-				fprintf(stderr, "printf: %%%c: invalid conversion\n",
+				__util_diagf("printf: %%%c: invalid conversion\n",
 					sp.conv ? sp.conv : '?');
 				g_status = 1;
 				return 1; /* malformed format: stop rather than guess */
@@ -543,7 +575,7 @@ int __util_printf_main(int argc, char **argv)
 	const char *format;
 
 	if (argc < 2) {
-		fprintf(stderr, "printf: missing operand\n");
+		__util_diagf("printf: missing operand\n");
 		return 1;
 	}
 	format = argv[1];
@@ -561,5 +593,6 @@ int __util_printf_main(int argc, char **argv)
 		if (run_one_pass(format, &a)) break;
 	} while (a.i < a.n && a.any_this_pass);
 
+	if (fflush(stdout) != 0) g_status = 1;
 	return g_status;
 }

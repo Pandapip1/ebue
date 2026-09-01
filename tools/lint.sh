@@ -38,19 +38,22 @@
 #             promoted left operand's width, and every signed arithmetic result
 #             to remain representable.
 #   ownership currently opt-in while its initial proof backlog is triaged.
-#             A path-sensitive Clang checker infers ownership from ntlibc's
-#             allocator families, treats aliases as borrows, proves every
-#             release and synchronization-object lifecycle, and requires every
-#             dereference to have nonnull, live, in-bounds, aligned storage.
-#             Descriptor, stream, directory, semaphore, mapping, and handle
-#             acquire/use/release state is tracked as well.
+#             Manual header/stub contracts identify producers, reallocations,
+#             and unique freers. Path-sensitive checkers prove every dynamic
+#             allocation is released or transferred before function exit,
+#             independently prove freer bodies, treat aliases as borrows, prove
+#             synchronization-object lifecycles, and require every dereference
+#             to have nonnull, live, in-bounds, aligned storage. Descriptor,
+#             stream, directory, semaphore, mapping, and handle acquire/use/
+#             release state is tracked as well. `alloclife` is a compatibility
+#             alias for this merged stage.
 #   memcontracts
 #             currently opt-in; proves spans for memory and I/O operations and
 #             proves memcpy ranges do not overlap and string API arguments have
 #             reachable NUL sentinels.
 #   initproof on by default; path-sensitively proves that scalar and field
 #             loads do not read definitely uninitialized storage.
-#   fallible  currently opt-in; rejects discarded results from known fallible
+#   fallible  on by default; rejects discarded results from known fallible
 #             system, I/O, mapping, semaphore, and pthread APIs.
 #   provenance
 #             on by default. A Clang 18 analyzer plugin proves common
@@ -81,7 +84,7 @@
 #             back into internal static storage is not read, dereferenced,
 #             or passed on after a later call to the same (or, in general, a
 #             sibling) family member has invalidated it.
-#   lockset   currently opt-in while its initial proof backlog is triaged.
+#   lockset   on by default.
 #             Clang's own Thread Safety Analysis (-Wthread-safety), driven by
 #             capability/guarded_by/acquire_capability/release_capability
 #             attributes behind src/internal/thread_annotations.h's
@@ -90,7 +93,7 @@
 #             internal lock that is supposed to protect them is held --
 #             the "which lock guards this data" question `locks` above does
 #             not ask at all.
-#   variadic  currently opt-in; proves printf/scanf format literalness, argument
+#   variadic  on by default; proves printf/scanf format literalness, argument
 #             counts, promoted types, pointer targets, and length modifiers.
 #   signals   on by default; checks directly registered signal handlers for
 #             async-signal-safe calls and volatile sig_atomic_t-only writes.
@@ -101,7 +104,8 @@
 #             close()), and only after some call or direct assignment on
 #             that path could actually have set it (no trusting leftover
 #             errno state from function entry).
-#   purity    currently opt-in while its initial proof backlog is triaged.
+#   purity    on by default for false claims; eligible-but-unannotated
+#             candidates remain advisory and are listed in the reports.
 #             A Clang 18 AST plugin walks every function's whole body and
 #             reachable in-TU call graph and proves __attribute__((pure))
 #             eligibility (no errno, no writes through a pointer or global,
@@ -424,19 +428,21 @@ sources_for() {
 }
 
 # Getting the target ABI right matters here: both win32 targets are
-# ILP32/LLP64 (`long` is 32 bits on each), whereas native Linux x86_64 is
-# LP64.  A native pass with the wrong `long` still catches most of what we
-# care about, but it is not the same compile, so prefer, in order:
+# ILP32/LLP64 (`long` is 32 bits on each), while aarch64 is the Linux target
+# whose inline assembly and ABI-specific types require an aarch64 triple.
+# A native pass with the wrong ABI still catches most of what we care about,
+# but it is not the same compile, so prefer, in order:
 #
 #   1. clang --target=<triple>, which needs no cross toolchain installed at
 #      all, because -nostdinc means we never touch the target's headers;
-#   2. an installed mingw-w64 gcc;
+#   2. an installed target-prefixed gcc;
 #   3. the native compiler with -m32/-m64, with a printed caveat.
 #
 triple_for() {
 	case $1 in
 	i386)   echo i686-w64-mingw32 ;;
 	x86_64) echo x86_64-w64-mingw32 ;;
+	aarch64) echo aarch64-linux-gnu ;;
 	esac
 }
 
@@ -454,7 +460,7 @@ pick_cc() {
 		echo "clang --target=$triple"
 	elif [ -n "$triple" ] && command -v "$triple-$base" >/dev/null 2>&1; then
 		echo "$triple-$base"
-	elif command -v "$base" >/dev/null 2>&1; then
+	elif [ "$arch" != aarch64 ] && command -v "$base" >/dev/null 2>&1; then
 		echo "$base $bits"
 	fi
 }
@@ -754,17 +760,25 @@ stage_cppcheck() {
 	for arch in $LINT_ARCHS; do
 		gen_alltypes "$arch" || continue
 		out=$builddir/$arch.cppcheck.log
+		asm_define=
 		case "$arch" in
 		i386) arch_define=-D__i386__=1 ;;
 		x86_64) arch_define=-D__x86_64__=1 ;;
-		aarch64) arch_define=-D__aarch64__=1 ;;
+		aarch64)
+			arch_define=-D__aarch64__=1
+			# cppcheck does not parse GNU register variables such as
+			# `register long x8 __asm__("x8")`.  Strip only that
+			# function-like declaration suffix; statement-form
+			# `__asm__ volatile (...)` remains visible to its parser.
+			asm_define='-D__asm__(x)='
+			;;
 		esac
 		# shellcheck disable=SC2046,SC2086
 		cppcheck --quiet --enable=warning,portability --std=c99 --max-configs=12 \
 			--inline-suppr --suppressions-list="$suppr" \
 			--error-exitcode=0 -j "$LINT_JOBS" \
 			-DNTLIBC_LINT=1 -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL \
-			"$arch_define" \
+			"$arch_define" $asm_define \
 			-Iarch/"$arch" -Iarch/generic -I"$builddir/$arch/include" \
 			-Iinclude -Isrc/internal \
 			$(sources_for "$arch") > "$out" 2>&1
@@ -1051,11 +1065,15 @@ stage_arithub() {
 		tools/clang/SizeCastChecker.cpp -o "$plugin" "$clang_cpp" \
 		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
 
+	# These built-ins add a same-operation assumption before a plugin's
+	# PreStmt callback.  Disable only the overlapping checks so ntlibc's
+	# checkers prove their own obligations from the real current path state.
 	fixture_log=$builddir/arithmetic-ub-fixtures.log
 	: > "$fixture_log"
 	for fixture in tools/lint-arithmetic-ub-fixtures/*.c; do
 		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
 			-Xclang -analyzer-checker=ntlibc.Divisor,ntlibc.ShiftCount,ntlibc.SignedArithmetic \
+			-Xclang -analyzer-disable-checker=core.DivideZero,core.BitwiseShift \
 			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
 			>> "$fixture_log" 2>&1 || any=1
 	done
@@ -1077,6 +1095,7 @@ stage_arithub() {
 			# shellcheck disable=SC2086
 			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
 				-Xclang -analyzer-checker=ntlibc.Divisor,ntlibc.ShiftCount,ntlibc.SignedArithmetic \
+				-Xclang -analyzer-disable-checker=core.DivideZero,core.BitwiseShift \
 				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
 				> "'"$pardir"'/$id.log" 2>&1
 		' _ {} clang-18 "$plugin" "$target" $flags
@@ -1108,7 +1127,7 @@ stage_arithub() {
 }
 
 stage_ownership() {
-	hdr "borrow and ownership proof obligations"
+	hdr "ownership, allocation lifetime, and borrow proof obligations"
 	any=0
 	require_tool clang-18 || return $missing
 	require_tool clang++-18 || return $missing
@@ -1125,27 +1144,40 @@ stage_ownership() {
 	# llvm-config deliberately returns shell words, not one argument.
 	# shellcheck disable=SC2046
 	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
-		tools/clang/OwnershipChecker.cpp -o "$plugin" "$clang_cpp" \
+		tools/clang/OwnershipChecker.cpp \
+		tools/clang/AllocationLifetimeChecker.cpp \
+		-o "$plugin" "$clang_cpp" \
 		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
 
 	fixture_log=$builddir/ownership-fixtures.log
 	: > "$fixture_log"
 	for fixture in tools/lint-ownership-fixtures/*.c; do
 		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
-			-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.OwnedConstruct,ntlibc.ValidPointer,ntlibc.Resource \
+			-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.OwnedConstruct,ntlibc.OwnershipContract,ntlibc.CapabilityToken,ntlibc.OwnershipType,ntlibc.ValidPointer,ntlibc.Resource \
 			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
 			>> "$fixture_log" 2>&1 || any=1
 	done
 	tools/lint-ownership.py --fixtures "$fixture_log" || any=1
 
+	allocation_fixture_log=$builddir/allocation-lifetime-fixtures.log
+	: > "$allocation_fixture_log"
+	for fixture in tools/lint-allocation-lifetime-fixtures/*.c; do
+		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
+			-Xclang -analyzer-checker=ntlibc.AllocationLifetime \
+			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
+			>> "$allocation_fixture_log" 2>&1 || any=1
+	done
+	tools/lint-allocation-lifetime.py --fixtures "$allocation_fixture_log" || any=1
+
 	analyzed=0
 	for arch in $LINT_ARCHS; do
 		gen_alltypes "$arch" || { any=1; continue; }
-		flags=$(cppflags_for "$arch")
+		flags="$(cppflags_for "$arch")"
 		target=$(pick_target "$arch")
 		nsrc=$(sources_for "$arch" | grep -c . || true)
 		out=$builddir/$arch.ownership.log
 		report=$builddir/$arch.ownership.report
+		allocation_report=$builddir/$arch.allocation-lifetime.report
 		pardir=$(mktemp -d "$builddir/ownership.XXXXXX") || return 1
 		# shellcheck disable=SC2086,SC2016
 		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
@@ -1153,12 +1185,13 @@ stage_ownership() {
 			id=$(printf %s "$f" | tr / _)
 			owner="'"$pardir"'/$id.owner"
 			pointer="'"$pardir"'/$id.pointer"
+			allocation="'"$pardir"'/$id.allocation"
 			combined="'"$pardir"'/$id.log"
 			# Keep the high-volume pointer proof search from consuming the
 			# exploration budget needed by ownership/lifecycle proofs.
 			# shellcheck disable=SC2086
 			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
-				-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.OwnedConstruct,ntlibc.Resource \
+				-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.OwnedConstruct,ntlibc.OwnershipContract,ntlibc.CapabilityToken,ntlibc.OwnershipType,ntlibc.Resource \
 				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
 				> "$owner" 2>&1
 			owner_rc=$?
@@ -1169,8 +1202,17 @@ stage_ownership() {
 				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
 				> "$pointer" 2>&1
 			pointer_rc=$?
-			cat "$owner" "$pointer" > "$combined"
-			[ "$owner_rc" -eq 0 ] && [ "$pointer_rc" -eq 0 ]
+			# Allocation lifetime has its own state space and path budget, but
+			# consumes the same declaration axioms from this combined plugin.
+			# shellcheck disable=SC2086
+			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
+				-Xclang -analyzer-checker=ntlibc.AllocationLifetime \
+				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
+				> "$allocation" 2>&1
+			allocation_rc=$?
+			cat "$owner" "$pointer" "$allocation" > "$combined"
+			[ "$owner_rc" -eq 0 ] && [ "$pointer_rc" -eq 0 ] && \
+				[ "$allocation_rc" -eq 0 ]
 		' _ {} clang-18 "$plugin" "$target" $flags
 		runrc=$?
 		nlog=$(find "$pardir" -name '*.log' 2>/dev/null | grep -c . || true)
@@ -1189,6 +1231,14 @@ stage_ownership() {
 		else
 			note "ownership proofs [$arch]: findings -> $report"
 			show_findings "$report"
+			any=1
+		fi
+		if tools/lint-allocation-lifetime.py --fixtures "$allocation_fixture_log" \
+			"$out" > "$allocation_report" 2>&1; then
+			note "allocation lifetime proofs [$arch]: proved -> $allocation_report"
+		else
+			note "allocation lifetime proofs [$arch]: findings -> $allocation_report"
+			show_findings "$allocation_report"
 			any=1
 		fi
 	done
@@ -1218,7 +1268,8 @@ stage_memcontracts() {
 	for fixture in tools/lint-memory-contract-fixtures/*.c; do
 		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
 			-Xclang -analyzer-checker=ntlibc.MemoryContract,ntlibc.StringSentinel \
-			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
+			-Xclang -analyzer-output=text \
+			-DNTLIBC_MEMORY_CONTRACT_ANALYSIS "$fixture" -o /dev/null \
 			>> "$fixture_log" 2>&1 || any=1
 	done
 	tools/lint-memory-contracts.py --fixtures "$fixture_log" || any=1
@@ -1237,7 +1288,8 @@ stage_memcontracts() {
 			# shellcheck disable=SC2086
 			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
 				-Xclang -analyzer-checker=ntlibc.MemoryContract,ntlibc.StringSentinel \
-				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
+				-Xclang -analyzer-output=text \
+				-DNTLIBC_MEMORY_CONTRACT_ANALYSIS "$@" "$f" -o /dev/null \
 				> "'"$pardir"'/$id.log" 2>&1
 		' _ {} clang-18 "$plugin" "$target" $flags
 		runrc=$?; nlog=$(find "$pardir" -name '*.log' | grep -c . || true)
@@ -1539,7 +1591,10 @@ stage_lockset() {
 			continue
 		fi
 		analyzed=$((analyzed + 1))
-		n=$(grep -E '(warning|error):' "$out" | sed 's/^ *//' | sort -u \
+		# This stage owns thread-safety diagnostics, not unrelated warnings
+		# emitted incidentally by the syntax-only compile. Compiler errors
+		# remain fatal because an uncompiled translation unit proves nothing.
+		n=$(grep -E 'error:|warning:.*\[-Wthread-safety[^]]*\]' "$out" | sed 's/^ *//' | sort -u \
 			| tee "$out.uniq" | wc -l)
 		note "lockset [$arch]: $nsrc file(s), $n unique diagnostic(s) -> $out.uniq"
 		show_findings "$out.uniq" warning
@@ -1863,7 +1918,18 @@ stage_purity() {
 	return $any
 }
 
-stages=${*:-warn analyze cppcheck shell sizearith locks provenance reentrancy signals abizeroinit initproof errno undefined unreferenced widthmod}
+requested_stages=${*:-warn analyze cppcheck shell sizearith fallible locks lockset provenance reentrancy variadic signals abizeroinit initproof errno purity undefined unreferenced widthmod}
+stages=
+for requested_stage in $requested_stages; do
+	case $requested_stage in
+	alloclife) normalized_stage=ownership ;;
+	*) normalized_stage=$requested_stage ;;
+	esac
+	case " $stages " in
+	*" $normalized_stage "*) ;;
+	*) stages="$stages $normalized_stage" ;;
+	esac
+done
 mkdir -p "$builddir" || exit 1
 
 # Generate every arch's alltypes.h once, up front, before any stage that

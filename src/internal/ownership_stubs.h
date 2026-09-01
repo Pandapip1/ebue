@@ -1,0 +1,55 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#ifndef _NTLIBC_OWNERSHIP_STUBS_H
+#define _NTLIBC_OWNERSHIP_STUBS_H
+
+/* These declarations are the leaf axioms used to connect a concrete state
+ * transition in a function body to its ownership-token contract.  They are
+ * visible only to the static analyzer; ordinary builds erase each proof call
+ * and therefore gain neither a runtime dependency nor a private ABI. */
+#ifdef __clang_analyzer__
+
+
+void __ownership_pthread_mutex_initialized(void * grant(pthread_mutex_unlocked));
+
+void __ownership_pthread_mutex_locked(void * consume(pthread_mutex_unlocked) grant(pthread_mutex_locked));
+
+void __ownership_pthread_mutex_unlocked(void * consume(pthread_mutex_locked) grant(pthread_mutex_unlocked));
+
+void __ownership_pthread_mutex_destroyed(void * consume(pthread_mutex_unlocked));
+
+void __ownership_pthread_spin_initialized(void * grant(pthread_spin_unlocked));
+void __ownership_pthread_spin_locked(void * consume(pthread_spin_unlocked) grant(pthread_spin_locked));
+void __ownership_pthread_spin_unlocked(void * consume(pthread_spin_locked) grant(pthread_spin_unlocked));
+void __ownership_pthread_spin_destroyed(void * consume(pthread_spin_unlocked));
+
+void __ownership_pthread_rwlock_initialized(void * grant(pthread_rwlock_unlocked));
+void __ownership_pthread_rwlock_read_locked(void *
+	consume_any(pthread_rwlock_unlocked) consume_any(pthread_rwlock_shared)
+	grant(pthread_rwlock_shared));
+void __ownership_pthread_rwlock_write_locked(void *
+	consume(pthread_rwlock_unlocked) grant(pthread_rwlock_exclusive));
+void __ownership_pthread_rwlock_unlocked(void *
+	consume_any(pthread_rwlock_shared) consume_any(pthread_rwlock_exclusive)
+	grant(pthread_rwlock_unlocked));
+void __ownership_pthread_rwlock_destroyed(void *
+	consume(pthread_rwlock_unlocked));
+
+#else
+
+#define __ownership_pthread_mutex_initialized(object) ((void)0)
+#define __ownership_pthread_mutex_locked(object) ((void)0)
+#define __ownership_pthread_mutex_unlocked(object) ((void)0)
+#define __ownership_pthread_mutex_destroyed(object) ((void)0)
+#define __ownership_pthread_spin_initialized(object) ((void)0)
+#define __ownership_pthread_spin_locked(object) ((void)0)
+#define __ownership_pthread_spin_unlocked(object) ((void)0)
+#define __ownership_pthread_spin_destroyed(object) ((void)0)
+#define __ownership_pthread_rwlock_initialized(object) ((void)0)
+#define __ownership_pthread_rwlock_read_locked(object) ((void)0)
+#define __ownership_pthread_rwlock_write_locked(object) ((void)0)
+#define __ownership_pthread_rwlock_unlocked(object) ((void)0)
+#define __ownership_pthread_rwlock_destroyed(object) ((void)0)
+
+#endif
+#endif

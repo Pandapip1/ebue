@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <pthread.h>
 #include <errno.h>
 #include <sched.h>
@@ -7,6 +12,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "pthread_impl.h"
+#include "ownership_stubs.h"
 #include "plat_thread.h"
 #include "plat_fd.h"
 
@@ -49,23 +55,23 @@ typedef char mutexattr_data_fits_public_storage[
 
 static struct mutex_data *mutex_data(pthread_mutex_t *mutex)
 {
-	return (struct mutex_data *)(void *)mutex;
+	return (struct mutex_data *)(void *)mutex; // NOLINT(bugprone-casting-through-void) -- public pthread_mutex_t is opaque storage for this ABI-defined internal layout
 }
 
 static const struct mutex_data *const_mutex_data(const pthread_mutex_t *mutex)
 {
-	return (const struct mutex_data *)(const void *)mutex;
+	return (const struct mutex_data *)(const void *)mutex; // NOLINT(bugprone-casting-through-void) -- public pthread_mutex_t is opaque storage for this ABI-defined internal layout
 }
 
 static struct mutexattr_data *mutexattr_data(pthread_mutexattr_t *attr)
 {
-	return (struct mutexattr_data *)(void *)attr;
+	return (struct mutexattr_data *)(void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_mutexattr_t is opaque storage for this ABI-defined internal layout
 }
 
 static const struct mutexattr_data *const_mutexattr_data(
 	const pthread_mutexattr_t *attr)
 {
-	return (const struct mutexattr_data *)(const void *)attr;
+	return (const struct mutexattr_data *)(const void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_mutexattr_t is opaque storage for this ABI-defined internal layout
 }
 
 static int valid_type(int type)
@@ -147,8 +153,9 @@ static int mutex_ready(pthread_mutex_t *mutex)
 	return error;
 }
 
-int pthread_mutex_init(pthread_mutex_t *__restrict mutex,
-	const pthread_mutexattr_t *__restrict attr)
+
+int pthread_mutex_init(pthread_mutex_t *__restrict mutex construct(pthread_mutex) static_handle(pthread_mutex) grant(pthread_mutex_unlocked),
+	const pthread_mutexattr_t *__restrict attr handle(pthread_mutexattr))
 {
 	struct mutex_data *data;
 	const struct mutexattr_data *attributes = 0;
@@ -161,7 +168,7 @@ int pthread_mutex_init(pthread_mutex_t *__restrict mutex,
 	}
 	error = create_semaphore(&semaphore);
 	if (error) return error;
-	memset(mutex, 0, sizeof *mutex);
+	memset(mutex, 0, sizeof *mutex); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- initializes caller-supplied opaque storage before constructing the mutex; no live object is copied
 	data = mutex_data(mutex);
 	data->magic = MUTEX_MAGIC;
 	data->semaphore = semaphore;
@@ -171,6 +178,7 @@ int pthread_mutex_init(pthread_mutex_t *__restrict mutex,
 	data->prioceiling = attributes ? attributes->prioceiling :
 		sched_get_priority_min(SCHED_FIFO);
 	data->robust = attributes ? attributes->robust : PTHREAD_MUTEX_STALLED;
+	__ownership_pthread_mutex_initialized(mutex);
 	return 0;
 }
 
@@ -185,7 +193,8 @@ int pthread_mutex_init(pthread_mutex_t *__restrict mutex,
  * as an honest residual rather than force-fit. pthread_mutex_
  * setprioceiling() below shares the identical shape via
  * pthread_mutex_lock(), which bottoms out in the same mutex_ready(). */
-int pthread_mutex_destroy(pthread_mutex_t *mutex)
+
+int pthread_mutex_destroy(pthread_mutex_t *mutex destroy(pthread_mutex) static_handle(pthread_mutex) consume(pthread_mutex_unlocked))
 {
 	struct mutex_data *data;
 	__plat_handle_t semaphore;
@@ -202,10 +211,12 @@ int pthread_mutex_destroy(pthread_mutex_t *mutex)
 	data->magic = MUTEX_DEAD;
 	__plat_fast_unlock();
 	if (semaphore) __plat_close(semaphore);
+	__ownership_pthread_mutex_destroyed(mutex);
 	return 0;
 }
 
-static int mutex_acquire(pthread_mutex_t *mutex,
+
+static int mutex_acquire(pthread_mutex_t *mutex consume(pthread_mutex_unlocked) grant(pthread_mutex_locked),
 	const struct timespec *absolute, int try_only)
 {
 	struct mutex_data *data;
@@ -245,13 +256,19 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 			data->owner_pid = getpid();
 			data->recursion = 1;
 			__plat_fast_unlock();
-			return data->robust == PTHREAD_MUTEX_ROBUST &&
-				data->robust_state == ROBUST_OWNER_DEAD ? EOWNERDEAD : 0;
+			if (data->robust == PTHREAD_MUTEX_ROBUST &&
+			    data->robust_state == ROBUST_OWNER_DEAD) {
+				__ownership_pthread_mutex_locked(mutex);
+				return EOWNERDEAD;
+			}
+			__ownership_pthread_mutex_locked(mutex);
+			return 0;
 		}
 		if (owned_by(data, self)) {
 			if (data->type == PTHREAD_MUTEX_RECURSIVE) {
 				data->recursion++;
 				__plat_fast_unlock();
+				__ownership_pthread_mutex_locked(mutex);
 				return 0;
 			}
 			if (data->type == PTHREAD_MUTEX_ERRORCHECK || try_only) {
@@ -298,24 +315,28 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 	}
 }
 
-int pthread_mutex_lock(pthread_mutex_t *mutex)
+
+int pthread_mutex_lock(pthread_mutex_t *mutex handle(pthread_mutex) static_handle(pthread_mutex) consume(pthread_mutex_unlocked) grant(pthread_mutex_locked))
 {
 	return mutex_acquire(mutex, 0, 0);
 }
 
-int pthread_mutex_trylock(pthread_mutex_t *mutex)
+
+int pthread_mutex_trylock(pthread_mutex_t *mutex handle(pthread_mutex) static_handle(pthread_mutex) consume(pthread_mutex_unlocked) grant(pthread_mutex_locked))
 {
 	return mutex_acquire(mutex, 0, 1);
 }
 
-int pthread_mutex_timedlock(pthread_mutex_t *__restrict mutex,
+
+int pthread_mutex_timedlock(pthread_mutex_t *__restrict mutex handle(pthread_mutex) static_handle(pthread_mutex) consume(pthread_mutex_unlocked) grant(pthread_mutex_locked),
 	const struct timespec *__restrict absolute)
 {
 	if (!absolute) return EINVAL;
 	return mutex_acquire(mutex, absolute, 0);
 }
 
-int pthread_mutex_unlock(pthread_mutex_t *mutex)
+
+int pthread_mutex_unlock(pthread_mutex_t *mutex handle(pthread_mutex) static_handle(pthread_mutex) consume(pthread_mutex_locked) grant(pthread_mutex_unlocked))
 {
 	struct mutex_data *data;
 	struct __pthread *self = __pthread_current();
@@ -340,10 +361,12 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
 	}
 	__plat_fast_unlock();
 	if (wake) __plat_semaphore_post(data->semaphore);
+	__ownership_pthread_mutex_unlocked(mutex);
 	return 0;
 }
 
-int pthread_mutex_getprioceiling(const pthread_mutex_t *__restrict mutex,
+
+int pthread_mutex_getprioceiling(const pthread_mutex_t *__restrict mutex handle(pthread_mutex) static_handle(pthread_mutex),
 	int *__restrict ceiling)
 {
 	const struct mutex_data *data;
@@ -356,7 +379,8 @@ int pthread_mutex_getprioceiling(const pthread_mutex_t *__restrict mutex,
 	return 0;
 }
 
-int pthread_mutex_setprioceiling(pthread_mutex_t *__restrict mutex,
+
+int pthread_mutex_setprioceiling(pthread_mutex_t *__restrict mutex handle(pthread_mutex) static_handle(pthread_mutex) withtok(pthread_mutex_unlocked),
 	int ceiling, int *__restrict old_ceiling)
 {
 	struct mutex_data *data;
@@ -370,7 +394,8 @@ int pthread_mutex_setprioceiling(pthread_mutex_t *__restrict mutex,
 	return pthread_mutex_unlock(mutex);
 }
 
-int pthread_mutex_consistent(pthread_mutex_t *mutex)
+
+int pthread_mutex_consistent(pthread_mutex_t *mutex handle(pthread_mutex) static_handle(pthread_mutex) withtok(pthread_mutex_locked))
 {
 	struct mutex_data *data;
 	struct __pthread *self;
@@ -389,7 +414,8 @@ int pthread_mutex_consistent(pthread_mutex_t *mutex)
 	return error;
 }
 
-int pthread_mutexattr_init(pthread_mutexattr_t *attr)
+
+int pthread_mutexattr_init(pthread_mutexattr_t *attr construct(pthread_mutexattr))
 {
 	struct mutexattr_data *data;
 	if (!attr) return EINVAL;
@@ -404,14 +430,16 @@ int pthread_mutexattr_init(pthread_mutexattr_t *attr)
 	return 0;
 }
 
-int pthread_mutexattr_destroy(pthread_mutexattr_t *attr)
+
+int pthread_mutexattr_destroy(pthread_mutexattr_t *attr destroy(pthread_mutexattr))
 {
 	if (!attr || mutexattr_data(attr)->magic != MUTEXATTR_MAGIC) return EINVAL;
 	memset(attr, 0, sizeof *attr);
 	return 0;
 }
 
-int pthread_mutexattr_getpshared(const pthread_mutexattr_t *__restrict attr,
+
+int pthread_mutexattr_getpshared(const pthread_mutexattr_t *__restrict attr handle(pthread_mutexattr),
 	int *__restrict output)
 {
 	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
@@ -420,7 +448,8 @@ int pthread_mutexattr_getpshared(const pthread_mutexattr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_mutexattr_gettype(const pthread_mutexattr_t *__restrict attr,
+
+int pthread_mutexattr_gettype(const pthread_mutexattr_t *__restrict attr handle(pthread_mutexattr),
 	int *__restrict output)
 {
 	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
@@ -429,7 +458,8 @@ int pthread_mutexattr_gettype(const pthread_mutexattr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *__restrict attr,
+
+int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *__restrict attr handle(pthread_mutexattr),
 	int *__restrict output)
 {
 	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
@@ -438,7 +468,8 @@ int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_mutexattr_getprioceiling(const pthread_mutexattr_t *__restrict attr,
+
+int pthread_mutexattr_getprioceiling(const pthread_mutexattr_t *__restrict attr handle(pthread_mutexattr),
 	int *__restrict output)
 {
 	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
@@ -447,7 +478,8 @@ int pthread_mutexattr_getprioceiling(const pthread_mutexattr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_mutexattr_getrobust(const pthread_mutexattr_t *__restrict attr,
+
+int pthread_mutexattr_getrobust(const pthread_mutexattr_t *__restrict attr handle(pthread_mutexattr),
 	int *__restrict output)
 {
 	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
@@ -456,7 +488,8 @@ int pthread_mutexattr_getrobust(const pthread_mutexattr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_mutexattr_setpshared(pthread_mutexattr_t *attr, int value)
+
+int pthread_mutexattr_setpshared(pthread_mutexattr_t *attr handle(pthread_mutexattr), int value)
 {
 	if (!attr || mutexattr_data(attr)->magic != MUTEXATTR_MAGIC ||
 	    !valid_pshared(value)) return EINVAL;
@@ -464,7 +497,8 @@ int pthread_mutexattr_setpshared(pthread_mutexattr_t *attr, int value)
 	return 0;
 }
 
-int pthread_mutexattr_settype(pthread_mutexattr_t *attr, int value)
+
+int pthread_mutexattr_settype(pthread_mutexattr_t *attr handle(pthread_mutexattr), int value)
 {
 	if (!attr || mutexattr_data(attr)->magic != MUTEXATTR_MAGIC ||
 	    !valid_type(value)) return EINVAL;
@@ -472,7 +506,8 @@ int pthread_mutexattr_settype(pthread_mutexattr_t *attr, int value)
 	return 0;
 }
 
-int pthread_mutexattr_setprotocol(pthread_mutexattr_t *attr, int value)
+
+int pthread_mutexattr_setprotocol(pthread_mutexattr_t *attr handle(pthread_mutexattr), int value)
 {
 	if (!attr || mutexattr_data(attr)->magic != MUTEXATTR_MAGIC ||
 	    !valid_protocol(value)) return EINVAL;
@@ -480,7 +515,8 @@ int pthread_mutexattr_setprotocol(pthread_mutexattr_t *attr, int value)
 	return 0;
 }
 
-int pthread_mutexattr_setprioceiling(pthread_mutexattr_t *attr, int value)
+
+int pthread_mutexattr_setprioceiling(pthread_mutexattr_t *attr handle(pthread_mutexattr), int value)
 {
 	if (!attr || mutexattr_data(attr)->magic != MUTEXATTR_MAGIC ||
 	    !valid_ceiling(value)) return EINVAL;
@@ -488,10 +524,13 @@ int pthread_mutexattr_setprioceiling(pthread_mutexattr_t *attr, int value)
 	return 0;
 }
 
-int pthread_mutexattr_setrobust(pthread_mutexattr_t *attr, int value)
+
+int pthread_mutexattr_setrobust(pthread_mutexattr_t *attr handle(pthread_mutexattr), int value)
 {
 	if (!attr || mutexattr_data(attr)->magic != MUTEXATTR_MAGIC ||
 	    !valid_robust(value)) return EINVAL;
 	mutexattr_data(attr)->robust = value;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

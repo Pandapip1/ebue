@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+withtok(heap_allocated)
 wchar_t *wcsdup(const wchar_t *s)
 {
 	size_t n = (wcslen(s) + 1) * sizeof(wchar_t);

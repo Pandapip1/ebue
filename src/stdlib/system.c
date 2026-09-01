@@ -114,12 +114,14 @@
 /* Resolve the shell to run commands through, or 0 (errno set) if none
  * can be found.  See the header comment for why ComSpec, checked with
  * access() ourselves, comes first. */
+withtok(heap_allocated)
 static char *find_shell(void)
 {
 	const char *cs = getenv("ComSpec");
 	if (cs && *cs && access(cs, X_OK) == 0) {
-		char *r = malloc(strlen(cs) + 1);
-		if (r) strcpy(r, cs);
+		size_t n = strlen(cs) + 1;
+		char *r = malloc(n);
+		if (r) memcpy(r, cs, n);
 		return r;
 	}
 	return __find_program("cmd.exe", 1);
@@ -167,8 +169,10 @@ int system(const char *command)
 		}
 
 		sigprocmask(SIG_SETMASK, &oldmask, 0);
-		signal(SIGQUIT, old_quit);
-		signal(SIGINT, old_int);
+		/* Restoration is cleanup after the command status is fixed; a
+		 * secondary failure must not overwrite that primary result. */
+		(void)signal(SIGQUIT, old_quit);
+		(void)signal(SIGINT, old_int);
 
 		if (status == -1) errno = saved_errno;
 	}

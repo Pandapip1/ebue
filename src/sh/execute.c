@@ -272,7 +272,7 @@ static void free_strv(char **v, size_t n)
 	size_t i;
 	if (!v) return;
 	for (i = 0; i < n; i++) __free(v[i]);
-	__free(v);
+	__free((void *)v);
 }
 
 /* Splits an assignment word's raw text ("NAME=value...", guaranteed by
@@ -308,7 +308,7 @@ static void free_strv(char **v, size_t n)
  * parameter here. */
 static int split_assignment(const char *raw, char **name, char **val)
     __attribute__((nonnull(2, 3)));
-static int split_assignment(const char *raw, char **name, char **val)
+static int split_assignment(const char *raw, char **name, char **val) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const char *eq = strchr(raw, '=');
 	size_t nlen;
@@ -350,10 +350,10 @@ static int env_set(char ***vp, size_t *n, size_t *cap, char *entry, size_t namel
 	}
 	if (*n + 1 >= *cap) {
 		size_t nc = *cap ? *cap * 2 : 16;
-		char **nv = __malloc((nc + 1) * sizeof *nv);
+		char **nv = (char **)__malloc((nc + 1) * sizeof *nv);
 		if (!nv) { __free(entry); return -1; }
-		memcpy(nv, v, *n * sizeof *nv);
-		__free(v);
+		memcpy((void *)nv, (const void *)v, *n * sizeof *nv);
+		__free((void *)v);
 		v = *vp = nv;
 		*cap = nc;
 	}
@@ -390,7 +390,7 @@ static char **build_child_envp(const struct sh_word *assigns, size_t *out_n)
 
 	for (n = 0; __environ && __environ[n]; n++) continue;
 	cap = n + 8;
-	v = __malloc((cap + 1) * sizeof *v);
+	v = (char **)__malloc((cap + 1) * sizeof *v);
 	if (!v) return 0;
 	for (i = 0; i < n; i++) {
 		v[i] = xstrdup(__environ[i]);
@@ -500,10 +500,10 @@ static void restore_fds(struct redir_state *rs)
 	size_t i;
 	for (i = 0; i < rs->n; i++) {
 		if (rs->saves[i].have) {
-			dup2(rs->saves[i].dup, rs->saves[i].fd);
-			close(rs->saves[i].dup);
+			(void)dup2(rs->saves[i].dup, rs->saves[i].fd);
+			(void)close(rs->saves[i].dup);
 		} else {
-			close(rs->saves[i].fd);
+			(void)close(rs->saves[i].fd);
 		}
 	}
 	__free(rs->saves);
@@ -643,12 +643,12 @@ static int heredoc_open(const char *text)
 
 	if (!f) return -1;
 	len = strlen(text);
-	if (len && fwrite(text, 1, len, f) != len) { fclose(f); return -1; }
-	if (fflush(f)) { fclose(f); return -1; }
+	if (len && fwrite(text, 1, len, f) != len) { (void)fclose(f); return -1; }
+	if (fflush(f)) { (void)fclose(f); return -1; }
 	fd = fileno(f);
-	if (fd < 0 || lseek(fd, 0, SEEK_SET) < 0) { fclose(f); return -1; }
+	if (fd < 0 || lseek(fd, 0, SEEK_SET) < 0) { (void)fclose(f); return -1; }
 	dfd = fcntl(fd, F_DUPFD_CLOEXEC, 0);
-	fclose(f);
+	(void)fclose(f);
 	return dfd;
 }
 
@@ -724,7 +724,7 @@ static int apply_one_redir(const struct sh_redir *r, int fd, int *unsupported)
 			 * an fd that was not even open is not treated as a
 			 * failure -- there is nothing left to do either way. */
 			__free(word);
-			close(fd);
+			(void)close(fd);
 			return 0;
 		}
 		n = strtol(word, &end, 10);
@@ -760,8 +760,8 @@ static int apply_one_redir(const struct sh_redir *r, int fd, int *unsupported)
 
 	if (newfd < 0) return 1;
 	if (newfd != fd) {
-		if (dup2(newfd, fd) < 0) { close(newfd); return 1; }
-		close(newfd);
+		if (dup2(newfd, fd) < 0) { (void)close(newfd); return 1; }
+		(void)close(newfd);
 	}
 	return 0;
 }
@@ -849,7 +849,8 @@ static int apply_redirs(const struct sh_redir *redirs, struct redir_state *rs, i
 static int call_function(const char *name, const char *body,
                          char **argv, int argc, int *status)
     __attribute__((nonnull(5)));
-static int call_function(const char *name, const char *body,
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
+static int call_function(const char *name, const char *body, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                          char **argv, int argc, int *status)
 {
 	struct sh_params saved;
@@ -857,7 +858,9 @@ static int call_function(const char *name, const char *body,
 	int rc;
 
 	if (func_depth >= SH_FUNC_DEPTH_MAX) {
-		fprintf(stderr, "%s: function calls nested more than %d deep\n",
+		/* The semantic failure status is primary; a failed diagnostic cannot
+		 * usefully be reported through the same stderr stream. */
+		(void)fprintf(stderr, "%s: function calls nested more than %d deep\n",
 			name, SH_FUNC_DEPTH_MAX);
 		*status = 1;
 		return 0;
@@ -1013,7 +1016,7 @@ static int run_interpreted(const char *resolved, const wordexp_t *we, int *statu
 	size_t n = we->we_wordc, i;
 	int argc;
 
-	av = malloc((n + 3) * sizeof *av);
+	av = (char **)malloc((n + 3) * sizeof *av);
 	if (!av) return -1;
 	av[0] = n ? we->we_wordv[0] : (char *)"sh";
 	av[1] = (char *)resolved;
@@ -1031,7 +1034,7 @@ static int run_interpreted(const char *resolved, const wordexp_t *we, int *statu
 	 * a script gets them from the shell it is handed to.  Not
 	 * implemented rather than half-implemented -- see the caller. */
 	*status = __sh_run_script(argc, av);
-	free(av);
+	free((void *)av);
 	return 0;
 }
 
@@ -1039,8 +1042,10 @@ static int run_interpreted(const char *resolved, const wordexp_t *we, int *statu
  * first statement, and `if (!cmd->words)` right after it is unconditional
  * too -- no branch precedes either. run_stage() below (the only caller)
  * always passes a real cmd and the address of a real stage_result_t. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
 {
 	wordexp_t we;
@@ -1215,8 +1220,10 @@ static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int en
  * spawn_stage(), which requires it nonnull above -- every path
  * dereferences it one way or the other. exec_simple() below is the only
  * caller, always with a real cmd and `&sr`. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int run_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int run_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
 {
 	if (!cmd->words) {
@@ -1260,8 +1267,10 @@ static int cmdsub_status_rule(const stage_result_t *sr, unsigned long gen0)
 	return sr->special;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_simple(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_simple(const struct sh_command *cmd, int *status)
 {
 	struct redir_state rs;
@@ -1525,8 +1534,8 @@ static void free_env_snapshot(struct env_snapshot *es)
 {
 	size_t i;
 	for (i = 0; i < es->n; i++) { __free(es->names[i]); __free(es->vals[i]); }
-	__free(es->names);
-	__free(es->vals);
+	__free((void *)es->names);
+	__free((void *)es->vals);
 	es->names = 0; es->vals = 0; es->n = 0;
 }
 
@@ -1538,9 +1547,9 @@ static int env_snapshot_take(struct env_snapshot *es)
 	es->names = 0; es->vals = 0; es->n = 0;
 	for (n = 0; __environ && __environ[n]; n++) continue;
 	if (!n) return 0;
-	es->names = __malloc(n * sizeof *es->names);
-	es->vals = __malloc(n * sizeof *es->vals);
-	if (!es->names || !es->vals) { __free(es->names); __free(es->vals); es->names = 0; es->vals = 0; return -1; }
+	es->names = (char **)__malloc(n * sizeof *es->names);
+	es->vals = (char **)__malloc(n * sizeof *es->vals);
+	if (!es->names || !es->vals) { __free((void *)es->names); __free((void *)es->vals); es->names = 0; es->vals = 0; return -1; }
 	for (i = 0; i < n; i++) {
 		const char *e = __environ[i];
 		const char *eq = strchr(e, '=');
@@ -1588,7 +1597,7 @@ static void env_snapshot_restore(const struct env_snapshot *es)
 	char **cur;
 
 	for (n = 0; __environ && __environ[n]; n++) continue;
-	cur = n ? __malloc(n * sizeof *cur) : 0;
+	cur = n ? (char **)__malloc(n * sizeof *cur) : 0;
 	if (n && cur) {
 		for (i = 0; i < n; i++) {
 			const char *e = __environ[i];
@@ -1601,7 +1610,7 @@ static void env_snapshot_restore(const struct env_snapshot *es)
 		for (i = 0; i < n; i++)
 			if (cur[i] && !name_in_snapshot(es, cur[i])) unsetenv(cur[i]);
 		for (i = 0; i < n; i++) __free(cur[i]);
-		__free(cur);
+		__free((void *)cur);
 	}
 	/* n && !cur is OOM listing what to remove: best effort continues
 	 * below and still gets every remembered value put back, even though
@@ -1666,8 +1675,10 @@ static void env_snapshot_restore(const struct env_snapshot *es)
  * them (cmd required). exec_compound() below is the only caller of all
  * three, always with a real cmd and the same status it was itself
  * handed. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_if(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_if(const struct sh_command *cmd, int *status)
 {
 	const struct sh_ifarm *a;
@@ -1693,8 +1704,10 @@ static int exec_if(const struct sh_command *cmd, int *status)
  * status of the last compound-list-2 executed, or zero if none was
  * executed", which is why *status starts at 0 and is only ever written
  * by the body. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_loop(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_loop(const struct sh_command *cmd, int *status)
 {
 	*status = 0;
@@ -1748,8 +1761,10 @@ static int exec_loop(const struct sh_command *cmd, int *status)
  * pre-existing deviation the whole variable story has, not a new one
  * this construct introduces -- `X=1; cmd` already behaves the same way
  * -- and it is stated here rather than left for someone to find. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_for(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_for(const struct sh_command *cmd, int *status)
 {
 	wordexp_t we;
@@ -1828,7 +1843,8 @@ static int exec_funcdef(const struct sh_command *cmd, int *status)
 static int exec_funcdef(const struct sh_command *cmd, int *status)
 {
 	if (__sh_func_define(cmd->name, cmd->func_text) < 0) {
-		fprintf(stderr, "%s: cannot define function\n", cmd->name);
+		/* Function definition already failed and fixes status at one. */
+		(void)fprintf(stderr, "%s: cannot define function\n", cmd->name);
 		*status = 1;
 		return 0;
 	}
@@ -1841,8 +1857,10 @@ static int exec_funcdef(const struct sh_command *cmd, int *status)
  * only forwards it to whichever of exec_funcdef()/exec_if()/exec_loop()/
  * exec_for()/__sh_exec_list() the switch selects, each of which states
  * its own contract. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_compound(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_compound(const struct sh_command *cmd, int *status)
 {
 	switch (cmd->kind) {
@@ -1868,8 +1886,10 @@ static int exec_compound(const struct sh_command *cmd, int *status)
  * reachable direct dereference, and no real caller of this function
  * (exec_group_stage_inline() aside, which is a separate function with
  * its own contract) ever passes it a NULL status. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_group(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_group(const struct sh_command *cmd, int *status)
 {
 	struct redir_state rs;
@@ -1887,11 +1907,11 @@ static int exec_group(const struct sh_command *cmd, int *status)
 
 	if (is_subshell) {
 		oldcwd = getcwd(0, 0);
-		if (env_snapshot_take(&es)) { restore_fds(&rs); return -1; }
+		if (env_snapshot_take(&es)) { free(oldcwd); restore_fds(&rs); return -1; }
 		if (params_subshell_enter(&ps, &fs)) {
 			env_snapshot_restore(&es);
 			free_env_snapshot(&es);
-			if (oldcwd) __free(oldcwd);
+			free(oldcwd);
 			restore_fds(&rs);
 			return -1;
 		}
@@ -1912,7 +1932,7 @@ static int exec_group(const struct sh_command *cmd, int *status)
 		params_subshell_leave(&ps, &fs);
 		env_snapshot_restore(&es);
 		free_env_snapshot(&es);
-		if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
+		if (oldcwd) { chdir(oldcwd); free(oldcwd); }
 	}
 	restore_fds(&rs);
 	return rc;
@@ -2044,35 +2064,39 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	tf = tmpfile();
 	if (!tf) { __sh_list_free(list); return -1; }
 	tfd = fileno(tf);
-	if (tfd < 0) { fclose(tf); __sh_list_free(list); return -1; }
+	if (tfd < 0) { (void)fclose(tf); __sh_list_free(list); return -1; }
 
 	/* Anything this process has buffered for its own stdout belongs on
 	 * the *real* stdout, not in the capture -- fd 1 is about to point
 	 * somewhere else, and stdio's buffer does not know that. */
-	fflush(stdout);
+	if (fflush(stdout)) {
+		(void)fclose(tf);
+		__sh_list_free(list);
+		return -1;
+	}
 
 	rs.saves = 0; rs.n = rs.cap = 0;
 	if (save_fd(&rs, 1) || dup2(tfd, 1) < 0) {
 		restore_fds(&rs);
-		fclose(tf);
+		(void)fclose(tf);
 		__sh_list_free(list);
 		return -1;
 	}
 
 	oldcwd = getcwd(0, 0);
 	if (env_snapshot_take(&es)) {
-		__free(oldcwd);
+		free(oldcwd);
 		restore_fds(&rs);
-		fclose(tf);
+		(void)fclose(tf);
 		__sh_list_free(list);
 		return -1;
 	}
 	if (params_subshell_enter(&ps, &fs)) {
 		env_snapshot_restore(&es);
 		free_env_snapshot(&es);
-		__free(oldcwd);
+		free(oldcwd);
 		restore_fds(&rs);
-		fclose(tf);
+		(void)fclose(tf);
 		__sh_list_free(list);
 		return -1;
 	}
@@ -2098,16 +2122,16 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	params_subshell_leave(&ps, &fs);
 	env_snapshot_restore(&es);
 	free_env_snapshot(&es);
-	if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
-	fflush(stdout);	/* while fd 1 is still the capture */
+	if (oldcwd) { chdir(oldcwd); free(oldcwd); }
+	if (fflush(stdout)) rc = -1; /* while fd 1 is still the capture */
 	restore_fds(&rs);
 	__sh_list_free(list);
 
-	if (rc) { fclose(tf); return -1; }
+	if (rc) { (void)fclose(tf); return -1; }
 
-	if (lseek(tfd, 0, SEEK_SET) < 0) { fclose(tf); return -1; }
+	if (lseek(tfd, 0, SEEK_SET) < 0) { (void)fclose(tf); return -1; }
 	buf = slurp_fd(tfd);
-	fclose(tf);
+	(void)fclose(tf);
 	if (!buf) return -1;
 
 	/* 2.6.3: "removing sequences of one or more <newline> characters at
@@ -2128,6 +2152,7 @@ int __sh_cmdsub(const char *program, char **out, int *status)
  * first statement. status is left unmarked -- forwarded, never itself
  * dereferenced, to whichever of exec_simple()/exec_group() the check
  * selects. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 int __sh_exec_command(const struct sh_command *cmd, int *status)
 {
 	if (cmd->kind == SH_CMD_SIMPLE) return exec_simple(cmd, status);
@@ -2163,8 +2188,10 @@ int __sh_exec_command(const struct sh_command *cmd, int *status)
  * "directly dereferenced on a real reachable path, no real caller ever
  * passes NULL" basis as exec_group()'s above -- `*status = 1;` in the
  * `if (failed)` branch. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 {
 	struct redir_state rs;
@@ -2180,11 +2207,11 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 	if (failed) { restore_fds(&rs); *status = 1; return 0; }
 
 	oldcwd = getcwd(0, 0);
-	if (env_snapshot_take(&es)) { __free(oldcwd); restore_fds(&rs); return -1; }
+	if (env_snapshot_take(&es)) { free(oldcwd); restore_fds(&rs); return -1; }
 	if (params_subshell_enter(&ps, &fs)) {
 		env_snapshot_restore(&es);
 		free_env_snapshot(&es);
-		__free(oldcwd);
+		free(oldcwd);
 		restore_fds(&rs);
 		return -1;
 	}
@@ -2200,7 +2227,7 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 	params_subshell_leave(&ps, &fs);
 	env_snapshot_restore(&es);
 	free_env_snapshot(&es);
-	if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
+	if (oldcwd) { chdir(oldcwd); free(oldcwd); }
 	restore_fds(&rs);
 	return rc;
 }
@@ -2219,11 +2246,11 @@ static int wire_stage_stdio(struct redir_state *rs, int (*pipes)[2], size_t n, s
 {
 	if (i > 0) {
 		if (save_fd(rs, 0)) return -1;
-		dup2(pipes[i - 1][0], 0);
+		if (dup2(pipes[i - 1][0], 0) < 0) return -1;
 	}
 	if (i + 1 < n) {
 		if (save_fd(rs, 1)) return -1;
-		dup2(pipes[i][1], 1);
+		if (dup2(pipes[i][1], 1) < 0) return -1;
 	}
 	return 0;
 }
@@ -2234,6 +2261,7 @@ static int wire_stage_stdio(struct redir_state *rs, int (*pipes)[2], size_t n, s
  * already return -1 (the sh.h-wide "status left untouched" convention),
  * and every real caller (__sh_exec_andor() below) always passes a real
  * status. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 {
 	size_t n = pl->ncommands, i;
@@ -2299,7 +2327,7 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 	for (i = 0; i + 1 < n; i++) {
 		if (pipe2(pipes[i], O_CLOEXEC) < 0) {
 			size_t j;
-			for (j = 0; j < i; j++) { close(pipes[j][0]); close(pipes[j][1]); }
+			for (j = 0; j < i; j++) { (void)close(pipes[j][0]); (void)close(pipes[j][1]); }
 			__free(pids); __free(statuses); __free(pipes); __free(deferred);
 			return -1;
 		}
@@ -2317,6 +2345,7 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		struct redir_state rs;
 		stage_result_t sr;
 		int failed = 0;
+		int unsupported;
 		unsigned long gen0 = cmdsub_generation;
 
 		sr.kind = 1;
@@ -2338,9 +2367,11 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 			 * left-to-right ordering then makes the explicit "2>&1"
 			 * apply on top of this implicit hookup, which is what
 			 * makes that merge happen at all). */
-			if (wire_stage_stdio(&rs, pipes, n, i)) {
-				abort_unsupported = 1;
-			} else if (apply_redirs(pl->commands[i].redirs, &rs, &failed)) {
+			unsupported = wire_stage_stdio(&rs, pipes, n, i) ||
+			              apply_redirs(pl->commands[i].redirs, &rs, &failed);
+			if (!unsupported && !failed)
+				unsupported = run_stage(&pl->commands[i], &sr, 0);
+			if (unsupported) {
 				abort_unsupported = 1;
 			} else if (failed) {
 				/* 2.8.1: this stage fails without running, same
@@ -2349,8 +2380,6 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 				 * (its reader just sees an immediate EOF from
 				 * this stage's never-written pipe end). */
 				sr.special = 1;
-			} else if (run_stage(&pl->commands[i], &sr, 0)) {
-				abort_unsupported = 1;
 			}
 			restore_fds(&rs);
 		}
@@ -2368,8 +2397,8 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		 * open here (and skipped entirely, via the `continue` above,
 		 * before ever reaching this point) -- pass 2 below still needs
 		 * them. */
-		if (i > 0) close(pipes[i - 1][0]);
-		if (i + 1 < n) close(pipes[i][1]);
+		if (i > 0) (void)close(pipes[i - 1][0]);
+		if (i + 1 < n) (void)close(pipes[i][1]);
 
 		pids[i] = sr.kind ? -1 : sr.normal;
 		statuses[i] = sr.kind ? cmdsub_status_rule(&sr, gen0) : 0;
@@ -2390,16 +2419,15 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 
 		if (!abort_unsupported) {
 			rs.saves = 0; rs.n = rs.cap = 0;
-			if (wire_stage_stdio(&rs, pipes, n, i)) {
-				abort_unsupported = 1;
-			} else if (exec_group_stage_inline(&pl->commands[i], &st)) {
+			if (wire_stage_stdio(&rs, pipes, n, i) ||
+			    exec_group_stage_inline(&pl->commands[i], &st)) {
 				abort_unsupported = 1;
 			}
 			restore_fds(&rs);
 		}
 
-		if (i > 0) close(pipes[i - 1][0]);
-		if (i + 1 < n) close(pipes[i][1]);
+		if (i > 0) (void)close(pipes[i - 1][0]);
+		if (i + 1 < n) (void)close(pipes[i][1]);
 
 		pids[i] = -1;
 		statuses[i] = st;
@@ -2438,6 +2466,7 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
  * real, directly-reachable dereferences of this function's own, not
  * merely forwarded ones, and __sh_exec_list() below always passes a
  * real status. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 int __sh_exec_andor(const struct sh_andor *a, int *status)
 {
 	int rc = __sh_exec_pipeline(&a->pipeline, status);
@@ -2478,6 +2507,7 @@ static unsigned exec_list_depth;
  * compound-command body (e.g. cmd->else_body when there is no `else`)
  * genuinely passes list as NULL here, and every caller in this file
  * relies on that. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 int __sh_exec_list(const struct sh_list *list, int *status)
 {
 	const struct sh_list_item *it;

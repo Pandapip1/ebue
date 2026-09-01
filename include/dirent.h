@@ -1,3 +1,8 @@
+/* C library headers must use the implementation-reserved namespace for guards,
+ * type plumbing, and implementation extensions so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -9,6 +14,14 @@ extern "C" {
 #endif
 
 #include <features.h>
+#include <ownership.h>
+
+#ifndef tokdef
+#define tokdef __token_type
+#endif
+tokdef directory_stream_open
+	dynamic_storage;
+#undef tokdef
 
 #define __NEED_ino_t
 #define __NEED_off_t
@@ -43,15 +56,18 @@ struct dirent {
  * stream obtained from opendir()/fdopendir(), the same "not the callee's
  * job to validate" contract every other libc (glibc, musl) implements
  * this family under -- confirmed against this tree's own bodies
- * (src/dirent/*.c), none of which null-check dp anywhere; it is
+	 * (the C files under src/dirent), none of which null-check dp anywhere; it is
  * unconditionally dereferenced on function entry in every one of them.
  * __attribute__((nonnull)) makes that real, pre-existing contract
  * explicit and lets GCC/Clang's own -Wnonnull catch a provably-NULL
  * caller mistake at compile time; tcc (this project's other target)
  * parses and silently ignores attribute contents it does not know (see
  * include/features.h's own comment on this), so this is free there. */
-int            closedir(DIR *) __attribute__((nonnull(1)));
+__attribute__((nonnull(1)))
+int            closedir(DIR * consume(directory_stream_open));
+withtok(directory_stream_open)
 DIR           *fdopendir(int);
+withtok(directory_stream_open)
 DIR           *opendir(const char *);
 struct dirent *readdir(DIR *) __attribute__((nonnull(1)));
 /* entry/result are required too: src/dirent/readdir.c's readdir_r()
@@ -75,7 +91,7 @@ int            dirfd(DIR *) __attribute__((nonnull(1)));
  * explicitly optional (`if (filter...)`/`if (compar)` guard each use).
  *
  * A residual remains past nonnull(1, 2) on both: `(*a)->d_name` and
- * `(*b)->d_name` are about the VALUE *a/*b point to (a struct dirent*
+	 * `(*b)->d_name` are about the values pointed to by *a and *b (a struct dirent*
  * one level further in), not about a/b themselves -- a fact `nonnull`
  * cannot describe on any signature, since it only ever asserts that
  * the parameter's own pointer value is non-NULL, not what a double
@@ -133,3 +149,5 @@ int versionsort(const struct dirent **, const struct dirent **)
 #endif
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

@@ -50,7 +50,7 @@ static int fill(char *tmpl, int suffix)
 	return 0;
 }
 
-int mkostemps(char *tmpl, int suffix, int flags)
+int mkostemps(char *tmpl, int suffix, int flags) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int i, fd;
 	flags &= ~O_ACCMODE;

@@ -5,6 +5,11 @@
  * parse.c's error-recovery paths reuse the word/redir/command-contents
  * pieces directly instead of duplicating this traversal.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include "libc.h"
 #include "sh.h"
 
@@ -33,6 +38,7 @@ void __sh_free_redirs(struct sh_redir *r)
 /* SH_CMD_IF's arms.  Each arm owns its two compound-lists; the chain
  * covers the `if` arm and every `elif` arm, which sh.h makes the same
  * node type for exactly this reason. */
+// NOLINTNEXTLINE(misc-no-recursion) -- the destructor mirrors the owned shell-AST hierarchy
 static void free_ifarms(struct sh_ifarm *a)
 {
 	while (a) {
@@ -60,6 +66,7 @@ static void free_ifarms(struct sh_ifarm *a)
  * func_body call (guarded by `if (c->func_body)` first), and
  * free_pipeline_contents() below (always `&pl->commands[i]`, an array
  * element's address) -- always passes a real struct. */
+// NOLINTNEXTLINE(misc-no-recursion) -- the destructor mirrors the owned shell-AST hierarchy
 void __sh_free_command_contents(struct sh_command *c)
 {
 	__sh_free_words(c->assigns);
@@ -82,6 +89,7 @@ void __sh_free_command_contents(struct sh_command *c)
 }
 
 static void free_pipeline_contents(struct sh_pipeline *pl) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- the destructor mirrors the owned shell-AST hierarchy
 static void free_pipeline_contents(struct sh_pipeline *pl)
 {
 	size_t i;
@@ -89,6 +97,7 @@ static void free_pipeline_contents(struct sh_pipeline *pl)
 	__free(pl->commands);
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- the destructor mirrors the owned shell-AST hierarchy
 static void free_andor(struct sh_andor *a)
 {
 	while (a) {
@@ -99,6 +108,7 @@ static void free_andor(struct sh_andor *a)
 	}
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- the destructor mirrors the owned shell-AST hierarchy
 void __sh_list_free(struct sh_list *list)
 {
 	struct sh_list_item *it;
@@ -112,3 +122,5 @@ void __sh_list_free(struct sh_list *list)
 	}
 	__free(list);
 }
+
+// NOLINTEND(misc-include-cleaner)

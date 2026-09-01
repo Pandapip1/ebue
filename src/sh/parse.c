@@ -156,7 +156,7 @@ static int copy_dquoted(const char **pp, struct gbuf *b)
  * (both delimiters included). */
 static int copy_balanced(const char **pp, struct gbuf *b, char open, char close)
     __attribute__((nonnull(1)));
-static int copy_balanced(const char **pp, struct gbuf *b, char open, char close)
+static int copy_balanced(const char **pp, struct gbuf *b, char open, char close) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const char *p = *pp;
 	int depth = 1;
@@ -249,6 +249,17 @@ struct lexer {
 	size_t errbuflen;
 };
 
+static void format_parse_error(char *dst, size_t size, const char *fmt, va_list ap)
+{
+	static const char fallback[] = "could not format parse error";
+	int n = vsnprintf(dst, size, fmt, ap);
+	if (n < 0 && size) {
+		size_t copy = sizeof fallback < size ? sizeof fallback : size;
+		memcpy(dst, fallback, copy - 1);
+		dst[copy - 1] = 0;
+	}
+}
+
 /* lx is required: `if (!lx->err && lx->errbuflen)` is this function's
  * first statement. fmt is left unmarked -- only touched (via vsnprintf())
  * inside that conditional block, and every real call site passes a
@@ -259,7 +270,7 @@ static void lex_errf(struct lexer *lx, const char *fmt, ...)
 	va_list ap;
 	if (!lx->err && lx->errbuflen) {
 		va_start(ap, fmt);
-		vsnprintf(lx->errbuf, lx->errbuflen, fmt, ap);
+		format_parse_error(lx->errbuf, lx->errbuflen, fmt, ap);
 		va_end(ap);
 	}
 	lx->err = 1;
@@ -571,7 +582,7 @@ static void perr(struct parser *p, const char *fmt, ...)
 	va_list ap;
 	if (!p->had_error) {
 		va_start(ap, fmt);
-		vsnprintf(p->lx.errbuf, p->lx.errbuflen, fmt, ap);
+		format_parse_error(p->lx.errbuf, p->lx.errbuflen, fmt, ap);
 		va_end(ap);
 	}
 	p->had_error = 1;
@@ -778,6 +789,7 @@ static int is_name(const char *s)
 
 /* `do compound-list done`, shared by the for/while/until loops -- 2.9.4
  * spells the same two reserved words out for each of the three. */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_list *parse_do_group(struct parser *p)
 {
 	struct sh_list *body;
@@ -794,6 +806,7 @@ static struct sh_list *parse_do_group(struct parser *p)
  *   if compound-list then compound-list
  *   [elif compound-list then compound-list]... [else compound-list] fi
  */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_command *parse_if(struct parser *p)
 {
 	struct sh_command *cmd = new_command(p, SH_CMD_IF);
@@ -834,6 +847,7 @@ fail:
 /* 2.9.4 "The while Loop" / "The until Loop" -- identical grammar, and
  * the only difference is the sense of the test, which is one bit on the
  * node rather than a duplicated parser. */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_command *parse_loop(struct parser *p, int until)
 {
 	struct sh_command *cmd = new_command(p, SH_CMD_LOOP);
@@ -858,6 +872,7 @@ static struct sh_command *parse_loop(struct parser *p, int until)
  * in "$@"".  It is parsed (so the shape is recorded honestly) and
  * refused at execution, because this shell has no positional
  * parameters to iterate -- see exec_for() and sh/main.c. */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_command *parse_for(struct parser *p)
 {
 	struct sh_command *cmd = new_command(p, SH_CMD_FOR);
@@ -938,6 +953,7 @@ static struct sh_command *parse_command(struct parser *p);
  * compound command ends), and validating the body at definition time
  * rather than at first call is what keeps a syntax error inside a
  * function from surfacing halfway through a build script. */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_command *parse_funcdef(struct parser *p, struct sh_command *cmd, char *fname)
 {
 	const struct sh_builtin *bi;
@@ -1013,6 +1029,7 @@ fail:
 }
 
 static struct sh_command *parse_command(struct parser *p) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_command *parse_command(struct parser *p)
 {
 	struct sh_command *cmd;
@@ -1164,8 +1181,10 @@ trailing_redirs:
  * it is an equally unconditional, unguarded direct dereference -- both
  * real call sites in parse_list() below always pass `&head->pipeline`/
  * `&node->pipeline`, never NULL. */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static int parse_pipeline(struct parser *p, struct sh_pipeline *out)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static int parse_pipeline(struct parser *p, struct sh_pipeline *out)
 {
 	struct sh_command *arr = 0;
@@ -1206,6 +1225,7 @@ fail:
 	return -1;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_andor *parse_andor(struct parser *p)
 {
 	struct sh_andor *head, *tail;
@@ -1234,6 +1254,7 @@ static struct sh_andor *parse_andor(struct parser *p)
 	return head;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_list *parse_list(struct parser *p, unsigned stops)
 {
 	struct sh_list *list = __malloc(sizeof *list);
@@ -1247,9 +1268,8 @@ static struct sh_list *parse_list(struct parser *p, unsigned stops)
 		item->andor = parse_andor(p);
 		item->next = 0;
 		if (!item->andor) { __free(item); return list; }
-		if (p->cur.type == T_SEMI) { item->sep = SH_SEP_SEQ; advance(p); }
+		if (p->cur.type == T_SEMI || p->cur.type == T_NEWLINE) { item->sep = SH_SEP_SEQ; advance(p); }
 		else if (p->cur.type == T_AMP) { item->sep = SH_SEP_AMP; advance(p); }
-		else if (p->cur.type == T_NEWLINE) { item->sep = SH_SEP_SEQ; advance(p); }
 		else item->sep = SH_SEP_END;
 		if (tail) tail->next = item; else list->items = item;
 		tail = item;
@@ -1284,7 +1304,7 @@ struct sh_list *__sh_parse(const char *src, char *errbuf, size_t errbuflen)
 
 	if (p.had_error) {
 		if (errbuf && errbuflen) {
-			size_t n = strlen(p.lx.errbuf);
+			size_t n = strnlen(p.lx.errbuf, sizeof p.lx.errbuf);
 			if (n >= errbuflen) n = errbuflen - 1;
 			memcpy(errbuf, p.lx.errbuf, n);
 			errbuf[n] = 0;

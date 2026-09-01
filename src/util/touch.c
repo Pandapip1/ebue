@@ -33,6 +33,11 @@
  * wrong.  -t's fixed-width numeric format has no such open-ended
  * grammar and is implemented in full below.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
@@ -42,50 +47,45 @@
 #include <sys/stat.h>
 #include "util.h"
 
-/* Reads exactly `n` decimal digits from `s` into *out; -1 on anything
- * else (a non-digit, or too few digits before the string ends since a
- * short read still leaves *out looking plausible otherwise). */
-static int read_digits(const char *s, int n, int *out)
+/* Every numeric field in -t is exactly two decimal digits. */
+static int read_two_digits(const char *s, int *out)
 {
-	int v = 0, i;
-	for (i = 0; i < n; i++) {
-		if (s[i] < '0' || s[i] > '9') return -1;
-		v = v * 10 + (s[i] - '0');
-	}
-	*out = v;
+	if (s[0] < '0' || s[0] > '9' || s[1] < '0' || s[1] > '9') return -1;
+	*out = (s[0] - '0') * 10 + (s[1] - '0');
 	return 0;
 }
 
 /* touch(1p) -t: "[[CC]YY]MMDDhhmm[.SS]". */
 static int parse_touch_t(const char *spec, struct timespec *out)
 {
-	const char *dot = strchr(spec, '.');
-	size_t mainlen = dot ? (size_t)(dot - spec) : strlen(spec);
+	size_t mainlen = strcspn(spec, ".");
+	const char *dot = spec[mainlen] ? spec + mainlen : 0;
 	int sec = 0, cc = -1, yy = -1, mm, dd, hh, mi;
 	struct tm tmv;
 	time_t t;
 
 	if (dot) {
-		if (strlen(dot + 1) != 2 || read_digits(dot + 1, 2, &sec) < 0 || sec > 60)
+		if (!dot[1] || !dot[2] || dot[3] ||
+		    read_two_digits(dot + 1, &sec) < 0 || sec > 60)
 			return -1;
 	}
 
 	switch (mainlen) {
 	case 8: /* MMDDhhmm */
-		if (read_digits(spec, 2, &mm) < 0 || read_digits(spec + 2, 2, &dd) < 0 ||
-		    read_digits(spec + 4, 2, &hh) < 0 || read_digits(spec + 6, 2, &mi) < 0)
+		if (read_two_digits(spec, &mm) < 0 || read_two_digits(spec + 2, &dd) < 0 ||
+		    read_two_digits(spec + 4, &hh) < 0 || read_two_digits(spec + 6, &mi) < 0)
 			return -1;
 		break;
 	case 10: /* YYMMDDhhmm */
-		if (read_digits(spec, 2, &yy) < 0 || read_digits(spec + 2, 2, &mm) < 0 ||
-		    read_digits(spec + 4, 2, &dd) < 0 || read_digits(spec + 6, 2, &hh) < 0 ||
-		    read_digits(spec + 8, 2, &mi) < 0)
+		if (read_two_digits(spec, &yy) < 0 || read_two_digits(spec + 2, &mm) < 0 ||
+		    read_two_digits(spec + 4, &dd) < 0 || read_two_digits(spec + 6, &hh) < 0 ||
+		    read_two_digits(spec + 8, &mi) < 0)
 			return -1;
 		break;
 	case 12: /* CCYYMMDDhhmm */
-		if (read_digits(spec, 2, &cc) < 0 || read_digits(spec + 2, 2, &yy) < 0 ||
-		    read_digits(spec + 4, 2, &mm) < 0 || read_digits(spec + 6, 2, &dd) < 0 ||
-		    read_digits(spec + 8, 2, &hh) < 0 || read_digits(spec + 10, 2, &mi) < 0)
+		if (read_two_digits(spec, &cc) < 0 || read_two_digits(spec + 2, &yy) < 0 ||
+		    read_two_digits(spec + 4, &mm) < 0 || read_two_digits(spec + 6, &dd) < 0 ||
+		    read_two_digits(spec + 8, &hh) < 0 || read_two_digits(spec + 10, &mi) < 0)
 			return -1;
 		break;
 	default:
@@ -128,48 +128,52 @@ int __util_touch_main(int argc, char **argv)
 	int opt_a = 0, opt_m = 0, opt_c = 0;
 	const char *ref = 0;
 	const char *tspec = 0;
-	struct timespec want[2]; /* [0]=atime [1]=mtime, only meaningful if have_explicit */
+	/* Keep the fallback value defined even if a future option path changes
+	 * have_explicit without installing both timestamps. */
+	struct timespec want[2] = {{0, 0}, {0, 0}};
 	int have_explicit = 0;
 
 	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
 		const char *a = argv[i];
+		size_t option_len;
 		if (!strcmp(a, "--")) { i++; break; }
 		if (!strcmp(a, "-d")) {
-			fprintf(stderr, "touch: -d: not implemented -- see src/util/touch.c\n");
+			__util_diagf("touch: -d: not implemented -- see src/util/touch.c\n");
 			return 1;
 		}
 		if (!strcmp(a, "-r")) {
-			if (i + 1 >= argc) { fprintf(stderr, "touch: -r: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("touch: -r: option requires an argument\n"); return 1; }
 			ref = argv[++i];
 			continue;
 		}
 		if (!strcmp(a, "-t")) {
-			if (i + 1 >= argc) { fprintf(stderr, "touch: -t: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("touch: -t: option requires an argument\n"); return 1; }
 			tspec = argv[++i];
 			continue;
 		}
-		if (a[1] != 0 && strspn(a + 1, "acm") == strlen(a + 1)) {
+		option_len = strspn(a + 1, "acm");
+		if (a[1] != 0 && a[option_len + 1] == 0) {
 			if (strchr(a, 'a')) opt_a = 1;
 			if (strchr(a, 'c')) opt_c = 1;
 			if (strchr(a, 'm')) opt_m = 1;
 			continue;
 		}
-		fprintf(stderr, "touch: %s: invalid option\n", a);
+		__util_diagf("touch: %s: invalid option\n", a);
 		return 1;
 	}
 	if (i >= argc) {
-		fprintf(stderr, "touch: missing operand\n");
+		__util_diagf("touch: missing operand\n");
 		return 1;
 	}
 	if (ref && tspec) {
-		fprintf(stderr, "touch: -r and -t are mutually exclusive\n");
+		__util_diagf("touch: -r and -t are mutually exclusive\n");
 		return 1;
 	}
 
 	if (ref) {
 		struct stat st;
 		if (stat(ref, &st) != 0) {
-			fprintf(stderr, "touch: %s: %s\n", ref, strerror(errno));
+			__util_diagf("touch: %s: %s\n", ref, strerror(errno));
 			return 1;
 		}
 		want[0] = st.st_atim;
@@ -178,7 +182,7 @@ int __util_touch_main(int argc, char **argv)
 	} else if (tspec) {
 		struct timespec t;
 		if (parse_touch_t(tspec, &t) < 0) {
-			fprintf(stderr, "touch: %s: invalid time\n", tspec);
+			__util_diagf("touch: %s: invalid time\n", tspec);
 			return 1;
 		}
 		want[0] = t;
@@ -198,11 +202,15 @@ int __util_touch_main(int argc, char **argv)
 			if (opt_c) continue;
 			fd = open(argv[i], O_CREAT | O_WRONLY, 0666);
 			if (fd < 0) {
-				fprintf(stderr, "touch: %s: %s\n", argv[i], strerror(errno));
+				__util_diagf("touch: %s: %s\n", argv[i], strerror(errno));
 				fail = 1;
 				continue;
 			}
-			close(fd);
+			if (close(fd) < 0) {
+				__util_diagf("touch: %s: %s\n", argv[i], strerror(errno));
+				fail = 1;
+				continue;
+			}
 		}
 
 		if (have_explicit) {
@@ -216,9 +224,11 @@ int __util_touch_main(int argc, char **argv)
 		else if (opt_m && !opt_a) ts[0].tv_nsec = UTIME_OMIT;
 
 		if (utimensat(AT_FDCWD, argv[i], ts, 0) != 0) {
-			fprintf(stderr, "touch: %s: %s\n", argv[i], strerror(errno));
+			__util_diagf("touch: %s: %s\n", argv[i], strerror(errno));
 			fail = 1;
 		}
 	}
 	return fail;
 }
+
+// NOLINTEND(misc-include-cleaner)

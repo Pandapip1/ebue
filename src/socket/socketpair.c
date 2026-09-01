@@ -14,7 +14,7 @@
 #include <errno.h>
 #include <string.h>
 
-int socketpair(int domain, int type, int protocol, int pair[2])
+int socketpair(int domain, int type, int protocol, int pair[2]) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct sockaddr_in address;
 	socklen_t length;
@@ -42,16 +42,16 @@ int socketpair(int domain, int type, int protocol, int pair[2])
 		goto fail;
 	server = accept(listener, 0, 0);
 	if (server < 0) goto fail;
-	close(listener);
+	(void)close(listener);
 	pair[0] = client;
 	pair[1] = server;
 	return 0;
 
 fail:
 	saved = errno;
-	if (server >= 0) close(server);
-	if (client >= 0) close(client);
-	if (listener >= 0) close(listener);
+	if (server >= 0) (void)close(server);
+	if (client >= 0) (void)close(client);
+	if (listener >= 0) (void)close(listener);
 	errno = saved;
 	return -1;
 }

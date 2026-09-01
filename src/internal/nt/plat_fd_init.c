@@ -16,6 +16,11 @@
  * any of this; this split is purely mechanical, verified by diff
  * against fd.c before this file existed.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
@@ -195,7 +200,7 @@ void __fd_init(void)
 			for (i = 0; i < count; i++) {
 				HANDLE h;
 				int vk = vfs ? vfs[i] : __VFS_NONE;
-				memcpy(&h, osfhnd + i * sizeof(HANDLE), sizeof h);
+				memcpy((void *)&h, osfhnd + i * sizeof(HANDLE), sizeof h);
 				if (!(osfile[i] & FOPEN) || !h || h == (HANDLE)(LONG_PTR)-1) continue;
 				if (i < 3 && __fds[i].h) {
 					if (vk) {
@@ -237,7 +242,7 @@ void __fd_init(void)
  * inheritable as a side effect (NtCreateUserProcess copies only those).
  * Returns a malloc'd block and its length, or NULL and 0 with nothing to
  * pass. */
-void *__fd_runtime_data(size_t *len)
+void *__fd_runtime_data(size_t *len, __plat_handle_t std[3])
 {
 	int count = 0, i, have_vfs = __vfs_cwd_get() != __VFS_NONE;
 	unsigned char *blk, *osfile, *osfhnd;
@@ -260,21 +265,28 @@ void *__fd_runtime_data(size_t *len)
 		HANDLE h = 0;
 		unsigned char fl = 0;
 		if (__fds[i].h && !(__fds[i].flags & O_CLOEXEC)) {
-			HANDLE dup;
+			HANDLE dup, old;
+			int j;
 			fl = FOPEN;
 			if (__fds[i].flags & O_APPEND) fl |= FAPPEND;
 			if (__fds[i].type == __FD_PIPE) fl |= FPIPE;
 			if (__fds[i].type == __FD_CONSOLE || __fds[i].type == __FD_CHAR) fl |= FDEV;
-			/* Make the handle itself inheritable, in place. */
-			if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), __fds[i].h, NtCurrentProcess(), &dup,
+			/* Make the handle itself inheritable, in place.  The process
+			 * backend has already resolved descriptors 0-2 into `std`, so
+			 * keep that snapshot in step when this replacement invalidates
+			 * its old HANDLE value. */
+			old = __fds[i].h;
+			if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), old, NtCurrentProcess(), &dup,
 			                                 0, OBJ_INHERIT, DUPLICATE_SAME_ACCESS | DUPLICATE_SAME_ATTRIBUTES))) {
-				NtClose(__fds[i].h);
+				NtClose(old);
 				__fds[i].h = dup;
+				for (j = 0; j < 3; j++)
+					if (std[j] == old) std[j] = dup;
 			}
 			h = __fds[i].h;
 		}
 		osfile[i] = fl;
-		memcpy(osfhnd + i * sizeof(HANDLE), &h, sizeof h);
+		memcpy(osfhnd + i * sizeof(HANDLE), (const void *)&h, sizeof h);
 	}
 	if (have_vfs) {
 		unsigned magic = VFS_RUNTIME_MAGIC, trailer_count = (unsigned)count;
@@ -291,3 +303,5 @@ void *__fd_runtime_data(size_t *len)
 	}
 	return blk;
 }
+
+// NOLINTEND(misc-include-cleaner)

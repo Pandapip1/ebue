@@ -17,15 +17,22 @@
  * allocates for anything larger and remembers the real block itself,
  * entirely above this interface.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include "plat_malloc.h"
 #include "libc.h"
 
+withtok(platform_heap_allocated)
 void *__plat_alloc(size_t n, int zero)
 {
 	return RtlAllocateHeap(__process_heap(), zero ? HEAP_ZERO_MEMORY : 0, n);
 }
 
-void *__plat_realloc(void *p, size_t n)
+withtok(platform_heap_allocated)
+void *__plat_realloc(void *p consume_if_nonnull_return(platform_heap_allocated), size_t n)
 {
 	return RtlReAllocateHeap(__process_heap(), 0, p, n);
 }
@@ -35,7 +42,9 @@ size_t __plat_alloc_size(void *p)
 	return RtlSizeHeap(__process_heap(), 0, p);
 }
 
-void __plat_dealloc(void *p)
+void __plat_dealloc(void *p consume(platform_heap_allocated))
 {
 	RtlFreeHeap(__process_heap(), 0, p);
 }
+
+// NOLINTEND(misc-include-cleaner)

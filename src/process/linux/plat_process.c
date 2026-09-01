@@ -68,6 +68,11 @@
  * status already encoded, without either backend needing its own copy
  * of that decoding.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include <sys/wait.h>   /* WIFEXITED/WEXITSTATUS/WIFSIGNALED/WTERMSIG -- see
                          * __plat_process_wait()'s own comment below for why
@@ -136,7 +141,7 @@
  * still-live stack frame across the child/parent split), though
  * SIGCHLD-only clone (no CLONE_VM) happens to share the parent's stack
  * so that particular hazard does not apply to this file's simpler use. */
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
 	register long x0 __asm__("x0") = a1;
@@ -199,7 +204,7 @@ struct raw_stat_prefix {
 int __plat_is_program(const char *path)
 {
 	long fd = raw_syscall(SYS_openat, (long)AT_FDCWD_LX, (long)path, 0L /* O_RDONLY */, 0L, 0L, 0L);
-	struct raw_stat_prefix st;
+	struct raw_stat_prefix st = {0};
 	long ret;
 
 	if (is_sys_error(fd)) return 0;
@@ -316,7 +321,7 @@ int __plat_process_wait(__plat_handle_t h, int mode)
 	if (reap_find(pid)) return 1;
 
 	switch (mode) {
-	case __PLAT_WAIT_NOHANG: options = WNOHANG_LX; break;
+	case __PLAT_WAIT_NOHANG:
 	case __PLAT_WAIT_POLL:   options = WNOHANG_LX; break;
 	default:                 options = 0; break;
 	}
@@ -422,7 +427,7 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 		 * values -- into this buffer; declaring it as anything wider
 		 * would leave pipefd[1] reading uninitialized stack past what
 		 * the kernel actually wrote. */
-		int fds[2];
+		int fds[2] = {-1, -1};
 		pfd_ret = raw_syscall(SYS_pipe2, (long)fds, (long)O_CLOEXEC_LX, 0L, 0L, 0L, 0L);
 		if (is_sys_error(pfd_ret)) { errno = (int)-pfd_ret; return -1; }
 		pipefd[0] = fds[0];
@@ -488,3 +493,5 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 	*out_process = (__plat_handle_t)(long)box_pid((int)pid);
 	return (int)pid;
 }
+
+// NOLINTEND(misc-include-cleaner)

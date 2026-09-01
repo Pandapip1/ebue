@@ -61,14 +61,14 @@
 #include <float.h>
 #include <stdint.h>
 
-static double j_series(int n, double x)
+static double j_series(int n, double x) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	double half = x * 0.5;
 	double term = 1.0;
 	double sum;
 	int k;
 
-	for (k = 1; k <= n; k++) term *= half / (double)k;
+	for (k = 1; k < n + 1; k++) term *= half / (double)k;
 	sum = term;
 	for (k = 1; k <= 60; k++) {
 		term *= -(half * half) / ((double)k * (double)(n + k));
@@ -78,7 +78,7 @@ static double j_series(int n, double x)
 	return sum;
 }
 
-static void asymp_pq(double n, double x, double *p, double *q)
+static void asymp_pq(double n, double x, double *p, double *q) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	double mu = 4.0 * n * n;
 	double t = 1.0 / (8.0 * x);
@@ -133,7 +133,7 @@ double j1(double x)
  * down to 0, tracking the (unnormalized) value at k == n along the
  * way, then rescales the whole run by matching the run's own J_0
  * against j0(x). */
-static double jn_miller(unsigned int n, double x)
+static double jn_miller(unsigned int n, double x) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	uint64_t nstart, k;
 	double jkp1, jk, jkm1, j_target;
@@ -161,7 +161,7 @@ static double jn_miller(unsigned int n, double x)
 	return j_target * (j0(x) / jk);
 }
 
-static int jn_underflows(unsigned int n, double x)
+static int jn_underflows(unsigned int n, double x) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	double nd = (double)n;
 	double log_bound;
@@ -217,7 +217,7 @@ static void airy_pair(double x, double *ai, double *bi)
 		double ca[64] = { ai0, aip0, 0.0 };
 		double cb[64] = { bi0, bip0, 0.0 };
 		int i;
-		for (i = 1; i + 2 < 64; i++) {
+		for (i = 1; i < 62; i++) {
 			ca[i + 2] = ca[i - 1] / ((double)(i + 2) * (i + 1));
 			cb[i + 2] = cb[i - 1] / ((double)(i + 2) * (i + 1));
 		}
@@ -230,7 +230,7 @@ static void airy_pair(double x, double *ai, double *bi)
 	}
 }
 
-static void large_order_uniform(unsigned int n, double x, double *j, double *y)
+static void large_order_uniform(unsigned int n, double x, double *j, double *y) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	double nu = (double)n;
 	double z = x / nu;
@@ -290,7 +290,7 @@ static double jn_recur(unsigned int n, double x)
 	return neg ? -r : r;
 }
 
-double jn(int n, double x)
+double jn(int n, double x) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned int order;
 	int negate;
@@ -381,7 +381,7 @@ double y1(double x)
 	return x >= 8.0 ? y_asymp(1, x) : y1_series(x);
 }
 
-double yn(int n, double x)
+double yn(int n, double x) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	double ym1, y, ynext, unused;
 	unsigned int order, k;

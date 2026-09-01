@@ -231,7 +231,7 @@ int tcgetattr(int fd, struct termios *t)
 	return 0;
 }
 
-int tcsetattr(int fd, int act, const struct termios *t)
+int tcsetattr(int fd, int act, const struct termios *t) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = get_console(fd);
 	if (!f) return -1;
@@ -290,7 +290,7 @@ speed_t cfgetospeed(const struct termios *t) { return t->c_ospeed; }
 int cfsetispeed(struct termios *t, speed_t s) { t->c_ispeed = s; return 0; }
 int cfsetospeed(struct termios *t, speed_t s) { t->c_ospeed = s; return 0; }
 
-int tcflush(int fd, int queue)
+int tcflush(int fd, int queue) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = get_console(fd);
 	if (!f) return -1;
@@ -319,7 +319,7 @@ int tcdrain(int fd)
 	return 0;   /* N/A: no transmit queue to wait out, see file banner */
 }
 
-int tcflow(int fd, int action)
+int tcflow(int fd, int action) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = get_console(fd);
 	if (!f) return -1;
@@ -327,7 +327,7 @@ int tcflow(int fd, int action)
 	return 0;   /* N/A: no serial data stream to suspend/resume, see file banner */
 }
 
-int tcsendbreak(int fd, int duration)
+int tcsendbreak(int fd, int duration) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = get_console(fd);
 	(void)duration;

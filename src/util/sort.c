@@ -125,8 +125,10 @@ struct line {
  * (and did, against an earlier version of this file). */
 static struct field *fields_grow(struct field *out, size_t *cap)
 {
-	size_t newcap = *cap ? *cap * 2 : 8;
-	struct field *g = realloc(out, newcap * sizeof *out);
+	size_t newcap;
+	struct field *g;
+	if (!__util_array_capacity(*cap, *cap, 1, 8, sizeof *out, &newcap)) return 0;
+	g = __util_reallocarray(out, newcap, sizeof *out);
 	if (!g) return 0;
 	*cap = newcap;
 	return g;
@@ -137,12 +139,12 @@ static struct field *split_fields(const char *line, size_t len, const struct sor
 	struct field *out;
 	size_t cap = 8, n = 0;
 
-	out = malloc(cap * sizeof *out);
+	out = __util_mallocarray(cap, sizeof *out);
 	if (!out) { *nout = 0; return 0; }
 
 	if (o->have_delim) {
 		size_t start = 0, i;
-		for (i = 0; i <= len; i++) {
+		for (i = 0; i < len + 1; i++) {
 			if (i == len || line[i] == o->delim) {
 				if (n >= cap) {
 					struct field *g = fields_grow(out, &cap);
@@ -190,7 +192,7 @@ static struct field *split_fields(const char *line, size_t len, const struct sor
 
 /* ==== key range resolution ================================================ */
 
-static size_t key_start_off(const char *line, size_t len, const struct field *fields, size_t nf, int f, int c, int bflag)
+static size_t key_start_off(const char *line, size_t len, const struct field *fields, size_t nf, int f, int c, int bflag) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct field fl;
 	size_t start;
@@ -206,7 +208,7 @@ static size_t key_start_off(const char *line, size_t len, const struct field *fi
 	return start;
 }
 
-static size_t key_end_off(const char *line, size_t len, const struct field *fields, size_t nf, int f, int c, int bflag)
+static size_t key_end_off(const char *line, size_t len, const struct field *fields, size_t nf, int f, int c, int bflag) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct field fl;
 	size_t fstart, end;
@@ -237,14 +239,14 @@ static long long parse_numeric(const char *s, size_t len)
 	return neg ? -v : v;
 }
 
-static int char_passes(unsigned char c, int d, int i)
+static int char_passes(unsigned char c, int d, int i) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	if (i && !isprint(c)) return 0;
 	if (d && !(isblank(c) || isalnum(c))) return 0;
 	return 1;
 }
 
-static int compare_range(const char *a, size_t as, size_t ae, const char *b, size_t bs, size_t be, int d, int f, int i, int n)
+static int compare_range(const char *a, size_t as, size_t ae, const char *b, size_t bs, size_t be, int d, int f, int i, int n) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	if (n) {
 		long long va = parse_numeric(a + as, ae - as);
@@ -281,6 +283,13 @@ static int compare_raw(const struct line *a, const struct line *b)
 	return 0;
 }
 
+static int reverse_comparison(int comparison)
+{
+	if (comparison < 0) return 1;
+	if (comparison > 0) return -1;
+	return 0;
+}
+
 static int compare_by_key(const struct sort_opts *o, const struct sort_key *k, const struct line *a, const struct line *b)
 {
 	int bflag, dflag, fflag, iflag, nflag, rflag;
@@ -304,7 +313,7 @@ static int compare_by_key(const struct sort_opts *o, const struct sort_key *k, c
 	if (be < bs) be = bs;
 
 	c = compare_range(a->text, as, ae, b->text, bs, be, dflag, fflag, iflag, nflag);
-	return rflag ? -c : c;
+	return rflag ? reverse_comparison(c) : c;
 }
 
 static int line_compare(const struct sort_opts *o, const struct line *a, const struct line *b)
@@ -325,12 +334,12 @@ static int line_compare(const struct sort_opts *o, const struct line *a, const s
 			while (bs < b->len && isblank((unsigned char)b->text[bs])) bs++;
 		}
 		c = compare_range(a->text, as, a->len, b->text, bs, b->len, o->d, o->f, o->i, o->n);
-		if (o->r) c = -c;
+		if (o->r) c = reverse_comparison(c);
 	}
 
 	if (c == 0 && !o->u) {
 		c = compare_raw(a, b);
-		if (o->r) c = -c;
+		if (o->r) c = reverse_comparison(c);
 	}
 	return c;
 }
@@ -343,14 +352,14 @@ static void merge_sort(struct line *lines, size_t n, const struct sort_opts *o)
 	size_t width;
 
 	if (n < 2) return;
-	tmp = malloc(n * sizeof *tmp);
+	tmp = __util_mallocarray(n, sizeof *tmp);
 	if (!tmp) return; /* input stays in original (still-valid) order */
 
-	for (width = 1; width < n; width *= 2) {
+	for (width = 1; width < n;) {
 		size_t i;
-		for (i = 0; i < n; i += 2 * width) {
-			size_t lo = i, mid = i + width < n ? i + width : n;
-			size_t hi = i + 2 * width < n ? i + 2 * width : n;
+		for (i = 0; i < n;) {
+			size_t lo = i, mid = n - i < width ? n : i + width;
+			size_t hi = n - mid < width ? n : mid + width;
 			size_t a = lo, b = mid, k = lo;
 			while (a < mid && b < hi) {
 				if (line_compare(o, &lines[a], &lines[b]) <= 0) tmp[k++] = lines[a++];
@@ -358,8 +367,11 @@ static void merge_sort(struct line *lines, size_t n, const struct sort_opts *o)
 			}
 			while (a < mid) tmp[k++] = lines[a++];
 			while (b < hi) tmp[k++] = lines[b++];
+			i = hi;
 		}
 		memcpy(lines, tmp, n * sizeof *tmp);
+		if (width > n / 2) break;
+		width *= 2;
 	}
 	free(tmp);
 }
@@ -389,7 +401,7 @@ static int parse_keydef(const char *spec, struct sort_key *k)
 	}
 	while (*p && strchr("bdfinr", *p)) {
 		k->has_mod = 1;
-		switch (*p) {
+		switch (*p) { // NOLINT(bugprone-switch-missing-default-case) -- the enclosing strchr guard restricts the modifier to these cases
 		case 'b': k->mb = 1; break;
 		case 'd': k->md = 1; break;
 		case 'f': k->mf = 1; break;
@@ -417,7 +429,7 @@ static int parse_keydef(const char *spec, struct sort_key *k)
 		}
 		while (*p && strchr("bdfinr", *p)) {
 			k->has_mod = 1;
-			switch (*p) {
+			switch (*p) { // NOLINT(bugprone-switch-missing-default-case) -- the enclosing strchr guard restricts the modifier to these cases
 			case 'b': k->mb = 1; break;
 			case 'd': k->md = 1; break;
 			case 'f': k->mf = 1; break;
@@ -445,13 +457,21 @@ static int read_all_lines(FILE *f, struct line **out, size_t *nout, size_t *cap)
 		size_t len = (size_t)got;
 		char *text;
 		if (len && buf[len - 1] == '\n') len--;
-		text = malloc(len + 1);
+		{
+			size_t bytes;
+			if (!__util_size_add(len, 1, &bytes)) { free(buf); return -1; }
+			text = malloc(bytes);
+		}
 		if (!text) { free(buf); return -1; }
 		memcpy(text, buf, len);
 		text[len] = 0;
 		if (*nout >= *cap) {
-			size_t newcap = *cap ? *cap * 2 : 64;
-			struct line *g = realloc(*out, newcap * sizeof **out);
+			size_t newcap;
+			struct line *g;
+			if (!__util_array_capacity(*cap, *nout, 1, 64, sizeof **out, &newcap)) {
+				free(text); free(buf); return -1;
+			}
+			g = __util_reallocarray(*out, newcap, sizeof **out);
 			if (!g) { free(text); free(buf); return -1; }
 			*out = g;
 			*cap = newcap;
@@ -512,22 +532,22 @@ int __util_sort_main(int argc, char **argv)
 			case 'c': opt_c = 1; p++; break;
 			case 'C': opt_c = 1; opt_C = 1; p++; break;
 			case 'm':
-				fprintf(stderr, "sort: -m: not implemented -- see src/util/sort.c\n");
+				__util_diagf("sort: -m: not implemented -- see src/util/sort.c\n");
 				return 2;
 			case 'k': {
 				const char *val;
 				p++;
 				if (*p) { val = p; }
 				else {
-					if (++i >= argc) { fprintf(stderr, "sort: -k: option requires an argument\n"); return 2; }
+					if (++i >= argc) { __util_diagf("sort: -k: option requires an argument\n"); return 2; }
 					val = argv[i];
 				}
 				if (o.nkeys >= sizeof keys / sizeof keys[0]) {
-					fprintf(stderr, "sort: too many -k options\n");
+					__util_diagf("sort: too many -k options\n");
 					return 2;
 				}
 				if (parse_keydef(val, &keys[o.nkeys]) < 0) {
-					fprintf(stderr, "sort: %s: invalid key definition\n", val);
+					__util_diagf("sort: %s: invalid key definition\n", val);
 					return 2;
 				}
 				o.nkeys++;
@@ -539,11 +559,11 @@ int __util_sort_main(int argc, char **argv)
 				p++;
 				if (*p) { val = p; }
 				else {
-					if (++i >= argc) { fprintf(stderr, "sort: -t: option requires an argument\n"); return 2; }
+					if (++i >= argc) { __util_diagf("sort: -t: option requires an argument\n"); return 2; }
 					val = argv[i];
 				}
 				if (val[0] == 0 || val[1] != 0) {
-					fprintf(stderr, "sort: -t: field separator must be exactly one character\n");
+					__util_diagf("sort: -t: field separator must be exactly one character\n");
 					return 2;
 				}
 				o.delim = val[0];
@@ -555,14 +575,14 @@ int __util_sort_main(int argc, char **argv)
 				p++;
 				if (*p) { outfile = p; }
 				else {
-					if (++i >= argc) { fprintf(stderr, "sort: -o: option requires an argument\n"); return 2; }
+					if (++i >= argc) { __util_diagf("sort: -o: option requires an argument\n"); return 2; }
 					outfile = argv[i];
 				}
 				p = (char *)"";
 				break;
 			}
 			default:
-				fprintf(stderr, "sort: -%c: invalid option\n", *p);
+				__util_diagf("sort: -%c: invalid option\n", *p);
 				return 2;
 			}
 		}
@@ -570,14 +590,14 @@ int __util_sort_main(int argc, char **argv)
 
 	for (; i < argc; i++) {
 		if (nfiles >= (int)(sizeof files / sizeof files[0])) {
-			fprintf(stderr, "sort: too many file operands\n");
+			__util_diagf("sort: too many file operands\n");
 			return 2;
 		}
 		files[nfiles++] = argv[i];
 	}
 
 	if (opt_c && nfiles > 1) {
-		fprintf(stderr, "sort: -c/-C: only one input file may be given\n");
+		__util_diagf("sort: -c/-C: only one input file may be given\n");
 		return 2;
 	}
 
@@ -587,7 +607,7 @@ int __util_sort_main(int argc, char **argv)
 	 * order specifically. */
 	if (nfiles == 0) {
 		if (read_all_lines(stdin, &lines, &nlines, &cap) < 0) {
-			fprintf(stderr, "sort: out of memory\n");
+			__util_diagf("sort: out of memory\n");
 			free_lines(lines, nlines);
 			return 2;
 		}
@@ -598,17 +618,22 @@ int __util_sort_main(int argc, char **argv)
 			int is_stdin = !strcmp(files[fi], "-");
 			f = is_stdin ? stdin : fopen(files[fi], "r");
 			if (!f) {
-				fprintf(stderr, "sort: %s: %s\n", files[fi], strerror(errno));
+				int saved = errno;
+				__util_diagf("sort: %s: %s\n", files[fi], strerror(saved));
 				free_lines(lines, nlines);
 				return 2;
 			}
 			if (read_all_lines(f, &lines, &nlines, &cap) < 0) {
-				fprintf(stderr, "sort: out of memory\n");
-				if (!is_stdin) fclose(f);
+				__util_diagf("sort: out of memory\n");
+				/* Allocation failure is primary; closing the input is cleanup. */
+				if (!is_stdin) (void)fclose(f);
 				free_lines(lines, nlines);
 				return 2;
 			}
-			if (!is_stdin) fclose(f);
+			if (!is_stdin && fclose(f) != 0) {
+				free_lines(lines, nlines);
+				return 2;
+			}
 		}
 	}
 
@@ -624,13 +649,13 @@ int __util_sort_main(int argc, char **argv)
 			int cmp = line_compare(&o, &lines[li - 1], &lines[li]);
 			if (cmp > 0) {
 				if (!opt_C)
-					fprintf(stderr, "sort: %s: disorder: %s\n", srcname, lines[li].text);
+					__util_diagf("sort: %s: disorder: %s\n", srcname, lines[li].text);
 				result = 1;
 				break;
 			}
 			if (cmp == 0 && o.u) {
 				if (!opt_C)
-					fprintf(stderr, "sort: %s: duplicate key: %s\n", srcname, lines[li].text);
+					__util_diagf("sort: %s: duplicate key: %s\n", srcname, lines[li].text);
 				result = 1;
 				break;
 			}
@@ -648,7 +673,7 @@ int __util_sort_main(int argc, char **argv)
 		if (outfile) {
 			outf = fopen(outfile, "w");
 			if (!outf) {
-				fprintf(stderr, "sort: %s: %s\n", outfile, strerror(errno));
+				__util_diagf("sort: %s: %s\n", outfile, strerror(errno));
 				free_lines(lines, nlines);
 				return 2;
 			}
@@ -659,10 +684,19 @@ int __util_sort_main(int argc, char **argv)
 				continue;
 			lines[keep++] = lines[write_i];
 		}
-		for (write_i = 0; write_i < keep; write_i++)
-			fprintf(outf, "%s\n", lines[write_i].text);
+		for (write_i = 0; write_i < keep; write_i++) {
+			if (fprintf(outf, "%s\n", lines[write_i].text) < 0) {
+				/* The output error fixes the result; close only releases outf. */
+				if (outfile) (void)fclose(outf);
+				free_lines(lines, nlines);
+				return 2;
+			}
+		}
 
-		if (outfile) fclose(outf);
+		if (outfile ? fclose(outf) != 0 : fflush(outf) != 0) {
+			free_lines(lines, nlines);
+			return 2;
+		}
 	}
 
 	free_lines(lines, nlines);

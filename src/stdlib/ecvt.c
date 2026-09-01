@@ -10,7 +10,7 @@ static char buf[64];
 
 /* Format with the %e conversion, then strip the exponent and the point
  * out so that the digits remain. */
-char *ecvt(double x, int n, int *dp, int *sign)
+char *ecvt(double x, int n, int *dp, int *sign) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	char tmp[80], *e;
 	int i, j = 0, exp;
@@ -21,7 +21,9 @@ char *ecvt(double x, int n, int *dp, int *sign)
 	if (*sign) x = -x;
 	if (x != x) { strcpy(buf, "nan"); *dp = 0; return buf; }
 	if (x == 1.0 / 0.0) { strcpy(buf, "inf"); *dp = 0; return buf; }
-	snprintf(tmp, sizeof tmp, "%.*e", n - 1, x);
+	if (snprintf(tmp, sizeof tmp, "%.*e", n - 1, x) < 0) {
+		buf[0] = 0; *dp = 0; return buf;
+	}
 	for (i = 0; tmp[i] && tmp[i] != 'e'; i++)
 		if (isdigit((unsigned char)tmp[i])) buf[j++] = tmp[i];
 	buf[j] = 0;
@@ -31,7 +33,7 @@ char *ecvt(double x, int n, int *dp, int *sign)
 	return buf;
 }
 
-char *fcvt(double x, int n, int *dp, int *sign)
+char *fcvt(double x, int n, int *dp, int *sign) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	char tmp[1600];
 	int i, j = 0, lead;
@@ -42,7 +44,9 @@ char *fcvt(double x, int n, int *dp, int *sign)
 	if (*sign) x = -x;
 	if (x != x) { strcpy(buf, "nan"); *dp = 0; return buf; }
 	if (x == 1.0 / 0.0) { strcpy(buf, "inf"); *dp = 0; return buf; }
-	snprintf(tmp, sizeof tmp, "%.*f", n, x);
+	if (snprintf(tmp, sizeof tmp, "%.*f", n, x) < 0) {
+		buf[0] = 0; *dp = 0; return buf;
+	}
 	/* digits before the point is *dp; a leading "0." before the point
 	 * is not a significant digit. */
 	for (lead = 0; tmp[lead] && tmp[lead] != '.'; lead++);
@@ -64,6 +68,6 @@ char *fcvt(double x, int n, int *dp, int *sign)
 
 char *gcvt(double x, int n, char *out)
 {
-	sprintf(out, "%.*g", n, x);
+	if (sprintf(out, "%.*g", n, x) < 0) out[0] = 0;
 	return out;
 }

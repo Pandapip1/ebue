@@ -205,7 +205,7 @@ static nl_catd read_catalog(const char *path)
 		if (n == 0) break;
 		len += (size_t)n;
 	}
-	close(fd);
+	(void)close(fd);
 
 	if (!check_catalog(buf, len)) {
 		free(buf);
@@ -216,7 +216,7 @@ static nl_catd read_catalog(const char *path)
 
 fail:
 	saved = saved ? saved : ENOMEM;
-	close(fd);
+	(void)close(fd);
 	free(buf);
 	errno = saved;
 	return (nl_catd)-1;
@@ -242,12 +242,15 @@ fail:
  * `tmpl`'s object -- that invariant lived only in catopen()'s two call
  * sites, not in anything expand() itself could see. */
 static size_t expand(char *buf, size_t bufsz, const char *tmpl,
-                     size_t tmpllen, const char *name, const char *lang)
+                     size_t tmpllen, const char *name, const char *lang) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
-	size_t i = 0;
+	size_t i = 0, iterations_left = tmpllen;
 	const char *p, *end = tmpl + tmpllen;
 
-	for (p = tmpl; p < end; p++) {
+	/* Each iteration consumes at least one template byte; a conversion
+	 * consumes two, so tmpllen is a conservative iteration bound. */
+	for (p = tmpl; p < end && iterations_left > 0;
+	     p++, iterations_left--) {
 		const char *v;
 		size_t l;
 
@@ -292,6 +295,7 @@ nl_catd catopen(const char *name, int oflag)
 	static const char dflt[] = "%N";
 	char buf[PATH_MAX];
 	const char *path, *lang, *p, *z;
+	size_t components_left;
 	nl_catd cd;
 
 	if (!name || !*name) { errno = ENOENT; return (nl_catd)-1; }
@@ -323,33 +327,41 @@ nl_catd catopen(const char *name, int oflag)
 	path = getenv("NLSPATH");
 	if (!path || !*path) path = "%N:%N.cat";
 
-	for (p = path; ; p = z + 1) {
-		size_t n;
+	/* A path of n bytes has at most n+1 colon-delimited templates,
+	 * including leading, adjacent, and trailing empty components. */
+	components_left = strlen(path) + 1;
+	p = path;
+	while (components_left > 0) {
+		size_t n, template_len;
 
-		z = strchr(p, ':');
-		if (!z) z = p + strlen(p);
+		components_left--;
+		template_len = strcspn(p, ":");
+		z = p + template_len;
 
 		/* "A leading or two adjacent <colon> characters ( "::" ) is
 		 * equivalent to specifying %N." */
-		n = z == p ? expand(buf, sizeof buf, dflt, sizeof dflt - 1,
-		                    name, lang)
-		           : expand(buf, sizeof buf, p, (size_t)(z - p), name, lang);
+		n = template_len == 0 ? expand(buf, sizeof buf, dflt,
+		                                 sizeof dflt - 1, name, lang)
+		                        : expand(buf, sizeof buf, p, template_len,
+		                                 name, lang);
 		if (n != (size_t)-1) {
 			cd = read_catalog(buf);
 			if (cd != (nl_catd)-1) return cd;
 		}
 		if (!*z) break;
+		p = z + 1;
 	}
 
 	errno = ENOENT;
 	return (nl_catd)-1;
 }
 
-char *catgets(nl_catd catd, int set_id, int msg_id, const char *s)
+char *catgets(nl_catd catd, int set_id, int msg_id, const char *s) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const unsigned char *m = (const unsigned char *)catd;
 	const unsigned char *sets, *msgs, *strings;
 	uint32_t lo, hi, nsets, nmsgs;
+	unsigned set_steps, msg_steps;
 
 	/* "The results are undefined if catd is not a value returned by
 	 * catopen() for a message catalog still open in the process."  A
@@ -367,17 +379,23 @@ char *catgets(nl_catd catd, int set_id, int msg_id, const char *s)
 	msgs = m + CAT_HDRSZ + V(m + 12);
 	strings = m + CAT_HDRSZ + V(m + 16);
 
-	for (lo = 0, hi = nsets; lo < hi; ) {
-		uint32_t mid = lo + (hi - lo) / 2;
-		uint32_t id = V(sets + (size_t)mid * CAT_RECSZ);
+	/* Each iteration at least halves a uint32_t-sized search interval. */
+	for (lo = 0, hi = nsets, set_steps = 32; set_steps-- > 0; ) {
+		uint32_t mid, id;
+		if (lo >= hi) break;
+		mid = lo + (hi - lo) / 2;
+		id = V(sets + (size_t)mid * CAT_RECSZ);
 
 		if ((uint32_t)set_id == id) {
 			nmsgs = V(sets + (size_t)mid * CAT_RECSZ + 4);
 			msgs += (size_t)V(sets + (size_t)mid * CAT_RECSZ + 8)
 			        * CAT_RECSZ;
-			for (lo = 0, hi = nmsgs; lo < hi; ) {
-				uint32_t k = lo + (hi - lo) / 2;
-				uint32_t mid_id = V(msgs + (size_t)k * CAT_RECSZ);
+			for (lo = 0, hi = nmsgs, msg_steps = 32;
+			     msg_steps-- > 0; ) {
+				uint32_t k, mid_id;
+				if (lo >= hi) break;
+				k = lo + (hi - lo) / 2;
+				mid_id = V(msgs + (size_t)k * CAT_RECSZ);
 
 				if ((uint32_t)msg_id == mid_id)
 					return (char *)strings +

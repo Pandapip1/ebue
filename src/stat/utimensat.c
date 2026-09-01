@@ -1,6 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <utime.h>
@@ -32,8 +37,9 @@ int utimes(const char *path, const struct timeval tv[2])
 		errno = EINVAL;
 		return -1;
 	}
-	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = tv[0].tv_usec * 1000;
-	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = tv[1].tv_usec * 1000;
+	/* The validation above bounds each product to [0, 999999000]. */
+	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = (long)(tv[0].tv_usec * 1000);
+	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = (long)(tv[1].tv_usec * 1000);
 	return utimensat(AT_FDCWD, path, ts, 0);
 }
 
@@ -55,7 +61,10 @@ int futimesat(int dirfd, const char *path, const struct timeval tv[2])
 		errno = EINVAL;
 		return -1;
 	}
-	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = tv[0].tv_usec * 1000;
-	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = tv[1].tv_usec * 1000;
+	/* The validation above bounds each product to [0, 999999000]. */
+	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = (long)(tv[0].tv_usec * 1000);
+	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = (long)(tv[1].tv_usec * 1000);
 	return utimensat(dirfd, path, ts, 0);
 }
+
+// NOLINTEND(misc-include-cleaner)

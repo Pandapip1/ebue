@@ -13,6 +13,11 @@
  * now one function, verified line for line against the pre-refactor
  * version (commit ce4763c did the same relocation for open()).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include <string.h>
 #include "libc.h"
@@ -72,7 +77,7 @@ static int ntpath_is_ancestor(const struct __ntpath *old,
 /* Open `old`'s already-resolved NT path (op) with DELETE|FILE_READ_
  * ATTRIBUTES|SYNCHRONIZE -- the eventual FILE_RENAME_INFORMATION[Ex]
  * set's own handle, kept open across the rest of this function.
- * *attrs/*tag are FileAttributeTagInformation's two fields, needed by
+	 * *attrs and *tag are FileAttributeTagInformation's two fields, needed by
  * isdir_attrs() to decide whether `old` is a directory; a failed query
  * (rather than a failed open) leaves them 0, which reads as "not a
  * reparse point, not a directory" either way -- not a behavior change
@@ -80,7 +85,7 @@ static int ntpath_is_ancestor(const struct __ntpath *old,
  * via return -- only the OPEN's own failure is reported; the attribute
  * query's failure is absorbed as above. */
 static int rename_open_old(struct __ntpath *op, __plat_handle_t *h_out,
-                           unsigned long *attrs, unsigned long *tag)
+                           unsigned long *attrs, unsigned long *tag) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	HANDLE h;
@@ -109,12 +114,12 @@ static int rename_open_old(struct __ntpath *op, __plat_handle_t *h_out,
 
 /* Best-effort probe of `new`'s NT path: does it exist, and if so, what
  * are its FileAttributeTagInformation fields?  *exists is always
- * written; *attrs/*tag only when *exists is set.  No handle is kept --
+	 * written; *attrs and *tag only when *exists is set.  No handle is kept --
  * new is never opened again after this call -- and no failure is
  * reported outward: an unreadable `new` is exactly like a nonexistent
  * one here. */
 static void query_new_attrs(struct __ntpath *np, int *exists,
-                            unsigned long *attrs, unsigned long *tag)
+                            unsigned long *attrs, unsigned long *tag) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	HANDLE nh;
@@ -145,7 +150,7 @@ static void query_new_attrs(struct __ntpath *np, int *exists,
  * `old_isdir`) when NT's STATUS_ACCESS_DENIED is standing in for a
  * directory-shaped refusal rather than a real permission failure, and
  * the generic mapping for everything else. */
-static int rename_set(__plat_handle_t h, struct __ntpath *np, int old_isdir, int new_isdir)
+static int rename_set(__plat_handle_t h, struct __ntpath *np, int old_isdir, int new_isdir) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	FILE_RENAME_INFORMATION *ri;
@@ -194,8 +199,8 @@ static int rename_set(__plat_handle_t h, struct __ntpath *np, int old_isdir, int
 int __plat_rename(int olddirfd, const char *old, int newdirfd, const char *new)
 {
 	struct __ntpath op, np;
-	__plat_handle_t h;
-	unsigned long old_attrs, old_tag, new_attrs, new_tag;
+	__plat_handle_t h = 0;
+	unsigned long old_attrs = 0, old_tag = 0, new_attrs = 0, new_tag = 0;
 	int old_isdir, new_exists, new_isdir;
 
 	if (__ntpath_at(olddirfd, old, &op, OBJ_CASE_INSENSITIVE) < 0) return -1;
@@ -254,3 +259,5 @@ int __plat_rename(int olddirfd, const char *old, int newdirfd, const char *new)
 		return r;
 	}
 }
+
+// NOLINTEND(misc-include-cleaner)

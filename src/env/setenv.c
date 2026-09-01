@@ -26,14 +26,14 @@ static int is_putenv(char *s) __attribute__((nonnull(1)));
  * array (and src/thread/{children,fork,wait}.c's __children[i]). */
 static int is_putenv(char *s)
 {
-	size_t i;
-	for (i = 0; i < nputenv; i++) if (putenv_strings[i] == s) return 1;
+	size_t i, count = nputenv;
+	for (i = 0; i < count; i++) if (putenv_strings[i] == s) return 1;
 	return 0;
 }
 
-static int env_count(void)
+static size_t env_count(void)
 {
-	int n = 0;
+	size_t n = 0;
 	if (__environ) while (__environ[n]) n++;
 	return n;
 }
@@ -45,8 +45,13 @@ int __putenv(char *s, size_t l, char *owned)
 		if (!is_putenv(*e)) free(*e);
 		*e = s;
 	} else {
-		int n = env_count();
-		char **ne = realloc(__environ, sizeof(char *) * (n + 2));
+		size_t n = env_count();
+		if (n > (size_t)-1 / sizeof(char *) - 2) {
+			errno = ENOMEM;
+			free(owned);
+			return -1;
+		}
+		char **ne = (char **)realloc((void *)__environ, sizeof(char *) * (n + 2));
 		if (!ne) { free(owned); return -1; }
 		ne[n] = s;
 		ne[n+1] = 0;
@@ -60,7 +65,9 @@ int setenv(const char *name, const char *value, int overwrite)
 {
 	size_t l1, l2;
 	char *s;
-	if (!name || !(l1 = strcspn(name, "=")) || name[l1]) { errno = EINVAL; return -1; }
+	if (!name) { errno = EINVAL; return -1; }
+	l1 = strcspn(name, "=");
+	if (!l1 || name[l1]) { errno = EINVAL; return -1; }
 	if (!overwrite && getenv(name)) return 0;
 	l2 = strlen(value);
 	s = malloc(l1 + l2 + 2);
@@ -76,7 +83,7 @@ int putenv(char *s)
 	size_t l = strcspn(s, "=");
 	char **np;
 	if (!l || !s[l]) return unsetenv(s);
-	np = realloc(putenv_strings, sizeof(char *) * (nputenv + 1));
+	np = (char **)realloc((void *)putenv_strings, sizeof(char *) * (nputenv + 1));
 	if (!np) return -1;
 	putenv_strings = np;
 	putenv_strings[nputenv++] = s;
@@ -85,13 +92,21 @@ int putenv(char *s)
 
 int unsetenv(const char *name)
 {
-	size_t l;
-	char **e;
-	if (!name || !(l = strcspn(name, "=")) || name[l]) { errno = EINVAL; return -1; }
-	while ((e = __env_find(name, l))) {
-		char **p = e;
-		if (!is_putenv(*e)) free(*e);
-		do p[0] = p[1]; while (*p++);
+	size_t l, remaining;
+	if (!name) { errno = EINVAL; return -1; }
+	l = strcspn(name, "=");
+	if (!l || name[l]) { errno = EINVAL; return -1; }
+	/* Each pass removes one entry, so the initial environment size is an
+	 * exact upper bound even when an inherited environment contains the
+	 * same name more than once. */
+	for (remaining = env_count(); remaining > 0; remaining--) {
+		char **p = __env_find(name, l);
+		if (!p) break;
+		if (!is_putenv(*p)) free(*p);
+		do {
+			p[0] = p[1];
+			p++;
+		} while (*p);
 	}
 	return 0;
 }

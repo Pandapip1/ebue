@@ -137,6 +137,11 @@
  *   or building the futex-on-ctid join a real CLONE_THREAD port would
  *   need anyway.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include <stddef.h>
 #include "plat_thread.h"
@@ -185,7 +190,7 @@
  * which silently discards the real -errno magnitude on failure; this
  * does not). aarch64's syscall calling convention: x8 = syscall number,
  * x0..x5 = up to 6 arguments, result (or -errno in [-4095,-1]) in x0. */
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
 	register long x0 __asm__("x0") = a1;
@@ -206,7 +211,7 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
  * __plat_thread_entry_t's shape (`unsigned (*)(void*)`, NT's
  * NtCreateThreadEx StartRoutine shape, reused as-is per plat_thread.h's
  * own banner) so callers pass `entry` straight through with no adapter. */
-extern long __ntlibc_linux_clone(__plat_thread_entry_t fn, void *stack_top,
+extern long __ntlibc_linux_clone(__plat_thread_entry_t fn, void *stack_top, // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
                                  long flags, void *arg);
 
 static int is_sys_error(long ret)
@@ -366,7 +371,7 @@ int __plat_event_set(__plat_handle_t h)
  * passes 0 (see plat_thread.h's own comment: real callers only pass
  * nonzero for sem_init()'s process-shared case, out of scope here), so
  * the difference is never exercised. Documented, not silently assumed. */
-int __plat_semaphore_create(long initial, long maximum, int inheritable,
+int __plat_semaphore_create(long initial, long maximum, int inheritable, // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; initial, maximum, and inheritance values have distinct roles
                             __plat_handle_t *out)
 {
 	struct ntlibc_linux_sync *obj;
@@ -411,7 +416,7 @@ int __plat_semaphore_getvalue(__plat_handle_t h, int *value)
  * Single-handle only: __plat_wait_any() (NtWaitForMultipleObjects'
  * WaitAny mode) is out of this port's chosen scope -- no caller here
  * needs it -- and is left undefined rather than stubbed. */
-int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout,
+int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout, // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; alert and timeout flags have distinct roles
                     long long relative_ticks)
 {
 	struct ntlibc_linux_sync *obj = (struct ntlibc_linux_sync *)h;
@@ -503,7 +508,7 @@ int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout,
  * threaded -- see fuzz/linux_pilot_test_pthread_mutex.c's own banner)
  * must know about this first. */
 int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
-                        size_t stack_size, int create_suspended,
+                        size_t stack_size, int create_suspended, // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; stack size and suspension flag have distinct roles
                         __plat_handle_t *out)
 {
 	size_t sz;
@@ -605,6 +610,7 @@ static int fast_lock_word;
 
 #define SYS_sched_yield 124
 
+void __plat_fast_lock(void) NTLIBC_NO_THREAD_SAFETY_ANALYSIS;
 void __plat_fast_lock(void)
 {
 	int c;
@@ -617,6 +623,7 @@ void __plat_fast_lock(void)
 	}
 }
 
+void __plat_fast_unlock(void) NTLIBC_NO_THREAD_SAFETY_ANALYSIS;
 void __plat_fast_unlock(void)
 {
 	__atomic_store_n(&fast_lock_word, 0, __ATOMIC_RELEASE);
@@ -635,7 +642,7 @@ void __plat_fast_unlock(void)
  * is a real, disclosed tradeoff, not a correctness gap. */
 #define SYS_nanosleep_wa 101
 
-int __plat_wait_any(__plat_handle_t *handles, unsigned count, int alertable,
+int __plat_wait_any(__plat_handle_t *handles, unsigned count, int alertable, // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; count and alert flag have distinct roles
                     int has_timeout, long long relative_ticks)
 {
 	long long remaining_ns;
@@ -744,7 +751,7 @@ static int map_named_sem(const char *name, long flags, long mode,
 /* A fresh, believed-unique name -- collision is a plain error, not a
  * create-or-open contract, matching plat_thread.h's own contract for
  * this function. */
-int __plat_named_semaphore_create(const char *name, long initial, long maximum,
+int __plat_named_semaphore_create(const char *name, long initial, long maximum, // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; initial and maximum counts have distinct roles
                                   __plat_handle_t *out)
 {
 	struct ntlibc_linux_sync *obj;
@@ -769,7 +776,7 @@ int __plat_named_semaphore_open(const char *name, __plat_handle_t *out)
 	return 0;
 }
 
-int __plat_named_semaphore_open_or_create(const char *name, long initial,
+int __plat_named_semaphore_open_or_create(const char *name, long initial, // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; initial and maximum counts have distinct roles
                                           long maximum, __plat_handle_t *out)
 {
 	struct ntlibc_linux_sync *obj;
@@ -953,7 +960,7 @@ int __plat_thread_queue_apc(__plat_handle_t h, __plat_apc_fn fn, void *arg1, voi
 	return -1;
 }
 
-int __plat_thread_redirect_ip(__plat_handle_t h, void *target)
+int __plat_thread_redirect_ip(__plat_handle_t h, void *target) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; thread handle and instruction target have distinct roles
 {
 	(void)h; (void)target;
 	errno = ENOSYS;
@@ -1023,9 +1030,10 @@ void __plat_thread_alertable_yield(void)
  * constant every Windows-interop codebase uses for this conversion). */
 long long __plat_query_system_time(void)
 {
-	struct linux_timespec ts;
+	struct linux_timespec ts = {0};
 	long long secs_since_1601;
-	raw_syscall(SYS_clock_gettime_lx, 0L /* CLOCK_REALTIME */, (long)&ts, 0, 0, 0, 0);
+	long ret = raw_syscall(SYS_clock_gettime_lx, 0L /* CLOCK_REALTIME */, (long)&ts, 0, 0, 0, 0);
+	if (is_sys_error(ret)) return 116444736000000000LL;
 	secs_since_1601 = (long long)ts.tv_sec + 11644473600LL;
 	return secs_since_1601 * 10000000LL + (long long)ts.tv_nsec / 100LL;
 }
@@ -1039,7 +1047,7 @@ long long __plat_query_system_time(void)
 #define SYS_pread64_lx  67
 #define SYS_pwrite64_lx 68
 
-ssize_t __plat_thread_file_io(__plat_handle_t h, void *buf, size_t count,
+ssize_t __plat_thread_file_io(__plat_handle_t h, void *buf, size_t count, // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; buffer extent and file offset have distinct roles
                               off_t off, int write_op)
 {
 	long fd = (long)h - 1;
@@ -1049,3 +1057,5 @@ ssize_t __plat_thread_file_io(__plat_handle_t h, void *buf, size_t count,
 	if (is_sys_error(r)) { errno = (int)-r; return -1; }
 	return (ssize_t)r;
 }
+
+// NOLINTEND(misc-include-cleaner)

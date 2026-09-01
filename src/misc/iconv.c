@@ -77,7 +77,7 @@
 
 enum { CS_UTF8, CS_UTF16LE };
 
-struct __iconv_state {
+struct __iconv_state { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 	int from;
 	int to;
 };
@@ -102,8 +102,8 @@ static int codeset(const char *name, int *out)
 	}
 	norm[n] = 0;
 
-	if (!strcmp(norm, "UTF8")) { *out = CS_UTF8; return 1; }
-	if (!strcmp(norm, "UTF16LE")) { *out = CS_UTF16LE; return 1; }
+	if (n == 4 && !memcmp(norm, "UTF8", 4)) { *out = CS_UTF8; return 1; }
+	if (n == 7 && !memcmp(norm, "UTF16LE", 7)) { *out = CS_UTF16LE; return 1; }
 	return 0;
 }
 
@@ -265,7 +265,9 @@ size_t iconv(iconv_t cd, char **restrict inbuf, size_t *restrict inbytesleft,
 	 * all of ol -- deriving ol from op instead would truncate that. */
 	ol = op && outbytesleft ? *outbytesleft : 0;
 
-	while (il) {
+	/* Every successful conversion consumes at least one input byte. */
+	for (size_t steps_left = il; il > 0 && steps_left > 0;
+	     steps_left--) {
 		uint32_t cp;
 		size_t used, need;
 		int err = 0;

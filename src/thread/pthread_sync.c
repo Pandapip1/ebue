@@ -1,10 +1,16 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <pthread.h>
 #include <errno.h>
 #include <sched.h>
 #include <string.h>
 #include "pthread_impl.h"
+#include "ownership_stubs.h"
 #include "plat_thread.h"
 #include "plat_fd.h"
 
@@ -43,7 +49,7 @@ struct barrierattr_data {
  * (duplicated in three files, not shared, but the reasoning is
  * identical) and for the aarch64/tcc (PLATFORM=nt ARCH=aarch64) branch
  * below's own story -- src/thread/nt/aarch64/atomic32.S's banner. */
-static int compare_exchange(volatile int *address, int old_value,
+static int compare_exchange(volatile int *address, int old_value, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	int new_value)
 {
 #if defined(__i386__) || defined(__x86_64__)
@@ -80,22 +86,24 @@ static void alertable_yield(void)
 	sched_yield();
 }
 
-int pthread_spin_init(pthread_spinlock_t *lock, int pshared)
+int pthread_spin_init(pthread_spinlock_t *lock construct(pthread_spin) grant(pthread_spin_unlocked), int pshared)
 {
 	if (!lock || (pshared != PTHREAD_PROCESS_PRIVATE &&
 	    pshared != PTHREAD_PROCESS_SHARED)) return EINVAL;
 	lock->__value = SPIN_UNLOCKED;
+	__ownership_pthread_spin_initialized(lock);
 	return 0;
 }
 
-int pthread_spin_destroy(pthread_spinlock_t *lock)
+int pthread_spin_destroy(pthread_spinlock_t *lock destroy(pthread_spin) consume(pthread_spin_unlocked))
 {
 	if (!lock || lock->__value != SPIN_UNLOCKED) return EBUSY;
 	lock->__value = 0;
+	__ownership_pthread_spin_destroyed(lock);
 	return 0;
 }
 
-int pthread_spin_lock(pthread_spinlock_t *lock)
+int pthread_spin_lock(pthread_spinlock_t *lock handle(pthread_spin) consume(pthread_spin_unlocked) grant(pthread_spin_locked))
 {
 	if (!lock) return EINVAL;
 	for (;;) {
@@ -103,44 +111,52 @@ int pthread_spin_lock(pthread_spinlock_t *lock)
 		if (!state) return EINVAL;
 		if (state == SPIN_UNLOCKED &&
 		    compare_exchange(&lock->__value, SPIN_UNLOCKED,
-			SPIN_LOCKED) == SPIN_UNLOCKED) return 0;
+			SPIN_LOCKED) == SPIN_UNLOCKED) {
+			__ownership_pthread_spin_locked(lock);
+			return 0;
+		}
 		alertable_yield();
 	}
 }
 
-int pthread_spin_trylock(pthread_spinlock_t *lock)
+int pthread_spin_trylock(pthread_spinlock_t *lock handle(pthread_spin) consume(pthread_spin_unlocked) grant(pthread_spin_locked))
 {
 	int state;
 	if (!lock) return EINVAL;
 	state = lock->__value;
 	if (!state) return EINVAL;
-	return state == SPIN_UNLOCKED &&
-		compare_exchange(&lock->__value, SPIN_UNLOCKED,
-			SPIN_LOCKED) == SPIN_UNLOCKED ? 0 : EBUSY;
+	if (state == SPIN_UNLOCKED &&
+	    compare_exchange(&lock->__value, SPIN_UNLOCKED,
+		SPIN_LOCKED) == SPIN_UNLOCKED) {
+		__ownership_pthread_spin_locked(lock);
+		return 0;
+	}
+	return EBUSY;
 }
 
-int pthread_spin_unlock(pthread_spinlock_t *lock)
+int pthread_spin_unlock(pthread_spinlock_t *lock handle(pthread_spin) consume(pthread_spin_locked) grant(pthread_spin_unlocked))
 {
 	if (!lock || lock->__value != SPIN_LOCKED) return EINVAL;
 	__asm__ __volatile__("" : : : "memory");
 	lock->__value = SPIN_UNLOCKED;
+	__ownership_pthread_spin_unlocked(lock);
 	return 0;
 }
 
 static struct barrier_data *barrier_data(pthread_barrier_t *barrier)
 {
-	return (struct barrier_data *)(void *)barrier;
+	return (struct barrier_data *)(void *)barrier; // NOLINT(bugprone-casting-through-void) -- public pthread_barrier_t is opaque storage for this ABI-defined internal layout
 }
 
 static struct barrierattr_data *barrierattr_data(pthread_barrierattr_t *attr)
 {
-	return (struct barrierattr_data *)(void *)attr;
+	return (struct barrierattr_data *)(void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_barrierattr_t is opaque storage for this ABI-defined internal layout
 }
 
 static const struct barrierattr_data *const_barrierattr_data(
 	const pthread_barrierattr_t *attr)
 {
-	return (const struct barrierattr_data *)(const void *)attr;
+	return (const struct barrierattr_data *)(const void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_barrierattr_t is opaque storage for this ABI-defined internal layout
 }
 
 /* Process-private barrier state is serialized by the PEB lock. Each caller
@@ -164,8 +180,9 @@ static void unlink_barrier_waiter_locked(struct barrier_waiter *waiter)
 	if (*link) *link = waiter->next;
 }
 
-int pthread_barrier_init(pthread_barrier_t *__restrict barrier,
-	const pthread_barrierattr_t *__restrict attr, unsigned count)
+
+int pthread_barrier_init(pthread_barrier_t *__restrict barrier construct(pthread_barrier),
+	const pthread_barrierattr_t *__restrict attr handle(pthread_barrierattr), unsigned count)
 {
 	struct barrier_data *data;
 	const struct barrierattr_data *attributes = 0;
@@ -183,7 +200,8 @@ int pthread_barrier_init(pthread_barrier_t *__restrict barrier,
 	return 0;
 }
 
-int pthread_barrier_destroy(pthread_barrier_t *barrier)
+
+int pthread_barrier_destroy(pthread_barrier_t *barrier destroy(pthread_barrier))
 {
 	struct barrier_data *data;
 	int result = 0;
@@ -204,7 +222,8 @@ int pthread_barrier_destroy(pthread_barrier_t *barrier)
 	return result;
 }
 
-int pthread_barrier_wait(pthread_barrier_t *barrier)
+
+int pthread_barrier_wait(pthread_barrier_t *barrier handle(pthread_barrier))
 {
 	struct barrier_data *data;
 	struct barrier_waiter waiter;
@@ -260,7 +279,8 @@ int pthread_barrier_wait(pthread_barrier_t *barrier)
 	return 0;
 }
 
-int pthread_barrierattr_init(pthread_barrierattr_t *attr)
+
+int pthread_barrierattr_init(pthread_barrierattr_t *attr construct(pthread_barrierattr))
 {
 	struct barrierattr_data *data;
 	if (!attr) return EINVAL;
@@ -271,14 +291,16 @@ int pthread_barrierattr_init(pthread_barrierattr_t *attr)
 	return 0;
 }
 
-int pthread_barrierattr_destroy(pthread_barrierattr_t *attr)
+
+int pthread_barrierattr_destroy(pthread_barrierattr_t *attr destroy(pthread_barrierattr))
 {
 	if (!attr || barrierattr_data(attr)->magic != BARATTR_MAGIC) return EINVAL;
 	memset(attr, 0, sizeof *attr);
 	return 0;
 }
 
-int pthread_barrierattr_getpshared(const pthread_barrierattr_t *__restrict attr,
+
+int pthread_barrierattr_getpshared(const pthread_barrierattr_t *__restrict attr handle(pthread_barrierattr),
 	int *__restrict pshared)
 {
 	if (!attr || !pshared ||
@@ -287,7 +309,8 @@ int pthread_barrierattr_getpshared(const pthread_barrierattr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_barrierattr_setpshared(pthread_barrierattr_t *attr, int pshared)
+
+int pthread_barrierattr_setpshared(pthread_barrierattr_t *attr handle(pthread_barrierattr), int pshared)
 {
 	if (!attr || barrierattr_data(attr)->magic != BARATTR_MAGIC ||
 	    (pshared != PTHREAD_PROCESS_PRIVATE &&
@@ -295,3 +318,5 @@ int pthread_barrierattr_setpshared(pthread_barrierattr_t *attr, int pshared)
 	barrierattr_data(attr)->pshared = pshared;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

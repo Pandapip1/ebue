@@ -19,6 +19,7 @@
  * latter.  Restricting the component to the portable filename character set
  * also avoids giving DOS device names and separators a second interpretation.
  */
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- strnlen(): bounded name and path validation
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -45,22 +46,25 @@ static int portable_name_char(unsigned char c)
 	       (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
 }
 
+withtok(heap_allocated)
 static char *shm_path(const char *name)
 {
 	const char *dir;
 	const char *component;
-	size_t dirlen, namelen, pathlen;
+	const size_t prefix = sizeof "/ntlibc-shm/" - 1;
+	size_t dirlen, maxdir, namelen, pathlen;
 	char *path;
 	size_t i;
 
 	if (!name) { errno = EINVAL; return NULL; }
-	namelen = strlen(name);
+	namelen = strnlen(name, PATH_MAX);
 	/* {PATH_MAX} includes the terminating null; {NAME_MAX} does not. */
 	if (namelen >= PATH_MAX) { errno = ENAMETOOLONG; return NULL; }
-	component = name[0] == '/' ? name + 1 : name;
-	namelen = strlen(component);
+	if (name[0] == '/') { component = name + 1; namelen--; }
+	else component = name;
 	if (namelen > NAME_MAX) { errno = ENAMETOOLONG; return NULL; }
-	if (!namelen || !strcmp(component, ".") || !strcmp(component, "..")) {
+	if (!namelen || (namelen == 1 && component[0] == '.') ||
+	    (namelen == 2 && component[0] == '.' && component[1] == '.')) {
 		errno = EINVAL;
 		return NULL;
 	}
@@ -70,16 +74,23 @@ static char *shm_path(const char *name)
 			return NULL;
 		}
 
+	if (namelen > (size_t)PATH_MAX - 1 - prefix) {
+		errno = ENAMETOOLONG;
+		return NULL;
+	}
+	/* Bound the environment-derived directory scan by the exact room
+	 * remaining after the fixed namespace and validated object name. */
+	maxdir = (size_t)PATH_MAX - 1 - prefix - namelen;
 	dir = shm_tmpdir();
-	dirlen = strlen(dir);
-	pathlen = dirlen + sizeof "/ntlibc-shm/" - 1 + namelen;
-	if (pathlen >= PATH_MAX) { errno = ENAMETOOLONG; return NULL; }
-	path = malloc(pathlen + 1);
+	dirlen = strnlen(dir, maxdir + 1);
+	if (dirlen > maxdir) { errno = ENAMETOOLONG; return NULL; }
+	pathlen = dirlen + prefix + namelen + 1;
+	path = malloc(pathlen);
 	if (!path) return NULL;
 	memcpy(path, dir, dirlen);
-	memcpy(path + dirlen, "/ntlibc-shm/", sizeof "/ntlibc-shm/" - 1);
-	memcpy(path + dirlen + sizeof "/ntlibc-shm/" - 1,
-	       component, namelen + 1);
+	memcpy(path + dirlen, "/ntlibc-shm/", prefix);
+	memcpy(path + dirlen + prefix, component, namelen);
+	path[pathlen - 1] = 0;
 	return path;
 }
 
@@ -128,6 +139,7 @@ static int ensure_namespace(const char *path)
  * Real NT stores the same value in $LXMOD on the data file.  Stock Wine
  * accepts that EA in NtCreateFile but drops it, so the sidecar is the
  * compatibility record that makes the mode survive close and reopen. */
+withtok(heap_allocated)
 static char *shm_mode_path(const char *path)
 {
 	const char *slash = strrchr(path, '/');
@@ -164,7 +176,7 @@ static int shm_mode_write(const char *path, mode_t mode)
 		result = written == sizeof value ? 0 : -1;
 		if (written >= 0 && result < 0) errno = EIO;
 		saved = errno;
-		close(fd);
+		(void)close(fd);
 		errno = saved;
 	}
 	saved = errno;
@@ -198,7 +210,7 @@ static int shm_mode_read(const char *path, mode_t *mode)
 			result = 1;
 		}
 		saved = errno;
-		close(fd);
+		(void)close(fd);
 		errno = saved;
 	}
 	saved = errno;
@@ -251,8 +263,8 @@ int shm_open(const char *name, int oflag, mode_t mode)
 		stored = mode & ~__umask_get() & 07777;
 		if (shm_mode_write(path, stored) < 0) {
 			saved = errno;
-			close(fd);
-			unlink(path);
+			(void)close(fd);
+			(void)unlink(path);
 			free(path);
 			errno = saved;
 			return -1;
@@ -301,9 +313,15 @@ static int rename_mapped_away(const char *path)
 	memcpy(dead, path, dirlen);
 	for (attempt = 0; attempt < 32; attempt++) {
 		unsigned serial = ++tombstone_serial;
-		snprintf(dead + dirlen, size - dirlen,
+		int n = snprintf(dead + dirlen, size - dirlen,
 		         "%s%08x-%08x-%08x", stem, (unsigned)getpid(),
 		         (unsigned)gettid(), serial);
+		if (n < 0 || (size_t)n >= size - dirlen) {
+			int e = n < 0 ? errno : ENAMETOOLONG;
+			free(dead);
+			errno = e;
+			return -1;
+		}
 		if (rename(path, dead) == 0) {
 			/* A live section may keep this private unlink from succeeding.
 			 * The namespace operation already succeeded, so do not turn a

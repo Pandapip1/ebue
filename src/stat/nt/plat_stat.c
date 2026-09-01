@@ -24,6 +24,11 @@
  * is the identical sequence each front door used to run inline, verified
  * line for line against the pre-refactor version.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <fcntl.h>
@@ -62,7 +67,7 @@ int __plat_lxmod_get(__plat_handle_t h, unsigned *mode)
 	if (!NT_SUCCESS(st) || io.Information < LXMOD_EA_LEN ||
 	    ea->EaNameLength != LXMOD_NAME_LEN ||
 	    ea->EaValueLength != LXMOD_VALUE_LEN ||
-	    memcmp(ea->EaName, LXMOD_NAME, LXMOD_NAME_LEN))
+	    memcmp(ea->EaName, LXMOD_NAME, LXMOD_NAME_LEN)) // NOLINT(bugprone-suspicious-string-compare) -- any nonzero result intentionally rejects a mismatched EA name
 		return 0;
 	*mode = getle32((unsigned char *)ea->EaName + LXMOD_NAME_LEN + 1);
 	return 1;
@@ -93,6 +98,7 @@ int __plat_chmod(__plat_handle_t h, mode_t mode)
 	struct stat before;
 	NTSTATUS st;
 	unsigned lxmode;
+	int making_readonly;
 	int have_before = __plat_fstat(h, __FD_FILE, &before) == 0;
 	st = NtQueryInformationFile(h, &io, &bi, sizeof bi, FileBasicInformation);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
@@ -118,6 +124,39 @@ int __plat_chmod(__plat_handle_t h, mode_t mode)
 		set.FileAttributes &= ~FILE_ATTRIBUTE_NORMAL;
 	else
 		set.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+	making_readonly = !(bi.FileAttributes & FILE_ATTRIBUTE_READONLY) &&
+	                  (set.FileAttributes & FILE_ATTRIBUTE_READONLY);
+	/* Wine refuses NtSetEaFile once FILE_ATTRIBUTE_READONLY is set on the
+	 * object, even when this already-open handle was granted FILE_WRITE_EA.
+	 * Persist the exact POSIX mode before making that one-way transition;
+	 * doing it in the old order made chmod(0700 -> 0500) report success via
+	 * the compatibility fallback below while stat() kept seeing the stale
+	 * 0700 $LXMOD record.  The inverse transition must retain the old order:
+	 * clearing READONLY first is what makes the EA writable again. */
+	if (making_readonly) {
+		if (__plat_lxmod_set(h, lxmode) == 0) {
+			st = NtSetInformationFile(h, &io, &set, sizeof set,
+			                          FileBasicInformation);
+			if (NT_SUCCESS(st)) return 0;
+			/* Best-effort observable rollback.  A handle on which fstat failed
+			 * cannot supply an old mode, but that is already an exceptional
+			 * object for which chmod cannot promise a recoverable metadata
+			 * transaction. */
+			if (have_before)
+				__plat_lxmod_set(h,
+				    (bi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY ? S_IFDIR : S_IFREG) |
+				    (before.st_mode & 07777));
+			return __set_errno_status(st);
+		}
+		/* Wine versions without writable EAs can still represent a
+		 * write-bit-only change with FILE_ATTRIBUTE_READONLY. */
+		if (!have_before || (mode & 0111) != (before.st_mode & 0111))
+			return -1;
+		st = NtSetInformationFile(h, &io, &set, sizeof set,
+		                          FileBasicInformation);
+		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		return 0;
+	}
 	if (set.FileAttributes != bi.FileAttributes) {
 		st = NtSetInformationFile(h, &io, &set, sizeof set, FileBasicInformation);
 		if (!NT_SUCCESS(st)) return __set_errno_status(st);
@@ -139,7 +178,7 @@ int __plat_chmod(__plat_handle_t h, mode_t mode)
 	return 0;
 }
 
-int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode)
+int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __ntpath np;
 	IO_STATUS_BLOCK io;
@@ -198,7 +237,11 @@ int __plat_mkdir(int dirfd, const char *path, mode_t mode)
 	ea_len = __lxmod_create_buffer(mode_ea, S_IFDIR | mode);
 
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
-	st = NtCreateFile(&h, FILE_LIST_DIRECTORY | SYNCHRONIZE, &np.oa, &io, 0,
+	/* Wine only consumes NtCreateFile's EA buffer when the requested access
+	 * includes FILE_WRITE_EA.  Without it mkdir() succeeded but silently
+	 * discarded the requested POSIX mode, so stat() fell back to 0755. */
+	st = NtCreateFile(&h, FILE_LIST_DIRECTORY | FILE_WRITE_EA | SYNCHRONIZE,
+	                          &np.oa, &io, 0,
 	                          FILE_ATTRIBUTE_NORMAL, FILE_SHARE_VALID_FLAGS, FILE_CREATE,
 	                          FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT,
 	                          mode_ea, ea_len);
@@ -231,6 +274,16 @@ int __plat_mkdir(int dirfd, const char *path, mode_t mode)
 	__ntpath_free(&np);
 	if (st == STATUS_OBJECT_NAME_COLLISION) { errno = EEXIST; return -1; }
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	/* Wine 11 accepts the create-time EA buffer above but does not attach it
+	 * to a newly-created directory.  Repeat the write on the returned handle,
+	 * which now names the complete object.  Keep this best-effort like the
+	 * create-time EA itself: Wine versions whose NtSetEaFile is still stubbed
+	 * must retain mkdir's historical native-directory fallback. */
+	{
+		int saved_errno = errno;
+		__plat_lxmod_set(h, S_IFDIR | mode);
+		errno = saved_errno;
+	}
 	NtClose(h);
 	return 0;
 }
@@ -243,8 +296,8 @@ int __plat_mkdir(int dirfd, const char *path, mode_t mode)
  * number can ever equal, while still keeping __STAT_DEV_PIPE and
  * __STAT_DEV_CHAR distinct from each other -- so a pipe can never be
  * mistaken for a console/char device, or either for a real file. */
-#define __STAT_DEV_PIPE ((dev_t)0xFFFFFFFF00000001ULL)
-#define __STAT_DEV_CHAR ((dev_t)0xFFFFFFFF00000002ULL)
+#define __STAT_DEV_PIPE ((dev_t)0xFFFFFFFF00000001ULL) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
+#define __STAT_DEV_CHAR ((dev_t)0xFFFFFFFF00000002ULL) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
 /* FNV-1a, a well-known 64-bit hash (offset basis and prime from the
  * canonical spec, http://www.isthe.com/chongo/tech/comp/fnv/), used
@@ -306,7 +359,7 @@ static ino_t fnv1a64(const void *data, size_t n)
  *    as different files.  This only happens when both a
  *    FileInternalInformation query and an object-name query find
  *    nothing to work with, which nothing observed so far exercises. */
-static ino_t __fstat_synthetic_ino(HANDLE h)
+static ino_t __fstat_synthetic_ino(HANDLE h) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 {
 	IO_STATUS_BLOCK io;
 	FILE_INTERNAL_INFORMATION ii;
@@ -332,7 +385,7 @@ static unsigned getle16(const unsigned char *p)
 	return (unsigned)p[0] | (unsigned)p[1] << 8;
 }
 
-static int read_at(HANDLE h, void *buffer, unsigned length, long long offset)
+static int read_at(HANDLE h, void *buffer, unsigned length, long long offset) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	LARGE_INTEGER position = offset;
@@ -381,7 +434,7 @@ done:
 	return result;
 }
 
-static mode_t mode_from_attrs(ULONG attrs, ULONG tag, int exe,
+static mode_t mode_from_attrs(ULONG attrs, ULONG tag, int exe, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                               int have_lxmod, unsigned lxmod)
 {
 	mode_t m;
@@ -400,7 +453,10 @@ static mode_t mode_from_attrs(ULONG attrs, ULONG tag, int exe,
 	 * permission and special bit from the metadata.  Files without the EA
 	 * use the validated-PE compatibility fallback. */
 	if (have_lxmod) m = (m & S_IFMT) | (lxmod & 07777);
-	else if (attrs & FILE_ATTRIBUTE_READONLY) m &= ~0222;
+	/* The native readonly attribute is independently authoritative.  It may
+	 * have been changed by a Windows program, or an EA query may return an
+	 * older $LXMOD value immediately after the attribute transition. */
+	if (attrs & FILE_ATTRIBUTE_READONLY) m &= ~0222;
 	return m;
 }
 
@@ -722,3 +778,5 @@ int __plat_set_times_at(int dirfd, const char *path, int flags, const struct tim
 	NtClose(h);
 	return r;
 }
+
+// NOLINTEND(misc-include-cleaner)

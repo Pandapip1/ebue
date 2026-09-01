@@ -1,11 +1,17 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <pthread.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "pthread_impl.h"
+#include "ownership_stubs.h"
 #include "plat_thread.h"
 #include "plat_fd.h"
 
@@ -43,18 +49,18 @@ struct rwattr_data {
 
 static struct rwlock_data *rwlock_data(pthread_rwlock_t *lock)
 {
-	return (struct rwlock_data *)(void *)lock;
+	return (struct rwlock_data *)(void *)lock; // NOLINT(bugprone-casting-through-void) -- public pthread_rwlock_t is opaque storage for this ABI-defined internal layout
 }
 
 static const struct rwattr_data *const_rwattr_data(
 	const pthread_rwlockattr_t *attr)
 {
-	return (const struct rwattr_data *)(const void *)attr;
+	return (const struct rwattr_data *)(const void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_rwlockattr_t is opaque storage for this ABI-defined internal layout
 }
 
 static struct rwattr_data *rwattr_data(pthread_rwlockattr_t *attr)
 {
-	return (struct rwattr_data *)(void *)attr;
+	return (struct rwattr_data *)(void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_rwlockattr_t is opaque storage for this ABI-defined internal layout
 }
 
 static int rwlock_ready(pthread_rwlock_t *lock)
@@ -83,7 +89,7 @@ static int rwlock_ready(pthread_rwlock_t *lock)
  * (duplicated in three files, not shared, but the reasoning is
  * identical) and for the aarch64/tcc (PLATFORM=nt ARCH=aarch64) branch
  * below's own story -- src/thread/nt/aarch64/atomic32.S's banner. */
-static int compare_exchange(volatile int *address, int old_value,
+static int compare_exchange(volatile int *address, int old_value, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	int new_value)
 {
 #if defined(__i386__) || defined(__x86_64__)
@@ -104,7 +110,7 @@ static int compare_exchange(volatile int *address, int old_value,
 }
 
 static int shared_acquire(struct rwlock_data *data,
-	const struct timespec *absolute, int try_only, int write)
+	const struct timespec *absolute, int try_only, int write) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	for (;;) {
 		int state = data->shared_state;
@@ -296,8 +302,9 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 	return result;
 }
 
-int pthread_rwlock_init(pthread_rwlock_t *__restrict lock,
-	const pthread_rwlockattr_t *__restrict attr)
+
+int pthread_rwlock_init(pthread_rwlock_t *__restrict lock construct(pthread_rwlock) static_handle(pthread_rwlock) grant(pthread_rwlock_unlocked),
+	const pthread_rwlockattr_t *__restrict attr handle(pthread_rwlockattr))
 {
 	struct rwlock_data *data;
 	const struct rwattr_data *attributes = 0;
@@ -310,10 +317,12 @@ int pthread_rwlock_init(pthread_rwlock_t *__restrict lock,
 	data = rwlock_data(lock);
 	data->magic = RWLOCK_MAGIC;
 	data->pshared = attributes ? attributes->pshared : PTHREAD_PROCESS_PRIVATE;
+	__ownership_pthread_rwlock_initialized(lock);
 	return 0;
 }
 
-int pthread_rwlock_destroy(pthread_rwlock_t *lock)
+
+int pthread_rwlock_destroy(pthread_rwlock_t *lock destroy(pthread_rwlock) static_handle(pthread_rwlock) consume(pthread_rwlock_unlocked))
 {
 	struct rwlock_data *data;
 	int error = rwlock_ready(lock);
@@ -322,50 +331,71 @@ int pthread_rwlock_destroy(pthread_rwlock_t *lock)
 	if (data->pshared == PTHREAD_PROCESS_SHARED) {
 		if (data->shared_state) return EBUSY;
 		data->magic = RWLOCK_DEAD;
+		__ownership_pthread_rwlock_destroyed(lock);
 		return 0;
 	}
 	__plat_fast_lock();
 	if (data->writer || data->readers || data->head) error = EBUSY;
 	else data->magic = RWLOCK_DEAD;
 	__plat_fast_unlock();
+	if (!error) __ownership_pthread_rwlock_destroyed(lock);
 	return error;
 }
 
-int pthread_rwlock_rdlock(pthread_rwlock_t *lock)
+
+int pthread_rwlock_rdlock(pthread_rwlock_t *lock handle(pthread_rwlock) static_handle(pthread_rwlock) consume_any(pthread_rwlock_unlocked) consume_any(pthread_rwlock_shared) grant(pthread_rwlock_shared))
 {
 	struct timespec forever = {(time_t)0x7fffffff, 0};
-	return rwlock_acquire(lock, &forever, 0, 0);
+	int error = rwlock_acquire(lock, &forever, 0, 0);
+	if (!error) __ownership_pthread_rwlock_read_locked(lock);
+	return error;
 }
 
-int pthread_rwlock_tryrdlock(pthread_rwlock_t *lock)
+
+int pthread_rwlock_tryrdlock(pthread_rwlock_t *lock handle(pthread_rwlock) static_handle(pthread_rwlock) consume_any(pthread_rwlock_unlocked) consume_any(pthread_rwlock_shared) grant(pthread_rwlock_shared))
 {
-	return rwlock_acquire(lock, 0, 1, 0);
+	int error = rwlock_acquire(lock, 0, 1, 0);
+	if (!error) __ownership_pthread_rwlock_read_locked(lock);
+	return error;
 }
 
-int pthread_rwlock_timedrdlock(pthread_rwlock_t *__restrict lock,
+
+int pthread_rwlock_timedrdlock(pthread_rwlock_t *__restrict lock handle(pthread_rwlock) static_handle(pthread_rwlock) consume_any(pthread_rwlock_unlocked) consume_any(pthread_rwlock_shared) grant(pthread_rwlock_shared),
 	const struct timespec *__restrict absolute)
 {
-	return rwlock_acquire(lock, absolute, 0, 0);
+	int error = rwlock_acquire(lock, absolute, 0, 0);
+	if (!error) __ownership_pthread_rwlock_read_locked(lock);
+	return error;
 }
 
-int pthread_rwlock_wrlock(pthread_rwlock_t *lock)
+
+int pthread_rwlock_wrlock(pthread_rwlock_t *lock handle(pthread_rwlock) static_handle(pthread_rwlock) consume(pthread_rwlock_unlocked) grant(pthread_rwlock_exclusive))
 {
 	struct timespec forever = {(time_t)0x7fffffff, 0};
-	return rwlock_acquire(lock, &forever, 0, 1);
+	int error = rwlock_acquire(lock, &forever, 0, 1);
+	if (!error) __ownership_pthread_rwlock_write_locked(lock);
+	return error;
 }
 
-int pthread_rwlock_trywrlock(pthread_rwlock_t *lock)
+
+int pthread_rwlock_trywrlock(pthread_rwlock_t *lock handle(pthread_rwlock) static_handle(pthread_rwlock) consume(pthread_rwlock_unlocked) grant(pthread_rwlock_exclusive))
 {
-	return rwlock_acquire(lock, 0, 1, 1);
+	int error = rwlock_acquire(lock, 0, 1, 1);
+	if (!error) __ownership_pthread_rwlock_write_locked(lock);
+	return error;
 }
 
-int pthread_rwlock_timedwrlock(pthread_rwlock_t *__restrict lock,
+
+int pthread_rwlock_timedwrlock(pthread_rwlock_t *__restrict lock handle(pthread_rwlock) static_handle(pthread_rwlock) consume(pthread_rwlock_unlocked) grant(pthread_rwlock_exclusive),
 	const struct timespec *__restrict absolute)
 {
-	return rwlock_acquire(lock, absolute, 0, 1);
+	int error = rwlock_acquire(lock, absolute, 0, 1);
+	if (!error) __ownership_pthread_rwlock_write_locked(lock);
+	return error;
 }
 
-int pthread_rwlock_unlock(pthread_rwlock_t *lock)
+
+int pthread_rwlock_unlock(pthread_rwlock_t *lock handle(pthread_rwlock) static_handle(pthread_rwlock) consume_any(pthread_rwlock_shared) consume_any(pthread_rwlock_exclusive) grant(pthread_rwlock_unlocked))
 {
 	struct rwlock_data *data;
 	pthread_t self = pthread_self();
@@ -377,7 +407,10 @@ int pthread_rwlock_unlock(pthread_rwlock_t *lock)
 			int state = data->shared_state;
 			if (!state) return EINVAL;
 			if (compare_exchange(&data->shared_state, state,
-				state < 0 ? 0 : state - 1) == state) return 0;
+				state < 0 ? 0 : state - 1) == state) {
+				__ownership_pthread_rwlock_unlocked(lock);
+				return 0;
+			}
 		}
 	}
 	__plat_fast_lock();
@@ -386,10 +419,12 @@ int pthread_rwlock_unlock(pthread_rwlock_t *lock)
 	else error = EINVAL;
 	if (!error) wake_waiters(data);
 	__plat_fast_unlock();
+	if (!error) __ownership_pthread_rwlock_unlocked(lock);
 	return error;
 }
 
-int pthread_rwlockattr_init(pthread_rwlockattr_t *attr)
+
+int pthread_rwlockattr_init(pthread_rwlockattr_t *attr construct(pthread_rwlockattr))
 {
 	struct rwattr_data *data;
 	if (!attr) return EINVAL;
@@ -400,14 +435,16 @@ int pthread_rwlockattr_init(pthread_rwlockattr_t *attr)
 	return 0;
 }
 
-int pthread_rwlockattr_destroy(pthread_rwlockattr_t *attr)
+
+int pthread_rwlockattr_destroy(pthread_rwlockattr_t *attr destroy(pthread_rwlockattr))
 {
 	if (!attr || rwattr_data(attr)->magic != RWATTR_MAGIC) return EINVAL;
 	memset(attr, 0, sizeof *attr);
 	return 0;
 }
 
-int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *__restrict attr,
+
+int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *__restrict attr handle(pthread_rwlockattr),
 	int *__restrict pshared)
 {
 	if (!attr || !pshared || const_rwattr_data(attr)->magic != RWATTR_MAGIC)
@@ -416,7 +453,8 @@ int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *__restrict attr,
 	return 0;
 }
 
-int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *attr, int pshared)
+
+int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *attr handle(pthread_rwlockattr), int pshared)
 {
 	if (!attr || rwattr_data(attr)->magic != RWATTR_MAGIC ||
 	    (pshared != PTHREAD_PROCESS_PRIVATE &&
@@ -424,3 +462,5 @@ int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *attr, int pshared)
 	rwattr_data(attr)->pshared = pshared;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

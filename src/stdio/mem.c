@@ -6,6 +6,11 @@
  * in buf.c already know how to talk to one (that is what f->is_mem
  * means to them); all that is done here is setting one up.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,9 +33,9 @@ FILE *fmemopen(void *__restrict buf, size_t size, const char *__restrict mode)
 		owned = 1;
 		b[0] = 0;
 	}
-	f = malloc(sizeof *f);
+	f = malloc(sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- the stdio implementation allocates its private FILE representation; it does not copy one
 	if (!f) { if (owned) free(b); return 0; }
-	memset(f, 0, sizeof *f);
+	memset(f, 0, sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- initializes new private FILE storage before it becomes a stream; no live FILE is copied
 	f->fd = -1;
 	f->pid = -1;
 	f->is_mem = 1;
@@ -70,9 +75,9 @@ FILE *open_memstream(char **bufp, size_t *sizep)
 	b = malloc(1);
 	if (!b) return 0;
 	b[0] = 0;
-	f = malloc(sizeof *f);
+	f = malloc(sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- the stdio implementation allocates its private FILE representation; it does not copy one
 	if (!f) { free(b); return 0; }
-	memset(f, 0, sizeof *f);
+	memset(f, 0, sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- initializes new private FILE storage before it becomes a stream; no live FILE is copied
 	f->fd = -1;
 	f->pid = -1;
 	f->is_mem = 1;
@@ -133,9 +138,9 @@ FILE *open_wmemstream(wchar_t **bufp, size_t *sizep)
 	b = malloc(sizeof *b);
 	if (!b) return 0;
 	b[0] = 0;
-	f = malloc(sizeof *f);
+	f = malloc(sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- the stdio implementation allocates its private FILE representation; it does not copy one
 	if (!f) { free(b); return 0; }
-	memset(f, 0, sizeof *f);
+	memset(f, 0, sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- initializes new private FILE storage before it becomes a stream; no live FILE is copied
 	f->fd = -1;
 	f->pid = -1;
 	f->is_mem = 1;
@@ -145,7 +150,7 @@ FILE *open_wmemstream(wchar_t **bufp, size_t *sizep)
 	f->writable = 1;
 	f->mem_buf = (unsigned char *)b;
 	f->mem_size = sizeof *b;
-	f->mem_out_ptr = (char **)(void *)bufp;
+	f->mem_out_ptr = (char **)(void *)bufp; // NOLINT(bugprone-casting-through-void) -- the shared stream backend stores the ABI-mandated wchar_t ** output slot in its generic char ** field
 	f->mem_out_size = sizep;
 	*bufp = b;
 	*sizep = 0;
@@ -154,3 +159,5 @@ FILE *open_wmemstream(wchar_t **bufp, size_t *sizep)
 	__stdio_files = f;
 	return f;
 }
+
+// NOLINTEND(misc-include-cleaner)

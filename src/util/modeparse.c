@@ -4,10 +4,16 @@
  * See modeparse.h for the grammar this implements and the documented
  * gap (X/s/t/permcopy are not supported -- refused, not approximated).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "modeparse.h"
+#include "util.h"
 
 static int is_octal_digit(char c) { return c >= '0' && c <= '7'; }
 
@@ -21,7 +27,7 @@ static const unsigned class_bit[3] = { 1, 2, 4 }; /* matches the wholist below *
  * filtered by the caller's umask -- set for every class when the clause
  * had no explicit who (chmod(1p)'s umask rule, quoted in modeparse.h),
  * clear otherwise. */
-static void apply_action(mode_t *cur, unsigned effwho, unsigned mask_who,
+static void apply_action(mode_t *cur, unsigned effwho, unsigned mask_who, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                           char op, unsigned perm, mode_t umask_bits)
 {
 	int i;
@@ -74,7 +80,7 @@ static int parse_clause(const char **pp, mode_t *cur, mode_t umask_bits)
 	return 0;
 }
 
-int __util_parse_mode(const char *prog, const char *spec, mode_t base,
+int __util_parse_mode(const char *prog, const char *spec, mode_t base, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                        mode_t umask_bits, mode_t *out)
 {
 	if (!*spec) goto bad;
@@ -105,6 +111,8 @@ int __util_parse_mode(const char *prog, const char *spec, mode_t base,
 	}
 
 bad:
-	fprintf(stderr, "%s: invalid mode: '%s'\n", prog, spec);
+	__util_diagf("%s: invalid mode: '%s'\n", prog, spec);
 	return -1;
 }
+
+// NOLINTEND(misc-include-cleaner)

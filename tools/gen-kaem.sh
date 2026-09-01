@@ -302,7 +302,7 @@ case "$PLATFORM" in
 			exit 1
 		fi
 		CC=clang
-		AR=ar
+		AR="ar"
 		;;
 esac
 

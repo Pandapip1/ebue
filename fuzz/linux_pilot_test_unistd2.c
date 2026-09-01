@@ -54,9 +54,8 @@
 
 extern long syscall(long number, ...);
 extern int printf(const char *, ...);
-extern void *memset(void *, int, unsigned long);
-extern int memcmp(const void *, const void *, unsigned long);
-extern unsigned long strlen(const char *);
+extern void *memset(void *, int, size_t);
+extern int memcmp(const void *, const void *, size_t);
 
 #define SYS_openat   56
 #define SYS_unlinkat 35
