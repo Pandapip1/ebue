@@ -26,7 +26,19 @@
 #define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include "dirent_internal.h"
+
+static int advance_offset(DIR *dp, struct dirent *out)
+{
+	if (dp->tell < 0 || dp->tell >= LONG_MAX) {
+		errno = EOVERFLOW;
+		return -1;
+	}
+	dp->tell = (long)((unsigned long)dp->tell + 1UL);
+	out->d_off = dp->tell;
+	return 0;
+}
 
 int __dirstream_next(DIR *dp, struct __dirent_raw *out)
 {
@@ -62,17 +74,16 @@ int __dirstream_next(DIR *dp, struct __dirent_raw *out)
  * comments in include/dirent.h and dirent_internal.h), and r is always
  * `&r`, the address of fill()'s own on-stack __dirstream_next() output,
  * never NULL. */
-static void make_real(DIR *dp, const struct __dirent_raw *r, struct dirent *out)
+static int make_real(DIR *dp, const struct __dirent_raw *r, struct dirent *out)
     __attribute__((nonnull(1, 2, 3)));
-static void make_real(DIR *dp, const struct __dirent_raw *r, struct dirent *out)
+static int make_real(DIR *dp, const struct __dirent_raw *r, struct dirent *out)
 {
 	memset(out, 0, sizeof *out);
 	out->d_ino = r->ino;
 	out->d_type = r->type;
 	out->d_reclen = sizeof *out;
 	memcpy(out->d_name, r->name, sizeof out->d_name);
-	dp->tell++;
-	out->d_off = dp->tell;
+	return advance_offset(dp, out);
 }
 
 /* 0 = filled *out; 1 = end of directory; -1 = error, errno set.
@@ -103,14 +114,12 @@ static int fill(DIR *dp, struct dirent *out)
 		out->d_type = types[dp->tell];
 		out->d_reclen = sizeof *out;
 		(void)strlcpy(out->d_name, names[dp->tell], sizeof out->d_name);
-		dp->tell++;
-		out->d_off = dp->tell;
-		return 0;
+		return advance_offset(dp, out);
 	}
 	{
 		struct __dirent_raw r;
 		if (__dirstream_next(dp, &r)) {
-			make_real(dp, &r, out);
+			if (make_real(dp, &r, out) < 0) return -1;
 			if (f->vfs_native) dp->vseen |= __vfs_mandatory_seen(f->vfs, out->d_name);
 			return 0;
 		}
@@ -127,9 +136,7 @@ static int fill(DIR *dp, struct dirent *out)
 			out->d_reclen = sizeof *out;
 			(void)strlcpy(out->d_name, __vfs_mandatory_name(f->vfs, i),
 			              sizeof out->d_name);
-			dp->tell++;
-			out->d_off = dp->tell;
-			return 0;
+			return advance_offset(dp, out);
 		}
 	}
 	return 1;
