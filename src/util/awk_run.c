@@ -41,6 +41,7 @@
 #include <errno.h>
 #include <sys/wait.h>
 #include "awk_priv.h"
+#include "ownership_stubs.h"
 #include "util.h"
 
 static void oom(void)
@@ -75,6 +76,8 @@ static char *dupn_local(const char *s, size_t n)
 {
 	char *r = malloc(n + 1);
 	if (!r) oom();
+	__ownership_writable_span(r, n);
+	__ownership_readable_span(s, n);
 	memcpy(r, s, n);
 	r[n] = 0;
 	return r;
@@ -362,7 +365,7 @@ static char *build_subsep_key(struct awk_interp *ip, struct awk_node **subs, int
 	char *key = NULL;
 	size_t len = 0;
 	int i;
-	const char *subsep = cell_str(ip, lookup_cell(ip, "SUBSEP"));
+	char *subsep = xstrdup(cell_str(ip, lookup_cell(ip, "SUBSEP")));
 	size_t subsep_len = strlen(subsep);
 
 	for (i = 0; i < n; i++) {
@@ -371,13 +374,21 @@ static char *build_subsep_key(struct awk_interp *ip, struct awk_node **subs, int
 		size_t slen = strlen(s);
 		size_t addlen = slen + (i ? subsep_len : 0);
 		key = xrealloc(key, len + addlen + 1);
-		if (i) { memcpy(key + len, subsep, subsep_len); len += subsep_len; }
+		if (i) {
+			__ownership_writable_span(key + len, subsep_len);
+			__ownership_readable_span(subsep, subsep_len);
+			memcpy(key + len, subsep, subsep_len);
+			len += subsep_len;
+		}
+		__ownership_writable_span(key + len, slen);
+		__ownership_readable_span(s, slen);
 		memcpy(key + len, s, slen);
 		len += slen;
 		v_free(&v);
 	}
 	if (!key) key = xstrdup("");
 	key[len] = 0;
+	free(subsep);
 	return key;
 }
 
@@ -529,9 +540,17 @@ static void rebuild_record(struct awk_interp *ip)
 	len = 0;
 	for (i = 0; i < ip->nf; i++) {
 		size_t flen;
-		if (i) { memcpy(rec + len, ofs, ofslen); len += ofslen; }
-		flen = strlen(ip->flds[i]);
-		memcpy(rec + len, ip->flds[i], flen);
+		const char *field = ip->flds[i];
+		if (i) {
+			__ownership_writable_span(rec + len, ofslen);
+			__ownership_readable_span(ofs, ofslen);
+			memcpy(rec + len, ofs, ofslen);
+			len += ofslen;
+		}
+		flen = strlen(field);
+		__ownership_writable_span(rec + len, flen);
+		__ownership_readable_span(field, flen);
+		memcpy(rec + len, field, flen);
 		len += flen;
 	}
 	rec[len] = 0;
@@ -717,6 +736,8 @@ static char *read_paragraph_record(FILE *f, int *got)
 		}
 		rec = xrealloc(rec, reclen + (have_any ? 1 : 0) + linelen + 1);
 		if (have_any) rec[reclen++] = '\n';
+		__ownership_writable_span(rec + reclen, linelen);
+		__ownership_readable_span(buf, linelen);
 		memcpy(rec + reclen, buf, linelen);
 		reclen += linelen;
 		rec[reclen] = 0;
@@ -871,7 +892,12 @@ static void buf_append(char **buf, size_t *len, size_t *cap, const char *s, size
 		*buf = xrealloc(*buf, newcap);
 		*cap = newcap;
 	}
-	memcpy(*buf + *len, s, n);
+	{
+		char *dst = *buf + *len;
+		__ownership_writable_span(dst, n);
+		__ownership_readable_span(s, n);
+		memcpy(dst, s, n);
+	}
 	*len += n;
 	(*buf)[*len] = 0;
 }
@@ -1304,7 +1330,13 @@ static struct awk_value eval(struct awk_interp *ip, struct awk_node *n)
 		size_t la = strlen(sa), lb = strlen(sb);
 		char *s = malloc(la + lb + 1);
 		if (!s) oom();
-		memcpy(s, sa, la); memcpy(s + la, sb, lb); s[la + lb] = 0;
+		__ownership_writable_span(s, la);
+		__ownership_readable_span(sa, la);
+		memcpy(s, sa, la);
+		__ownership_writable_span(s + la, lb);
+		__ownership_readable_span(sb, lb);
+		memcpy(s + la, sb, lb);
+		s[la + lb] = 0;
 		v_free(&a); v_free(&b);
 		v_str_init(&v, s, VK_STR);
 		return v;
@@ -1851,6 +1883,7 @@ static void awk_interp_seed_defaults(struct awk_interp *ip)
 
 void awk_interp_init(struct awk_interp *ip, struct awk_program *prog)
 {
+	__ownership_writable_span(ip, sizeof *ip);
 	memset(ip, 0, sizeof *ip);
 	ip->prog = prog;
 	awk_htab_init(&ip->globals);
