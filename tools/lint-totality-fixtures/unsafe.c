@@ -422,6 +422,112 @@ int signed_nonunit_after_zero_guard(int n)
 	}
 }
 
+int dynamic_countdown_allows_zero(int n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step > n) return n;
+		n -= step;
+	}
+	return n;
+}
+
+int dynamic_countdown_allows_negative(int n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step == 0 || step > n) return n;
+		n -= step;
+	}
+	return n;
+}
+
+int dynamic_countdown_allows_oversize(int n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step <= 0) return n;
+		n -= step;
+	}
+	return n;
+}
+
+int dynamic_countdown_missing_branch(int n, int skip)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step <= 0 || step > n) return n;
+		if (skip) continue;
+		n -= step;
+	}
+	return n;
+}
+
+int dynamic_countdown_conditional_update(int n, int update)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step <= 0 || step > n) return n;
+		if (update) n -= step;
+	}
+	return n;
+}
+
+void opaque_rank_mutation(int *n);
+
+int dynamic_countdown_escaped_rank(int n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step <= 0 || step > n) return n;
+		opaque_rank_mutation(&n);
+		n -= step;
+	}
+	return n;
+}
+
+unsigned dynamic_cast_without_positive_guard(unsigned n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if ((unsigned)step > n) return n;
+		n -= (unsigned)step;
+	}
+	return n;
+}
+
+unsigned char dynamic_narrowing_cast(unsigned char n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step <= 0 || (unsigned char)step > n) return n;
+		n -= (unsigned char)step;
+	}
+	return n;
+}
+
+int dynamic_step_changed_after_guard(int n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step <= 0 || step > n) return n;
+		step = opaque_predicate();
+		n -= step;
+	}
+	return n;
+}
+
+int dynamic_rank_changed_after_guard(int n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step <= 0 || step > n) return n;
+		n += opaque_predicate();
+		n -= step;
+	}
+	return n;
+}
+
 unsigned member_zero_branch_can_fall_through(struct vec *p, int stop)
 {
 	for (;;) { /* totality-expect */

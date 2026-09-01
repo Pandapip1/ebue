@@ -113,11 +113,10 @@ int __util_tee_main(int argc, char **argv)
 	while ((n = read(STDIN_FILENO, buf, sizeof buf)) > 0) {
 		int j;
 		char *p = buf;
-		ssize_t left = n, remaining = n;
+		ssize_t left = n;
 
-		while (left > 0 && remaining > 0) {
+		while (left > 0) {
 			ssize_t w = write(STDOUT_FILENO, p, (size_t)left);
-			remaining--;
 			if (w <= 0 || w > left) {
 				if (w >= 0) errno = EIO;
 				__util_diagf("tee: standard output: %s\n", strerror(errno));
@@ -132,10 +131,8 @@ int __util_tee_main(int argc, char **argv)
 			if (fds[j] < 0) continue;  /* already failed; skip, per DESCRIPTION */
 			p = buf;
 			left = n;
-			remaining = n;
-			while (left > 0 && remaining > 0) {
+			while (left > 0) {
 				ssize_t w = write(fds[j], p, (size_t)left);
-				remaining--;
 				if (w <= 0 || w > left) {
 					if (w >= 0) errno = EIO;
 					__util_diagf("tee: %s: %s\n", paths[j], strerror(errno));

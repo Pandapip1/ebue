@@ -112,10 +112,8 @@ int __util_copy_regular_file(const char *src, const char *dst, int force)
 
 	while ((n = read(in, buf, sizeof buf)) > 0) {
 		char *p = buf;
-		ssize_t remaining = n;
-		while (n > 0 && remaining > 0) {
+		while (n > 0) {
 			ssize_t w = write(out, p, (size_t)n);
-			remaining--;
 			if (w <= 0 || w > n) {
 				if (w >= 0) errno = EIO;
 				__util_diagf("cp: error writing to '%s': %s\n", dst, strerror(errno));

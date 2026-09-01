@@ -219,6 +219,29 @@ int signed_unconditional_countdown(int n)
 	return n;
 }
 
+int opaque_dynamic_step(void);
+
+int guarded_dynamic_countdown(int n)
+{
+	while (n > 0) {
+		opaque_exit_call();
+		int step = opaque_dynamic_step();
+		if (step <= 0 || step > n) return n;
+		n -= step;
+	}
+	return n;
+}
+
+unsigned guarded_mixed_dynamic_countdown(unsigned n)
+{
+	while (n > 0) {
+		int step = opaque_dynamic_step();
+		if (step <= 0 || (unsigned)step > n) return n;
+		n -= (unsigned)step;
+	}
+	return n;
+}
+
 struct byte_cursor {
 	unsigned char next;
 };
