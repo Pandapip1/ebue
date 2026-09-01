@@ -372,6 +372,48 @@ unsigned member_rank_call_before_continue(struct vec *p, int call)
 	return p->n;
 }
 
+unsigned member_decrement_before_guard(struct vec *p)
+{
+	for (;;) { /* totality-expect */
+		p->n--;
+		if (p->n == 0) return p->n;
+	}
+}
+
+unsigned member_guard_bypassed(struct vec *p, int bypass)
+{
+	for (;;) { /* totality-expect */
+		if (bypass) continue;
+		if (p->n == 0) return p->n;
+		p->n--;
+	}
+}
+
+unsigned member_guard_without_progress(struct vec *p, int skip)
+{
+	for (;;) { /* totality-expect */
+		if (p->n == 0) return p->n;
+		if (skip) continue;
+		p->n--;
+	}
+}
+
+int signed_nonunit_after_zero_guard(int n)
+{
+	for (;;) { /* totality-expect */
+		if (n == 0) return n;
+		n -= 2;
+	}
+}
+
+unsigned member_zero_branch_can_fall_through(struct vec *p, int stop)
+{
+	for (;;) { /* totality-expect */
+		if (p->n == 0 && stop) return p->n;
+		p->n--;
+	}
+}
+
 struct byte_cursor {
 	unsigned char next;
 };

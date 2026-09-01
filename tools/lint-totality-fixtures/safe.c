@@ -182,6 +182,29 @@ unsigned member_countdown_call_only_on_exit(struct counter *counter, int stop)
 	return counter->n;
 }
 
+unsigned member_unconditional_countdown(struct counter *counter)
+{
+	for (;;) {
+		unsigned value;
+		if (counter->n == 0) {
+			opaque_exit_call();
+			return counter->n;
+		}
+		counter->n--;
+		value = counter->n;
+		if (value & 1) continue;
+	}
+}
+
+int signed_unconditional_countdown(int n)
+{
+	for (;;) {
+		if (!n) break;
+		n--;
+	}
+	return n;
+}
+
 struct byte_cursor {
 	unsigned char next;
 };

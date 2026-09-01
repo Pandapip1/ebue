@@ -37,6 +37,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     const Expr *GuardedStep = nullptr;
     bool VolatileAccess = false;
     bool RequiresNonzeroCondition = false;
+    bool UnitStep = false;
+    bool UnitOnly = false;
   };
 
   std::string file(SourceLocation Location) const {
@@ -297,10 +299,11 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   static Progress makeProgress(const ValueDecl *Variable, ProgressKind Kind,
                                const ValueDecl *Base, const Expr *Access,
                                const Expr *GuardedStep = nullptr,
-                               bool RequiresNonzeroCondition = false) {
+                               bool RequiresNonzeroCondition = false,
+                               bool UnitStep = false) {
     return Progress{Variable, Kind, Base, GuardedStep,
                     Access && Access->getType().isVolatileQualified(),
-                    RequiresNonzeroCondition};
+                    RequiresNonzeroCondition, UnitStep, false};
   }
 
   static bool sameRank(const Progress &Left, const Progress &Right) {
@@ -345,10 +348,10 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       const ValueDecl *Base = Member ? value(Member->getBase()) : nullptr;
       if (Unary->isIncrementOp())
         return makeProgress(Variable, ProgressKind::Up, Base,
-                            Unary->getSubExpr());
+                            Unary->getSubExpr(), nullptr, false, true);
       if (Unary->isDecrementOp())
         return makeProgress(Variable, ProgressKind::Down, Base,
-                            Unary->getSubExpr());
+                            Unary->getSubExpr(), nullptr, false, true);
     }
     const auto *Binary = dyn_cast_or_null<BinaryOperator>(Expression);
     if (!Binary)
@@ -368,7 +371,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
           positiveInteger(Binary->getRHS())) ||
          (Variable->getType()->isPointerType() &&
           strictlyPositive(Binary->getRHS()))))
-      return makeProgress(Variable, ProgressKind::Up, Base, Binary->getLHS());
+      return makeProgress(Variable, ProgressKind::Up, Base, Binary->getLHS(),
+                          nullptr, false, unitInteger(Binary->getRHS()));
     if (Binary->getOpcode() == BO_SubAssign &&
         (unitInteger(Binary->getRHS()) ||
          (Variable->getType()->isSignedIntegerType() &&
@@ -380,7 +384,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
           Variable->getType()->isUnsignedIntegerType() &&
                   !unitInteger(Binary->getRHS())
               ? Binary->getRHS()
-              : nullptr);
+              : nullptr,
+          false, unitInteger(Binary->getRHS()));
     /* For an unsigned value tested for nonzero, division by a constant
      * greater than one is a strict descent to zero.  This is the common
      * integer-to-text digit loop (`while (u) u /= 10`); unlike a non-unit
@@ -407,7 +412,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
              (Variable->getType()->isPointerType() &&
               strictlyPositive(Operation->getRHS()))))
           return makeProgress(Variable, ProgressKind::Up, Base,
-                              Binary->getLHS());
+                              Binary->getLHS(), nullptr, false,
+                              unitInteger(Operation->getRHS()));
         if (Operation->getOpcode() == BO_Sub &&
             (unitInteger(Operation->getRHS()) ||
              (Variable->getType()->isSignedIntegerType() &&
@@ -418,8 +424,9 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
               Variable, ProgressKind::Down, Base, Binary->getLHS(),
               Variable->getType()->isUnsignedIntegerType() &&
                       !unitInteger(Operation->getRHS())
-                  ? Operation->getRHS()
-                  : nullptr);
+                      ? Operation->getRHS()
+                      : nullptr,
+              false, unitInteger(Operation->getRHS()));
         if (Operation->getOpcode() == BO_Div &&
             Variable->getType()->isIntegerType() &&
             integerGreaterThanOne(Operation->getRHS()))
@@ -471,13 +478,16 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
             return Mutation::Bad;
           /* A condition guarding one unsigned chunk size says nothing about
            * a different chunk on another path.  Requiring the very same AST
-           * update keeps the guarded proof single-step; ordinary unit and
-           * signed steps retain the existing same-direction treatment. */
+           * update keeps the guarded proof single-step.  A proof which
+           * specifically requires a unit step must likewise not be
+           * satisfied by a wider signed update on another path. */
           if ((Change->GuardedStep || Expected.GuardedStep) &&
               Change->GuardedStep != Expected.GuardedStep)
             return Mutation::Bad;
           if (Change->RequiresNonzeroCondition !=
               Expected.RequiresNonzeroCondition)
+            return Mutation::Bad;
+          if (Expected.UnitOnly && !Change->UnitStep)
             return Mutation::Bad;
           return Mutation::Good;
         }
@@ -1211,6 +1221,42 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     }
   }
 
+  static bool exitsBeforeBackedge(const Stmt *Statement) {
+    CallFlow Result = callFlow(Statement);
+    return !Result.Invalid && Result.Outcomes != 0 &&
+           !(Result.Outcomes &
+             (FallWithoutCall | FallWithCall |
+              BackWithoutCall | BackWithCall));
+  }
+
+  static bool bodyHasDominatingNonzeroGuard(const Stmt *Body,
+                                            const Progress &Rank) {
+    const auto *Compound = dyn_cast_or_null<CompoundStmt>(Body);
+    if (!Compound)
+      return false;
+    for (const Stmt *Child : Compound->body()) {
+      if (const auto *Guard = dyn_cast<IfStmt>(Child)) {
+        if (Guard->getInit() || Guard->getConditionVariableDeclStmt() ||
+            containsCall(Guard->getCond()) ||
+            mutation(Guard->getCond(), Rank) != Mutation::None)
+          return false;
+        if (exitsBeforeBackedge(Guard->getThen()) &&
+            rankNonzeroWhen(Guard->getCond(), Rank, false))
+          return true;
+        return Guard->getElse() && exitsBeforeBackedge(Guard->getElse()) &&
+               rankNonzeroWhen(Guard->getCond(), Rank, true);
+      }
+      /* Only straight-line, call-free, rank-preserving declarations or
+       * expressions may precede the guard.  In particular a decrement,
+       * conditional bypass, continue, or goto prevents domination. */
+      Flow Prefix = flow(Child, Rank);
+      if (containsCall(Child) || Prefix.Invalid ||
+          Prefix.Outcomes != FallWithoutProgress)
+        return false;
+    }
+    return false;
+  }
+
   bool sentinelCondition(const Expr *Condition, const Progress &Change) const {
     Condition = ignore(Condition);
     if (Change.RequiresNonzeroCondition)
@@ -1265,7 +1311,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
           ignore(Unary->getSubExpr()));
       const ValueDecl *Base = Member ? value(Member->getBase()) : nullptr;
       return makeProgress(Variable, ProgressKind::Down, Base,
-                          Unary->getSubExpr());
+                          Unary->getSubExpr(), nullptr, false, true);
     };
     if (std::optional<Progress> Change = Decremented(Condition))
       return Change;
@@ -1355,6 +1401,15 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         continue;
       if (strictComparison(Condition, Change, Body, Increment))
         return "strict-scalar-rank";
+      if (!Condition && Change.UnitStep &&
+          Change.Kind == ProgressKind::Down &&
+          Change.Variable->getType()->isIntegerType()) {
+        Progress UnitChange = Change;
+        UnitChange.UnitOnly = true;
+        if (bodyGuaranteesProgress(Body, UnitChange) &&
+            bodyHasDominatingNonzeroGuard(Body, UnitChange))
+          return "strict-scalar-rank";
+      }
       if (sentinelCondition(Condition, Change))
         return "sentinel-distance-rank";
     }
