@@ -1304,7 +1304,7 @@ struct sh_list *__sh_parse(const char *src, char *errbuf, size_t errbuflen)
 
 	if (p.had_error) {
 		if (errbuf && errbuflen) {
-			size_t n = strlen(p.lx.errbuf);
+			size_t n = strnlen(p.lx.errbuf, sizeof p.lx.errbuf);
 			if (n >= errbuflen) n = errbuflen - 1;
 			memcpy(errbuf, p.lx.errbuf, n);
 			errbuf[n] = 0;
