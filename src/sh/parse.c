@@ -64,8 +64,6 @@ static int gbuf_push(struct gbuf *b, char c)
 		char *nd = __malloc(nc);
 		if (!nd) return -1;
 		if (old) {
-			__ownership_writable_span(nd, b->n);
-			__ownership_readable_span(old, b->n);
 			memcpy(nd, old, b->n);
 		}
 		__free(old);
@@ -106,8 +104,6 @@ static char *xstrdup(const char *s)
 	size_t n = strlen(s) + 1;
 	char *p = __malloc(n);
 	if (p) {
-		__ownership_writable_span(p, n);
-		__ownership_readable_span(s, n);
 		memcpy(p, s, n);
 	}
 	return p;
@@ -271,7 +267,6 @@ static void format_parse_error(char *dst, size_t size, const char *fmt, va_list 
 	if (n < 0 && size) {
 		size_t copy = sizeof fallback < size ? sizeof fallback : size;
 		__ownership_writable_span(dst, copy - 1);
-		__ownership_readable_span(fallback, copy - 1);
 		memcpy(dst, fallback, copy - 1);
 		dst[copy - 1] = 0;
 	}

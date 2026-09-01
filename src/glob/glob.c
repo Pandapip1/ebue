@@ -43,8 +43,6 @@ static char *xstrdup(const char *s)
 	size_t n = strlen(s) + 1;
 	char *p = __malloc(n);
 	if (p) {
-		__ownership_writable_span(p, n);
-		__ownership_readable_span(s, n);
 		memcpy(p, s, n);
 	}
 	return p;
@@ -72,8 +70,6 @@ static int pv_push(struct pv *p, char *s)
 		char **nv = (char **)__malloc(nc * sizeof *nv);
 		if (!nv) { __free(s); return -1; }
 		if (old) {
-			__ownership_writable_span(nv, p->n * sizeof *nv);
-			__ownership_readable_span(old, p->n * sizeof *nv);
 			memcpy((void *)nv, (const void *)old, p->n * sizeof *nv);
 		}
 		__free((void *)old);
@@ -201,11 +197,7 @@ static int join(char *out, const char *prefix, size_t preflen,
 		if (need >= (size_t)PATH_MAX - 1) return -1;
 		need++;
 	}
-	__ownership_writable_span(out, preflen);
-	__ownership_readable_span(prefix, preflen);
 	memcpy(out, prefix, preflen);
-	__ownership_writable_span(out + preflen, namelen);
-	__ownership_readable_span(name, namelen);
 	memcpy(out + preflen, name, namelen);
 	if (want_slash) out[preflen + namelen] = '/';
 	out[need] = 0;
@@ -340,8 +332,6 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 		int rc = 0;
 
 		if (!segbuf) return -1;
-		__ownership_writable_span(segbuf, seglen);
-		__ownership_readable_span(pat, seglen);
 		memcpy(segbuf, pat, seglen);
 		segbuf[seglen] = 0;
 		dot_ok = seglen > 0 && (pat[0] == '.' ||
@@ -462,7 +452,6 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
 			char *const *old = pglob->gl_pathv + pglob->gl_offs;
 			out.v = (char **)__malloc(out.n * sizeof *out.v);
 			if (!out.v) { errno = ENOMEM; return GLOB_NOSPACE; }
-			__ownership_writable_span(out.v, out.n * sizeof *out.v);
 			__ownership_readable_span(old, out.n * sizeof *out.v);
 			memcpy((void *)out.v, (const void *)old, out.n * sizeof *out.v);
 		}

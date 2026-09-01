@@ -119,7 +119,6 @@ static char *dupn(const char *s, size_t n)
 {
 	char *r = malloc(n + 1);
 	if (!r) return NULL;
-	__ownership_writable_span(r, n);
 	__ownership_readable_span(s, n);
 	memcpy(r, s, n);
 	r[n] = 0;

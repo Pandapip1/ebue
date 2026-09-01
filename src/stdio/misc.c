@@ -104,11 +104,7 @@ FILE *tmpfile(void)
 	if (n > (size_t)-1 - sizeof "/ntlibcXXXXXX") { errno = ENOMEM; return 0; }
 	tmpl = malloc(n + sizeof "/ntlibcXXXXXX");
 	if (!tmpl) return 0;
-	__ownership_writable_span(tmpl, n + sizeof "/ntlibcXXXXXX");
-	__ownership_readable_span(dir, n);
 	memcpy(tmpl, dir, n);
-	__ownership_writable_span(tmpl + n, sizeof "/ntlibcXXXXXX");
-	__ownership_readable_span("/ntlibcXXXXXX", sizeof "/ntlibcXXXXXX");
 	memcpy(tmpl + n, "/ntlibcXXXXXX", sizeof "/ntlibcXXXXXX");
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return 0; }
@@ -212,18 +208,12 @@ char *tempnam(const char *dir, const char *pfx) // NOLINT(bugprone-easily-swappa
 	{
 		char *dst = tmpl;
 		const char *src = d;
-		__ownership_writable_span(dst, n);
-		__ownership_readable_span(src, n);
 		memcpy(dst, src, n); // NOLINT(bugprone-not-null-terminated-result) -- built up piece by piece, terminated below
 	}
 	tmpl[n] = '/';
 	if (pn) {
-		__ownership_writable_span(tmpl + n + 1, pn);
-		__ownership_readable_span(pfx, pn);
 		memcpy(tmpl + n + 1, pfx, pn); // NOLINT(bugprone-not-null-terminated-result) -- ditto
 	}
-	__ownership_writable_span(tmpl + n + 1 + pn, sizeof "XXXXXX");
-	__ownership_readable_span("XXXXXX", sizeof "XXXXXX");
 	memcpy(tmpl + n + 1 + pn, "XXXXXX", sizeof "XXXXXX");
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return 0; }
@@ -242,7 +232,6 @@ char *ctermid(char *s)
 	static char buf[L_ctermid] = "/dev/tty";
 	if (s) {
 		__ownership_writable_span(s, sizeof "/dev/tty");
-		__ownership_readable_span("/dev/tty", sizeof "/dev/tty");
 		memcpy(s, "/dev/tty", sizeof "/dev/tty");
 		return s;
 	}

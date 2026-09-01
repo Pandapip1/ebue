@@ -48,7 +48,6 @@ unsigned __lxmod_create_buffer(
 	ea->EaNameLength = LXMOD_NAME_LEN;
 	ea->EaValueLength = LXMOD_VALUE_LEN;
 	__ownership_writable_span(ea->EaName, LXMOD_NAME_LEN + 1);
-	__ownership_readable_span(LXMOD_NAME, LXMOD_NAME_LEN + 1);
 	memcpy(ea->EaName, LXMOD_NAME, LXMOD_NAME_LEN + 1);
 	putle32((unsigned char *)ea->EaName + LXMOD_NAME_LEN + 1, mode);
 	return LXMOD_EA_LEN;

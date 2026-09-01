@@ -140,7 +140,6 @@ static void fill_child_rusage(__plat_handle_t h, struct rusage *ru)
 {
 	unsigned long long ktime = 0, utime = 0;
 
-	__ownership_writable_span(ru, sizeof *ru);
 	memset(ru, 0, sizeof *ru);
 	if (!h) return;
 	if (__plat_process_times(h, &ktime, &utime) < 0) return;

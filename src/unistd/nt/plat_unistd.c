@@ -584,7 +584,6 @@ ssize_t __plat_readlink(int dirfd, const char *path, char *buf, size_t bufsz)
 		n = (int)strlen(u);
 		if ((size_t)n > bufsz) n = (int)bufsz;
 		__ownership_writable_span(buf, (size_t)n);
-		__ownership_readable_span(u, (size_t)n);
 		memcpy(buf, u, n);
 		__free(u);
 	}
@@ -677,20 +676,15 @@ int __plat_symlink(const char *target, int newdirfd, const char *linkpath)
 	sz = RDB_HDR + SL_HDR + (off + 2 * tl) * sizeof(WCHAR);
 	r = __malloc(sz);
 	if (!r) { __free(wt); NtClose(h); return -1; }
-	__ownership_writable_span(r, sz);
 	memset(r, 0, sz);
 	r->ReparseTag = IO_REPARSE_TAG_SYMLINK;
 	r->SymbolicLinkReparseBuffer.Flags = relative ? SYMLINK_FLAG_RELATIVE : 0;
 	{
 		WCHAR *pb = r->SymbolicLinkReparseBuffer.PathBuffer;
 		if (!relative) { pb[0] = '\\'; pb[1] = '?'; pb[2] = '?'; pb[3] = '\\'; }
-		__ownership_writable_span(pb + off, tl * sizeof(WCHAR));
-		__ownership_readable_span(wt, tl * sizeof(WCHAR));
 		memcpy(pb + off, wt, tl * sizeof(WCHAR));
 		r->SymbolicLinkReparseBuffer.SubstituteNameOffset = 0;
 		r->SymbolicLinkReparseBuffer.SubstituteNameLength = (USHORT)((off + tl) * sizeof(WCHAR));
-		__ownership_writable_span(pb + off + tl, tl * sizeof(WCHAR));
-		__ownership_readable_span(wt, tl * sizeof(WCHAR));
 		memcpy(pb + off + tl, wt, tl * sizeof(WCHAR));
 		r->SymbolicLinkReparseBuffer.PrintNameOffset = (USHORT)((off + tl) * sizeof(WCHAR));
 		r->SymbolicLinkReparseBuffer.PrintNameLength = (USHORT)(tl * sizeof(WCHAR));

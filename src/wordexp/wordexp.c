@@ -76,11 +76,7 @@ static int fbuf_push(struct fbuf *b, char c, int literal) // NOLINT(bugprone-eas
 		unsigned char *nl = __malloc(nc);
 		if (!nd || !nl) { __free(nd); __free(nl); return -1; }
 		if (old_data) {
-			__ownership_writable_span(nd, b->n);
-			__ownership_readable_span(old_data, b->n);
 			memcpy(nd, old_data, b->n);
-			__ownership_writable_span(nl, b->n);
-			__ownership_readable_span(old_lit, b->n);
 			memcpy(nl, old_lit, b->n);
 		}
 		__free(old_data);
@@ -146,7 +142,6 @@ static int pv_push(struct pv *p, char *s)
 		if (!nv) { __free(s); return -1; }
 		if (old) {
 			__ownership_writable_span(nv, p->n * sizeof *nv);
-			__ownership_readable_span(old, p->n * sizeof *nv);
 			memcpy((void *)nv, (const void *)old, p->n * sizeof *nv);
 		}
 		__free((void *)old);
@@ -376,8 +371,6 @@ static int expand_param_word(const char *start, size_t input_len, int flags, // 
 	text = __malloc(input_len + prefix + 1);
 	if (!text) return WRDE_NOSPACE;
 	if (prefix) text[0] = '\\';
-	__ownership_writable_span(text + prefix, input_len);
-	__ownership_readable_span(start, input_len);
 	memcpy(text + prefix, start, input_len);
 	text[input_len + prefix] = 0;
 	memset(&we, 0, sizeof we);
@@ -742,7 +735,6 @@ static int expand_tilde(const char **pp, struct fbuf *b)
 		home = getenv("HOME");
 	} else if (len < sizeof name) {
 		struct passwd *pw;
-		__ownership_writable_span(name, len);
 		__ownership_readable_span(start, len);
 		memcpy(name, start, len);
 		name[len] = 0;
@@ -889,8 +881,6 @@ static int expand_arith(const char **pp, struct fbuf *b, int flags, int sh,
 	len = (size_t)(end - start);
 	expr = __malloc(len + 1);
 	if (!expr) return WRDE_NOSPACE;
-	__ownership_writable_span(expr, len);
-	__ownership_readable_span(start, len);
 	memcpy(expr, start, len);
 	expr[len] = 0;
 
@@ -1010,8 +1000,6 @@ static char *cmdsub_dollar_text(const char **pp, int *syntax)
 	len = (size_t)(p - start);
 	r = __malloc(len + 1);
 	if (!r) return 0;
-	__ownership_writable_span(r, len);
-	__ownership_readable_span(start, len);
 	memcpy(r, start, len);
 	r[len] = 0;
 	*pp = p + 1;	/* past the ')' */
@@ -1210,8 +1198,6 @@ static int emit_field(struct fbuf *b, struct pv *out)
 	plain = __malloc(b->n + 1);
 	if (!plain) return WRDE_NOSPACE;
 	if (b->n) {
-		__ownership_writable_span(plain, b->n);
-		__ownership_readable_span(b->data, b->n);
 		memcpy(plain, b->data, b->n);
 	}
 	plain[b->n] = 0;
@@ -1272,7 +1258,6 @@ static int split_appended(struct fbuf *b, struct pv *out, int *active,
 	if (!n) return 0;
 	text = __malloc(n);
 	if (!text) return WRDE_NOSPACE;
-	__ownership_writable_span(text, n);
 	__ownership_readable_span(b->data + before, n);
 	memcpy(text, b->data + before, n);
 	b->n = before;
@@ -1436,7 +1421,6 @@ static int expand_impl(const char *words, wordexp_t *pwordexp, int flags, int sh
 			char *const *old = pwordexp->we_wordv + pwordexp->we_offs;
 			out.v = (char **)__malloc(out.n * sizeof *out.v);
 			if (!out.v) { errno = ENOMEM; return WRDE_NOSPACE; }
-			__ownership_writable_span(out.v, out.n * sizeof *out.v);
 			__ownership_readable_span(old, out.n * sizeof *out.v);
 			memcpy((void *)out.v, (const void *)old, out.n * sizeof *out.v);
 		}

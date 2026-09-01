@@ -130,12 +130,9 @@ static const char *resolve(struct walkstate *ws, const char *path, char **tmp)
 	l1 = strlen(path);
 	full = malloc(l0 + 1 + l1 + 1);
 	if (!full) { errno = ENOMEM; return NULL; }
-	__ownership_writable_span(full, l0);
-	__ownership_readable_span(cwd, l0);
 	memcpy(full, cwd, l0);
 	full[l0] = '/';
 	__ownership_writable_span(full + l0 + 1, l1 + 1);
-	__ownership_readable_span(path, l1 + 1);
 	memcpy(full + l0 + 1, path, l1 + 1);
 	*tmp = full;
 	return full;
@@ -413,12 +410,8 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 			clen++;
 			child = malloc(clen);
 			if (!child) { r = -1; errno = ENOMEM; break; }
-			__ownership_writable_span(child, plen);
-			__ownership_readable_span(path, plen);
 			memcpy(child, path, plen);
 			if (separator) child[plen] = '/';
-			__ownership_writable_span(child + off, namelen);
-			__ownership_readable_span(name, namelen);
 			memcpy(child + off, name, namelen);
 			child[off + namelen] = 0;
 

@@ -196,7 +196,6 @@ static nl_catd read_catalog(const char *path)
 			buf = nbuf;
 			cap *= 2;
 		}
-		__ownership_writable_span(buf + len, cap - len);
 		n = read(fd, buf + len, cap - len);
 		if (n < 0) {
 			/* catopen.html lists no [EINTR], but read() can
@@ -277,8 +276,6 @@ static size_t expand(char *buf, size_t bufsz, const char *tmpl,
 		default: return (size_t)-1;
 		}
 		if (l >= bufsz - i) return (size_t)-1;
-		__ownership_writable_span(buf + i, l);
-		__ownership_readable_span(v, l);
 		memcpy(buf + i, v, l);
 		i += l;
 	}

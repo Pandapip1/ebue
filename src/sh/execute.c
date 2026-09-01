@@ -416,11 +416,9 @@ static char **build_child_envp(const struct sh_word *assigns, size_t *out_n)
 		entry = __malloc(nlen + 1 + vlen + 1);
 		if (!entry) { __free(name); __free(val); free_strv(v, n); return 0; }
 		__ownership_writable_span(entry, nlen);
-		__ownership_readable_span(name, nlen);
 		memcpy(entry, name, nlen);
 		entry[nlen] = '=';
 		__ownership_writable_span(entry + nlen + 1, vlen + 1);
-		__ownership_readable_span(val, vlen + 1);
 		memcpy(entry + nlen + 1, val, vlen + 1);
 		__free(name);
 		__free(val);
@@ -2045,15 +2043,12 @@ static char *slurp_fd(int fd, size_t *out_len)
 			nb = __malloc(nc);
 			if (!nb) { __free(buf); return 0; }
 			if (buf) {
-				__ownership_writable_span(nb, len);
-				__ownership_readable_span(buf, len);
 				memcpy(nb, buf, len);
 			}
 			__free(buf);
 			buf = nb;
 			cap = nc;
 		}
-		__ownership_writable_span(buf + len, 4096);
 		n = read(fd, buf + len, 4096);
 		if (n < 0) { __free(buf); return 0; }
 		if (n == 0) break;

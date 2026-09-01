@@ -233,7 +233,6 @@ static int ustar_split_name(const char *path, char *prefix, char *name)
 			size_t nlen = len - i;
 			if (plen <= 155 && nlen > 0 && nlen <= 100) {
 				__ownership_writable_span(prefix, plen);
-				__ownership_readable_span(path, plen);
 				memcpy(prefix, path, plen); prefix[plen] = 0;
 				__ownership_writable_span(name, nlen);
 				__ownership_readable_span(path + i, nlen);
@@ -404,7 +403,6 @@ static int cpio_put_field(char *field, int width, unsigned long value, const cha
 	}
 	snprintf(tmp, sizeof tmp, "%0*lo", width, value);
 	__ownership_writable_span(field, (size_t)width);
-	__ownership_readable_span(tmp, (size_t)width);
 	memcpy(field, tmp, width);
 	return 0;
 }

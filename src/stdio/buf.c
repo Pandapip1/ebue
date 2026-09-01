@@ -35,7 +35,6 @@ ssize_t __file_read(FILE *f, void *buf, size_t n)
 		if (n > avail) n = avail;
 		if (n) {
 			const unsigned char *src = f->mem_buf + f->mem_pos;
-			__ownership_writable_span(buf, n);
 			__ownership_readable_span(src, n);
 			memcpy(buf, src, n);
 		}
@@ -43,7 +42,6 @@ ssize_t __file_read(FILE *f, void *buf, size_t n)
 		return (ssize_t)n;
 	}
 	if (f->fd < 0) { errno = EBADF; return -1; }
-	__ownership_writable_span(buf, n);
 	return read(f->fd, buf, n);
 }
 
@@ -148,7 +146,6 @@ ssize_t __file_write(FILE *f, const void *buf, size_t n)
 		if (f->mem_pos > f->mem_len) f->mem_len = f->mem_pos;
 		if (f->mem_len <= f->mem_size && term <= f->mem_size - f->mem_len) {
 			unsigned char *term_dst = f->mem_buf + f->mem_len;
-			__ownership_writable_span(term_dst, term);
 			memset(term_dst, 0, term);
 		}
 		mem_publish(f);

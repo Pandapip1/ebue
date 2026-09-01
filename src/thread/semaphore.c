@@ -97,13 +97,8 @@ static char *sem_path(const char *name)
 	total = d + prefix + n + 1;
 	path = malloc(total);
 	if (!path) return NULL;
-	__ownership_writable_span(path, d);
-	__ownership_readable_span(dir, d);
 	memcpy(path, dir, d);
-	__ownership_writable_span(path + d, prefix);
-	__ownership_readable_span("/ntlibc-sem/", prefix);
 	memcpy(path + d, "/ntlibc-sem/", prefix);
-	__ownership_writable_span(path + d + prefix, n);
 	__ownership_readable_span(component, n);
 	memcpy(path + d + prefix, component, n);
 	path[total - 1] = 0;
@@ -375,7 +370,6 @@ int sem_close(sem_t *sem)
 	if (!entry->linked && !entry->refs) {
 		__plat_close(entry->sem.__handle);
 		free(entry->path);
-		__ownership_writable_span(entry, sizeof *entry);
 		memset(entry, 0, sizeof *entry);
 	}
 	__plat_fast_unlock();

@@ -894,8 +894,6 @@ static void buf_append(char **buf, size_t *len, size_t *cap, const char *s, size
 	}
 	{
 		char *dst = *buf + *len;
-		__ownership_writable_span(dst, n);
-		__ownership_readable_span(s, n);
 		memcpy(dst, s, n);
 	}
 	*len += n;

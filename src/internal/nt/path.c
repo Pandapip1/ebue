@@ -416,8 +416,6 @@ static int normalize_rel(WCHAR *w, size_t *np, int *trailing)
 			 * least as short as its source and i has passed a
 			 * separator), so this never overwrites the source. */
 			if (out) w[out++] = '\\';
-			__ownership_writable_span(w + out, len * sizeof(WCHAR));
-			__ownership_readable_span(w + i, len * sizeof(WCHAR));
 			memmove(w + out, w + i, len * sizeof(WCHAR));
 			out += len;
 			lastdot = 0;
@@ -537,15 +535,8 @@ static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
 			while (curn > 2 && cur[curn-1] == '\\') curn--;
 			joined = __malloc((curn - 2 + 1 + n + 1) * sizeof(WCHAR));
 			if (!joined) return -1;
-			__ownership_writable_span(joined,
-				(curn - 2) * sizeof(WCHAR));
-			__ownership_readable_span(cur + 2,
-				(curn - 2) * sizeof(WCHAR));
 			memcpy(joined, cur + 2, (curn - 2) * sizeof(WCHAR));
 			joined[curn - 2] = '\\';
-			__ownership_writable_span(joined + curn - 1,
-				n * sizeof(WCHAR));
-			__ownership_readable_span(dos, n * sizeof(WCHAR));
 			memcpy(joined + curn - 1, dos, n * sizeof(WCHAR));
 			bodyn = curn - 1 + n;
 			joined[bodyn] = 0;
@@ -561,8 +552,6 @@ static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
 	w[0] = '\\'; w[1] = '?'; w[2] = '?'; w[3] = '\\';
 	w[4] = letter; w[5] = ':'; w[6] = '\\';
 	bn = bodyn - 1;                 /* body[0] is the separator at w[6] */
-	__ownership_writable_span(w + 7, bn * sizeof(WCHAR));
-	__ownership_readable_span(body + 1, bn * sizeof(WCHAR));
 	memcpy(w + 7, body + 1, bn * sizeof(WCHAR));
 	__free(joined);
 	if (normalize_rel(w + 7, &bn, trailing)) { __free(w); return -1; }
@@ -572,7 +561,6 @@ static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
 	/* The same UNICODE_STRING ceiling the rest of this file applies. */
 	if (len > __US_MAX_WCHARS) { __free(w); return -1; }
 
-	__ownership_writable_span(out, sizeof *out);
 	memset(out, 0, sizeof *out);
 	out->nt.Buffer = w;
 	out->nt.Length = (USHORT)(len * sizeof(WCHAR));
@@ -679,13 +667,10 @@ static int ntpath_at_impl(int dirfd, const char *path, struct __ntpath *out,
 			pl = strlen(path);
 			joined = __malloc(dl + 1 + pl + 1);
 			if (!joined) { __free(dir); errno = ENOMEM; return -1; }
-			__ownership_writable_span(joined, dl);
-			__ownership_readable_span(dir, dl);
 			memcpy(joined, dir, dl);
 			/* "C:\\" already ends in one */
 			if (dl && dir[dl-1] != '\\' && dir[dl-1] != '/') joined[dl++] = '\\';
 			__ownership_writable_span(joined + dl, pl + 1);
-			__ownership_readable_span(path, pl + 1);
 			memcpy(joined + dl, path, pl + 1);
 			__free(dir);
 			rc = ntpath_impl(joined, out, attributes, overlay);
