@@ -50,6 +50,7 @@
 #include <unistd.h>
 #include "internal.h"
 #include "libc.h"
+#include "ownership_stubs.h"
 
 /* ---- growable byte buffer: the field being built, plus a parallel
  * "quoted/escaped" flag per byte --------------------------------------- */
@@ -67,14 +68,23 @@ static int fbuf_push(struct fbuf *b, char c, int literal)
 static int fbuf_push(struct fbuf *b, char c, int literal) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	if (b->n == b->cap) {
+		char *old_data = b->data;
+		unsigned char *old_lit = b->lit;
 		size_t nc;
 		if (!__array_next_capacity(b->cap, b->n, 1, 64, 1, &nc)) return -1;
 		char *nd = __malloc(nc);
 		unsigned char *nl = __malloc(nc);
 		if (!nd || !nl) { __free(nd); __free(nl); return -1; }
-		if (b->data) { memcpy(nd, b->data, b->n); memcpy(nl, b->lit, b->n); }
-		__free(b->data);
-		__free(b->lit);
+		if (old_data) {
+			__ownership_writable_span(nd, b->n);
+			__ownership_readable_span(old_data, b->n);
+			memcpy(nd, old_data, b->n);
+			__ownership_writable_span(nl, b->n);
+			__ownership_readable_span(old_lit, b->n);
+			memcpy(nl, old_lit, b->n);
+		}
+		__free(old_data);
+		__free(old_lit);
 		b->data = nd;
 		b->lit = nl;
 		b->cap = nc;
@@ -128,13 +138,18 @@ static int pv_push(struct pv *p, char *s)
 {
 	if (!s) return -1;
 	if (p->n == p->cap) {
+		char **old = p->v;
 		size_t nc;
 		if (!__array_next_capacity(p->cap, p->n, 1, 16,
 		    sizeof *p->v, &nc)) { __free(s); return -1; }
 		char **nv = (char **)__malloc(nc * sizeof *nv);
 		if (!nv) { __free(s); return -1; }
-		if (p->v) memcpy((void *)nv, (const void *)p->v, p->n * sizeof *nv);
-		__free((void *)p->v);
+		if (old) {
+			__ownership_writable_span(nv, p->n * sizeof *nv);
+			__ownership_readable_span(old, p->n * sizeof *nv);
+			memcpy((void *)nv, (const void *)old, p->n * sizeof *nv);
+		}
+		__free((void *)old);
 		p->v = nv;
 		p->cap = nc;
 	}
@@ -361,6 +376,8 @@ static int expand_param_word(const char *start, size_t input_len, int flags, // 
 	text = __malloc(input_len + prefix + 1);
 	if (!text) return WRDE_NOSPACE;
 	if (prefix) text[0] = '\\';
+	__ownership_writable_span(text + prefix, input_len);
+	__ownership_readable_span(start, input_len);
 	memcpy(text + prefix, start, input_len);
 	text[input_len + prefix] = 0;
 	memset(&we, 0, sizeof we);
@@ -382,6 +399,8 @@ static int expand_param_word(const char *start, size_t input_len, int flags, // 
 	for (i = 0; i < we.we_wordc; i++) {
 		size_t z = strlen(we.we_wordv[i]);
 		if (i && *ifs) s[n++] = *ifs;
+		__ownership_writable_span(s + n, z);
+		__ownership_readable_span(we.we_wordv[i], z);
 		memcpy(s + n, we.we_wordv[i], z);
 		n += z;
 	}
@@ -441,6 +460,8 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
 		while (is_namechar(*p)) p++;
 		len = (size_t)(p - start);
 		if (*p != '}' || len >= sizeof name) return WRDE_SYNTAX;
+		__ownership_writable_span(name, len);
+		__ownership_readable_span(start, len);
 		memcpy(name, start, len);
 		name[len] = 0;
 		*pp = p + 1;
@@ -513,6 +534,8 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
 	while (is_namechar(*p)) p++;
 	len = (size_t)(p - start);
 	if (len >= sizeof name) return WRDE_SYNTAX;
+	__ownership_writable_span(name, len);
+	__ownership_readable_span(start, len);
 	memcpy(name, start, len);
 	name[len] = 0;
 	val = getenv(name);
@@ -634,6 +657,8 @@ static int expand_trim_pattern(const char *start, size_t len, int flags, // NOLI
 	*result = 0;
 	text = __malloc(len + 1);
 	if (!text) return WRDE_NOSPACE;
+	__ownership_writable_span(text, len);
+	__ownership_readable_span(start, len);
 	memcpy(text, start, len);
 	text[len] = 0;
 	for (p = text; *p;) {
@@ -717,6 +742,8 @@ static int expand_tilde(const char **pp, struct fbuf *b)
 		home = getenv("HOME");
 	} else if (len < sizeof name) {
 		struct passwd *pw;
+		__ownership_writable_span(name, len);
+		__ownership_readable_span(start, len);
 		memcpy(name, start, len);
 		name[len] = 0;
 		pw = getpwnam(name);
@@ -862,6 +889,8 @@ static int expand_arith(const char **pp, struct fbuf *b, int flags, int sh,
 	len = (size_t)(end - start);
 	expr = __malloc(len + 1);
 	if (!expr) return WRDE_NOSPACE;
+	__ownership_writable_span(expr, len);
+	__ownership_readable_span(start, len);
 	memcpy(expr, start, len);
 	expr[len] = 0;
 
@@ -981,6 +1010,8 @@ static char *cmdsub_dollar_text(const char **pp, int *syntax)
 	len = (size_t)(p - start);
 	r = __malloc(len + 1);
 	if (!r) return 0;
+	__ownership_writable_span(r, len);
+	__ownership_readable_span(start, len);
 	memcpy(r, start, len);
 	r[len] = 0;
 	*pp = p + 1;	/* past the ')' */
@@ -1178,7 +1209,11 @@ static int emit_field(struct fbuf *b, struct pv *out)
 
 	plain = __malloc(b->n + 1);
 	if (!plain) return WRDE_NOSPACE;
-	if (b->n) memcpy(plain, b->data, b->n);
+	if (b->n) {
+		__ownership_writable_span(plain, b->n);
+		__ownership_readable_span(b->data, b->n);
+		memcpy(plain, b->data, b->n);
+	}
 	plain[b->n] = 0;
 
 	if (!has_meta) return pv_push(out, plain) ? WRDE_NOSPACE : 0;
@@ -1237,6 +1272,8 @@ static int split_appended(struct fbuf *b, struct pv *out, int *active,
 	if (!n) return 0;
 	text = __malloc(n);
 	if (!text) return WRDE_NOSPACE;
+	__ownership_writable_span(text, n);
+	__ownership_readable_span(b->data + before, n);
 	memcpy(text, b->data + before, n);
 	b->n = before;
 	for (i = 0; i < n; i++) {
@@ -1396,9 +1433,12 @@ static int expand_impl(const char *words, wordexp_t *pwordexp, int flags, int sh
 		 * fields) -- see the "other errors" branch of fail: below. */
 		out.n = out.cap = pwordexp->we_wordc;
 		if (out.n) {
+			char *const *old = pwordexp->we_wordv + pwordexp->we_offs;
 			out.v = (char **)__malloc(out.n * sizeof *out.v);
 			if (!out.v) { errno = ENOMEM; return WRDE_NOSPACE; }
-			memcpy((void *)out.v, (const void *)(pwordexp->we_wordv + pwordexp->we_offs), out.n * sizeof *out.v);
+			__ownership_writable_span(out.v, out.n * sizeof *out.v);
+			__ownership_readable_span(old, out.n * sizeof *out.v);
+			memcpy((void *)out.v, (const void *)old, out.n * sizeof *out.v);
 		}
 		base = out.n;
 	}
