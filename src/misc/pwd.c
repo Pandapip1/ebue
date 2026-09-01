@@ -55,6 +55,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include "ownership_stubs.h"
 
 /* Non-reentrant getpwnam()/getpwuid()/getpwent() share this static
  * storage; none of these functions are required to be thread-safe
@@ -123,12 +124,18 @@ static int fill_current(struct passwd *pw, char *buf, size_t bufsz, size_t *need
 	need = nl + dl + sl;
 	if (need > bufsz) { if (needp) *needp = need; return ERANGE; }
 
+	__ownership_writable_span(buf, nl);
+	__ownership_readable_span(name, nl);
 	memcpy(buf, name, nl);
 	pw->pw_name = buf;
 	buf += nl;
+	__ownership_writable_span(buf, dl);
+	__ownership_readable_span(dir, dl);
 	memcpy(buf, dir, dl);
 	pw->pw_dir = buf;
 	buf += dl;
+	__ownership_writable_span(buf, sl);
+	__ownership_readable_span(shell, sl);
 	memcpy(buf, shell, sl);
 	pw->pw_shell = buf;
 
