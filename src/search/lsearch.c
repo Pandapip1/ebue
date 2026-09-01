@@ -12,10 +12,14 @@ void *lfind(const void *key, const void *base, size_t *nelp, size_t width, // NO
 	    int (*compar)(const void *, const void *))
 {
 	const char *p = base;
-	size_t i;
+	size_t i = 0, remaining = (size_t)-1;
 
-	for (i = 0; i < *nelp; i++, p += width)
+	while (remaining > 0 && i < *nelp) {
+		remaining--;
 		if (compar(key, p) == 0) return (void *)p;
+		i++;
+		p += width;
+	}
 	return NULL;
 }
 
