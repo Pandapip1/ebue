@@ -1106,41 +1106,45 @@ int regexec(const regex_t *__restrict preg, const char *__restrict string,
 
 #define NERRMSGS 14	/* index 0 (unused) through REG_BADRPT (13) */
 
-static const char *const errmsgs[NERRMSGS] = {
-	NULL,				/* unused: no code 0 in this header */
-	"no match",			/* REG_NOMATCH */
-	"invalid regular expression",	/* REG_BADPAT */
-	"invalid collating element",	/* REG_ECOLLATE */
-	"invalid character class",	/* REG_ECTYPE */
-	"trailing backslash",		/* REG_EESCAPE */
-	"invalid back reference",	/* REG_ESUBREG */
-	"unmatched [ or [^",		/* REG_EBRACK */
-	"unmatched ( or \\(",		/* REG_EPAREN */
-	"unmatched \\{",		/* REG_EBRACE */
-	"invalid interval",		/* REG_BADBR */
-	"invalid range end",		/* REG_ERANGE */
-	"out of memory",		/* REG_ESPACE */
-	"repetition operator with nothing to repeat",	/* REG_BADRPT */
+struct errmsg {
+	const char *text;
+	size_t size;
 };
+
+#define ERRMSG(s) { s, sizeof s }
+
+static const struct errmsg errmsgs[NERRMSGS] = {
+	ERRMSG("unknown regex error"),	/* fallback: no code 0 in this header */
+	ERRMSG("no match"),		/* REG_NOMATCH */
+	ERRMSG("invalid regular expression"), /* REG_BADPAT */
+	ERRMSG("invalid collating element"), /* REG_ECOLLATE */
+	ERRMSG("invalid character class"), /* REG_ECTYPE */
+	ERRMSG("trailing backslash"),	/* REG_EESCAPE */
+	ERRMSG("invalid back reference"), /* REG_ESUBREG */
+	ERRMSG("unmatched [ or [^"),	/* REG_EBRACK */
+	ERRMSG("unmatched ( or \\("),	/* REG_EPAREN */
+	ERRMSG("unmatched \\{"),		/* REG_EBRACE */
+	ERRMSG("invalid interval"),	/* REG_BADBR */
+	ERRMSG("invalid range end"),	/* REG_ERANGE */
+	ERRMSG("out of memory"),		/* REG_ESPACE */
+	ERRMSG("repetition operator with nothing to repeat"), /* REG_BADRPT */
+};
+
+#undef ERRMSG
 
 size_t regerror(int errcode, const regex_t *__restrict preg, char *__restrict errbuf, size_t errbuf_size)
 {
-	const char *msg = "unknown regex error";
-	size_t need;
+	const struct errmsg *msg = &errmsgs[0];
 	(void)preg;
 
-	if (errcode >= 1 && errcode < NERRMSGS) {
-		const char *m = errmsgs[errcode];
-		if (m) msg = m;
-	}
+	if (errcode >= 1 && errcode < NERRMSGS) msg = &errmsgs[errcode];
 
-	need = strlen(msg) + 1;
 	if (errbuf_size != 0) {
-		size_t n = need < errbuf_size ? need : errbuf_size;
-		memcpy(errbuf, msg, n - 1);
+		size_t n = msg->size < errbuf_size ? msg->size : errbuf_size;
+		memcpy(errbuf, msg->text, n - 1);
 		errbuf[n - 1] = '\0';
 	}
-	return need;
+	return msg->size;
 }
 
 void regfree(regex_t *preg)
