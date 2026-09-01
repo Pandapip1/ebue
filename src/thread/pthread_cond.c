@@ -92,6 +92,9 @@ static int cond_ready(pthread_cond_t *cond)
 	return data->magic == COND_MAGIC ? 0 : EINVAL;
 }
 
+__attribute__((ownership_constructs(pthread_cond, 1),
+	ownership_static(pthread_cond, 1),
+	ownership_requires_handle(pthread_condattr, 2)))
 int pthread_cond_init(pthread_cond_t *__restrict cond,
 	const pthread_condattr_t *__restrict attr)
 {
@@ -110,6 +113,8 @@ int pthread_cond_init(pthread_cond_t *__restrict cond,
 	return 0;
 }
 
+__attribute__((ownership_destroys(pthread_cond, 1),
+	ownership_static(pthread_cond, 1)))
 int pthread_cond_destroy(pthread_cond_t *cond)
 {
 	struct cond_data *data;
@@ -256,14 +261,22 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	return lock_error ? lock_error : result;
 }
 
-__attribute__((ownership_requires_token(pthread_mutex_locked, 2)))
+__attribute__((ownership_requires_handle(pthread_cond, 1),
+	ownership_static(pthread_cond, 1),
+	ownership_requires_handle(pthread_mutex, 2),
+	ownership_static(pthread_mutex, 2),
+	ownership_requires_token(pthread_mutex_locked, 2)))
 int pthread_cond_wait(pthread_cond_t *__restrict cond,
 	pthread_mutex_t *__restrict mutex)
 {
 	return cond_wait(cond, mutex, 0);
 }
 
-__attribute__((ownership_requires_token(pthread_mutex_locked, 2)))
+__attribute__((ownership_requires_handle(pthread_cond, 1),
+	ownership_static(pthread_cond, 1),
+	ownership_requires_handle(pthread_mutex, 2),
+	ownership_static(pthread_mutex, 2),
+	ownership_requires_token(pthread_mutex_locked, 2)))
 int pthread_cond_timedwait(pthread_cond_t *__restrict cond,
 	pthread_mutex_t *__restrict mutex, const struct timespec *__restrict absolute)
 {
@@ -271,6 +284,8 @@ int pthread_cond_timedwait(pthread_cond_t *__restrict cond,
 	return cond_wait(cond, mutex, absolute);
 }
 
+__attribute__((ownership_requires_handle(pthread_cond, 1),
+	ownership_static(pthread_cond, 1)))
 int pthread_cond_signal(pthread_cond_t *cond)
 {
 	struct cond_data *data;
@@ -290,6 +305,8 @@ int pthread_cond_signal(pthread_cond_t *cond)
 	return 0;
 }
 
+__attribute__((ownership_requires_handle(pthread_cond, 1),
+	ownership_static(pthread_cond, 1)))
 int pthread_cond_broadcast(pthread_cond_t *cond)
 {
 	struct cond_data *data;
@@ -308,6 +325,7 @@ int pthread_cond_broadcast(pthread_cond_t *cond)
 	return 0;
 }
 
+__attribute__((ownership_constructs(pthread_condattr, 1)))
 int pthread_condattr_init(pthread_condattr_t *attr)
 {
 	struct condattr_data *data;
@@ -320,6 +338,7 @@ int pthread_condattr_init(pthread_condattr_t *attr)
 	return 0;
 }
 
+__attribute__((ownership_destroys(pthread_condattr, 1)))
 int pthread_condattr_destroy(pthread_condattr_t *attr)
 {
 	if (!attr || condattr_data(attr)->magic != CONDATTR_MAGIC) return EINVAL;
@@ -327,6 +346,7 @@ int pthread_condattr_destroy(pthread_condattr_t *attr)
 	return 0;
 }
 
+__attribute__((ownership_requires_handle(pthread_condattr, 1)))
 int pthread_condattr_getclock(const pthread_condattr_t *__restrict attr,
 	clockid_t *__restrict clock)
 {
@@ -336,6 +356,7 @@ int pthread_condattr_getclock(const pthread_condattr_t *__restrict attr,
 	return 0;
 }
 
+__attribute__((ownership_requires_handle(pthread_condattr, 1)))
 int pthread_condattr_setclock(pthread_condattr_t *attr, clockid_t clock)
 {
 	if (!attr || condattr_data(attr)->magic != CONDATTR_MAGIC ||
@@ -344,6 +365,7 @@ int pthread_condattr_setclock(pthread_condattr_t *attr, clockid_t clock)
 	return 0;
 }
 
+__attribute__((ownership_requires_handle(pthread_condattr, 1)))
 int pthread_condattr_getpshared(const pthread_condattr_t *__restrict attr,
 	int *__restrict pshared)
 {
@@ -353,6 +375,7 @@ int pthread_condattr_getpshared(const pthread_condattr_t *__restrict attr,
 	return 0;
 }
 
+__attribute__((ownership_requires_handle(pthread_condattr, 1)))
 int pthread_condattr_setpshared(pthread_condattr_t *attr, int pshared)
 {
 	if (!attr || condattr_data(attr)->magic != CONDATTR_MAGIC ||
