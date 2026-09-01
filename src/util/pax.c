@@ -448,7 +448,11 @@ static int read_cpio_header(FILE *in, struct pax_member *m, int *end)
 	if (fread(namebuf, 1, namesize, in) != namesize) return -1;
 	namebuf[namesize - 1] = 0; /* namesize counts the trailing NUL already read */
 
-	if (strcmp(namebuf, "TRAILER!!!") == 0) { *end = 1; return 0; }
+	if (namesize >= sizeof "TRAILER!!!" &&
+	    memcmp(namebuf, "TRAILER!!!", sizeof "TRAILER!!!") == 0) {
+		*end = 1;
+		return 0;
+	}
 
 	snprintf(m->name, sizeof m->name, "%s", namebuf);
 	m->mode = mode & 07777;
