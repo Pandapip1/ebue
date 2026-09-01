@@ -9,11 +9,14 @@
 #define token typedef struct { char _tok; }
 #define l_unlimited __attribute__((annotate("qual:l_unlimited")))
 #define implicit_drop __attribute__((annotate("qual:implicit_drop")))
+#define dynamic_storage __attribute__((annotate("qual:dynamic_storage")))
 #define sentinel_exclude(value) \
 	__attribute__((annotate("qual:sentinel_exclude=" #value)))
 #define withtok(token_name) \
 	__attribute__((annotate("withtok:" #token_name)))
 #define consume(token_name) \
 	__attribute__((annotate("consume:" #token_name)))
+#define consume_if_nonnull_return(token_name) \
+	__attribute__((annotate("consume_if_nonnull_return:" #token_name)))
 
 #endif

@@ -60,19 +60,12 @@ void conditional_return(void)
 	free(conditional_buffer(0));
 }
 
-[[clang::ownership_takes(widget, 1)]]
-void destroy_widget(void *);
-[[clang::ownership_returns(widget)]]
-void *make_widget(void);
-
-[[clang::ownership_returns(widget)]]
-void *make_widget(void)
+void *make_widget(void) withtok(widget_allocated)
 {
 	return malloc(16);
 }
 
-[[clang::ownership_takes(widget, 1)]]
-void destroy_widget(void *widget)
+void destroy_widget(void *widget consume(widget_allocated))
 {
 	free(widget);
 }

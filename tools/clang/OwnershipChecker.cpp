@@ -325,15 +325,26 @@ class OwnershipChecker
     return dyn_cast_or_null<FunctionDecl>(Call.getDecl());
   }
 
-  static const OwnershipAttr *returnsOwnership(const CallEvent &Call) {
+  static bool returnsOwnership(const CallEvent &Call) {
     const FunctionDecl *Function = functionOf(Call);
     if (!Function)
-      return nullptr;
+      return false;
     for (const OwnershipAttr *Attribute :
          Function->specific_attrs<OwnershipAttr>())
       if (Attribute->isReturns())
-        return Attribute;
-    return nullptr;
+        return true;
+    for (const AnnotateAttr *Attribute :
+         Function->specific_attrs<AnnotateAttr>()) {
+      StringRef Text = Attribute->getAnnotation();
+      if (Text.consume_front("withtok:") && !Text.empty() &&
+          !Text.contains(':')) {
+        const TypedefNameDecl *Token =
+            dialectToken(Function->getASTContext(), Text);
+        if (hasDialectQualifier(Token, "qual:dynamic_storage"))
+          return true;
+      }
+    }
+    return false;
   }
 
   static std::optional<unsigned> annotatedArgument(const FunctionDecl *Function,
@@ -355,7 +366,26 @@ class OwnershipChecker
 
   static std::optional<unsigned>
   reallocatedArgument(const FunctionDecl *Function) {
-    return annotatedArgument(Function, "ownership_reallocates:");
+    if (std::optional<unsigned> Argument =
+            annotatedArgument(Function, "ownership_reallocates:"))
+      return Argument;
+    if (!Function)
+      return std::nullopt;
+    unsigned Argument = 0;
+    for (const ParmVarDecl *Parameter : Function->parameters()) {
+      for (const AnnotateAttr *Attribute :
+           Parameter->specific_attrs<AnnotateAttr>()) {
+        StringRef Text = Attribute->getAnnotation();
+        if (Text.consume_front("consume_if_nonnull_return:") &&
+            !Text.empty() && !Text.contains(':') &&
+            hasDialectQualifier(
+                dialectToken(Function->getASTContext(), Text),
+                "qual:dynamic_storage"))
+          return Argument;
+      }
+      ++Argument;
+    }
+    return std::nullopt;
   }
 
   static std::optional<unsigned>
@@ -375,6 +405,20 @@ class OwnershipChecker
         if (Index.isValid())
           return Index.getASTIndex();
     }
+    unsigned Argument = 0;
+    for (const ParmVarDecl *Parameter : Function->parameters()) {
+      for (const AnnotateAttr *Attribute :
+           Parameter->specific_attrs<AnnotateAttr>()) {
+        StringRef Text = Attribute->getAnnotation();
+        if (Text.consume_front("consume:") && !Text.empty() &&
+            !Text.contains(':') &&
+            hasDialectQualifier(
+                dialectToken(Function->getASTContext(), Text),
+                "qual:dynamic_storage"))
+          return Argument;
+      }
+      ++Argument;
+    }
     return std::nullopt;
   }
 
@@ -385,7 +429,7 @@ class OwnershipChecker
   }
 
   static bool isAllocator(const CallEvent &Call) {
-    return returnsOwnership(Call) != nullptr;
+    return returnsOwnership(Call);
   }
 
   // Clang's own dynamic-extent tracking for an allocator's return value
@@ -1142,7 +1186,8 @@ class OwnershipContractChecker : public Checker<check::ASTDecl<FunctionDecl>> {
   static bool isOwnershipContract(StringRef Annotation) {
     return Annotation.starts_with("ownership_") ||
            Annotation.starts_with("withtok:") ||
-           Annotation.starts_with("consume:");
+           Annotation.starts_with("consume:") ||
+           Annotation.starts_with("consume_if_nonnull_return:");
   }
 
 public:

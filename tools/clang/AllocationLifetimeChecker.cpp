@@ -33,17 +33,68 @@ REGISTER_MAP_WITH_PROGRAMSTATE(ReplacedBy, SymbolRef, SymbolRef)
 
 namespace {
 
+struct TokenContract {
+  const IdentifierInfo *Family;
+  const Attr *Attribute;
+};
+
 static const FunctionDecl *functionOf(const CallEvent &Call) {
   return dyn_cast_or_null<FunctionDecl>(Call.getDecl());
 }
 
-static const OwnershipAttr *returnsOwnership(const FunctionDecl *Function) {
-  if (!Function)
+static const TypedefNameDecl *dialectToken(ASTContext &Context,
+                                           StringRef Name) {
+  IdentifierInfo &Identifier = Context.Idents.get(Name);
+  DeclarationName Declaration(&Identifier);
+  for (NamedDecl *Candidate :
+       Context.getTranslationUnitDecl()->lookup(Declaration))
+    if (const auto *Token = dyn_cast<TypedefNameDecl>(Candidate))
+      return Token;
+  return nullptr;
+}
+
+static bool isDynamicStorageToken(ASTContext &Context, StringRef Name) {
+  const TypedefNameDecl *Token = dialectToken(Context, Name);
+  if (!Token)
+    return false;
+  for (const AnnotateAttr *Attribute :
+       Token->specific_attrs<AnnotateAttr>())
+    if (Attribute->getAnnotation() == "qual:dynamic_storage")
+      return true;
+  return false;
+}
+
+static const IdentifierInfo *annotationFamily(const Decl *Declaration,
+                                              StringRef Prefix) {
+  if (!Declaration)
     return nullptr;
+  for (const AnnotateAttr *Attribute :
+       Declaration->specific_attrs<AnnotateAttr>()) {
+    StringRef Text = Attribute->getAnnotation();
+    if (Text.consume_front(Prefix) && !Text.empty() && !Text.contains(':') &&
+        isDynamicStorageToken(Declaration->getASTContext(), Text))
+      return &Declaration->getASTContext().Idents.get(Text);
+  }
+  return nullptr;
+}
+
+static std::optional<TokenContract>
+returnsOwnership(const FunctionDecl *Function) {
+  if (!Function)
+    return std::nullopt;
   for (const OwnershipAttr *Attribute : Function->specific_attrs<OwnershipAttr>())
     if (Attribute->isReturns())
-      return Attribute;
-  return nullptr;
+      return TokenContract{Attribute->getModule(), Attribute};
+  for (const AnnotateAttr *Attribute :
+       Function->specific_attrs<AnnotateAttr>()) {
+    StringRef Text = Attribute->getAnnotation();
+    if (Text.consume_front("withtok:") && !Text.empty() &&
+        !Text.contains(':') &&
+        isDynamicStorageToken(Function->getASTContext(), Text))
+      return TokenContract{&Function->getASTContext().Idents.get(Text),
+                           Attribute};
+  }
+  return std::nullopt;
 }
 
 static bool takesAnyArgument(const FunctionDecl *Function, unsigned Argument) {
@@ -56,6 +107,9 @@ static bool takesAnyArgument(const FunctionDecl *Function, unsigned Argument) {
       if (Index.isValid() && Index.getASTIndex() == Argument)
         return true;
   }
+  if (Argument < Function->getNumParams() &&
+      annotationFamily(Function->getParamDecl(Argument), "consume:"))
+    return true;
   return false;
 }
 
@@ -79,6 +133,10 @@ reallocatedArgument(const FunctionDecl *Function) {
         SourceIndex > 0)
       return SourceIndex - 1;
   }
+  for (unsigned Argument = 0; Argument < Function->getNumParams(); ++Argument)
+    if (annotationFamily(Function->getParamDecl(Argument),
+                         "consume_if_nonnull_return:"))
+      return Argument;
   return std::nullopt;
 }
 
@@ -117,6 +175,9 @@ static bool takesArgument(const FunctionDecl *Function,
       if (Index.isValid() && Index.getASTIndex() == Argument)
         return true;
   }
+  if (Argument < Function->getNumParams() &&
+      annotationFamily(Function->getParamDecl(Argument), "consume:") == Family)
+    return true;
   return false;
 }
 
@@ -282,6 +343,42 @@ public:
                          << '\t' << Line << '\n';
       }
     }
+    for (const AnnotateAttr *Attribute :
+         Function->specific_attrs<AnnotateAttr>()) {
+      StringRef Family = Attribute->getAnnotation();
+      if (!Family.consume_front("withtok:") || Family.empty() ||
+          Family.contains(':') ||
+          !isDynamicStorageToken(Function->getASTContext(), Family))
+        continue;
+      StringRef Kind = !Function->doesThisDeclarationHaveABody()
+                           ? "returns-declaration"
+                           : Attribute->isInherited()
+                                 ? "returns-definition-inherited"
+                                 : "returns-definition-explicit";
+      llvm::errs() << "ntlibc-allocation-contract: " << Kind << '\t'
+                   << Family << '\t' << Function->getName() << '\t' << Path
+                   << '\t' << Line << '\n';
+    }
+    unsigned Argument = 1;
+    for (const ParmVarDecl *Parameter : Function->parameters()) {
+      for (const AnnotateAttr *Attribute :
+           Parameter->specific_attrs<AnnotateAttr>()) {
+        StringRef Family = Attribute->getAnnotation();
+        if (!Family.consume_front("consume:") || Family.empty() ||
+            Family.contains(':') ||
+            !isDynamicStorageToken(Function->getASTContext(), Family))
+          continue;
+        StringRef Kind = !Function->doesThisDeclarationHaveABody()
+                             ? "takes-declaration"
+                             : Attribute->isInherited()
+                                   ? "takes-definition-inherited"
+                                   : "takes-definition-explicit";
+        llvm::errs() << "ntlibc-allocation-contract: " << Kind << '\t'
+                     << Family << '\t' << Function->getName() << '\t'
+                     << Argument << '\t' << Path << '\t' << Line << '\n';
+      }
+      ++Argument;
+    }
   }
 
   void checkBeginFunction(CheckerContext &C) const {
@@ -289,38 +386,44 @@ public:
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
     if (!Function)
       return;
-    llvm::SmallVector<ProgramStateRef, 4> States{C.getState()};
-    bool Changed = false;
-    for (const OwnershipAttr *Attribute : Function->specific_attrs<OwnershipAttr>()) {
+    llvm::SmallVector<std::pair<const IdentifierInfo *, const ParmVarDecl *>, 4>
+        Inputs;
+    for (const OwnershipAttr *Attribute :
+         Function->specific_attrs<OwnershipAttr>()) {
       if (!Attribute->isTakes() || !familyOf(Attribute))
         continue;
-      for (const ParamIdx &Index : Attribute->args()) {
-        if (!Index.isValid() || Index.getASTIndex() >= Function->getNumParams())
+      for (const ParamIdx &Index : Attribute->args())
+        if (Index.isValid() && Index.getASTIndex() < Function->getNumParams())
+          Inputs.push_back(
+              {familyOf(Attribute), Function->getParamDecl(Index.getASTIndex())});
+    }
+    for (const ParmVarDecl *Parameter : Function->parameters())
+      if (const IdentifierInfo *Family =
+              annotationFamily(Parameter, "consume:"))
+        Inputs.push_back({Family, Parameter});
+    llvm::SmallVector<ProgramStateRef, 4> States{C.getState()};
+    bool Changed = false;
+    for (const auto &[Family, Parameter] : Inputs) {
+      llvm::SmallVector<ProgramStateRef, 4> NextStates;
+      for (ProgramStateRef State : States) {
+        SVal Value = State->getSVal(
+            State->getLValue(Parameter, C.getLocationContext()));
+        SymbolRef Symbol = Value.getAsLocSymbol(true);
+        std::optional<DefinedOrUnknownSVal> Defined =
+            Value.getAs<DefinedOrUnknownSVal>();
+        if (!Symbol || !Defined) {
+          NextStates.push_back(State);
           continue;
-        const ParmVarDecl *Parameter =
-            Function->getParamDecl(Index.getASTIndex());
-        llvm::SmallVector<ProgramStateRef, 4> NextStates;
-        for (ProgramStateRef State : States) {
-          SVal Value = State->getSVal(
-              State->getLValue(Parameter, C.getLocationContext()));
-          SymbolRef Symbol = Value.getAsLocSymbol(true);
-          std::optional<DefinedOrUnknownSVal> Defined =
-              Value.getAs<DefinedOrUnknownSVal>();
-          if (!Symbol || !Defined) {
-            NextStates.push_back(State);
-            continue;
-          }
-          auto [NonNullState, NullState] = State->assume(*Defined);
-          if (NullState)
-            NextStates.push_back(NullState);
-          if (NonNullState)
-            NextStates.push_back(track(NonNullState, Symbol, nullptr,
-                                       C.getStackFrame(), familyOf(Attribute),
-                                       true));
-          Changed = true;
         }
-        States = std::move(NextStates);
+        auto [NonNullState, NullState] = State->assume(*Defined);
+        if (NullState)
+          NextStates.push_back(NullState);
+        if (NonNullState)
+          NextStates.push_back(track(NonNullState, Symbol, nullptr,
+                                     C.getStackFrame(), Family, true));
+        Changed = true;
       }
+      States = std::move(NextStates);
     }
     if (Changed)
       for (ProgramStateRef State : States)
@@ -356,7 +459,7 @@ public:
 
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
     const FunctionDecl *Function = functionOf(Call);
-    const OwnershipAttr *Returns = returnsOwnership(Function);
+    std::optional<TokenContract> Returns = returnsOwnership(Function);
     if (!Returns)
       return;
     ProgramStateRef State = C.getState();
@@ -389,7 +492,7 @@ public:
       C.addTransition(NullState);
     if (!NonNullState)
       return;
-    const IdentifierInfo *Family = familyOf(Returns);
+    const IdentifierInfo *Family = Returns->Family;
     NonNullState = track(NonNullState, Result, Call.getOriginExpr(),
                          C.getStackFrame(), Family, false);
     if (std::optional<unsigned> Argument =
@@ -406,7 +509,7 @@ public:
     ProgramStateRef State = C.getState();
     const auto *Function =
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
-    const OwnershipAttr *Returns = returnsOwnership(Function);
+    std::optional<TokenContract> Returns = returnsOwnership(Function);
     SymbolRef Returned =
         Return && Return->getRetValue()
             ? C.getSVal(Return->getRetValue()).getAsLocSymbol(true)
