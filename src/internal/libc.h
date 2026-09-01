@@ -167,6 +167,7 @@ void __ntpath_free(struct __ntpath *);
 int __nt_prefix_not_dir(const UNICODE_STRING *nt, HANDLE root)
     __attribute__((nonnull(1)));
 /* The DOS-form absolute path of a handle, UTF-8, malloc'd. */
+__attribute__((ownership_returns(internal_malloc)))
 char *__handle_path(HANDLE);
 
 /* The guts of open()/openat(): resolve and open, handing back the raw

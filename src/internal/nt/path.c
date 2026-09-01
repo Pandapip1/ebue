@@ -105,6 +105,7 @@ int __name_too_long(const char *path)
 	return 0;
 }
 
+__attribute__((ownership_returns(internal_malloc)))
 static WCHAR *dos_from_posix(const char *path, size_t *wlen, int *trailing)
 {
 	WCHAR *w;
