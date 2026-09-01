@@ -107,7 +107,7 @@ static int fill_current(struct group *gr, char **mem, char *buf, size_t bufsz, s
 	nl = strlen(name) + 1;
 	if (nl > bufsz) { if (needp) *needp = nl; return ERANGE; }
 
-	memcpy(buf, name, nl);
+	strcpy(buf, name);
 	gr->gr_name = buf;
 	gr->gr_gid = getgid();
 	mem[0] = buf;
