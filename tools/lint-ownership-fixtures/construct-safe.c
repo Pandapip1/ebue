@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../../include/ownership.h"
+
 typedef struct {
   void *opaque[8];
 } mutex_t;
@@ -24,54 +26,40 @@ typedef struct {
   void *opaque[4];
 } mutexattr_t;
 
-[[ownership_constructs(mutex, 1), ownership_static(mutex, 1),
-  ownership_requires_handle(mutexattr, 2)]]
-int pthread_mutex_init(mutex_t *, const mutexattr_t *);
-[[ownership_destroys(mutex, 1), ownership_static(mutex, 1)]]
-int pthread_mutex_destroy(mutex_t *);
-[[ownership_requires_handle(mutex, 1), ownership_static(mutex, 1)]]
-int pthread_mutex_lock(mutex_t *);
-[[ownership_requires_handle(mutex, 1), ownership_static(mutex, 1)]]
-int pthread_mutex_unlock(mutex_t *);
-[[ownership_constructs(mutexattr, 1)]] int
-pthread_mutexattr_init(mutexattr_t *);
-[[ownership_destroys(mutexattr, 1)]] int
-pthread_mutexattr_destroy(mutexattr_t *);
-[[ownership_constructs(rwlock, 1), ownership_static(rwlock, 1)]]
-int pthread_rwlock_init(rwlock_t *, const void *);
-[[ownership_destroys(rwlock, 1), ownership_static(rwlock, 1)]]
-int pthread_rwlock_destroy(rwlock_t *);
-[[ownership_requires_handle(rwlock, 1), ownership_static(rwlock, 1)]]
-int pthread_rwlock_rdlock(rwlock_t *);
-[[ownership_requires_handle(rwlock, 1), ownership_static(rwlock, 1)]]
-int pthread_rwlock_unlock(rwlock_t *);
-[[ownership_constructs(condition, 1), ownership_static(condition, 1)]]
-int pthread_cond_init(cond_t *, const void *);
-[[ownership_destroys(condition, 1), ownership_static(condition, 1)]]
-int pthread_cond_destroy(cond_t *);
-[[ownership_requires_handle(condition, 1), ownership_static(condition, 1)]]
-int pthread_cond_signal(cond_t *);
-[[ownership_constructs(barrier, 1)]]
-int pthread_barrier_init(barrier_t *, const void *, unsigned);
-[[ownership_destroys(barrier, 1)]] int pthread_barrier_destroy(barrier_t *);
-[[ownership_requires_handle(barrier, 1)]] int pthread_barrier_wait(barrier_t *);
-[[ownership_constructs(spinlock, 1)]] int pthread_spin_init(spinlock_t *, int);
-[[ownership_destroys(spinlock, 1)]] int pthread_spin_destroy(spinlock_t *);
-[[ownership_requires_handle(spinlock, 1)]] int pthread_spin_lock(spinlock_t *);
-[[ownership_requires_handle(spinlock, 1)]] int
-pthread_spin_unlock(spinlock_t *);
-[[ownership_constructs(semaphore, 1)]] int sem_init(semaphore_t *, int,
-                                                    unsigned);
-[[ownership_destroys(semaphore, 1)]] int sem_destroy(semaphore_t *);
-[[ownership_requires_handle(semaphore, 1)]] int sem_post(semaphore_t *);
-[[ownership_requires_handle(semaphore, 1)]] int sem_trywait(semaphore_t *);
-[[ownership_requires_handle(condition, 1), ownership_static(condition, 1),
-  ownership_requires_handle(mutex, 2), ownership_static(mutex, 2)]]
-int pthread_cond_timedwait(cond_t *, mutex_t *, const void *);
+int pthread_mutex_init(mutex_t *construct(mutex) static_handle(mutex),
+                       const mutexattr_t *handle(mutexattr));
+int pthread_mutex_destroy(mutex_t *destroy(mutex) static_handle(mutex));
+int pthread_mutex_lock(mutex_t *handle(mutex) static_handle(mutex));
+int pthread_mutex_unlock(mutex_t *handle(mutex) static_handle(mutex));
+int pthread_mutexattr_init(mutexattr_t *construct(mutexattr));
+int pthread_mutexattr_destroy(mutexattr_t *destroy(mutexattr));
+int pthread_rwlock_init(rwlock_t *construct(rwlock) static_handle(rwlock),
+                        const void *);
+int pthread_rwlock_destroy(rwlock_t *destroy(rwlock) static_handle(rwlock));
+int pthread_rwlock_rdlock(rwlock_t *handle(rwlock) static_handle(rwlock));
+int pthread_rwlock_unlock(rwlock_t *handle(rwlock) static_handle(rwlock));
+int pthread_cond_init(cond_t *construct(condition) static_handle(condition),
+                      const void *);
+int pthread_cond_destroy(cond_t *destroy(condition) static_handle(condition));
+int pthread_cond_signal(cond_t *handle(condition) static_handle(condition));
+int pthread_barrier_init(barrier_t *construct(barrier), const void *, unsigned);
+int pthread_barrier_destroy(barrier_t *destroy(barrier));
+int pthread_barrier_wait(barrier_t *handle(barrier));
+int pthread_spin_init(spinlock_t *construct(spinlock), int);
+int pthread_spin_destroy(spinlock_t *destroy(spinlock));
+int pthread_spin_lock(spinlock_t *handle(spinlock));
+int pthread_spin_unlock(spinlock_t *handle(spinlock));
+int sem_init(semaphore_t *construct(semaphore), int, unsigned);
+int sem_destroy(semaphore_t *destroy(semaphore));
+int sem_post(semaphore_t *handle(semaphore));
+int sem_trywait(semaphore_t *handle(semaphore));
+int pthread_cond_timedwait(cond_t *handle(condition) static_handle(condition),
+                           mutex_t *handle(mutex) static_handle(mutex),
+                           const void *);
 
-[[ownership_constructs(custom, 1)]] int open_custom(mutex_t *);
-[[ownership_requires_handle(custom, 1)]] int inspect_custom(mutex_t *);
-[[ownership_destroys(custom, 1)]] int close_custom(mutex_t *);
+int open_custom(mutex_t *construct(custom));
+int inspect_custom(mutex_t *handle(custom));
+int close_custom(mutex_t *destroy(custom));
 
 static mutex_t static_mutex;
 

@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../../include/ownership.h"
+
 typedef struct {
   void *opaque[8];
 } mutex_t;
@@ -12,20 +14,16 @@ typedef struct {
   unsigned magic, named;
 } semaphore_t;
 
-[[ownership_constructs(mutex, 1), ownership_static(mutex, 1)]]
-int pthread_mutex_init(mutex_t *, const void *);
-[[ownership_destroys(mutex, 1), ownership_static(mutex, 1)]]
-int pthread_mutex_destroy(mutex_t *);
-[[ownership_requires_handle(mutex, 1), ownership_static(mutex, 1)]]
-int pthread_mutex_lock(mutex_t *);
-[[ownership_destroys(rwlock, 1), ownership_static(rwlock, 1)]]
-int pthread_rwlock_destroy(rwlock_t *);
-[[ownership_constructs(semaphore, 1)]] int sem_init(semaphore_t *, int,
-                                                    unsigned);
-[[ownership_destroys(semaphore, 1)]] int sem_destroy(semaphore_t *);
-[[ownership_requires_handle(semaphore, 1)]] int sem_post(semaphore_t *);
-[[ownership_constructs(first_class, 1)]] int open_custom(mutex_t *);
-[[ownership_requires_handle(second_class, 1)]] int inspect_custom(mutex_t *);
+int pthread_mutex_init(mutex_t *construct(mutex) static_handle(mutex),
+                       const void *);
+int pthread_mutex_destroy(mutex_t *destroy(mutex) static_handle(mutex));
+int pthread_mutex_lock(mutex_t *handle(mutex) static_handle(mutex));
+int pthread_rwlock_destroy(rwlock_t *destroy(rwlock) static_handle(rwlock));
+int sem_init(semaphore_t *construct(semaphore), int, unsigned);
+int sem_destroy(semaphore_t *destroy(semaphore));
+int sem_post(semaphore_t *handle(semaphore));
+int open_custom(mutex_t *construct(first_class));
+int inspect_custom(mutex_t *handle(second_class));
 
 void use_uninitialized(void) {
   mutex_t mutex;
@@ -62,7 +60,7 @@ void use_after_destroy(void) {
 
 void destroy_uninitialized(void) {
   rwlock_t rwlock;
-  pthread_rwlock_destroy(&rwlock); /* ownership-expect: construct-uninitialized */
+  pthread_rwlock_destroy(&rwlock); /* ownership-expect: uninitialized */
 }
 
 void mismatched_ownership_class(void) {
