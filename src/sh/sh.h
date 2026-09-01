@@ -71,6 +71,10 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <ownership.h>
+
+tokdef child_environment_allocated
+	dynamic_storage;
 
 /* ---- words --------------------------------------------------------------
  * `text` is the raw source text of the word: quotes and backslashes are

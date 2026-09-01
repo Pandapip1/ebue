@@ -267,7 +267,8 @@ int __sh_last_status(void)
 	return sh_last_status;
 }
 
-static void free_strv(char **v, size_t n)
+static void free_strv(
+	char **v consume(child_environment_allocated), size_t n)
 {
 	size_t i;
 	if (!v) return;
@@ -380,8 +381,10 @@ static int env_set(char ***vp, size_t *n, size_t *cap, char *entry, size_t namel
  * is about the global `environ` this loop walks, not about either
  * parameter -- the same class of residual as split_assignment()'s
  * we.we_wordv[0] above. */
+withtok(child_environment_allocated)
 static char **build_child_envp(const struct sh_word *assigns, size_t *out_n)
     __attribute__((nonnull(2)));
+withtok(child_environment_allocated)
 static char **build_child_envp(const struct sh_word *assigns, size_t *out_n)
 {
 	size_t n = 0, cap, i;
