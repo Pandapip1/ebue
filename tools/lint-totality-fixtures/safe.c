@@ -107,6 +107,20 @@ unsigned radix_countdown(unsigned n)
 	return n;
 }
 
+unsigned radix_countdown_above_one(unsigned n)
+{
+	while (n > 1)
+		n /= 10;
+	return n;
+}
+
+unsigned radix_countdown_at_least_two(unsigned n)
+{
+	while (2 <= n)
+		n /= 10;
+	return n;
+}
+
 unsigned assigned_radix_countdown(unsigned n)
 {
 	while (n)

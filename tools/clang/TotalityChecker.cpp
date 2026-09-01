@@ -1169,8 +1169,35 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return maximumFitsRank(ObjectExtentMaximum, Rank.Variable, true);
   }
 
-  static bool rankNonzeroWhen(const Expr *Condition, const Progress &Rank,
-                              bool Truth) {
+  bool comparisonExcludesZero(BinaryOperatorKind Opcode,
+                              const Expr *RankExpression,
+                              const Expr *Bound, bool Truth) const {
+    if (!BinaryOperator::isComparisonOp(Opcode) ||
+        !RankExpression->getType()->isIntegerType())
+      return false;
+    Expr::EvalResult BoundValue;
+    if (!Bound->EvaluateAsInt(BoundValue, Context))
+      return false;
+    llvm::APSInt Zero(
+        llvm::APInt::getZero(Context.getIntWidth(RankExpression->getType())),
+        RankExpression->getType()->isUnsignedIntegerOrEnumerationType());
+    int Comparison = llvm::APSInt::compareValues(Zero,
+                                                  BoundValue.Val.getInt());
+    bool ZeroSatisfies;
+    switch (Opcode) {
+    case BO_EQ: ZeroSatisfies = Comparison == 0; break;
+    case BO_NE: ZeroSatisfies = Comparison != 0; break;
+    case BO_LT: ZeroSatisfies = Comparison < 0; break;
+    case BO_LE: ZeroSatisfies = Comparison <= 0; break;
+    case BO_GT: ZeroSatisfies = Comparison > 0; break;
+    case BO_GE: ZeroSatisfies = Comparison >= 0; break;
+    default: return false;
+    }
+    return ZeroSatisfies != Truth;
+  }
+
+  bool rankNonzeroWhen(const Expr *Condition, const Progress &Rank,
+                       bool Truth) const {
     Condition = ignore(Condition);
     if (!Condition)
       return false;
@@ -1197,28 +1224,16 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return rankNonzeroWhen(Binary->getLHS(), Rank, false) ||
              rankNonzeroWhen(Binary->getRHS(), Rank, false);
     }
-    bool RankLeft =
-        rankAccess(Binary->getLHS(), Rank) && zeroInteger(Binary->getRHS());
-    bool RankRight =
-        rankAccess(Binary->getRHS(), Rank) && zeroInteger(Binary->getLHS());
+    bool RankLeft = rankAccess(Binary->getLHS(), Rank);
+    bool RankRight = rankAccess(Binary->getRHS(), Rank);
     if (!RankLeft && !RankRight)
       return false;
-    switch (Binary->getOpcode()) {
-    case BO_NE:
-      return Truth;
-    case BO_EQ:
-      return !Truth;
-    case BO_GT:
-      return RankLeft && Truth;
-    case BO_LT:
-      return RankRight && Truth;
-    case BO_LE:
-      return RankLeft && !Truth;
-    case BO_GE:
-      return RankRight && !Truth;
-    default:
-      return false;
-    }
+    if (RankLeft)
+      return comparisonExcludesZero(Binary->getOpcode(), Binary->getLHS(),
+                                    Binary->getRHS(), Truth);
+    return comparisonExcludesZero(
+        BinaryOperator::reverseComparisonOp(Binary->getOpcode()),
+        Binary->getRHS(), Binary->getLHS(), Truth);
   }
 
   static bool exitsBeforeBackedge(const Stmt *Statement) {
@@ -1229,8 +1244,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
               BackWithoutCall | BackWithCall));
   }
 
-  static bool bodyHasDominatingNonzeroGuard(const Stmt *Body,
-                                            const Progress &Rank) {
+  bool bodyHasDominatingNonzeroGuard(const Stmt *Body,
+                                     const Progress &Rank) const {
     const auto *Compound = dyn_cast_or_null<CompoundStmt>(Body);
     if (!Compound)
       return false;

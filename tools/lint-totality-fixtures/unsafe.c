@@ -110,6 +110,22 @@ unsigned division_by_one_does_not_progress(unsigned n)
 	return n;
 }
 
+unsigned division_guard_admits_zero(unsigned n)
+{
+	while (n < 2) { /* totality-expect */
+		n /= 2;
+	}
+	return n;
+}
+
+unsigned division_disequality_admits_zero(unsigned n)
+{
+	while (n != 1) { /* totality-expect */
+		n /= 2;
+	}
+	return n;
+}
+
 unsigned nonunit_countdown_can_wrap(unsigned n)
 {
 	while (n) { /* totality-expect */
