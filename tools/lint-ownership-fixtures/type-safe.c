@@ -1,34 +1,36 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+
+#include "../../include/ownership.h"
+
+token heap_free;
+token shared_access l_unlimited implicit_drop;
+#undef token
+
 struct owner_box {
-	void *value [[ownership_holds_handle(heap), ownership_holds_token(heap_free)]];
+	void *value withhandle(heap) withtok(heap_free);
 };
 
-[[ownership_holds_handle(heap), ownership_holds_token(heap_free)]]
+withhandle(heap) withtok(heap_free)
 void *make_owner(void);
-void inspect_owner(void *value [[ownership_holds_handle(heap),
-                                ownership_holds_token(heap_free)]]);
+void inspect_owner(void *value withhandle(heap) withtok(heap_free));
 
-[[ownership_holds_handle(shared),
-  ownership_holds_duplicable_token(shared_access)]]
+withhandle(shared) withtok(shared_access)
 void *make_shared(void);
 void inspect_shared(void *value
-    [[ownership_holds_handle(shared),
-      ownership_holds_duplicable_token(shared_access)]]);
+    withhandle(shared) withtok(shared_access));
 
-[[ownership_holds_handle(heap), ownership_holds_token(heap_free)]]
+withhandle(heap) withtok(heap_free)
 void *forward_owner(void)
 {
-	void *owner [[ownership_holds_handle(heap),
-	             ownership_holds_token(heap_free)]] = make_owner();
+	void *owner withhandle(heap) withtok(heap_free) = make_owner();
 	return owner;
 }
 
 void store_and_pass_owner(void)
 {
-	void *owner [[ownership_holds_handle(heap),
-	             ownership_holds_token(heap_free)]] = make_owner();
+	void *owner withhandle(heap) withtok(heap_free) = make_owner();
 	struct owner_box box;
 	box.value = owner;
 	inspect_owner(box.value);
@@ -36,17 +38,14 @@ void store_and_pass_owner(void)
 
 void move_linear_token(void)
 {
-	void *first [[ownership_holds_handle(heap),
-	             ownership_holds_token(heap_free)]] = make_owner();
-	void *second [[ownership_holds_handle(heap),
-	              ownership_holds_token(heap_free)]] = first;
+	void *first withhandle(heap) withtok(heap_free) = make_owner();
+	void *second withhandle(heap) withtok(heap_free) = first;
 	inspect_owner(second);
 }
 
 void borrow_without_moving_linear_token(void)
 {
-	void *owner [[ownership_holds_handle(heap),
-	             ownership_holds_token(heap_free)]] = make_owner();
+	void *owner withhandle(heap) withtok(heap_free) = make_owner();
 	void *borrowed = owner;
 	(void)borrowed;
 	inspect_owner(owner);
@@ -54,10 +53,8 @@ void borrow_without_moving_linear_token(void)
 
 void copy_duplicable_token(void)
 {
-	void *first [[ownership_holds_handle(shared),
-	             ownership_holds_duplicable_token(shared_access)]] = make_shared();
-	void *second [[ownership_holds_handle(shared),
-	              ownership_holds_duplicable_token(shared_access)]] = first;
+	void *first withhandle(shared) withtok(shared_access) = make_shared();
+	void *second withhandle(shared) withtok(shared_access) = first;
 	inspect_shared(first);
 	inspect_shared(second);
 }

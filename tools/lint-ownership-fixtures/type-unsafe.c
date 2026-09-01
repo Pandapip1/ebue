@@ -1,21 +1,26 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+
+#include "../../include/ownership.h"
+
+token heap_free;
+token shared_access l_unlimited implicit_drop;
+#undef token
+
 struct owner_box {
-	void *value [[ownership_holds_handle(heap), ownership_holds_token(heap_free)]];
+	void *value withhandle(heap) withtok(heap_free);
 };
 
-[[ownership_holds_handle(heap), ownership_holds_token(heap_free)]]
+withhandle(heap) withtok(heap_free)
 void *make_owner(void);
 void *make_plain(void);
-void inspect_owner(void *value [[ownership_holds_handle(heap),
-                                ownership_holds_token(heap_free)]]);
+void inspect_owner(void *value withhandle(heap) withtok(heap_free));
 
 void manufacture_token(void)
 {
 	void *owner /* ownership-expect: type-manufacture */
-	    [[ownership_holds_handle(heap),
-	      ownership_holds_token(heap_free)]] = make_plain();
+	    withhandle(heap) withtok(heap_free) = make_plain();
 	(void)owner;
 }
 
@@ -38,7 +43,7 @@ void pass_wrong_type(void)
 	inspect_owner(plain); /* ownership-expect: type-parameter */
 }
 
-[[ownership_holds_handle(heap), ownership_holds_token(heap_free)]]
+withhandle(heap) withtok(heap_free)
 void *return_wrong_type(void)
 {
 	return make_plain(); /* ownership-expect: type-return */
@@ -46,23 +51,18 @@ void *return_wrong_type(void)
 
 void use_after_linear_move(void)
 {
-	void *first [[ownership_holds_handle(heap),
-	             ownership_holds_token(heap_free)]] = make_owner();
-	void *second [[ownership_holds_handle(heap),
-	              ownership_holds_token(heap_free)]] = first;
+	void *first withhandle(heap) withtok(heap_free) = make_owner();
+	void *second withhandle(heap) withtok(heap_free) = first;
 	inspect_owner(first); /* ownership-expect: token-moved */
-	(void)second;
+	inspect_owner(second);
 }
 
 void move_linear_token_twice(void)
 {
-	void *first [[ownership_holds_handle(heap),
-	             ownership_holds_token(heap_free)]] = make_owner();
-	void *second [[ownership_holds_handle(heap),
-	              ownership_holds_token(heap_free)]] = first;
+	void *first withhandle(heap) withtok(heap_free) = make_owner();
+	void *second withhandle(heap) withtok(heap_free) = first;
 	void *third /* ownership-expect: token-moved */
-	    [[ownership_holds_handle(heap),
-	      ownership_holds_token(heap_free)]] = first;
-	(void)second;
+	    withhandle(heap) withtok(heap_free) = first;
+	inspect_owner(second);
 	(void)third;
 }
