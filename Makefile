@@ -502,8 +502,42 @@ TEST_PROFILE ?= capability.symlink=no capability.console=no capability.overcommi
 # alternative is remembering to delete the target by hand every time.
 TEST_DEPFLAGS = -MMD -MF $(@:.exe=.d)
 
+# -lntdll is an NT-only import library (see ALL_LIBS' own PLATFORM=nt/
+# else split above -- nothing ever builds a PLATFORM=linux lib/
+# libntdll.a). Every existing consumer of the pattern rule below was,
+# until test/posix-dl-linux.c, always built under PLATFORM=nt and run
+# under Wine (`check`'s and `test-exes`' own TEST_EXES, both driven by
+# TEST_SRCS -- see the PLATFORM=nt-only branch of `all`, above, for the
+# same asymmetry), so this rule's own hardcoded -lntdll was never
+# exercised on any other platform before now. TESTPROG_LIBS threads
+# that same PLATFORM split through this one rule, minimally, rather
+# than hardcoding an NT-only import library into a pattern rule a
+# Linux-only test now also needs to match cleanly (an explicit unknown-
+# library link error, not a silent skip, is exactly what would happen
+# without this: `make obj/test/posix-dl-linux.exe` under PLATFORM=linux
+# would fail with "cannot find -lntdll" otherwise).
+ifeq ($(PLATFORM),nt)
+TESTPROG_LIBS = -lc -lntdll
+TESTPROG_CRT = lib/crt1.o
+else
+TESTPROG_LIBS = -lc
+# PLATFORM=linux's own crt is two objects, not one: crt/linux/$(ARCH)/
+# start.S's real _start (sets up the stack, finds argc/argv/envp/auxv,
+# calls __linux_start_main) is a SEPARATE object from crt/linux/crt1.c's
+# __linux_start_main itself (see that file's own header comment) --
+# unlike NT's crt/crt1.c, which is both halves in one object. Omitting
+# lib/start.o here is exactly the failure this comment exists to head
+# off: a link that "succeeds" with `ld: warning: cannot find entry
+# symbol _start; defaulting to 0x...` and produces a binary that
+# segfaults or runs garbage the instant it's executed, not a build
+# error -- caught here, not by inspection, the first time this pattern
+# rule was ever actually exercised under PLATFORM=linux (test/posix-dl-
+# linux.c). Matches tools/linux-build-dlfcn.sh's own link line exactly.
+TESTPROG_CRT = lib/start.o lib/crt1.o
+endif
+
 obj/test/%.exe: $(srcdir)/test/%.c $(ALL_LIBS) | obj/test
-	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) $(TEST_DEPFLAGS) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ lib/crt1.o $< -Llib -lc -lntdll
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) $(TEST_DEPFLAGS) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ $(TESTPROG_CRT) $< -Llib $(TESTPROG_LIBS)
 
 # test/rpath.c delay-loads this DLL from its own directory ($ORIGIN)
 # to exercise the real resolution path -- it links against nothing of
@@ -675,6 +709,62 @@ TEST_EXES += obj/test/delayall.exe
 # TEST_RUN is a recursively-expanded (`=`) variable, so it re-reads
 # TEST_EXES -- now including delayall.exe -- every time it is expanded;
 # no separate `+=` needed here, and one would double it up.
+endif
+
+# test/posix-dl-linux.c: real Linux dlopen() coverage against src/dlfcn/
+# linux/plat_dlfcn.c (see that test's own header comment for why it is a
+# separate file from test/posix-dl.c's NT-only clause audit). Excluded
+# from the generic TEST_SRCS glob above unconditionally -- its own
+# dlopen() calls name real Linux .so fixtures this build only knows how
+# to produce, and only means anything at all, on PLATFORM=linux; an NT/
+# Wine build would either fail to build the fixtures below (wrong
+# target triple for -shared -fPIC ELF output) or, if it somehow did,
+# have nothing meaningful to test against (plat_dlfcn.c has an entirely
+# separate NT sibling, src/dlfcn/nt/plat_dlfcn.c, with its own already-
+# covered feature set) -- so this test is re-added, and its fixture .so
+# build rules only defined at all, under PLATFORM=linux, mirroring
+# test/delayall.c's own DELAY_ALL-gated inclusion just above.
+TEST_SRCS := $(filter-out $(srcdir)/test/posix-dl-linux.c,$(TEST_SRCS))
+ifeq ($(PLATFORM),linux)
+TEST_SRCS += $(srcdir)/test/posix-dl-linux.c
+TEST_EXES := $(patsubst $(srcdir)/test/%.c,obj/test/%.exe,$(TEST_SRCS))
+# TEST_RUN is recursively expanded (see delayall.exe's own comment
+# above) so it picks this up too with no separate `+=` needed.
+
+# Every dlfix_*.so fixture below is built the same way test/rpath-
+# plugin.dll is -- see that rule's own comment for the atomic temp-
+# then-rename reasoning, which applies identically here -- except with
+# real ELF-.so-shaped flags (-fPIC -nostdlib -Wl,--hash-style=sysv: see
+# tools/linux-build-dlfcn.sh's own identical build line and comment;
+# plat_dlfcn.c's own banner explains why DT_HASH, not GNU-hash-only,
+# is required) in place of rpath-plugin.dll's bare `-shared`. Built
+# directly with $(CC) -- for PLATFORM=linux this IS a native Linux
+# compiler already (the same one the rest of this build uses to
+# produce lib/libc.a/lib/crt1.o), not a second cross toolchain. Kept in
+# one shared test/dl-linux-fixtures/ directory rather than test/rpath-
+# plugin.dll's one-subdirectory-per-fixture convention: four small,
+# related fixtures for one test file, not four unrelated ones each
+# needing their own naming scheme -- still out of the test/*.c glob
+# entirely either way, which is the property that convention actually
+# protects.
+obj/test/dlfix_dep.so: $(srcdir)/test/dl-linux-fixtures/dlfix_dep.c | obj/test
+	$(CC) -shared -fPIC -nostdlib -Wl,--hash-style=sysv -Wl,-soname,dlfix_dep.so -o $@.tmp $< && mv -f $@.tmp $@
+
+# Linked directly against dlfix_dep.so (not just compiled alongside
+# it): that is what makes the linker resolve dep_answer() against it
+# and emit a real DT_NEEDED entry naming it, rather than leaving
+# dep_answer() a plain unresolved symbol -- see dlfix_needs.c's own
+# comment.
+obj/test/dlfix_needs.so: $(srcdir)/test/dl-linux-fixtures/dlfix_needs.c obj/test/dlfix_dep.so | obj/test
+	$(CC) -shared -fPIC -nostdlib -Wl,--hash-style=sysv -Wl,-soname,dlfix_needs.so -o $@.tmp $< obj/test/dlfix_dep.so && mv -f $@.tmp $@
+
+obj/test/dlfix_ctor.so: $(srcdir)/test/dl-linux-fixtures/dlfix_ctor.c | obj/test
+	$(CC) -shared -fPIC -nostdlib -Wl,--hash-style=sysv -Wl,-soname,dlfix_ctor.so -o $@.tmp $< && mv -f $@.tmp $@
+
+obj/test/dlfix_tls.so: $(srcdir)/test/dl-linux-fixtures/dlfix_tls.c | obj/test
+	$(CC) -shared -fPIC -nostdlib -Wl,--hash-style=sysv -Wl,-soname,dlfix_tls.so -o $@.tmp $< && mv -f $@.tmp $@
+
+obj/test/posix-dl-linux.exe: obj/test/dlfix_dep.so obj/test/dlfix_needs.so obj/test/dlfix_ctor.so obj/test/dlfix_tls.so
 endif
 
 obj/test:

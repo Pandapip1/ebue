@@ -288,38 +288,56 @@ static struct elf_phdr *find_tls_phdr(long *auxv)
 #if defined(__aarch64__)
 /* aarch64's TLS layout (the ARM AAELF64 ABI's "variant I"): the thread
  * pointer (TPIDR_EL0) addresses a fixed 2-pointer TCB header (dtv slot,
- * reserved -- both unused here: this program is a single, statically
- * linked TLS module, so there is no dynamic module array to point a
- * dtv at), and the module's own TLS data begins immediately after that
- * header, at tp + 16, rounded up to the segment's own alignment. A
+ * reserved), and the module's own TLS data begins immediately after
+ * that header, at tp + 16, rounded up to the segment's own alignment. A
  * `__thread`-qualified variable's address is `tp + 16 + <link-time
  * offset within the TLS segment>` -- the compiler and linker already
  * computed that offset into every access (R_AARCH64_TLSLE_* Local
  * Exec relocations, the only kind a non-PIE, non-dlopen'd, single-
- * module binary like this one ever needs); this function's only job is
+ * module binary like this one ever needs); this function's own job is
  * making sure `tp + 16` really does land on a correctly-sized,
  * correctly-initialized copy of PT_TLS's data. Modeled on musl's own
  * arch/aarch64 static-TLS bootstrap, independently re-derived here
  * against the AAELF64 spec since this project links against neither
  * musl nor glibc's crt.
- */
+ *
+ * The dtv slot is no longer permanently unused: src/dlfcn/linux/
+ * plat_dlfcn.c's own "TLS / per-library thread descriptors" banner
+ * documents a real per-dlopen()'d-object TLS design built on top of it
+ * -- a small integer "TLS module id" indexes this array to reach that
+ * module's own miniature TCB-shaped TLS block, with module 1 reserved
+ * for the main image's own TLS (needing no separate allocation: this
+ * function's own `tp` already IS shaped exactly like a per-module TLS
+ * block, so dtv[1] = tp below is simply correct, not a placeholder).
+ * See tls_dtv_ensure_capacity() in that file for how the array grows
+ * past its initial capacity here.
+ *
+ * This function now ALWAYS installs a TCB (with its own real DTV),
+ * even for a program with no PT_TLS segment of its own at all: a later
+ * dlopen() of a PT_TLS-bearing object still needs a real TPIDR_EL0/DTV
+ * to register itself into, and this is the only place that ever runs
+ * before any such dlopen() could. `tls` being NULL just means an empty
+ * (zero-length) main-image TLS block -- not "skip TCB setup entirely"
+ * the way it used to. Every existing single-static-module program (the
+ * overwhelmingly common case in practice: src/internal/errno.c's own
+ * `__thread` errno alone gives almost every real ntlibc program a
+ * nonempty PT_TLS segment) keeps working exactly as before -- this
+ * change only ever ADDS a working TPIDR_EL0/DTV to the one narrow case
+ * (no PT_TLS at all) that previously left it unset. */
 static void linux_setup_tls(long *auxv)
 {
 	struct elf_phdr *tls = find_tls_phdr(auxv);
+	unsigned long tls_vaddr = tls ? tls->p_vaddr : 0;
+	unsigned long tls_filesz = tls ? tls->p_filesz : 0;
+	unsigned long tls_memsz = tls ? tls->p_memsz : 0;
 	unsigned long tcb_size, data_align, alloc_size;
-	long mm;
+	long mm, dtv_mm;
 	unsigned char *base, *data;
+	void **dtv;
 
-	/* No PT_TLS segment at all (e.g. a test program with no __thread
-	 * variables reachable from its own translation units) is not an
-	 * error -- TPIDR_EL0 simply stays whatever it was on entry (0 on a
-	 * fresh Linux thread), and nothing this program actually runs will
-	 * ever dereference it. */
-	if (!tls) return;
-
-	data_align = tls->p_align > 16 ? tls->p_align : 16;
+	data_align = (tls && tls->p_align > 16) ? tls->p_align : 16;
 	tcb_size = 16; /* dtv + reserved, fixed by the ABI */
-	alloc_size = tcb_size + tls->p_memsz + data_align; /* slack for alignment */
+	alloc_size = tcb_size + tls_memsz + data_align; /* slack for alignment */
 
 	mm = raw_syscall(SYS_mmap, 0, (long)alloc_size, PROT_READ | PROT_WRITE,
 	                 MAP_PRIVATE | MAP_ANONYMOUS, -1L, 0L);
@@ -329,12 +347,38 @@ static void linux_setup_tls(long *auxv)
 	data = base + tcb_size;
 	data = (unsigned char *)(((unsigned long)data + data_align - 1) & ~(data_align - 1));
 
-	memcpy(data, (void *)(unsigned long)tls->p_vaddr, tls->p_filesz);
-	memset(data + tls->p_filesz, 0, tls->p_memsz - tls->p_filesz);
+	if (tls_filesz) memcpy(data, (void *)tls_vaddr, tls_filesz);
+	if (tls_memsz > tls_filesz) memset(data + tls_filesz, 0, tls_memsz - tls_filesz);
+
+	/* The DTV array itself -- see this function's own updated banner
+	 * above and src/dlfcn/linux/plat_dlfcn.c's TLS_DTV_INITIAL_CAPACITY
+	 * (which MUST equal the 8 below: a numeric contract duplicated
+	 * across the two files rather than shared through a header, the
+	 * same discipline this file already applies to its own SYS_* raw
+	 * syscall numbers). Allocated with the same bootstrap-safe raw
+	 * mmap() this function already uses for the TCB itself -- malloc()
+	 * is not yet safe this early (__fd_init()/allocator init have not
+	 * run -- see this file's own top banner). Capacity 8 is a starting
+	 * point, not a ceiling: plat_dlfcn.c's own tls_dtv_ensure_capacity()
+	 * reallocates (via malloc(), always safe by the time any dlopen()
+	 * can run) and repoints tp[0] whenever a dlopen() needs a module id
+	 * this initial array cannot hold. */
+#define TLS_DTV_INITIAL_CAPACITY 8
+	dtv_mm = raw_syscall(SYS_mmap, 0, (long)(TLS_DTV_INITIAL_CAPACITY * sizeof(void *)),
+	                     PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1L, 0L);
+	if ((unsigned long)dtv_mm >= (unsigned long)-4095L) return; /* leave TPIDR_EL0 unset entirely --
+	                                                              * see this function's own banner:
+	                                                              * the plain, non-dlopen path never
+	                                                              * dereferences dtv at all, so this
+	                                                              * is no worse than before this
+	                                                              * change for that path. */
+	dtv = (void **)dtv_mm;
+	memset(dtv, 0, TLS_DTV_INITIAL_CAPACITY * sizeof(void *));
 
 	{
 		unsigned char *tp = data - tcb_size;
-		((void **)tp)[0] = 0; /* dtv -- unused, single static module */
+		dtv[1] = tp; /* module 1 == the main image, see this function's own banner */
+		((void **)tp)[0] = dtv;
 		((void **)tp)[1] = 0; /* reserved */
 		__asm__ volatile("msr tpidr_el0, %0" : : "r"(tp) : "memory");
 	}
@@ -366,7 +410,25 @@ static void linux_setup_tls(long *auxv)
  * install a full GDT-style segment descriptor via set_thread_area(2)
  * and then load %gs with the resulting selector -- so THAT half is
  * further arch-guarded below, while the TCB layout/allocation logic
- * above it is shared between the two, both being variant II. */
+ * above it is shared between the two, both being variant II.
+ *
+ * NOT extended with a DTV the way aarch64's sibling above now is --
+ * src/dlfcn/linux/plat_dlfcn.c's own dlopen()-time per-object TLS
+ * support (module-id allocation, the DTV-indexing __tls_get_addr/
+ * TLSDESC resolver) is aarch64-only for this pass, and explicitly says
+ * so at the one place x86_64 PT_TLS is actually refused (that file's
+ * load_object()). The reason is real, not just "ran out of time": this
+ * TCB is variant II (self-pointer-headed, TLS data at NEGATIVE tp
+ * offsets), structurally different from variant I's dtv-headed layout
+ * the aarch64 design above was built against -- adding a dtv slot HERE
+ * would need it at a different, non-ABI-mandated position (variant II's
+ * own psABI does not reserve a dtv word the way variant I's TCB header
+ * does), and the General-Dynamic access-and-resolver shape x86_64 code
+ * would use (a real `__tls_get_addr(tls_index*)` call, not a TLSDESC
+ * sequence -- x86_64's own default TLS model differs from aarch64's
+ * TLSDESC-only reality, see plat_dlfcn.c's own R_AARCH64_TLSDESC
+ * comment) is a second, separately-derived resolver this pass did not
+ * build. Concretely deferred, not silently assumed to carry over. */
 static void linux_setup_tls(long *auxv)
 {
 	struct elf_phdr *tls = find_tls_phdr(auxv);
@@ -375,7 +437,12 @@ static void linux_setup_tls(long *auxv)
 	unsigned char *base, *data, *tp;
 
 	/* No PT_TLS segment: see aarch64's identical comment above -- the
-	 * thread pointer register simply stays whatever it was on entry. */
+	 * thread pointer register simply stays whatever it was on entry.
+	 * Unlike aarch64's sibling above, this is still fine to leave as an
+	 * early return: nothing in this pass ever needs x86_64/i386's
+	 * TPIDR_EL0-equivalent (FS_BASE/%gs) to be set up in the "no TLS at
+	 * all" case, since per-object TLS is not implemented on this arch
+	 * (see this function's own banner just above). */
 	if (!tls) return;
 
 	/* data_align MUST be the segment's own true p_align here, NOT
