@@ -191,6 +191,7 @@ int pthread_barrier_init(pthread_barrier_t *__restrict barrier construct(pthread
 		attributes = const_barrierattr_data(attr);
 		if (attributes->magic != BARATTR_MAGIC) return EINVAL;
 	}
+	__ownership_writable_span(barrier, sizeof *barrier);
 	memset(barrier, 0, sizeof *barrier);
 	data = barrier_data(barrier);
 	data->magic = BARRIER_MAGIC;
@@ -284,6 +285,7 @@ int pthread_barrierattr_init(pthread_barrierattr_t *attr construct(pthread_barri
 {
 	struct barrierattr_data *data;
 	if (!attr) return EINVAL;
+	__ownership_writable_span(attr, sizeof *attr);
 	memset(attr, 0, sizeof *attr);
 	data = barrierattr_data(attr);
 	data->magic = BARATTR_MAGIC;
@@ -295,6 +297,7 @@ int pthread_barrierattr_init(pthread_barrierattr_t *attr construct(pthread_barri
 int pthread_barrierattr_destroy(pthread_barrierattr_t *attr destroy(pthread_barrierattr))
 {
 	if (!attr || barrierattr_data(attr)->magic != BARATTR_MAGIC) return EINVAL;
+	__ownership_writable_span(attr, sizeof *attr);
 	memset(attr, 0, sizeof *attr);
 	return 0;
 }
