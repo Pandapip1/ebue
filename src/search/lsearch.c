@@ -28,7 +28,7 @@ void *lsearch(const void *key, void *base, size_t *nelp, size_t width,
 	if (found) return found;
 
 	slot = (char *)base + *nelp * width;
-	memcpy(slot, key, width);
+	memmove(slot, key, width);
 	(*nelp)++;
 	return slot;
 }
