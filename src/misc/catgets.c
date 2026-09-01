@@ -295,6 +295,7 @@ nl_catd catopen(const char *name, int oflag)
 	static const char dflt[] = "%N";
 	char buf[PATH_MAX];
 	const char *path, *lang, *p, *z;
+	size_t components_left;
 	nl_catd cd;
 
 	if (!name || !*name) { errno = ENOENT; return (nl_catd)-1; }
@@ -326,9 +327,14 @@ nl_catd catopen(const char *name, int oflag)
 	path = getenv("NLSPATH");
 	if (!path || !*path) path = "%N:%N.cat";
 
-	for (p = path; ; p = z + 1) {
+	/* A path of n bytes has at most n+1 colon-delimited templates,
+	 * including leading, adjacent, and trailing empty components. */
+	components_left = strlen(path) + 1;
+	p = path;
+	while (components_left > 0) {
 		size_t n;
 
+		components_left--;
 		z = strchr(p, ':');
 		if (!z) z = p + strlen(p);
 
@@ -342,6 +348,7 @@ nl_catd catopen(const char *name, int oflag)
 			if (cd != (nl_catd)-1) return cd;
 		}
 		if (!*z) break;
+		p = z + 1;
 	}
 
 	errno = ENOENT;
