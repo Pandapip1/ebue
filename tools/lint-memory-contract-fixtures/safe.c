@@ -217,6 +217,13 @@ void consume_strlen_bounded_prefix(const char *s, size_t requested)
 	consume_bytes(s, requested);
 }
 
+void consume_conditional_string_prefix(const char *s, size_t requested)
+{
+	size_t available = strlen(s);
+	size_t selected = requested < available ? requested : available;
+	consume_bytes(s, selected);
+}
+
 void fill_strict_capacity(
 	char *buffer withtok(fixture_writable_span(capacity)),
 	size_t capacity, size_t used)
