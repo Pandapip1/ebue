@@ -135,6 +135,7 @@ int __util_touch_main(int argc, char **argv)
 
 	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
 		const char *a = argv[i];
+		size_t option_len;
 		if (!strcmp(a, "--")) { i++; break; }
 		if (!strcmp(a, "-d")) {
 			__util_diagf("touch: -d: not implemented -- see src/util/touch.c\n");
@@ -150,7 +151,8 @@ int __util_touch_main(int argc, char **argv)
 			tspec = argv[++i];
 			continue;
 		}
-		if (a[1] != 0 && strspn(a + 1, "acm") == strlen(a + 1)) {
+		option_len = strspn(a + 1, "acm");
+		if (a[1] != 0 && a[option_len + 1] == 0) {
 			if (strchr(a, 'a')) opt_a = 1;
 			if (strchr(a, 'c')) opt_c = 1;
 			if (strchr(a, 'm')) opt_m = 1;
