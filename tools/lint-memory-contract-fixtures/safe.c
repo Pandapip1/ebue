@@ -202,6 +202,20 @@ void consume_guarded_strlen_difference(const char *s, const char *tail)
 	consume_bytes(s, whole - removed);
 }
 
+void consume_strlen_bounded_prefix(const char *s, size_t requested)
+{
+	size_t available = strlen(s);
+	if (requested > available) return;
+	consume_bytes(s, requested);
+}
+
+void fill_strict_capacity(
+	char *buffer withtok(fixture_writable_span(capacity)),
+	size_t capacity, size_t used)
+{
+	if (used < capacity) memset(buffer, 0, used + 1);
+}
+
 /* xstrdup's own shape, duplicated across src/glob/glob.c,
  * src/sh/execute.c, src/sh/parse.c, and src/wordexp/wordexp.c (and
  * src/string/strdup.c itself): the allocation and the memcpy length are

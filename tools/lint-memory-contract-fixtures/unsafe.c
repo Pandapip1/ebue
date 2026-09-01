@@ -212,3 +212,17 @@ void unchecked_strlen_difference(const char *s, const char *tail)
 	size_t removed = strlen(tail);
 	consume_bytes(s, whole - removed); /* memory-contract-expect */
 }
+
+void consume_unbounded_prefix(const char *s, size_t requested)
+{
+	(void)strlen(s);
+	consume_bytes(s, requested); /* memory-contract-expect */
+}
+
+void overfill_nonstrict_capacity(
+	char *buffer withtok(fixture_writable_span(capacity)),
+	size_t capacity, size_t used)
+{
+	if (used <= capacity)
+		memset(buffer, 0, used + 1); /* memory-contract-expect */
+}
