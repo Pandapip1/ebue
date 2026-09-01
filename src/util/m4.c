@@ -886,7 +886,8 @@ static int32_t ev_lor(struct m4_eval *e)
 	}
 }
 
-static char *format_radix(int32_t value, int radix, int width)
+static char *format_radix(int32_t value, int radix __arith_range(2, 36),
+	int width)
 {
 	char digits[40];
 	int n = 0, i, neg = value < 0;

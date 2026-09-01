@@ -17,9 +17,10 @@ FIXTURES = ROOT / "tools/lint-arithmetic-ub-fixtures"
 DIAGNOSTIC = re.compile(
     r"^(.*?):(\d+):(\d+): warning: "
     r"(divisor is not proven nonzero|shift count is not proven in range \[0, \d+\)|"
-    r"signed arithmetic result is not proven representable); "
+    r"signed arithmetic result is not proven representable|"
+    r"arithmetic contract is not proven: .*); "
     r"origin '(.*)'; context '(.*)'; expression '(.*)'; site '(.*)' "
-    r"\[ntlibc\.(Divisor|ShiftCount|SignedArithmetic)\]$"
+    r"\[ntlibc\.(Divisor|ShiftCount|SignedArithmetic|ArithmeticContract)\]$"
 )
 
 
@@ -88,16 +89,19 @@ def main() -> int:
     for finding in sorted(findings.values()):
         obligation = ("nonzero divisor" if finding.checker == "Divisor"
                       else "shift count range" if finding.checker == "ShiftCount"
+                      else "declared arithmetic contract" if finding.checker == "ArithmeticContract"
                       else "signed arithmetic range")
         print(f"{finding.path}:{finding.line}: unproved {obligation} in "
               f"{finding.context}: {finding.expression}")
     if findings:
         divisors = sum(finding.checker == "Divisor" for finding in findings.values())
         shifts = sum(finding.checker == "ShiftCount" for finding in findings.values())
-        arithmetic = len(findings) - divisors - shifts
+        contracts = sum(finding.checker == "ArithmeticContract" for finding in findings.values())
+        arithmetic = len(findings) - divisors - shifts - contracts
         print(f"lint-arithmetic-ub: {divisors} unproved divisor(s), "
               f"{shifts} unproved shift count(s), "
-              f"{arithmetic} unproved signed arithmetic result(s)")
+              f"{arithmetic} unproved signed arithmetic result(s), "
+              f"{contracts} unproved arithmetic contract(s)")
         return 1
     print("lint-arithmetic-ub: no findings (fixtures passed)")
     return 0

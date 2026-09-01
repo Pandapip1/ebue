@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "clang/AST/Expr.h"
+#include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/AST/ASTTypeTraits.h"
+#include "clang/AST/ParentMapContext.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ConstraintManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
@@ -19,9 +23,13 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 using namespace clang;
 using namespace ento;
+
+REGISTER_MAP_WITH_PROGRAMSTATE(ArithmeticContractField,
+                               const StackFrameContext *, const MemRegion *)
 
 namespace {
 
@@ -177,6 +185,20 @@ public:
 
   static constexpr unsigned MaxSymbolDepth = 16;
 
+  static bool containsRemainder(SymbolRef Sym, unsigned Depth = 0) {
+    if (!Sym || Depth >= MaxSymbolDepth)
+      return false;
+    if (const auto *Expression = dyn_cast<SymIntExpr>(Sym))
+      return Expression->getOpcode() == BO_Rem;
+    if (const auto *Expression = dyn_cast<IntSymExpr>(Sym))
+      return Expression->getOpcode() == BO_Rem;
+    if (const auto *Expression = dyn_cast<SymSymExpr>(Sym))
+      return Expression->getOpcode() == BO_Rem;
+    if (const auto *Cast = dyn_cast<SymbolCast>(Sym))
+      return containsRemainder(Cast->getOperand(), Depth + 1);
+    return false;
+  }
+
   // expressionInterval() below already knows how to narrow `hash % n`,
   // `mask & bits`, and `value >> shift` past their operands' full type
   // range when it walks those operators inline in the source AST -- but
@@ -284,11 +306,26 @@ public:
       }
     } else if (const auto *SymExprB = dyn_cast<SymSymExpr>(Sym)) {
       BinaryOperator::Opcode Op = SymExprB->getOpcode();
-      if (Op == BO_Add || Op == BO_Sub || Op == BO_Mul) {
-        Interval Left = symbolInterval(SymExprB->getLHS(), State, C, Depth + 1);
-        Interval Right = symbolInterval(SymExprB->getRHS(), State, C, Depth + 1);
-        Interval Result = combineBinary(Op, Left, Right);
-        return intersectInterval(Bound, Result);
+      if (Op == BO_Rem || Op == BO_Add || Op == BO_Sub || Op == BO_Mul) {
+        Interval Left =
+            symbolInterval(SymExprB->getLHS(), State, C, Depth + 1);
+        Interval Right =
+            symbolInterval(SymExprB->getRHS(), State, C, Depth + 1);
+        if (Op == BO_Rem && Right.Min > Zero) {
+          llvm::APSInt Magnitude = Right.Max - One;
+          if (ResultUnsigned)
+            return intersectInterval(Bound, Interval{Zero, Magnitude});
+          if (Left.Min >= Zero)
+            return intersectInterval(Bound, Interval{Zero, Magnitude});
+          if (Left.Max <= Zero)
+            return intersectInterval(Bound, Interval{-Magnitude, Zero});
+          return intersectInterval(Bound,
+                                   Interval{-Magnitude, Magnitude});
+        }
+        if (Op == BO_Add || Op == BO_Sub || Op == BO_Mul) {
+          Interval Result = combineBinary(Op, Left, Right);
+          return intersectInterval(Bound, Result);
+        }
       }
     } else if (const auto *CastSym = dyn_cast<SymbolCast>(Sym)) {
       // Only trusted if the operand's own range already fits inside this
@@ -332,9 +369,24 @@ public:
     if (!Defined)
       return std::nullopt;
 
+    SymbolRef Sym = Value.getAsSymbol();
     Interval Result = bisectInterval(*Defined, Expr->getType(), State, C);
-    if (SymbolRef Sym = Value.getAsSymbol())
-      Result = intersectInterval(Result, symbolInterval(Sym, State, C, 0));
+    if (Sym) {
+      Interval Symbolic = symbolInterval(Sym, State, C, 0);
+      // Clang retains an unsigned SymSym remainder beneath a representable
+      // cast to a signed materialized local.  Its generic range query applies
+      // the signed expression bounds to that unsigned SVal and can return a
+      // spurious disjoint extreme.  The remainder interval is independently
+      // sound; carry it through only when every possible remainder fits the
+      // source expression's destination type.  All other symbol shapes keep
+      // the historical solver/intersection behavior.
+      Interval ExprRange = typeInterval(C.getASTContext(), Expr->getType());
+      if (containsRemainder(Sym) &&
+          !C.getASTContext().hasSameType(Sym->getType(), Expr->getType()) &&
+          contains(ExprRange, Symbolic))
+        return Symbolic;
+      Result = intersectInterval(Result, Symbolic);
+    }
     return Result;
   }
 
@@ -737,6 +789,20 @@ class SignedArithmeticChecker : public Checker<check::PreStmt<BinaryOperator>,
     NonLoc Minimum = Builder.makeIntVal(
         SizeCastChecker::typeMin(C.getASTContext(), Type));
 
+    // Relational guards can prove subtraction safe without manufacturing a
+    // MIN+right or MAX+right boundary expression.  If 0 <= right <= left,
+    // the result is in [0, MAX]; symmetrically, left <= right <= 0 puts it in
+    // [MIN, 0].  These are sufficient conditions only: an unmodelled or
+    // feasible negation falls through to the general overflow predicates.
+    if (Subtract) {
+      if (!assumeComparison(Input, *Right, Zero, BO_LT, C) &&
+          !assumeComparison(Input, *Left, *Right, BO_LT, C))
+        return false;
+      if (!assumeComparison(Input, *Right, Zero, BO_GT, C) &&
+          !assumeComparison(Input, *Left, *Right, BO_GT, C))
+        return false;
+    }
+
     ProgramStateRef Positive =
         assumeComparison(Input, *Right, Zero, BO_GT, C);
     if (Positive) {
@@ -1003,6 +1069,412 @@ static std::string arithmeticContext(CheckerContext &C) {
   return Current ? Current->getDeclKindName() : "unknown";
 }
 
+class ArithmeticContractChecker
+    : public Checker<eval::Call, check::BeginFunction, check::PreCall,
+                     check::PostCall, check::EndFunction> {
+  mutable std::unique_ptr<BugType> BT;
+
+  struct RangeContract {
+    int64_t Minimum;
+    int64_t Maximum;
+  };
+
+  struct FieldContract {
+    unsigned Argument;
+    StringRef Field;
+  };
+
+  static std::optional<RangeContract> rangeContract(const ParmVarDecl *Param) {
+    for (const AnnotateAttr *Attr : Param->specific_attrs<AnnotateAttr>()) {
+      StringRef Text = Attr->getAnnotation();
+      if (!Text.consume_front("ntlibc_arith_range:"))
+        continue;
+      auto Parts = Text.split(':');
+      int64_t Minimum, Maximum;
+      if (Parts.first.getAsInteger(10, Minimum) ||
+          Parts.second.getAsInteger(10, Maximum) || Minimum > Maximum)
+        return std::nullopt;
+      return RangeContract{Minimum, Maximum};
+    }
+    return std::nullopt;
+  }
+
+  static bool hasAnnotation(const FunctionDecl *Function, StringRef Name) {
+    for (const FunctionDecl *Redeclaration : Function->redecls())
+      for (const AnnotateAttr *Attr :
+           Redeclaration->specific_attrs<AnnotateAttr>())
+        if (Attr->getAnnotation() == Name)
+          return true;
+    return false;
+  }
+
+  class AddressUseVisitor : public RecursiveASTVisitor<AddressUseVisitor> {
+    const FunctionDecl *Target;
+    ASTContext &Ctx;
+
+    bool isDirectCallee(const DeclRefExpr *Reference) const {
+      DynTypedNode Node = DynTypedNode::create(*Reference);
+      for (;;) {
+        auto Parents = Ctx.getParents(Node);
+        if (Parents.size() != 1)
+          return false;
+        if (const auto *Call = Parents[0].get<CallExpr>()) {
+          const FunctionDecl *Direct = Call->getDirectCallee();
+          return Direct &&
+                 Direct->getCanonicalDecl() == Target->getCanonicalDecl();
+        }
+        const Expr *Parent = Parents[0].get<Expr>();
+        if (!Parent || (!isa<ImplicitCastExpr>(Parent) &&
+                        !isa<ParenExpr>(Parent)))
+          return false;
+        Node = DynTypedNode::create(*Parent);
+      }
+    }
+
+  public:
+    bool AddressTaken = false;
+
+    AddressUseVisitor(const FunctionDecl *Target, ASTContext &Ctx)
+        : Target(Target), Ctx(Ctx) {}
+
+    bool VisitDeclRefExpr(const DeclRefExpr *Reference) {
+      const auto *Function = dyn_cast<FunctionDecl>(Reference->getDecl());
+      if (Function &&
+          Function->getCanonicalDecl() == Target->getCanonicalDecl() &&
+          !isDirectCallee(Reference))
+        AddressTaken = true;
+      return !AddressTaken;
+    }
+  };
+
+  static bool directOnlyRangeCallee(const FunctionDecl *Function,
+                                    ASTContext &Ctx) {
+    if (Function->getStorageClass() != SC_Static)
+      return false;
+    AddressUseVisitor Visitor(Function, Ctx);
+    Visitor.TraverseDecl(Ctx.getTranslationUnitDecl());
+    return !Visitor.AddressTaken;
+  }
+
+  static bool verifiedScalarNoop(const FunctionDecl *Function) {
+    const FunctionDecl *Definition = Function->getDefinition();
+    if (!Definition)
+      return true; // The annotated declaration's defining TU is linted too.
+    const auto *Body = dyn_cast_or_null<CompoundStmt>(Definition->getBody());
+    if (!Body || Body->size() != 1 || Definition->getNumParams() != 1)
+      return false;
+    const auto *Call = dyn_cast<CallExpr>(*Body->body_begin());
+    if (!Call || Call->getNumArgs() != 1)
+      return false;
+    const FunctionDecl *Callee = Call->getDirectCallee();
+    if (!Callee || Callee->getName() != "free")
+      return false;
+    const auto *Argument = dyn_cast<DeclRefExpr>(
+        Call->getArg(0)->IgnoreParenImpCasts());
+    return Argument &&
+           Argument->getDecl() == Definition->getParamDecl(0);
+  }
+
+  static std::optional<FieldContract>
+  fieldContract(const FunctionDecl *Function) {
+    for (const FunctionDecl *Redeclaration : Function->redecls()) {
+      for (const AnnotateAttr *Attr :
+           Redeclaration->specific_attrs<AnnotateAttr>()) {
+        StringRef Text = Attr->getAnnotation();
+        if (!Text.consume_front(
+                "ntlibc_arith_nonzero_field_on_success:"))
+          continue;
+        auto Parts = Text.split(':');
+        unsigned Argument;
+        if (Parts.first.getAsInteger(10, Argument) || Parts.second.empty())
+          return std::nullopt;
+        return FieldContract{Argument, Parts.second};
+      }
+    }
+    return std::nullopt;
+  }
+
+  static const FunctionDecl *function(const CallEvent &Call) {
+    return dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+  }
+
+  static const FunctionDecl *definition(const FunctionDecl *Function) {
+    if (!Function)
+      return nullptr;
+    if (const FunctionDecl *Definition = Function->getDefinition())
+      return Definition;
+    return Function;
+  }
+
+  static std::optional<std::pair<llvm::APSInt, llvm::APSInt>>
+  nativeRange(QualType Type, const RangeContract &Contract,
+              CheckerContext &C) {
+    if (Type.isNull() || !Type->isIntegerType())
+      return std::nullopt;
+    llvm::APSInt MinimumMath(
+        llvm::APInt(SizeCastChecker::MathBits,
+                    static_cast<uint64_t>(Contract.Minimum), true),
+        false);
+    llvm::APSInt MaximumMath(
+        llvm::APInt(SizeCastChecker::MathBits,
+                    static_cast<uint64_t>(Contract.Maximum), true),
+        false);
+    SizeCastChecker::Interval Bounds =
+        SizeCastChecker::typeInterval(C.getASTContext(), Type);
+    if (MinimumMath < Bounds.Min || MaximumMath > Bounds.Max)
+      return std::nullopt;
+    unsigned Bits = C.getASTContext().getIntWidth(Type);
+    bool Unsigned = Type->isUnsignedIntegerOrEnumerationType();
+    return std::pair{
+        SizeCastChecker::asSourceType(MinimumMath, Bits, Unsigned),
+        SizeCastChecker::asSourceType(MaximumMath, Bits, Unsigned)};
+  }
+
+  static const FieldDecl *field(const ParmVarDecl *Parameter,
+                                StringRef Name) {
+    QualType Type = Parameter->getType();
+    if (!Type->isPointerType())
+      return nullptr;
+    const RecordType *Record = Type->getPointeeType()->getAs<RecordType>();
+    if (!Record)
+      return nullptr;
+    for (const FieldDecl *Candidate : Record->getDecl()->fields())
+      if (Candidate->getName() == Name)
+        return Candidate;
+    return nullptr;
+  }
+
+  static std::optional<DefinedOrUnknownSVal>
+  fieldValue(ProgramStateRef State, SVal Pointer, const FieldDecl *Field,
+             CheckerContext &C) {
+    if (!Pointer.getAsRegion() || !Field)
+      return std::nullopt;
+    SVal Location = State->getLValue(Field, Pointer);
+    return State->getSVal(Location.castAs<Loc>())
+        .getAs<DefinedOrUnknownSVal>();
+  }
+
+  void report(const Stmt *Statement, ProgramStateRef State, StringRef Detail,
+              CheckerContext &C) const {
+    ExplodedNode *Node = C.generateErrorNode(State);
+    if (!Node)
+      return;
+    if (!BT)
+      BT = std::make_unique<BugType>(this, "Violated arithmetic contract",
+                                     categories::LogicError);
+    std::string Message =
+        "arithmetic contract is not proven: " + Detail.str() + "; origin '" +
+        arithmeticOrigin(cast<Expr>(Statement), C) + "'; context '" +
+        arithmeticContext(C) + "'; expression '" +
+        arithmeticText(Statement, C) + "'; site '" +
+        arithmeticSite(cast<Expr>(Statement), C) + "'";
+    auto Report = std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
+    Report->addRange(Statement->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+
+  void reportInvalidNoop(const FunctionDecl *Function,
+                         CheckerContext &C) const {
+    const Stmt *Body = Function->getBody();
+    ExplodedNode *Node = C.generateNonFatalErrorNode(C.getState());
+    if (!Node || !Body)
+      return;
+    if (!BT)
+      BT = std::make_unique<BugType>(this, "Violated arithmetic contract",
+                                     categories::LogicError);
+    const SourceManager &SM = C.getSourceManager();
+    std::string Origin =
+        SM.getFilename(SM.getExpansionLoc(Body->getBeginLoc())).str();
+    std::string Message =
+        "arithmetic contract is not proven: annotated scalar no-op is not "
+        "the exact free(parameter) wrapper; origin '" +
+        Origin + "'; context '" + Function->getQualifiedNameAsString() +
+        "'; expression 'function body'; site 'annotated function "
+        "definition'";
+    auto Report = std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
+    Report->addRange(Body->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+
+public:
+  bool evalCall(const CallEvent &Call, CheckerContext &C) const {
+    const FunctionDecl *Function = function(Call);
+    if (!Function || Function->getName() != "__free" ||
+        Call.getNumArgs() != 1 || !Function->getReturnType()->isVoidType() ||
+        !hasAnnotation(Function, "ntlibc_arith_scalar_noop") ||
+        !verifiedScalarNoop(Function))
+      return false;
+    // ntlibc's internal __free is a one-line allocator wrapper.  It changes
+    // only allocation lifetime/allocator-private bookkeeping; it cannot
+    // mutate the caller's scalar objects or globals.  The arithmetic stage
+    // does not model heap lifetime, so treating this wrapper as an arithmetic
+    // no-op preserves relational guards across cleanup loops without making
+    // any claim about memory that remains legal to access after the free.
+    C.addTransition(C.getState());
+    return true;
+  }
+
+  void checkBeginFunction(CheckerContext &C) const {
+    const auto *Function = definition(
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl()));
+    if (!Function)
+      return;
+    if (Function->getName() == "__free" &&
+        hasAnnotation(Function, "ntlibc_arith_scalar_noop") &&
+        !verifiedScalarNoop(Function)) {
+      reportInvalidNoop(Function, C);
+      return;
+    }
+    ProgramStateRef State = C.getState();
+    bool Changed = false;
+    for (const ParmVarDecl *Parameter : Function->parameters()) {
+      auto Contract = rangeContract(Parameter);
+      if (!Contract || !directOnlyRangeCallee(Function, C.getASTContext()))
+        continue;
+      auto Bounds = nativeRange(Parameter->getType(), *Contract, C);
+      if (!Bounds)
+        continue;
+      SVal Value = State->getSVal(
+          State->getLValue(Parameter, C.getLocationContext()));
+      auto Defined = Value.getAs<DefinedOrUnknownSVal>();
+      if (!Defined)
+        continue;
+      ProgramStateRef Restricted = State->assumeInclusiveRange(
+          *Defined, Bounds->first, Bounds->second, true);
+      if (Restricted && Restricted != State) {
+        State = Restricted;
+        Changed = true;
+      }
+    }
+    if (auto Contract = fieldContract(Function)) {
+      if (Contract->Argument < Function->getNumParams()) {
+        const ParmVarDecl *Parameter =
+            Function->getParamDecl(Contract->Argument);
+        const FieldDecl *Field = field(Parameter, Contract->Field);
+        SVal Pointer = State->getSVal(
+            State->getLValue(Parameter, C.getLocationContext()));
+        if (Pointer.getAsRegion() && Field) {
+          SVal Location = State->getLValue(Field, Pointer);
+          if (const MemRegion *Region = Location.getAsRegion()) {
+            State = State->set<ArithmeticContractField>(
+                C.getLocationContext()->getStackFrame(), Region);
+            Changed = true;
+          }
+        }
+      }
+    }
+    if (Changed)
+      C.addTransition(State);
+  }
+
+  void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
+    const FunctionDecl *Function = function(Call);
+    if (!Function)
+      return;
+    ProgramStateRef State = C.getState();
+    bool Changed = false;
+    for (unsigned Index = 0;
+         Index < Function->getNumParams() && Index < Call.getNumArgs();
+         ++Index) {
+      auto Contract = rangeContract(Function->getParamDecl(Index));
+      if (!Contract)
+        continue;
+      auto Bounds =
+          nativeRange(Function->getParamDecl(Index)->getType(), *Contract, C);
+      auto Argument = Call.getArgSVal(Index).getAs<DefinedOrUnknownSVal>();
+      if (!Bounds || !Argument)
+        continue;
+      ProgramStateRef Violation = State->assumeInclusiveRange(
+          *Argument, Bounds->first, Bounds->second, false);
+      if (Violation) {
+        const Expr *Expression = Call.getArgExpr(Index);
+        std::string Detail = "argument " + std::to_string(Index + 1) +
+                             " is outside declared range [" +
+                             std::to_string(Contract->Minimum) + ", " +
+                             std::to_string(Contract->Maximum) + "]";
+        report(Expression, Violation, Detail, C);
+      }
+      State = State->assumeInclusiveRange(*Argument, Bounds->first,
+                                          Bounds->second, true);
+      if (!State)
+        return;
+      Changed = true;
+    }
+    if (Changed)
+      C.addTransition(State);
+  }
+
+  void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
+    const FunctionDecl *Function = function(Call);
+    const FunctionDecl *Definition = Function ? Function->getDefinition()
+                                              : nullptr;
+    auto Contract = Definition ? fieldContract(Definition) : std::nullopt;
+    if (!Contract || Contract->Argument >= Call.getNumArgs() ||
+        Contract->Argument >= Function->getNumParams())
+      return;
+    auto Return = Call.getReturnValue().getAs<DefinedOrUnknownSVal>();
+    const FieldDecl *Field = field(
+        Function->getParamDecl(Contract->Argument), Contract->Field);
+    if (!Return || !Field)
+      return;
+    ProgramStateRef State = C.getState();
+    ProgramStateRef Failure = State->assume(*Return, false);
+    ProgramStateRef Success = State->assume(*Return, true);
+    if (Success) {
+      SVal Pointer = Call.getArgSVal(Contract->Argument);
+      SVal Location = Success->getLValue(Field, Pointer);
+      if (auto FieldLocation = Location.getAs<Loc>()) {
+        DefinedOrUnknownSVal Fresh =
+            C.getSValBuilder().conjureSymbolVal(
+                this, Call.getOriginExpr(), C.getLocationContext(),
+                Field->getType(), C.blockCount());
+        Success =
+            Success->bindLoc(*FieldLocation, Fresh, C.getLocationContext());
+        Success = Success->assume(Fresh, true);
+      }
+    }
+    if (Failure)
+      C.addTransition(Failure);
+    if (Success)
+      C.addTransition(Success);
+  }
+
+  void checkEndFunction(const ReturnStmt *Return, CheckerContext &C) const {
+    const auto *Function = definition(
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl()));
+    auto Contract = Function ? fieldContract(Function) : std::nullopt;
+    if (!Contract || !Return || !Return->getRetValue() ||
+        Contract->Argument >= Function->getNumParams())
+      return;
+    ProgramStateRef State = C.getState();
+    auto Returned = C.getSVal(Return->getRetValue())
+                        .getAs<DefinedOrUnknownSVal>();
+    if (!Returned)
+      return;
+    ProgramStateRef Success = State->assume(*Returned, true);
+    if (!Success)
+      return;
+    const MemRegion *const *Region = Success->get<ArithmeticContractField>(
+        C.getLocationContext()->getStackFrame());
+    auto Value = Region ? Success->getSVal(*Region)
+                              .getAs<DefinedOrUnknownSVal>()
+                        : std::nullopt;
+    if (!Value) {
+      report(Return->getRetValue(), Success,
+             "successful return cannot prove nonzero field '" +
+                 Contract->Field.str() + "'",
+             C);
+      return;
+    }
+    ProgramStateRef Violation = Success->assume(*Value, false);
+    if (Violation)
+      report(Return->getRetValue(), Violation,
+             "successful return does not establish nonzero field '" +
+                 Contract->Field.str() + "'",
+             C);
+  }
+};
+
 class DivisorChecker : public Checker<check::PreStmt<BinaryOperator>> {
   mutable std::unique_ptr<BugType> BT;
 
@@ -1229,4 +1701,7 @@ extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
   Registry.addChecker<SignedArithmeticChecker>(
       "ntlibc.SignedArithmetic",
       "Proves that signed arithmetic results are representable", "");
+  Registry.addChecker<ArithmeticContractChecker>(
+      "ntlibc.ArithmeticContract",
+      "Enforces arithmetic parameter and successful-call contracts", "");
 }

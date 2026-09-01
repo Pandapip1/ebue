@@ -565,6 +565,9 @@ int __sh_last_status(void);
 withtok(internal_heap_allocated)
 withtok(writable_span(size))
 void *__malloc(size_t size);
+#ifdef NTLIBC_ARITHMETIC_ANALYSIS
+__attribute__((annotate("ntlibc_arith_scalar_noop")))
+#endif
 void __free(void * consume(internal_heap_allocated));
 
 /* ---- time -------------------------------------------------------------- */

@@ -16,6 +16,8 @@ void *memset(void *destination withtok(fixture_writable_span(length)), int,
 withtok(fixture_writable_span(length))
 void *__malloc(size_t length);
 void *opaque_allocator(size_t length);
+withtok(fixture_writable_span(length))
+void *allocate_unknown_extent(size_t length);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 void consume_bytes(const void *source withtok(fixture_readable_span(length)),
@@ -83,6 +85,22 @@ void copy_unrestricted_parameters(
 	char *destination withtok(fixture_writable_span(length)),
 	const char *source withtok(fixture_readable_span(length)), size_t length)
 {
+	memcpy(destination, source, length); /* memory-contract-expect */
+}
+
+void copy_restrict_alias(
+	char *restrict destination withtok(fixture_writable_span(length)),
+	size_t length)
+{
+	char *alias = destination;
+	memcpy(destination, alias, length); /* memory-contract-expect */
+}
+
+void copy_to_unproven_fresh_allocation(
+	const char *source withtok(fixture_readable_span(length)), size_t length)
+{
+	char *destination = allocate_unknown_extent(length);
+	if (!destination) return;
 	memcpy(destination, source, length); /* memory-contract-expect */
 }
 
@@ -189,6 +207,31 @@ void wrapped_allocator_extent(size_t n)
 	char *d = __malloc(n + 1);
 	if (!d) return;
 	memset(d, 0, n); /* memory-contract-expect */
+}
+
+void overfill_reassociated_allocation(size_t left, size_t right)
+{
+	char *buffer = __malloc(left + right);
+	if (!buffer) return;
+	memset(buffer, 0, right + left + 1); /* memory-contract-expect */
+}
+
+void fill_unchecked_allocation_suffix(
+	const char *source withtok(fixture_readable_span(right)),
+	size_t left, size_t right)
+{
+	char *buffer = __malloc(left + right);
+	if (!buffer) return;
+	memcpy(buffer + left, source, right); /* memory-contract-expect */
+}
+
+void fill_wrapping_slack_suffix(
+	const char *source withtok(fixture_readable_span(right)),
+	size_t left, size_t right)
+{
+	char *buffer = __malloc(left + right + 1);
+	if (!buffer) return;
+	memcpy(buffer + left, source, right); /* memory-contract-expect */
 }
 
 /* strnlen(s, n)'s contract is looser than strlen(s)'s: if it walked all

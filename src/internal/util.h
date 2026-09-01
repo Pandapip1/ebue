@@ -47,6 +47,20 @@
 
 #include <stdlib.h>
 
+/* Arithmetic contracts are analysis-only: normal compilers see no source
+ * attribute, while the arithub checker both enforces them at every direct
+ * call and assumes them at the separately-analyzed callee entry. */
+#ifdef NTLIBC_ARITHMETIC_ANALYSIS
+#define __arith_range(minimum, maximum) \
+	__attribute__((annotate("ntlibc_arith_range:" #minimum ":" #maximum)))
+#define __arith_nonzero_field_on_success(argument, field) \
+	__attribute__((annotate("ntlibc_arith_nonzero_field_on_success:" \
+		#argument ":" #field)))
+#else
+#define __arith_range(minimum, maximum)
+#define __arith_nonzero_field_on_success(argument, field)
+#endif
+
 #include <errno.h>
 #include <stdarg.h>
 #include <stddef.h>

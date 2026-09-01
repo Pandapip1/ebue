@@ -7,6 +7,7 @@ typedef __SIZE_TYPE__ size_t;
 tokdef fixture_readable_span l_unlimited implicit_drop extent_at_least zero_vacuous;
 tokdef fixture_writable_span l_unlimited implicit_drop extent_at_least zero_vacuous;
 tokdef fixture_disjoint_span l_unlimited implicit_drop disjoint_extent zero_vacuous;
+tokdef fixture_allocation dynamic_storage;
 
 void *memcpy(void *destination withtok(fixture_writable_span(length))
 	withtok(fixture_disjoint_span(source, length)),
@@ -17,12 +18,16 @@ void *memset(void *destination withtok(fixture_writable_span(length)), int,
 	size_t length);
 long read(int, void *buffer withtok(fixture_writable_span(length)),
 	size_t length);
+withtok(fixture_allocation)
 withtok(fixture_writable_span(length))
 void *__malloc(size_t length);
 withtok(fixture_writable_span(length))
 void *allocate_bytes(size_t length);
 withtok(fixture_writable_span(count * size))
 void *allocate_array(size_t count, size_t size);
+withtok(fixture_allocation)
+withtok(fixture_writable_span(length))
+void *allocate_unknown_extent(size_t length);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 void consume_bytes(const void *source withtok(fixture_readable_span(length)),
@@ -161,6 +166,34 @@ void copy_restrict_parameters(
 	memcpy(destination, source, length);
 }
 
+void copy_one_restrict_parameter(
+	char *restrict destination withtok(fixture_writable_span(length)),
+	const char *source withtok(fixture_readable_span(length)), size_t length)
+{
+	memcpy(destination, source, length);
+}
+
+void copy_to_fresh_unknown_allocation(
+	const char *source withtok(fixture_readable_span(length)), size_t length)
+{
+	char *destination = allocate_unknown_extent(length);
+	if (!destination) return;
+	memcpy(destination, source, length);
+}
+
+struct allocated_bytes {
+	char value[8];
+};
+
+void copy_to_typed_fresh_allocation(
+	const char *source withtok(fixture_readable_span(length)), size_t length)
+{
+	struct allocated_bytes *destination = allocate_unknown_extent(
+		sizeof *destination);
+	if (!destination || length > sizeof destination->value) return;
+	memcpy(destination->value, source, length);
+}
+
 void clear_typed_member(struct fixture_record *record)
 {
 	memset(&record->second, 0, sizeof record->second);
@@ -276,4 +309,34 @@ void declaration_driven_array_allocator(size_t count, size_t size)
 	char *buffer = allocate_array(count, size);
 	if (!buffer) return;
 	memset(buffer, 0, count * size);
+}
+
+void fill_reassociated_allocation(size_t left, size_t right)
+{
+	char *buffer = __malloc(left + right);
+	if (!buffer) return;
+	memset(buffer, 0, right + left);
+}
+
+void fill_checked_allocation_suffix(
+	const char *source withtok(fixture_readable_span(right)),
+	size_t left, size_t right)
+{
+	size_t total = left + right;
+	if (total < left) return;
+	char *buffer = __malloc(total);
+	if (!buffer) return;
+	memcpy(buffer + left, source, right);
+}
+
+void fill_checked_slack_suffix(
+	const char *source withtok(fixture_readable_span(right)),
+	size_t left, size_t right)
+{
+	if (right == (size_t)-1) return;
+	size_t total = left + right + 1;
+	if (total <= left) return;
+	char *buffer = __malloc(total);
+	if (!buffer) return;
+	memcpy(buffer + left, source, right);
 }

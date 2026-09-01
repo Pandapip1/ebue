@@ -637,6 +637,377 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
            !(Result.Outcomes & (FallWithoutProgress | BackWithoutProgress));
   }
 
+  enum class IntervalPatternKind { Halving, Bounds };
+
+  struct IntervalPattern {
+    IntervalPatternKind Kind;
+    const VarDecl *Low;
+    const VarDecl *High;
+    const VarDecl *Middle;
+    const DeclStmt *MiddleDeclaration;
+  };
+
+  struct IntervalFlow {
+    /* Bit N records paths with N=0 no update, N=1 one exact shrinking
+     * update, or N=2 an unrecognized/repeated update. */
+    unsigned FallMasks;
+    unsigned BackMasks;
+    bool Exits;
+    bool Invalid;
+  };
+
+  static unsigned combineIntervalMasks(unsigned First, unsigned Second) {
+    unsigned Result = 0;
+    for (unsigned A = 0; A != 3; ++A)
+      if (First & (1u << A))
+        for (unsigned B = 0; B != 3; ++B)
+          if (Second & (1u << B)) {
+            unsigned Combined = A == 2 || B == 2 || (A == 1 && B == 1)
+                                    ? 2
+                                    : A + B;
+            Result |= 1u << Combined;
+          }
+    return Result;
+  }
+
+  static IntervalFlow intervalSequence(IntervalFlow First,
+                                       IntervalFlow Second) {
+    if (First.Invalid || Second.Invalid)
+      return {0, 0, false, true};
+    unsigned Fall = combineIntervalMasks(First.FallMasks, Second.FallMasks);
+    unsigned Back = First.BackMasks |
+                    combineIntervalMasks(First.FallMasks, Second.BackMasks);
+    return {Fall, Back, First.Exits || (First.FallMasks && Second.Exits),
+            false};
+  }
+
+  static bool exactVariable(const Expr *Expression,
+                            const ValueDecl *Variable) {
+    return value(Expression) == Variable;
+  }
+
+  static bool exactAddOne(const Expr *Expression,
+                          const ValueDecl *Variable) {
+    const auto *Add = dyn_cast_or_null<BinaryOperator>(ignore(Expression));
+    return Add && Add->getOpcode() == BO_Add &&
+           ((exactVariable(Add->getLHS(), Variable) &&
+             unitInteger(Add->getRHS())) ||
+            (unitInteger(Add->getLHS()) &&
+             exactVariable(Add->getRHS(), Variable)));
+  }
+
+  static bool exactHalf(const Expr *Expression,
+                        const ValueDecl *Variable) {
+    const auto *Divide =
+        dyn_cast_or_null<BinaryOperator>(ignore(Expression));
+    const auto *Two = Divide ? dyn_cast_or_null<IntegerLiteral>(
+                                   ignore(Divide->getRHS()))
+                             : nullptr;
+    return Divide && Divide->getOpcode() == BO_Div && Two &&
+           Two->getValue() == 2 && exactVariable(Divide->getLHS(), Variable);
+  }
+
+  static bool exactMidpoint(const Expr *Expression, const ValueDecl *Low,
+                            const ValueDecl *High) {
+    const auto *Add = dyn_cast_or_null<BinaryOperator>(ignore(Expression));
+    if (!Add || Add->getOpcode() != BO_Add ||
+        !exactVariable(Add->getLHS(), Low))
+      return false;
+    const auto *Divide =
+        dyn_cast_or_null<BinaryOperator>(ignore(Add->getRHS()));
+    const auto *Difference = Divide ? dyn_cast_or_null<BinaryOperator>(
+                                          ignore(Divide->getLHS()))
+                                    : nullptr;
+    const auto *Two = Divide ? dyn_cast_or_null<IntegerLiteral>(
+                                   ignore(Divide->getRHS()))
+                             : nullptr;
+    return Divide && Divide->getOpcode() == BO_Div && Difference &&
+           Difference->getOpcode() == BO_Sub && Two &&
+           Two->getValue() == 2 &&
+           exactVariable(Difference->getLHS(), High) &&
+           exactVariable(Difference->getRHS(), Low);
+  }
+
+  static unsigned intervalMutation(const Stmt *Statement,
+                                   const IntervalPattern &Pattern) {
+    if (!Statement || Statement == Pattern.MiddleDeclaration)
+      return 0;
+    if (const auto *Expression = dyn_cast<Expr>(Statement)) {
+      const auto *Assignment =
+          dyn_cast_or_null<BinaryOperator>(ignore(Expression));
+      if (Assignment && Assignment->isAssignmentOp()) {
+        const ValueDecl *Target = value(Assignment->getLHS());
+        if (Pattern.Kind == IntervalPatternKind::Halving &&
+            Target == Pattern.High) {
+          if (Assignment->getOpcode() == BO_Assign &&
+              exactVariable(Assignment->getRHS(), Pattern.Middle))
+            return 1;
+          if (Assignment->getOpcode() == BO_SubAssign &&
+              exactAddOne(Assignment->getRHS(), Pattern.Middle))
+            return 1;
+          return 2;
+        }
+        if (Pattern.Kind == IntervalPatternKind::Bounds) {
+          if (Target == Pattern.High)
+            return Assignment->getOpcode() == BO_Assign &&
+                           exactVariable(Assignment->getRHS(), Pattern.Middle)
+                       ? 1
+                       : 2;
+          if (Target == Pattern.Low)
+            return Assignment->getOpcode() == BO_Assign &&
+                           exactAddOne(Assignment->getRHS(), Pattern.Middle)
+                       ? 1
+                       : 2;
+        }
+        if (Target == Pattern.Middle)
+          return 2;
+      }
+      const auto *Unary = dyn_cast_or_null<UnaryOperator>(ignore(Expression));
+      if (Unary && (Unary->isIncrementDecrementOp() ||
+                    Unary->getOpcode() == UO_AddrOf)) {
+        const ValueDecl *Target = value(Unary->getSubExpr());
+        if (Target == Pattern.Low || Target == Pattern.High ||
+            Target == Pattern.Middle)
+          return 2;
+      }
+    }
+    unsigned Result = 0;
+    for (const Stmt *Child : Statement->children()) {
+      unsigned ChildResult = intervalMutation(Child, Pattern);
+      if (ChildResult == 2 || (Result == 1 && ChildResult == 1))
+        return 2;
+      Result |= ChildResult;
+    }
+    return Result;
+  }
+
+  static IntervalFlow intervalFlow(const Stmt *Statement,
+                                   const IntervalPattern &Pattern) {
+    if (!Statement)
+      return {1u, 0, false, false};
+    if (containsAsm(Statement) ||
+        containsUnevaluatedOrEmbeddedControl(Statement) ||
+        containsConditionalExecution(Statement))
+      return {0, 0, false, true};
+    if (const auto *Compound = dyn_cast<CompoundStmt>(Statement)) {
+      IntervalFlow Result{1u, 0, false, false};
+      for (const Stmt *Child : Compound->body())
+        Result = intervalSequence(Result, intervalFlow(Child, Pattern));
+      return Result;
+    }
+    if (const auto *If = dyn_cast<IfStmt>(Statement)) {
+      IntervalFlow Prefix = intervalSequence(
+          intervalFlow(If->getInit(), Pattern),
+          intervalFlow(If->getConditionVariableDeclStmt(), Pattern));
+      Prefix = intervalSequence(Prefix,
+                                intervalFlow(If->getCond(), Pattern));
+      IntervalFlow Then = intervalFlow(If->getThen(), Pattern);
+      IntervalFlow Else = intervalFlow(If->getElse(), Pattern);
+      IntervalFlow Arms{Then.FallMasks | Else.FallMasks,
+                        Then.BackMasks | Else.BackMasks,
+                        Then.Exits || Else.Exits,
+                        Then.Invalid || Else.Invalid};
+      return intervalSequence(Prefix, Arms);
+    }
+    if (const auto *Label = dyn_cast<LabelStmt>(Statement))
+      return intervalFlow(Label->getSubStmt(), Pattern);
+    if (isa<ContinueStmt>(Statement))
+      return {0, 1u, false, false};
+    if (isa<BreakStmt>(Statement) || isa<ReturnStmt>(Statement))
+      return {0, 0, true, false};
+    if (isa<GotoStmt>(Statement) || isa<IndirectGotoStmt>(Statement) ||
+        isa<SwitchStmt>(Statement))
+      return {0, 0, false, true};
+    if (isa<ForStmt>(Statement) || isa<WhileStmt>(Statement) ||
+        isa<DoStmt>(Statement))
+      return {intervalMutation(Statement, Pattern) ? 1u << 2 : 1u,
+              0, false, false};
+    unsigned Mutation = intervalMutation(Statement, Pattern);
+    return {1u << Mutation, 0, false, false};
+  }
+
+  static const VarDecl *directInitializedVariable(
+      const CompoundStmt *Body, const DeclStmt *&Declaration,
+      const ValueDecl *First, const ValueDecl *Second = nullptr) {
+    const VarDecl *Result = nullptr;
+    Declaration = nullptr;
+    for (const Stmt *Child : Body->body()) {
+      const auto *Decls = dyn_cast<DeclStmt>(Child);
+      if (!Decls || !Decls->isSingleDecl())
+        continue;
+      for (const Decl *Item : Decls->decls()) {
+        const auto *Variable = dyn_cast<VarDecl>(Item);
+        if (!Variable || !Variable->getInit())
+          continue;
+        bool Matches = Second
+                           ? exactMidpoint(Variable->getInit(), First, Second)
+                           : exactHalf(Variable->getInit(), First);
+        if (!Matches)
+          continue;
+        if (Result)
+          return nullptr;
+        Result = Variable;
+        Declaration = Decls;
+      }
+    }
+    return Result;
+  }
+
+  bool branchCompleteIntervalDescent(const Expr *Condition,
+                                     const Stmt *Body) const {
+    /* For unsigned n>0, h=n/2 satisfies h<n and h+1<=n, so both
+     * n=h and n-=h+1 strictly decrease without wrapping.  For same-type
+     * unsigned lo<hi, d=hi-lo is representable and
+     * mid=lo+d/2 satisfies lo<=mid<hi; therefore hi=mid and lo=mid+1
+     * each strictly shrink hi-lo, and mid+1<=hi proves representability.
+     * intervalFlow additionally requires exactly one of those assignments
+     * on every backedge and discards arbitrary mutations only on paths
+     * which exit the loop first. */
+    const auto *Compound = dyn_cast_or_null<CompoundStmt>(Body);
+    if (!Condition || !Compound || !Current)
+      return false;
+    const Expr *PlainCondition = ignore(Condition);
+    const auto *Comparison = dyn_cast_or_null<BinaryOperator>(PlainCondition);
+    IntervalPattern Pattern{};
+    const DeclStmt *MiddleDeclaration = nullptr;
+    if (Comparison && Comparison->getOpcode() == BO_LT) {
+      const auto *Low = dyn_cast_or_null<VarDecl>(value(Comparison->getLHS()));
+      const auto *High = dyn_cast_or_null<VarDecl>(value(Comparison->getRHS()));
+      if (!Low || !High || Low == High ||
+          !Low->getType()->isUnsignedIntegerType() ||
+          Low->getType().getCanonicalType().getUnqualifiedType() !=
+              High->getType().getCanonicalType().getUnqualifiedType())
+        return false;
+      const VarDecl *Middle = directInitializedVariable(
+          Compound, MiddleDeclaration, Low, High);
+      if (!Middle)
+        return false;
+      Pattern = {IntervalPatternKind::Bounds, Low, High, Middle,
+                 MiddleDeclaration};
+    } else {
+      const auto *High = dyn_cast_or_null<VarDecl>(value(PlainCondition));
+      if (!High || !High->getType()->isUnsignedIntegerType() ||
+          !nonzeroWhen(Condition, High, true))
+        return false;
+      const VarDecl *Middle = directInitializedVariable(
+          Compound, MiddleDeclaration, High);
+      if (!Middle)
+        return false;
+      Pattern = {IntervalPatternKind::Halving, nullptr, High, Middle,
+                 MiddleDeclaration};
+    }
+    if (Pattern.Middle->getType().getCanonicalType().getUnqualifiedType() !=
+            Pattern.High->getType().getCanonicalType().getUnqualifiedType() ||
+        !(Pattern.Middle->hasLocalStorage()) ||
+        !(isa<ParmVarDecl>(Pattern.High) || Pattern.High->hasLocalStorage()) ||
+        (Pattern.Low && !(isa<ParmVarDecl>(Pattern.Low) ||
+                          Pattern.Low->hasLocalStorage())) ||
+        Pattern.Middle->getType().isVolatileQualified() ||
+        Pattern.High->getType().isVolatileQualified() ||
+        (Pattern.Low && Pattern.Low->getType().isVolatileQualified()) ||
+        addressTaken(Current->getBody(), Pattern.Middle) ||
+        addressTaken(Current->getBody(), Pattern.High) ||
+        (Pattern.Low && addressTaken(Current->getBody(), Pattern.Low)))
+      return false;
+    IntervalFlow Result = intervalFlow(Body, Pattern);
+    unsigned Backedges = Result.FallMasks | Result.BackMasks;
+    return !Result.Invalid && Backedges && Backedges == (1u << 1);
+  }
+
+  enum RankMutationOutcome : unsigned {
+    FallRankClean = 1,
+    FallRankChanged = 2,
+    BackRankClean = 4,
+    BackRankChanged = 8,
+    ExitsAfterRankMutation = 16,
+  };
+
+  struct RankMutationFlow {
+    unsigned Outcomes;
+    bool Invalid;
+  };
+
+  static bool rankMutationFlowUnsupported(const Stmt *Statement) {
+    if (!Statement)
+      return false;
+    if (isa<AsmStmt>(Statement) || isa<GotoStmt>(Statement) ||
+        isa<IndirectGotoStmt>(Statement) || isa<StmtExpr>(Statement))
+      return true;
+    for (const Stmt *Child : Statement->children())
+      if (rankMutationFlowUnsupported(Child))
+        return true;
+    return false;
+  }
+
+  static RankMutationFlow rankMutationSequence(RankMutationFlow First,
+                                               RankMutationFlow Second) {
+    if (First.Invalid || Second.Invalid)
+      return {0, true};
+    unsigned Result = First.Outcomes &
+        (BackRankClean | BackRankChanged | ExitsAfterRankMutation);
+    if (First.Outcomes & FallRankClean)
+      Result |= Second.Outcomes;
+    if (First.Outcomes & FallRankChanged) {
+      if (Second.Outcomes & (FallRankClean | FallRankChanged))
+        Result |= FallRankChanged;
+      if (Second.Outcomes & (BackRankClean | BackRankChanged))
+        Result |= BackRankChanged;
+      if (Second.Outcomes & ExitsAfterRankMutation)
+        Result |= ExitsAfterRankMutation;
+    }
+    return {Result, false};
+  }
+
+  static RankMutationFlow rankMutationFlow(const Stmt *Statement,
+                                           const Progress &Rank) {
+    if (!Statement)
+      return {FallRankClean, false};
+    if (rankMutationFlowUnsupported(Statement))
+      return {0, true};
+    if (const auto *Compound = dyn_cast<CompoundStmt>(Statement)) {
+      RankMutationFlow Result{FallRankClean, false};
+      for (const Stmt *Child : Compound->body())
+        Result = rankMutationSequence(Result,
+                                      rankMutationFlow(Child, Rank));
+      return Result;
+    }
+    if (const auto *If = dyn_cast<IfStmt>(Statement)) {
+      RankMutationFlow Prefix = rankMutationSequence(
+          rankMutationFlow(If->getInit(), Rank),
+          rankMutationFlow(If->getConditionVariableDeclStmt(), Rank));
+      Prefix = rankMutationSequence(Prefix,
+                                    rankMutationFlow(If->getCond(), Rank));
+      RankMutationFlow Then = rankMutationFlow(If->getThen(), Rank);
+      RankMutationFlow Else = rankMutationFlow(If->getElse(), Rank);
+      RankMutationFlow Arms{Then.Outcomes | Else.Outcomes,
+                            Then.Invalid || Else.Invalid};
+      return rankMutationSequence(Prefix, Arms);
+    }
+    if (const auto *Label = dyn_cast<LabelStmt>(Statement))
+      return rankMutationFlow(Label->getSubStmt(), Rank);
+    if (isa<ContinueStmt>(Statement))
+      return {BackRankClean, false};
+    if (isa<BreakStmt>(Statement) || isa<ReturnStmt>(Statement))
+      return {ExitsAfterRankMutation, false};
+    if (isa<GotoStmt>(Statement) || isa<SwitchStmt>(Statement))
+      return {0, true};
+    if (isa<ForStmt>(Statement) || isa<WhileStmt>(Statement) ||
+        isa<DoStmt>(Statement))
+      return mutation(Statement, Rank) == Mutation::None
+                 ? RankMutationFlow{FallRankClean, false}
+                 : RankMutationFlow{FallRankChanged, false};
+    return mutation(Statement, Rank) == Mutation::None
+               ? RankMutationFlow{FallRankClean, false}
+               : RankMutationFlow{FallRankChanged, false};
+  }
+
+  static bool rankUnmodifiedOnBackedges(const Stmt *Body,
+                                        const Progress &Rank) {
+    RankMutationFlow Result = rankMutationFlow(Body, Rank);
+    return !Result.Invalid && Result.Outcomes != 0 &&
+           !(Result.Outcomes & (FallRankChanged | BackRankChanged));
+  }
+
   struct PairFlow {
     /* Bit N means a path reaches this control edge after progressing the
      * subset N of the two ranks. */
@@ -1016,6 +1387,50 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return false;
   }
 
+  static bool directMemberOfBase(const Expr *Expression,
+                                 const ValueDecl *Base) {
+    const auto *Member = dyn_cast_or_null<MemberExpr>(ignore(Expression));
+    return Member && value(Member->getBase()) == Base;
+  }
+
+  static bool exportsMemberBase(const Stmt *Statement,
+                                const ValueDecl *Base) {
+    if (!Statement)
+      return false;
+    if (const auto *Expression = dyn_cast<Expr>(Statement)) {
+      const Expr *Plain = ignore(Expression);
+      /* Ordinary scalar/member loads and stores through Base are exactly
+       * what a restrict-qualified base is for.  Taking a member's address,
+       * however, exports a pointer based on Base and lets a callee mutate the
+       * rank legitimately, so it must remain unproved. */
+      if (const auto *Unary = dyn_cast_or_null<UnaryOperator>(Plain))
+        if (Unary->getOpcode() == UO_AddrOf &&
+            directMemberOfBase(Unary->getSubExpr(), Base))
+          return true;
+      if (directMemberOfBase(Plain, Base))
+        return false;
+      if (const auto *Reference = dyn_cast_or_null<DeclRefExpr>(Plain))
+        if (Reference->getDecl() == Base)
+          return true;
+    }
+    for (const Stmt *Child : Statement->children())
+      if (exportsMemberBase(Child, Base))
+        return true;
+    return false;
+  }
+
+  bool restrictedMemberBaseIsClosed(const VarDecl *Base) const {
+    /* A restrict-qualified parameter gives the needed object-identity
+     * invariant: once the loop modifies a member through Base, a defined C
+     * execution cannot have an opaque call reach the same object through a
+     * globally-created alias.  Still reject every function which exports
+     * Base itself (including copies, casts, &Base, &Base->member and call
+     * arguments); those expressions create a legitimate Base-derived path
+     * by which the call could reset the rank. */
+    return Base && isa<ParmVarDecl>(Base) && Base->getType().isRestrictQualified() &&
+           Current && !exportsMemberBase(Current->getBody(), Base);
+  }
+
   bool pairedConditionValuesAreLocal(const Stmt *Statement) const {
     if (!Statement || !Current)
       return true;
@@ -1195,10 +1610,13 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
                          const Expr *Increment = nullptr) const {
     if (const auto *Field = dyn_cast<FieldDecl>(Change.Variable)) {
       const auto *Base = dyn_cast_or_null<VarDecl>(Change.Base);
+      bool ClosedRestrictedBase = restrictedMemberBaseIsClosed(Base);
       return !Change.VolatileAccess && !Field->getType().isVolatileQualified() &&
              Base && !Base->getType().isVolatileQualified() && Current &&
-             !callCanReachBackedge(Body) &&
-             !containsCall(Increment) &&
+             (!Base->getType().isRestrictQualified() ||
+              ClosedRestrictedBase) &&
+             ((!callCanReachBackedge(Body) && !containsCall(Increment)) ||
+              ClosedRestrictedBase) &&
              !writesVariable(Body, Base) && !aliasedWrite(Base, Body) &&
              (!Base->getType()->isPointerType() ||
               !writesThroughAlias(Body, Base, false));
@@ -1297,6 +1715,28 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return boundFitsRank(Bound, Variable, false);
   }
 
+  bool belowTypeMaximumAfterConversion(
+      const Expr *Bound, const ValueDecl *Variable) const {
+    const Expr *Source = ignore(Bound);
+    if (!Source)
+      return false;
+    QualType SourceType = Source->getType();
+    QualType ConvertedType = Bound->getType();
+    if (SourceType->isSignedIntegerOrEnumerationType() &&
+        ConvertedType->isUnsignedIntegerOrEnumerationType()) {
+      /* A negative signed value converted to the unsigned comparison
+       * domain can become its maximum: -1 is exactly UINT_MAX.  That is
+       * harmless for strict `<`, but `rank <= UINT_MAX; rank++` wraps.
+       * Accept this conversion only when the source is a known
+       * nonnegative constant; arbitrary signed bounds include -1. */
+      Expr::EvalResult Constant;
+      if (!Source->EvaluateAsInt(Constant, Context) ||
+          Constant.Val.getInt().isNegative())
+        return false;
+    }
+    return belowTypeMaximum(Bound, Variable);
+  }
+
   bool atMostTypeMaximum(const Expr *Bound,
                          const ValueDecl *Variable) const {
     return boundFitsRank(Bound, Variable, true);
@@ -1391,7 +1831,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
                    atMostTypeMaximum(Logical->getRHS(), Change.Variable))) ||
                  (Logical->getOpcode() == BO_LE &&
                   (!Change.Variable->getType()->isUnsignedIntegerType() ||
-                   belowTypeMaximum(Logical->getRHS(), Change.Variable))))) ||
+                   belowTypeMaximumAfterConversion(
+                       Logical->getRHS(), Change.Variable))))) ||
                (Right &&
                 stableBound(Logical->getLHS(), Body, Increment) &&
                 ((Logical->getOpcode() == BO_GT &&
@@ -1399,7 +1840,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
                    atMostTypeMaximum(Logical->getLHS(), Change.Variable))) ||
                  (Logical->getOpcode() == BO_GE &&
                   (!Change.Variable->getType()->isUnsignedIntegerType() ||
-                   belowTypeMaximum(Logical->getLHS(), Change.Variable)))));
+                   belowTypeMaximumAfterConversion(
+                       Logical->getLHS(), Change.Variable)))));
       if (Change.Kind == ProgressKind::Down)
         return (Left &&
                 stableBound(Logical->getRHS(), Body, Increment) &&
@@ -1421,6 +1863,53 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
                    aboveTypeMinimum(Logical->getLHS(), Change.Variable)))));
     }
     return false;
+  }
+
+  bool sameDomainUnitUpperBound(const Expr *Condition,
+                                const Progress &Change) const {
+    if (!Change.UnitStep || Change.Kind != ProgressKind::Up ||
+        !Change.Variable->getType()->isIntegerType() ||
+        mutation(Condition, Change) != Mutation::None)
+      return false;
+    const auto *Comparison = dyn_cast_or_null<BinaryOperator>(
+        ignore(Condition));
+    if (!Comparison)
+      return false;
+    const Expr *RankOperand = nullptr;
+    const Expr *Bound = nullptr;
+    bool Inclusive = false;
+    if (rankAccess(Comparison->getLHS(), Change) &&
+        (Comparison->getOpcode() == BO_LT ||
+         Comparison->getOpcode() == BO_LE)) {
+      RankOperand = Comparison->getLHS();
+      Bound = Comparison->getRHS();
+      Inclusive = Comparison->getOpcode() == BO_LE;
+    } else if (rankAccess(Comparison->getRHS(), Change) &&
+               (Comparison->getOpcode() == BO_GT ||
+                Comparison->getOpcode() == BO_GE)) {
+      RankOperand = Comparison->getRHS();
+      Bound = Comparison->getLHS();
+      Inclusive = Comparison->getOpcode() == BO_GE;
+    } else {
+      return false;
+    }
+    if (!RankOperand->getType()->isIntegerType() ||
+        !Bound->getType()->isIntegerType())
+      return false;
+    QualType RankComparisonType = RankOperand->getType().getCanonicalType()
+                                      .getUnqualifiedType();
+    QualType BoundComparisonType = Bound->getType().getCanonicalType()
+                                       .getUnqualifiedType();
+    if (RankComparisonType != BoundComparisonType)
+      return false;
+    /* The condition is reevaluated before every backedge.  If every value
+     * the upper operand can contribute fits in the rank's own arithmetic
+     * domain, a taken `rank < bound` proves rank != TYPE_MAX.  Unit `++`
+     * is therefore representable and strictly advances even when the bound
+     * is live, aliased, or changed by a callback.  `<=` needs the stronger
+     * strict-below-maximum fact because equality also takes the backedge. */
+    return Inclusive ? belowTypeMaximumAfterConversion(Bound, Change.Variable)
+                     : atMostTypeMaximum(Bound, Change.Variable);
   }
 
   static bool sentinelRead(const Stmt *Statement, const Progress &Rank) {
@@ -1950,7 +2439,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   }
 
   std::string loopProof(const Expr *Condition, const Expr *Increment,
-                        const Stmt *Body) const {
+                        const Stmt *Body, bool ConditionBeforeBody) const {
     if (constantFalse(Condition, Context))
       return "constant-false";
     /* Without an explicit total/pure call summary, a call made while
@@ -1958,6 +2447,9 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
      * mutate globally reachable rank or bound state. */
     if (containsCall(Condition))
       return "unproved";
+    if (ConditionBeforeBody && !Increment &&
+        branchCompleteIntervalDescent(Condition, Body))
+      return "strict-scalar-rank";
     /* `while (n--)` and `for (...; n-- > 0; ...)` perform their strict
      * descent in the condition, before every taken iteration.  The final
      * false test may itself wrap an unsigned n, but there is no following
@@ -1973,6 +2465,14 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
        * mutation could cancel it or turn the effective step into a
        * sentinel-skipping/wrapping step. */
       Mutation BodyMutation = mutation(Body, *Change);
+      if (sameDomainUnitUpperBound(Condition, *Change) &&
+          isa<VarDecl>(Change->Variable) &&
+          (isa<ParmVarDecl>(Change->Variable) ||
+           cast<VarDecl>(Change->Variable)->hasLocalStorage()) &&
+          !addressTaken(Current->getBody(), Change->Variable) &&
+          validRankVariable(*Change, Body, Increment) &&
+          rankUnmodifiedOnBackedges(Body, *Change))
+        return "strict-scalar-rank";
       /* An additional same-direction unit step cannot invalidate a signed
        * induction rank: either the comparison is reached after finitely
        * many steps, or the addition overflows and the execution was already
@@ -1999,7 +2499,18 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     collectProgress(Increment, IncrementCandidates);
     for (const Progress &Change : IncrementCandidates) {
       Mutation BodyMutation = mutation(Body, Change);
-      if (!validRankVariable(Change, Body, Increment) ||
+      if (sameDomainUnitUpperBound(Condition, Change) &&
+          isa<VarDecl>(Change.Variable) &&
+          (isa<ParmVarDecl>(Change.Variable) ||
+           cast<VarDecl>(Change.Variable)->hasLocalStorage()) &&
+          !addressTaken(Current->getBody(), Change.Variable) &&
+          validRankVariable(Change, Body, Increment) &&
+          progressOccurrences(Increment, Change) == 1 &&
+          mutation(Increment, Change) == Mutation::Good &&
+          rankUnmodifiedOnBackedges(Body, Change))
+        return "strict-scalar-rank";
+      if (progressOccurrences(Increment, Change) != 1 ||
+          !validRankVariable(Change, Body, Increment) ||
           mutation(Increment, Change) != Mutation::Good ||
           (BodyMutation != Mutation::None &&
            !(BodyMutation == Mutation::Good &&
@@ -2085,7 +2596,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     llvm::outs() << "L\t" << key(Current) << '\t'
                  << file(Statement->getBeginLoc()) << '\t'
                  << line(Statement->getBeginLoc()) << '\t' << Kind << '\t'
-                 << loopProof(Condition, Increment, Body) << '\t'
+                 << loopProof(Condition, Increment, Body, Kind != "do") << '\t'
                  << text(Statement) << '\n';
   }
 

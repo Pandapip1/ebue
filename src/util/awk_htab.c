@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "awk_priv.h"
+#include "util.h"
 
 static size_t fnv1a(const char *s)
 {
@@ -28,10 +29,15 @@ void awk_htab_init(struct awk_htab *t)
 }
 
 static int rehash(struct awk_htab *t)
+	__arith_nonzero_field_on_success(0, nbuckets)
 {
-	size_t newn = t->nbuckets ? t->nbuckets * 2 : 16;
-	struct awk_hnode **nb = calloc(newn, sizeof *nb);
+	size_t newn;
+	struct awk_hnode **nb;
 	size_t i;
+
+	if (t->nbuckets > (size_t)-1 / 2) return 0;
+	newn = t->nbuckets ? t->nbuckets * 2 : 16;
+	nb = calloc(newn, sizeof *nb);
 
 	if (!nb) return 0;
 	for (i = 0; i < t->nbuckets; i++) {

@@ -18,6 +18,7 @@
 
 #include <cctype>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -54,6 +55,8 @@ using DisjointRegionKey = std::pair<const MemRegion *, const MemRegion *>;
 REGISTER_MAP_WITH_PROGRAMSTATE(AssumedDisjointExtent, DisjointRegionKey,
                                DefinedOrUnknownSVal)
 REGISTER_SET_WITH_PROGRAMSTATE(AllocatedBaseRegion, const MemRegion *)
+REGISTER_MAP_WITH_PROGRAMSTATE(AllocatedSpanExtent, const MemRegion *,
+                               DefinedOrUnknownSVal)
 REGISTER_MAP_WITH_PROGRAMSTATE(GrantedSpanProof, const ParmVarDecl *,
                                const ParmVarDecl *)
 using DisjointParameterKey =
@@ -256,6 +259,24 @@ class MemoryContractChecker
     return std::nullopt;
   }
 
+  static bool declaredFreshAllocation(const FunctionDecl *Function) {
+    if (!Function || !Function->getReturnType()->isPointerType())
+      return false;
+    for (const FunctionDecl *Redeclaration : Function->redecls())
+      for (const AnnotateAttr *Attribute :
+           Redeclaration->specific_attrs<AnnotateAttr>()) {
+        StringRef Annotation = Attribute->getAnnotation();
+        if (!Annotation.consume_front("withtok:"))
+          continue;
+        StringRef Family = Annotation.split('(').first.trim();
+        const TypedefNameDecl *Token =
+            dialectToken(Function->getASTContext(), Family);
+        if (hasDialectQualifier(Token, "qual:dynamic_storage"))
+          return true;
+      }
+    return false;
+  }
+
   static SymbolRef stripCasts(SymbolRef Symbol) {
     while (const auto *Cast = dyn_cast_or_null<SymbolCast>(Symbol))
       Symbol = Cast->getOperand();
@@ -319,6 +340,76 @@ class MemoryContractChecker
     return true;
   }
 
+  struct LinearSymbolForm {
+    std::map<SymbolRef, int64_t> Terms;
+    __int128 Constant = 0;
+  };
+
+  static bool addLinearSymbol(SymbolRef Symbol, int64_t Sign,
+                              LinearSymbolForm &Form) {
+    Symbol = stripCasts(Symbol);
+    if (!Symbol)
+      return false;
+    if (const auto *Expression = dyn_cast<SymSymExpr>(Symbol)) {
+      if (Expression->getOpcode() != BO_Add &&
+          Expression->getOpcode() != BO_Sub)
+        goto atomic;
+      return addLinearSymbol(Expression->getLHS(), Sign, Form) &&
+             addLinearSymbol(Expression->getRHS(),
+                             Expression->getOpcode() == BO_Add ? Sign : -Sign,
+                             Form);
+    }
+    if (const auto *Expression = dyn_cast<SymIntExpr>(Symbol)) {
+      if (Expression->getOpcode() != BO_Add &&
+          Expression->getOpcode() != BO_Sub)
+        goto atomic;
+      const llvm::APSInt &Value = Expression->getRHS();
+      if (!Value.isSignedIntN(64))
+        return false;
+      Form.Constant += static_cast<__int128>(Sign) * Value.getSExtValue() *
+                       (Expression->getOpcode() == BO_Add ? 1 : -1);
+      return addLinearSymbol(Expression->getLHS(), Sign, Form);
+    }
+    if (const auto *Expression = dyn_cast<IntSymExpr>(Symbol)) {
+      if (Expression->getOpcode() != BO_Add &&
+          Expression->getOpcode() != BO_Sub)
+        goto atomic;
+      const llvm::APSInt &Value = Expression->getLHS();
+      if (!Value.isSignedIntN(64))
+        return false;
+      Form.Constant += static_cast<__int128>(Sign) * Value.getSExtValue();
+      return addLinearSymbol(Expression->getRHS(),
+                             Expression->getOpcode() == BO_Add ? Sign : -Sign,
+                             Form);
+    }
+  atomic:
+    Form.Terms[Symbol] += Sign;
+    return true;
+  }
+
+  static std::optional<int64_t> symbolicConstantDifference(SVal Left,
+                                                            SVal Right) {
+    SymbolRef L = Left.getAsSymbol();
+    SymbolRef R = Right.getAsSymbol();
+    if (!L || !R)
+      return std::nullopt;
+    LinearSymbolForm Difference;
+    if (!addLinearSymbol(L, 1, Difference) ||
+        !addLinearSymbol(R, -1, Difference))
+      return std::nullopt;
+    for (const auto &[Symbol, Coefficient] : Difference.Terms)
+      if (Coefficient != 0)
+        return std::nullopt;
+    if (Difference.Constant < std::numeric_limits<int64_t>::min() ||
+        Difference.Constant > std::numeric_limits<int64_t>::max())
+      return std::nullopt;
+    return static_cast<int64_t>(Difference.Constant);
+  }
+
+  static bool symbolicallyEquivalent(SVal Left, SVal Right) {
+    return symbolicConstantDifference(Left, Right) == 0;
+  }
+
   // For a heap allocation whose real dynamic extent was set (above)
   // directly from its own size ARGUMENT expression, prove a span
   // in-bounds when the operation's LENGTH argument shares that same
@@ -345,6 +436,27 @@ class MemoryContractChecker
      * expression wrapped before reaching this point. */
     if (ExtentSymbol && ExtentSymbol == LengthSymbol)
       return true;
+    if (symbolicallyEquivalent(Extent, Length))
+      return true;
+    if (std::optional<int64_t> Difference =
+            symbolicConstantDifference(Extent, Length)) {
+      if (*Difference > 0 && LengthSymbol) {
+        QualType LengthType = LengthSymbol->getType();
+        if (LengthType->isIntegerType()) {
+          llvm::APSInt Limit =
+              C.getSValBuilder().getBasicValueFactory().getMaxValue(LengthType);
+          llvm::APSInt Delta(
+              llvm::APInt(Limit.getBitWidth(),
+                          static_cast<uint64_t>(*Difference)),
+              Limit.isUnsigned());
+          Limit -= Delta;
+          const llvm::APSInt *Maximum =
+              C.getSValBuilder().getMaxValue(State, Length);
+          if (Maximum && *Maximum <= Limit)
+            return true;
+        }
+      }
+    }
     const auto *ExtentProduct = dyn_cast_or_null<SymSymExpr>(ExtentSymbol);
     const auto *LengthProduct = dyn_cast_or_null<SymSymExpr>(LengthSymbol);
     if (ExtentProduct && LengthProduct &&
@@ -716,8 +828,13 @@ public:
     if (UseAssumedSpans)
       if (const auto *Element =
               dyn_cast_or_null<ElementRegion>(Pointer.getAsRegion()))
-        if (const DefinedOrUnknownSVal *BaseExtent =
-                State->get<AssumedSpanExtent>(Element->getSuperRegion())) {
+        {
+          const DefinedOrUnknownSVal *BaseExtent =
+              State->get<AssumedSpanExtent>(Element->getSuperRegion());
+          if (!BaseExtent)
+            BaseExtent = State->get<AllocatedSpanExtent>(
+                Element->getSuperRegion()->getBaseRegion());
+          if (BaseExtent) {
           SVal ElementBytes = getElementExtent(Element->getElementType(),
                                                C.getSValBuilder());
           SVal Offset = Element->getIndex();
@@ -739,6 +856,7 @@ public:
             if (ExtentProvesLength(Remaining))
               return true;
           }
+        }
         }
     SVal Extent = getDynamicExtentWithOffset(State, Pointer);
     if (Extent.isUnknownOrUndef() || Length.isUnknownOrUndef())
@@ -829,30 +947,40 @@ public:
                             .getQuantity());
   }
 
-  static const ParmVarDecl *restrictRootParameter(const Expr *Expression) {
+  static const ParmVarDecl *rootParameter(const Expr *Expression) {
     if (!Expression)
       return nullptr;
     Expression = Expression->IgnoreParenCasts();
     if (const auto *Reference = dyn_cast<DeclRefExpr>(Expression))
       if (const auto *Parameter = dyn_cast<ParmVarDecl>(Reference->getDecl()))
-        return Parameter->getType().isRestrictQualified() ? Parameter
-                                                         : nullptr;
+        return Parameter;
     if (const auto *Binary = dyn_cast<BinaryOperator>(Expression))
       if (Binary->getOpcode() == BO_Add || Binary->getOpcode() == BO_Sub)
-        return restrictRootParameter(Binary->getLHS());
+        return rootParameter(Binary->getLHS());
     if (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(Expression))
-      return restrictRootParameter(Subscript->getBase());
+      return rootParameter(Subscript->getBase());
     if (const auto *Address = dyn_cast<UnaryOperator>(Expression))
       if (Address->getOpcode() == UO_AddrOf)
-        return restrictRootParameter(Address->getSubExpr());
+        return rootParameter(Address->getSubExpr());
     return nullptr;
   }
 
-  static bool restrictDisjointSpanProven(const Expr *First,
-                                         const Expr *Second) {
-    const ParmVarDecl *A = restrictRootParameter(First);
-    const ParmVarDecl *B = restrictRootParameter(Second);
-    return A && B && A != B;
+  static bool restrictDisjointSpanProven(const Expr *FirstExpression,
+                                         const Expr *SecondExpression,
+                                         SVal First, SVal Second) {
+    const ParmVarDecl *A = rootParameter(FirstExpression);
+    const ParmVarDecl *B = rootParameter(SecondExpression);
+    if ((!A || !A->getType().isRestrictQualified()) &&
+        (!B || !B->getType().isRestrictQualified()))
+      return false;
+    const MemRegion *FirstRegion = First.getAsRegion();
+    const MemRegion *SecondRegion = Second.getAsRegion();
+    if (!FirstRegion || !SecondRegion)
+      return false;
+    RegionOffset FirstOffset = FirstRegion->getAsOffset();
+    RegionOffset SecondOffset = SecondRegion->getAsOffset();
+    return FirstOffset.isValid() && SecondOffset.isValid() &&
+           FirstOffset.getRegion() != SecondOffset.getRegion();
   }
 
   bool derivedContractSpanProven(SVal Pointer, SVal Length,
@@ -1002,8 +1130,17 @@ public:
        * distinct symbolic roots alone are not such a proof. */
       if (AO.getRegion()->getMemorySpace() != BO.getRegion()->getMemorySpace())
         return true;
-      if (State->contains<AllocatedBaseRegion>(AO.getRegion()) ||
-          State->contains<AllocatedBaseRegion>(BO.getRegion()))
+      auto IsFreshAllocation = [&](const MemRegion *Region) {
+        const MemRegion *Base = Region->getBaseRegion();
+        for (const MemRegion *Allocated :
+             State->get<AllocatedBaseRegion>())
+          if (Allocated == Region || Allocated == Base ||
+              Allocated->getBaseRegion() == Base)
+            return true;
+        return false;
+      };
+      if (IsFreshAllocation(AO.getRegion()) ||
+          IsFreshAllocation(BO.getRegion()))
         return true;
       if (isa<SymbolicRegion>(AO.getRegion()) ||
           isa<SymbolicRegion>(BO.getRegion()))
@@ -1328,7 +1465,8 @@ public:
       SVal Second = Call.getArgSVal(Contract.Second);
       SVal Length = Call.getArgSVal(Contract.Length);
       if (!restrictDisjointSpanProven(Call.getArgExpr(Contract.First),
-                                     Call.getArgExpr(Contract.Second)) &&
+                                     Call.getArgExpr(Contract.Second), First,
+                                     Second) &&
           !overlapProven(First, Second, Length, C.getState(), C)) {
         BugType *Type = OverlapBT.get();
         report("memcpy ranges are not proven nonoverlapping", Type, Call,
@@ -1353,6 +1491,9 @@ public:
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
     ProgramStateRef State = C.getState();
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    if (declaredFreshAllocation(Function))
+      if (const MemRegion *Region = Call.getReturnValue().getAsRegion())
+        State = State->add<AllocatedBaseRegion>(Region->getBaseRegion());
     if (std::optional<SVal> Extent =
             declaredReturnSpanExtent(Function, Call, C)) {
       if (std::optional<DefinedOrUnknownSVal> DefinedSize =
@@ -1361,7 +1502,7 @@ public:
           const MemRegion *Base = Region->getBaseRegion();
           State = setDynamicExtent(State, Base, *DefinedSize,
                                    C.getSValBuilder());
-          State = State->add<AllocatedBaseRegion>(Base);
+          State = State->set<AllocatedSpanExtent>(Base, *DefinedSize);
         }
       }
     // See stringLengthSourceSpanProven above: record which pointer
