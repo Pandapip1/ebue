@@ -12,6 +12,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "pthread_impl.h"
+#include "ownership_stubs.h"
 #include "plat_thread.h"
 #include "plat_fd.h"
 
@@ -180,6 +181,7 @@ int pthread_mutex_init(pthread_mutex_t *__restrict mutex,
 	data->prioceiling = attributes ? attributes->prioceiling :
 		sched_get_priority_min(SCHED_FIFO);
 	data->robust = attributes ? attributes->robust : PTHREAD_MUTEX_STALLED;
+	__ownership_pthread_mutex_initialized(mutex);
 	return 0;
 }
 
@@ -214,9 +216,12 @@ int pthread_mutex_destroy(pthread_mutex_t *mutex)
 	data->magic = MUTEX_DEAD;
 	__plat_fast_unlock();
 	if (semaphore) __plat_close(semaphore);
+	__ownership_pthread_mutex_destroyed(mutex);
 	return 0;
 }
 
+__attribute__((ownership_drops_token(pthread_mutex_unlocked, 1),
+  ownership_adds_duplicable_token(pthread_mutex_locked, 1)))
 static int mutex_acquire(pthread_mutex_t *mutex,
 	const struct timespec *absolute, int try_only)
 {
@@ -257,13 +262,19 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 			data->owner_pid = getpid();
 			data->recursion = 1;
 			__plat_fast_unlock();
-			return data->robust == PTHREAD_MUTEX_ROBUST &&
-				data->robust_state == ROBUST_OWNER_DEAD ? EOWNERDEAD : 0;
+			if (data->robust == PTHREAD_MUTEX_ROBUST &&
+			    data->robust_state == ROBUST_OWNER_DEAD) {
+				__ownership_pthread_mutex_locked(mutex);
+				return EOWNERDEAD;
+			}
+			__ownership_pthread_mutex_locked(mutex);
+			return 0;
 		}
 		if (owned_by(data, self)) {
 			if (data->type == PTHREAD_MUTEX_RECURSIVE) {
 				data->recursion++;
 				__plat_fast_unlock();
+				__ownership_pthread_mutex_locked(mutex);
 				return 0;
 			}
 			if (data->type == PTHREAD_MUTEX_ERRORCHECK || try_only) {
@@ -368,6 +379,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
 	}
 	__plat_fast_unlock();
 	if (wake) __plat_semaphore_post(data->semaphore);
+	__ownership_pthread_mutex_unlocked(mutex);
 	return 0;
 }
 
