@@ -332,17 +332,18 @@ nl_catd catopen(const char *name, int oflag)
 	components_left = strlen(path) + 1;
 	p = path;
 	while (components_left > 0) {
-		size_t n;
+		size_t n, template_len;
 
 		components_left--;
-		z = strchr(p, ':');
-		if (!z) z = p + strlen(p);
+		template_len = strcspn(p, ":");
+		z = p + template_len;
 
 		/* "A leading or two adjacent <colon> characters ( "::" ) is
 		 * equivalent to specifying %N." */
-		n = z == p ? expand(buf, sizeof buf, dflt, sizeof dflt - 1,
-		                    name, lang)
-		           : expand(buf, sizeof buf, p, (size_t)(z - p), name, lang);
+		n = template_len == 0 ? expand(buf, sizeof buf, dflt,
+		                                 sizeof dflt - 1, name, lang)
+		                        : expand(buf, sizeof buf, p, template_len,
+		                                 name, lang);
 		if (n != (size_t)-1) {
 			cd = read_catalog(buf);
 			if (cd != (nl_catd)-1) return cd;
