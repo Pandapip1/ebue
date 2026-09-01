@@ -270,6 +270,7 @@ void __plat_dealloc(void *p)
  * the original. Simple, and the copy is bounded by real, exact sizes
  * both ends already track precisely, so there is no scope for an
  * over-read here even though it is not the fastest possible realloc. */
+__attribute__((ownership_reallocates(1), ownership_returns(plat_heap)))
 void *__plat_realloc(void *p, size_t n)
 {
 	struct ntlibc_malloc_chunk_hdr *h;

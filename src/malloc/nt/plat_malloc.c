@@ -30,6 +30,7 @@ void *__plat_alloc(size_t n, int zero)
 	return RtlAllocateHeap(__process_heap(), zero ? HEAP_ZERO_MEMORY : 0, n);
 }
 
+__attribute__((ownership_reallocates(1), ownership_returns(plat_heap)))
 void *__plat_realloc(void *p, size_t n)
 {
 	return RtlReAllocateHeap(__process_heap(), 0, p, n);

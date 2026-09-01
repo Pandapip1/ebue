@@ -44,6 +44,7 @@ void *calloc(size_t m, size_t n)
 	return p;
 }
 
+__attribute__((ownership_reallocates(1), ownership_returns(malloc)))
 void *realloc(void *p, size_t n)
 {
 	void *q;
@@ -63,6 +64,7 @@ size_t malloc_usable_size(void *p)
 	return p ? __plat_alloc_size(p) : 0;
 }
 
+__attribute__((ownership_reallocates(1), ownership_returns(malloc)))
 void *reallocarray(void *p, size_t m, size_t n)
 {
 	if (n && m > (size_t)-1 / n) { errno = ENOMEM; return 0; }
