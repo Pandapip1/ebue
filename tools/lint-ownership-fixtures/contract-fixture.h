@@ -1,11 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-[[ownership_adds_token(contract_ready, 1)]]
-int contract_repeated_in_definition(void *object);
+#include "../../include/ownership.h"
 
-[[ownership_drops_token(contract_ready, 1)]]
-int contract_inherited_only(void *object);
+token contract_ready;
+#undef token
 
-[[ownership_adds_token(contract_ready, 1)]]
-int contract_primitive(void *object);
+int contract_repeated_in_definition(void *object grant(contract_ready));
+int contract_inherited_only(void *object consume(contract_ready));
+int contract_primitive(void *object grant(contract_ready));

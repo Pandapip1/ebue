@@ -3,8 +3,7 @@
 
 #include "contract-fixture.h"
 
-[[ownership_adds_token(contract_ready, 1)]]
-int contract_repeated_in_definition(void *object)
+int contract_repeated_in_definition(void *object grant(contract_ready))
 {
 	return contract_primitive(object);
 }
