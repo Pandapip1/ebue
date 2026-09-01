@@ -45,7 +45,34 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become NA at run time instead, by design).
 #
-# COUNTS PASS=102 BUG=3 UNIMPL=26 NA=14 FLAKY=1
+# COUNTS PASS=105 BUG=3 UNIMPL=23 NA=14 FLAKY=1
+# (ipc_msg/ipc_sem/ipc_shm moved from UNIMPL to the PASS default in the
+# XSI-IPC pass that added <sys/ipc.h>/<sys/shm.h>/<sys/msg.h>/<sys/sem.h>
+# -- see test/posix-ipc.c. Verified by building and running the
+# unmodified upstream ipc_shm.c/ipc_msg.c/ipc_sem.c natively against
+# this project's Linux backend (real shmget(2)/msgget(2)/semget(2)
+# syscalls): every assertion passes except shm_perm.gid/cgid (and the
+# msg_perm/sem_perm equivalents), which fail for a pre-existing,
+# unrelated reason already tracked separately -- getgid()/getegid()
+# (src/unistd/ids.c) are hardcoded to 1000 rather than reading the real
+# credential, so ntlibc's own getegid() disagrees with the value the
+# real kernel stamped into shm_perm.gid at shmget() time. The NT backend
+# does not share that failure mode: it populates ipc_perm.{uid,gid}
+# FROM this project's own geteuid()/getegid() at creation time (src/ipc/
+# nt/plat_{shm,msg,sem}.c), so the corpus test's `== geteuid()/getegid()`
+# assertions compare against the same function on both sides by
+# construction, whatever that function returns. NT itself could not be
+# executed to confirm this end to end: this environment's Wine could not
+# be brought up at all under the qemu-user x86_64-on-aarch64 translation
+# available here (wine-preloader: "Unable to find a guest_base to
+# satisfy all guest address mapping requirements", reproduced across
+# two qemu versions and unrelated to this change), and this baseline's
+# own note above already records that Wine needs the project's patched
+# build (RtlCloneUserProcess) for XSI IPC's fork()-based test shape
+# regardless. This PASS therefore rests on real Linux execution of the
+# identical upstream source plus code review of the NT backend, not on
+# an observed Wine run -- flagged here for whoever next runs this
+# ledger's probe against real Wine to confirm.)
 # (whole-corpus totals once the wildcard default below is applied to
 # every real case tools/libc-test.sh discovers -- not a count of rows in
 # this file, which lists only the 45 explicit exceptions plus the
@@ -61,9 +88,6 @@ env                               runtime=wine,target_arch=x86_64,kernel32=no  U
 execle-env                        runtime=wine,target_arch=x86_64,kernel32=no  NA  no /bin/sh on the target; execle("/bin/sh",...) cannot succeed
 fcntl                             runtime=wine,target_arch=x86_64,kernel32=no  BUG  F_SETLK across fork(): the child inherits the same NT file object, so its byte-range-lock request does not conflict with the parent's lock as POSIX requires for the child's distinct process; the test reports "lock failed to work"
 flockfile-list                    runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  lib/libc.a: error: link symbol 'malloc' defined twice
-ipc_msg                           runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  ipc_msg.c:9: error: include file 'sys/msg.h' not found
-ipc_sem                           runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  ipc_sem.c:9: error: include file 'sys/sem.h' not found
-ipc_shm                           runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  ipc_shm.c:9: error: include file 'sys/shm.h' not found
 malloc-brk-fail                   runtime=wine,target_arch=x86_64,kernel32=no  NA  design difference, not a defect: t_vmfill now genuinely exhausts free virtual address space, but malloc() uses the pre-existing NT process heap (src/malloc/nt/plat_malloc.c), whose already-reserved arena can still satisfy malloc(10000); exhausting addresses therefore does not establish this test's musl/brk-specific premise that the next allocation must fail
 malloc-oom                        runtime=wine,target_arch=x86_64,kernel32=no  NA  upstream t_memfill reaches real virtual-address exhaustion, then declines the experiment because t_setrlim(RLIMIT_DATA, 0) is stubbed: setrlimit() is not enforced on this target, so the helper cannot exhaust the NT process heap's existing reserve and the required malloc-OOM premise is not established
 mbc                               runtime=wine,target_arch=x86_64,kernel32=no  NA  design difference, not a defect: its one failure is mbrtowc("\xf0\x90\x80\x80") yielding 0xd800 where it wants 0x10000. wchar_t is 16-bit on this target because that is the Windows ABI (arch/x86_64/bits/alltypes.h.in), so a non-BMP character is a UTF-16 surrogate pair and cannot be one wchar_t; src/stdlib/mbrtowc.c returns the high surrogate and holds the low one in the mbstate_t, and test/posix-wchar.c:posix_wchar_wcwidth_non_bmp records the same constraint. Built and ran here only as of include/langinfo.h
