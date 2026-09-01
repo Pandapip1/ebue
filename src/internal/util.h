@@ -242,6 +242,18 @@ int __util_paste_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_tr_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_unexpand_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* Tier 4: "bigger engine" utilities -- real parsers, not just option
+ * loops over stdio.  patch(1p) is the first: it reads a diff(1)-style
+ * difference report (normal, copied-context, unified-context, or ed
+ * script -- see src/util/patch.c's own header comment for exactly which
+ * of each format's behaviour is implemented, and the real, cited scope
+ * narrowings against XCU patch(1p) taken along the way) and applies it
+ * to a file.  Not __pure__: it reads (and, absent -o, writes) real
+ * files.  nonnull(2) for the same reason as every other utility above:
+ * argv is never NULL from a real caller, and a usage-error path taken
+ * with argc==1 still needs argv[0] for its own diagnostic. */
+int __util_patch_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 /* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
  * src/util/rm.c -----------------------------------------------------
  *

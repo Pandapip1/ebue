@@ -519,6 +519,20 @@ static int bi_fold(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== Tier 4: "bigger engine" utilities =================================
+ *
+ * patch(1p): same reasoning as every tier above -- it also exists as a
+ * real standalone obj/bin/patch.exe (src/util/patch.c, declared in
+ * src/internal/util.h), and stays registered here too.  Not a 2.14
+ * special built-in and has no effect on the shell execution environment
+ * itself, so env_effect is 0, same as the rest of this table. */
+static int bi_patch(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_patch(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_patch_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* XCU 2.14: "exit [n] -- ... shall cause the shell to exit with the
  * exit status specified by the unsigned decimal integer n.  If n is
  * specified, but its value is not between 0 and 255 inclusively, the
@@ -895,6 +909,7 @@ static const struct sh_builtin builtins[] = {
 	{ "expand",   0, 0, bi_expand },
 	{ "unexpand", 0, 0, bi_unexpand },
 	{ "fold",     0, 0, bi_fold },
+	{ "patch", 0, 0, bi_patch },
 	{ 0, 0, 0, 0 }
 };
 
