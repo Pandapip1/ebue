@@ -95,14 +95,20 @@
 int __name_too_long(const char *path)
 {
 	const char *p = path;
+	size_t remaining = strlen(path);
+	size_t component = 0;
 
-	while (*p) {
-		const char *start = p;
-		while (*p && *p != '/' && *p != '\\') p++;
-		if ((size_t)(p - start) > NAME_MAX) return 1;
-		if (*p) p++;
+	while (remaining > 0) {
+		if (*p == '/' || *p == '\\') {
+			if (component > NAME_MAX) return 1;
+			component = 0;
+		} else {
+			component++;
+		}
+		p++;
+		remaining--;
 	}
-	return 0;
+	return component > NAME_MAX;
 }
 
 withtok(internal_heap_allocated)
