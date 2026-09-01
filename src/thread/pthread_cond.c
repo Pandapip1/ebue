@@ -43,9 +43,8 @@ struct condattr_data {
 struct cond_cleanup {
 	struct cond_data *cond;
 	struct cond_waiter *waiter;
-	pthread_mutex_t *mutex
-		__attribute__((ownership_holds_handle(pthread_mutex),
-			ownership_holds_token(pthread_mutex_unlocked)));
+	pthread_mutex_t *mutex withhandle(pthread_mutex)
+		withtok(pthread_mutex_unlocked);
 	int mutex_held;
 };
 
@@ -94,9 +93,8 @@ static int cond_ready(pthread_cond_t *cond)
 	return data->magic == COND_MAGIC ? 0 : EINVAL;
 }
 
-__attribute__((ownership_constructs(pthread_cond, 1),
-	ownership_static(pthread_cond, 1)))
-int pthread_cond_init(pthread_cond_t *__restrict cond,
+
+int pthread_cond_init(pthread_cond_t *__restrict cond construct(pthread_cond) static_handle(pthread_cond),
 	const pthread_condattr_t *__restrict attr handle(pthread_condattr))
 {
 	struct cond_data *data;
@@ -114,9 +112,8 @@ int pthread_cond_init(pthread_cond_t *__restrict cond,
 	return 0;
 }
 
-__attribute__((ownership_destroys(pthread_cond, 1),
-	ownership_static(pthread_cond, 1)))
-int pthread_cond_destroy(pthread_cond_t *cond)
+
+int pthread_cond_destroy(pthread_cond_t *cond destroy(pthread_cond) static_handle(pthread_cond))
 {
 	struct cond_data *data;
 	int error = cond_ready(cond);
@@ -261,26 +258,23 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	return lock_error ? lock_error : result;
 }
 
-__attribute__((ownership_requires_handle(pthread_cond, 1),
-	ownership_static(pthread_cond, 1)))
-int pthread_cond_wait(pthread_cond_t *__restrict cond,
+
+int pthread_cond_wait(pthread_cond_t *__restrict cond handle(pthread_cond) static_handle(pthread_cond),
 	pthread_mutex_t *__restrict mutex handle(pthread_mutex) static_handle(pthread_mutex) withtok(pthread_mutex_locked))
 {
 	return cond_wait(cond, mutex, 0);
 }
 
-__attribute__((ownership_requires_handle(pthread_cond, 1),
-	ownership_static(pthread_cond, 1)))
-int pthread_cond_timedwait(pthread_cond_t *__restrict cond,
+
+int pthread_cond_timedwait(pthread_cond_t *__restrict cond handle(pthread_cond) static_handle(pthread_cond),
 	pthread_mutex_t *__restrict mutex handle(pthread_mutex) static_handle(pthread_mutex) withtok(pthread_mutex_locked), const struct timespec *__restrict absolute)
 {
 	if (!absolute) return EINVAL;
 	return cond_wait(cond, mutex, absolute);
 }
 
-__attribute__((ownership_requires_handle(pthread_cond, 1),
-	ownership_static(pthread_cond, 1)))
-int pthread_cond_signal(pthread_cond_t *cond)
+
+int pthread_cond_signal(pthread_cond_t *cond handle(pthread_cond) static_handle(pthread_cond))
 {
 	struct cond_data *data;
 	struct cond_waiter *waiter;
@@ -299,9 +293,8 @@ int pthread_cond_signal(pthread_cond_t *cond)
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_cond, 1),
-	ownership_static(pthread_cond, 1)))
-int pthread_cond_broadcast(pthread_cond_t *cond)
+
+int pthread_cond_broadcast(pthread_cond_t *cond handle(pthread_cond) static_handle(pthread_cond))
 {
 	struct cond_data *data;
 	struct cond_waiter *waiter;

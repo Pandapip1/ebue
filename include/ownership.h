@@ -15,6 +15,8 @@
 	__attribute__((annotate("qual:sentinel_exclude=" #value)))
 #define withtok(token_name) \
 	__attribute__((annotate("withtok:" #token_name)))
+#define withhandle(handle_name) \
+	__attribute__((annotate("withhandle:" #handle_name)))
 #define withouttok(token_name) \
 	__attribute__((annotate("withouttok:" #token_name)))
 #define consume(token_name) \

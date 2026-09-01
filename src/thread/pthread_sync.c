@@ -180,8 +180,8 @@ static void unlink_barrier_waiter_locked(struct barrier_waiter *waiter)
 	if (*link) *link = waiter->next;
 }
 
-__attribute__((ownership_constructs(pthread_barrier, 1)))
-int pthread_barrier_init(pthread_barrier_t *__restrict barrier,
+
+int pthread_barrier_init(pthread_barrier_t *__restrict barrier construct(pthread_barrier),
 	const pthread_barrierattr_t *__restrict attr handle(pthread_barrierattr), unsigned count)
 {
 	struct barrier_data *data;
@@ -200,8 +200,8 @@ int pthread_barrier_init(pthread_barrier_t *__restrict barrier,
 	return 0;
 }
 
-__attribute__((ownership_destroys(pthread_barrier, 1)))
-int pthread_barrier_destroy(pthread_barrier_t *barrier)
+
+int pthread_barrier_destroy(pthread_barrier_t *barrier destroy(pthread_barrier))
 {
 	struct barrier_data *data;
 	int result = 0;
@@ -222,8 +222,8 @@ int pthread_barrier_destroy(pthread_barrier_t *barrier)
 	return result;
 }
 
-__attribute__((ownership_requires_handle(pthread_barrier, 1)))
-int pthread_barrier_wait(pthread_barrier_t *barrier)
+
+int pthread_barrier_wait(pthread_barrier_t *barrier handle(pthread_barrier))
 {
 	struct barrier_data *data;
 	struct barrier_waiter waiter;

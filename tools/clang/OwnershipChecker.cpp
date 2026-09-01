@@ -1244,6 +1244,7 @@ class OwnershipContractChecker : public Checker<check::ASTDecl<FunctionDecl>> {
            Annotation.starts_with("construct:") ||
            Annotation.starts_with("destroy:") ||
            Annotation.starts_with("handle:") ||
+           Annotation.starts_with("withhandle:") ||
            Annotation.starts_with("static_handle:");
   }
 
@@ -1776,6 +1777,7 @@ class OwnershipTypeChecker
     };
     static constexpr MemberAnnotation Annotations[] = {
         {"ownership_holds_handle:", OwnershipTypeMember::Handle},
+        {"withhandle:", OwnershipTypeMember::Handle},
         {"ownership_holds_token:", OwnershipTypeMember::LinearToken},
         {"ownership_holds_duplicable_token:",
          OwnershipTypeMember::DuplicableToken}};
