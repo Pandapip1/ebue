@@ -94,14 +94,16 @@ static const char *tmpdir(void)
 
 FILE *tmpfile(void)
 {
+	const char *dir = tmpdir();
 	char *tmpl;
 	int fd;
 	FILE *f;
-	size_t n = strlen(tmpdir());
+	size_t n = strlen(dir);
 
+	if (n > (size_t)-1 - sizeof "/ntlibcXXXXXX") { errno = ENOMEM; return 0; }
 	tmpl = malloc(n + sizeof "/ntlibcXXXXXX");
 	if (!tmpl) return 0;
-	memcpy(tmpl, tmpdir(), n);
+	memcpy(tmpl, dir, n);
 	memcpy(tmpl + n, "/ntlibcXXXXXX", sizeof "/ntlibcXXXXXX");
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return 0; }
