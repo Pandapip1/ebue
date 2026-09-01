@@ -547,11 +547,12 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
 
 void globfree(glob_t *pglob)
 {
-	size_t i, offs;
+	size_t i, offs, count;
 
 	if (!pglob || !pglob->gl_pathv) return;
 	offs = pglob->gl_offs;
-	for (i = 0; i < pglob->gl_pathc; i++) __free(pglob->gl_pathv[offs + i]);
+	count = pglob->gl_pathc;
+	for (i = 0; i < count; i++) __free(pglob->gl_pathv[offs + i]);
 	__free((void *)pglob->gl_pathv);
 	pglob->gl_pathv = 0;
 	pglob->gl_pathc = 0;
