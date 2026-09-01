@@ -943,8 +943,10 @@ arithmetic_done:
 /* Both required: *syntax = 0 is written unconditionally at entry
  * (before any error path), and *pp is dereferenced immediately
  * (`p = *pp + 2`). */
+withtok(internal_heap_allocated)
 static char *cmdsub_dollar_text(const char **pp, int *syntax)
     __attribute__((nonnull(1, 2)));
+withtok(internal_heap_allocated)
 static char *cmdsub_dollar_text(const char **pp, int *syntax)
 {
 	const char *p = *pp + 2;
@@ -992,8 +994,10 @@ static char *cmdsub_dollar_text(const char **pp, int *syntax)
  * NULL on an unterminated substitution or OOM (*syntax distinguishes
  * the two). */
 /* Same shape and same reasoning as cmdsub_dollar_text() just above. */
+withtok(internal_heap_allocated)
 static char *cmdsub_backquote_text(const char **pp, int *syntax)
     __attribute__((nonnull(1, 2)));
+withtok(internal_heap_allocated)
 static char *cmdsub_backquote_text(const char **pp, int *syntax)
 {
 	const char *p = *pp + 1;
