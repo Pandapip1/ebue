@@ -18,8 +18,6 @@ __wraps void *memmove(void *dest withtok(writable_span(n)),
 	 * worth restating byte-range-overlap logic just to dodge a check
 	 * that exists to police unmarked wraparound, not this one. */
 	if ((uintptr_t)s - (uintptr_t)d - n <= -2*n) {
-		__ownership_writable_span(d, n);
-		__ownership_readable_span(s, n);
 		__ownership_disjoint_span(d, s, n);
 		return memcpy(d, s, n);
 	}

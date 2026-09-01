@@ -400,6 +400,20 @@ class MemoryContractChecker
     return false;
   }
 
+  static std::optional<SVal>
+  callerArgumentValue(unsigned Argument, ProgramStateRef State,
+                      const LocationContext *Context) {
+    const auto *Frame = dyn_cast_or_null<StackFrameContext>(Context);
+    if (!Frame || Frame->inTopFrame())
+      return std::nullopt;
+    const auto *Call = dyn_cast_or_null<CallExpr>(Frame->getCallSite());
+    if (!Call || Argument >= Call->getNumArgs())
+      return std::nullopt;
+    SVal Value = State->getSVal(Call->getArg(Argument), Frame->getParent());
+    return Value.isUnknownOrUndef() ? std::nullopt
+                                    : std::optional<SVal>(Value);
+  }
+
 public:
   void checkBranchCondition(const Stmt *Condition, CheckerContext &C) const {
     const auto *Comparison = dyn_cast<BinaryOperator>(Condition);
@@ -416,11 +430,15 @@ public:
     if (!Left || !Right)
       return;
     bool LeftLessEqual =
-        (IsTrue && Comparison->getOpcode() == BO_LE) ||
-        (IsFalse && Comparison->getOpcode() == BO_GT);
+        (IsTrue && (Comparison->getOpcode() == BO_LE ||
+                    Comparison->getOpcode() == BO_LT)) ||
+        (IsFalse && (Comparison->getOpcode() == BO_GT ||
+                     Comparison->getOpcode() == BO_GE));
     bool RightLessEqual =
-        (IsTrue && Comparison->getOpcode() == BO_GE) ||
-        (IsFalse && Comparison->getOpcode() == BO_LT);
+        (IsTrue && (Comparison->getOpcode() == BO_GE ||
+                    Comparison->getOpcode() == BO_GT)) ||
+        (IsFalse && (Comparison->getOpcode() == BO_LT ||
+                     Comparison->getOpcode() == BO_LE));
     if (LeftLessEqual)
       State = State->add<ProvenLessEqual>({Left, Right});
     if (RightLessEqual)
@@ -603,7 +621,12 @@ public:
     SmallVector<DisjointContract, 1> Disjoint;
     tokenContracts(CurrentFunction, Spans, Disjoint);
     std::optional<DefinedOrUnknownSVal> Extent;
+    if (const DefinedOrUnknownSVal *Assumed =
+            State->get<AssumedSpanExtent>(Element->getSuperRegion()))
+      Extent = *Assumed;
     for (const SpanContract &Contract : Spans) {
+      if (Extent)
+        break;
       if (Contract.Operation != MemoryTokenOperation::Require)
         continue;
       const ParmVarDecl *PointerParameter =
@@ -616,9 +639,11 @@ public:
         continue;
       const ParmVarDecl *LengthParameter =
           CurrentFunction->getParamDecl(Contract.Length);
-      Extent = State->getSVal(
-          State->getLValue(LengthParameter, C.getLocationContext()))
-                   .getAs<DefinedOrUnknownSVal>();
+      SVal LengthValue = callerArgumentValue(
+          Contract.Length, State, C.getLocationContext()).value_or(
+          State->getSVal(
+              State->getLValue(LengthParameter, C.getLocationContext())));
+      Extent = LengthValue.getAs<DefinedOrUnknownSVal>();
       break;
     }
     if (!Extent || Length.isUnknownOrUndef())
@@ -647,16 +672,51 @@ public:
       return false;
     if (State->contains<ProvenLessEqual>({LengthSymbol, RemainingSymbol}))
       return true;
+    SymbolRef DynamicRemaining =
+        getDynamicExtentWithOffset(State, Pointer).getAsSymbol();
+    if (DynamicRemaining) {
+      const auto *DynamicDifference = dyn_cast<IntSymExpr>(DynamicRemaining);
+      for (const SymbolRelation &Relation : State->get<ProvenLessEqual>()) {
+        const auto *BoundDifference = dyn_cast<IntSymExpr>(Relation.second);
+        if (Relation.first == LengthSymbol && DynamicDifference &&
+            BoundDifference && DynamicDifference->getOpcode() == BO_Sub &&
+            BoundDifference->getOpcode() == BO_Sub &&
+            DynamicDifference->getRHS() == BoundDifference->getRHS() &&
+            llvm::APSInt::compareValues(DynamicDifference->getLHS(),
+                                        BoundDifference->getLHS()) == 0)
+          return true;
+      }
+    }
     SymbolRef ExtentSymbol = Extent->getAsSymbol();
     SymbolRef OffsetSymbol = Offset.getAsSymbol();
-    if (!ExtentSymbol || !OffsetSymbol)
+    if (!OffsetSymbol)
       return false;
     for (const SymbolRelation &Relation : State->get<ProvenLessEqual>()) {
+      if (Relation.first != LengthSymbol)
+        continue;
       const auto *Difference = dyn_cast<SymSymExpr>(Relation.second);
-      if (Relation.first == LengthSymbol && Difference &&
-          Difference->getOpcode() == BO_Sub &&
-          Difference->getLHS() == ExtentSymbol &&
-          Difference->getRHS() == OffsetSymbol)
+      if (ExtentSymbol && Difference && Difference->getOpcode() == BO_Sub &&
+          Difference->getRHS() == OffsetSymbol) {
+        SymbolRef Minuend = Difference->getLHS();
+        if (Minuend == ExtentSymbol)
+          return true;
+      }
+      const auto *ConstantDifference = dyn_cast<IntSymExpr>(Relation.second);
+      const llvm::APSInt *KnownExtent =
+          C.getSValBuilder().getKnownValue(State, *Extent);
+      if (!KnownExtent || !ConstantDifference ||
+          ConstantDifference->getOpcode() != BO_Sub ||
+          ConstantDifference->getRHS() != OffsetSymbol ||
+          llvm::APSInt::compareValues(ConstantDifference->getLHS(),
+                                      *KnownExtent) > 0)
+        continue;
+      SVal OffsetWithinBound = C.getSValBuilder().evalBinOp(
+          State, BO_LE, Offset,
+          C.getSValBuilder().makeIntVal(ConstantDifference->getLHS()),
+          C.getSValBuilder().getConditionType());
+      std::optional<DefinedOrUnknownSVal> Within =
+          OffsetWithinBound.getAs<DefinedOrUnknownSVal>();
+      if (Within && !State->assume(*Within, false))
         return true;
     }
     return false;
@@ -867,6 +927,9 @@ public:
           State->getLValue(PointerParameter, C.getLocationContext()));
       SVal LengthValue = State->getSVal(
           State->getLValue(LengthParameter, C.getLocationContext()));
+      if (std::optional<SVal> CallerLength = callerArgumentValue(
+              Contract.Length, State, C.getLocationContext()))
+        LengthValue = *CallerLength;
       const MemRegion *Region = PointerValue.getAsRegion();
       std::optional<DefinedOrUnknownSVal> DefinedLength =
           LengthValue.getAs<DefinedOrUnknownSVal>();

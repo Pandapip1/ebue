@@ -39,7 +39,6 @@
 #include <string.h>
 #include <errno.h>
 #include "dirent_internal.h"
-#include "ownership_stubs.h"
 
 static int append_missing(struct __fd *f, struct dirent *out, size_t size)
 {
@@ -56,7 +55,6 @@ static int append_missing(struct __fd *f, struct dirent *out, size_t size)
 		remaining--;
 		if (f->vseen & (1u << i)) continue;
 		d = (struct dirent *)((char *)out + used);
-		__ownership_writable_span(d, sizeof *d);
 		memset(d, 0, sizeof *d);
 		d->d_ino = (ino_t)__vfs_mandatory_kind(f->vfs, i);
 		d->d_type = f->vfs == __VFS_ROOT ? __DT_DIR : __DT_CHR;
@@ -93,7 +91,6 @@ int getdents(int fd, struct dirent *out withtok(writable_span(size)),
 		size_t index = f->pos < 0 ? 0 : (size_t)f->pos;
 		while (index < total && used + sizeof(struct dirent) <= size) {
 			struct dirent *d = (struct dirent *)((char *)out + used);
-			__ownership_writable_span(d, sizeof *d);
 			memset(d, 0, sizeof *d);
 			d->d_ino = (ino_t)(index < 2 ? (f->vfs == __VFS_ROOT ? __VFS_ROOT :
 			             (index == 0 ? __VFS_DEV : __VFS_ROOT)) :
@@ -119,12 +116,10 @@ int getdents(int fd, struct dirent *out withtok(writable_span(size)),
 	while (used + sizeof(struct dirent) <= size &&
 	       __plat_dir_decode_one(buf, buflen, &bufpos, &r)) {
 		struct dirent *d = (struct dirent *)((char *)out + used);
-		__ownership_writable_span(d, sizeof *d);
 		memset(d, 0, sizeof *d);
 		d->d_ino = r.ino;
 		d->d_type = r.type;
 		d->d_reclen = sizeof *d;
-		__ownership_writable_span(d->d_name, sizeof d->d_name);
 		memcpy(d->d_name, r.name, sizeof d->d_name);
 		if (f->vfs_native) f->vseen |= __vfs_mandatory_seen(f->vfs, d->d_name);
 		used += sizeof *d;
