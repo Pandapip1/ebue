@@ -12,6 +12,7 @@ extern "C" {
 #endif
 
 #include <features.h>
+#include <ownership.h>
 #define __NEED_mode_t
 #include <bits/alltypes.h>
 
@@ -26,16 +27,16 @@ typedef struct {
 #define SEM_FAILED ((sem_t *)-1)
 #define SEM_VALUE_MAX 2147483647
 
-int sem_init(sem_t *, int, unsigned int) __attribute__((ownership_constructs(semaphore, 1)));
-int sem_destroy(sem_t *) __attribute__((ownership_destroys(semaphore, 1)));
+int sem_init(sem_t *sem construct(semaphore), int, unsigned int);
+int sem_destroy(sem_t *sem destroy(semaphore));
 sem_t *sem_open(const char *, int, ...);
 int sem_close(sem_t *);
 int sem_unlink(const char *);
-int sem_wait(sem_t *) __attribute__((ownership_requires_handle(semaphore, 1)));
-int sem_trywait(sem_t *) __attribute__((ownership_requires_handle(semaphore, 1)));
-int sem_timedwait(sem_t *, const struct timespec *) __attribute__((ownership_requires_handle(semaphore, 1)));
-int sem_post(sem_t *) __attribute__((ownership_requires_handle(semaphore, 1)));
-int sem_getvalue(sem_t *, int *) __attribute__((ownership_requires_handle(semaphore, 1)));
+int sem_wait(sem_t *sem handle(semaphore));
+int sem_trywait(sem_t *sem handle(semaphore));
+int sem_timedwait(sem_t *sem handle(semaphore), const struct timespec *);
+int sem_post(sem_t *sem handle(semaphore));
+int sem_getvalue(sem_t *sem handle(semaphore), int *);
 
 #ifdef __cplusplus
 }

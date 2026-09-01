@@ -190,8 +190,7 @@ static struct named_sem *free_slot(void)
 	return NULL;
 }
 
-__attribute__((ownership_constructs(semaphore, 1)))
-int sem_init(sem_t *sem, int pshared, unsigned value) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+int sem_init(sem_t *sem construct(semaphore), int pshared, unsigned value) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	__plat_handle_t h;
 	(void)pshared;
@@ -217,8 +216,7 @@ int sem_init(sem_t *sem, int pshared, unsigned value) // NOLINT(bugprone-easily-
 	return 0;
 }
 
-__attribute__((ownership_destroys(semaphore, 1)))
-int sem_destroy(sem_t *sem)
+int sem_destroy(sem_t *sem destroy(semaphore))
 {
 	if (!valid(sem) || sem->__named) { errno = EINVAL; return -1; }
 	__plat_close(sem->__handle);
@@ -425,14 +423,12 @@ static int restartable_interruption(unsigned long *caught, // NOLINT(bugprone-ea
 	return -1;
 }
 
-__attribute__((ownership_requires_handle(semaphore, 1)))
-int sem_trywait(sem_t *sem)
+int sem_trywait(sem_t *sem handle(semaphore))
 {
 	return wait_handle(sem, 0);
 }
 
-__attribute__((ownership_requires_handle(semaphore, 1)))
-int sem_wait(sem_t *sem)
+int sem_wait(sem_t *sem handle(semaphore))
 {
 	const long long slice = -500000; /* 50 ms: observe handlers run elsewhere. */
 	unsigned long caught;
@@ -471,8 +467,7 @@ int sem_wait(sem_t *sem)
 	}
 }
 
-__attribute__((ownership_requires_handle(semaphore, 1)))
-int sem_timedwait(sem_t *sem, const struct timespec *abstime)
+int sem_timedwait(sem_t *sem handle(semaphore), const struct timespec *abstime)
 {
 	struct timespec now;
 	long long ticks;
@@ -511,15 +506,13 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
 	}
 }
 
-__attribute__((ownership_requires_handle(semaphore, 1)))
-int sem_post(sem_t *sem)
+int sem_post(sem_t *sem handle(semaphore))
 {
 	if (!valid(sem)) { errno = EINVAL; return -1; }
 	return __plat_semaphore_post(sem->__handle);
 }
 
-__attribute__((ownership_requires_handle(semaphore, 1)))
-int sem_getvalue(sem_t *sem, int *value)
+int sem_getvalue(sem_t *sem handle(semaphore), int *value)
 {
 	if (!valid(sem) || !value) { errno = EINVAL; return -1; }
 	return __plat_semaphore_getvalue(sem->__handle, value);
