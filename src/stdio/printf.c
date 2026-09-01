@@ -416,7 +416,7 @@ static void dec_exact(double v, struct dec *D)
 	union { double f; uint64_t i; } u;
 	uint32_t bn[DEC_LIMBS];
 	uint64_t m;
-	int e2, bl = 0, k, i, j, nfrac = 0;
+	int e2, bl = 0, k, i, j, nfrac = 0, chunks;
 	char *p;
 
 	u.f = v;
@@ -432,14 +432,18 @@ static void dec_exact(double v, struct dec *D)
 	 * e2 < 0 it is m * 5^-e2 with the point -e2 places from the right,
 	 * since m / 2^k == m * 5^k / 10^k.  Either way one big integer
 	 * carries every digit, so no division is needed to produce them. */
-	while (e2 > 0) {
+	/* Finite double exponents bound both exact chunk counts below. */
+	chunks = e2 > 0 ? e2 / 29 + (e2 % 29 != 0) : 0;
+	while (chunks > 0) {
 		k = e2 > 29 ? 29 : e2;
 		bl = mul_small(bn, bl, 1u << k);
 		e2 -= k;
+		chunks--;
 	}
 	if (e2 < 0) {
 		nfrac = -e2;
-		for (k = nfrac; k > 0; ) {
+		chunks = nfrac / 12 + (nfrac % 12 != 0);
+		for (k = nfrac; chunks > 0; chunks--) {
 			if (k >= 12) { bl = mul_small(bn, bl, 244140625u); k -= 12; }  /* 5^12 */
 			else {
 				uint32_t f = 1;
