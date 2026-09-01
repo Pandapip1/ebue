@@ -50,7 +50,7 @@ void *make_inherited(void)
 } /* allocation-contract-expect: inherited producer attribute is an error */
 
 /* The header-style declaration above is not enough for an in-tree body:
- * this definition must repeat ownership_takes explicitly. */
+ * this definition must repeat consume explicitly. */
 void inherited_destroy(void *object)
 {
 	free(object);

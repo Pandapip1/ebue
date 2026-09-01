@@ -13,7 +13,7 @@ tokdef heap_allocated
 
 /* Header-only declarations are explicit external assumptions.  If a .c
  * definition of free exists in the scanned tree, that definition must repeat
- * ownership_takes and its body is then proved. */
+ * consume contract and its body is then proved. */
 withtok(heap_allocated)
 void *malloc(size_t);
 void free(void *consume(heap_allocated));

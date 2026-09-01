@@ -82,9 +82,6 @@ static std::optional<TokenContract>
 returnsOwnership(const FunctionDecl *Function) {
   if (!Function)
     return std::nullopt;
-  for (const OwnershipAttr *Attribute : Function->specific_attrs<OwnershipAttr>())
-    if (Attribute->isReturns())
-      return TokenContract{Attribute->getModule(), Attribute};
   for (const AnnotateAttr *Attribute :
        Function->specific_attrs<AnnotateAttr>()) {
     StringRef Text = Attribute->getAnnotation();
@@ -100,39 +97,18 @@ returnsOwnership(const FunctionDecl *Function) {
 static bool takesAnyArgument(const FunctionDecl *Function, unsigned Argument) {
   if (!Function)
     return false;
-  for (const OwnershipAttr *Attribute : Function->specific_attrs<OwnershipAttr>()) {
-    if (!Attribute->isTakes())
-      continue;
-    for (const ParamIdx &Index : Attribute->args())
-      if (Index.isValid() && Index.getASTIndex() == Argument)
-        return true;
-  }
   if (Argument < Function->getNumParams() &&
       annotationFamily(Function->getParamDecl(Argument), "consume:"))
     return true;
   return false;
 }
 
-/* Reallocation is the one ownership transition the standard
- * ownership_returns/ownership_takes vocabulary cannot state: the input is
- * consumed only when the returned pointer is nonnull.  Headers describe that
- * operation with [[ownership_reallocates(N)]], where N is the source-level
- * (one-origin) input parameter.  This remains declaration-driven: the checker
- * contains no allocator function names. */
+/* A reallocation input is consumed only when the returned pointer is nonnull.
+ * This remains declaration-driven: the checker contains no allocator names. */
 static std::optional<unsigned>
 reallocatedArgument(const FunctionDecl *Function) {
   if (!Function)
     return std::nullopt;
-  constexpr StringRef Prefix = "ownership_reallocates:";
-  for (const AnnotateAttr *Attribute : Function->specific_attrs<AnnotateAttr>()) {
-    StringRef Text = Attribute->getAnnotation();
-    if (!Text.starts_with(Prefix))
-      continue;
-    unsigned SourceIndex = 0;
-    if (!Text.drop_front(Prefix.size()).getAsInteger(10, SourceIndex) &&
-        SourceIndex > 0)
-      return SourceIndex - 1;
-  }
   for (unsigned Argument = 0; Argument < Function->getNumParams(); ++Argument)
     if (annotationFamily(Function->getParamDecl(Argument),
                          "consume_if_nonnull_return:"))
@@ -147,16 +123,6 @@ static std::optional<unsigned>
 returnedArgument(const FunctionDecl *Function, const IdentifierInfo *Family) {
   if (!Function)
     return std::nullopt;
-  constexpr StringRef Prefix = "ownership_returns_argument:";
-  for (const AnnotateAttr *Attribute : Function->specific_attrs<AnnotateAttr>()) {
-    StringRef Text = Attribute->getAnnotation();
-    if (!Text.starts_with(Prefix))
-      continue;
-    unsigned SourceIndex = 0;
-    if (!Text.drop_front(Prefix.size()).getAsInteger(10, SourceIndex) &&
-        SourceIndex > 0)
-      return SourceIndex - 1;
-  }
   if (!Family)
     return std::nullopt;
   unsigned Argument = 0;
@@ -172,21 +138,10 @@ returnedArgument(const FunctionDecl *Function, const IdentifierInfo *Family) {
   return std::nullopt;
 }
 
-static const IdentifierInfo *familyOf(const OwnershipAttr *Attribute) {
-  return Attribute ? Attribute->getModule() : nullptr;
-}
-
 static bool takesArgument(const FunctionDecl *Function,
                           const IdentifierInfo *Family, unsigned Argument) {
   if (!Function || !Family)
     return false;
-  for (const OwnershipAttr *Attribute : Function->specific_attrs<OwnershipAttr>()) {
-    if (!Attribute->isTakes() || Attribute->getModule() != Family)
-      continue;
-    for (const ParamIdx &Index : Attribute->args())
-      if (Index.isValid() && Index.getASTIndex() == Argument)
-        return true;
-  }
   if (Argument < Function->getNumParams() &&
       annotationFamily(Function->getParamDecl(Argument), "consume:") == Family)
     return true;
@@ -328,33 +283,6 @@ public:
       llvm::errs() << "ntlibc-allocation-contract: definition\t-\t"
                    << Function->getName() << '\t' << Path << '\t' << Line
                    << '\n';
-    for (const OwnershipAttr *Attribute : Function->specific_attrs<OwnershipAttr>()) {
-      const IdentifierInfo *Family = familyOf(Attribute);
-      if (!Family)
-        continue;
-      if (Attribute->isReturns()) {
-        StringRef Kind = !Function->doesThisDeclarationHaveABody()
-                             ? "returns-declaration"
-                             : Attribute->isInherited()
-                                   ? "returns-definition-inherited"
-                                   : "returns-definition-explicit";
-        llvm::errs() << "ntlibc-allocation-contract: " << Kind << '\t'
-                     << Family->getName() << '\t' << Function->getName()
-                     << '\t' << Path << '\t' << Line << '\n';
-      } else if (Attribute->isTakes()) {
-        StringRef Kind = !Function->doesThisDeclarationHaveABody()
-                             ? "takes-declaration"
-                             : Attribute->isInherited()
-                                   ? "takes-definition-inherited"
-                                   : "takes-definition-explicit";
-        for (const ParamIdx &Index : Attribute->args())
-          if (Index.isValid())
-            llvm::errs() << "ntlibc-allocation-contract: " << Kind << '\t'
-                         << Family->getName() << '\t' << Function->getName()
-                         << '\t' << Index.getSourceIndex() << '\t' << Path
-                         << '\t' << Line << '\n';
-      }
-    }
     for (const AnnotateAttr *Attribute :
          Function->specific_attrs<AnnotateAttr>()) {
       StringRef Family = Attribute->getAnnotation();
@@ -400,15 +328,6 @@ public:
       return;
     llvm::SmallVector<std::pair<const IdentifierInfo *, const ParmVarDecl *>, 4>
         Inputs;
-    for (const OwnershipAttr *Attribute :
-         Function->specific_attrs<OwnershipAttr>()) {
-      if (!Attribute->isTakes() || !familyOf(Attribute))
-        continue;
-      for (const ParamIdx &Index : Attribute->args())
-        if (Index.isValid() && Index.getASTIndex() < Function->getNumParams())
-          Inputs.push_back(
-              {familyOf(Attribute), Function->getParamDecl(Index.getASTIndex())});
-    }
     for (const ParmVarDecl *Parameter : Function->parameters())
       if (const IdentifierInfo *Family =
               annotationFamily(Parameter, "consume:"))
@@ -530,7 +449,7 @@ public:
     if (Returned && belongsToFrame(State, Returned, C.getStackFrame())) {
       const Stmt *const *Origin = State->get<AllocationOrigin>(Returned);
       if (!Returns) {
-        report("returned allocation has no ownership_returns contract",
+        report("returned allocation has no dynamic-storage token contract",
                Origin ? *Origin : Return, State, C);
         return;
       }
@@ -546,7 +465,7 @@ public:
       const Stmt *const *Origin = State->get<AllocationOrigin>(Symbol);
       const bool *Freer = State->get<FreerObligation>(Symbol);
       report(Freer && *Freer
-                 ? "ownership_takes function exits without releasing its argument"
+                 ? "consume function exits without releasing its argument"
                  : "dynamic allocation is not freed before function exit",
              Origin ? *Origin : (Return ? static_cast<const Stmt *>(Return)
                                         : Function ? Function->getBody() : nullptr),
@@ -562,6 +481,6 @@ void registerAllocationLifetimeChecker(CheckerRegistry &Registry) {
   Registry.addChecker<AllocationLifetimeChecker>(
       "ntlibc.AllocationLifetime",
       "Proves allocations are freed or transferred through a paired "
-      "ownership_returns/ownership_takes contract",
+      "dynamic-storage token contract",
       "");
 }

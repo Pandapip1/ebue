@@ -1146,7 +1146,6 @@ stage_ownership() {
 	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
 		tools/clang/OwnershipChecker.cpp \
 		tools/clang/AllocationLifetimeChecker.cpp \
-		tools/clang/OwnershipAttributes.cpp \
 		-o "$plugin" "$clang_cpp" \
 		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
 

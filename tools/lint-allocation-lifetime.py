@@ -17,8 +17,8 @@ FIXTURES = ROOT / "tools/lint-allocation-lifetime-fixtures"
 DIAGNOSTIC = re.compile(
     r"^(.*?):(\d+):(\d+): warning: "
     r"(dynamic allocation is not freed before function exit|"
-    r"returned allocation has no ownership_returns contract|"
-    r"ownership_takes function exits without releasing its argument); "
+    r"returned allocation has no dynamic-storage token contract|"
+    r"consume function exits without releasing its argument); "
     r"context '(.*)'; allocation '(.*)' \[ntlibc\.AllocationLifetime\]$"
 )
 CONTRACT = re.compile(
@@ -96,7 +96,7 @@ def validate_contracts(contracts: set[tuple[str, str, str]], fixture: bool) -> l
             errors.append(
                 f"producer '{producer}' for family '{family}' has an in-tree "
                 "definition but that definition does not repeat "
-                "ownership_returns explicitly (the header attribute was only "
+                "withtok explicitly (the header annotation was only "
                 "inherited)"
             )
     for family, functions in sorted(producers.items()):
@@ -111,8 +111,8 @@ def validate_contracts(contracts: set[tuple[str, str, str]], fixture: bool) -> l
                 inherited_here = freer in inherited.get(family, set())
                 errors.append(
                     f"freer '{freer}' for family '{family}' has an in-tree definition "
-                    f"but that definition does not repeat ownership_takes explicitly"
-                    + (" (the header attribute was only inherited)" if inherited_here else "")
+                    f"but that definition does not repeat consume explicitly"
+                    + (" (the header annotation was only inherited)" if inherited_here else "")
                 )
     if not fixture:
         all_freer_families = set(declared) | set(explicit)

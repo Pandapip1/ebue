@@ -338,10 +338,6 @@ class OwnershipChecker
     const FunctionDecl *Function = functionOf(Call);
     if (!Function)
       return false;
-    for (const OwnershipAttr *Attribute :
-         Function->specific_attrs<OwnershipAttr>())
-      if (Attribute->isReturns())
-        return true;
     for (const AnnotateAttr *Attribute :
          Function->specific_attrs<AnnotateAttr>()) {
       StringRef Text = Attribute->getAnnotation();
@@ -356,28 +352,8 @@ class OwnershipChecker
     return false;
   }
 
-  static std::optional<unsigned> annotatedArgument(const FunctionDecl *Function,
-                                                   StringRef Prefix) {
-    if (!Function)
-      return std::nullopt;
-    for (const AnnotateAttr *Attribute :
-         Function->specific_attrs<AnnotateAttr>()) {
-      StringRef Text = Attribute->getAnnotation();
-      if (!Text.starts_with(Prefix))
-        continue;
-      unsigned SourceIndex = 0;
-      if (!Text.drop_front(Prefix.size()).getAsInteger(10, SourceIndex) &&
-          SourceIndex > 0)
-        return SourceIndex - 1;
-    }
-    return std::nullopt;
-  }
-
   static std::optional<unsigned>
   reallocatedArgument(const FunctionDecl *Function) {
-    if (std::optional<unsigned> Argument =
-            annotatedArgument(Function, "ownership_reallocates:"))
-      return Argument;
     if (!Function)
       return std::nullopt;
     unsigned Argument = 0;
@@ -399,9 +375,6 @@ class OwnershipChecker
 
   static std::optional<unsigned>
   returnedArgument(const FunctionDecl *Function) {
-    if (std::optional<unsigned> Argument =
-            annotatedArgument(Function, "ownership_returns_argument:"))
-      return Argument;
     if (!Function)
       return std::nullopt;
     StringRef ReturnedFamily;
@@ -433,14 +406,6 @@ class OwnershipChecker
   ownershipTakenArgument(const FunctionDecl *Function) {
     if (!Function)
       return std::nullopt;
-    for (const OwnershipAttr *Attribute :
-         Function->specific_attrs<OwnershipAttr>()) {
-      if (!Attribute->isTakes())
-        continue;
-      for (const ParamIdx &Index : Attribute->args())
-        if (Index.isValid())
-          return Index.getASTIndex();
-    }
     unsigned Argument = 0;
     for (const ParmVarDecl *Parameter : Function->parameters()) {
       for (const AnnotateAttr *Attribute :
@@ -909,41 +874,6 @@ struct ConstructCall {
 class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
   mutable std::unique_ptr<BugType> BT;
 
-  struct FamilyArgument {
-    const IdentifierInfo *Family;
-    unsigned Argument;
-  };
-
-  static std::optional<FamilyArgument>
-  annotationArgument(const FunctionDecl *Function, const AnnotateAttr *Attr,
-                     StringRef Prefix) {
-    StringRef Text = Attr->getAnnotation();
-    if (!Text.consume_front(Prefix))
-      return std::nullopt;
-    auto [FamilyName, ArgumentText] = Text.split(':');
-    if (FamilyName.empty() || ArgumentText.empty())
-      return std::nullopt;
-    unsigned Argument = 0;
-    if (ArgumentText.getAsInteger(10, Argument) || Argument == 0)
-      return std::nullopt;
-    return FamilyArgument{&Function->getASTContext().Idents.get(FamilyName),
-                          Argument - 1};
-  }
-
-  static bool hasArgumentAnnotation(const FunctionDecl *Function,
-                                    StringRef Prefix,
-                                    const IdentifierInfo *Family,
-                                    unsigned Argument) {
-    if (!Function)
-      return false;
-    for (const AnnotateAttr *Attr : Function->specific_attrs<AnnotateAttr>())
-      if (std::optional<FamilyArgument> Parsed =
-              annotationArgument(Function, Attr, Prefix))
-        if (Parsed->Family == Family && Parsed->Argument == Argument)
-          return true;
-    return false;
-  }
-
   static const IdentifierInfo *parameterAnnotation(const FunctionDecl *Function,
                                                    const AnnotateAttr *Attr,
                                                    StringRef Prefix) {
@@ -974,20 +904,9 @@ class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
       ConstructOperation Operation;
     };
     static constexpr OperationAnnotation Operations[] = {
-        {"ownership_constructs:", ConstructOperation::Construct},
-        {"ownership_destroys:", ConstructOperation::Destroy},
-        {"ownership_requires_handle:", ConstructOperation::Use},
         {"construct:", ConstructOperation::Construct},
         {"destroy:", ConstructOperation::Destroy},
         {"handle:", ConstructOperation::Use}};
-    for (const AnnotateAttr *Attr : Function->specific_attrs<AnnotateAttr>())
-      for (const OperationAnnotation &Candidate : Operations)
-        if (std::optional<FamilyArgument> Parsed =
-                annotationArgument(Function, Attr, Candidate.Prefix))
-          Protocols.push_back(
-              {Candidate.Operation, Parsed->Family, Parsed->Argument,
-               hasArgumentAnnotation(Function, "ownership_static:",
-                                     Parsed->Family, Parsed->Argument)});
     unsigned Argument = 0;
     for (const ParmVarDecl *Parameter : Function->parameters()) {
       for (const AnnotateAttr *Attr : Parameter->specific_attrs<AnnotateAttr>())
@@ -997,9 +916,7 @@ class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
             Protocols.push_back(
                 {Candidate.Operation, Family, Argument,
                  hasParameterAnnotation(Function, Parameter,
-                                        "ownership_static:", Family) ||
-                     hasParameterAnnotation(Function, Parameter,
-                                            "static_handle:", Family)});
+                                        "static_handle:", Family)});
       ++Argument;
     }
     return Protocols;
@@ -1243,8 +1160,7 @@ class OwnershipContractChecker : public Checker<check::ASTDecl<FunctionDecl>> {
   }
 
   static bool isOwnershipContract(StringRef Annotation) {
-    return Annotation.starts_with("ownership_") ||
-           Annotation.starts_with("withtok:") ||
+    return Annotation.starts_with("withtok:") ||
            Annotation.starts_with("withouttok:") ||
            Annotation.starts_with("consume:") ||
            Annotation.starts_with("consume_any:") ||
@@ -1297,26 +1213,6 @@ class CapabilityTokenChecker
                      check::EndFunction> {
   mutable std::unique_ptr<BugType> BT;
 
-  struct FamilyArgument {
-    const IdentifierInfo *Family;
-    unsigned Argument;
-  };
-
-  static std::optional<FamilyArgument>
-  annotationArgument(const FunctionDecl *Function, const AnnotateAttr *Attr,
-                     StringRef Prefix) {
-    StringRef Text = Attr->getAnnotation();
-    if (!Text.consume_front(Prefix))
-      return std::nullopt;
-    auto [FamilyName, ArgumentText] = Text.split(':');
-    unsigned Argument = 0;
-    if (FamilyName.empty() || ArgumentText.getAsInteger(10, Argument) ||
-        Argument == 0 || Argument > Function->getNumParams())
-      return std::nullopt;
-    return FamilyArgument{&Function->getASTContext().Idents.get(FamilyName),
-                          Argument - 1};
-  }
-
   static const IdentifierInfo *parameterAnnotation(const FunctionDecl *Function,
                                                    const AnnotateAttr *Attr,
                                                    StringRef Prefix) {
@@ -1348,14 +1244,6 @@ class CapabilityTokenChecker
     for (const AnnotateAttr *Attr :
          Declaration->specific_attrs<AnnotateAttr>()) {
       StringRef Text = Attr->getAnnotation();
-      if (Text.consume_front("ownership_holds_token:") &&
-          Text == Family->getName())
-        return CapabilityKind::Linear;
-      Text = Attr->getAnnotation();
-      if (Text.consume_front("ownership_holds_duplicable_token:") &&
-          Text == Family->getName())
-        return CapabilityKind::Duplicable;
-      Text = Attr->getAnnotation();
       if (Text.consume_front("withtok:") && Text == Family->getName())
         return dialectTokenKind(Declaration->getASTContext(), Text);
     }
@@ -1372,25 +1260,11 @@ class CapabilityTokenChecker
       CapabilityOperation Operation;
     };
     static constexpr OperationAnnotation Operations[] = {
-        {"ownership_requires_token:", CapabilityOperation::Require},
-        {"ownership_requires_absent_token:",
-         CapabilityOperation::RequireAbsent},
-        {"ownership_drops_token:", CapabilityOperation::Consume},
-        {"ownership_drops_any_token:", CapabilityOperation::ConsumeAny},
-        {"ownership_adds_token:", CapabilityOperation::GrantLinear},
-        {"ownership_adds_duplicable_token:",
-         CapabilityOperation::GrantDuplicable},
         {"withtok:", CapabilityOperation::Require},
         {"withouttok:", CapabilityOperation::RequireAbsent},
         {"consume:", CapabilityOperation::Consume},
         {"consume_any:", CapabilityOperation::ConsumeAny},
         {"grant:", CapabilityOperation::GrantLinear}};
-    for (const AnnotateAttr *Attr : Function->specific_attrs<AnnotateAttr>())
-      for (const OperationAnnotation &Candidate : Operations)
-        if (std::optional<FamilyArgument> Parsed =
-                annotationArgument(Function, Attr, Candidate.Prefix))
-          Protocols.push_back(
-              {Candidate.Operation, Parsed->Family, Parsed->Argument});
     unsigned Argument = 0;
     for (const ParmVarDecl *Parameter : Function->parameters()) {
       for (const AnnotateAttr *Attr : Parameter->specific_attrs<AnnotateAttr>())
@@ -1432,11 +1306,6 @@ class CapabilityTokenChecker
                                           unsigned Argument) {
     if (!Function)
       return false;
-    for (const AnnotateAttr *Attr : Function->specific_attrs<AnnotateAttr>())
-      if (std::optional<FamilyArgument> Parsed =
-              annotationArgument(Function, Attr, "ownership_static:"))
-        if (Parsed->Argument == Argument)
-          return true;
     if (Argument >= Function->getNumParams())
       return false;
     const ParmVarDecl *Parameter = Function->getParamDecl(Argument);
@@ -1826,11 +1695,7 @@ class OwnershipTypeChecker
       OwnershipTypeMember Member;
     };
     static constexpr MemberAnnotation Annotations[] = {
-        {"ownership_holds_handle:", OwnershipTypeMember::Handle},
-        {"withhandle:", OwnershipTypeMember::Handle},
-        {"ownership_holds_token:", OwnershipTypeMember::LinearToken},
-        {"ownership_holds_duplicable_token:",
-         OwnershipTypeMember::DuplicableToken}};
+        {"withhandle:", OwnershipTypeMember::Handle}};
     for (const AnnotateAttr *Attr :
          Declaration->specific_attrs<AnnotateAttr>()) {
       for (const MemberAnnotation &Candidate : Annotations) {
@@ -1889,26 +1754,6 @@ class OwnershipTypeChecker
   };
 
   static llvm::SmallVector<SentinelTrait, 2>
-  sentinelTraits(const ValueDecl *Declaration, StringRef Prefix) {
-    llvm::SmallVector<SentinelTrait, 2> Traits;
-    if (!Declaration)
-      return Traits;
-    for (const AnnotateAttr *Attr :
-         Declaration->specific_attrs<AnnotateAttr>()) {
-      StringRef Text = Attr->getAnnotation();
-      if (!Text.consume_front(Prefix))
-        continue;
-      auto [FamilyName, ValueText] = Text.split(':');
-      int64_t Value = 0;
-      if (FamilyName.empty() || ValueText.getAsInteger(10, Value))
-        continue;
-      Traits.push_back(
-          {&Declaration->getASTContext().Idents.get(FamilyName), Value});
-    }
-    return Traits;
-  }
-
-  static llvm::SmallVector<SentinelTrait, 2>
   dialectSentinelTraits(const ValueDecl *Declaration) {
     llvm::SmallVector<SentinelTrait, 2> Traits;
     if (!Declaration)
@@ -1920,21 +1765,6 @@ class OwnershipTypeChecker
           dialectToken(Declaration->getASTContext(), Entry.Family->getName());
       if (std::optional<int64_t> Sentinel = dialectExcludedSentinel(Token))
         Traits.push_back({Entry.Family, *Sentinel});
-    }
-    return Traits;
-  }
-
-  static llvm::SmallVector<const IdentifierInfo *, 2>
-  familyTraits(const ValueDecl *Declaration, StringRef Prefix) {
-    llvm::SmallVector<const IdentifierInfo *, 2> Traits;
-    if (!Declaration)
-      return Traits;
-    for (const AnnotateAttr *Attr :
-         Declaration->specific_attrs<AnnotateAttr>()) {
-      StringRef Text = Attr->getAnnotation();
-      if (!Text.consume_front(Prefix) || Text.empty() || Text.contains(':'))
-        continue;
-      Traits.push_back(&Declaration->getASTContext().Idents.get(Text));
     }
     return Traits;
   }
@@ -2073,14 +1903,6 @@ class OwnershipTypeChecker
         return;
       }
     }
-    for (const IdentifierInfo *Family : familyTraits(
-             declarationFor(Pointer), "ownership_token_blocks_dereference:"))
-      if (capabilityFor(State, Carrier, Value, Family).Kind) {
-        report("pointer operation is blocked while unchecked ownership token "
-               "is held",
-               Statement, State, C);
-        return;
-      }
   }
 
   ProgramStateRef transferTokens(const ValueDecl *Destination,
@@ -2233,11 +2055,8 @@ public:
     SVal Value = C.getSVal(ValueExpression);
     const MemRegion *Carrier = carrierRegion(ValueExpression, C);
     bool Changed = false;
-    llvm::SmallVector<SentinelTrait, 4> Traits = sentinelTraits(
-        declarationFor(ValueExpression),
-        "ownership_token_consumed_by_equal:");
-    llvm::append_range(Traits,
-                       dialectSentinelTraits(declarationFor(ValueExpression)));
+    llvm::SmallVector<SentinelTrait, 2> Traits =
+        dialectSentinelTraits(declarationFor(ValueExpression));
     for (const SentinelTrait &Trait : Traits) {
       if (Trait.Value != *Sentinel ||
           !capabilityFor(State, Carrier, Value, Trait.Family).Kind)
@@ -2276,10 +2095,8 @@ public:
     SVal Value = valueForExpression(Condition, C);
     const MemRegion *Carrier = carrierRegion(Condition, C);
     bool Changed = false;
-    llvm::SmallVector<SentinelTrait, 4> Traits = sentinelTraits(
-        declarationFor(Condition), "ownership_token_consumed_by_switch:");
-    llvm::append_range(Traits,
-                       dialectSentinelTraits(declarationFor(Condition)));
+    llvm::SmallVector<SentinelTrait, 2> Traits =
+        dialectSentinelTraits(declarationFor(Condition));
     for (const SentinelTrait &Trait : Traits) {
       bool HasSentinelCase = false;
       for (const SwitchCase *Case = Statement->getSwitchCaseList(); Case;
