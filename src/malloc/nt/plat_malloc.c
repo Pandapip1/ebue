@@ -25,6 +25,7 @@
 #include "plat_malloc.h"
 #include "libc.h"
 
+__attribute__((ownership_returns(plat_heap)))
 void *__plat_alloc(size_t n, int zero)
 {
 	return RtlAllocateHeap(__process_heap(), zero ? HEAP_ZERO_MEMORY : 0, n);

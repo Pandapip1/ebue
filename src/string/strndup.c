@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+__attribute__((ownership_returns(malloc)))
 char *strndup(const char *s, size_t n)
 {
 	size_t l = strnlen(s, n);

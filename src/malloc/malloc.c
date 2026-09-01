@@ -28,6 +28,7 @@
 #include "libc.h"
 #include "plat_malloc.h"
 
+__attribute__((ownership_returns(malloc)))
 void *malloc(size_t n)
 {
 	void *p = __plat_alloc(n, 0);
@@ -35,6 +36,7 @@ void *malloc(size_t n)
 	return p;
 }
 
+__attribute__((ownership_returns(malloc)))
 void *calloc(size_t m, size_t n)
 {
 	void *p;
@@ -100,6 +102,7 @@ int posix_memalign(void **res, size_t align, size_t len)
 	return 0;
 }
 
+__attribute__((ownership_returns(malloc)))
 void *aligned_alloc(size_t align, size_t len)
 {
 	void *p;
@@ -108,7 +111,9 @@ void *aligned_alloc(size_t align, size_t len)
 	return p;
 }
 
+__attribute__((ownership_returns(malloc)))
 void *memalign(size_t align, size_t len) { return aligned_alloc(align, len); }
+__attribute__((ownership_returns(malloc)))
 void *valloc(size_t len) { return aligned_alloc(4096, len); }
 
 __attribute__((ownership_takes(malloc, 1)))

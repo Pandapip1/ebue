@@ -203,6 +203,7 @@ static void ntlibc_malloc_refill_locked(int class)
 	}
 }
 
+__attribute__((ownership_returns(plat_heap)))
 void *__plat_alloc(size_t n, int zero) // NOLINT(bugprone-easily-swappable-parameters) -- fixed allocator-backend contract; size and zero-fill flag have distinct roles
 {
 	struct ntlibc_malloc_chunk_hdr *h;
