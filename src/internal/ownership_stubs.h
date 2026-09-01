@@ -3,7 +3,9 @@
 #ifndef _NTLIBC_OWNERSHIP_STUBS_H
 #define _NTLIBC_OWNERSHIP_STUBS_H
 
+#include <stddef.h>
 #include <string_tokens.h>
+#include <memory_tokens.h>
 
 /* These declarations are the leaf axioms used to connect a concrete state
  * transition in a function body to its ownership-token contract.  They are
@@ -39,6 +41,13 @@ void __ownership_pthread_rwlock_destroyed(void *
 
 void __ownership_string_terminated(const void * grant(null_terminated));
 void __ownership_string_invalidated(void * drop(null_terminated));
+void __ownership_readable_span(
+	const void *data grant(readable_span(length)), size_t length);
+void __ownership_writable_span(
+	void *data grant(writable_span(length)), size_t length);
+void __ownership_disjoint_span(
+	void *first grant(disjoint_span(second, length)), const void *second,
+	size_t length);
 
 #else
 
@@ -57,6 +66,9 @@ void __ownership_string_invalidated(void * drop(null_terminated));
 #define __ownership_pthread_rwlock_destroyed(object) ((void)0)
 #define __ownership_string_terminated(object) ((void)0)
 #define __ownership_string_invalidated(object) ((void)0)
+#define __ownership_readable_span(object, length) ((void)0)
+#define __ownership_writable_span(object, length) ((void)0)
+#define __ownership_disjoint_span(first, second, length) ((void)0)
 
 #endif
 #endif

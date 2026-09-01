@@ -20,6 +20,58 @@ long read(int, void *buffer withtok(fixture_writable_span(length)),
 void *__malloc(size_t);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
+void establish_writable(
+	void *buffer grant(fixture_writable_span(length)), size_t length);
+void establish_readable(
+	const void *buffer grant(fixture_readable_span(length)), size_t length);
+void establish_disjoint(
+	void *first grant(fixture_disjoint_span(second, length)),
+	const void *second, size_t length);
+
+void prove_writable(
+	void *buffer grant(fixture_writable_span(length)), size_t length)
+{
+	establish_writable(buffer, length);
+}
+
+void prove_disjoint(
+	void *first grant(fixture_disjoint_span(second, length)),
+	const void *second, size_t length)
+{
+	establish_disjoint(first, second, length);
+}
+
+int prove_writable_if(
+	void *buffer grant(fixture_writable_span(length)), size_t length, int okay)
+{
+	if (!okay)
+		return -1;
+	establish_writable(buffer, length);
+	return 0;
+}
+
+int compose_conditional_proof(
+	void *buffer grant(fixture_writable_span(length)), size_t length, int okay)
+{
+	return prove_writable_if(buffer, length, okay);
+}
+
+void use_conditional_memory_proof(char *destination, size_t length, int okay)
+{
+	if (compose_conditional_proof(destination, length, okay) != 0)
+		return;
+	memset(destination, 0, length);
+}
+
+void use_explicit_memory_proofs(char *destination, const char *source,
+	size_t length)
+{
+	prove_writable(destination, length);
+	establish_readable(source, length);
+	prove_disjoint(destination, source, length);
+	memcpy(destination, source, length);
+}
+
 void contracted_copy(char *out withtok(fixture_writable_span(length)),
 	const char *in withtok(fixture_readable_span(length)), size_t length)
 {

@@ -16,6 +16,40 @@ void *memset(void *destination withtok(fixture_writable_span(length)), int,
 void *__malloc(size_t);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
+void establish_writable(
+	void *buffer grant(fixture_writable_span(length)), size_t length);
+int maybe_establish_writable(
+	void *buffer grant(fixture_writable_span(length)), size_t length);
+
+void unproved_writable_grant(
+	void *buffer grant(fixture_writable_span(length)), size_t length)
+{
+	(void)buffer;
+	(void)length;
+} /* memory-contract-expect */
+
+void proof_invalidated_by_reassignment(
+	void *buffer grant(fixture_writable_span(length)), size_t length)
+{
+	establish_writable(buffer, length);
+	buffer = 0;
+} /* memory-contract-expect */
+
+void failed_grant_is_not_available(char *buffer, size_t length)
+{
+	if (maybe_establish_writable(buffer, length) == 0)
+		return;
+	memset(buffer, 0, length); /* memory-contract-expect */
+}
+
+void unproved_disjoint_grant(
+	void *first grant(fixture_disjoint_span(second, length)),
+	const void *second, size_t length)
+{
+	(void)first;
+	(void)second;
+	(void)length;
+} /* memory-contract-expect */
 
 void contracted_copy(char *out withtok(fixture_writable_span(length)),
 	const char *in withtok(fixture_readable_span(length)), size_t length);

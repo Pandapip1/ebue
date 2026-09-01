@@ -16,7 +16,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tools/lint-memory-contract-fixtures"
 DIAGNOSTIC = re.compile(
     r"^(.*?):(\d+):(\d+): warning: "
-    r"(memory operation span is not proven valid|memcpy ranges are not proven nonoverlapping); "
+    r"(memory operation span is not proven valid|memcpy ranges are not proven nonoverlapping|"
+    r"declared memory token addition is not proven by function body); "
     r"origin '(.*)'; context '(.*)'; expression '(.*)'; site '(.*)' "
     r"\[ntlibc\.MemoryContract\]$"
 )
@@ -86,8 +87,9 @@ def main() -> int:
     if findings:
         spans = sum(f.reason.startswith("memory operation span") for f in findings.values())
         overlaps = sum(f.reason.startswith("memcpy ranges") for f in findings.values())
+        tokens = sum(f.reason.startswith("declared memory token") for f in findings.values())
         print(f"lint-memory-contracts: {spans} unproved span(s), "
-              f"{overlaps} unproved overlap(s)")
+              f"{overlaps} unproved overlap(s), {tokens} unproved token contract(s)")
         return 1
     print("lint-memory-contracts: no findings (fixtures passed)")
     return 0

@@ -49,6 +49,15 @@ REGISTER_MAP_WITH_PROGRAMSTATE(StrnlenSource, SymbolRef, const MemRegion *)
  * base's real extent. */
 REGISTER_MAP_WITH_PROGRAMSTATE(AssumedSpanExtent, const MemRegion *,
                                DefinedOrUnknownSVal)
+using DisjointRegionKey = std::pair<const MemRegion *, const MemRegion *>;
+REGISTER_MAP_WITH_PROGRAMSTATE(AssumedDisjointExtent, DisjointRegionKey,
+                               DefinedOrUnknownSVal)
+REGISTER_MAP_WITH_PROGRAMSTATE(GrantedSpanProof, const ParmVarDecl *,
+                               const ParmVarDecl *)
+using DisjointParameterKey =
+    std::pair<const ParmVarDecl *, const ParmVarDecl *>;
+REGISTER_MAP_WITH_PROGRAMSTATE(GrantedDisjointProof, DisjointParameterKey,
+                               const ParmVarDecl *)
 
 namespace {
 
@@ -73,11 +82,19 @@ static bool hasDialectQualifier(const TypedefNameDecl *Token,
   return false;
 }
 
+enum class MemoryTokenOperation : unsigned char { Require, Grant };
+
 static bool tokenApplication(const FunctionDecl *Function,
-                             StringRef Annotation, StringRef &Family,
+                             StringRef Annotation,
+                             MemoryTokenOperation &Operation, StringRef &Family,
                              SmallVectorImpl<unsigned> &Arguments) {
-  if (!Annotation.consume_front("withtok:") ||
-      !Annotation.ends_with(")"))
+  if (Annotation.consume_front("withtok:"))
+    Operation = MemoryTokenOperation::Require;
+  else if (Annotation.consume_front("grant:"))
+    Operation = MemoryTokenOperation::Grant;
+  else
+    return false;
+  if (!Annotation.ends_with(")"))
     return false;
   size_t Open = Annotation.find('(');
   if (Open == StringRef::npos)
@@ -102,24 +119,27 @@ static bool tokenApplication(const FunctionDecl *Function,
 }
 
 struct SpanContract {
+  MemoryTokenOperation Operation;
   unsigned Pointer;
   unsigned Length;
 };
 
 struct DisjointContract {
+  MemoryTokenOperation Operation;
   unsigned First;
   unsigned Second;
   unsigned Length;
 };
 
 static bool operator==(const SpanContract &Left, const SpanContract &Right) {
-  return Left.Pointer == Right.Pointer && Left.Length == Right.Length;
+  return Left.Operation == Right.Operation && Left.Pointer == Right.Pointer &&
+         Left.Length == Right.Length;
 }
 
 static bool operator==(const DisjointContract &Left,
                        const DisjointContract &Right) {
-  return Left.First == Right.First && Left.Second == Right.Second &&
-         Left.Length == Right.Length;
+  return Left.Operation == Right.Operation && Left.First == Right.First &&
+         Left.Second == Right.Second && Left.Length == Right.Length;
 }
 
 static void tokenContracts(const FunctionDecl *Function,
@@ -134,20 +154,22 @@ static void tokenContracts(const FunctionDecl *Function,
                                                ->specific_attrs<AnnotateAttr>()) {
         StringRef Family;
         SmallVector<unsigned, 2> Arguments;
-        if (!tokenApplication(Redeclaration, Attribute->getAnnotation(), Family,
-                              Arguments))
+        MemoryTokenOperation Operation;
+        if (!tokenApplication(Redeclaration, Attribute->getAnnotation(),
+                              Operation, Family, Arguments))
           continue;
         const TypedefNameDecl *Token =
             dialectToken(Function->getASTContext(), Family);
         if (hasDialectQualifier(Token, "qual:extent_at_least") &&
             Arguments.size() == 1) {
-          SpanContract Contract{Pointer, Arguments[0]};
+          SpanContract Contract{Operation, Pointer, Arguments[0]};
           if (llvm::find(Spans, Contract) == Spans.end())
             Spans.push_back(Contract);
         }
         if (hasDialectQualifier(Token, "qual:disjoint_extent") &&
             Arguments.size() == 2) {
-          DisjointContract Contract{Pointer, Arguments[0], Arguments[1]};
+          DisjointContract Contract{
+              Operation, Pointer, Arguments[0], Arguments[1]};
           if (llvm::find(Disjoint, Contract) == Disjoint.end())
             Disjoint.push_back(Contract);
         }
@@ -157,9 +179,11 @@ static void tokenContracts(const FunctionDecl *Function,
 }
 
 class MemoryContractChecker
-    : public Checker<check::PreCall, check::PostCall, check::BeginFunction> {
+    : public Checker<check::PreCall, check::PostCall, check::BeginFunction,
+                     check::EndFunction, check::Bind> {
   mutable std::unique_ptr<BugType> SpanBT;
   mutable std::unique_ptr<BugType> OverlapBT;
+  mutable std::unique_ptr<BugType> TokenBT;
 
   static bool hasName(const CallEvent &Call, StringRef Wanted) {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
@@ -425,6 +449,30 @@ public:
     C.emitReport(std::move(Report));
   }
 
+  void reportToken(StringRef Reason, const Stmt *Statement,
+                   ProgramStateRef State, CheckerContext &C) const {
+    if (!Statement)
+      return;
+    ExplodedNode *Node = C.generateNonFatalErrorNode(State);
+    if (!Node)
+      return;
+    if (!TokenBT)
+      TokenBT = std::make_unique<BugType>(this,
+                                          "Unproven memory token contract",
+                                          categories::MemoryError);
+    const SourceManager &SM = C.getSourceManager();
+    std::string Message =
+        (Reason + "; origin '" +
+         SM.getFilename(SM.getExpansionLoc(Statement->getBeginLoc())) +
+         "'; context '" + context(C) + "'; expression '" + text(Statement, C) +
+         "'; site '" + site(Statement, C) + "'")
+            .str();
+    auto Report =
+        std::make_unique<PathSensitiveBugReport>(*TokenBT, Message, Node);
+    Report->addRange(Statement->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+
   bool spanProven(SVal Pointer, SVal Length, ProgramStateRef State,
                   CheckerContext &C) const {
     if (State->isNull(Length).isConstrainedTrue())
@@ -464,6 +512,16 @@ public:
     const MemRegion *B = Second.getAsRegion();
     if (!A || !B)
       return false;
+    if (const DefinedOrUnknownSVal *Assumed =
+            State->get<AssumedDisjointExtent>({A, B})) {
+      SVal Enough = C.getSValBuilder().evalBinOp(
+          State, BO_GE, *Assumed, Length,
+          C.getSValBuilder().getConditionType());
+      if (std::optional<DefinedOrUnknownSVal> Condition =
+              Enough.getAs<DefinedOrUnknownSVal>())
+        if (!State->assume(*Condition, false))
+          return true;
+    }
     RegionOffset AO = A->getAsOffset();
     RegionOffset BO = B->getAsOffset();
     if (!AO.isValid() || !BO.isValid())
@@ -483,7 +541,141 @@ public:
            BBytes + static_cast<int64_t>(Bytes) <= ABytes;
   }
 
+  static DefinedOrUnknownSVal protocolSucceeded(
+      const FunctionDecl *Function, DefinedOrUnknownSVal Return,
+      SValBuilder &Builder, ProgramStateRef State) {
+    DefinedOrUnknownSVal IsZero = Builder.evalEQ(
+        State, Return, Builder.makeZeroVal(Function->getReturnType()));
+    if (!Function->getReturnType()->isPointerType())
+      return IsZero;
+    return Builder
+        .evalBinOp(State, BO_EQ, IsZero, Builder.makeTruthVal(false),
+                   Builder.getConditionType())
+        .castAs<DefinedOrUnknownSVal>();
+  }
+
+  static const ParmVarDecl *argumentParameter(const CallEvent &Call,
+                                              unsigned Argument) {
+    if (Argument >= Call.getNumArgs())
+      return nullptr;
+    const Expr *Expression = Call.getArgExpr(Argument);
+    Expression = Expression ? Expression->IgnoreParenImpCasts() : nullptr;
+    const auto *Reference = dyn_cast_or_null<DeclRefExpr>(Expression);
+    return Reference ? dyn_cast<ParmVarDecl>(Reference->getDecl()) : nullptr;
+  }
+
+  static ProgramStateRef applyGrants(
+      ProgramStateRef State, const CallEvent &Call,
+      ArrayRef<SpanContract> Spans, ArrayRef<DisjointContract> Disjoint) {
+    for (const SpanContract &Contract : Spans) {
+      if (Contract.Operation != MemoryTokenOperation::Grant ||
+          Contract.Pointer >= Call.getNumArgs() ||
+          Contract.Length >= Call.getNumArgs())
+        continue;
+      const MemRegion *Region =
+          Call.getArgSVal(Contract.Pointer).getAsRegion();
+      std::optional<DefinedOrUnknownSVal> Extent =
+          Call.getArgSVal(Contract.Length).getAs<DefinedOrUnknownSVal>();
+      if (Region && Extent)
+        State = State->set<AssumedSpanExtent>(Region, *Extent);
+    }
+    for (const DisjointContract &Contract : Disjoint) {
+      if (Contract.Operation != MemoryTokenOperation::Grant ||
+          Contract.First >= Call.getNumArgs() ||
+          Contract.Second >= Call.getNumArgs() ||
+          Contract.Length >= Call.getNumArgs())
+        continue;
+      const MemRegion *First = Call.getArgSVal(Contract.First).getAsRegion();
+      const MemRegion *Second = Call.getArgSVal(Contract.Second).getAsRegion();
+      std::optional<DefinedOrUnknownSVal> Extent =
+          Call.getArgSVal(Contract.Length).getAs<DefinedOrUnknownSVal>();
+      if (First && Second && Extent)
+        State = State->set<AssumedDisjointExtent>({First, Second}, *Extent);
+    }
+    return State;
+  }
+
+  static ProgramStateRef recordGrantProofs(
+      ProgramStateRef State, const CallEvent &Call,
+      ArrayRef<SpanContract> Spans, ArrayRef<DisjointContract> Disjoint) {
+    for (const SpanContract &Contract : Spans) {
+      if (Contract.Operation != MemoryTokenOperation::Grant ||
+          Contract.Pointer >= Call.getNumArgs() ||
+          Contract.Length >= Call.getNumArgs())
+        continue;
+      const ParmVarDecl *Parameter =
+          argumentParameter(Call, Contract.Pointer);
+      const ParmVarDecl *Length = argumentParameter(Call, Contract.Length);
+      if (Parameter && Length)
+        State = State->set<GrantedSpanProof>(Parameter, Length);
+    }
+    for (const DisjointContract &Contract : Disjoint) {
+      if (Contract.Operation != MemoryTokenOperation::Grant ||
+          Contract.First >= Call.getNumArgs() ||
+          Contract.Second >= Call.getNumArgs() ||
+          Contract.Length >= Call.getNumArgs())
+        continue;
+      const ParmVarDecl *First = argumentParameter(Call, Contract.First);
+      const ParmVarDecl *Second = argumentParameter(Call, Contract.Second);
+      const ParmVarDecl *Length = argumentParameter(Call, Contract.Length);
+      if (First && Second && Length)
+        State = State->set<GrantedDisjointProof>({First, Second}, Length);
+    }
+    return State;
+  }
+
+  static ProgramStateRef removeGrantProofs(
+      ProgramStateRef State, const CallEvent &Call,
+      ArrayRef<SpanContract> Spans, ArrayRef<DisjointContract> Disjoint) {
+    for (const SpanContract &Contract : Spans) {
+      if (Contract.Operation != MemoryTokenOperation::Grant)
+        continue;
+      if (const ParmVarDecl *Parameter =
+              argumentParameter(Call, Contract.Pointer))
+        State = State->remove<GrantedSpanProof>(Parameter);
+    }
+    for (const DisjointContract &Contract : Disjoint) {
+      if (Contract.Operation != MemoryTokenOperation::Grant)
+        continue;
+      const ParmVarDecl *First = argumentParameter(Call, Contract.First);
+      const ParmVarDecl *Second = argumentParameter(Call, Contract.Second);
+      if (First && Second)
+        State = State->remove<GrantedDisjointProof>({First, Second});
+    }
+    return State;
+  }
+
 public:
+  void checkBind(SVal Location, SVal, const Stmt *, CheckerContext &C) const {
+    const auto *Function =
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
+    const MemRegion *Bound = Location.getAsRegion();
+    if (!Function || !Bound)
+      return;
+    ProgramStateRef State = C.getState();
+    for (const ParmVarDecl *Parameter : Function->parameters()) {
+      if (State->getLValue(Parameter, C.getLocationContext()).getAsRegion() !=
+          Bound)
+        continue;
+      SmallVector<const ParmVarDecl *, 2> RemoveSpans;
+      for (const auto &Proof : State->get<GrantedSpanProof>())
+        if (Proof.first == Parameter || Proof.second == Parameter)
+          RemoveSpans.push_back(Proof.first);
+      for (const ParmVarDecl *Key : RemoveSpans)
+        State = State->remove<GrantedSpanProof>(Key);
+      SmallVector<DisjointParameterKey, 2> Remove;
+      for (const auto &Proof : State->get<GrantedDisjointProof>())
+        if (Proof.first.first == Parameter || Proof.first.second == Parameter ||
+            Proof.second == Parameter)
+          Remove.push_back(Proof.first);
+      for (const DisjointParameterKey &Key : Remove)
+        State = State->remove<GrantedDisjointProof>(Key);
+      break;
+    }
+    if (State != C.getState())
+      C.addTransition(State);
+  }
+
   void checkBeginFunction(CheckerContext &C) const {
     const auto *Function =
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
@@ -492,6 +684,8 @@ public:
     tokenContracts(Function, Spans, Disjoint);
     ProgramStateRef State = C.getState();
     for (const SpanContract &Contract : Spans) {
+      if (Contract.Operation != MemoryTokenOperation::Require)
+        continue;
       const ParmVarDecl *PointerParameter =
           Function->getParamDecl(Contract.Pointer);
       const ParmVarDecl *LengthParameter =
@@ -506,6 +700,22 @@ public:
       if (Region && DefinedLength)
         State = State->set<AssumedSpanExtent>(Region, *DefinedLength);
     }
+    for (const DisjointContract &Contract : Disjoint) {
+      if (Contract.Operation != MemoryTokenOperation::Require)
+        continue;
+      const ParmVarDecl *First = Function->getParamDecl(Contract.First);
+      const ParmVarDecl *Second = Function->getParamDecl(Contract.Second);
+      const ParmVarDecl *Length = Function->getParamDecl(Contract.Length);
+      const MemRegion *A = State->getSVal(
+          State->getLValue(First, C.getLocationContext())).getAsRegion();
+      const MemRegion *B = State->getSVal(
+          State->getLValue(Second, C.getLocationContext())).getAsRegion();
+      std::optional<DefinedOrUnknownSVal> Extent = State->getSVal(
+          State->getLValue(Length, C.getLocationContext()))
+          .getAs<DefinedOrUnknownSVal>();
+      if (A && B && Extent)
+        State = State->set<AssumedDisjointExtent>({A, B}, *Extent);
+    }
     if (State != C.getState())
       C.addTransition(State);
   }
@@ -517,6 +727,8 @@ public:
     tokenContracts(Function, Spans, Disjoint);
     ProgramStateRef ContractState = C.getState();
     for (const SpanContract &Contract : Spans) {
+      if (Contract.Operation != MemoryTokenOperation::Require)
+        continue;
       if (Contract.Pointer >= Call.getNumArgs() ||
           Contract.Length >= Call.getNumArgs())
         continue;
@@ -529,6 +741,8 @@ public:
             ContractState->set<AssumedSpanExtent>(Region, *DefinedLength);
     }
     for (const SpanContract &Contract : Spans) {
+      if (Contract.Operation != MemoryTokenOperation::Require)
+        continue;
       if (Contract.Pointer >= Call.getNumArgs() ||
           Contract.Length >= Call.getNumArgs())
         continue;
@@ -542,24 +756,35 @@ public:
         break;
       }
     }
-    if (!Spans.empty() && ContractState != C.getState())
-      C.addTransition(ContractState);
     for (const DisjointContract &Contract : Disjoint) {
+      if (Contract.Operation != MemoryTokenOperation::Require)
+        continue;
       if (Contract.First >= Call.getNumArgs() ||
           Contract.Second >= Call.getNumArgs() ||
           Contract.Length >= Call.getNumArgs())
         continue;
-      if (overlapProven(Call.getArgSVal(Contract.First),
-                        Call.getArgSVal(Contract.Second),
-                        Call.getArgSVal(Contract.Length), C.getState(), C))
-        continue;
-      BugType *Type = OverlapBT.get();
-      report("memcpy ranges are not proven nonoverlapping", Type, Call,
-             C.getState(), C);
-      if (!OverlapBT && Type)
-        OverlapBT.reset(Type);
-      break;
+      SVal First = Call.getArgSVal(Contract.First);
+      SVal Second = Call.getArgSVal(Contract.Second);
+      SVal Length = Call.getArgSVal(Contract.Length);
+      if (!overlapProven(First, Second, Length, C.getState(), C)) {
+        BugType *Type = OverlapBT.get();
+        report("memcpy ranges are not proven nonoverlapping", Type, Call,
+               C.getState(), C);
+        if (!OverlapBT && Type)
+          OverlapBT.reset(Type);
+      }
+      const MemRegion *A = First.getAsRegion();
+      const MemRegion *B = Second.getAsRegion();
+      std::optional<DefinedOrUnknownSVal> Extent =
+          Length.getAs<DefinedOrUnknownSVal>();
+      if (A && B && Extent)
+        ContractState =
+            ContractState->set<AssumedDisjointExtent>({A, B}, *Extent);
     }
+    ContractState =
+        recordGrantProofs(ContractState, Call, Spans, Disjoint);
+    if (ContractState != C.getState())
+      C.addTransition(ContractState);
   }
 
   // See allocationSizeInBytes above: give this tree's own __malloc-family
@@ -567,17 +792,15 @@ public:
   // already gives literally-named "malloc"/"calloc"/etc, so spanProven has
   // real information to work with instead of an unconstrained placeholder.
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
+    ProgramStateRef State = C.getState();
     if (std::optional<SVal> SizeInBytes = allocationSizeInBytes(Call, C)) {
       if (std::optional<DefinedOrUnknownSVal> DefinedSize =
               SizeInBytes->getAs<DefinedOrUnknownSVal>()) {
         if (const MemRegion *Region = Call.getReturnValue().getAsRegion()) {
-          ProgramStateRef State =
-              setDynamicExtent(C.getState(), Region->getBaseRegion(),
-                               *DefinedSize, C.getSValBuilder());
-          C.addTransition(State);
+          State = setDynamicExtent(State, Region->getBaseRegion(), *DefinedSize,
+                                   C.getSValBuilder());
         }
       }
-      return;
     }
     // See stringLengthSourceSpanProven above: record which pointer
     // argument a strlen()/strnlen() call's return symbol was measured
@@ -586,18 +809,140 @@ public:
     // by construction.
     bool IsStrlen = hasName(Call, "strlen") && Call.getNumArgs() >= 1;
     bool IsStrnlen = hasName(Call, "strnlen") && Call.getNumArgs() >= 2;
-    if (!IsStrlen && !IsStrnlen)
+    if (IsStrlen || IsStrnlen) {
+      const MemRegion *ArgRegion = Call.getArgSVal(0).getAsRegion();
+      SymbolRef ReturnSym = stripCasts(Call.getReturnValue().getAsSymbol());
+      if (ArgRegion && ReturnSym)
+        State = IsStrlen
+                    ? State->set<StrlenSource>(ReturnSym,
+                                               ArgRegion->getBaseRegion())
+                    : State->set<StrnlenSource>(ReturnSym,
+                                                ArgRegion->getBaseRegion());
+    }
+
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    SmallVector<SpanContract, 2> Spans;
+    SmallVector<DisjointContract, 1> Disjoint;
+    tokenContracts(Function, Spans, Disjoint);
+    bool HasGrant = llvm::any_of(Spans, [](const SpanContract &Contract) {
+      return Contract.Operation == MemoryTokenOperation::Grant;
+    }) || llvm::any_of(Disjoint, [](const DisjointContract &Contract) {
+      return Contract.Operation == MemoryTokenOperation::Grant;
+    });
+    if (!HasGrant) {
+      if (State != C.getState())
+        C.addTransition(State);
       return;
-    const MemRegion *ArgRegion = Call.getArgSVal(0).getAsRegion();
-    SymbolRef ReturnSym = stripCasts(Call.getReturnValue().getAsSymbol());
-    if (!ArgRegion || !ReturnSym)
+    }
+    if (Function->getReturnType()->isVoidType()) {
+      C.addTransition(applyGrants(State, Call, Spans, Disjoint));
       return;
+    }
+    std::optional<DefinedOrUnknownSVal> Return =
+        Call.getReturnValue().getAs<DefinedOrUnknownSVal>();
+    if (!Return) {
+      ProgramStateRef Unproven =
+          removeGrantProofs(State, Call, Spans, Disjoint);
+      if (Unproven != C.getState())
+        C.addTransition(Unproven);
+      return;
+    }
+    DefinedOrUnknownSVal Success = protocolSucceeded(
+        Function, *Return, C.getSValBuilder(), State);
+    auto [Succeeded, Failed] = State->assume(Success);
+    if (Succeeded)
+      C.addTransition(applyGrants(Succeeded, Call, Spans, Disjoint));
+    if (Failed)
+      C.addTransition(removeGrantProofs(Failed, Call, Spans, Disjoint));
+  }
+
+  void checkEndFunction(const ReturnStmt *Return, CheckerContext &C) const {
+    const auto *Function =
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
+    if (!Function || !Function->doesThisDeclarationHaveABody())
+      return;
+    SmallVector<SpanContract, 2> Spans;
+    SmallVector<DisjointContract, 1> Disjoint;
+    tokenContracts(Function, Spans, Disjoint);
     ProgramStateRef State = C.getState();
-    State = IsStrlen ? State->set<StrlenSource>(ReturnSym,
-                                                ArgRegion->getBaseRegion())
-                     : State->set<StrnlenSource>(ReturnSym,
-                                                 ArgRegion->getBaseRegion());
-    C.addTransition(State);
+    if (!Function->getReturnType()->isVoidType()) {
+      if (!Return || !Return->getRetValue())
+        return;
+      std::optional<DefinedOrUnknownSVal> Result =
+          C.getSVal(Return->getRetValue()).getAs<DefinedOrUnknownSVal>();
+      if (!Result)
+        return;
+      DefinedOrUnknownSVal Success = protocolSucceeded(
+          Function, *Result, C.getSValBuilder(), State);
+      State = State->assume(Success).first;
+      if (!State)
+        return;
+    }
+    const LocationContext *LC = C.getLocationContext();
+    const Stmt *Site =
+        Return ? static_cast<const Stmt *>(Return) : Function->getBody();
+    for (const SpanContract &Contract : Spans) {
+      if (Contract.Operation != MemoryTokenOperation::Grant)
+        continue;
+      const ParmVarDecl *Pointer = Function->getParamDecl(Contract.Pointer);
+      const ParmVarDecl *Length = Function->getParamDecl(Contract.Length);
+      SVal PointerValue =
+          State->getSVal(State->getLValue(Pointer, LC));
+      SVal LengthValue = State->getSVal(State->getLValue(Length, LC));
+      const MemRegion *Region = PointerValue.getAsRegion();
+      bool Proven = State->isNull(LengthValue).isConstrainedTrue();
+      if (Region)
+        if (const ParmVarDecl *const *ProvenLength =
+                State->get<GrantedSpanProof>(Pointer)) {
+          if (*ProvenLength == Length) {
+            if (std::optional<DefinedOrUnknownSVal> Extent =
+                    LengthValue.getAs<DefinedOrUnknownSVal>()) {
+              ProgramStateRef ProofState =
+                  State->set<AssumedSpanExtent>(Region, *Extent);
+              Proven = spanProven(PointerValue, LengthValue, ProofState, C);
+            }
+          }
+        }
+      if (!Proven) {
+        reportToken("declared memory token addition is not proven by function "
+                    "body",
+                    Site, State, C);
+        return;
+      }
+    }
+    for (const DisjointContract &Contract : Disjoint) {
+      if (Contract.Operation != MemoryTokenOperation::Grant)
+        continue;
+      const ParmVarDecl *First = Function->getParamDecl(Contract.First);
+      const ParmVarDecl *Second = Function->getParamDecl(Contract.Second);
+      const ParmVarDecl *Length = Function->getParamDecl(Contract.Length);
+      SVal FirstValue = State->getSVal(State->getLValue(First, LC));
+      SVal SecondValue = State->getSVal(State->getLValue(Second, LC));
+      SVal LengthValue = State->getSVal(State->getLValue(Length, LC));
+      const MemRegion *FirstRegion = FirstValue.getAsRegion();
+      const MemRegion *SecondRegion = SecondValue.getAsRegion();
+      bool Proven = State->isNull(LengthValue).isConstrainedTrue();
+      if (FirstRegion && SecondRegion)
+        if (const ParmVarDecl *const *ProvenLength =
+                State->get<GrantedDisjointProof>({First, Second})) {
+          if (*ProvenLength == Length) {
+            if (std::optional<DefinedOrUnknownSVal> Extent =
+                    LengthValue.getAs<DefinedOrUnknownSVal>()) {
+              ProgramStateRef ProofState =
+                  State->set<AssumedDisjointExtent>(
+                      {FirstRegion, SecondRegion}, *Extent);
+              Proven = overlapProven(FirstValue, SecondValue, LengthValue,
+                                     ProofState, C);
+            }
+          }
+        }
+      if (!Proven) {
+        reportToken("declared memory token addition is not proven by function "
+                    "body",
+                    Site, State, C);
+        return;
+      }
+    }
   }
 };
 
