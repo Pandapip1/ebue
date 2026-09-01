@@ -45,12 +45,10 @@
 #             synchronization-object lifecycles, and require every dereference
 #             to have nonnull, live, in-bounds, aligned storage. Descriptor,
 #             stream, directory, semaphore, mapping, and handle acquire/use/
-#             release state is tracked as well. `alloclife` is a compatibility
-#             alias for this merged stage.
-#   memcontracts
-#             currently opt-in; proves spans for memory and I/O operations and
-#             proves memcpy ranges do not overlap. String termination is part
-#             of the ownership token stage above.
+#             release state is tracked as well. Parameterized memory tokens
+#             prove spans for memory and I/O operations and prove memcpy ranges
+#             do not overlap in the same analyzer pass. `alloclife` and
+#             `memcontracts` are compatibility aliases for this merged stage.
 #   initproof on by default; path-sensitively proves that scalar and field
 #             loads do not read definitely uninitialized storage.
 #   fallible  on by default; rejects discarded results from known fallible
@@ -1132,7 +1130,7 @@ stage_arithub() {
 }
 
 stage_ownership() {
-	hdr "ownership, allocation lifetime, and borrow proof obligations"
+	hdr "ownership, allocation lifetime, borrow, and memory proof obligations"
 	any=0
 	require_tool clang-18 || return $missing
 	require_tool clang++-18 || return $missing
@@ -1148,9 +1146,11 @@ stage_ownership() {
 	plugin=$builddir/ntlibc-ownership-checker.so
 	# llvm-config deliberately returns shell words, not one argument.
 	# shellcheck disable=SC2046
-	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
+	clang++-18 -fPIC -shared -DOWNERSHIP_CHECKER_BUNDLE \
+		$(llvm-config-18 --cxxflags) \
 		tools/clang/OwnershipChecker.cpp \
 		tools/clang/AllocationLifetimeChecker.cpp \
+		tools/clang/MemoryContractChecker.cpp \
 		-o "$plugin" "$clang_cpp" \
 		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
 
@@ -1174,6 +1174,16 @@ stage_ownership() {
 	done
 	tools/lint-allocation-lifetime.py --fixtures "$allocation_fixture_log" || any=1
 
+	memory_fixture_log=$builddir/memory-contract-fixtures.log
+	: > "$memory_fixture_log"
+	for fixture in tools/lint-memory-contract-fixtures/*.c; do
+		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
+			-Xclang -analyzer-checker=ntlibc.MemoryContract \
+			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
+			>> "$memory_fixture_log" 2>&1 || any=1
+	done
+	tools/lint-memory-contracts.py --fixtures "$memory_fixture_log" || any=1
+
 	analyzed=0
 	for arch in $LINT_ARCHS; do
 		gen_alltypes "$arch" || { any=1; continue; }
@@ -1183,6 +1193,7 @@ stage_ownership() {
 		out=$builddir/$arch.ownership.log
 		report=$builddir/$arch.ownership.report
 		allocation_report=$builddir/$arch.allocation-lifetime.report
+		memory_report=$builddir/$arch.memory-contract.report
 		pardir=$(mktemp -d "$builddir/ownership.XXXXXX") || return 1
 		# shellcheck disable=SC2086,SC2016
 		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
@@ -1203,7 +1214,7 @@ stage_ownership() {
 			# Ownership also supplies allocation provenance to ValidPointer.
 			# shellcheck disable=SC2086
 			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
-				-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.ValidPointer \
+				-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.ValidPointer,ntlibc.MemoryContract \
 				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
 				> "$pointer" 2>&1
 			pointer_rc=$?
@@ -1246,68 +1257,19 @@ stage_ownership() {
 			show_findings "$allocation_report"
 			any=1
 		fi
+		if tools/lint-memory-contracts.py --fixtures "$memory_fixture_log" \
+			"$out" > "$memory_report" 2>&1; then
+			note "memory token proofs [$arch]: proved -> $memory_report"
+		else
+			note "memory token proofs [$arch]: findings -> $memory_report"
+			show_findings "$memory_report"
+			any=1
+		fi
 	done
 	if [ "$analyzed" -eq 0 ]; then
 		note "ownership analyzer: FAILED -- no architecture was analyzed."
 		return 1
 	fi
-	return $any
-}
-
-stage_memcontracts() {
-	hdr "memory span and overlap proof obligations"
-	any=0
-	require_tool clang-18 || return $missing
-	require_tool clang++-18 || return $missing
-	require_tool llvm-config-18 || return $missing
-	libdir=$(llvm-config-18 --libdir)
-	clang_cpp=$(find "$libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' -print 2>/dev/null | sort | head -n 1)
-	[ -n "$clang_cpp" ] || { report_missing "Clang 18 development libraries are required for memory contracts."; return $missing; }
-	plugin=$builddir/ntlibc-memory-contract-checker.so
-	# shellcheck disable=SC2046
-	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
-		tools/clang/MemoryContractChecker.cpp -o "$plugin" "$clang_cpp" \
-		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
-	fixture_log=$builddir/memory-contract-fixtures.log
-	: > "$fixture_log"
-	for fixture in tools/lint-memory-contract-fixtures/*.c; do
-		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
-			-Xclang -analyzer-checker=ntlibc.MemoryContract \
-			-Xclang -analyzer-output=text \
-			-DNTLIBC_MEMORY_CONTRACT_ANALYSIS "$fixture" -o /dev/null \
-			>> "$fixture_log" 2>&1 || any=1
-	done
-	tools/lint-memory-contracts.py --fixtures "$fixture_log" || any=1
-	analyzed=0
-	for arch in $LINT_ARCHS; do
-		gen_alltypes "$arch" || { any=1; continue; }
-		flags=$(cppflags_for "$arch"); target=$(pick_target "$arch")
-		nsrc=$(sources_for "$arch" | grep -c . || true)
-		out=$builddir/$arch.memory-contract.log
-		report=$builddir/$arch.memory-contract.report
-		pardir=$(mktemp -d "$builddir/memory-contract.XXXXXX") || return 1
-		# shellcheck disable=SC2086,SC2016
-		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
-			f=$1; clang=$2; plugin=$3; target=$4; shift 4
-			id=$(printf %s "$f" | tr / _)
-			# shellcheck disable=SC2086
-			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
-				-Xclang -analyzer-checker=ntlibc.MemoryContract \
-				-Xclang -analyzer-output=text \
-				-DNTLIBC_MEMORY_CONTRACT_ANALYSIS "$@" "$f" -o /dev/null \
-				> "'"$pardir"'/$id.log" 2>&1
-		' _ {} clang-18 "$plugin" "$target" $flags
-		runrc=$?; nlog=$(find "$pardir" -name '*.log' | grep -c . || true)
-		: > "$out"; ls "$pardir"/*.log >/dev/null 2>&1 && cat "$pardir"/*.log > "$out"; rm -rf "$pardir"
-		if [ "$runrc" -ne 0 ] || [ "$nlog" -ne "$nsrc" ]; then any=1; continue; fi
-		analyzed=$((analyzed + 1))
-		if tools/lint-memory-contracts.py --fixtures "$fixture_log" "$out" > "$report" 2>&1; then
-			note "memory contracts [$arch]: proved -> $report"
-		else
-			note "memory contracts [$arch]: findings -> $report"; show_findings "$report"; any=1
-		fi
-	done
-	[ "$analyzed" -gt 0 ] || return 1
 	return $any
 }
 
@@ -1927,7 +1889,7 @@ requested_stages=${*:-warn analyze cppcheck shell sizearith fallible locks locks
 stages=
 for requested_stage in $requested_stages; do
 	case $requested_stage in
-	alloclife) normalized_stage=ownership ;;
+	alloclife|memcontracts) normalized_stage=ownership ;;
 	*) normalized_stage=$requested_stage ;;
 	esac
 	case " $stages " in
@@ -1964,7 +1926,6 @@ for s in $stages; do
 		totality)  stage_totality ;;
 		arithub)    stage_arithub ;;
 		ownership)  stage_ownership ;;
-		memcontracts) stage_memcontracts ;;
 		initproof)  stage_initproof ;;
 		fallible)   stage_fallible ;;
 		provenance) stage_provenance ;;

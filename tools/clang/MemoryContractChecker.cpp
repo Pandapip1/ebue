@@ -948,11 +948,17 @@ public:
 
 } // namespace
 
-extern "C" const char clang_analyzerAPIVersionString[] =
-    CLANG_ANALYZER_API_VERSION_STRING;
-
-extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
+void registerMemoryContractChecker(CheckerRegistry &Registry) {
   Registry.addChecker<MemoryContractChecker>(
       "ntlibc.MemoryContract",
       "Proves memory spans and memcpy non-overlap contracts", "");
 }
+
+#ifndef OWNERSHIP_CHECKER_BUNDLE
+extern "C" const char clang_analyzerAPIVersionString[] =
+    CLANG_ANALYZER_API_VERSION_STRING;
+
+extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
+  registerMemoryContractChecker(Registry);
+}
+#endif

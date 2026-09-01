@@ -3747,12 +3747,14 @@ public:
 } // namespace
 
 void registerAllocationLifetimeChecker(CheckerRegistry &Registry);
+void registerMemoryContractChecker(CheckerRegistry &Registry);
 
 extern "C" const char clang_analyzerAPIVersionString[] =
     CLANG_ANALYZER_API_VERSION_STRING;
 
 extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
   registerAllocationLifetimeChecker(Registry);
+  registerMemoryContractChecker(Registry);
   Registry.addChecker<OwnershipChecker>(
       "ntlibc.Ownership",
       "Proves allocator provenance and borrow lifetime at deallocation", "");
