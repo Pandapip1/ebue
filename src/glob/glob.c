@@ -265,7 +265,15 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 	}
 
 	slash = find_slash(pat, flags);
-	seglen = slash ? (size_t)(slash - pat) : strlen(pat);
+	seglen = strlen(pat);
+	if (slash) {
+		size_t suffix_len = strlen(slash);
+		if (suffix_len > seglen) {
+			errno = EINVAL;
+			return -1;
+		}
+		seglen -= suffix_len;
+	}
 	rest = slash ? slash + 1 : 0;
 	meta = has_meta(pat, seglen, flags);
 	want_slash = rest != 0;

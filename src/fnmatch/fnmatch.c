@@ -90,7 +90,14 @@ static struct bracket_result bracket_match(const char *p, unsigned char c)
 		if (p[0] == '[' && p[1] == ':') {
 			const char *q = strstr(p + 2, ":]");
 			if (q) {
-				if (class_match(p + 2, (size_t)(q - (p + 2)), c))
+				const char *name = p + 2;
+				size_t name_tail = strlen(name);
+				size_t delimiter_tail = strlen(q);
+				if (delimiter_tail > name_tail) {
+					result.match = -2;
+					return result;
+				}
+				if (class_match(name, name_tail - delimiter_tail, c))
 					matched = 1;
 				p = q + 2;
 				continue;
