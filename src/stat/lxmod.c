@@ -16,6 +16,7 @@
 // NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include "libc.h"
+#include "ownership_stubs.h"
 
 #define LXMOD_NAME "$LXMOD"
 #define LXMOD_NAME_LEN 6u
@@ -37,13 +38,17 @@ static void putle32(unsigned char *p, unsigned v)
  * every caller (src/fcntl/open.c, src/stat/mkdir.c, and __plat_lxmod_set
  * indirectly) exactly like mman.c's reservation table stays in its own
  * front door -- see src/internal/plat_stat.h's banner. */
-unsigned __lxmod_create_buffer(void *buffer, unsigned mode)
+unsigned __lxmod_create_buffer(
+    void *buffer withtok(writable_span(19)), unsigned mode)
 {
 	unsigned char *b = buffer;
 	__NT_FILE_FULL_EA_INFORMATION *ea = (__NT_FILE_FULL_EA_INFORMATION *)b;
+	__ownership_writable_span(b, LXMOD_EA_LEN);
 	memset(b, 0, LXMOD_EA_LEN);
 	ea->EaNameLength = LXMOD_NAME_LEN;
 	ea->EaValueLength = LXMOD_VALUE_LEN;
+	__ownership_writable_span(ea->EaName, LXMOD_NAME_LEN + 1);
+	__ownership_readable_span(LXMOD_NAME, LXMOD_NAME_LEN + 1);
 	memcpy(ea->EaName, LXMOD_NAME, LXMOD_NAME_LEN + 1);
 	putle32((unsigned char *)ea->EaName + LXMOD_NAME_LEN + 1, mode);
 	return LXMOD_EA_LEN;

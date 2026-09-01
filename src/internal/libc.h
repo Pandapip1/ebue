@@ -491,7 +491,8 @@ int __is_program(const char *path);
  * The platform calls that read/write it are __plat_lxmod_get()/
  * __plat_lxmod_set() (src/internal/plat_stat.h); only the buffer builder,
  * which makes no platform call, is declared cross-module here. */
-unsigned __lxmod_create_buffer(void *, unsigned mode); /* NtCreateFile EA */
+unsigned __lxmod_create_buffer(
+    void *buffer withtok(writable_span(19)), unsigned mode); /* NtCreateFile EA */
 /* The [ENOEXEC] command interpreter of XSH exec and XCU 2.9.1: runs
  * argv -- { arg0, command_file, argument..., 0 } -- as one invocation
  * of sh(1p) in this process, and returns its exit status.  Shared by
