@@ -21,6 +21,8 @@ withtok(fixture_writable_span(length))
 void *__malloc(size_t length);
 withtok(fixture_writable_span(length))
 void *allocate_bytes(size_t length);
+withtok(fixture_writable_span(count * size))
+void *allocate_array(size_t count, size_t size);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 void establish_writable(
@@ -175,4 +177,11 @@ void declaration_driven_allocator(size_t length)
 	char *buffer = allocate_bytes(length);
 	if (!buffer) return;
 	memset(buffer, 0, length);
+}
+
+void declaration_driven_array_allocator(size_t count, size_t size)
+{
+	char *buffer = allocate_array(count, size);
+	if (!buffer) return;
+	memset(buffer, 0, count * size);
 }

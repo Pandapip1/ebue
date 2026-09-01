@@ -38,6 +38,7 @@ void *malloc(size_t n)
 }
 
 withtok(heap_allocated)
+withtok(writable_span(m * n))
 void *calloc(size_t m, size_t n)
 {
 	void *p;
@@ -69,6 +70,7 @@ size_t malloc_usable_size(void *p)
 }
 
 withtok(heap_allocated)
+withtok(writable_span(m * n))
 void *reallocarray(void *p consume_if_nonnull_return(heap_allocated), size_t m, size_t n)
 {
 	if (n && m > (size_t)-1 / n) { errno = ENOMEM; return 0; }

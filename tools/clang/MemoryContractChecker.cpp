@@ -202,25 +202,50 @@ class MemoryContractChecker
    * declaration itself: `withtok(writable_span(size))`.  Interpreting the
    * function-level token as a return-value grant keeps allocator knowledge in
    * headers and stubs; the checker never recognizes an allocator by name. */
-  static std::optional<unsigned>
-  declaredReturnSpanLength(const FunctionDecl *Function) {
+  static std::optional<SVal>
+  declaredReturnSpanExtent(const FunctionDecl *Function,
+                           const CallEvent &Call, CheckerContext &C) {
     if (!Function || !Function->getReturnType()->isPointerType())
       return std::nullopt;
+    auto ParameterIndex = [](const FunctionDecl *Declaration,
+                             StringRef Name) -> std::optional<unsigned> {
+      Name = Name.trim();
+      for (unsigned Index = 0; Index < Declaration->getNumParams(); ++Index)
+        if (Declaration->getParamDecl(Index)->getName() == Name)
+          return Index;
+      return std::nullopt;
+    };
     for (const FunctionDecl *Redeclaration : Function->redecls())
       for (const AnnotateAttr *Attribute :
            Redeclaration->specific_attrs<AnnotateAttr>()) {
-        StringRef Family;
-        SmallVector<unsigned, 2> Arguments;
-        MemoryTokenOperation Operation;
-        if (!tokenApplication(Redeclaration, Attribute->getAnnotation(),
-                              Operation, Family, Arguments))
+        StringRef Annotation = Attribute->getAnnotation();
+        if (!Annotation.consume_front("withtok:") ||
+            !Annotation.ends_with(")"))
           continue;
+        size_t Open = Annotation.find('(');
+        if (Open == StringRef::npos)
+          continue;
+        StringRef Family = Annotation.take_front(Open).trim();
         const TypedefNameDecl *Token =
             dialectToken(Function->getASTContext(), Family);
-        if (Operation == MemoryTokenOperation::Require &&
-            hasDialectQualifier(Token, "qual:extent_at_least") &&
-            Arguments.size() == 1)
-          return Arguments[0];
+        if (!hasDialectQualifier(Token, "qual:extent_at_least"))
+          continue;
+        StringRef Expression =
+            Annotation.slice(Open + 1, Annotation.size() - 1).trim();
+        auto [LeftName, RightName] = Expression.split('*');
+        std::optional<unsigned> Left = ParameterIndex(Redeclaration, LeftName);
+        if (!Left || *Left >= Call.getNumArgs())
+          continue;
+        if (RightName.empty())
+          return Call.getArgSVal(*Left);
+        std::optional<unsigned> Right =
+            ParameterIndex(Redeclaration, RightName);
+        if (!Right || *Right >= Call.getNumArgs() ||
+            RightName.contains('*'))
+          continue;
+        return C.getSValBuilder().evalBinOp(
+            C.getState(), BO_Mul, Call.getArgSVal(*Left),
+            Call.getArgSVal(*Right), C.getASTContext().getSizeType());
       }
     return std::nullopt;
   }
@@ -289,6 +314,18 @@ class MemoryContractChecker
      * expression wrapped before reaching this point. */
     if (ExtentSymbol && ExtentSymbol == LengthSymbol)
       return true;
+    const auto *ExtentProduct = dyn_cast_or_null<SymSymExpr>(ExtentSymbol);
+    const auto *LengthProduct = dyn_cast_or_null<SymSymExpr>(LengthSymbol);
+    if (ExtentProduct && LengthProduct &&
+        ExtentProduct->getOpcode() == BO_Mul &&
+        LengthProduct->getOpcode() == BO_Mul) {
+      SymbolRef EL = stripCasts(ExtentProduct->getLHS());
+      SymbolRef ER = stripCasts(ExtentProduct->getRHS());
+      SymbolRef LL = stripCasts(LengthProduct->getLHS());
+      SymbolRef LR = stripCasts(LengthProduct->getRHS());
+      if ((EL == LL && ER == LR) || (EL == LR && ER == LL))
+        return true;
+    }
     SymbolRef ExtentBase, LengthBase;
     int64_t ExtentOffset, LengthOffset;
     if (!decomposeAffine(Extent, ExtentBase, ExtentOffset))
@@ -834,17 +871,17 @@ public:
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
     ProgramStateRef State = C.getState();
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
-    if (std::optional<unsigned> Length = declaredReturnSpanLength(Function)) {
-      if (*Length < Call.getNumArgs())
-        if (std::optional<DefinedOrUnknownSVal> DefinedSize =
-                Call.getArgSVal(*Length).getAs<DefinedOrUnknownSVal>())
-          if (const MemRegion *Region = Call.getReturnValue().getAsRegion()) {
+    if (std::optional<SVal> Extent =
+            declaredReturnSpanExtent(Function, Call, C)) {
+      if (std::optional<DefinedOrUnknownSVal> DefinedSize =
+              Extent->getAs<DefinedOrUnknownSVal>())
+        if (const MemRegion *Region = Call.getReturnValue().getAsRegion()) {
           const MemRegion *Base = Region->getBaseRegion();
           State = setDynamicExtent(State, Base, *DefinedSize,
                                    C.getSValBuilder());
           State = State->add<AllocatedBaseRegion>(Base);
-          }
-    }
+        }
+      }
     // See stringLengthSourceSpanProven above: record which pointer
     // argument a strlen()/strnlen() call's return symbol was measured
     // from, so a later memcpy/memset/etc using that same (conjured)

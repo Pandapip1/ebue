@@ -53,7 +53,8 @@ withtok(heap_allocated)
 withtok(writable_span(size))
 void *malloc (size_t size);
 withtok(heap_allocated)
-void *calloc (size_t, size_t);
+withtok(writable_span(count * size))
+void *calloc (size_t count, size_t size);
 withtok(heap_allocated)
 withtok(writable_span(size))
 void *realloc (void * consume_if_nonnull_return(heap_allocated), size_t size);
@@ -224,7 +225,9 @@ int getloadavg(double *, int);
 #define WCOREDUMP(s) ((s) & 0x80)
 #define WIFCONTINUED(s) ((s) == 0xffff)
 withtok(heap_allocated)
-void *reallocarray (void * consume_if_nonnull_return(heap_allocated), size_t, size_t);
+withtok(writable_span(count * size))
+void *reallocarray (void * consume_if_nonnull_return(heap_allocated),
+                    size_t count, size_t size);
 void qsort_r (void *, size_t, size_t, int (*)(const void *, const void *, void *), void *);
 #endif
 
