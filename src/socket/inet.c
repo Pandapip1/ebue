@@ -46,6 +46,7 @@ in_addr_t inet_addr(const char *s)
 {
 	unsigned long parts[4];
 	int nparts = 0;
+	int parts_left;
 	const char *p;
 	in_addr_t result = INADDR_NONE;
 	int saved_errno = errno;
@@ -68,15 +69,19 @@ in_addr_t inet_addr(const char *s)
 	 * bigger change than this one call site justifies. */
 	if (!s) goto done;
 	p = s;
-	for (;;) {
+	for (parts_left = 4; parts_left > 0; parts_left--) {
 		char *end;
 		unsigned long v;
-		if (nparts == 4 || *p < '0' || *p > '9') goto done;
+		if (*p < '0' || *p > '9') goto done;
 		v = strtoul(p, &end, 0); /* base 0: honours "0x"/"0" prefixes, per inet_addr.html */
 		if (end == p) goto done;
 		parts[nparts++] = v;
 		p = end;
-		if (*p == '.') { p++; continue; }
+		if (*p == '.') {
+			p++;
+			if (parts_left == 1) goto done;
+			continue;
+		}
 		break;
 	}
 	if (*p) goto done; /* trailing garbage */

@@ -124,10 +124,11 @@ static int __getopt_long(int argc, char *const *argv, const char *optstring, con
 	skipped = optind;
 	if (optstring[0] != '+' && optstring[0] != '-') {
 		int i;
-		for (i = optind; ; i++) {
-			if (i >= argc || !argv[i]) return -1;
+		for (i = optind; i < argc; i++) {
+			if (!argv[i]) return -1;
 			if (argv[i][0] == '-' && argv[i][1]) break;
 		}
+		if (i >= argc) return -1;
 		optind = i;
 	}
 	resumed = optind;
