@@ -171,6 +171,12 @@ static std::optional<CapabilityKind> dialectTokenKind(ASTContext &Context,
              : CapabilityKind::Linear;
 }
 
+static bool dialectTokenPermitsCarrierCopy(const TypedefNameDecl *Token) {
+  return Token && hasDialectQualifier(Token, "qual:l_permissive") &&
+         !hasDialectQualifier(Token, "qual:l_strict") &&
+         !hasDialectQualifier(Token, "qual:l_unlimited");
+}
+
 static std::optional<int64_t> dialectExcludedSentinel(
     const TypedefNameDecl *Token) {
   if (!Token)
@@ -1960,6 +1966,20 @@ class OwnershipTypeChecker
     ProgramStateRef State = C.getState();
     const MemRegion *SourceCarrier = carrierRegion(Source, C);
     SVal SourceValue = C.getSVal(Source);
+    if (!DestinationBundle.empty())
+      for (const OwnershipTypeEntry &Entry : SourceBundle) {
+        if (Entry.Member != OwnershipTypeMember::LinearToken ||
+            contains(DestinationBundle, Entry))
+          continue;
+        const TypedefNameDecl *Token =
+            dialectToken(C.getASTContext(), Entry.Family->getName());
+        if (dialectTokenPermitsCarrierCopy(Token))
+          continue;
+        report("strict linear token prevents copying the remaining ownership "
+               "bundle",
+               Statement, State, C);
+        return;
+      }
     for (const OwnershipTypeEntry &Entry : DestinationBundle) {
       if (Entry.Member == OwnershipTypeMember::Handle)
         continue;

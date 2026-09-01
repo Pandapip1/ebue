@@ -6,6 +6,8 @@
 
 token heap_free;
 token shared_access l_unlimited implicit_drop;
+token strict_once l_strict implicit_drop;
+token strict_view l_unlimited implicit_drop;
 #undef token
 
 struct owner_box {
@@ -16,6 +18,9 @@ withhandle(heap) withtok(heap_free)
 void *make_owner(void);
 void *make_plain(void);
 void inspect_owner(void *value withhandle(heap) withtok(heap_free));
+
+withhandle(strict) withtok(strict_once) withtok(strict_view)
+void *make_strict(void);
 
 void manufacture_token(void)
 {
@@ -65,4 +70,13 @@ void move_linear_token_twice(void)
 	    withhandle(heap) withtok(heap_free) = first;
 	inspect_owner(second);
 	(void)third;
+}
+
+void copy_around_strict_linear_token(void)
+{
+	void *owner withhandle(strict) withtok(strict_once) withtok(strict_view) =
+	    make_strict();
+	void *copy /* ownership-expect: strict-copy */
+	    withhandle(strict) withtok(strict_view) = owner;
+	(void)copy;
 }

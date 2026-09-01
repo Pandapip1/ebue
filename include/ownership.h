@@ -8,6 +8,10 @@
  * refer to that policy by name. */
 #define __token_type typedef struct { char _tok; }
 #define token __token_type
+/* Linear tokens are strict by default.  A permissive token remains linear,
+ * but may stay behind while other, unlimited tokens on its carrier copy. */
+#define l_strict __attribute__((annotate("qual:l_strict")))
+#define l_permissive __attribute__((annotate("qual:l_permissive")))
 #define l_unlimited __attribute__((annotate("qual:l_unlimited")))
 #define implicit_drop __attribute__((annotate("qual:implicit_drop")))
 #define dynamic_storage __attribute__((annotate("qual:dynamic_storage")))

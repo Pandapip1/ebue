@@ -6,6 +6,8 @@
 
 token heap_free;
 token shared_access l_unlimited implicit_drop;
+token permissive_once l_permissive implicit_drop;
+token permissive_view l_unlimited implicit_drop;
 #undef token
 
 struct owner_box {
@@ -20,6 +22,11 @@ withhandle(shared) withtok(shared_access)
 void *make_shared(void);
 void inspect_shared(void *value
     withhandle(shared) withtok(shared_access));
+
+withhandle(permissive) withtok(permissive_once) withtok(permissive_view)
+void *make_permissive(void);
+void inspect_permissive(void *value
+    withhandle(permissive) withtok(permissive_view));
 
 withhandle(heap) withtok(heap_free)
 void *forward_owner(void)
@@ -57,4 +64,13 @@ void copy_duplicable_token(void)
 	void *second withhandle(shared) withtok(shared_access) = first;
 	inspect_shared(first);
 	inspect_shared(second);
+}
+
+void copy_around_permissive_linear_token(void)
+{
+	void *owner withhandle(permissive) withtok(permissive_once)
+	    withtok(permissive_view) = make_permissive();
+	void *copy withhandle(permissive) withtok(permissive_view) = owner;
+	inspect_permissive(owner);
+	inspect_permissive(copy);
 }
