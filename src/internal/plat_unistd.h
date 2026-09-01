@@ -213,6 +213,16 @@ int __plat_symlink(const char *target, int newdirfd, const char *linkpath)
  * return. */
 uid_t __plat_detect_uid(void);
 
+/* getgid(): this process's gid.  Same never-fails contract as
+ * __plat_detect_uid() above (getgid.html reserves no error return
+ * either).  Added alongside the res*id() family (src/unistd/linux/
+ * plat_ids.c) so getgid()/getegid() answer a real, live value on a
+ * backend that actually has one, exactly the asymmetry
+ * __plat_detect_uid() already draws between NT (one fixed identity) and
+ * Linux (a real per-process id) -- see ids.c's own getgid()/getegid()
+ * for how the two compose. */
+gid_t __plat_detect_gid(void);
+
 /* Publish `self` (this process's own, already-known pid) as its own
  * process-group leader: a named, idempotent, cross-process boolean keyed
  * by pid, since NT has no real process-group object to set one on (see

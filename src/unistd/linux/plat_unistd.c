@@ -113,12 +113,15 @@
 #define SYS_getpid            172
 #define SYS_gettid            178
 #define SYS_getuid            174
+#define SYS_getgid            176
 #define SYS_clock_gettime     113
 #define SYS_sched_getaffinity 123
 #define SYS_sysinfo           179
 #define SYS_kill              129
 #define SYS_setpgid           154
 #define SYS_getpgid           155
+#define SYS_syncfs            267
+#define SYS_acct               89
 
 /* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
  * the call path at all. NOT `extern long syscall(long, ...)`: that
@@ -220,6 +223,38 @@ long syscall(long number, ...)
 static int unbox(__plat_handle_t h)
 {
 	return (int)((long)h - 1);
+}
+
+/* syncfs(): include/unistd.h's own declaration is marked "undefined-ok:
+ * ... NT has no per-volume sync primitive" -- true of NT, not of Linux,
+ * which has had a real syncfs(2) syscall (sync every dirty inode/buffer
+ * belonging to the filesystem `fd` is on, as opposed to fsync(2)'s
+ * single-descriptor scope) since 2.6.39. Same "plain POSIX front door,
+ * not a __plat_* seam" shape as syscall() above: NT has nothing this
+ * could be implemented in terms of, so there is no plat_unistd.h
+ * contract to satisfy, only a direct syscall. */
+int syncfs(int fd)
+{
+	struct __fd *f = __fd_get(fd);
+	long ret;
+	if (!f) return -1;
+	ret = raw_syscall(SYS_syncfs, (long)unbox(f->h), 0L, 0L, 0L, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
+/* acct(): include/unistd.h's own declaration is marked "undefined-ok:
+ * Unix process accounting is a kernel facility NT has no equivalent
+ * of" -- true of NT, not of Linux, which has a real acct(2) syscall
+ * (CONFIG_BSD_PROCESS_ACCT permitting; a kernel built without it
+ * answers ENOSYS, a real and correctly-reported failure, not a silent
+ * no-op). Same "plain POSIX front door" shape as syncfs() just above:
+ * no NT-shaped concept to build a __plat_* seam out of. */
+int acct(const char *filename)
+{
+	long ret = raw_syscall(SYS_acct, (long)filename, 0L, 0L, 0L, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
 }
 
 /* See this file's own banner: turns ntlibc's own AT_FDCWD sentinel or
@@ -474,6 +509,13 @@ uid_t __plat_detect_uid(void)
 	 * error return either -- the raw return is always the real uid,
 	 * never in is_sys_error()'s [-4095,-1] failure window. */
 	return (uid_t)raw_syscall(SYS_getuid, 0L, 0L, 0L, 0L, 0L, 0L);
+}
+
+/* getgid(2), same "cannot fail" contract as getuid(2) just above --
+ * see plat_unistd.h's own updated banner for why this exists now. */
+gid_t __plat_detect_gid(void)
+{
+	return (gid_t)raw_syscall(SYS_getgid, 0L, 0L, 0L, 0L, 0L, 0L);
 }
 
 void __plat_pgrp_publish_self(pid_t self)

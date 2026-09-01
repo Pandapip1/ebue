@@ -308,6 +308,14 @@ void __fd_init(void);                        /* fds 0-2 from the PEB, 3+ from Ru
  * mechanism, since every math function touching a long double's raw
  * bits is unsafe past this point otherwise. */
 int __verify_ldbl_layout(void);
+/* Forget src/unistd/ids.c's own cached getuid()/getgid() answers, so the
+ * next call re-derives them via __plat_detect_uid()/__plat_detect_gid()
+ * (src/internal/plat_unistd.h) instead of returning a now-stale value.
+ * Called by the Linux-only setresuid()/setresgid()
+ * (src/unistd/linux/plat_ids.c) after a successful real identity change;
+ * unused, and harmless, on NT, whose token never changes underneath the
+ * cache. */
+void __ids_creds_cache_invalidate(void);
 void __mq_fd_closed(int);                    /* release side handles for an mqd_t */
 void __mq_fd_replaced(int, __plat_handle_t);  /* follow fork/fcntl handle remakes */
 /* Serialise the inheritable part of the descriptor table into a freshly

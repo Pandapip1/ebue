@@ -87,6 +87,7 @@
 #include "plat_unistd.h"
 
 static uid_t cached_uid = (uid_t)-1;
+static gid_t cached_gid = (gid_t)-1;
 
 uid_t getuid(void)
 {
@@ -97,8 +98,33 @@ uid_t getuid(void)
 	return uid;
 }
 uid_t geteuid(void) { return getuid(); }
-gid_t getgid(void) { return 1000; }
-gid_t getegid(void) { return 1000; }
+/* __plat_detect_gid() (src/internal/plat_unistd.h) is a constant 1000 on
+ * NT (no POSIX group identity distinct from the fixed uid model, see
+ * that file's own comment) and a real getgid(2) on Linux
+ * (src/unistd/linux/plat_unistd.c) -- the identical NT-constant/Linux-
+ * real split getuid() above already draws through __plat_detect_uid().
+ * Cached the same way and for the same reason. */
+gid_t getgid(void)
+{
+	gid_t gid = cached_gid;
+	if (gid == (gid_t)-1) cached_gid = gid = __plat_detect_gid();
+	return gid;
+}
+gid_t getegid(void) { return getgid(); }
+
+/* setresuid()/setresgid() (src/unistd/linux/plat_ids.c, Linux only --
+ * NT has no real syscall behind these, see include/unistd.h's own
+ * comment) can move this process's real uid/gid out from under the
+ * cache above; this is how they keep getuid()/getgid() honest
+ * afterward, the same way __plat_detect_uid()/__plat_detect_gid() are
+ * consulted fresh the first time. Harmless and unused on NT: nothing
+ * there ever changes the token this process runs under, so nothing
+ * there ever needs to call this. */
+void __ids_creds_cache_invalidate(void)
+{
+	cached_uid = (uid_t)-1;
+	cached_gid = (gid_t)-1;
+}
 
 /* Which ids exist at all, as opposed to which ids may be assumed.
  *
