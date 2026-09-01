@@ -80,7 +80,6 @@ int awk_is_builtin_name(const char *s)
 
 void awk_lex_init(struct awk_lexer *lx, const char *src)
 {
-	__ownership_writable_span(lx, sizeof *lx);
 	memset(lx, 0, sizeof *lx);
 	lx->src = src;
 	lx->len = strlen(src);
@@ -279,7 +278,6 @@ int awk_lex_next(struct awk_lexer *lx, struct awk_token *out)
 {
 	int c;
 
-	__ownership_writable_span(out, sizeof *out);
 	memset(out, 0, sizeof *out);
 	skip_filler(lx);
 

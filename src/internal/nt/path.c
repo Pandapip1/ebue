@@ -315,7 +315,6 @@ static int ntpath_impl(const char *path, struct __ntpath *out, ULONG attributes,
 	 * its own hand-built string (src/unistd/chdir.c). */
 	if (n > __US_MAX_WCHARS) { __free(dos); errno = ENAMETOOLONG; return -1; }
 
-	__ownership_writable_span(out, sizeof *out);
 	memset(out, 0, sizeof *out);
 	st = RtlDosPathNameToNtPathName_U_WithStatus(dos, &out->nt, 0, 0);
 	if (NT_SUCCESS(st)) {
@@ -687,7 +686,6 @@ static int ntpath_at_impl(int dirfd, const char *path, struct __ntpath *out,
 			errno = ENAMETOOLONG;
 			return -1;
 		}
-		__ownership_writable_span(out, sizeof *out);
 		memset(out, 0, sizeof *out);
 		out->nt.Buffer = w;
 		out->nt.Length = (USHORT)(n * sizeof(WCHAR));

@@ -104,7 +104,6 @@ static void ticks_to_timeval(unsigned long long t100ns, struct timeval *tv)
 
 void __rusage_children(struct rusage *ru)
 {
-	__ownership_writable_span(ru, sizeof *ru);
 	memset(ru, 0, sizeof *ru);
 	ticks_to_timeval(children_ktime100ns, &ru->ru_stime);
 	ticks_to_timeval(children_utime100ns, &ru->ru_utime);
@@ -287,7 +286,6 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 				if (status) *status = c->status;
 				pid = c->pid;
 				if (ru) {
-					__ownership_writable_span(ru, sizeof *ru);
 					memset(ru, 0, sizeof *ru);
 				}
 				if (!nowait) __child_remove(c);
@@ -347,7 +345,6 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 		if (status) *status = c->status;
 		pid = c->pid;
 		if (ru) {
-			__ownership_writable_span(ru, sizeof *ru);
 			memset(ru, 0, sizeof *ru);
 		}
 		if (!nowait) __child_remove(c);
@@ -485,7 +482,6 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options) // NOLINT(bu
 		 * only has the 0 return to go on. */
 		if (pid == 0) {
 			if (infop) {
-				__ownership_writable_span(infop, sizeof *infop);
 				memset(infop, 0, sizeof *infop);
 			}
 			return 0;
@@ -512,7 +508,6 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options) // NOLINT(bu
 			 * without it, ECHILD is both terminating and true --
 			 * there is no child that can ever satisfy this request. */
 			if (infop) {
-				__ownership_writable_span(infop, sizeof *infop);
 				memset(infop, 0, sizeof *infop);
 			}
 			if (options & WNOHANG) return 0;
@@ -522,7 +517,6 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options) // NOLINT(bu
 	}
 
 	if (infop) {
-		__ownership_writable_span(infop, sizeof *infop);
 		memset(infop, 0, sizeof *infop);
 		/* "the si_signo member shall be set equal to SIGCHLD"
 		 * (DESCRIPTION). */

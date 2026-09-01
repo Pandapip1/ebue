@@ -18,7 +18,8 @@ DIAGNOSTIC = re.compile(
     r"^(.*?):(\d+):(\d+): warning: "
     r"(memory operation span is not proven valid|memcpy ranges are not proven nonoverlapping|"
     r"declared memory token addition is not proven by function body|"
-    r"manual memory proof axiom is redundant); "
+    r"manual memory proof axiom is redundant|"
+    r"manual memory proof axiom can be narrowed); "
     r"origin '(.*)'; context '(.*)'; expression '(.*)'; site '(.*)' "
     r"\[ntlibc\.MemoryContract\]$"
 )
@@ -90,9 +91,12 @@ def main() -> int:
         overlaps = sum(f.reason.startswith("memcpy ranges") for f in findings.values())
         tokens = sum(f.reason.startswith("declared memory token") for f in findings.values())
         redundant = sum(f.reason.startswith("manual memory proof") for f in findings.values())
+        movable = sum(f.reason.endswith("can be narrowed") for f in findings.values())
+        redundant -= movable
         print(f"lint-memory-contracts: {spans} unproved span(s), "
               f"{overlaps} unproved overlap(s), {tokens} unproved token contract(s), "
-              f"{redundant} redundant manual axiom(s)")
+              f"{redundant} redundant manual axiom(s), "
+              f"{movable} movable manual axiom(s)")
         return 1
     print("lint-memory-contracts: no findings (fixtures passed)")
     return 0

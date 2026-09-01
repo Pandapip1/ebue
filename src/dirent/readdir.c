@@ -28,7 +28,6 @@
 #include <errno.h>
 #include <limits.h>
 #include "dirent_internal.h"
-#include "ownership_stubs.h"
 
 static int advance_offset(DIR *dp, struct dirent *out)
 {
@@ -79,12 +78,10 @@ static int make_real(DIR *dp, const struct __dirent_raw *r, struct dirent *out)
     __attribute__((nonnull(1, 2, 3)));
 static int make_real(DIR *dp, const struct __dirent_raw *r, struct dirent *out)
 {
-	__ownership_writable_span(out, sizeof *out);
 	memset(out, 0, sizeof *out);
 	out->d_ino = r->ino;
 	out->d_type = r->type;
 	out->d_reclen = sizeof *out;
-	__ownership_writable_span(out->d_name, sizeof out->d_name);
 	memcpy(out->d_name, r->name, sizeof out->d_name);
 	return advance_offset(dp, out);
 }
@@ -110,7 +107,6 @@ static int fill(DIR *dp, struct dirent *out)
 		const unsigned char *types = f->vfs == __VFS_ROOT ? root_types : dev_types;
 		size_t count = f->vfs == __VFS_ROOT ? 3 : 5;
 		if ((size_t)dp->tell >= count) { dp->done = 1; return 1; }
-		__ownership_writable_span(out, sizeof *out);
 		memset(out, 0, sizeof *out);
 		out->d_ino = (ino_t)(dp->tell < 2 ? (f->vfs == __VFS_ROOT ? __VFS_ROOT :
 		                    (dp->tell == 0 ? __VFS_DEV : __VFS_ROOT)) :
@@ -134,7 +130,6 @@ static int fill(DIR *dp, struct dirent *out)
 		while (dp->vnext < total) {
 			int i = dp->vnext++;
 			if (dp->vseen & (1u << i)) continue;
-			__ownership_writable_span(out, sizeof *out);
 			memset(out, 0, sizeof *out);
 			out->d_ino = (ino_t)__vfs_mandatory_kind(f->vfs, i);
 			out->d_type = f->vfs == __VFS_ROOT ? __DT_DIR : __DT_CHR;

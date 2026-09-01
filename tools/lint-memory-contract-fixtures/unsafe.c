@@ -77,6 +77,27 @@ void insufficient_contracted_suffix(
 		memset(out + offset, 0, length); /* memory-contract-expect */
 }
 
+struct fixture_record {
+	int first;
+	int second;
+};
+
+void overfill_typed_object(struct fixture_record *record)
+{
+	memset(record, 0, sizeof *record + 1); /* memory-contract-expect */
+}
+
+void movable_path_axiom(char *buffer, size_t length, int use_local)
+{
+	char local[8];
+	if (use_local) {
+		if (length > sizeof local)
+			return;
+		buffer = local;
+	}
+	__ownership_writable_span(buffer, length); /* memory-contract-expect */
+}
+
 void violate_contracts(char *text)
 {
 	char source[4], destination[4];

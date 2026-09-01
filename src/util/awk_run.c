@@ -1881,7 +1881,6 @@ static void awk_interp_seed_defaults(struct awk_interp *ip)
 
 void awk_interp_init(struct awk_interp *ip, struct awk_program *prog)
 {
-	__ownership_writable_span(ip, sizeof *ip);
 	memset(ip, 0, sizeof *ip);
 	ip->prog = prog;
 	awk_htab_init(&ip->globals);

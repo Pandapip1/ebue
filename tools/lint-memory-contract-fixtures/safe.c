@@ -114,6 +114,16 @@ void contracted_suffix(
 	memset(out + offset, 0, length);
 }
 
+struct fixture_record {
+	int first;
+	int second;
+};
+
+void fill_typed_object(struct fixture_record *record)
+{
+	memset(record, 0, sizeof *record);
+}
+
 void satisfy_contracts(void)
 {
 	char source[8], destination[8];

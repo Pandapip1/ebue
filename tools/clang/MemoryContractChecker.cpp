@@ -189,6 +189,7 @@ class MemoryContractChecker
   mutable std::unique_ptr<BugType> OverlapBT;
   mutable std::unique_ptr<BugType> TokenBT;
   mutable std::unique_ptr<BugType> RedundantBT;
+  mutable std::unique_ptr<BugType> MovableBT;
 
   static bool hasName(const CallEvent &Call, StringRef Wanted) {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
@@ -506,6 +507,8 @@ public:
         Title = "Unproven memory span";
       else if (Reason == "manual memory proof axiom is redundant")
         Title = "Redundant memory proof axiom";
+      else if (Reason == "manual memory proof axiom can be narrowed")
+        Title = "Overbroad memory proof axiom";
       std::unique_ptr<BugType> New = std::make_unique<BugType>(
           this, Title, categories::MemoryError);
       Type = New.release();
@@ -604,6 +607,81 @@ public:
     if (stringLengthSourceSpanProven(Pointer, Length, State))
       return true;
     return ExtentProvesLength(Extent);
+  }
+
+  bool typedObjectSpanProven(const Expr *PointerExpression,
+                             const Expr *LengthExpression, SVal Length,
+                             ProgramStateRef State, CheckerContext &C,
+                             bool RequireConstantLength = false) const {
+    if (!PointerExpression || Length.isUnknownOrUndef())
+      return false;
+    const Expr *Object = PointerExpression->IgnoreParenCasts();
+    QualType ObjectType = Object->getType();
+    QualType ExtentType;
+    if (ObjectType->isArrayType()) {
+      ExtentType = ObjectType;
+    } else {
+      if (!isa<DeclRefExpr>(Object) && !isa<MemberExpr>(Object))
+        return false;
+      if (!ObjectType->isPointerType())
+        return false;
+      ExtentType = ObjectType->getPointeeType();
+    }
+    if (ExtentType.isNull() || ExtentType->isVoidType() ||
+        ExtentType->isFunctionType() || ExtentType->isIncompleteType() ||
+        ExtentType->isVariableArrayType())
+      return false;
+    CharUnits Bytes = C.getASTContext().getTypeSizeInChars(ExtentType);
+    if (RequireConstantLength) {
+      Expr::EvalResult Result;
+      if (!LengthExpression ||
+          !LengthExpression->EvaluateAsInt(Result, C.getASTContext()))
+        return false;
+      const llvm::APSInt &Constant = Result.Val.getInt();
+      return !Constant.isNegative() && Constant.getActiveBits() <= 64 &&
+             Constant.getZExtValue() <=
+                 static_cast<uint64_t>(Bytes.getQuantity());
+    }
+    SVal Extent = C.getSValBuilder().makeIntVal(
+        static_cast<uint64_t>(Bytes.getQuantity()),
+        C.getASTContext().getSizeType());
+    SVal Enough = C.getSValBuilder().evalBinOp(
+        State, BO_GE, Extent, Length,
+        C.getSValBuilder().getConditionType());
+    std::optional<DefinedOrUnknownSVal> Condition =
+        Enough.getAs<DefinedOrUnknownSVal>();
+    return Condition && !State->assume(*Condition, false);
+  }
+
+  bool typedDisjointSpanProven(const Expr *FirstExpression,
+                               const Expr *SecondExpression,
+                               const Expr *LengthExpression,
+                               CheckerContext &C) const {
+    if (!FirstExpression || !SecondExpression || !LengthExpression)
+      return false;
+    const auto *First = dyn_cast<DeclRefExpr>(
+        FirstExpression->IgnoreParenCasts());
+    const auto *Second = dyn_cast<DeclRefExpr>(
+        SecondExpression->IgnoreParenCasts());
+    if (!First || !Second || First->getDecl() == Second->getDecl() ||
+        !First->getType()->isArrayType() ||
+        !Second->getType()->isArrayType() ||
+        First->getType()->isVariableArrayType() ||
+        Second->getType()->isVariableArrayType())
+      return false;
+    Expr::EvalResult Result;
+    if (!LengthExpression->EvaluateAsInt(Result, C.getASTContext()))
+      return false;
+    const llvm::APSInt &Length = Result.Val.getInt();
+    if (Length.isNegative() || Length.getActiveBits() > 64)
+      return false;
+    uint64_t Bytes = Length.getZExtValue();
+    return Bytes <= static_cast<uint64_t>(
+                        C.getASTContext().getTypeSizeInChars(First->getType())
+                            .getQuantity()) &&
+           Bytes <= static_cast<uint64_t>(
+                        C.getASTContext().getTypeSizeInChars(Second->getType())
+                            .getQuantity());
   }
 
   bool derivedContractSpanProven(SVal Pointer, SVal Length,
@@ -977,14 +1055,27 @@ public:
             Contract.Pointer >= Call.getNumArgs() ||
             Contract.Length >= Call.getNumArgs())
           continue;
-        if (spanProven(Call.getArgSVal(Contract.Pointer),
+        bool Redundant = typedObjectSpanProven(
+            Call.getArgExpr(Contract.Pointer),
+            Call.getArgExpr(Contract.Length),
+            Call.getArgSVal(Contract.Length), C.getState(), C, true);
+        bool ProvenOnPath = Redundant ||
+            spanProven(Call.getArgSVal(Contract.Pointer),
                        Call.getArgSVal(Contract.Length), C.getState(), C,
-                       false)) {
-          BugType *Type = RedundantBT.get();
-          report("manual memory proof axiom is redundant", Type, Call,
-                 C.getState(), C);
-          if (!RedundantBT && Type)
+                       false) ||
+            typedObjectSpanProven(Call.getArgExpr(Contract.Pointer),
+                                  Call.getArgExpr(Contract.Length),
+                                  Call.getArgSVal(Contract.Length),
+                                  C.getState(), C);
+        if (ProvenOnPath) {
+          BugType *Type = Redundant ? RedundantBT.get() : MovableBT.get();
+          report(Redundant ? "manual memory proof axiom is redundant"
+                           : "manual memory proof axiom can be narrowed",
+                 Type, Call, C.getState(), C);
+          if (Redundant && !RedundantBT && Type)
             RedundantBT.reset(Type);
+          if (!Redundant && !MovableBT && Type)
+            MovableBT.reset(Type);
           Reported = true;
           break;
         }
@@ -996,15 +1087,23 @@ public:
               Contract.Second >= Call.getNumArgs() ||
               Contract.Length >= Call.getNumArgs())
             continue;
-          if (overlapProven(Call.getArgSVal(Contract.First),
-                            Call.getArgSVal(Contract.Second),
-                            Call.getArgSVal(Contract.Length), C.getState(),
-                            C, false)) {
-            BugType *Type = RedundantBT.get();
-            report("manual memory proof axiom is redundant", Type, Call,
-                   C.getState(), C);
-            if (!RedundantBT && Type)
+          bool Redundant = typedDisjointSpanProven(
+              Call.getArgExpr(Contract.First),
+              Call.getArgExpr(Contract.Second),
+              Call.getArgExpr(Contract.Length), C);
+          bool ProvenOnPath = Redundant || overlapProven(
+              Call.getArgSVal(Contract.First),
+              Call.getArgSVal(Contract.Second),
+              Call.getArgSVal(Contract.Length), C.getState(), C, false);
+          if (ProvenOnPath) {
+            BugType *Type = Redundant ? RedundantBT.get() : MovableBT.get();
+            report(Redundant ? "manual memory proof axiom is redundant"
+                             : "manual memory proof axiom can be narrowed",
+                   Type, Call, C.getState(), C);
+            if (Redundant && !RedundantBT && Type)
               RedundantBT.reset(Type);
+            if (!Redundant && !MovableBT && Type)
+              MovableBT.reset(Type);
             break;
           }
         }
@@ -1032,6 +1131,10 @@ public:
         continue;
       if (!spanProven(Call.getArgSVal(Contract.Pointer),
                       Call.getArgSVal(Contract.Length), C.getState(), C) &&
+          !typedObjectSpanProven(Call.getArgExpr(Contract.Pointer),
+                                 Call.getArgExpr(Contract.Length),
+                                 Call.getArgSVal(Contract.Length),
+                                 C.getState(), C) &&
           !derivedContractSpanProven(Call.getArgSVal(Contract.Pointer),
                                      Call.getArgSVal(Contract.Length),
                                      C.getState(), C)) {

@@ -30,7 +30,6 @@
 #include <string.h>
 #include <errno.h>
 #include "libc.h"
-#include "ownership_stubs.h"
 
 #define __VFS_STAT_DEV ((dev_t)0xffffffff00000003ULL) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
@@ -39,7 +38,6 @@ static int cwd_kind;
 int __vfs_stat(int kind, struct stat *st)
 {
 	if (!st) { errno = EFAULT; return -1; }
-	__ownership_writable_span(st, sizeof *st);
 	memset(st, 0, sizeof *st);
 	st->st_dev = __VFS_STAT_DEV;
 	st->st_ino = (ino_t)kind;

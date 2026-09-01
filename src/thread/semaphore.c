@@ -222,7 +222,6 @@ int sem_destroy(sem_t *sem destroy(semaphore))
 {
 	if (!valid(sem) || sem->__named) { errno = EINVAL; return -1; }
 	__plat_close(sem->__handle);
-	__ownership_writable_span(sem, sizeof *sem);
 	memset(sem, 0, sizeof *sem);
 	__plat_fast_lock();
 	unnamed_count--;

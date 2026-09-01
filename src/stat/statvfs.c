@@ -81,7 +81,6 @@
 #include <errno.h>
 #include "libc.h"
 #include "plat_stat.h"
-#include "ownership_stubs.h"
 
 int fstatvfs(int fd, struct statvfs *buf)
 {
@@ -89,7 +88,6 @@ int fstatvfs(int fd, struct statvfs *buf)
 	if (!f) return -1;   /* __fd_get sets EBADF */
 	if (!buf) { errno = EFAULT; return -1; }
 	if (f->vfs && !f->vfs_native) {
-		__ownership_writable_span(buf, sizeof *buf);
 		memset(buf, 0, sizeof *buf);
 		buf->f_bsize = buf->f_frsize = 4096;
 		buf->f_fsid = 0xffffffffu;

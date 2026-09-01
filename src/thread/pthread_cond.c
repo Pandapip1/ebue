@@ -11,7 +11,6 @@
 #include <string.h>
 #include <time.h>
 #include "pthread_impl.h"
-#include "ownership_stubs.h"
 #include "plat_thread.h"
 #include "plat_fd.h"
 
@@ -85,7 +84,6 @@ static int cond_ready(pthread_cond_t *cond)
 		return EINVAL;
 	}
 	if (data->magic == 0) {
-		__ownership_writable_span(data, sizeof *data);
 		memset(data, 0, sizeof *data);
 		data->magic = COND_MAGIC;
 		data->pshared = PTHREAD_PROCESS_PRIVATE;
@@ -106,7 +104,6 @@ int pthread_cond_init(pthread_cond_t *__restrict cond construct(pthread_cond) st
 		attributes = const_condattr_data(attr);
 		if (attributes->magic != CONDATTR_MAGIC) return EINVAL;
 	}
-	__ownership_writable_span(cond, sizeof *cond);
 	memset(cond, 0, sizeof *cond); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- initializes caller-supplied opaque storage before constructing the condition variable; no live object is copied
 	data = cond_data(cond);
 	data->magic = COND_MAGIC;
@@ -320,7 +317,6 @@ int pthread_condattr_init(pthread_condattr_t *attr construct(pthread_condattr))
 {
 	struct condattr_data *data;
 	if (!attr) return EINVAL;
-	__ownership_writable_span(attr, sizeof *attr);
 	memset(attr, 0, sizeof *attr);
 	data = condattr_data(attr);
 	data->magic = CONDATTR_MAGIC;
@@ -333,7 +329,6 @@ int pthread_condattr_init(pthread_condattr_t *attr construct(pthread_condattr))
 int pthread_condattr_destroy(pthread_condattr_t *attr destroy(pthread_condattr))
 {
 	if (!attr || condattr_data(attr)->magic != CONDATTR_MAGIC) return EINVAL;
-	__ownership_writable_span(attr, sizeof *attr);
 	memset(attr, 0, sizeof *attr);
 	return 0;
 }
