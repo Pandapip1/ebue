@@ -8,11 +8,14 @@
  *
  * Entry points for ntlibc's own POSIX.1-2017 (XCU) standard utilities.
  * Each `__util_<name>_main()` is the whole of utility <name>'s logic,
- * implemented once in src/util/<name>.c (mkdir, chmod and printf are the
- * three exceptions -- src/util/mkdir_util.c, src/util/chmod_util.c and
- * src/util/util_printf.c, to avoid colliding with the ar member names
- * src/stat/mkdir.c, src/stat/chmod.c and, for printf, this library's own
- * enormous and heavily-used src/stdio/printf.c already own; see each
+ * implemented once in src/util/<name>.c (mkdir, chmod, printf and time
+ * are the four exceptions -- src/util/mkdir_util.c, src/util/chmod_util.c,
+ * src/util/util_printf.c and src/util/util_time.c, to avoid colliding with
+ * the ar member names src/stat/mkdir.c, src/stat/chmod.c, and, for printf
+ * and time, this library's own src/stdio/printf.c and src/time/time.c
+ * already own (tcc's `ar` truncates archive member names to basename
+ * only, so two time.c anywhere in src/ silently collide in lib/libc.a --
+ * confirmed real, not theoretical, before choosing the name); see each
  * file's own header comment) and shared by two callers:
  *
  *  - bin/<name>.c, a thin main() building the standalone obj/bin/<name>.exe
@@ -378,6 +381,20 @@ char *__util_join_basename(const char *dir, const char *src);
  * reads real files/stdin, writes real output, and can run arbitrary
  * commands via system()/getline/print redirection. */
 int __util_awk_main(int argc, char **argv) __attribute__((nonnull(2)));
+
+/* Tier 5: process/environment utilities.  time(1p) runs a utility and
+ * reports its real/user/system elapsed time; timeout(1) -- not an XCU
+ * utility at all (checked against the real alphabetical XCU utility
+ * index before writing either file: no timeout(1p) page exists), but
+ * named in this project's own POSIX-utilities plan for this tier
+ * anyway, implemented per the common GNU-heritage semantics every
+ * `timeout` agrees on -- runs a utility and signals it if it outlives
+ * a deadline.  See each file's own header comment for the exact
+ * spec/manual wording cited and every deliberate scope narrowing.
+ * Neither is __pure__: both spawn and wait on a real child process,
+ * whose very existence and behaviour differ call to call. */
+int __util_time_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_timeout_main(int argc, char **argv) __attribute__((nonnull(2)));
 
 #endif
 

@@ -997,6 +997,35 @@ static int bi_m4(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== Tier 5: process/environment utilities =============================
+ *
+ * time(1p), timeout: same reasoning as every other batch in this file
+ * for staying registered here even though each also exists as a real
+ * standalone obj/bin/<name>.exe (src/util/util_time.c,
+ * src/util/timeout.c, declared in src/internal/util.h) -- a builtin
+ * runs in this process, unconditionally, without depending on
+ * __find_program()/__spawn() succeeding to be found in the first
+ * place. Neither has any effect on the shell execution environment
+ * itself (2.12's list) -- both only spawn and wait on a child of their
+ * own -- so `env_effect` is 0 for both, same as the rest of this
+ * table; neither is a 2.14 special built-in either. See each file's
+ * own header comment for the real, deliberate scope narrowing each
+ * documents (timeout is not even an XCU-mandatory utility at all --
+ * see its own header comment for how that was verified). */
+static int bi_time(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_time(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_time_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_timeout(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_timeout(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_timeout_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* ==== the dispatcher ==================================================== */
 
 /* `special` is XCU 2.14's distinction, recorded because 2.8.1 hangs
@@ -1088,6 +1117,8 @@ static const struct sh_builtin builtins[] = {
 	{ "m4",    0, 0, bi_m4 },
 	{ "diff",  0, 0, bi_diff },
 	{ "cmp",   0, 0, bi_cmp },
+	{ "time",    0, 0, bi_time },
+	{ "timeout", 0, 0, bi_timeout },
 	{ 0, 0, 0, 0 }
 };
 
