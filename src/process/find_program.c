@@ -111,12 +111,15 @@ withtok(heap_allocated)
 static char *try_dir(const char *dir, size_t dlen, const char *name)
 {
 	size_t nlen = strlen(name);
-	/* dlen/nlen come from a PATH entry and the program name; the taint
-	 * checker can't see that the allocation size below exactly matches
-	 * what the writes that follow need (dlen + optional separator +
-	 * nlen+1 + up to ".exe\0"), with no clamp needed since malloc simply
-	 * fails on an absurd PATH rather than overflowing. */
-	char *p = malloc(dlen + 1 + nlen + 4 + 1); // NOLINT(clang-analyzer-optin.taint.TaintedAlloc)
+	size_t total;
+	char *p;
+
+	if (!__size_add_checked(dlen, nlen, &total) ||
+	    !__size_add_checked(total, 6, &total)) {
+		errno = ENOMEM;
+		return 0;
+	}
+	p = malloc(total); // NOLINT(clang-analyzer-optin.taint.TaintedAlloc)
 	if (!p) return 0;
 	if (dlen) {
 		memcpy(p, dir, dlen);

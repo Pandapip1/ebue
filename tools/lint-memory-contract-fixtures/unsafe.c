@@ -225,6 +225,15 @@ void fill_unchecked_allocation_suffix(
 	memcpy(buffer + left, source, right); /* memory-contract-expect */
 }
 
+void fill_wrapping_slack_suffix(
+	const char *source withtok(fixture_readable_span(right)),
+	size_t left, size_t right)
+{
+	char *buffer = __malloc(left + right + 1);
+	if (!buffer) return;
+	memcpy(buffer + left, source, right); /* memory-contract-expect */
+}
+
 /* strnlen(s, n)'s contract is looser than strlen(s)'s: if it walked all
  * n bytes without finding a terminator, only those n bytes (not n + 1)
  * are known-safe to read back from s -- reading one byte past that is

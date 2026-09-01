@@ -387,19 +387,27 @@ class MemoryContractChecker
     return true;
   }
 
-  static bool symbolicallyEquivalent(SVal Left, SVal Right) {
+  static std::optional<int64_t> symbolicConstantDifference(SVal Left,
+                                                            SVal Right) {
     SymbolRef L = Left.getAsSymbol();
     SymbolRef R = Right.getAsSymbol();
     if (!L || !R)
-      return false;
+      return std::nullopt;
     LinearSymbolForm Difference;
     if (!addLinearSymbol(L, 1, Difference) ||
-        !addLinearSymbol(R, -1, Difference) || Difference.Constant != 0)
-      return false;
+        !addLinearSymbol(R, -1, Difference))
+      return std::nullopt;
     for (const auto &[Symbol, Coefficient] : Difference.Terms)
       if (Coefficient != 0)
-        return false;
-    return true;
+        return std::nullopt;
+    if (Difference.Constant < std::numeric_limits<int64_t>::min() ||
+        Difference.Constant > std::numeric_limits<int64_t>::max())
+      return std::nullopt;
+    return static_cast<int64_t>(Difference.Constant);
+  }
+
+  static bool symbolicallyEquivalent(SVal Left, SVal Right) {
+    return symbolicConstantDifference(Left, Right) == 0;
   }
 
   // For a heap allocation whose real dynamic extent was set (above)
@@ -430,6 +438,25 @@ class MemoryContractChecker
       return true;
     if (symbolicallyEquivalent(Extent, Length))
       return true;
+    if (std::optional<int64_t> Difference =
+            symbolicConstantDifference(Extent, Length)) {
+      if (*Difference > 0 && LengthSymbol) {
+        QualType LengthType = LengthSymbol->getType();
+        if (LengthType->isIntegerType()) {
+          llvm::APSInt Limit =
+              C.getSValBuilder().getBasicValueFactory().getMaxValue(LengthType);
+          llvm::APSInt Delta(
+              llvm::APInt(Limit.getBitWidth(),
+                          static_cast<uint64_t>(*Difference)),
+              Limit.isUnsigned());
+          Limit -= Delta;
+          const llvm::APSInt *Maximum =
+              C.getSValBuilder().getMaxValue(State, Length);
+          if (Maximum && *Maximum <= Limit)
+            return true;
+        }
+      }
+    }
     const auto *ExtentProduct = dyn_cast_or_null<SymSymExpr>(ExtentSymbol);
     const auto *LengthProduct = dyn_cast_or_null<SymSymExpr>(LengthSymbol);
     if (ExtentProduct && LengthProduct &&

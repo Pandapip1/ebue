@@ -328,3 +328,15 @@ void fill_checked_allocation_suffix(
 	if (!buffer) return;
 	memcpy(buffer + left, source, right);
 }
+
+void fill_checked_slack_suffix(
+	const char *source withtok(fixture_readable_span(right)),
+	size_t left, size_t right)
+{
+	if (right == (size_t)-1) return;
+	size_t total = left + right + 1;
+	if (total <= left) return;
+	char *buffer = __malloc(total);
+	if (!buffer) return;
+	memcpy(buffer + left, source, right);
+}
