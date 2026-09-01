@@ -29,6 +29,7 @@
 #include <string.h>
 #include "libc.h"
 #include "plat_dirent.h"
+#include "ownership_stubs.h"
 
 ssize_t __plat_dir_read(__plat_handle_t h, void *buf, size_t bufsize, int restart)
 {
@@ -89,6 +90,7 @@ int __plat_dir_decode_one(const void *buf, size_t buflen, size_t *pos, struct __
 	 * that guarantee has to be re-created here now that this struct is
 	 * an independent local the caller memcpy()s whole, not the final
 	 * struct dirent itself. */
+	__ownership_writable_span(out, sizeof *out);
 	memset(out, 0, sizeof *out);
 
 	out->ino = (ino_t)fi->FileId;
