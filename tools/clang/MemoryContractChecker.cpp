@@ -256,6 +256,24 @@ class MemoryContractChecker
     return std::nullopt;
   }
 
+  static bool declaredFreshAllocation(const FunctionDecl *Function) {
+    if (!Function || !Function->getReturnType()->isPointerType())
+      return false;
+    for (const FunctionDecl *Redeclaration : Function->redecls())
+      for (const AnnotateAttr *Attribute :
+           Redeclaration->specific_attrs<AnnotateAttr>()) {
+        StringRef Annotation = Attribute->getAnnotation();
+        if (!Annotation.consume_front("withtok:"))
+          continue;
+        StringRef Family = Annotation.split('(').first.trim();
+        const TypedefNameDecl *Token =
+            dialectToken(Function->getASTContext(), Family);
+        if (hasDialectQualifier(Token, "qual:dynamic_storage"))
+          return true;
+      }
+    return false;
+  }
+
   static SymbolRef stripCasts(SymbolRef Symbol) {
     while (const auto *Cast = dyn_cast_or_null<SymbolCast>(Symbol))
       Symbol = Cast->getOperand();
@@ -1353,6 +1371,9 @@ public:
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
     ProgramStateRef State = C.getState();
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    if (declaredFreshAllocation(Function))
+      if (const MemRegion *Region = Call.getReturnValue().getAsRegion())
+        State = State->add<AllocatedBaseRegion>(Region->getBaseRegion());
     if (std::optional<SVal> Extent =
             declaredReturnSpanExtent(Function, Call, C)) {
       if (std::optional<DefinedOrUnknownSVal> DefinedSize =
@@ -1361,7 +1382,6 @@ public:
           const MemRegion *Base = Region->getBaseRegion();
           State = setDynamicExtent(State, Base, *DefinedSize,
                                    C.getSValBuilder());
-          State = State->add<AllocatedBaseRegion>(Base);
         }
       }
     // See stringLengthSourceSpanProven above: record which pointer

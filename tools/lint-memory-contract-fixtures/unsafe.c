@@ -16,6 +16,8 @@ void *memset(void *destination withtok(fixture_writable_span(length)), int,
 withtok(fixture_writable_span(length))
 void *__malloc(size_t length);
 void *opaque_allocator(size_t length);
+withtok(fixture_writable_span(length))
+void *allocate_unknown_extent(size_t length);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 void consume_bytes(const void *source withtok(fixture_readable_span(length)),
@@ -83,6 +85,14 @@ void copy_unrestricted_parameters(
 	char *destination withtok(fixture_writable_span(length)),
 	const char *source withtok(fixture_readable_span(length)), size_t length)
 {
+	memcpy(destination, source, length); /* memory-contract-expect */
+}
+
+void copy_to_unproven_fresh_allocation(
+	const char *source withtok(fixture_readable_span(length)), size_t length)
+{
+	char *destination = allocate_unknown_extent(length);
+	if (!destination) return;
 	memcpy(destination, source, length); /* memory-contract-expect */
 }
 
