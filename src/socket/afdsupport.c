@@ -361,6 +361,7 @@ uint32_t __afd_poll_get_handle_count(const void *buf)
 uint32_t __afd_poll_events_for(const void *buf, unsigned long nrequested, HANDLE h)
 {
 	uint32_t count = __afd_poll_get_handle_count(buf);
+	uint32_t entries_left;
 	unsigned long i;
 
 	/* The reply cannot name more handles than were asked about; a
@@ -370,7 +371,8 @@ uint32_t __afd_poll_events_for(const void *buf, unsigned long nrequested, HANDLE
 	if ((unsigned long long)count > (unsigned long long)nrequested)
 		count = (uint32_t)nrequested;
 
-	for (i = 0; i < (unsigned long)count; i++) {
+	for (i = 0, entries_left = count; entries_left > 0;
+	     i++, entries_left--) {
 		const unsigned char *e = (const unsigned char *)buf + AFD_POLL_REQ_OFF_HANDLES
 		                       + (size_t)i * AFD_POLL_H_SIZE;
 		HANDLE eh;

@@ -153,8 +153,9 @@ static int queue_pending(int sig, const siginfo_t *si)
 static int take_pending_signal_from(struct pending_state *state, int sig,
 				    siginfo_t *si)
 {
-	int i;
-	for (i = 0; i < state->count; i++) {
+	int i, entries_left = SIGQUEUE_MAX;
+	for (i = 0; i < state->count && entries_left > 0;
+	     i++, entries_left--) {
 		if (state->info[i].si_signo != sig) continue;
 		if (si) *si = state->info[i];
 		state->count--;
