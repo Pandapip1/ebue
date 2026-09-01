@@ -222,6 +222,19 @@ int __util_sort_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_tsort_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_uniq_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* Tier 4: the "bigger engines" tier -- real parsers, not option-flag
+ * shuffling.  sed(1p) is the first entry: its whole script parser,
+ * BRE-driven address/substitution engine, and pattern-space/hold-space
+ * cycle live in src/util/sed.c (see that file's own header comment for
+ * the mandatory-command coverage and the deliberate GNU-extension
+ * exclusions), sharing this section's slot the same way every prior
+ * tier's utilities do.  Not __pure__: it reads a real file or stdin,
+ * and its w/s///w commands, and 'i'/'a' output, are real I/O with
+ * externally visible side effects -- so, like every other utility in
+ * this header, a repeated call with the same argv is not guaranteed to
+ * answer the same way twice. */
+int __util_sed_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 /* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
  * src/util/rm.c -----------------------------------------------------
  *
