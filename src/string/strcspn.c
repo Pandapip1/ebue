@@ -7,15 +7,15 @@
 
 size_t strcspn(const char *s, const char *c)
 {
-	const char *a = s;
 	size_t byteset[32/sizeof(size_t)];
+	size_t n = 0;
 
 	if (!c[0] || !c[1]) {
-		for (; *s && *s != *c; s++);
-		return s-a;
+		for (; *s && *s != *c; s++) n++;
+		return n;
 	}
 	memset(byteset, 0, sizeof byteset);
 	for (; *c && BITOP(byteset, *(unsigned char *)c, |=); c++);
-	for (; *s && !BITOP(byteset, *(unsigned char *)s, &); s++);
-	return s-a;
+	for (; *s && !BITOP(byteset, *(unsigned char *)s, &); s++) n++;
+	return n;
 }
