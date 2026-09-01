@@ -57,20 +57,20 @@
 #include "util.h"
 #include "uucode.h"
 
-static void chomp(char *s)
+static size_t chomp(char *s, size_t n)
 {
-	size_t n = strlen(s);
 	while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r')) s[--n] = 0;
+	return n;
 }
 
-/* Decodes one data line (already chomped) into `out`, up to `n` real
- * bytes (uuencode.c's own length prefix, already parsed by the caller).
+/* Decodes one data line (`have` bytes, already chomped) into `out`, up to
+ * `n` real bytes (uuencode.c's own length prefix, parsed by the caller).
  * Returns 0 on success, -1 (diagnostic already written) on a malformed
  * or truncated line. */
-static int decode_line(const char *prog, const char *line, unsigned n, FILE *out) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+static int decode_line(const char *prog, const char *line, size_t have,
+                       unsigned n, FILE *out) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	size_t needed = ((size_t)n + 2) / 3 * 4;
-	size_t have = strlen(line);
 	size_t pos, written = 0;
 
 	if (have < needed) {
@@ -137,7 +137,7 @@ int __util_uudecode_main(int argc, char **argv)
 	}
 
 	while (fgets(line, sizeof line, in)) {
-		chomp(line);
+		(void)chomp(line, strnlen(line, sizeof line));
 		if (!strncmp(line, "begin ", 6)) { found_begin = 1; break; }
 	}
 	if (!found_begin) {
@@ -174,8 +174,9 @@ int __util_uudecode_main(int argc, char **argv)
 	}
 
 	while (fgets(line, sizeof line, in)) {
+		size_t line_len;
 		unsigned n;
-		chomp(line);
+		line_len = chomp(line, strnlen(line, sizeof line));
 		if (!line[0]) continue; /* tolerate a stray blank line between records */
 		if (!uu_valid_char(line[0])) {
 			__util_diagf("uudecode: %s: invalid length character in data\n", in_path ? in_path : "stdin");
@@ -187,7 +188,7 @@ int __util_uudecode_main(int argc, char **argv)
 			__util_diagf("uudecode: %s: data line length %u out of range\n", in_path ? in_path : "stdin", n);
 			goto fail;
 		}
-		if (decode_line("uudecode", line + 1, n, out) < 0) goto fail;
+		if (decode_line("uudecode", line + 1, line_len - 1, n, out) < 0) goto fail;
 	}
 	if (!terminated) {
 		__util_diagf("uudecode: %s: truncated uuencoded stream (no terminator line)\n", in_path ? in_path : "stdin");
@@ -197,10 +198,12 @@ int __util_uudecode_main(int argc, char **argv)
 		__util_diagf("uudecode: %s: truncated uuencoded stream (no \"end\" line)\n", in_path ? in_path : "stdin");
 		goto fail;
 	}
-	chomp(line);
-	if (strcmp(line, "end") != 0) {
-		__util_diagf("uudecode: %s: missing \"end\" line\n", in_path ? in_path : "stdin");
-		goto fail;
+	{
+		size_t line_len = chomp(line, strnlen(line, sizeof line));
+		if (line_len != 3 || memcmp(line, "end", 3) != 0) {
+			__util_diagf("uudecode: %s: missing \"end\" line\n", in_path ? in_path : "stdin");
+			goto fail;
+		}
 	}
 
 	if (fclose(out) < 0) {
