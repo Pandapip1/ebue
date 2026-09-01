@@ -226,8 +226,9 @@ static int take_slot(struct saved_slot *sv, int *nsv, int cap, int fd)
     __attribute__((nonnull(2)));
 static int take_slot(struct saved_slot *sv, int *nsv, int cap, int fd) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
-	int i;
-	for (i = 0; i < *nsv; i++) {
+	int i, entries_left;
+	for (i = 0, entries_left = *nsv; entries_left > 0;
+	     i++, entries_left--) {
 		if (sv[i].fd != fd) continue;
 		if (__fds[fd].h) __plat_close(__fds[fd].h);
 		memset(&__fds[fd], 0, sizeof __fds[fd]);
