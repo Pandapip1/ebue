@@ -166,12 +166,32 @@ void copy_restrict_parameters(
 	memcpy(destination, source, length);
 }
 
+void copy_one_restrict_parameter(
+	char *restrict destination withtok(fixture_writable_span(length)),
+	const char *source withtok(fixture_readable_span(length)), size_t length)
+{
+	memcpy(destination, source, length);
+}
+
 void copy_to_fresh_unknown_allocation(
 	const char *source withtok(fixture_readable_span(length)), size_t length)
 {
 	char *destination = allocate_unknown_extent(length);
 	if (!destination) return;
 	memcpy(destination, source, length);
+}
+
+struct allocated_bytes {
+	char value[8];
+};
+
+void copy_to_typed_fresh_allocation(
+	const char *source withtok(fixture_readable_span(length)), size_t length)
+{
+	struct allocated_bytes *destination = allocate_unknown_extent(
+		sizeof *destination);
+	if (!destination || length > sizeof destination->value) return;
+	memcpy(destination->value, source, length);
 }
 
 void clear_typed_member(struct fixture_record *record)

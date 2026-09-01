@@ -88,6 +88,14 @@ void copy_unrestricted_parameters(
 	memcpy(destination, source, length); /* memory-contract-expect */
 }
 
+void copy_restrict_alias(
+	char *restrict destination withtok(fixture_writable_span(length)),
+	size_t length)
+{
+	char *alias = destination;
+	memcpy(destination, alias, length); /* memory-contract-expect */
+}
+
 void copy_to_unproven_fresh_allocation(
 	const char *source withtok(fixture_readable_span(length)), size_t length)
 {

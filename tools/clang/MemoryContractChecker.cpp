@@ -847,30 +847,40 @@ public:
                             .getQuantity());
   }
 
-  static const ParmVarDecl *restrictRootParameter(const Expr *Expression) {
+  static const ParmVarDecl *rootParameter(const Expr *Expression) {
     if (!Expression)
       return nullptr;
     Expression = Expression->IgnoreParenCasts();
     if (const auto *Reference = dyn_cast<DeclRefExpr>(Expression))
       if (const auto *Parameter = dyn_cast<ParmVarDecl>(Reference->getDecl()))
-        return Parameter->getType().isRestrictQualified() ? Parameter
-                                                         : nullptr;
+        return Parameter;
     if (const auto *Binary = dyn_cast<BinaryOperator>(Expression))
       if (Binary->getOpcode() == BO_Add || Binary->getOpcode() == BO_Sub)
-        return restrictRootParameter(Binary->getLHS());
+        return rootParameter(Binary->getLHS());
     if (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(Expression))
-      return restrictRootParameter(Subscript->getBase());
+      return rootParameter(Subscript->getBase());
     if (const auto *Address = dyn_cast<UnaryOperator>(Expression))
       if (Address->getOpcode() == UO_AddrOf)
-        return restrictRootParameter(Address->getSubExpr());
+        return rootParameter(Address->getSubExpr());
     return nullptr;
   }
 
-  static bool restrictDisjointSpanProven(const Expr *First,
-                                         const Expr *Second) {
-    const ParmVarDecl *A = restrictRootParameter(First);
-    const ParmVarDecl *B = restrictRootParameter(Second);
-    return A && B && A != B;
+  static bool restrictDisjointSpanProven(const Expr *FirstExpression,
+                                         const Expr *SecondExpression,
+                                         SVal First, SVal Second) {
+    const ParmVarDecl *A = rootParameter(FirstExpression);
+    const ParmVarDecl *B = rootParameter(SecondExpression);
+    if ((!A || !A->getType().isRestrictQualified()) &&
+        (!B || !B->getType().isRestrictQualified()))
+      return false;
+    const MemRegion *FirstRegion = First.getAsRegion();
+    const MemRegion *SecondRegion = Second.getAsRegion();
+    if (!FirstRegion || !SecondRegion)
+      return false;
+    RegionOffset FirstOffset = FirstRegion->getAsOffset();
+    RegionOffset SecondOffset = SecondRegion->getAsOffset();
+    return FirstOffset.isValid() && SecondOffset.isValid() &&
+           FirstOffset.getRegion() != SecondOffset.getRegion();
   }
 
   bool derivedContractSpanProven(SVal Pointer, SVal Length,
@@ -1020,8 +1030,17 @@ public:
        * distinct symbolic roots alone are not such a proof. */
       if (AO.getRegion()->getMemorySpace() != BO.getRegion()->getMemorySpace())
         return true;
-      if (State->contains<AllocatedBaseRegion>(AO.getRegion()) ||
-          State->contains<AllocatedBaseRegion>(BO.getRegion()))
+      auto IsFreshAllocation = [&](const MemRegion *Region) {
+        const MemRegion *Base = Region->getBaseRegion();
+        for (const MemRegion *Allocated :
+             State->get<AllocatedBaseRegion>())
+          if (Allocated == Region || Allocated == Base ||
+              Allocated->getBaseRegion() == Base)
+            return true;
+        return false;
+      };
+      if (IsFreshAllocation(AO.getRegion()) ||
+          IsFreshAllocation(BO.getRegion()))
         return true;
       if (isa<SymbolicRegion>(AO.getRegion()) ||
           isa<SymbolicRegion>(BO.getRegion()))
@@ -1346,7 +1365,8 @@ public:
       SVal Second = Call.getArgSVal(Contract.Second);
       SVal Length = Call.getArgSVal(Contract.Length);
       if (!restrictDisjointSpanProven(Call.getArgExpr(Contract.First),
-                                     Call.getArgExpr(Contract.Second)) &&
+                                     Call.getArgExpr(Contract.Second), First,
+                                     Second) &&
           !overlapProven(First, Second, Length, C.getState(), C)) {
         BugType *Type = OverlapBT.get();
         report("memcpy ranges are not proven nonoverlapping", Type, Call,
