@@ -12,4 +12,10 @@ __wraps int isspace(int c)
 	return c == ' ' || (unsigned)c-'\t' < 5;
 }
 
+int isspace_l(int c, locale_t loc)
+{
+	(void)loc;
+	return isspace(c);
+}
+
 // NOLINTEND(misc-include-cleaner)

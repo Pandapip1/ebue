@@ -26,3 +26,9 @@ int iswctype(wint_t wc, wctype_t desc) // NOLINT(bugprone-easily-swappable-param
 	default: return 0;
 	}
 }
+
+int iswctype_l(wint_t wc, wctype_t desc, locale_t loc)
+{
+	(void)loc;
+	return iswctype(wc, desc);
+}

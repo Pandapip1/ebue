@@ -7,3 +7,9 @@ int iswcntrl(wint_t wc)
 {
 	return iscntrl((int)wc);
 }
+
+int iswcntrl_l(wint_t wc, locale_t loc)
+{
+	(void)loc;
+	return iswcntrl(wc);
+}

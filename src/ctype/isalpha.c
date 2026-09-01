@@ -12,4 +12,10 @@ __wraps int isalpha(int c)
 	return ((unsigned)c|32)-'a' < 26;
 }
 
+int isalpha_l(int c, locale_t loc)
+{
+	(void)loc;
+	return isalpha(c);
+}
+
 // NOLINTEND(misc-include-cleaner)

@@ -12,4 +12,10 @@ __wraps int islower(int c)
 	return (unsigned)c-'a' < 26;
 }
 
+int islower_l(int c, locale_t loc)
+{
+	(void)loc;
+	return islower(c);
+}
+
 // NOLINTEND(misc-include-cleaner)

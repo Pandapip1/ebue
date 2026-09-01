@@ -7,3 +7,9 @@ int iswalpha(wint_t wc)
 {
 	return isalpha((int)wc);
 }
+
+int iswalpha_l(wint_t wc, locale_t loc)
+{
+	(void)loc;
+	return iswalpha(wc);
+}

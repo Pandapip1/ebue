@@ -12,4 +12,10 @@ __wraps int isdigit(int c)
 	return (unsigned)c-'0' < 10;
 }
 
+int isdigit_l(int c, locale_t loc)
+{
+	(void)loc;
+	return isdigit(c);
+}
+
 // NOLINTEND(misc-include-cleaner)

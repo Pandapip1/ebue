@@ -6,3 +6,9 @@ int ispunct(int c)
 {
 	return isgraph(c) && !isalnum(c);
 }
+
+int ispunct_l(int c, locale_t loc)
+{
+	(void)loc;
+	return ispunct(c);
+}
