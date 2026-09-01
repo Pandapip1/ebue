@@ -67,10 +67,8 @@ enum tail_mode { TAIL_LINES, TAIL_BYTES };
 static int write_all(const char *buf, size_t len)
 {
 	const char *p = buf;
-	size_t remaining = len;
-	while (len > 0 && remaining > 0) {
+	while (len > 0) {
 		ssize_t w = write(STDOUT_FILENO, p, len);
-		remaining--;
 		if (w < 0) return -1;
 		if (!w || (size_t)w > len) { errno = EIO; return -1; }
 		p += (size_t)w;

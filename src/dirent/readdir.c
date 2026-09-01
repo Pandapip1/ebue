@@ -130,11 +130,9 @@ static int fill(DIR *dp, struct dirent *out)
 		if (!dp->done) return -1;
 	}
 	if (f->vfs_native) {
-		int total = __vfs_mandatory_count(f->vfs);
-		unsigned remaining = (unsigned)total;
-		while (remaining > 0 && dp->vnext < total) {
+		unsigned char total = __vfs_mandatory_count(f->vfs);
+		while (dp->vnext < total) {
 			int i = dp->vnext++;
-			remaining--;
 			if (dp->vseen & (1u << i)) continue;
 			__ownership_writable_span(out, sizeof *out);
 			memset(out, 0, sizeof *out);

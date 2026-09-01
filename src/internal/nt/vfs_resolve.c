@@ -49,8 +49,6 @@ static int component(const char **pp, const char **start) // NOLINT(bugprone-eas
 static int same(const char *s, int n, const char *word)
 {
 	if (strlen(word) != (size_t)n) return 0;
-	__ownership_readable_span(s, (size_t)n);
-	__ownership_readable_span(word, (size_t)n);
 	return !memcmp(s, word, (size_t)n);
 }
 
@@ -156,11 +154,9 @@ int __vfs_resolve_at(int dirfd, const char *path)
 			joined = __malloc(bytes);
 			if (!joined) { __free(dir); errno = ENOMEM; return -1; }
 			__ownership_writable_span(joined, dl);
-			__ownership_readable_span(dir, dl);
 			memcpy(joined, dir, dl);
 			if (dl && !issep(joined[dl - 1])) joined[dl++] = '\\';
 			__ownership_writable_span(joined + dl, pl + 1);
-			__ownership_readable_span(path, pl + 1);
 			memcpy(joined + dl, path, pl + 1);
 			__free(dir);
 			if (__ntpath_native(joined, &np, OBJ_CASE_INSENSITIVE) < 0) {

@@ -18,7 +18,6 @@ void *memmem(const void *h0, size_t k, const void *n0, size_t l)
 		remaining--;
 		if (h[i] == *n) {
 			__ownership_readable_span(h + i + 1, l - 1);
-			__ownership_readable_span(n + 1, l - 1);
 			if (!memcmp(h + i + 1, n + 1, l - 1)) return (void *)(h + i);
 		}
 		i++;

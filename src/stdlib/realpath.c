@@ -57,8 +57,6 @@ char *realpath(const char *__restrict path,
 			resolved = malloc(len + 1);
 			if (!resolved) return 0;
 		}
-		__ownership_writable_span(resolved, len + 1);
-		__ownership_readable_span(name, len + 1);
 		memcpy(resolved, name, len + 1);
 		return resolved;
 	}
@@ -79,7 +77,6 @@ char *realpath(const char *__restrict path,
 	if (!resolved) return p;
 	if (len + 1 > PATH_MAX) { free(p); errno = ENAMETOOLONG; return 0; }
 	__ownership_writable_span(resolved, len + 1);
-	__ownership_readable_span(p, len + 1);
 	memcpy(resolved, p, len + 1);
 	free(p);
 	return resolved;

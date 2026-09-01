@@ -24,6 +24,7 @@
 #include <limits.h>
 #include <errno.h>
 #include "libc.h"
+#include "ownership_stubs.h"
 #include "pthread_impl.h"
 #include "plat_thread.h"
 #include "plat_fd.h"
@@ -98,6 +99,7 @@ static char *sem_path(const char *name)
 	if (!path) return NULL;
 	memcpy(path, dir, d);
 	memcpy(path + d, "/ntlibc-sem/", prefix);
+	__ownership_readable_span(component, n);
 	memcpy(path + d + prefix, component, n);
 	path[total - 1] = 0;
 	return path;
@@ -220,6 +222,7 @@ int sem_destroy(sem_t *sem destroy(semaphore))
 {
 	if (!valid(sem) || sem->__named) { errno = EINVAL; return -1; }
 	__plat_close(sem->__handle);
+	__ownership_writable_span(sem, sizeof *sem);
 	memset(sem, 0, sizeof *sem);
 	__plat_fast_lock();
 	unnamed_count--;
@@ -365,7 +368,9 @@ int sem_close(sem_t *sem)
 	if (!entry || !entry->refs) { __plat_fast_unlock(); errno = EINVAL; return -1; }
 	entry->refs--;
 	if (!entry->linked && !entry->refs) {
-		__plat_close(entry->sem.__handle); free(entry->path); memset(entry, 0, sizeof *entry);
+		__plat_close(entry->sem.__handle);
+		free(entry->path);
+		memset(entry, 0, sizeof *entry);
 	}
 	__plat_fast_unlock();
 	return 0;
@@ -387,7 +392,10 @@ int sem_unlink(const char *name)
 		if (entry) {
 			entry->linked = 0;
 			if (!entry->refs) {
-				__plat_close(entry->sem.__handle); free(entry->path); memset(entry, 0, sizeof *entry);
+				__plat_close(entry->sem.__handle);
+				free(entry->path);
+				__ownership_writable_span(entry, sizeof *entry);
+				memset(entry, 0, sizeof *entry);
 			}
 		}
 		__plat_fast_unlock();

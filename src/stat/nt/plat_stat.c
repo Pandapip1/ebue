@@ -474,7 +474,6 @@ int __plat_fstat(__plat_handle_t h, int type, struct stat *st)
 	unsigned lxmod = 0;
 	int have_lxmod, exe = 0;
 
-	__ownership_writable_span(st, sizeof *st);
 	memset(st, 0, sizeof *st);
 	if (type == __FD_PIPE) {
 		st->st_dev = __STAT_DEV_PIPE;

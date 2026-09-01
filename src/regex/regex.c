@@ -1008,26 +1008,19 @@ static int run(struct mstate *ms, int pc, const char *sp)
 		/* Backtrack: undo capture writes until an untaken
 		 * alternative surfaces.  An empty stack means this start
 		 * offset has no match. */
-		{
-			int resume = 0;
-			/* Unwinding only pops entries, so the entry depth is an
-			 * exact finite budget for this scan. */
-			int entries_left = ms->nbt;
-			while (entries_left-- > 0) {
-				struct bt *e;
-				e = &ms->bt[--ms->nbt];
-				if (e->kind == BT_UNDO) { ms->slot[e->x] = e->old; continue; }
-				pc = e->x;
-				sp = e->sp;
-				resume = 1;
-				break;
-			}
-			if (!resume) {
+		for (;;) {
+			struct bt *e;
+			if (ms->nbt == 0) {
 				if (found)
 					memcpy(ms->slot, ms->best,
 					       (size_t)ms->nslot * sizeof *ms->slot);
 				return found;
 			}
+			e = &ms->bt[--ms->nbt];
+			if (e->kind == BT_UNDO) { ms->slot[e->x] = e->old; continue; }
+			pc = e->x;
+			sp = e->sp;
+			break;
 		}
 	}
 	return -1;

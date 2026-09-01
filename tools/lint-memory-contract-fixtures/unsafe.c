@@ -13,11 +13,20 @@ void *memcpy(void *destination withtok(fixture_writable_span(length))
 	const void *source withtok(fixture_readable_span(length)), size_t length);
 void *memset(void *destination withtok(fixture_writable_span(length)), int,
 	size_t length);
-void *__malloc(size_t);
+withtok(fixture_writable_span(length))
+void *__malloc(size_t length);
+void *opaque_allocator(size_t length);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 void establish_writable(
 	void *buffer grant(fixture_writable_span(length)), size_t length);
+void __ownership_writable_span(
+	void *buffer grant(fixture_writable_span(length)), size_t length);
+void __ownership_readable_span(
+	const void *buffer grant(fixture_readable_span(length)), size_t length);
+void __ownership_disjoint_span(
+	void *first grant(fixture_disjoint_span(second, length)),
+	const void *second, size_t length);
 int maybe_establish_writable(
 	void *buffer grant(fixture_writable_span(length)), size_t length);
 
@@ -87,6 +96,24 @@ void opaque(void *buffer, size_t length)
 	memset(buffer, 0, length); /* memory-contract-expect */
 }
 
+/* Manual proof calls are migration scaffolding.  Once the allocation's
+ * dynamic extent already proves the same span, retaining the axiom must be
+ * diagnosed so implementation bodies converge on inferred contracts. */
+void redundant_heap_axiom(size_t length)
+{
+	char *buffer = __malloc(length);
+	if (!buffer) return;
+	__ownership_writable_span(buffer, length); /* memory-contract-expect */
+	memset(buffer, 0, length);
+}
+
+void redundant_static_axioms(void)
+{
+	char source[4], destination[4];
+	__ownership_readable_span(source, sizeof source); /* memory-contract-expect */
+	__ownership_disjoint_span(destination, source, sizeof source); /* memory-contract-expect */
+}
+
 void overlapping(void)
 {
 	char buffer[16];
@@ -101,6 +128,14 @@ void too_small_heap_allocation(const char *s)
 {
 	char *d = __malloc(4);
 	memcpy(d, s, 8); /* memory-contract-expect */
+}
+
+/* A suggestive allocator name is not a contract. */
+void undeclared_allocator_extent(size_t length)
+{
+	char *buffer = opaque_allocator(length);
+	if (!buffer) return;
+	memset(buffer, 0, length); /* memory-contract-expect */
 }
 
 /* Sharing an affine root does not prove the larger expression is larger:

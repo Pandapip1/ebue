@@ -80,6 +80,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include "ownership_stubs.h"
 
 /* Big enough that a header-plus-payload writev -- the shape this call
  * exists for -- is gathered without touching malloc(), small enough to
@@ -149,6 +150,7 @@ static ssize_t readv_looped(int fd, const struct iovec *iov, int iovcnt)
 	for (i = 0; i < iovcnt; i++) {
 		ssize_t r;
 		if (!iov[i].iov_len) continue;
+		__ownership_writable_span(iov[i].iov_base, iov[i].iov_len);
 		r = read(fd, iov[i].iov_base, iov[i].iov_len);
 		if (r < 0) return total ? total : -1;
 		total += r;
@@ -168,6 +170,7 @@ static ssize_t writev_looped(int fd, const struct iovec *iov, int iovcnt)
 	for (i = 0; i < iovcnt; i++) {
 		ssize_t w;
 		if (!iov[i].iov_len) continue;
+		__ownership_readable_span(iov[i].iov_base, iov[i].iov_len);
 		w = write(fd, iov[i].iov_base, iov[i].iov_len);
 		if (w < 0) return total ? total : -1;
 		total += w;
@@ -191,7 +194,10 @@ ssize_t readv(int fd, const struct iovec *iov, int iovcnt)
 	 * its side. */
 	if (!total) return 0;
 	i = sole_area(iov, iovcnt);
-	if (i >= 0) return read(fd, iov[i].iov_base, iov[i].iov_len);
+	if (i >= 0) {
+		__ownership_writable_span(iov[i].iov_base, iov[i].iov_len);
+		return read(fd, iov[i].iov_base, iov[i].iov_len);
+	}
 
 	buf = total <= sizeof stack ? stack : malloc(total);
 	if (!buf) return readv_looped(fd, iov, iovcnt);
@@ -204,6 +210,8 @@ ssize_t readv(int fd, const struct iovec *iov, int iovcnt)
 	for (left = r > 0 ? (size_t)r : 0, i = 0; left && i < iovcnt; i++) {
 		size_t n = iov[i].iov_len < left ? iov[i].iov_len : left;
 		if (!n) continue;
+		__ownership_writable_span(iov[i].iov_base, n);
+		__ownership_readable_span(buf + off, n);
 		memcpy(iov[i].iov_base, buf + off, n);
 		off += n;
 		left -= n;
@@ -228,7 +236,10 @@ ssize_t writev(int fd, const struct iovec *iov, int iovcnt)
 	 * have no other effect." */
 	if (!total) return 0;
 	i = sole_area(iov, iovcnt);
-	if (i >= 0) return write(fd, iov[i].iov_base, iov[i].iov_len);
+	if (i >= 0) {
+		__ownership_readable_span(iov[i].iov_base, iov[i].iov_len);
+		return write(fd, iov[i].iov_base, iov[i].iov_len);
+	}
 
 	buf = total <= sizeof stack ? stack : malloc(total);
 	if (!buf) return writev_looped(fd, iov, iovcnt);
@@ -238,6 +249,8 @@ ssize_t writev(int fd, const struct iovec *iov, int iovcnt)
 	 * memcpy() from NULL is undefined even for a length of 0. */
 	for (i = 0; i < iovcnt; i++) {
 		if (!iov[i].iov_len) continue;
+		__ownership_writable_span(buf + off, iov[i].iov_len);
+		__ownership_readable_span(iov[i].iov_base, iov[i].iov_len);
 		memcpy(buf + off, iov[i].iov_base, iov[i].iov_len);
 		off += iov[i].iov_len;
 	}

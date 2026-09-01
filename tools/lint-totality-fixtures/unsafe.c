@@ -110,6 +110,22 @@ unsigned division_by_one_does_not_progress(unsigned n)
 	return n;
 }
 
+unsigned division_guard_admits_zero(unsigned n)
+{
+	while (n < 2) { /* totality-expect */
+		n /= 2;
+	}
+	return n;
+}
+
+unsigned division_disequality_admits_zero(unsigned n)
+{
+	while (n != 1) { /* totality-expect */
+		n /= 2;
+	}
+	return n;
+}
+
 unsigned nonunit_countdown_can_wrap(unsigned n)
 {
 	while (n) { /* totality-expect */
@@ -175,6 +191,8 @@ struct vec {
 };
 
 void mutate_vec(struct vec *p);
+void free(void *);
+void *realloc(void *, __SIZE_TYPE__);
 
 unsigned member_bound_mutated_in_body(struct vec *p)
 {
@@ -190,6 +208,24 @@ unsigned member_bound_escapes_to_call(struct vec *p)
 	unsigned i;
 	for (i = 0; i < p->n; i++) { /* totality-expect */
 		mutate_vec(p);
+	}
+	return i;
+}
+
+unsigned member_bound_across_realloc(struct vec *p)
+{
+	unsigned i;
+	for (i = 0; i < p->n; i++) { /* totality-expect */
+		(void)realloc(p->v, 16);
+	}
+	return i;
+}
+
+unsigned member_bound_address_taken(struct vec *p)
+{
+	unsigned i;
+	for (i = 0; i < p->n; i++) { /* totality-expect */
+		(void)&p->n;
 	}
 	return i;
 }
@@ -358,6 +394,183 @@ unsigned member_rank_across_opaque_call(struct vec *p)
 		p->n--;
 	}
 	return p->n;
+}
+
+unsigned member_rank_call_before_continue(struct vec *p, int call)
+{
+	while (p->n) { /* totality-expect */
+		p->n--;
+		if (call) {
+			opaque_mutation();
+			continue;
+		}
+	}
+	return p->n;
+}
+
+unsigned member_decrement_before_guard(struct vec *p)
+{
+	for (;;) { /* totality-expect */
+		p->n--;
+		if (p->n == 0) return p->n;
+	}
+}
+
+unsigned member_guard_bypassed(struct vec *p, int bypass)
+{
+	for (;;) { /* totality-expect */
+		if (bypass) continue;
+		if (p->n == 0) return p->n;
+		p->n--;
+	}
+}
+
+unsigned member_guard_without_progress(struct vec *p, int skip)
+{
+	for (;;) { /* totality-expect */
+		if (p->n == 0) return p->n;
+		if (skip) continue;
+		p->n--;
+	}
+}
+
+int signed_nonunit_after_zero_guard(int n)
+{
+	for (;;) { /* totality-expect */
+		if (n == 0) return n;
+		n -= 2;
+	}
+}
+
+int dynamic_countdown_allows_zero(int n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step > n) return n;
+		n -= step;
+	}
+	return n;
+}
+
+int dynamic_countdown_allows_negative(int n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step == 0 || step > n) return n;
+		n -= step;
+	}
+	return n;
+}
+
+int dynamic_countdown_allows_oversize(int n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step <= 0) return n;
+		n -= step;
+	}
+	return n;
+}
+
+int dynamic_countdown_missing_branch(int n, int skip)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step <= 0 || step > n) return n;
+		if (skip) continue;
+		n -= step;
+	}
+	return n;
+}
+
+int dynamic_countdown_conditional_update(int n, int update)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step <= 0 || step > n) return n;
+		if (update) n -= step;
+	}
+	return n;
+}
+
+void opaque_rank_mutation(int *n);
+
+int dynamic_countdown_escaped_rank(int n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step <= 0 || step > n) return n;
+		opaque_rank_mutation(&n);
+		n -= step;
+	}
+	return n;
+}
+
+unsigned dynamic_cast_without_positive_guard(unsigned n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if ((unsigned)step > n) return n;
+		n -= (unsigned)step;
+	}
+	return n;
+}
+
+unsigned char dynamic_narrowing_cast(unsigned char n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step <= 0 || (unsigned char)step > n) return n;
+		n -= (unsigned char)step;
+	}
+	return n;
+}
+
+int dynamic_step_changed_after_guard(int n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step <= 0 || step > n) return n;
+		step = opaque_predicate();
+		n -= step;
+	}
+	return n;
+}
+
+int dynamic_rank_changed_after_guard(int n)
+{
+	while (n > 0) { /* totality-expect */
+		int step = opaque_predicate();
+		if (step <= 0 || step > n) return n;
+		n += opaque_predicate();
+		n -= step;
+	}
+	return n;
+}
+
+unsigned member_zero_branch_can_fall_through(struct vec *p, int stop)
+{
+	for (;;) { /* totality-expect */
+		if (p->n == 0 && stop) return p->n;
+		p->n--;
+	}
+}
+
+struct byte_cursor {
+	unsigned char next;
+};
+
+unsigned char member_byte_rank_call_before_continue(struct byte_cursor *cursor,
+	unsigned char total, int call)
+{
+	while (cursor->next < total) { /* totality-expect */
+		cursor->next++;
+		if (call) {
+			opaque_mutation();
+			continue;
+		}
+	}
+	return cursor->next;
 }
 
 unsigned member_rank_with_condition_call(struct vec *p)

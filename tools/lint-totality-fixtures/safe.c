@@ -107,6 +107,20 @@ unsigned radix_countdown(unsigned n)
 	return n;
 }
 
+unsigned radix_countdown_above_one(unsigned n)
+{
+	while (n > 1)
+		n /= 10;
+	return n;
+}
+
+unsigned radix_countdown_at_least_two(unsigned n)
+{
+	while (2 <= n)
+		n /= 10;
+	return n;
+}
+
 unsigned assigned_radix_countdown(unsigned n)
 {
 	while (n)
@@ -161,11 +175,87 @@ struct counter {
 	unsigned n;
 };
 
+void opaque_exit_call(void);
+
 unsigned member_countdown(struct counter *counter)
 {
 	while (counter->n)
 		counter->n--;
 	return counter->n;
+}
+
+unsigned member_countdown_call_only_on_exit(struct counter *counter, int stop)
+{
+	while (counter->n) {
+		counter->n--;
+		if (stop) {
+			opaque_exit_call();
+			return counter->n;
+		}
+	}
+	return counter->n;
+}
+
+unsigned member_unconditional_countdown(struct counter *counter)
+{
+	for (;;) {
+		unsigned value;
+		if (counter->n == 0) {
+			opaque_exit_call();
+			return counter->n;
+		}
+		counter->n--;
+		value = counter->n;
+		if (value & 1) continue;
+	}
+}
+
+int signed_unconditional_countdown(int n)
+{
+	for (;;) {
+		if (!n) break;
+		n--;
+	}
+	return n;
+}
+
+int opaque_dynamic_step(void);
+
+int guarded_dynamic_countdown(int n)
+{
+	while (n > 0) {
+		opaque_exit_call();
+		int step = opaque_dynamic_step();
+		if (step <= 0 || step > n) return n;
+		n -= step;
+	}
+	return n;
+}
+
+unsigned guarded_mixed_dynamic_countdown(unsigned n)
+{
+	while (n > 0) {
+		int step = opaque_dynamic_step();
+		if (step <= 0 || (unsigned)step > n) return n;
+		n -= (unsigned)step;
+	}
+	return n;
+}
+
+struct byte_cursor {
+	unsigned char next;
+};
+
+unsigned char member_byte_rank_call_only_on_exit(struct byte_cursor *cursor,
+	unsigned char total, int skip)
+{
+	while (cursor->next < total) {
+		cursor->next++;
+		if (skip) continue;
+		opaque_exit_call();
+		return cursor->next;
+	}
+	return cursor->next;
 }
 
 int signed_extra_progress(int n, int skip)
@@ -246,6 +336,14 @@ struct vec {
 	unsigned *v;
 };
 
+void free(void *);
+void __free(void *);
+
+struct owned_vec {
+	unsigned n;
+	void **v;
+};
+
 unsigned member_bound_arrow(struct vec *p)
 {
 	unsigned i;
@@ -270,5 +368,21 @@ unsigned member_bound_while(struct vec *p)
 			return i;
 		i++;
 	}
+	return i;
+}
+
+unsigned member_bound_across_free(struct owned_vec *p)
+{
+	unsigned i;
+	for (i = 0; i < p->n; i++)
+		free(p->v[i]);
+	return i;
+}
+
+unsigned member_bound_across_internal_free(struct owned_vec *p)
+{
+	unsigned i;
+	for (i = 0; i < p->n; i++)
+		__free(p->v[i]);
 	return i;
 }

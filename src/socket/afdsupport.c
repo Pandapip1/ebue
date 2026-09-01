@@ -117,7 +117,6 @@ void __afd_build_open_ea_for(int shape, void *buf)
 	 * == '\0'.  Hence AFD_EA_NAME_LEN here but +1 in the copy. */
 	ea->EaNameLength = AFD_EA_NAME_LEN;
 	__ownership_writable_span(ea->EaName, AFD_EA_NAME_LEN + 1);
-	__ownership_readable_span(AFD_EA_NAME, AFD_EA_NAME_LEN + 1);
 	memcpy(ea->EaName, AFD_EA_NAME, AFD_EA_NAME_LEN + 1);
 	ea->EaValueLength = (unsigned short)AFD_OPEN_PACKET_BYTES(hdr);
 
@@ -137,8 +136,6 @@ void __afd_build_open_ea_for(int shape, void *buf)
 		pkt->SizeOfTransportName = (uint32_t)AFD_TRANSPORT_BYTES;
 		__ownership_writable_span(pkt->TransportName,
 		                          AFD_TRANSPORT_BYTES + sizeof(WCHAR));
-		__ownership_readable_span(afd_transport,
-		                          AFD_TRANSPORT_BYTES + sizeof(WCHAR));
 		memcpy(pkt->TransportName, afd_transport, AFD_TRANSPORT_BYTES + sizeof(WCHAR));
 	} else {
 		/* phnt ntafd.h's AFD_OPEN_PACKET. */
@@ -154,8 +151,6 @@ void __afd_build_open_ea_for(int shape, void *buf)
 		pkt->Protocol = IPPROTO_TCP;
 		pkt->TransportDeviceNameLength = (uint32_t)AFD_TRANSPORT_BYTES;
 		__ownership_writable_span(pkt->TransportDeviceName,
-		                          AFD_TRANSPORT_BYTES + sizeof(WCHAR));
-		__ownership_readable_span(afd_transport,
 		                          AFD_TRANSPORT_BYTES + sizeof(WCHAR));
 		memcpy(pkt->TransportDeviceName, afd_transport, AFD_TRANSPORT_BYTES + sizeof(WCHAR));
 	}
@@ -206,12 +201,9 @@ int __afd_addr_from_sockaddr(const struct sockaddr *addr, socklen_t len, TRANSPO
 	/* AddressType overlays sa_family, and AF_INET == TDI_ADDRESS_TYPE_IP == 2. */
 	out->Address[0].AddressType = TDI_ADDRESS_TYPE_IP;
 	a = out->Address[0].Address;
-	__ownership_writable_span(a, TDI_ADDRESS_LENGTH_IP);
 	memset(a, 0, TDI_ADDRESS_LENGTH_IP);
-	__ownership_writable_span(a + TDI_IP_OFF_PORT, sizeof(sin->sin_port));
 	__ownership_readable_span(&sin->sin_port, sizeof(sin->sin_port));
 	memcpy(a + TDI_IP_OFF_PORT, &sin->sin_port, sizeof(sin->sin_port));
-	__ownership_writable_span(a + TDI_IP_OFF_ADDR, sizeof(sin->sin_addr.s_addr));
 	__ownership_readable_span(&sin->sin_addr.s_addr, sizeof(sin->sin_addr.s_addr));
 	memcpy(a + TDI_IP_OFF_ADDR, &sin->sin_addr.s_addr, sizeof(sin->sin_addr.s_addr));
 	/* sin_zero is already zeroed by the memset above. */
@@ -276,17 +268,12 @@ int __afd_build_connect_request(void *buf, const struct sockaddr *addr, socklen_
 		unsigned short l = ta.Address[0].AddressLength;
 		unsigned short t = ta.Address[0].AddressType;
 		__ownership_writable_span(p + AFD_CONNECT_REQ_OFF_ADDR_COUNT, sizeof(count));
-		__ownership_readable_span(&count, sizeof(count));
 		memcpy(p + AFD_CONNECT_REQ_OFF_ADDR_COUNT, &count, sizeof(count));
 		__ownership_writable_span(p + AFD_CONNECT_REQ_OFF_ADDR_LENGTH, sizeof(l));
-		__ownership_readable_span(&l, sizeof(l));
 		memcpy(p + AFD_CONNECT_REQ_OFF_ADDR_LENGTH, &l, sizeof(l));
 		__ownership_writable_span(p + AFD_CONNECT_REQ_OFF_ADDR_TYPE, sizeof(t));
-		__ownership_readable_span(&t, sizeof(t));
 		memcpy(p + AFD_CONNECT_REQ_OFF_ADDR_TYPE, &t, sizeof(t));
 		__ownership_writable_span(p + AFD_CONNECT_REQ_OFF_ADDR,
-		                          TDI_ADDRESS_LENGTH_IP);
-		__ownership_readable_span(ta.Address[0].Address,
 		                          TDI_ADDRESS_LENGTH_IP);
 		memcpy(p + AFD_CONNECT_REQ_OFF_ADDR, ta.Address[0].Address, TDI_ADDRESS_LENGTH_IP);
 	}
@@ -322,10 +309,8 @@ void __afd_build_poll_request(void *buf, long long timeout, unsigned long nhandl
 	__ownership_writable_span(p, AFD_POLL_REQ_SIZE(nhandles));
 	memset(p, 0, AFD_POLL_REQ_SIZE(nhandles));
 	__ownership_writable_span(p + AFD_POLL_REQ_OFF_TIMEOUT, sizeof(timeout));
-	__ownership_readable_span(&timeout, sizeof(timeout));
 	memcpy(p + AFD_POLL_REQ_OFF_TIMEOUT, &timeout, sizeof(timeout));
 	__ownership_writable_span(p + AFD_POLL_REQ_OFF_HANDLE_COUNT, sizeof(count));
-	__ownership_readable_span(&count, sizeof(count));
 	memcpy(p + AFD_POLL_REQ_OFF_HANDLE_COUNT, &count, sizeof(count));
 	/* Four bytes, and always zero.  Microsoft's afd.h and phnt call
 	 * it BOOLEAN Unique, wepoll and libuv call it ULONG Exclusive;
@@ -342,7 +327,6 @@ void __afd_build_poll_request(void *buf, long long timeout, unsigned long nhandl
 	 * would silently break another thread's concurrent
 	 * select()/poll() on the same socket. */
 	__ownership_writable_span(p + AFD_POLL_REQ_OFF_EXCLUSIVE, sizeof(exclusive));
-	__ownership_readable_span(&exclusive, sizeof(exclusive));
 	memcpy(p + AFD_POLL_REQ_OFF_EXCLUSIVE, &exclusive, sizeof(exclusive));
 }
 
@@ -353,13 +337,10 @@ void __afd_poll_set_handle(void *buf, unsigned long i, HANDLE h, uint32_t events
 	uint32_t zero = 0;
 
 	__ownership_writable_span(e + AFD_POLL_H_OFF_HANDLE, sizeof(h));
-	__ownership_readable_span(&h, sizeof(h));
 	memcpy(e + AFD_POLL_H_OFF_HANDLE, (const void *)&h, sizeof(h));
 	__ownership_writable_span(e + AFD_POLL_H_OFF_EVENTS, sizeof(events));
-	__ownership_readable_span(&events, sizeof(events));
 	memcpy(e + AFD_POLL_H_OFF_EVENTS, &events, sizeof(events));
 	__ownership_writable_span(e + AFD_POLL_H_OFF_STATUS, sizeof(zero));
-	__ownership_readable_span(&zero, sizeof(zero));
 	memcpy(e + AFD_POLL_H_OFF_STATUS, &zero, sizeof(zero));
 }
 
@@ -370,7 +351,6 @@ uint32_t __afd_poll_get_events(const void *buf, unsigned long i)
 	const unsigned char *e = (const unsigned char *)buf + AFD_POLL_REQ_OFF_HANDLES + (size_t)i * AFD_POLL_H_SIZE;
 	uint32_t events;
 
-	__ownership_writable_span(&events, sizeof(events));
 	__ownership_readable_span(e + AFD_POLL_H_OFF_EVENTS, sizeof(events));
 	memcpy(&events, e + AFD_POLL_H_OFF_EVENTS, sizeof(events));
 	return events;
@@ -382,7 +362,6 @@ uint32_t __afd_poll_get_handle_count(const void *buf)
 {
 	uint32_t count;
 
-	__ownership_writable_span(&count, sizeof(count));
 	__ownership_readable_span((const unsigned char *)buf + AFD_POLL_REQ_OFF_HANDLE_COUNT,
 	                          sizeof(count));
 	memcpy(&count, (const unsigned char *)buf + AFD_POLL_REQ_OFF_HANDLE_COUNT, sizeof(count));
@@ -423,12 +402,10 @@ uint32_t __afd_poll_events_for(const void *buf, unsigned long nrequested, HANDLE
 		                       + (size_t)i * AFD_POLL_H_SIZE;
 		HANDLE eh;
 
-		__ownership_writable_span(&eh, sizeof(eh));
 		__ownership_readable_span(e + AFD_POLL_H_OFF_HANDLE, sizeof(eh));
 		memcpy((void *)&eh, e + AFD_POLL_H_OFF_HANDLE, sizeof(eh));
 		if (eh == h) {
 			uint32_t events;
-			__ownership_writable_span(&events, sizeof(events));
 			__ownership_readable_span(e + AFD_POLL_H_OFF_EVENTS, sizeof(events));
 			memcpy(&events, e + AFD_POLL_H_OFF_EVENTS, sizeof(events));
 			return events;
@@ -445,7 +422,6 @@ NTSTATUS __afd_poll_get_status(const void *buf, unsigned long i)
 	const unsigned char *e = (const unsigned char *)buf + AFD_POLL_REQ_OFF_HANDLES + (size_t)i * AFD_POLL_H_SIZE;
 	NTSTATUS st;
 
-	__ownership_writable_span(&st, sizeof(st));
 	__ownership_readable_span(e + AFD_POLL_H_OFF_STATUS, sizeof(st));
 	memcpy(&st, e + AFD_POLL_H_OFF_STATUS, sizeof(st));
 	return st;
@@ -469,7 +445,6 @@ void __afd_addr_to_sockaddr(const TA_ADDRESS *ta, struct sockaddr *addr, socklen
 	if (!addr || !len) return;
 	n = *len < (socklen_t)sizeof(sin) ? *len : (socklen_t)sizeof(sin);
 	__ownership_writable_span(addr, n);
-	__ownership_readable_span(&sin, n);
 	memcpy(addr, &sin, n);
 	*len = sizeof(sin);
 }
@@ -511,12 +486,10 @@ int __afd_transport_addr_out(const void *tap, struct sockaddr *addr, socklen_t *
 	int32_t count;
 	unsigned short alen;
 
-	__ownership_writable_span(&count, sizeof(count));
 	__ownership_readable_span(p, sizeof(count));
 	memcpy(&count, p, sizeof(count));
 	if (count < 1) return -1;
 
-	__ownership_writable_span(&alen, sizeof(alen));
 	__ownership_readable_span(p + 4, sizeof(alen));
 	memcpy(&alen, p + 4, sizeof(alen));
 	if (alen < TDI_ADDRESS_LENGTH_IP) return -1;
@@ -528,7 +501,6 @@ int __afd_transport_addr_out(const void *tap, struct sockaddr *addr, socklen_t *
 	 * not be aligned for one, and this file's own tests hand it a
 	 * plain unsigned char image. */
 	memset(&ta, 0, sizeof(ta));
-	__ownership_writable_span(&ta, (size_t)(2 + 2 + TDI_ADDRESS_LENGTH_IP));
 	__ownership_readable_span(p + 4, (size_t)(2 + 2 + TDI_ADDRESS_LENGTH_IP));
 	memcpy(&ta, p + 4, (size_t)(2 + 2 + TDI_ADDRESS_LENGTH_IP));
 	__afd_addr_to_sockaddr(&ta, addr, len);

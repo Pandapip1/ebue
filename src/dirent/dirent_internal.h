@@ -84,7 +84,7 @@ static inline int __dirent_ascii_casecmp(const char *a, const char *b) // NOLINT
 	}
 }
 
-static inline int __vfs_mandatory_count(int kind)
+static inline unsigned char __vfs_mandatory_count(int kind)
 {
 	return kind == __VFS_ROOT ? 1 : kind == __VFS_DEV ? 3 : 0;
 }

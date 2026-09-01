@@ -110,8 +110,6 @@ static char *image_dir(void)
 	if (i > 1 && !(i == 3 && progname[1] == ':')) i--;
 	dir = __malloc(i + 1);
 	if (dir) {
-		__ownership_writable_span(dir, i);
-		__ownership_readable_span(progname, i);
 		memcpy(dir, progname, i);
 		dir[i] = 0;
 	}
@@ -139,12 +137,8 @@ static char *join(const char *dir, const char *tail)
 	size_t dl = strlen(dir), tl = strlen(tail), i;
 	char *p = __malloc(dl + 1 + tl + 1);
 	if (!p) return 0;
-	__ownership_writable_span(p, dl);
-	__ownership_readable_span(dir, dl);
 	memcpy(p, dir, dl);
 	p[dl] = '\\';
-	__ownership_writable_span(p + dl + 1, tl);
-	__ownership_readable_span(tail, tl);
 	memcpy(p + dl + 1, tail, tl);
 	p[dl + 1 + tl] = 0;
 	for (i = 0; i < dl + 1 + tl; i++)

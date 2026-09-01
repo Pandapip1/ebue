@@ -52,6 +52,7 @@ REGISTER_MAP_WITH_PROGRAMSTATE(AssumedSpanExtent, const MemRegion *,
 using DisjointRegionKey = std::pair<const MemRegion *, const MemRegion *>;
 REGISTER_MAP_WITH_PROGRAMSTATE(AssumedDisjointExtent, DisjointRegionKey,
                                DefinedOrUnknownSVal)
+REGISTER_SET_WITH_PROGRAMSTATE(AllocatedBaseRegion, const MemRegion *)
 REGISTER_MAP_WITH_PROGRAMSTATE(GrantedSpanProof, const ParmVarDecl *,
                                const ParmVarDecl *)
 using DisjointParameterKey =
@@ -184,6 +185,7 @@ class MemoryContractChecker
   mutable std::unique_ptr<BugType> SpanBT;
   mutable std::unique_ptr<BugType> OverlapBT;
   mutable std::unique_ptr<BugType> TokenBT;
+  mutable std::unique_ptr<BugType> RedundantBT;
 
   static bool hasName(const CallEvent &Call, StringRef Wanted) {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
@@ -191,50 +193,60 @@ class MemoryContractChecker
            Function->getName() == Wanted;
   }
 
-  // Clang's own dynamic-extent tracking for an allocator's return value
-  // only fires for a handful of literally-named standard functions:
-  // `malloc(n)` gets a real, usable dynamic extent from clang's builtin
-  // modeling, but `__malloc(n)` -- the name every allocation inside this
-  // tree's OWN code actually goes through, since `malloc` is just this
-  // codebase's own public wrapper around it -- does not, leaving
-  // spanProven's getDynamicExtentWithOffset() with nothing but an
-  // unconstrained placeholder for every buffer this codebase allocates
-  // through its own internal entry point. This is the identical gap
-  // OwnershipChecker::allocationSizeInBytes fixes for the sibling
-  // ValidPointerChecker (see 8a56a66's own extensive writeup); this
-  // checker needs its own copy since the memcontracts stage does not run
-  // ntlibc.Ownership, whose checkPostCall would otherwise set the state.
-  // Setting
-  // the region's real dynamic extent straight from the real size
-  // argument(s) is not a new assumption layered on top of what the
-  // program does: it is the exact byte count the allocator itself is
-  // about to hand back, read directly off the arguments of the call that
-  // produced it. strdup/strndup are deliberately left alone, matching
-  // 8a56a66: their real size depends on string *content*, not an
-  // argument SVal already sitting at the call site.
-  static std::optional<SVal> allocationSizeInBytes(const CallEvent &Call,
-                                                    CheckerContext &C) {
-    SValBuilder &Builder = C.getSValBuilder();
-    QualType SizeTy = C.getASTContext().getSizeType();
-    unsigned NumArgs = Call.getNumArgs();
-    auto Arg = [&](unsigned Index) -> SVal {
-      return Index < NumArgs ? Call.getArgSVal(Index) : UnknownVal();
+  static bool isManualProofCall(const FunctionDecl *Function) {
+    return Function && Function->getIdentifier() &&
+           Function->getName().starts_with("__ownership_");
+  }
+
+  /* A pointer-returning function carries its byte extent on the function
+   * declaration itself: `withtok(writable_span(size))`.  Interpreting the
+   * function-level token as a return-value grant keeps allocator knowledge in
+   * headers and stubs; the checker never recognizes an allocator by name. */
+  static std::optional<SVal>
+  declaredReturnSpanExtent(const FunctionDecl *Function,
+                           const CallEvent &Call, CheckerContext &C) {
+    if (!Function || !Function->getReturnType()->isPointerType())
+      return std::nullopt;
+    auto ParameterIndex = [](const FunctionDecl *Declaration,
+                             StringRef Name) -> std::optional<unsigned> {
+      Name = Name.trim();
+      for (unsigned Index = 0; Index < Declaration->getNumParams(); ++Index)
+        if (Declaration->getParamDecl(Index)->getName() == Name)
+          return Index;
+      return std::nullopt;
     };
-    if (hasName(Call, "malloc") || hasName(Call, "__malloc") ||
-        hasName(Call, "valloc"))
-      return NumArgs >= 1 ? std::optional<SVal>(Arg(0)) : std::nullopt;
-    if (hasName(Call, "calloc"))
-      return NumArgs >= 2 ? std::optional<SVal>(Builder.evalBinOp(
-                                C.getState(), BO_Mul, Arg(0), Arg(1), SizeTy))
-                          : std::nullopt;
-    if (hasName(Call, "realloc"))
-      return NumArgs >= 2 ? std::optional<SVal>(Arg(1)) : std::nullopt;
-    if (hasName(Call, "reallocarray"))
-      return NumArgs >= 3 ? std::optional<SVal>(Builder.evalBinOp(
-                                C.getState(), BO_Mul, Arg(1), Arg(2), SizeTy))
-                          : std::nullopt;
-    if (hasName(Call, "aligned_alloc") || hasName(Call, "memalign"))
-      return NumArgs >= 2 ? std::optional<SVal>(Arg(1)) : std::nullopt;
+    for (const FunctionDecl *Redeclaration : Function->redecls())
+      for (const AnnotateAttr *Attribute :
+           Redeclaration->specific_attrs<AnnotateAttr>()) {
+        StringRef Annotation = Attribute->getAnnotation();
+        if (!Annotation.consume_front("withtok:") ||
+            !Annotation.ends_with(")"))
+          continue;
+        size_t Open = Annotation.find('(');
+        if (Open == StringRef::npos)
+          continue;
+        StringRef Family = Annotation.take_front(Open).trim();
+        const TypedefNameDecl *Token =
+            dialectToken(Function->getASTContext(), Family);
+        if (!hasDialectQualifier(Token, "qual:extent_at_least"))
+          continue;
+        StringRef Expression =
+            Annotation.slice(Open + 1, Annotation.size() - 1).trim();
+        auto [LeftName, RightName] = Expression.split('*');
+        std::optional<unsigned> Left = ParameterIndex(Redeclaration, LeftName);
+        if (!Left || *Left >= Call.getNumArgs())
+          continue;
+        if (RightName.empty())
+          return Call.getArgSVal(*Left);
+        std::optional<unsigned> Right =
+            ParameterIndex(Redeclaration, RightName);
+        if (!Right || *Right >= Call.getNumArgs() ||
+            RightName.contains('*'))
+          continue;
+        return C.getSValBuilder().evalBinOp(
+            C.getState(), BO_Mul, Call.getArgSVal(*Left),
+            Call.getArgSVal(*Right), C.getASTContext().getSizeType());
+      }
     return std::nullopt;
   }
 
@@ -302,6 +314,18 @@ class MemoryContractChecker
      * expression wrapped before reaching this point. */
     if (ExtentSymbol && ExtentSymbol == LengthSymbol)
       return true;
+    const auto *ExtentProduct = dyn_cast_or_null<SymSymExpr>(ExtentSymbol);
+    const auto *LengthProduct = dyn_cast_or_null<SymSymExpr>(LengthSymbol);
+    if (ExtentProduct && LengthProduct &&
+        ExtentProduct->getOpcode() == BO_Mul &&
+        LengthProduct->getOpcode() == BO_Mul) {
+      SymbolRef EL = stripCasts(ExtentProduct->getLHS());
+      SymbolRef ER = stripCasts(ExtentProduct->getRHS());
+      SymbolRef LL = stripCasts(LengthProduct->getLHS());
+      SymbolRef LR = stripCasts(LengthProduct->getRHS());
+      if ((EL == LL && ER == LR) || (EL == LR && ER == LL))
+        return true;
+    }
     SymbolRef ExtentBase, LengthBase;
     int64_t ExtentOffset, LengthOffset;
     if (!decomposeAffine(Extent, ExtentBase, ExtentOffset))
@@ -428,12 +452,13 @@ public:
     if (!Node)
       return;
     if (!Type) {
+      StringRef Title = "Unproven memory overlap";
+      if (Reason == "memory operation span is not proven valid")
+        Title = "Unproven memory span";
+      else if (Reason == "manual memory proof axiom is redundant")
+        Title = "Redundant memory proof axiom";
       std::unique_ptr<BugType> New = std::make_unique<BugType>(
-          this,
-          Reason == "memory operation span is not proven valid"
-              ? "Unproven memory span"
-              : "Unproven memory overlap",
-          categories::MemoryError);
+          this, Title, categories::MemoryError);
       Type = New.release();
     }
     const SourceManager &SM = C.getSourceManager();
@@ -474,7 +499,7 @@ public:
   }
 
   bool spanProven(SVal Pointer, SVal Length, ProgramStateRef State,
-                  CheckerContext &C) const {
+                  CheckerContext &C, bool UseAssumedSpans = true) const {
     if (State->isNull(Length).isConstrainedTrue())
       return true;
     auto ExtentProvesLength = [&](SVal Extent) {
@@ -489,11 +514,12 @@ public:
           Enough.getAs<DefinedOrUnknownSVal>();
       return Condition && !State->assume(*Condition, false);
     };
-    if (const MemRegion *Region = Pointer.getAsRegion())
-      if (const DefinedOrUnknownSVal *Assumed =
-              State->get<AssumedSpanExtent>(Region))
-        if (ExtentProvesLength(*Assumed))
-          return true;
+    if (UseAssumedSpans)
+      if (const MemRegion *Region = Pointer.getAsRegion())
+        if (const DefinedOrUnknownSVal *Assumed =
+                State->get<AssumedSpanExtent>(Region))
+          if (ExtentProvesLength(*Assumed))
+            return true;
     SVal Extent = getDynamicExtentWithOffset(State, Pointer);
     if (Extent.isUnknownOrUndef() || Length.isUnknownOrUndef())
       return false;
@@ -505,29 +531,44 @@ public:
   }
 
   bool overlapProven(SVal First, SVal Second, SVal Length,
-                     ProgramStateRef State, CheckerContext &C) const {
+                     ProgramStateRef State, CheckerContext &C,
+                     bool UseAssumedSpans = true) const {
     if (State->isNull(Length).isConstrainedTrue())
       return true;
     const MemRegion *A = First.getAsRegion();
     const MemRegion *B = Second.getAsRegion();
     if (!A || !B)
       return false;
-    if (const DefinedOrUnknownSVal *Assumed =
-            State->get<AssumedDisjointExtent>({A, B})) {
-      SVal Enough = C.getSValBuilder().evalBinOp(
-          State, BO_GE, *Assumed, Length,
-          C.getSValBuilder().getConditionType());
-      if (std::optional<DefinedOrUnknownSVal> Condition =
-              Enough.getAs<DefinedOrUnknownSVal>())
-        if (!State->assume(*Condition, false))
-          return true;
-    }
+    if (UseAssumedSpans)
+      if (const DefinedOrUnknownSVal *Assumed =
+              State->get<AssumedDisjointExtent>({A, B})) {
+        SVal Enough = C.getSValBuilder().evalBinOp(
+            State, BO_GE, *Assumed, Length,
+            C.getSValBuilder().getConditionType());
+        if (std::optional<DefinedOrUnknownSVal> Condition =
+                Enough.getAs<DefinedOrUnknownSVal>())
+          if (!State->assume(*Condition, false))
+            return true;
+      }
     RegionOffset AO = A->getAsOffset();
     RegionOffset BO = B->getAsOffset();
     if (!AO.isValid() || !BO.isValid())
       return false;
-    if (AO.getRegion() != BO.getRegion())
+    if (AO.getRegion() != BO.getRegion()) {
+      /* Two symbolic pointer parameters may still alias even though Clang
+       * represents their pointees with distinct SymbolicRegions.  Distinct
+       * concrete storage objects (separate locals/globals) cannot overlap;
+       * distinct symbolic roots alone are not such a proof. */
+      if (AO.getRegion()->getMemorySpace() != BO.getRegion()->getMemorySpace())
+        return true;
+      if (State->contains<AllocatedBaseRegion>(AO.getRegion()) ||
+          State->contains<AllocatedBaseRegion>(BO.getRegion()))
+        return true;
+      if (isa<SymbolicRegion>(AO.getRegion()) ||
+          isa<SymbolicRegion>(BO.getRegion()))
+        return false;
       return true;
+    }
     if (AO.hasSymbolicOffset() || BO.hasSymbolicOffset())
       return false;
     const llvm::APSInt *KnownLength =
@@ -726,6 +767,46 @@ public:
     SmallVector<DisjointContract, 1> Disjoint;
     tokenContracts(Function, Spans, Disjoint);
     ProgramStateRef ContractState = C.getState();
+    if (isManualProofCall(Function)) {
+      bool Reported = false;
+      for (const SpanContract &Contract : Spans) {
+        if (Contract.Operation != MemoryTokenOperation::Grant ||
+            Contract.Pointer >= Call.getNumArgs() ||
+            Contract.Length >= Call.getNumArgs())
+          continue;
+        if (spanProven(Call.getArgSVal(Contract.Pointer),
+                       Call.getArgSVal(Contract.Length), C.getState(), C,
+                       false)) {
+          BugType *Type = RedundantBT.get();
+          report("manual memory proof axiom is redundant", Type, Call,
+                 C.getState(), C);
+          if (!RedundantBT && Type)
+            RedundantBT.reset(Type);
+          Reported = true;
+          break;
+        }
+      }
+      if (!Reported) {
+        for (const DisjointContract &Contract : Disjoint) {
+          if (Contract.Operation != MemoryTokenOperation::Grant ||
+              Contract.First >= Call.getNumArgs() ||
+              Contract.Second >= Call.getNumArgs() ||
+              Contract.Length >= Call.getNumArgs())
+            continue;
+          if (overlapProven(Call.getArgSVal(Contract.First),
+                            Call.getArgSVal(Contract.Second),
+                            Call.getArgSVal(Contract.Length), C.getState(),
+                            C, false)) {
+            BugType *Type = RedundantBT.get();
+            report("manual memory proof axiom is redundant", Type, Call,
+                   C.getState(), C);
+            if (!RedundantBT && Type)
+              RedundantBT.reset(Type);
+            break;
+          }
+        }
+      }
+    }
     for (const SpanContract &Contract : Spans) {
       if (Contract.Operation != MemoryTokenOperation::Require)
         continue;
@@ -787,21 +868,20 @@ public:
       C.addTransition(ContractState);
   }
 
-  // See allocationSizeInBytes above: give this tree's own __malloc-family
-  // allocator calls the same real dynamic extent clang's builtin modeling
-  // already gives literally-named "malloc"/"calloc"/etc, so spanProven has
-  // real information to work with instead of an unconstrained placeholder.
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
     ProgramStateRef State = C.getState();
-    if (std::optional<SVal> SizeInBytes = allocationSizeInBytes(Call, C)) {
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    if (std::optional<SVal> Extent =
+            declaredReturnSpanExtent(Function, Call, C)) {
       if (std::optional<DefinedOrUnknownSVal> DefinedSize =
-              SizeInBytes->getAs<DefinedOrUnknownSVal>()) {
+              Extent->getAs<DefinedOrUnknownSVal>())
         if (const MemRegion *Region = Call.getReturnValue().getAsRegion()) {
-          State = setDynamicExtent(State, Region->getBaseRegion(), *DefinedSize,
+          const MemRegion *Base = Region->getBaseRegion();
+          State = setDynamicExtent(State, Base, *DefinedSize,
                                    C.getSValBuilder());
+          State = State->add<AllocatedBaseRegion>(Base);
         }
       }
-    }
     // See stringLengthSourceSpanProven above: record which pointer
     // argument a strlen()/strnlen() call's return symbol was measured
     // from, so a later memcpy/memset/etc using that same (conjured)
@@ -820,7 +900,6 @@ public:
                                                 ArgRegion->getBaseRegion());
     }
 
-    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
     SmallVector<SpanContract, 2> Spans;
     SmallVector<DisjointContract, 1> Disjoint;
     tokenContracts(Function, Spans, Disjoint);
@@ -891,6 +970,8 @@ public:
       SVal LengthValue = State->getSVal(State->getLValue(Length, LC));
       const MemRegion *Region = PointerValue.getAsRegion();
       bool Proven = State->isNull(LengthValue).isConstrainedTrue();
+      if (!Proven)
+        Proven = spanProven(PointerValue, LengthValue, State, C, false);
       if (Region)
         if (const ParmVarDecl *const *ProvenLength =
                 State->get<GrantedSpanProof>(Pointer)) {

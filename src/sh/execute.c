@@ -155,6 +155,7 @@
 #include <sys/wait.h>
 #include <errno.h>
 #include "libc.h"
+#include "ownership_stubs.h"
 #include "sh.h"
 
 static char *xstrdup(const char *s)
@@ -319,10 +320,15 @@ static int split_assignment(const char *raw, char **name, char **val) // NOLINT(
 
 	if (!eq) return -1;
 	nlen = (size_t)(eq - raw);
-	*name = __malloc(nlen + 1);
-	if (!*name) return -1;
-	memcpy(*name, raw, nlen);
-	(*name)[nlen] = 0;
+	{
+		char *allocated_name = __malloc(nlen + 1);
+		if (!allocated_name) return -1;
+		__ownership_writable_span(allocated_name, nlen);
+		__ownership_readable_span(raw, nlen);
+		memcpy(allocated_name, raw, nlen);
+		allocated_name[nlen] = 0;
+		*name = allocated_name;
+	}
 
 	if (eq[1] && __wordexp_sh(eq + 1, &we, 0) == 0) {
 		have_we = 1;
@@ -409,8 +415,10 @@ static char **build_child_envp(const struct sh_word *assigns, size_t *out_n)
 		vlen = strlen(val);
 		entry = __malloc(nlen + 1 + vlen + 1);
 		if (!entry) { __free(name); __free(val); free_strv(v, n); return 0; }
+		__ownership_writable_span(entry, nlen);
 		memcpy(entry, name, nlen);
 		entry[nlen] = '=';
+		__ownership_writable_span(entry + nlen + 1, vlen + 1);
 		memcpy(entry + nlen + 1, val, vlen + 1);
 		__free(name);
 		__free(val);
@@ -1557,8 +1565,14 @@ static int env_snapshot_take(struct env_snapshot *es)
 		const char *e = __environ[i];
 		const char *eq = strchr(e, '=');
 		size_t nlen = eq ? (size_t)(eq - e) : strlen(e);
-		es->names[i] = __malloc(nlen + 1);
-		if (es->names[i]) { memcpy(es->names[i], e, nlen); es->names[i][nlen] = 0; }
+		char *name = __malloc(nlen + 1);
+		if (name) {
+			__ownership_writable_span(name, nlen);
+			__ownership_readable_span(e, nlen);
+			memcpy(name, e, nlen);
+			name[nlen] = 0;
+		}
+		es->names[i] = name;
 		es->vals[i] = xstrdup(eq ? eq + 1 : "");
 		if (!es->names[i] || !es->vals[i]) { es->n = i + 1; free_env_snapshot(es); return -1; }
 	}
@@ -1607,7 +1621,12 @@ static void env_snapshot_restore(const struct env_snapshot *es)
 			const char *eq = strchr(e, '=');
 			size_t nlen = eq ? (size_t)(eq - e) : strlen(e);
 			char *nm = __malloc(nlen + 1);
-			if (nm) { memcpy(nm, e, nlen); nm[nlen] = 0; }
+			if (nm) {
+				__ownership_writable_span(nm, nlen);
+				__ownership_readable_span(e, nlen);
+				memcpy(nm, e, nlen);
+				nm[nlen] = 0;
+			}
 			cur[i] = nm;
 		}
 		for (i = 0; i < n; i++)
@@ -2023,7 +2042,9 @@ static char *slurp_fd(int fd, size_t *out_len)
 			while (len + 4096 + 1 > nc) nc *= 2;
 			nb = __malloc(nc);
 			if (!nb) { __free(buf); return 0; }
-			if (buf) memcpy(nb, buf, len);
+			if (buf) {
+				memcpy(nb, buf, len);
+			}
 			__free(buf);
 			buf = nb;
 			cap = nc;

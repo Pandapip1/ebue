@@ -8,6 +8,6 @@ int ffsl(long i)
 	int n;
 	if (!u) return 0;
 	n = 1;
-	while (u && !(u & 1)) { n++; u /= 2; }
+	while (u > 1 && !(u & 1)) { n++; u /= 2; }
 	return n;
 }

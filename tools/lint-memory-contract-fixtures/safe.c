@@ -17,7 +17,12 @@ void *memset(void *destination withtok(fixture_writable_span(length)), int,
 	size_t length);
 long read(int, void *buffer withtok(fixture_writable_span(length)),
 	size_t length);
-void *__malloc(size_t);
+withtok(fixture_writable_span(length))
+void *__malloc(size_t length);
+withtok(fixture_writable_span(length))
+void *allocate_bytes(size_t length);
+withtok(fixture_writable_span(count * size))
+void *allocate_array(size_t count, size_t size);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 void establish_writable(
@@ -25,6 +30,13 @@ void establish_writable(
 void establish_readable(
 	const void *buffer grant(fixture_readable_span(length)), size_t length);
 void establish_disjoint(
+	void *first grant(fixture_disjoint_span(second, length)),
+	const void *second, size_t length);
+void __ownership_writable_span(
+	void *buffer grant(fixture_writable_span(length)), size_t length);
+void __ownership_readable_span(
+	const void *buffer grant(fixture_readable_span(length)), size_t length);
+void __ownership_disjoint_span(
 	void *first grant(fixture_disjoint_span(second, length)),
 	const void *second, size_t length);
 
@@ -70,6 +82,21 @@ void use_explicit_memory_proofs(char *destination, const char *source,
 	establish_readable(source, length);
 	prove_disjoint(destination, source, length);
 	memcpy(destination, source, length);
+}
+
+/* An opaque caller-provided pointer has no inferred extent.  Its proof is
+ * still necessary and therefore must not receive the redundancy warning. */
+void use_necessary_manual_proof(char *destination, size_t length)
+{
+	__ownership_writable_span(destination, length);
+	memset(destination, 0, length);
+}
+
+void retain_necessary_alias_proofs(char *destination, const char *source,
+	size_t length)
+{
+	__ownership_readable_span(source, length);
+	__ownership_disjoint_span(destination, source, length);
 }
 
 void contracted_copy(char *out withtok(fixture_writable_span(length)),
@@ -142,4 +169,19 @@ char *dup_all(void)
 	if (!p) return 0;
 	memcpy(p, s, n);
 	return p;
+}
+
+/* Return extents are declaration-driven, not tied to allocator spellings. */
+void declaration_driven_allocator(size_t length)
+{
+	char *buffer = allocate_bytes(length);
+	if (!buffer) return;
+	memset(buffer, 0, length);
+}
+
+void declaration_driven_array_allocator(size_t count, size_t size)
+{
+	char *buffer = allocate_array(count, size);
+	if (!buffer) return;
+	memset(buffer, 0, count * size);
 }
