@@ -625,6 +625,11 @@ obj/test/util-archive.exe: obj/bin/pax.exe obj/bin/file.exe obj/bin/ar.exe $(SH_
 # plus the shell need to exist first.
 obj/test/util-findls.exe: obj/bin/find.exe obj/bin/xargs.exe obj/bin/expr.exe obj/bin/ls.exe $(SH_EXE)
 
+# test/util-awk.c is the same idea, one tier up again: awk(1p), spawned
+# as obj/bin/awk.exe and exercised as a shell built-in via obj/sh/sh.exe
+# -c, so both the .exe and the shell need to exist first.
+obj/test/util-awk.exe: obj/bin/awk.exe $(SH_EXE)
+
 # test/delayall.c and its plugin DLL: proof that an *unmodified* program
 # (plain extern, ordinary call, no ntlibc-specific macro at the call
 # site) gets $ORIGIN delay loading through -Wl,--delay-all and

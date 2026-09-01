@@ -335,6 +335,18 @@ int __util_remove_tree(const char *path) __attribute__((nonnull(1)));
 withtok(heap_allocated) __attribute__((nonnull(1, 2)))
 char *__util_join_basename(const char *dir, const char *src);
 
+/* Tier 4: "bigger engines" -- real parsers, budget real time.  awk(1p)
+ * is the whole of this tier: the single biggest POSIX utility there
+ * is, a real pattern-action language with its own lexer, recursive-
+ * descent parser and tree-walking interpreter (src/util/awk_lex.c,
+ * awk_parse.c, awk_run.c, with shared types in src/util/awk_priv.h).
+ * See src/util/awk.c's own header for the full XCU awk(1p) citations
+ * and every deliberate scope narrowing, spelled out the same honest
+ * way src/util/dd.c documents its conv= coverage. Not __pure__: awk
+ * reads real files/stdin, writes real output, and can run arbitrary
+ * commands via system()/getline/print redirection. */
+int __util_awk_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 #endif
 
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

@@ -632,6 +632,20 @@ static int bi_ls(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* Tier 4 continued: awk(1p) -- same reasoning as every tier above: it
+ * also exists as a real standalone obj/bin/awk.exe (src/util/awk.c,
+ * declared in src/internal/util.h), and stays registered here too so
+ * a script run before PATH lookup or __spawn() can be trusted still
+ * has it. Not a 2.14 special built-in and has no effect on the shell
+ * execution environment itself, so env_effect is 0, same as the rest
+ * of this table. */
+static int bi_awk(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_awk(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_awk_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* XCU 2.14: "exit [n] -- ... shall cause the shell to exit with the
  * exit status specified by the unsigned decimal integer n.  If n is
  * specified, but its value is not between 0 and 255 inclusively, the
@@ -1018,6 +1032,7 @@ static const struct sh_builtin builtins[] = {
 	{ "xargs", 0, 0, bi_xargs },
 	{ "expr",  0, 0, bi_expr },
 	{ "ls",    0, 0, bi_ls },
+	{ "awk",   0, 0, bi_awk },
 	{ 0, 0, 0, 0 }
 };
 
