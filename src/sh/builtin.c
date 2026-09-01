@@ -533,6 +533,19 @@ static int bi_patch(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* Tier 4 continued: sed(1p) -- src/util/sed.c's __util_sed_main() is the
+ * whole of it, shared with the standalone obj/bin/sed.exe (declared in
+ * src/internal/util.h), registered here too so a script run before PATH
+ * lookup or __spawn() can be trusted still has it.  Not a 2.14 special
+ * built-in, no effect on the shell execution environment itself, so
+ * `env_effect` is 0, same as the rest of this table. */
+static int bi_sed(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_sed(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_sed_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* XCU 2.14: "exit [n] -- ... shall cause the shell to exit with the
  * exit status specified by the unsigned decimal integer n.  If n is
  * specified, but its value is not between 0 and 255 inclusively, the
@@ -910,6 +923,7 @@ static const struct sh_builtin builtins[] = {
 	{ "unexpand", 0, 0, bi_unexpand },
 	{ "fold",     0, 0, bi_fold },
 	{ "patch", 0, 0, bi_patch },
+	{ "sed",   0, 0, bi_sed },
 	{ 0, 0, 0, 0 }
 };
 

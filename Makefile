@@ -600,6 +600,12 @@ obj/test/util-textfmt.exe: obj/bin/cut.exe obj/bin/paste.exe obj/bin/tr.exe obj/
 # exist first.
 obj/test/util-patch.exe: obj/bin/patch.exe $(SH_EXE)
 
+# test/util-sed.c is the same idea, one tier up again: sed(1p), Tier 4's
+# second "bigger engine" utility, spawned as obj/bin/sed.exe and exercised
+# as a shell built-in via obj/sh/sh.exe -c, so that .exe plus the shell
+# need to exist first.
+obj/test/util-sed.exe: obj/bin/sed.exe $(SH_EXE)
+
 # test/delayall.c and its plugin DLL: proof that an *unmodified* program
 # (plain extern, ordinary call, no ntlibc-specific macro at the call
 # site) gets $ORIGIN delay loading through -Wl,--delay-all and
