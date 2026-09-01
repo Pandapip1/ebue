@@ -202,7 +202,8 @@ static std::string contextName(CheckerContext &C) {
 
 class AllocationLifetimeChecker
     : public Checker<check::ASTDecl<FunctionDecl>, check::BeginFunction,
-                     check::PreCall, check::PostCall, check::EndFunction> {
+                     check::PreCall, check::PostCall,
+                     check::PostStmt<BinaryOperator>, check::EndFunction> {
   mutable std::unique_ptr<BugType> BT;
 
   static ProgramStateRef forget(ProgramStateRef State, SymbolRef Symbol) {
@@ -239,6 +240,19 @@ class AllocationLifetimeChecker
                            CheckerContext &C) {
     DefinedSVal Value = C.getSValBuilder().makeSymbolVal(Symbol);
     return State->assume(Value, true) != nullptr;
+  }
+
+  static const ValueDecl *destinationDeclaration(const Expr *Expression) {
+    if (!Expression)
+      return nullptr;
+    Expression = Expression->IgnoreParenImpCasts();
+    if (const auto *Reference = dyn_cast<DeclRefExpr>(Expression))
+      return dyn_cast<ValueDecl>(Reference->getDecl());
+    if (const auto *Member = dyn_cast<MemberExpr>(Expression))
+      return Member->getMemberDecl();
+    if (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(Expression))
+      return destinationDeclaration(Subscript->getBase());
+    return nullptr;
   }
 
   static bool replacedOnThisPath(ProgramStateRef State, SymbolRef Symbol,
@@ -486,6 +500,35 @@ public:
         NonNullState = NonNullState->set<ReplacedBy>(Old, Result);
     }
     C.addTransition(NonNullState);
+  }
+
+  /* An annotated destination is an owning slot.  Assignment moves the
+   * matching dynamic-storage obligation into that slot; the ordinary
+   * ownership-type checker separately enforces that the token classes match
+   * and that a linear source is not copied.  This is what lets a composite
+   * owner collect children without making every constructor look like it
+   * leaked each child at function exit. */
+  void checkPostStmt(const BinaryOperator *Statement,
+                     CheckerContext &C) const {
+    if (!Statement->isAssignmentOp())
+      return;
+    const ValueDecl *Destination =
+        destinationDeclaration(Statement->getLHS());
+    const IdentifierInfo *DestinationFamily =
+        annotationFamily(Destination, "withtok:");
+    if (!DestinationFamily)
+      return;
+    SymbolRef Source =
+        C.getSVal(Statement->getRHS()).getAsLocSymbol(true);
+    if (!Source)
+      return;
+    ProgramStateRef State = C.getState();
+    const IdentifierInfo *const *SourceFamily =
+        State->get<AllocationFamily>(Source);
+    if (!SourceFamily || *SourceFamily != DestinationFamily ||
+        !belongsToFrame(State, Source, C.getStackFrame()))
+      return;
+    C.addTransition(forget(State, Source));
   }
 
   void checkEndFunction(const ReturnStmt *Return, CheckerContext &C) const {

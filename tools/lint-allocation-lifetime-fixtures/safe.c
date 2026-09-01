@@ -76,6 +76,17 @@ void use_contract(void)
 	destroy_widget(widget);
 }
 
+struct widget_box {
+	void *widget withtok(widget_allocated);
+};
+
+void aggregate_transfer(void)
+{
+	struct widget_box box;
+	box.widget = make_widget();
+	destroy_widget(box.widget);
+}
+
 withtok(sentinel_allocated)
 void *sentinel_producer(int fail)
 {
