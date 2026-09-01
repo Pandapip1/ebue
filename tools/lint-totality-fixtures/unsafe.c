@@ -1098,3 +1098,164 @@ unsigned statement_expression_skips_progress(unsigned bound, int reset)
 	}
 	return i;
 }
+
+unsigned interval_one_branch_unchanged(unsigned lo, unsigned hi, int left)
+{
+	while (lo < hi) { /* totality-expect */
+		unsigned mid = lo + (hi - lo) / 2;
+		if (left)
+			hi = mid;
+	}
+	return lo;
+}
+
+unsigned interval_one_branch_grows(unsigned lo, unsigned hi, int left)
+{
+	while (lo < hi) { /* totality-expect */
+		unsigned mid = lo + (hi - lo) / 2;
+		if (left)
+			hi = mid;
+		else
+			lo = mid + 2;
+	}
+	return lo;
+}
+
+unsigned interval_overflowing_midpoint(unsigned lo, unsigned hi, int left)
+{
+	while (lo < hi) { /* totality-expect */
+		unsigned mid = (lo + hi) / 2;
+		if (left)
+			hi = mid;
+		else
+			lo = mid + 1;
+	}
+	return lo;
+}
+
+void callback_changes_bounds(unsigned *lo, unsigned *hi);
+
+unsigned interval_callback_mutation(unsigned lo, unsigned hi, int left)
+{
+	while (lo < hi) { /* totality-expect */
+		unsigned mid = lo + (hi - lo) / 2;
+		callback_changes_bounds(&lo, &hi);
+		if (left)
+			hi = mid;
+		else
+			lo = mid + 1;
+	}
+	return lo;
+}
+
+unsigned interval_alias_reset(unsigned lo, unsigned hi, int left)
+{
+	unsigned *alias = &lo;
+	while (lo < hi) { /* totality-expect */
+		unsigned mid = lo + (hi - lo) / 2;
+		if (left)
+			hi = mid;
+		else
+			lo = mid + 1;
+		*alias = 0;
+	}
+	return lo;
+}
+
+unsigned interval_continue_before_update(unsigned lo, unsigned hi, int skip)
+{
+	while (lo < hi) { /* totality-expect */
+		unsigned mid = lo + (hi - lo) / 2;
+		if (skip)
+			continue;
+		lo = mid + 1;
+	}
+	return lo;
+}
+
+unsigned interval_goto_skips_update(unsigned lo, unsigned hi, int skip)
+{
+	while (lo < hi) { /* totality-expect */
+		unsigned mid = lo + (hi - lo) / 2;
+		if (skip)
+			goto next;
+		lo = mid + 1;
+next:
+		;
+	}
+	return lo;
+}
+
+unsigned interval_low_can_stall(unsigned lo, unsigned hi, int left)
+{
+	while (lo < hi) { /* totality-expect */
+		unsigned mid = lo + (hi - lo) / 2;
+		if (left)
+			hi = mid;
+		else
+			lo = mid;
+	}
+	return lo;
+}
+
+unsigned interval_high_can_stall(unsigned lo, unsigned hi, int left)
+{
+	while (lo < hi) { /* totality-expect */
+		unsigned mid = lo + (hi - lo) / 2;
+		if (left)
+			hi = mid + 1;
+		else
+			lo = mid + 1;
+	}
+	return lo;
+}
+
+unsigned interval_midpoint_mutated(unsigned lo, unsigned hi, int left)
+{
+	while (lo < hi) { /* totality-expect */
+		unsigned mid = lo + (hi - lo) / 2;
+		mid++;
+		if (left)
+			hi = mid;
+		else
+			lo = mid + 1;
+	}
+	return lo;
+}
+
+unsigned halving_wrong_divisor(unsigned n, int left)
+{
+	while (n) { /* totality-expect */
+		unsigned half = n / 3;
+		if (left)
+			n = half;
+		else
+			n -= half + 1;
+	}
+	return n;
+}
+
+unsigned halving_repeated_update(unsigned n, int left)
+{
+	while (n) { /* totality-expect */
+		unsigned half = n / 2;
+		if (left)
+			n = half;
+		else
+			n -= half + 1;
+		n = half;
+	}
+	return n;
+}
+
+unsigned interval_do_while_first_iteration(unsigned lo, unsigned hi, int left)
+{
+	do { /* totality-expect */
+		unsigned mid = lo + (hi - lo) / 2;
+		if (left)
+			hi = mid;
+		else
+			lo = mid + 1;
+	} while (lo < hi);
+	return lo;
+}

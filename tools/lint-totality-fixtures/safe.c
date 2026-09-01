@@ -553,3 +553,59 @@ unsigned reused_rank_only_before_return(unsigned bound, unsigned inner,
 	}
 	return i;
 }
+
+unsigned halving_interval(unsigned n, unsigned key)
+{
+	while (n) {
+		unsigned half = n / 2;
+		if (key > half)
+			n -= half + 1;
+		else
+			n = half;
+	}
+	return n;
+}
+
+unsigned bounded_interval(unsigned lo, unsigned hi, unsigned key)
+{
+	while (lo < hi) {
+		unsigned mid = lo + (hi - lo) / 2;
+		if (key < mid)
+			hi = mid;
+		else
+			lo = mid + 1;
+	}
+	return lo;
+}
+
+int interval_compare(unsigned key, unsigned mid);
+
+unsigned interval_with_comparator(unsigned lo, unsigned hi, unsigned key)
+{
+	while (lo < hi) {
+		unsigned mid = lo + (hi - lo) / 2;
+		if (interval_compare(key, mid) < 0)
+			hi = mid;
+		else
+			lo = mid + 1;
+	}
+	return lo;
+}
+
+unsigned interval_reused_only_on_exit(unsigned lo, unsigned hi,
+	unsigned inner, int stop)
+{
+	while (lo < hi) {
+		unsigned mid = lo + (hi - lo) / 2;
+		if (stop) {
+			while (lo < inner)
+				lo++;
+			return lo;
+		}
+		if (mid & 1)
+			hi = mid;
+		else
+			lo = mid + 1;
+	}
+	return lo;
+}

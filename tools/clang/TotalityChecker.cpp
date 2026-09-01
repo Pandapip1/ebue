@@ -637,6 +637,283 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
            !(Result.Outcomes & (FallWithoutProgress | BackWithoutProgress));
   }
 
+  enum class IntervalPatternKind { Halving, Bounds };
+
+  struct IntervalPattern {
+    IntervalPatternKind Kind;
+    const VarDecl *Low;
+    const VarDecl *High;
+    const VarDecl *Middle;
+    const DeclStmt *MiddleDeclaration;
+  };
+
+  struct IntervalFlow {
+    /* Bit N records paths with N=0 no update, N=1 one exact shrinking
+     * update, or N=2 an unrecognized/repeated update. */
+    unsigned FallMasks;
+    unsigned BackMasks;
+    bool Exits;
+    bool Invalid;
+  };
+
+  static unsigned combineIntervalMasks(unsigned First, unsigned Second) {
+    unsigned Result = 0;
+    for (unsigned A = 0; A != 3; ++A)
+      if (First & (1u << A))
+        for (unsigned B = 0; B != 3; ++B)
+          if (Second & (1u << B)) {
+            unsigned Combined = A == 2 || B == 2 || (A == 1 && B == 1)
+                                    ? 2
+                                    : A + B;
+            Result |= 1u << Combined;
+          }
+    return Result;
+  }
+
+  static IntervalFlow intervalSequence(IntervalFlow First,
+                                       IntervalFlow Second) {
+    if (First.Invalid || Second.Invalid)
+      return {0, 0, false, true};
+    unsigned Fall = combineIntervalMasks(First.FallMasks, Second.FallMasks);
+    unsigned Back = First.BackMasks |
+                    combineIntervalMasks(First.FallMasks, Second.BackMasks);
+    return {Fall, Back, First.Exits || (First.FallMasks && Second.Exits),
+            false};
+  }
+
+  static bool exactVariable(const Expr *Expression,
+                            const ValueDecl *Variable) {
+    return value(Expression) == Variable;
+  }
+
+  static bool exactAddOne(const Expr *Expression,
+                          const ValueDecl *Variable) {
+    const auto *Add = dyn_cast_or_null<BinaryOperator>(ignore(Expression));
+    return Add && Add->getOpcode() == BO_Add &&
+           ((exactVariable(Add->getLHS(), Variable) &&
+             unitInteger(Add->getRHS())) ||
+            (unitInteger(Add->getLHS()) &&
+             exactVariable(Add->getRHS(), Variable)));
+  }
+
+  static bool exactHalf(const Expr *Expression,
+                        const ValueDecl *Variable) {
+    const auto *Divide =
+        dyn_cast_or_null<BinaryOperator>(ignore(Expression));
+    const auto *Two = Divide ? dyn_cast_or_null<IntegerLiteral>(
+                                   ignore(Divide->getRHS()))
+                             : nullptr;
+    return Divide && Divide->getOpcode() == BO_Div && Two &&
+           Two->getValue() == 2 && exactVariable(Divide->getLHS(), Variable);
+  }
+
+  static bool exactMidpoint(const Expr *Expression, const ValueDecl *Low,
+                            const ValueDecl *High) {
+    const auto *Add = dyn_cast_or_null<BinaryOperator>(ignore(Expression));
+    if (!Add || Add->getOpcode() != BO_Add ||
+        !exactVariable(Add->getLHS(), Low))
+      return false;
+    const auto *Divide =
+        dyn_cast_or_null<BinaryOperator>(ignore(Add->getRHS()));
+    const auto *Difference = Divide ? dyn_cast_or_null<BinaryOperator>(
+                                          ignore(Divide->getLHS()))
+                                    : nullptr;
+    const auto *Two = Divide ? dyn_cast_or_null<IntegerLiteral>(
+                                   ignore(Divide->getRHS()))
+                             : nullptr;
+    return Divide && Divide->getOpcode() == BO_Div && Difference &&
+           Difference->getOpcode() == BO_Sub && Two &&
+           Two->getValue() == 2 &&
+           exactVariable(Difference->getLHS(), High) &&
+           exactVariable(Difference->getRHS(), Low);
+  }
+
+  static unsigned intervalMutation(const Stmt *Statement,
+                                   const IntervalPattern &Pattern) {
+    if (!Statement || Statement == Pattern.MiddleDeclaration)
+      return 0;
+    if (const auto *Expression = dyn_cast<Expr>(Statement)) {
+      const auto *Assignment =
+          dyn_cast_or_null<BinaryOperator>(ignore(Expression));
+      if (Assignment && Assignment->isAssignmentOp()) {
+        const ValueDecl *Target = value(Assignment->getLHS());
+        if (Pattern.Kind == IntervalPatternKind::Halving &&
+            Target == Pattern.High) {
+          if (Assignment->getOpcode() == BO_Assign &&
+              exactVariable(Assignment->getRHS(), Pattern.Middle))
+            return 1;
+          if (Assignment->getOpcode() == BO_SubAssign &&
+              exactAddOne(Assignment->getRHS(), Pattern.Middle))
+            return 1;
+          return 2;
+        }
+        if (Pattern.Kind == IntervalPatternKind::Bounds) {
+          if (Target == Pattern.High)
+            return Assignment->getOpcode() == BO_Assign &&
+                           exactVariable(Assignment->getRHS(), Pattern.Middle)
+                       ? 1
+                       : 2;
+          if (Target == Pattern.Low)
+            return Assignment->getOpcode() == BO_Assign &&
+                           exactAddOne(Assignment->getRHS(), Pattern.Middle)
+                       ? 1
+                       : 2;
+        }
+        if (Target == Pattern.Middle)
+          return 2;
+      }
+      const auto *Unary = dyn_cast_or_null<UnaryOperator>(ignore(Expression));
+      if (Unary && (Unary->isIncrementDecrementOp() ||
+                    Unary->getOpcode() == UO_AddrOf)) {
+        const ValueDecl *Target = value(Unary->getSubExpr());
+        if (Target == Pattern.Low || Target == Pattern.High ||
+            Target == Pattern.Middle)
+          return 2;
+      }
+    }
+    unsigned Result = 0;
+    for (const Stmt *Child : Statement->children()) {
+      unsigned ChildResult = intervalMutation(Child, Pattern);
+      if (ChildResult == 2 || (Result == 1 && ChildResult == 1))
+        return 2;
+      Result |= ChildResult;
+    }
+    return Result;
+  }
+
+  static IntervalFlow intervalFlow(const Stmt *Statement,
+                                   const IntervalPattern &Pattern) {
+    if (!Statement)
+      return {1u, 0, false, false};
+    if (containsAsm(Statement) ||
+        containsUnevaluatedOrEmbeddedControl(Statement) ||
+        containsConditionalExecution(Statement))
+      return {0, 0, false, true};
+    if (const auto *Compound = dyn_cast<CompoundStmt>(Statement)) {
+      IntervalFlow Result{1u, 0, false, false};
+      for (const Stmt *Child : Compound->body())
+        Result = intervalSequence(Result, intervalFlow(Child, Pattern));
+      return Result;
+    }
+    if (const auto *If = dyn_cast<IfStmt>(Statement)) {
+      IntervalFlow Prefix = intervalSequence(
+          intervalFlow(If->getInit(), Pattern),
+          intervalFlow(If->getConditionVariableDeclStmt(), Pattern));
+      Prefix = intervalSequence(Prefix,
+                                intervalFlow(If->getCond(), Pattern));
+      IntervalFlow Then = intervalFlow(If->getThen(), Pattern);
+      IntervalFlow Else = intervalFlow(If->getElse(), Pattern);
+      IntervalFlow Arms{Then.FallMasks | Else.FallMasks,
+                        Then.BackMasks | Else.BackMasks,
+                        Then.Exits || Else.Exits,
+                        Then.Invalid || Else.Invalid};
+      return intervalSequence(Prefix, Arms);
+    }
+    if (const auto *Label = dyn_cast<LabelStmt>(Statement))
+      return intervalFlow(Label->getSubStmt(), Pattern);
+    if (isa<ContinueStmt>(Statement))
+      return {0, 1u, false, false};
+    if (isa<BreakStmt>(Statement) || isa<ReturnStmt>(Statement))
+      return {0, 0, true, false};
+    if (isa<GotoStmt>(Statement) || isa<IndirectGotoStmt>(Statement) ||
+        isa<SwitchStmt>(Statement))
+      return {0, 0, false, true};
+    if (isa<ForStmt>(Statement) || isa<WhileStmt>(Statement) ||
+        isa<DoStmt>(Statement))
+      return {intervalMutation(Statement, Pattern) ? 1u << 2 : 1u,
+              0, false, false};
+    unsigned Mutation = intervalMutation(Statement, Pattern);
+    return {1u << Mutation, 0, false, false};
+  }
+
+  static const VarDecl *directInitializedVariable(
+      const CompoundStmt *Body, const DeclStmt *&Declaration,
+      const ValueDecl *First, const ValueDecl *Second = nullptr) {
+    const VarDecl *Result = nullptr;
+    Declaration = nullptr;
+    for (const Stmt *Child : Body->body()) {
+      const auto *Decls = dyn_cast<DeclStmt>(Child);
+      if (!Decls || !Decls->isSingleDecl())
+        continue;
+      for (const Decl *Item : Decls->decls()) {
+        const auto *Variable = dyn_cast<VarDecl>(Item);
+        if (!Variable || !Variable->getInit())
+          continue;
+        bool Matches = Second
+                           ? exactMidpoint(Variable->getInit(), First, Second)
+                           : exactHalf(Variable->getInit(), First);
+        if (!Matches)
+          continue;
+        if (Result)
+          return nullptr;
+        Result = Variable;
+        Declaration = Decls;
+      }
+    }
+    return Result;
+  }
+
+  bool branchCompleteIntervalDescent(const Expr *Condition,
+                                     const Stmt *Body) const {
+    /* For unsigned n>0, h=n/2 satisfies h<n and h+1<=n, so both
+     * n=h and n-=h+1 strictly decrease without wrapping.  For same-type
+     * unsigned lo<hi, d=hi-lo is representable and
+     * mid=lo+d/2 satisfies lo<=mid<hi; therefore hi=mid and lo=mid+1
+     * each strictly shrink hi-lo, and mid+1<=hi proves representability.
+     * intervalFlow additionally requires exactly one of those assignments
+     * on every backedge and discards arbitrary mutations only on paths
+     * which exit the loop first. */
+    const auto *Compound = dyn_cast_or_null<CompoundStmt>(Body);
+    if (!Condition || !Compound || !Current)
+      return false;
+    const Expr *PlainCondition = ignore(Condition);
+    const auto *Comparison = dyn_cast_or_null<BinaryOperator>(PlainCondition);
+    IntervalPattern Pattern{};
+    const DeclStmt *MiddleDeclaration = nullptr;
+    if (Comparison && Comparison->getOpcode() == BO_LT) {
+      const auto *Low = dyn_cast_or_null<VarDecl>(value(Comparison->getLHS()));
+      const auto *High = dyn_cast_or_null<VarDecl>(value(Comparison->getRHS()));
+      if (!Low || !High || Low == High ||
+          !Low->getType()->isUnsignedIntegerType() ||
+          Low->getType().getCanonicalType().getUnqualifiedType() !=
+              High->getType().getCanonicalType().getUnqualifiedType())
+        return false;
+      const VarDecl *Middle = directInitializedVariable(
+          Compound, MiddleDeclaration, Low, High);
+      if (!Middle)
+        return false;
+      Pattern = {IntervalPatternKind::Bounds, Low, High, Middle,
+                 MiddleDeclaration};
+    } else {
+      const auto *High = dyn_cast_or_null<VarDecl>(value(PlainCondition));
+      if (!High || !High->getType()->isUnsignedIntegerType() ||
+          !nonzeroWhen(Condition, High, true))
+        return false;
+      const VarDecl *Middle = directInitializedVariable(
+          Compound, MiddleDeclaration, High);
+      if (!Middle)
+        return false;
+      Pattern = {IntervalPatternKind::Halving, nullptr, High, Middle,
+                 MiddleDeclaration};
+    }
+    if (Pattern.Middle->getType().getCanonicalType().getUnqualifiedType() !=
+            Pattern.High->getType().getCanonicalType().getUnqualifiedType() ||
+        !(Pattern.Middle->hasLocalStorage()) ||
+        !(isa<ParmVarDecl>(Pattern.High) || Pattern.High->hasLocalStorage()) ||
+        (Pattern.Low && !(isa<ParmVarDecl>(Pattern.Low) ||
+                          Pattern.Low->hasLocalStorage())) ||
+        Pattern.Middle->getType().isVolatileQualified() ||
+        Pattern.High->getType().isVolatileQualified() ||
+        (Pattern.Low && Pattern.Low->getType().isVolatileQualified()) ||
+        addressTaken(Current->getBody(), Pattern.Middle) ||
+        addressTaken(Current->getBody(), Pattern.High) ||
+        (Pattern.Low && addressTaken(Current->getBody(), Pattern.Low)))
+      return false;
+    IntervalFlow Result = intervalFlow(Body, Pattern);
+    unsigned Backedges = Result.FallMasks | Result.BackMasks;
+    return !Result.Invalid && Backedges && Backedges == (1u << 1);
+  }
+
   enum RankMutationOutcome : unsigned {
     FallRankClean = 1,
     FallRankChanged = 2,
@@ -2162,7 +2439,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   }
 
   std::string loopProof(const Expr *Condition, const Expr *Increment,
-                        const Stmt *Body) const {
+                        const Stmt *Body, bool ConditionBeforeBody) const {
     if (constantFalse(Condition, Context))
       return "constant-false";
     /* Without an explicit total/pure call summary, a call made while
@@ -2170,6 +2447,9 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
      * mutate globally reachable rank or bound state. */
     if (containsCall(Condition))
       return "unproved";
+    if (ConditionBeforeBody && !Increment &&
+        branchCompleteIntervalDescent(Condition, Body))
+      return "strict-scalar-rank";
     /* `while (n--)` and `for (...; n-- > 0; ...)` perform their strict
      * descent in the condition, before every taken iteration.  The final
      * false test may itself wrap an unsigned n, but there is no following
@@ -2316,7 +2596,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     llvm::outs() << "L\t" << key(Current) << '\t'
                  << file(Statement->getBeginLoc()) << '\t'
                  << line(Statement->getBeginLoc()) << '\t' << Kind << '\t'
-                 << loopProof(Condition, Increment, Body) << '\t'
+                 << loopProof(Condition, Increment, Body, Kind != "do") << '\t'
                  << text(Statement) << '\n';
   }
 
