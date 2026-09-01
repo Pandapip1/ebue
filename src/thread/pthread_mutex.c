@@ -155,10 +155,9 @@ static int mutex_ready(pthread_mutex_t *mutex)
 
 __attribute__((ownership_constructs(pthread_mutex, 1),
   ownership_static(pthread_mutex, 1),
-  ownership_requires_handle(pthread_mutexattr, 2),
   ownership_adds_token(pthread_mutex_unlocked, 1)))
 int pthread_mutex_init(pthread_mutex_t *__restrict mutex,
-	const pthread_mutexattr_t *__restrict attr)
+	const pthread_mutexattr_t *__restrict attr handle(pthread_mutexattr))
 {
 	struct mutex_data *data;
 	const struct mutexattr_data *attributes = 0;
@@ -437,8 +436,8 @@ int pthread_mutex_consistent(pthread_mutex_t *mutex)
 	return error;
 }
 
-__attribute__((ownership_constructs(pthread_mutexattr, 1)))
-int pthread_mutexattr_init(pthread_mutexattr_t *attr)
+
+int pthread_mutexattr_init(pthread_mutexattr_t *attr construct(pthread_mutexattr))
 {
 	struct mutexattr_data *data;
 	if (!attr) return EINVAL;
@@ -453,16 +452,16 @@ int pthread_mutexattr_init(pthread_mutexattr_t *attr)
 	return 0;
 }
 
-__attribute__((ownership_destroys(pthread_mutexattr, 1)))
-int pthread_mutexattr_destroy(pthread_mutexattr_t *attr)
+
+int pthread_mutexattr_destroy(pthread_mutexattr_t *attr destroy(pthread_mutexattr))
 {
 	if (!attr || mutexattr_data(attr)->magic != MUTEXATTR_MAGIC) return EINVAL;
 	memset(attr, 0, sizeof *attr);
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_mutexattr, 1)))
-int pthread_mutexattr_getpshared(const pthread_mutexattr_t *__restrict attr,
+
+int pthread_mutexattr_getpshared(const pthread_mutexattr_t *__restrict attr handle(pthread_mutexattr),
 	int *__restrict output)
 {
 	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
@@ -471,8 +470,8 @@ int pthread_mutexattr_getpshared(const pthread_mutexattr_t *__restrict attr,
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_mutexattr, 1)))
-int pthread_mutexattr_gettype(const pthread_mutexattr_t *__restrict attr,
+
+int pthread_mutexattr_gettype(const pthread_mutexattr_t *__restrict attr handle(pthread_mutexattr),
 	int *__restrict output)
 {
 	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
@@ -481,8 +480,8 @@ int pthread_mutexattr_gettype(const pthread_mutexattr_t *__restrict attr,
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_mutexattr, 1)))
-int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *__restrict attr,
+
+int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *__restrict attr handle(pthread_mutexattr),
 	int *__restrict output)
 {
 	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
@@ -491,8 +490,8 @@ int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *__restrict attr,
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_mutexattr, 1)))
-int pthread_mutexattr_getprioceiling(const pthread_mutexattr_t *__restrict attr,
+
+int pthread_mutexattr_getprioceiling(const pthread_mutexattr_t *__restrict attr handle(pthread_mutexattr),
 	int *__restrict output)
 {
 	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
@@ -501,8 +500,8 @@ int pthread_mutexattr_getprioceiling(const pthread_mutexattr_t *__restrict attr,
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_mutexattr, 1)))
-int pthread_mutexattr_getrobust(const pthread_mutexattr_t *__restrict attr,
+
+int pthread_mutexattr_getrobust(const pthread_mutexattr_t *__restrict attr handle(pthread_mutexattr),
 	int *__restrict output)
 {
 	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
@@ -511,8 +510,8 @@ int pthread_mutexattr_getrobust(const pthread_mutexattr_t *__restrict attr,
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_mutexattr, 1)))
-int pthread_mutexattr_setpshared(pthread_mutexattr_t *attr, int value)
+
+int pthread_mutexattr_setpshared(pthread_mutexattr_t *attr handle(pthread_mutexattr), int value)
 {
 	if (!attr || mutexattr_data(attr)->magic != MUTEXATTR_MAGIC ||
 	    !valid_pshared(value)) return EINVAL;
@@ -520,8 +519,8 @@ int pthread_mutexattr_setpshared(pthread_mutexattr_t *attr, int value)
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_mutexattr, 1)))
-int pthread_mutexattr_settype(pthread_mutexattr_t *attr, int value)
+
+int pthread_mutexattr_settype(pthread_mutexattr_t *attr handle(pthread_mutexattr), int value)
 {
 	if (!attr || mutexattr_data(attr)->magic != MUTEXATTR_MAGIC ||
 	    !valid_type(value)) return EINVAL;
@@ -529,8 +528,8 @@ int pthread_mutexattr_settype(pthread_mutexattr_t *attr, int value)
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_mutexattr, 1)))
-int pthread_mutexattr_setprotocol(pthread_mutexattr_t *attr, int value)
+
+int pthread_mutexattr_setprotocol(pthread_mutexattr_t *attr handle(pthread_mutexattr), int value)
 {
 	if (!attr || mutexattr_data(attr)->magic != MUTEXATTR_MAGIC ||
 	    !valid_protocol(value)) return EINVAL;
@@ -538,8 +537,8 @@ int pthread_mutexattr_setprotocol(pthread_mutexattr_t *attr, int value)
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_mutexattr, 1)))
-int pthread_mutexattr_setprioceiling(pthread_mutexattr_t *attr, int value)
+
+int pthread_mutexattr_setprioceiling(pthread_mutexattr_t *attr handle(pthread_mutexattr), int value)
 {
 	if (!attr || mutexattr_data(attr)->magic != MUTEXATTR_MAGIC ||
 	    !valid_ceiling(value)) return EINVAL;
@@ -547,8 +546,8 @@ int pthread_mutexattr_setprioceiling(pthread_mutexattr_t *attr, int value)
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_mutexattr, 1)))
-int pthread_mutexattr_setrobust(pthread_mutexattr_t *attr, int value)
+
+int pthread_mutexattr_setrobust(pthread_mutexattr_t *attr handle(pthread_mutexattr), int value)
 {
 	if (!attr || mutexattr_data(attr)->magic != MUTEXATTR_MAGIC ||
 	    !valid_robust(value)) return EINVAL;

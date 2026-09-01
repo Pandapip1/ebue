@@ -95,10 +95,9 @@ static int cond_ready(pthread_cond_t *cond)
 }
 
 __attribute__((ownership_constructs(pthread_cond, 1),
-	ownership_static(pthread_cond, 1),
-	ownership_requires_handle(pthread_condattr, 2)))
+	ownership_static(pthread_cond, 1)))
 int pthread_cond_init(pthread_cond_t *__restrict cond,
-	const pthread_condattr_t *__restrict attr)
+	const pthread_condattr_t *__restrict attr handle(pthread_condattr))
 {
 	struct cond_data *data;
 	const struct condattr_data *attributes = 0;
@@ -326,8 +325,8 @@ int pthread_cond_broadcast(pthread_cond_t *cond)
 	return 0;
 }
 
-__attribute__((ownership_constructs(pthread_condattr, 1)))
-int pthread_condattr_init(pthread_condattr_t *attr)
+
+int pthread_condattr_init(pthread_condattr_t *attr construct(pthread_condattr))
 {
 	struct condattr_data *data;
 	if (!attr) return EINVAL;
@@ -339,16 +338,16 @@ int pthread_condattr_init(pthread_condattr_t *attr)
 	return 0;
 }
 
-__attribute__((ownership_destroys(pthread_condattr, 1)))
-int pthread_condattr_destroy(pthread_condattr_t *attr)
+
+int pthread_condattr_destroy(pthread_condattr_t *attr destroy(pthread_condattr))
 {
 	if (!attr || condattr_data(attr)->magic != CONDATTR_MAGIC) return EINVAL;
 	memset(attr, 0, sizeof *attr);
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_condattr, 1)))
-int pthread_condattr_getclock(const pthread_condattr_t *__restrict attr,
+
+int pthread_condattr_getclock(const pthread_condattr_t *__restrict attr handle(pthread_condattr),
 	clockid_t *__restrict clock)
 {
 	if (!attr || !clock || const_condattr_data(attr)->magic != CONDATTR_MAGIC)
@@ -357,8 +356,8 @@ int pthread_condattr_getclock(const pthread_condattr_t *__restrict attr,
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_condattr, 1)))
-int pthread_condattr_setclock(pthread_condattr_t *attr, clockid_t clock)
+
+int pthread_condattr_setclock(pthread_condattr_t *attr handle(pthread_condattr), clockid_t clock)
 {
 	if (!attr || condattr_data(attr)->magic != CONDATTR_MAGIC ||
 	    (clock != CLOCK_REALTIME && clock != CLOCK_MONOTONIC)) return EINVAL;
@@ -366,8 +365,8 @@ int pthread_condattr_setclock(pthread_condattr_t *attr, clockid_t clock)
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_condattr, 1)))
-int pthread_condattr_getpshared(const pthread_condattr_t *__restrict attr,
+
+int pthread_condattr_getpshared(const pthread_condattr_t *__restrict attr handle(pthread_condattr),
 	int *__restrict pshared)
 {
 	if (!attr || !pshared || const_condattr_data(attr)->magic != CONDATTR_MAGIC)
@@ -376,8 +375,8 @@ int pthread_condattr_getpshared(const pthread_condattr_t *__restrict attr,
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_condattr, 1)))
-int pthread_condattr_setpshared(pthread_condattr_t *attr, int pshared)
+
+int pthread_condattr_setpshared(pthread_condattr_t *attr handle(pthread_condattr), int pshared)
 {
 	if (!attr || condattr_data(attr)->magic != CONDATTR_MAGIC ||
 	    (pshared != PTHREAD_PROCESS_PRIVATE &&

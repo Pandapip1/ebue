@@ -302,10 +302,9 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 }
 
 __attribute__((ownership_constructs(pthread_rwlock, 1),
-	ownership_static(pthread_rwlock, 1),
-	ownership_requires_handle(pthread_rwlockattr, 2)))
+	ownership_static(pthread_rwlock, 1)))
 int pthread_rwlock_init(pthread_rwlock_t *__restrict lock,
-	const pthread_rwlockattr_t *__restrict attr)
+	const pthread_rwlockattr_t *__restrict attr handle(pthread_rwlockattr))
 {
 	struct rwlock_data *data;
 	const struct rwattr_data *attributes = 0;
@@ -413,8 +412,8 @@ int pthread_rwlock_unlock(pthread_rwlock_t *lock)
 	return error;
 }
 
-__attribute__((ownership_constructs(pthread_rwlockattr, 1)))
-int pthread_rwlockattr_init(pthread_rwlockattr_t *attr)
+
+int pthread_rwlockattr_init(pthread_rwlockattr_t *attr construct(pthread_rwlockattr))
 {
 	struct rwattr_data *data;
 	if (!attr) return EINVAL;
@@ -425,16 +424,16 @@ int pthread_rwlockattr_init(pthread_rwlockattr_t *attr)
 	return 0;
 }
 
-__attribute__((ownership_destroys(pthread_rwlockattr, 1)))
-int pthread_rwlockattr_destroy(pthread_rwlockattr_t *attr)
+
+int pthread_rwlockattr_destroy(pthread_rwlockattr_t *attr destroy(pthread_rwlockattr))
 {
 	if (!attr || rwattr_data(attr)->magic != RWATTR_MAGIC) return EINVAL;
 	memset(attr, 0, sizeof *attr);
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_rwlockattr, 1)))
-int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *__restrict attr,
+
+int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *__restrict attr handle(pthread_rwlockattr),
 	int *__restrict pshared)
 {
 	if (!attr || !pshared || const_rwattr_data(attr)->magic != RWATTR_MAGIC)
@@ -443,8 +442,8 @@ int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *__restrict attr,
 	return 0;
 }
 
-__attribute__((ownership_requires_handle(pthread_rwlockattr, 1)))
-int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *attr, int pshared)
+
+int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *attr handle(pthread_rwlockattr), int pshared)
 {
 	if (!attr || rwattr_data(attr)->magic != RWATTR_MAGIC ||
 	    (pshared != PTHREAD_PROCESS_PRIVATE &&
