@@ -65,7 +65,8 @@ static int parse_touch_t(const char *spec, struct timespec *out)
 	time_t t;
 
 	if (dot) {
-		if (strlen(dot + 1) != 2 || read_two_digits(dot + 1, &sec) < 0 || sec > 60)
+		if (!dot[1] || !dot[2] || dot[3] ||
+		    read_two_digits(dot + 1, &sec) < 0 || sec > 60)
 			return -1;
 	}
 
