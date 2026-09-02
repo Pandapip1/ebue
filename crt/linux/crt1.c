@@ -229,6 +229,7 @@ struct elf_phdr {
 	unsigned long p_align;
 };
 #endif
+#define PT_PHDR 6
 #define PT_TLS 7
 
 struct auxv_entry {
@@ -241,21 +242,59 @@ struct auxv_entry {
 #define AT_PHNUM 5
 
 /* Shared across all three arches: walk auxv for AT_PHDR/AT_PHENT/
- * AT_PHNUM, then the program header table itself, looking for PT_TLS.
- * Everything arch-specific (the TCB layout, where the module's data
- * sits relative to the thread pointer, and how the thread pointer
- * register itself gets set) lives in linux_setup_tls() below, per
- * arch -- this helper is pure ELF/auxv bookkeeping, identical logic
- * regardless of TLS "variant". See this same nonnull-vs-disclosed-
- * residual pattern this function inherits verbatim from its own
- * former single-arch body, previously inline in linux_setup_tls()
- * itself. */
-static struct elf_phdr *find_tls_phdr(long *auxv)
-    __attribute__((nonnull(1)));
-static struct elf_phdr *find_tls_phdr(long *auxv)
+ * AT_PHNUM, then the program header table itself, looking for PT_TLS
+ * (and PT_PHDR -- see *load_bias_out below). Everything arch-specific
+ * (the TCB layout, where the module's data sits relative to the
+ * thread pointer, and how the thread pointer register itself gets
+ * set) lives in linux_setup_tls() below, per arch -- this helper is
+ * pure ELF/auxv bookkeeping, identical logic regardless of TLS
+ * "variant".
+ *
+ * *load_bias_out is the piece this function used to get wrong (found
+ * for real: a PIE build of fuzz/linux_pilot_test_crt.c -- the same
+ * file this crt's own pilot script builds -static -no-pie, minus
+ * those two flags -- segfaults in memcpy() at startup, reading
+ * address 0x3fd60-ish, exactly this image's link-time PT_TLS
+ * p_vaddr with no bias applied, instead of the real runtime address
+ * some ASLR-random load base away). AT_PHDR ITSELF needs no fixing --
+ * the Linux kernel's own ELF auxiliary vector contract guarantees it
+ * is always the running image's real, already-mapped program headers
+ * address, PIE or not, exactly like this function's own prior
+ * comment already established -- so walking `phdr + i * phent` below
+ * to find a program header is unconditionally correct. What is NOT
+ * unconditionally correct is any p_vaddr field READ OUT OF one of
+ * those program headers (PT_TLS's below, most importantly): that is
+ * a LINK-TIME address baked into the file by the static linker, and
+ * for a non-PIE ET_EXEC binary it happens to equal the real runtime
+ * address (the kernel loads ET_EXEC at its link-time-fixed addresses,
+ * no bias at all) but for an ET_DYN PIE binary it does not -- the
+ * kernel (or, with a PT_INTERP present, the real dynamic linker that
+ * maps the main image on the kernel's behalf) picks a random load
+ * address, and every p_vaddr in the file needs that same random bias
+ * added before it is a real, dereferenceable pointer.
+ *
+ * The bias is computed the standard way real ELF loaders derive it
+ * (musl's own dynamic-linker startup, glibc's ld.so, FreeBSD's rtld,
+ * all independently reinvented here against the ELF spec rather than
+ * copied): PT_PHDR is the one program header type whose OWN p_vaddr
+ * describes the program header table's link-time address -- the
+ * exact same table AT_PHDR already gives the real runtime address
+ * of -- so `AT_PHDR - PT_PHDR->p_vaddr` is exactly the offset every
+ * OTHER p_vaddr in this same image needs added too. A linker always
+ * emits PT_PHDR for an ET_EXEC/ET_DYN image meant to be directly
+ * execve()'d (the only kind AT_PHDR is ever meaningful for in the
+ * first place), so this is not a fallback-only path; no PT_PHDR found
+ * (or no auxv at all) leaves *load_bias_out at 0, the same as this
+ * function's own prior unconditional behavior. */
+static struct elf_phdr *find_tls_phdr(long *auxv, unsigned long *load_bias_out)
+    __attribute__((nonnull(1, 2)));
+static struct elf_phdr *find_tls_phdr(long *auxv, unsigned long *load_bias_out)
 {
 	unsigned long phdr = 0, phent = 0, phnum = 0;
 	unsigned long i;
+	struct elf_phdr *tls = 0;
+
+	*load_bias_out = 0;
 
 	for (; auxv[0] != AT_NULL; auxv += 2) {
 		if (auxv[0] == AT_PHDR) phdr = (unsigned long)auxv[1];
@@ -281,9 +320,10 @@ static struct elf_phdr *find_tls_phdr(long *auxv)
 	 * auxv/sp themselves. */
 	for (i = 0; i < phnum; i++) {
 		struct elf_phdr *ph = (struct elf_phdr *)(phdr + i * phent);
-		if (ph->p_type == PT_TLS) return ph;
+		if (ph->p_type == PT_TLS) tls = ph;
+		else if (ph->p_type == PT_PHDR) *load_bias_out = phdr - (unsigned long)ph->p_vaddr;
 	}
-	return 0;
+	return tls;
 }
 
 #if defined(__aarch64__)
@@ -327,8 +367,9 @@ static struct elf_phdr *find_tls_phdr(long *auxv)
  * (no PT_TLS at all) that previously left it unset. */
 static void linux_setup_tls(long *auxv)
 {
-	struct elf_phdr *tls = find_tls_phdr(auxv);
-	unsigned long tls_vaddr = tls ? tls->p_vaddr : 0;
+	unsigned long load_bias;
+	struct elf_phdr *tls = find_tls_phdr(auxv, &load_bias);
+	unsigned long tls_vaddr = tls ? tls->p_vaddr + load_bias : 0;
 	unsigned long tls_filesz = tls ? tls->p_filesz : 0;
 	unsigned long tls_memsz = tls ? tls->p_memsz : 0;
 	unsigned long tcb_size, data_align, alloc_size;
@@ -432,7 +473,8 @@ static void linux_setup_tls(long *auxv)
  * build. Concretely deferred, not silently assumed to carry over. */
 static void linux_setup_tls(long *auxv)
 {
-	struct elf_phdr *tls = find_tls_phdr(auxv);
+	unsigned long load_bias;
+	struct elf_phdr *tls = find_tls_phdr(auxv, &load_bias);
 	unsigned long tls_size, data_align, tcb_size, alloc_size;
 	long mm;
 	unsigned char *base, *data, *tp;
@@ -492,7 +534,7 @@ static void linux_setup_tls(long *auxv)
 	                       * data block, not before it -- the defining
 	                       * difference from aarch64's layout above. */
 
-	memcpy(data, (void *)(unsigned long)tls->p_vaddr, tls->p_filesz);
+	memcpy(data, (void *)(unsigned long)(tls->p_vaddr + load_bias), tls->p_filesz);
 	memset(data + tls->p_filesz, 0, tls->p_memsz - tls->p_filesz);
 
 	*(unsigned char **)tp = tp; /* TCB self-pointer -- the one field

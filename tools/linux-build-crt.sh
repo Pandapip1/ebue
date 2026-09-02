@@ -23,14 +23,26 @@
 # project's OWN program-startup code (not the host's) gets argv/
 # environ/TLS/errno/fd 0-2/exit status all correct end to end.
 #
-# -no-pie matters beyond style: crt1.c's TLS setup reads AT_PHDR
-# straight out of auxv and treats it as an absolute, already-relocated
-# address (see linux_setup_tls()'s own comment) -- correct for a
-# non-PIE static binary, where the kernel loads the image at its
-# link-time addresses with no bias to account for. A PIE build would
-# need that bias computed first; out of scope for what this script
-# proves, so the link line simply asks for the format this crt is
-# written against.
+# -static -no-pie here is scope, not a correctness requirement any
+# more: crt1.c's TLS setup used to read a PT_TLS program header's own
+# p_vaddr as if it were already an absolute runtime address, which is
+# only true for a non-PIE ET_EXEC binary loaded at its link-time-fixed
+# addresses -- a real, reproduced bug (a PIE build of this very file,
+# minus these two flags, segfaulted in memcpy() at startup reading a
+# tiny, unmapped link-time address instead of the real ASLR-random
+# runtime one). find_tls_phdr() now also computes the image's real
+# load bias (AT_PHDR minus the PT_PHDR program header's own p_vaddr,
+# the same technique musl/glibc/FreeBSD's own loaders use) and every
+# p_vaddr this file reads out of a program header gets that bias
+# added before use, so a PIE build of the very same crt/link inputs
+# now works too -- see obj/bin/*.exe's own real build (no -static
+# -no-pie at all, see Makefile's obj/bin/%.exe pattern rule) for that
+# proof. This script keeps -static -no-pie anyway, unrelated to the
+# fix: it is still the simplest, smallest-moving-parts format for a
+# from-scratch pilot script whose only job is proving this crt's own
+# code (not a PIE build's worth of dynamic-linker/relocation
+# interaction, already covered by the real product build) gets argv/
+# environ/TLS/errno/fd 0-2/exit status right.
 #
 # Deliberately NOT `make all`: PLATFORM=linux's `make lib/libc.a`
 # builds the WHOLE library, including large swaths (src/math/x87.h's
