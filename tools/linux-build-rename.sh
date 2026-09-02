@@ -69,9 +69,28 @@ FILES="
 	src/unistd/linux/plat_fd.c
 	src/string/memcpy.c
 	src/internal/errno.c
+	src/malloc/crt_alloc.c
+	src/malloc/linux/plat_malloc.c
+	src/thread/linux/plat_thread.c
 	fuzz/linux_pilot_harness_fs.c
 	fuzz/linux_pilot_test_rename.c
 "
+# src/malloc/crt_alloc.c, src/malloc/linux/plat_malloc.c and
+# src/thread/linux/plat_thread.c -- the identical gap and identical fix
+# tools/linux-build-fs.sh's own comment already documents in full
+# (src/stat/chmod.c's fchmod() calls __free() on its EACCES retry path;
+# this test never calls fchmod() either, but src/stat/chmod.c is linked
+# here as a whole object, same shape as src/stdio/misc.c below).
+#
+# fuzz/linux_pilot_test_rename.c's own __find_program() stub was added
+# for the same reason its pre-existing __file_new()/__spawn() stubs
+# exist: src/stdio/misc.c's popen() (never called by this test, but
+# compiled in unconditionally alongside rename()/renameat()) calls the
+# real src/process/find_program.c's __find_program() to locate "sh" --
+# a whole PATH-search subsystem (malloc(), access(),
+# src/process/linux/plat_process.c's __plat_is_program()) well past
+# this pilot's own scope, so it is stubbed locally instead, matching
+# the file's own established pattern and comment.
 
 echo "$TAG: compiling ($CC, native ELF)..."
 objs=""

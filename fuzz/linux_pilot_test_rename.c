@@ -36,6 +36,23 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 	(void)path; (void)argv; (void)envp;
 	return -1;
 }
+/* popen()'s own real "sh" lookup (src/stdio/misc.c, added by "Add a
+ * real Linux implementation of system() and popen()" after this file
+ * was last touched -- a real, previously-hidden gap CI never reached).
+ * src/process/find_program.c's real __find_program() needs malloc(),
+ * access() and __plat_is_program() (src/process/linux/plat_process.c)
+ * -- a whole PATH-search subsystem well past this rename()/renameat()
+ * pilot's own scope to stand up just for a popen() call this test never
+ * makes. Same stand-in shape as __file_new()/__spawn() above: a NULL
+ * "not found" is honest here too (real __find_program() also returns
+ * NULL when nothing on PATH matches), and popen()'s own `if (!shell)
+ * pid = -1;` guard is what actually executes if this is ever reached
+ * at runtime, which it never is. */
+char *__find_program(const char *name, int use_path)
+{
+	(void)name; (void)use_path;
+	return 0;
+}
 
 static int failures;
 
