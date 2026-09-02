@@ -214,8 +214,44 @@ static int join(char *out withtok(writable_span(outcap)), size_t outcap,
 	return 0;
 }
 
+/* Total do_glob() invocations (this call plus every recursive one)
+ * that one top-level glob() call will perform before giving up as
+ * though it had run out of memory. Recursion depth here is already
+ * bounded by the pattern's own component count (the NOLINT below), but
+ * depth is not the axis that matters: a pattern of the shape
+ * "* /../* /../* /../..." (a wildcard immediately undone by a literal
+ * "..", repeated) revisits the SAME directory at the SAME depth every
+ * time, and each visit re-multiplies by however many entries that
+ * directory has, so the number of do_glob() CALLS is exponential in the
+ * number of repeats even though the directory tree involved is tiny and
+ * shallow -- two entries and one level was enough for
+ * fuzz/fuzz_wordexp.c to find a wordexp() call that ran for 26 seconds
+ * (test/posix-glob.c's test_wordexp_glob_alternation_bound reproduces
+ * it directly against do_glob()). The literal ".." arm costs one stat()
+ * and does not itself recurse into the meta branch's readdir loop, so
+ * it is not what is exponential; the repeated wildcard re-matches are.
+ *
+ * glibc's own glob() carries an equivalent GLOB_LIMIT protection for
+ * the identical reason -- a short, unremarkable-looking pattern must
+ * not be able to cost unbounded wall time against a real filesystem --
+ * and, like this one, reports it as GLOB_NOSPACE/ENOMEM rather than
+ * inventing a new failure mode: "out of budget" and "out of memory" are
+ * both just "this call cannot be completed with the resources this
+ * implementation is willing to spend on it", and wordexp.h has no
+ * WRDE_* code that means anything more specific than WRDE_NOSPACE
+ * either (emit_field()'s own comment on its glob() call records that).
+ *
+ * The ceiling is generous by the standard of any pattern a real caller
+ * writes by hand -- even a pattern that is nothing but wildcard
+ * components, several deep, against a wide, multi-level real tree
+ * stays several orders of magnitude below it -- while still keeping
+ * the worst case a small fraction of a second rather than tens of
+ * seconds. */
+#define GLOB_STEP_LIMIT ((size_t)1 << 14)
+
 /* Returns 0 (call handled, possibly zero matches added), 1 (GLOB_ABORTED
- * -- stop the whole scan), or -1 (GLOB_NOSPACE).
+ * -- stop the whole scan), or -1 (GLOB_NOSPACE, also returned once
+ * *steps exceeds GLOB_STEP_LIMIT -- see the constant's own comment).
  *
  * pat required: `*pat` is read unconditionally at entry (the leading-
  * slash skip loop). Every real call site agrees: glob()'s own initial
@@ -229,22 +265,28 @@ static int join(char *out withtok(writable_span(outcap)), size_t outcap,
  * sites, and prefix, though written through in several branches, is
  * only read back conditionally per-branch (never unconditionally at
  * entry the way pat is), so there is no single unconditional dereference
- * this attribute could describe for it. */
-// NOLINTNEXTLINE(misc-no-recursion) -- component expansion mirrors the pathname hierarchy and is pattern/path-depth bounded
+ * this attribute could describe for it. steps IS marked: `++*steps` at
+ * the top of the function dereferences it unconditionally, on every
+ * call, and both recursive call sites and glob()'s own initial call
+ * (its own comment) agree in passing the address of a real counter,
+ * never NULL. */
+// NOLINTNEXTLINE(misc-no-recursion) -- component expansion mirrors the pathname hierarchy and is pattern/path-depth bounded; total call count is separately bounded by GLOB_STEP_LIMIT
 static int do_glob(char *prefix withtok(readable_span(prefixcap)),
                     size_t prefixcap, size_t preflen, const char *pat, int flags,
-                    int (*errfunc)(const char *, int), struct pv *out)
-    __attribute__((nonnull(4)));
-// NOLINTNEXTLINE(misc-no-recursion) -- component expansion mirrors the pathname hierarchy and is pattern/path-depth bounded
+                    int (*errfunc)(const char *, int), struct pv *out, size_t *steps)
+    __attribute__((nonnull(4, 8)));
+// NOLINTNEXTLINE(misc-no-recursion) -- component expansion mirrors the pathname hierarchy and is pattern/path-depth bounded; total call count is separately bounded by GLOB_STEP_LIMIT
 static int do_glob(char *prefix withtok(readable_span(prefixcap)),
                     size_t prefixcap, size_t preflen, const char *pat, int flags,
-                    int (*errfunc)(const char *, int), struct pv *out)
+                    int (*errfunc)(const char *, int), struct pv *out, size_t *steps)
 {
 	const char *slash, *rest;
 	size_t seglen, newlen;
 	int meta, want_slash;
 	char newprefix[PATH_MAX];
 	if (preflen > prefixcap) return -1;
+
+	if (++*steps > GLOB_STEP_LIMIT) { errno = ENOMEM; return -1; }
 
 	while (*pat == '/') pat++;
 	if (!*pat) {
@@ -326,7 +368,7 @@ static int do_glob(char *prefix withtok(readable_span(prefixcap)),
 		if (rest) {
 			if (stat(newprefix, &st) != 0 || !S_ISDIR(st.st_mode)) return 0;
 			return do_glob(newprefix, sizeof newprefix, newlen, rest, flags,
-			               errfunc, out);
+			               errfunc, out, steps);
 		}
 		if (stat(newprefix, &st) != 0) return 0;
 		isdir = S_ISDIR(st.st_mode);
@@ -382,7 +424,7 @@ static int do_glob(char *prefix withtok(readable_span(prefixcap)),
 			if (rest) {
 				if (stat(newprefix, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
 				rc = do_glob(newprefix, sizeof newprefix, newlen, rest, flags,
-				             errfunc, out);
+				             errfunc, out, steps);
 				if (rc) break;
 			} else {
 				int isdir = 0;
@@ -454,7 +496,7 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
 {
 	struct pv out;
 	char prefix[PATH_MAX];
-	size_t preflen = 0, base;
+	size_t preflen = 0, base, steps = 0;
 	const char *pat = pattern;
 	int rc;
 
@@ -503,7 +545,7 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
 	 * legitimate exhausted case naming the root.  So the test is on the
 	 * caller's original pattern, not on pat. */
 	rc = *pattern ? do_glob(prefix, sizeof prefix, preflen, pat, flags,
-	                        errfunc, &out) : 0;
+	                        errfunc, &out, &steps) : 0;
 
 	if (rc == -1) {
 		/* Frees everything in out, including any entries kept alive
