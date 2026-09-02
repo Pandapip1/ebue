@@ -2629,7 +2629,9 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
                                  const Expr *Increment) const {
     if (!Rank.Variable->getType()->isPointerType() ||
         containsAsm(Condition) || containsAsm(Body) || containsAsm(Increment) ||
-        mutation(Condition, Rank) != Mutation::None)
+        mutation(Condition, Rank) != Mutation::None ||
+        hasPotentiallyReversingPointerStep(Body, Rank) ||
+        hasPotentiallyReversingPointerStep(Increment, Rank))
       return false;
     if (!isa<FieldDecl>(Rank.Variable))
       return true;
@@ -2641,6 +2643,30 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
            !mentionsFieldThroughOtherBase(Condition, Rank) &&
            !mentionsFieldThroughOtherBase(Body, Rank) &&
            !mentionsFieldThroughOtherBase(Increment, Rank);
+  }
+
+  bool hasPotentiallyReversingPointerStep(const Stmt *Statement,
+                                          const Progress &Rank) const {
+    if (!Statement)
+      return false;
+    if (const auto *Expression = dyn_cast<Expr>(Statement)) {
+      if (std::optional<Progress> Change = progress(Expression)) {
+        if (sameRank(*Change, Rank) && Change->DynamicStep) {
+          /* An unsigned delta is nonnegative.  A signed delta can reverse
+           * the syntactic +=/-= direction and cancel the selected pointer
+           * rank unless the closed-callsite summary proves it positive. */
+          if (!Change->GuardedStep ||
+              !Change->GuardedStep->getType()->isUnsignedIntegerType()) {
+            if (!admissibleProgress(*Change))
+              return true;
+          }
+        }
+      }
+    }
+    for (const Stmt *Child : Statement->children())
+      if (hasPotentiallyReversingPointerStep(Child, Rank))
+        return true;
+    return false;
   }
 
   bool signedFiniteDomainRank(const Progress &Rank,

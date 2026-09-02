@@ -2660,6 +2660,47 @@ const char *local_pointer_net_zero(const char *p, int keep_running)
 	return p;
 }
 
+const char *local_pointer_dynamic_cancellation(const char *p, int step,
+	int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		p++;
+		p += step;
+	}
+	return p;
+}
+
+const char *local_pointer_copied_dynamic_cancellation(const char *p,
+	int step, int keep_running)
+{
+	int copy = step;
+	while (keep_running) { /* totality-expect */
+		p++;
+		p += copy;
+	}
+	return p;
+}
+
+const char *local_pointer_dynamic_descent_cancellation(const char *p,
+	int step, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		p--;
+		p -= step;
+	}
+	return p;
+}
+
+const char *local_pointer_literal_cancellation(const char *p,
+	int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		p++;
+		p += -1;
+	}
+	return p;
+}
+
 const char *local_pointer_alternating(const char *p, int keep_running,
 	int reverse)
 {
