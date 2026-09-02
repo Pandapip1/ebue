@@ -37,7 +37,10 @@
 
 int wcscasecmp(const wchar_t *l, const wchar_t *r)
 {
-	for (; *l && *r && (*l == *r || towlower(*l) == towlower(*r)); l++, r++);
+	while (*l && *r && (*l == *r || towlower(*l) == towlower(*r))) {
+		l++;
+		r++;
+	}
 	return (int)towlower(*l) - (int)towlower(*r);
 }
 
@@ -45,7 +48,11 @@ int wcsncasecmp(const wchar_t *l, const wchar_t *r, size_t n)
 {
 	if (!n) return 0;
 	n--;
-	for (; *l && *r && n && (*l == *r || towlower(*l) == towlower(*r)); l++, r++, n--);
+	while (*l && *r && n && (*l == *r || towlower(*l) == towlower(*r))) {
+		l++;
+		r++;
+		n--;
+	}
 	return (int)towlower(*l) - (int)towlower(*r);
 }
 

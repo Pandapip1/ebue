@@ -5,6 +5,9 @@
 int strcmp(const char *l withtok(null_terminated),
 	const char *r withtok(null_terminated))
 {
-	for (; *l == *r && *l; l++, r++);
+	while (*l == *r && *l) {
+		l++;
+		r++;
+	}
 	return *(unsigned char *)l - *(unsigned char *)r;
 }

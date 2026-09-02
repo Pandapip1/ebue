@@ -14,7 +14,7 @@ char *strchrnul(const char *s withtok(null_terminated), int c)
 		__ownership_string_terminated(result);
 		return result;
 	}
-	for (; *s && *(unsigned char *)s != c; s++);
+	while (*s && *(unsigned char *)s != c) s++;
 	result = (char *)s;
 	__ownership_string_terminated(result);
 	return result;

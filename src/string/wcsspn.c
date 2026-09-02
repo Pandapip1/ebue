@@ -41,14 +41,14 @@ static int inset(const wchar_t *set, wchar_t c)
 size_t wcsspn(const wchar_t *s, const wchar_t *set)
 {
 	const wchar_t *a = s;
-	for (; *s && inset(set, *s); s++);
+	while (*s && inset(set, *s)) s++;
 	return (size_t)(s - a);
 }
 
 size_t wcscspn(const wchar_t *s, const wchar_t *set)
 {
 	const wchar_t *a = s;
-	for (; *s && !inset(set, *s); s++);
+	while (*s && !inset(set, *s)) s++;
 	return (size_t)(s - a);
 }
 

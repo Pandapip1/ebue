@@ -12,7 +12,9 @@ wchar_t *wcscpy(wchar_t *__restrict d, const wchar_t *__restrict s)
 	wchar_t *a = d;
 
 	while (*s) {
-		*d++ = *s++;
+		*d = *s;
+		d++;
+		s++;
 	}
 	*d = 0;
 	return a;

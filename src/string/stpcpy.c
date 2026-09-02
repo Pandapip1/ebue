@@ -9,7 +9,12 @@
 
 char *stpcpy(char *__restrict d, const char *__restrict s)
 {
-	for (; (*d = *s); s++, d++);
+	while (*s != '\0') {
+		*d = *s;
+		d++;
+		s++;
+	}
+	*d = '\0';
 	return d;
 }
 

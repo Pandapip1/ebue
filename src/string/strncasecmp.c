@@ -9,7 +9,11 @@ int strncasecmp(const char *_l, const char *_r, size_t n)
 	int lc, rc;
 	if (!n) return 0;
 	n--;
-	for (; *l && *r && n && (*l == *r || tolower(*l) == tolower(*r)); l++, r++, n--);
+	while (*l && *r && n && (*l == *r || tolower(*l) == tolower(*r))) {
+		l++;
+		r++;
+		n--;
+	}
 	lc = tolower(*l);
 	rc = tolower(*r);
 	if (lc < rc) return -1;
