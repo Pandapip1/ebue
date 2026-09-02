@@ -97,6 +97,16 @@ static void emit_offset(const struct pr_opts *o)
 	for (i = 0; i < o->offset; i++) putchar(' ');
 }
 
+/* emit_offset() immediately followed by a bare newline: every blank
+ * (no-content) output line in this file's header/trailer/filler
+ * machinery is exactly this pair, so it is folded into one call here
+ * instead of left for each call site to repeat. */
+static void emit_blank_line(const struct pr_opts *o)
+{
+	emit_offset(o);
+	putchar('\n');
+}
+
 static void emit_header(const struct pr_opts *o, const char *fname)
 {
 	char datebuf[64];
@@ -109,18 +119,18 @@ static void emit_header(const struct pr_opts *o, const char *fname)
 	}
 	else datebuf[0] = 0;
 
-	emit_offset(o); putchar('\n');
-	emit_offset(o); putchar('\n');
+	emit_blank_line(o);
+	emit_blank_line(o);
 	emit_offset(o); printf("%s %s Page %ld\n", datebuf, fname, g_page_no);
-	emit_offset(o); putchar('\n');
-	emit_offset(o); putchar('\n');
+	emit_blank_line(o);
+	emit_blank_line(o);
 }
 
 static void emit_trailer(const struct pr_opts *o)
 {
 	int i;
 	if (o->opt_F) { putchar('\f'); return; }
-	for (i = 0; i < 5; i++) { emit_offset(o); putchar('\n'); }
+	for (i = 0; i < 5; i++) emit_blank_line(o);
 }
 
 struct prstate {
@@ -167,8 +177,7 @@ static int page_body_fits(const struct prstate *st)
 static void end_page(struct prstate *st)
 {
 	while (st->lines_on_page < st->budget) {
-		emit_offset(st->o);
-		putchar('\n');
+		emit_blank_line(st->o);
 		st->lines_on_page++;
 	}
 	if (!st->o->opt_t) emit_trailer(st->o);
@@ -181,6 +190,13 @@ static int process_stream(const struct pr_opts *o, FILE *f, const char *fname)
 	char *line = 0;
 	size_t cap = 0;
 	int rc = 0, saved_errno = 0;
+
+	/* Every failure path below (increment_long(), start_page(),
+	 * page_body_fits()) does exactly this same three-step "record the
+	 * failure and unwind to the shared cleanup" on error -- folded into
+	 * one macro so a reader does not have to re-verify all three copies
+	 * are identical. */
+#define PR_FAIL() do { rc = -1; saved_errno = errno; goto done; } while (0)
 
 	st.o = o;
 	st.fname = fname;
@@ -197,27 +213,15 @@ static int process_stream(const struct pr_opts *o, FILE *f, const char *fname)
 		ssize_t n = getline(&line, &cap, f);
 		size_t len;
 		if (n < 0) break;
-		if (increment_long(&st.lineno, "line count") < 0) {
-			rc = -1;
-			saved_errno = errno;
-			goto done;
-		}
+		if (increment_long(&st.lineno, "line count") < 0) PR_FAIL();
 		len = (size_t)n;
 		if (len > 0 && line[len - 1] == '\n') { line[len - 1] = 0; len--; }
 
 		if (!st.page_open || st.lines_on_page >= st.budget) {
 			if (st.page_open) end_page(&st);
-			if (start_page(&st) < 0) {
-				rc = -1;
-				saved_errno = errno;
-				goto done;
-			}
+			if (start_page(&st) < 0) PR_FAIL();
 		}
-		if (page_body_fits(&st) < 0) {
-			rc = -1;
-			saved_errno = errno;
-			goto done;
-		}
+		if (page_body_fits(&st) < 0) PR_FAIL();
 
 		if (o->opt_n) printf("%*ld%c", o->n_width, st.lineno, o->n_sepchar);
 		emit_offset(o);
@@ -226,8 +230,7 @@ static int process_stream(const struct pr_opts *o, FILE *f, const char *fname)
 		st.lines_on_page++;
 
 		if (o->opt_d) {
-			emit_offset(o);
-			putchar('\n');
+			emit_blank_line(o);
 			st.lines_on_page++;
 		}
 	}
@@ -238,6 +241,7 @@ done:
 	if (st.page_open) end_page(&st);
 	if (rc < 0) errno = saved_errno;
 	return rc;
+#undef PR_FAIL
 }
 
 static int process_file(const struct pr_opts *o, const char *path)
