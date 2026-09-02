@@ -1,0 +1,187 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH PATCH 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+patch \- apply changes to files
+.SH SYNOPSIS
+.B patch
+.RB [ \-blNR ]
+.RB [ \-c | \-e | \-n | \-u ]
+.RI [ \-d " dir" ]
+.RI [ \-D " define" ]
+.RI [ \-i " patchfile" ]
+.RI [ \-o " outfile" ]
+.RI [ \-p " num" ]
+.RI [ \-r " rejectfile" ]
+.RI [ file ]
+.SH DESCRIPTION
+.B patch
+reads a difference report (a
+.RI \(lq diff \(rq
+listing) and applies it to
+.IR file ,
+or to a file named within the difference report itself. All four
+difference formats
+.B diff
+can produce are recognized and applied: normal, unified
+.RI ( \-u ),
+copied context
+.RI ( \-c ),
+and
+.B ed
+scripts
+.RI ( \-e ).
+When none of
+.BR \-c ", " \-e ", " \-n ", or " \-u
+is given, the format is detected automatically by scanning the patch
+input for a recognizable header.
+.PP
+For the normal, unified, and context formats, each hunk is located by
+first trying the line number it recorded (adjusted by the net effect
+of hunks already applied earlier in the same file), then searching
+outward from that position through the rest of the file for matching
+context; a hunk is never matched against content an earlier hunk in
+the same run already consumed. A hunk whose old content cannot be
+found anywhere is compared against its own new content at the expected
+location: if that already matches, the hunk is treated as already
+applied (see
+.B \-N
+below); otherwise it is written to the reject file. An
+.B ed
+script carries no context at all, so its commands are applied directly
+by line number with no searching.
+.SH OPTIONS
+.TP
+.B \-b
+Before modifying a file in place, save a copy of its original content
+as
+.IR file .orig.
+Has no effect when
+.B \-o
+is also given, since the target file is never modified in that case.
+.TP
+.BR \-c ", " \-e ", " \-n ", " \-u
+Force the patch input to be interpreted as copied context, ed script,
+normal, or unified format, respectively, instead of auto-detecting
+it. Giving more than one of these is a usage error.
+.TP
+.BI \-d " dir"
+Change to
+.I dir
+before applying the patch. The patch input itself (from
+.B \-i
+or standard input) is fully read before changing directory, so its
+own pathname resolves relative to the original working directory;
+every other pathname (the
+.I file
+operand,
+.BR \-o ", " \-r ,
+and any filename recorded in the patch) resolves relative to
+.IR dir .
+.TP
+.BI \-D " define"
+Instead of unconditionally applying each hunk, wrap the result in
+C preprocessor conditionals on the name
+.IR define :
+a hunk that is a pure addition is wrapped in
+\(lq#ifdef \fIdefine\fR\(rq \(lq#endif\(rq,
+a pure deletion in
+\(lq#ifndef \fIdefine\fR\(rq \(lq#endif\(rq,
+and a hunk that both deletes and adds is wrapped so the old text is
+kept under
+\(lq#ifndef \fIdefine\fR\(rq
+and the new text is added under
+\(lq#else\(rq.
+Refused together with
+.B \-e
+(an ed script never records the text it deletes, so there is no old
+text available for the
+.B #ifndef
+branch).
+.TP
+.BI \-i " patchfile"
+Read the patch from
+.I patchfile
+instead of standard input.
+.TP
+.B \-l
+When matching a hunk's context or old-content lines against the
+target file, treat any run of blank characters in the patch as
+matching any run of blank characters in the file. This affects
+matching only: every byte actually written to the output \(em
+context lines, and old-line text wrapped by
+.B \-D
+\(em is always copied from the target file's own literal bytes, never
+rewritten to the patch's own whitespace.
+.TP
+.B \-N
+Treat a hunk whose new content is already present at the expected
+location as a successful no-op instead of rejecting it. Without
+.BR \-N ,
+an already-applied hunk is rejected exactly like a genuine mismatch
+(written to the reject file, exit status 1).
+.TP
+.BI \-o " outfile"
+Write the patched result to
+.I outfile
+instead of modifying the target file in place; the target file itself
+is never modified in this case, and
+.B \-b
+has no effect. If the patch input contains hunks for more than one
+file and an explicit
+.I file
+operand is also given, every hunk from every section is applied, in
+stream order, to that one operand file as a single combined pass.
+.TP
+.BI \-p " num"
+Strip the leading
+.I num
+slash-separated components from each pathname recorded in the patch
+before using it to select the target file. Stripping more components
+than a pathname has leaves just its basename.
+.TP
+.B \-R
+Assume the patch was generated with the old and new files swapped,
+and apply it in reverse. Refused together with
+.B \-e
+for the same reason as
+.BR \-D .
+.TP
+.BI \-r " rejectfile"
+Write rejected hunks to
+.I rejectfile
+instead of the default,
+.IR outfile .rej
+(or
+.IR file .rej
+when modifying in place).
+.SH OPERANDS
+.TP
+.I file
+The file to patch. Required when the patch is in normal or
+.B ed
+format, since neither carries a filename of its own. When the patch is
+in context or unified format and no
+.I file
+operand is given, the target file is chosen from the patch's own
+recorded old/new filenames: the old name is used if a file by that
+name already exists (after any
+.B \-p
+stripping), otherwise the new name is used.
+.SH EXIT STATUS
+.TP
+.B 0
+Every hunk in the patch was applied successfully.
+.TP
+.B 1
+One or more hunks could not be applied and were written to the reject
+file.
+.TP
+.B 2
+A usage error or an I/O error occurred (the patch input could not be
+read or parsed, a file could not be opened, changed into, read, or
+written, or an option combination was refused).
+.SH SEE ALSO
+.BR diff (1),
+.BR ed (1),
+.BR m4 (1)

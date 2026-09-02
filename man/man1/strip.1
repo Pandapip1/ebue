@@ -1,0 +1,107 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH STRIP 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+strip \- remove unnecessary information from an object file
+.SH SYNOPSIS
+.B strip
+.RI [ \-o " strip_file" ]
+.I file
+.SH DESCRIPTION
+.B strip
+removes symbol-table and debugging information from
+.IR file ,
+modifying it in place, when doing so can be proven safe; otherwise
+.I file
+is left byte-for-byte unchanged. Removal is never guaranteed to
+happen \(em only that, if it happens, nothing needed to load or run
+the file is disturbed.
+.PP
+Both ELF64 and PE object files are recognized, by their leading magic
+bytes; any other file is refused with a diagnostic and neither read
+further nor modified.
+.SS "ELF64 objects"
+Only
+.B ET_EXEC
+and
+.B ET_DYN
+files (an executable or a shared/position-independent object) with a
+program header table are considered; a relocatable
+.RB ( ET_REL )
+object, or a file with no program headers, is left unchanged, since a
+later link step may still need its symbol table. A section is a
+candidate for removal only if its name is one of
+.BR .symtab ", " .strtab ", " .symtab_shndx ", " .comment ","
+.BR .gnu_debuglink ", " .gnu_debugdata ","
+or begins with
+.BR .debug_ ,
+it carries no
+.B SHF_ALLOC
+flag (nothing a loader maps into memory), and its file content lies
+entirely at or beyond the highest offset any program header actually
+covers. The
+.BR .dynsym / .dynstr
+tables, and anything else a loaded segment might depend on, are never
+removed. If any allocated section is found to lie at or beyond that
+same offset boundary \(em meaning the "everything loaded lives below
+this point" assumption does not hold for this particular file \(em the
+entire strip is aborted and the file is left unchanged, rather than
+risk a partial, unsafe rewrite. A section that would otherwise be
+removed is kept instead if some other kept section still refers to it
+by index, so removal never leaves a dangling reference.
+.SS "PE objects"
+Support is narrower and more conservative than for ELF, since this
+build has no way to verify a stripped PE binary still runs correctly.
+Two independent changes are made, each individually:
+.IP \(bu 4
+The legacy COFF symbol table is removed, but only when its byte range
+\(em the fixed-size symbol records followed by a string table whose own
+first four bytes give its total size \(em reaches exactly the end of
+the file. If it does not reach exactly the end of the file, the
+symbol table is left alone entirely.
+.IP \(bu 4
+The Debug Data Directory entry in the optional header, if present, is
+zeroed. This clears a pointer/size pair inside the already-loaded
+header region only; no section, RVA, or table elsewhere in the file
+is moved or resized.
+.PP
+No PE section is ever removed (including an actual
+.B .debug$
+COFF section, if present) \(em doing so would require re-deriving
+every relative virtual address that follows it, which cannot be
+verified without a way to execute the result. The PE checksum field
+is left stale after either change; ordinary loading does not validate
+it.
+.SH OPTIONS
+.TP
+.BI \-o " strip_file"
+Write the result to
+.I strip_file
+instead of modifying
+.I file
+in place. The output's permission bits are set to match
+.IR file 's,
+regardless of the current umask, since a stripped file is very often
+still meant to be run as a program.
+.SH OPERANDS
+.TP
+.I file
+The pathname of the object file to strip. Exactly one is accepted.
+.SH EXIT STATUS
+.TP
+.B 0
+Processing completed, whether or not anything was actually removed.
+.TP
+.B 1
+.I file
+could not be opened, read, or was not a regular file; the result
+could not be written; or
+.I file
+was not a recognized ELF or PE object file.
+.TP
+.B 2
+A usage error occurred: an invalid option, a missing operand, or more
+than one operand.
+.SH SEE ALSO
+.BR nm (1),
+.BR ar (1)

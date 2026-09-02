@@ -1,0 +1,102 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH NM 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+nm \- print name list (symbol table) of object files
+.SH SYNOPSIS
+.B nm
+.RB [ \-gpuv ]
+.RI [ file ...]
+.SH DESCRIPTION
+.B nm
+prints the symbol table of each
+.I file
+operand, one symbol per line, in the form
+\(lq\fIvalue type name\fR\(rq.
+.I value
+is 16 lowercase hexadecimal digits, zero-filled, or 16 spaces for an
+undefined symbol.
+.I type
+is a single letter: uppercase for a global or weak symbol, lowercase
+for a local one.
+.RS
+.nf
+A          absolute
+B, b       uninitialized data (bss)
+C          common
+D, d       initialized data
+N          a non\-loaded (e.g. debug) section
+R, r       read\-only data
+T, t       text (code)
+U          undefined (always uppercase)
+V, W, w    weak
+I, i       GNU indirect function
+.fi
+.RE
+.PP
+Only ELF64, little-endian object files are read; a file with any other
+format is refused with a diagnostic. Neither PE/COFF object files nor
+archives are supported: an archive operand (recognized by its
+.RB \(lq !<arch>\en \(rq
+magic) is refused with a diagnostic rather than treated as an object
+file or walked for its members.
+.PP
+A symbol table entry with no name, a
+.B STT_FILE
+entry (a compilation-unit filename record), and an AArch64/ARM
+assembler-generated mapping symbol (named
+.RB \(lq $x \(rq ,
+.RB \(lq $d \(rq ,
+.RB \(lq $a \(rq ,
+or
+.RB \(lq $t \(rq ,
+optionally followed by
+.RB \(lq . \(rq
+and a disambiguator) are never printed.
+.SH OPTIONS
+.TP
+.B \-g
+Print only external (global or weak) symbols; local symbols are
+omitted.
+.TP
+.B \-p
+Do not sort the output; print symbols in the object file's own
+symbol-table order.
+.TP
+.B \-u
+Print only undefined symbols.
+.TP
+.B \-v
+Sort output by symbol value (address) instead of by name. Every
+undefined (or weak-undefined) symbol sorts before every symbol with a
+real value, regardless of address; among symbols with a real value,
+ties are broken by name. Has no effect together with
+.BR \-p ,
+which disables sorting entirely.
+.SH OPERANDS
+.TP
+.I file
+A pathname of an object file. With no operands, a file named
+.B a.out
+is read. With more than one operand, each file's symbols are preceded
+by a
+.RI \(lq file :\(rq
+header line.
+.SH APPLICATION USAGE
+The default sort by name is a plain byte-wise comparison of the raw
+symbol name, not locale-collated.
+.SH EXIT STATUS
+.TP
+.B 0
+Every operand was read and its symbols printed successfully.
+.TP
+.B 1
+An operand could not be opened, was not a recognized ELF64
+little-endian object file, was an archive, or had no symbol table.
+.TP
+.B 2
+A usage error occurred: an invalid option was given.
+.SH SEE ALSO
+.BR ar (1),
+.BR strip (1),
+.BR file (1)

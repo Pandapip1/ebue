@@ -1,0 +1,184 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH PAX 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+pax \- portable archive interchange
+.SH SYNOPSIS
+.B pax
+.RB [ \-cv ]
+.RI [ \-f " archive" ]
+.RI [ pattern ...]
+.br
+.B pax \-r
+.RB [ \-cdkuv ]
+.RI [ \-f " archive" ]
+.RI [ pattern ...]
+.br
+.B pax \-w
+.RB [ \-dv ]
+.RI [ \-f " archive" ]
+.RI [ \-x " format" ]
+.RI [ file ...]
+.br
+.B pax \-r \-w
+.RB [ \-dkuv ]
+.RI [ file ...]
+.I directory
+.SH DESCRIPTION
+.B pax
+reads and writes file archives and, in copy mode, copies whole
+directory trees, in one of four modes selected by
+.BR \-r " and " \-w :
+.TP
+.I list mode
+(neither \fB\-r\fR nor \fB\-w\fR given) Write the name of each archive
+member matching a
+.I pattern
+operand (or every member, with none given) to standard output.
+.TP
+.I read mode
+(\fB\-r\fR given) Extract each archive member matching a
+.I pattern
+operand (or every member) into the current directory hierarchy.
+.TP
+.I write mode
+(\fB\-w\fR given) Write each
+.I file
+operand (recursing into directories) to a newly created archive.
+.TP
+.I copy mode
+(both \fB\-r\fR and \fB\-w\fR given) Copy each
+.I file
+operand (recursing into directories) directly into
+.IR directory ,
+without creating an archive at all.
+.PP
+Two archive formats are supported: ustar (the default for write mode)
+and the octet-oriented ("odc") variant of cpio, selected with
+.BR "\-x cpio" .
+Both are auto-detected on read, regardless of which format wrote
+them. The pax interchange format's own extended-header records (used
+by other implementations to carry pathnames, sizes, or timestamps too
+large for a plain ustar or cpio field) are not implemented; a member
+that would require one is refused with a diagnostic at write time
+rather than silently truncated, and
+.RB \(lq "\-x pax" \(rq
+itself is refused as an unimplemented format.
+.SH OPTIONS
+.TP
+.BR \-r ", " \-w
+Select read, write, or (both together) copy mode, as described above.
+.TP
+.BI \-f " archive"
+The archive's pathname. In list or read mode, defaults to standard
+input; in write mode, defaults to standard output. Ignored in copy
+mode, which has no archive.
+.TP
+.BI \-x " format"
+In write mode, selects the output archive format:
+.B ustar
+(the default) or
+.BR cpio .
+Any other value, including
+.BR pax ,
+is refused.
+.TP
+.B \-v
+Verbose. In read, write, and copy mode, writes the pathname of each
+file processed to standard error as it is processed. In list mode,
+produces an
+.B ls
+\-l\-style listing (type, mode, size, date, name, and, for a symbolic
+link, its target) instead of a bare name.
+.TP
+.B \-d
+For a directory named directly on the command line as a
+.I file
+operand (write and copy mode), archive or copy only the directory
+entry itself, not its contents.
+.TP
+.B \-k
+In read or copy mode, never overwrite a file that already exists at
+the destination; the corresponding archive member is skipped instead.
+.TP
+.B \-u
+In read or copy mode, skip restoring a member whose recorded
+modification time is not newer than an existing file already at the
+destination.
+.TP
+.B \-c
+In list or read mode, match every member
+.I except
+those matched by a
+.I pattern
+operand, instead of only those matched by one.
+.SH OPERANDS
+.TP
+.I pattern
+A shell glob pattern selecting archive members by name, for list and
+read mode. A pattern containing none of
+.RB \(lq * \(rq ,
+.RB \(lq ? \(rq ,
+or
+.RB \(lq [ \(rq
+additionally matches as a directory-prefix: a plain pattern
+.RB \(lq usr \(rq
+selects both a member literally named
+.B usr
+and every member whose name begins
+.RB \(lq usr/ \(rq .
+With no
+.I pattern
+operands, every member matches.
+.TP
+.I file
+A pathname to archive or copy (write and copy mode); a directory
+operand is recursed into unless
+.B \-d
+is given. With no
+.I file
+operands in write mode, a list of pathnames, one per line, is read
+from standard input instead.
+.TP
+.I directory
+The destination directory for copy mode; required, and must already
+exist.
+.SH APPLICATION USAGE
+On extraction (read or copy mode), a member pathname that is absolute
+or contains a
+.RB \(lq .. \(rq
+path component is refused with a diagnostic and skipped, rather than
+allowed to write outside the destination \(em a safety check beyond
+what the format itself requires.
+.PP
+File ownership (user and group) is never restored on extraction: this
+platform has no real multi-user ownership model, so there is nothing
+meaningful to restore. Permission bits are restored as archived,
+subject to the usual umask; modification time is restored via a
+timestamp update after a regular file's data is written. Hard links
+are never detected while walking
+.I file
+operands in write or copy mode (every source file is archived or
+copied as an independent full copy, regardless of how many names it
+has); on read, a ustar hard-link member is honored by linking to its
+already-extracted target, but cpio's own hard-link convention is not
+recognized and round-trips as independent copies instead. A FIFO,
+character, block, or socket file encountered while walking a
+.I file
+operand is refused with a diagnostic and skipped; extracting a FIFO or
+device-special member fails on this platform, which has no real
+backing for either.
+.SH EXIT STATUS
+.TP
+.B 0
+Every operand was processed successfully.
+.TP
+.B 1
+An error occurred: an invalid or unimplemented option, a missing or
+unreadable archive, a refused or failed member, or a failure while
+walking or writing a
+.I file
+operand.
+.SH SEE ALSO
+.BR ar (1),
+.BR ls (1)
