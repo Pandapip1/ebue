@@ -281,6 +281,52 @@ int __plat_unlink(int dirfd, const char *path, int isdir)
 }
 
 /* ======================================================================
+ * gethostname.c: moved verbatim from src/unistd/gethostname.c's own
+ * front door -- no behaviour change, only location (see plat_unistd.h's
+ * own comment: NT has no kernel notion of a hostname at all, so
+ * COMPUTERNAME -- the calling process's own environment -- is the only
+ * oracle a plain ntdll-only build has for one).
+ * ====================================================================== */
+
+void __plat_hostname(char *buf, size_t bufsz)
+{
+	const char *h = getenv("COMPUTERNAME");
+	size_t n;
+	if (!h) h = "localhost";
+	n = strlen(h);
+	if (!bufsz) return;
+	if (n >= bufsz) n = bufsz - 1;
+	memcpy(buf, h, n);
+	buf[n] = '\0';
+}
+
+/* ======================================================================
+ * getcwd.c: moved verbatim from src/unistd/getcwd.c's own front door --
+ * no behaviour change, only location (see plat_unistd.h's own comment).
+ * getcwd returns the DOS form, C:\dir, with backslashes turned into
+ * forward slashes so that programs that split paths on '/' (which is
+ * most of them) keep working.  A trailing slash is removed except at a
+ * drive root.
+ * ====================================================================== */
+
+ssize_t __plat_getcwd(char *buf, size_t bufsz)
+{
+	WCHAR w[4096];
+	ULONG n;
+	size_t i;
+	int r;
+
+	n = RtlGetCurrentDirectory_U(sizeof w, w);
+	if (!n || n > sizeof w) { errno = ERANGE; return -1; }
+	n /= sizeof(WCHAR);
+	for (i = 0; i < n; i++) if (w[i] == '\\') w[i] = '/';
+	if (n > 3 && w[n-1] == '/') n--;
+	r = __utf16_to_utf8_buf(w, n, buf, bufsz);
+	if (r < 0) return -1;
+	return r;
+}
+
+/* ======================================================================
  * chdir.c
  *
  * __plat_chdir() absorbed everything src/unistd/chdir.c's own chdir()

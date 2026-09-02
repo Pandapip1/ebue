@@ -147,9 +147,13 @@ WRAPCC_TCC = $(CC)
 # ntdll.def only means anything for the NT platform (it lists ntdll's own
 # exports, for -lntdll to link against) -- a platform=linux `all` has no
 # use for it and no NT ntlibc-tcc wrapper either (ALL_TOOLS wraps a
-# win32-targeting tcc specifically).  ntdll.def's absence also matters
-# for `all`'s own recipe list below: SH_EXE links -lntdll unconditionally,
-# so `all` only chases it on the platform that can satisfy that.
+# win32-targeting tcc specifically).  `all`'s own recipe list below still
+# only chases $(SH_EXE)/$(BIN_EXES) on PLATFORM=nt: not because they fail
+# to link there any more (PROG_LIBS/PROG_CRT, further down, make both
+# link cleanly against a real PLATFORM=linux libc.a too -- see that
+# variable's own comment), but because `all`'s PLATFORM=nt branch also
+# chases install-check's wine-only tooling, which platform=linux simply
+# has no equivalent of yet.
 #
 # Must come after -include config.mak, not before: ifeq is a parse-time
 # directive, evaluated against whatever $(PLATFORM) is AT THAT LINE, and
@@ -211,8 +215,11 @@ endif
 # process group, so make never runs its own cleanup).
 .DELETE_ON_ERROR:
 
-# sh(1p), the test binaries and install-check all link -lntdll (or
-# probe wine/PE-only tooling), so `all` only chases them on PLATFORM=nt;
+# sh(1p), the test binaries and install-check all build against a real
+# program link now (PROG_LIBS/PROG_CRT link cleanly under PLATFORM=linux
+# too -- `make obj/sh/sh.exe` works there directly), but install-check
+# itself still probes wine/PE-only tooling that platform=linux has no
+# equivalent of, so `all` only chases the whole group on PLATFORM=nt;
 # platform=linux's `all` stops at the library + crt objects themselves
 # (ALL_LIBS above already omits DEF_FILES/ALL_TOOLS the same way) --
 # see the Makefile PLAT_GLOBS comment and configure's --platform flag.
@@ -421,7 +428,7 @@ obj/sh:
 	mkdir -p $@
 
 $(SH_EXE): $(SH_SRCS) $(srcdir)/src/sh/sh.h $(ALL_LIBS) | obj/sh
-	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ lib/crt1.o $(SH_SRCS) -Llib -lc -lntdll
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ $(PROG_CRT) $(SH_SRCS) -Llib $(PROG_LIBS)
 
 sh: $(SH_EXE)
 
@@ -439,7 +446,7 @@ obj/bin:
 # gets the *library's* consumer environment, not CFLAGS_ALL's
 # -D_NTLIBC_INTERNAL -Isrc/internal one; see that rule's own comment).
 obj/bin/%.exe: $(srcdir)/bin/%.c $(ALL_LIBS) | obj/bin
-	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ lib/crt1.o $< -Llib -lc -lntdll
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ $(PROG_CRT) $< -Llib $(PROG_LIBS)
 
 .PHONY: sh install-progs
 
@@ -536,23 +543,24 @@ TEST_DEPFLAGS = -MMD -MF $(@:.exe=.d)
 
 # -lntdll is an NT-only import library (see ALL_LIBS' own PLATFORM=nt/
 # else split above -- nothing ever builds a PLATFORM=linux lib/
-# libntdll.a). Every existing consumer of the pattern rule below was,
-# until test/posix-dl-linux.c, always built under PLATFORM=nt and run
+# libntdll.a). Every real-program link in this Makefile (this pattern
+# rule, $(SH_EXE), obj/bin/%.exe) was, until test/posix-dl-linux.c and
+# this getcwd()/sh.exe fix, always built under PLATFORM=nt and run
 # under Wine (`check`'s and `test-exes`' own TEST_EXES, both driven by
 # TEST_SRCS -- see the PLATFORM=nt-only branch of `all`, above, for the
-# same asymmetry), so this rule's own hardcoded -lntdll was never
-# exercised on any other platform before now. TESTPROG_LIBS threads
-# that same PLATFORM split through this one rule, minimally, rather
-# than hardcoding an NT-only import library into a pattern rule a
-# Linux-only test now also needs to match cleanly (an explicit unknown-
-# library link error, not a silent skip, is exactly what would happen
-# without this: `make obj/test/posix-dl-linux.exe` under PLATFORM=linux
-# would fail with "cannot find -lntdll" otherwise).
+# same asymmetry), so their hardcoded -lntdll was never exercised on
+# any other platform before now. PROG_LIBS/PROG_CRT thread that same
+# PLATFORM split through every real-program link, minimally, rather
+# than hardcoding an NT-only import library into rules a Linux build
+# now also needs to match cleanly (an explicit unknown-library link
+# error, not a silent skip, is exactly what would happen without this:
+# `make obj/test/posix-dl-linux.exe` or `make obj/sh/sh.exe` under
+# PLATFORM=linux would fail with "cannot find -lntdll" otherwise).
 ifeq ($(PLATFORM),nt)
-TESTPROG_LIBS = -lc -lntdll
-TESTPROG_CRT = lib/crt1.o
+PROG_LIBS = -lc -lntdll
+PROG_CRT = lib/crt1.o
 else
-TESTPROG_LIBS = -lc
+PROG_LIBS = -lc
 # PLATFORM=linux's own crt is two objects, not one: crt/linux/$(ARCH)/
 # start.S's real _start (sets up the stack, finds argc/argv/envp/auxv,
 # calls __linux_start_main) is a SEPARATE object from crt/linux/crt1.c's
@@ -565,8 +573,13 @@ TESTPROG_LIBS = -lc
 # error -- caught here, not by inspection, the first time this pattern
 # rule was ever actually exercised under PLATFORM=linux (test/posix-dl-
 # linux.c). Matches tools/linux-build-dlfcn.sh's own link line exactly.
-TESTPROG_CRT = lib/start.o lib/crt1.o
+PROG_CRT = lib/start.o lib/crt1.o
 endif
+# Old names, kept as aliases: some comments/tooling elsewhere in this
+# tree still say "TESTPROG_*"; PROG_LIBS/PROG_CRT is the same value,
+# just no longer test-only now that $(SH_EXE)/obj/bin/%.exe use it too.
+TESTPROG_LIBS = $(PROG_LIBS)
+TESTPROG_CRT = $(PROG_CRT)
 
 obj/test/%.exe: $(srcdir)/test/%.c $(ALL_LIBS) | obj/test
 	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) $(TEST_DEPFLAGS) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ $(TESTPROG_CRT) $< -Llib $(TESTPROG_LIBS)

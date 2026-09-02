@@ -130,6 +130,42 @@ long __plat_phys_pages(void);
  * (AT_FDCWD for the current directory). */
 int __plat_unlink(int dirfd, const char *path, int isdir);
 
+/* ---- src/unistd/gethostname.c ------------------------------------------- */
+
+/* Fill `buf` (NUL-terminated, up to bufsz bytes; does nothing if bufsz
+ * is 0) with this system's own hostname, the way this backend actually
+ * knows it: NT has no kernel concept of one at all, so its own answer is
+ * the calling process's own COMPUTERNAME environment variable (or
+ * "localhost" if unset/unusable) -- the only oracle a plain ntdll-only
+ * build has for this; Linux's own uname(2) syscall answers this
+ * directly and correctly, kernel-side, with no environment indirection
+ * needed at all (the same call src/misc/linux/plat_misc.c's
+ * __plat_uname() already makes for the identical field -- see that
+ * function's own comment for the raw struct new_utsname layout this one
+ * duplicates locally, matching every other Linux backend's own
+ * per-file syscall-number copies in this tree). Never fails --
+ * gethostname.html's own contract has no error for "the name is
+ * unknown", only for a `name` argument the front door (src/unistd/
+ * gethostname.c) already validates before calling here. */
+void __plat_hostname(char *buf, size_t bufsz);
+
+/* ---- src/unistd/getcwd.c ---------------------------------------------------- */
+
+/* getcwd(): fill `buf` (a caller-owned buffer of at least `bufsz` bytes)
+ * with the process's current working directory, already in this
+ * library's POSIX-facing form -- UTF-8, forward slashes, NUL-terminated,
+ * no trailing slash except at a root -- so the front door (src/unistd/
+ * getcwd.c) never has to know how a backend actually names its own
+ * current directory. Returns the length written, NOT counting the NUL
+ * (matching strlen() of the result, and the length the front door's own
+ * malloc-when-buf-is-NULL/ERANGE math is written against), or -1 with
+ * errno set (ERANGE if `bufsz` was too small to hold the result plus its
+ * NUL, same as getcwd(3)'s own [ERANGE]) on failure. The front door
+ * handles the __VFS_ROOT/__VFS_DEV overlay cases itself (portable
+ * bookkeeping, see chdir.c's own comment on why that stays there) and
+ * only calls this for a real, native directory. */
+ssize_t __plat_getcwd(char *buf, size_t bufsz);
+
 /* ---- src/unistd/chdir.c ---------------------------------------------------- */
 
 /* chdir(): set the process's current directory to `path` (UTF-8, POSIX

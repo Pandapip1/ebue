@@ -16,6 +16,8 @@
 // NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include <string.h>
+#include <stdio.h>
+#include <unistd.h>
 #include <sys/resource.h>
 #include "libc.h"
 #include "plat_misc.h"
@@ -195,6 +197,111 @@ void __plat_job_apply_limits(rlim_t nproc_cur, rlim_t cpu_cur, rlim_t as_cur, rl
 		eli.ProcessMemoryLimit = (SIZE_T)lim;
 	}
 	NtSetInformationJobObject(h, JobObjectExtendedLimitInformation, &eli, sizeof eli);
+}
+
+/* ======================================================================
+ * uname.c: moved verbatim from src/misc/uname.c's own front door -- no
+ * behaviour change, only location (see plat_misc.h's own comment and
+ * uname.c's own header comment for exactly what each field reports and
+ * why: every field is something NT genuinely knows, nothing invented).
+ * ====================================================================== */
+
+/* HKLM\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName,
+ * value "ComputerName" -- the registry location this node's real name
+ * lives at, independent of any process's own environment.  Returns 0
+ * and fills `out` (NUL-terminated, up to outsz bytes) on success, -1 on
+ * any failure (key missing, value missing, wrong type, NtOpenKey/
+ * NtQueryValueKey not implemented by the ntdll underneath) -- every
+ * failure is treated identically by the one caller, __plat_uname()
+ * below, which falls back to gethostname()'s env-based answer rather
+ * than failing outright. */
+static int nt_registry_computername(char *out, size_t outsz)
+{
+	static const WCHAR keypath[] =
+		L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\"
+		L"ComputerName\\ActiveComputerName";
+	static const WCHAR valuename[] = L"ComputerName";
+	UNICODE_STRING key_us, value_us;
+	OBJECT_ATTRIBUTES oa;
+	HANDLE khandle;
+	NTSTATUS st;
+	/* KEY_VALUE_PARTIAL_INFORMATION's Data[1] is a placeholder for a
+	 * variable-length trailer; this buffer holds the header plus up to
+	 * 256 bytes of value data, generously past any real computer name
+	 * (NetBIOS caps it at 15 characters; DNS-style names in this key
+	 * have been measured no longer than 63). */
+	unsigned char buf[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + 256];
+	PKEY_VALUE_PARTIAL_INFORMATION info = (PKEY_VALUE_PARTIAL_INFORMATION)buf;
+	ULONG result_len = 0;
+	int n;
+
+	RtlInitUnicodeString(&key_us, keypath);
+	RtlInitUnicodeString(&value_us, valuename);
+	InitializeObjectAttributes(&oa, &key_us, OBJ_CASE_INSENSITIVE, 0, 0);
+
+	st = NtOpenKey(&khandle, KEY_QUERY_VALUE, &oa);
+	if (!NT_SUCCESS(st)) return -1;
+
+	st = NtQueryValueKey(khandle, &value_us, KeyValuePartialInformation,
+	    info, sizeof buf, &result_len);
+	NtClose(khandle);
+	if (!NT_SUCCESS(st)) return -1;
+	/* REG_SZ == 1: the type this value has always been measured to be
+	 * (GetComputerNameW() itself expects the same); anything else is
+	 * not this library's job to reinterpret. */
+	if (info->Type != 1 || info->DataLength < sizeof(WCHAR)) return -1;
+
+	n = __utf16_to_utf8_buf((const WCHAR *)info->Data,
+	    info->DataLength / sizeof(WCHAR), out, outsz);
+	if (n < 0) return -1;
+	/* The registry value is not guaranteed NUL-terminated within
+	 * DataLength (RtlInitUnicodeString-style APIs never require it);
+	 * __utf16_to_utf8_buf converts exactly the code units named above
+	 * and does not add a terminator of its own if the input carried a
+	 * trailing NUL WCHAR already counted in DataLength -- strip it here
+	 * so out is a clean C string either way. */
+	if (n > 0 && out[n - 1] == '\0') n--;
+	if ((size_t)n < outsz) out[n] = '\0';
+	else if (outsz) out[outsz - 1] = '\0';
+	return 0;
+}
+
+int __plat_uname(struct utsname *u)
+{
+	RTL_OSVERSIONINFOW vi;
+	int n;
+
+	memset(&vi, 0, sizeof vi);
+	vi.dwOSVersionInfoSize = sizeof vi;
+	RtlGetVersion(&vi);   /* NTSTATUS return is documented always-success */
+
+	strcpy(u->sysname, "Windows_NT");
+
+	if (nt_registry_computername(u->nodename, sizeof u->nodename) < 0) {
+		/* Degraded, not the primary path: see nt_registry_computername()'s
+		 * own banner for when this is reached. */
+		if (gethostname(u->nodename, sizeof u->nodename) < 0)
+			strcpy(u->nodename, "localhost");
+	}
+
+	n = snprintf(u->release, sizeof u->release, "%lu.%lu",
+	    (unsigned long)vi.dwMajorVersion, (unsigned long)vi.dwMinorVersion);
+	if (n < 0) return -1;
+	if ((size_t)n >= sizeof u->release) { errno = EOVERFLOW; return -1; }
+	n = snprintf(u->version, sizeof u->version, "Build %lu",
+	    (unsigned long)vi.dwBuildNumber);
+	if (n < 0) return -1;
+	if ((size_t)n >= sizeof u->version) { errno = EOVERFLOW; return -1; }
+
+#if defined(__x86_64__)
+	strcpy(u->machine, "x86_64");
+#elif defined(__i386__)
+	strcpy(u->machine, "i686");
+#else
+	strcpy(u->machine, "unknown");
+#endif
+
+	return 0;
 }
 
 // NOLINTEND(misc-include-cleaner)
