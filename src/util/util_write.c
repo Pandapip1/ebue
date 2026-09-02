@@ -102,7 +102,7 @@ int __util_write_main(int argc, char **argv)
 	const char *user, *ttyop;
 	struct passwd *pw;
 	struct term_ident t;
-	int fd, wfd, opened_real;
+	int fd, wfd, opened_real, status = 0;
 	time_t now;
 	char *timestr;
 	char tbuf[64];
@@ -165,15 +165,15 @@ int __util_write_main(int argc, char **argv)
 
 	if (send_all(wfd, banner, strlen(banner)) != 0) {
 		__util_diagf("write: %s\n", strerror(errno));
-		if (opened_real) close(wfd);
-		return 1;
+		status = 1;
+		goto out;
 	}
 
 	while (fgets(line, sizeof line, stdin)) {
 		if (send_all(wfd, line, strlen(line)) != 0) {
 			__util_diagf("write: %s\n", strerror(errno));
-			if (opened_real) close(wfd);
-			return 1;
+			status = 1;
+			goto out;
 		}
 	}
 
@@ -181,6 +181,7 @@ int __util_write_main(int argc, char **argv)
 	                            * exhausted either way, nothing left to
 	                            * usefully retry against */
 
+out:
 	if (opened_real) close(wfd);
-	return 0;
+	return status;
 }
