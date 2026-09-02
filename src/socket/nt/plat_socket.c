@@ -40,13 +40,17 @@
  * shared with test/posix-socket-ea.c, which re-parses it on hosts with
  * no working \Device\Afd at all.  Only the actual NtCreateFile and the
  * OBJECT_ATTRIBUTES/UNICODE_STRING it needs live here. */
-int __afd_open(HANDLE *out)
+int __afd_open(HANDLE *out, int socktype)
 {
 	/* The shape is read once and passed to both calls, so that the
 	 * buffer's declared size and its contents cannot come from two
 	 * different answers.  __afd_open_shape() is cached and constant
 	 * for the process, so this is belt-and-braces -- but a size/shape
-	 * mismatch here would be a heap overflow, not a wrong packet. */
+	 * mismatch here would be a heap overflow, not a wrong packet.
+	 * `socktype` (SOCK_STREAM or SOCK_DGRAM) has no such hazard --
+	 * __afd_open_ea_size_for() does not depend on it at all (see
+	 * afd.h) -- but is threaded through the same way for the same
+	 * reason: one value, read once, handed to both calls below. */
 	int shape = __afd_open_shape();
 	unsigned long ea_size = __afd_open_ea_size_for(shape);
 	char *buf;
@@ -58,7 +62,7 @@ int __afd_open(HANDLE *out)
 
 	buf = malloc(ea_size);
 	if (!buf) { errno = ENOMEM; return -1; }
-	__afd_build_open_ea_for(shape, buf);
+	__afd_build_open_ea_for(shape, socktype, buf);
 
 	/* \Device\Afd\Endpoint (dllmain.c's DevName; confirmed independently
 	 * by leftarcode's reverse-engineering series -- see afd.h banner). */
@@ -148,12 +152,14 @@ ssize_t __plat_sock_recv(__plat_handle_t h, void *buf, size_t len, int flags) //
 
 /* socket(): open a fresh AFD endpoint.  __afd_open() (above) already IS
  * the entire body socket()'s front door used to run before this move --
- * this is a thin __plat_handle_t-shaped wrapper over it, not new logic. */
-int __plat_socket_open(__plat_handle_t *out)
+ * this is a thin __plat_handle_t-shaped wrapper over it, not new logic.
+ * `type` (SOCK_STREAM or SOCK_DGRAM) is passed straight through -- see
+ * plat_socket.h's banner for why this parameter exists. */
+int __plat_socket_open(__plat_handle_t *out, int type)
 {
 	HANDLE h = 0;
 
-	if (__afd_open(&h) < 0) return -1;
+	if (__afd_open(&h, type) < 0) return -1;
 	*out = h;
 	return 0;
 }
@@ -295,7 +301,12 @@ int __plat_socket_accept(__plat_handle_t h, struct sockaddr *addr, socklen_t *le
 		return -1;
 	}
 
-	if (__afd_open(&newh) < 0) return -1;
+	/* SOCK_STREAM: accept() (src/socket/accept.c) is refused entirely
+	 * on a SOCK_DGRAM socket before this backend is ever reached (the
+	 * front door's __SOCK_ST_LISTENING check can never be set on one,
+	 * since listen.c refuses it too), so the accepted connection here
+	 * is always a stream endpoint. */
+	if (__afd_open(&newh, SOCK_STREAM) < 0) return -1;
 
 	ad.UseSAN = 0;
 	ad.SequenceNumber = recvd.SequenceNumber;
@@ -405,6 +416,53 @@ int __plat_socket_shutdown(__plat_handle_t h, int how)
 	st = __afd_ioctl(h, IOCTL_AFD_DISCONNECT, &di, sizeof(di), 0, 0, 0);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
+}
+
+/* getsockopt(SO_SNDBUF)/getsockopt(SO_RCVBUF): see plat_socket.h's
+ * banner for why this backend answers with a fixed constant instead of
+ * a real AFD query.  IOCTL_AFD_GET_INFO's AFD_INFO structure (phnt
+ * ntafd.h: AFD_INFO, with AfdInformationClass values including
+ * AFD_INFO_SEND_BUFFER_SIZE/AFD_INFO_RECEIVE_BUFFER_SIZE) is the real
+ * mechanism ReactOS's WSPGetSockOpt uses for these two options -- but
+ * unlike every other ioctl this file issues, its request/reply layout
+ * has not been independently cross-checked against a second source the
+ * way afd.h's socket-creation banner insists on for everything else
+ * here, so it is not used.  8192 is not measured: it is a plausible,
+ * round, POSIX-legal (getsockopt.html requires no more than "the size
+ * of the buffer" be reported, and this is a value a caller can act on:
+ * non-zero, finite, small enough that a fixture deliberately queuing
+ * more data than one buffer's worth reliably overflows it) stand-in,
+ * chosen so setup_aio() (third_party/ltp's aio_test.h) gets an answer
+ * instead of ENOPROTOOPT and can proceed to size its own messages
+ * against it -- exactly the role SO_ERROR's fixed "always 0" already
+ * plays a few functions up this file's own sibling, sockopt.c. */
+#define __NT_SOCKBUF_STANDIN 8192
+
+int __plat_socket_getsndbuf(__plat_handle_t h)
+{
+	(void)h;
+	return __NT_SOCKBUF_STANDIN;
+}
+
+int __plat_socket_getrcvbuf(__plat_handle_t h)
+{
+	(void)h;
+	return __NT_SOCKBUF_STANDIN;
+}
+
+/* socketpair(): AFD has no native socketpair primitive -- an endpoint
+ * is always opened via __afd_open() and separately bound/connected, so
+ * there is nothing for this backend to do but say so.  ENOSYS tells
+ * src/socket/socketpair.c to fall back to its own bind()/connect()
+ * construction (a loopback TCP listener+accept for SOCK_STREAM, a
+ * loopback UDP pair for SOCK_DGRAM), exactly as it already did before
+ * this function existed. */
+int __plat_socketpair(int type, __plat_handle_t out[2])
+{
+	(void)type;
+	(void)out;
+	errno = ENOSYS;
+	return -1;
 }
 
 // NOLINTEND(misc-include-cleaner)

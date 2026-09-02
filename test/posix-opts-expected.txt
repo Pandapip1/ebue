@@ -40,16 +40,38 @@
 # case-specific), so the 12 PASS conversions rest on clean compile/link
 # evidence only, not on an independent Wine run of the built .exe files.
 #
-# COUNTS PASS=1492 BUG=0 UNIMPL=3 NA=112 FLAKY=3
+# 2026-09-01, SOCK_DGRAM: the 7 NA rows reading "suite prerequisite is
+# unavailable: cancellation fixture requires socketpair(AF_UNIX,
+# SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram
+# sockets" (aio_cancel/2-1..7-1.c, lio_listio/2-1.c) predated real
+# SOCK_DGRAM support -- <sys/socket.h>, src/socket/socket.c,
+# src/socket/socketpair.c, both src/socket/{linux,nt}/plat_socket.c.
+# Their shared fixture (third_party/ltp's aio_test.h setup_aio()) now
+# runs its real assertions instead of being skipped, so they were
+# removed and now resolve via the wildcard PASS row -- like the 12
+# conversions above, this rests on the strongest evidence obtainable in
+# this sandbox, not an independent Wine run of the wine/x86_64 profile
+# these rows themselves target: this session's Wine is confirmed broken
+# (not merely absent, per this repo's own tooling notes), so verification
+# instead built and ran the literal third_party/ltp source for all 7
+# cases against a native-Linux ntlibc build (aarch64-linux, real
+# socketpair(2)/getsockopt(2) syscalls) -- all 7 compiled, linked, and
+# printed their own "Test PASSED"/"...PASSED" line on repeated clean
+# runs, with the real, kernel-enforced datagram flow control the
+# fixture's blocking-write assertions depend on (an early loopback-UDP
+# construction was tried first and rejected: real UDP does not couple a
+# sender's buffer to whether its peer is reading, so writes returned
+# EMSGSIZE instead of blocking -- see src/internal/plat_socket.h's
+# __plat_socketpair() banner). The NT backend (\Device\Udp, by analogy
+# to \Device\Tcp -- src/internal/afd.h's AFD_TRANSPORT_UDP comment) was
+# not independently exercised the same way; it compiles cleanly against
+# x86_64-win32-tcc but its runtime behaviour under the wine/x86_64
+# profile these rows select remains unverified in this sandbox.
+#
+# COUNTS PASS=1499 BUG=0 UNIMPL=3 NA=105 FLAKY=3
 # (whole-suite totals once the wildcard default below is applied to every
 # real case tools/posix-opts.py discovers -- not a count of rows in this
-# file, which lists only the 118 explicit exceptions plus the wildcard.)
-aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
-aio_cancel/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
-aio_cancel/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
-aio_cancel/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
-aio_cancel/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
-aio_cancel/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
+# file, which lists only the 111 explicit exceptions plus the wildcard.)
 aio_error/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	baseline disagreed across repeated runs after AIO implementation: PASS when EINPROGRESS was observed and UNRESOLVED when all 128 small writes completed before the probe. Re-reviewed src/thread/aio.c: a single persistent worker thread (aio_worker()) drains requests[] in FIFO order (next_queued()) while submit() enqueues all 128 aio_write() calls back to back; the queue lock and completion handshake (finish_locked(), wake_waiters_locked()) are correct on inspection -- no missing lock or lost wakeup found -- so which of the 128 the checking loop still finds QUEUED/RUNNING is a genuine race between the submitting thread and the worker thread, resolved only by host scheduling, the same load-sensitivity class as the CLOCK_BOUND cases. Could not re-run: this sandbox's Wine cannot execute x86_64 PE binaries (stock aarch64 Wine only ships aarch64-windows support and fails every PE load with STATUS_NOT_SUPPORTED; an x86_64-linux Wine run under qemu-user's ELF emulation instead crashes inside Wine's own PE loader trying to reserve its guest address space), so no fresh pass/fail ratio was collected here and the CI-observed split above is unconfirmed but unchallenged
 aio_read/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNTESTED because prioritized I/O is not supported; asynchronous I/O itself is implemented
 aio_return/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite check is self-contradictory: after probing an invalid aiocb it expects aio_error on a different completed request to return EINVAL
@@ -76,7 +98,6 @@ fork/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	pthread.h no long
 fork/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the test requires an external gencat utility to generate its message catalog
 kill/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED, not load noise: the case returns PTS_UNRESOLVED from its own setuid(1) privilege-drop guard at 2-2.c:58, reached unconditionally after a kill(999999, 0) ESRCH check that is itself timing-independent, and setuid() now refuses every id but this platform's single identity, so it cannot resolve on any box, quiet or loaded. A PASS or FAIL here means setuid() stopped refusing: re-adjudicate this row, do not retry it
 kill/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED, not load noise: the case returns PTS_UNRESOLVED from its own setuid(1) privilege-drop guard at 3-1.c:26, its first statement, before any test work runs, and setuid() now refuses every id but this platform's single identity, so it cannot resolve on any box, quiet or loaded. A PASS or FAIL here means setuid() stopped refusing: re-adjudicate this row, do not retry it
-lio_listio/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
 mlock/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- mlock.html's [EPERM] names "appropriate privilege", which XBD leaves implementation-defined; the specific mechanism this case probes (RLIMIT_MEMLOCK soft limit + CAP_IPC_LOCK) is a Linux capability model, and the case's own comment scopes it explicitly: "(Linux 2.6.9 and later)". This platform's mlock() is a real, working NtLockVirtualMemory() call bounded by NT's own working-set quota, not by RLIMIT_MEMLOCK -- src/misc/resource.c does not tie the two together, so setrlimit(RLIMIT_MEMLOCK, 0) changes nothing this mlock() consults, and the call genuinely succeeds. Not reclassified for convenience: the case is asserting a Linux-specific privilege mechanism this platform has no equivalent of, not a POSIX base requirement mlock() fails to meet
 mlock/speculative/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- mlock.html's [EPERM] names "appropriate privilege", which XBD leaves implementation-defined; the specific mechanism this case probes (RLIMIT_MEMLOCK soft limit + CAP_IPC_LOCK) is a Linux capability model, and the case's own comment scopes it explicitly: "(Linux 2.6.9 and later)". This platform's mlock() is a real, working NtLockVirtualMemory() call bounded by NT's own working-set quota, not by RLIMIT_MEMLOCK -- src/misc/resource.c does not tie the two together, so setrlimit(RLIMIT_MEMLOCK, 0) changes nothing this mlock() consults, and the call genuinely succeeds. Not reclassified for convenience: the case is asserting a Linux-specific privilege mechanism this platform has no equivalent of, not a POSIX base requirement mlock() fails to meet
 mlockall/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- may-fail privilege probe built after mlockall() implementation but returned UNRESOLVED because mlockall(MCL_CURRENT) succeeded. As with mlock/12-1, POSIX leaves the appropriate privilege implementation-defined; this case specifically tries to manufacture its denial through a Unix uid transition and RLIMIT_MEMLOCK=0, while ntlibc has one fixed NT identity and mlockall() is bounded by NtLockVirtualMemory's working-set quota rather than src/misc/resource.c's non-enforceable RLIMIT_MEMLOCK. It therefore does not test a base mlockall() requirement on this platform

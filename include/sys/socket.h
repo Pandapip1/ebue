@@ -11,21 +11,24 @@
  * per-function pages this project's function bodies (src/socket/ (every .c there))
  * cite individually.
  *
- * Scope, per test/networking-audit.md and this header's own task:
- * AF_INET with SOCK_STREAM only.  UDP (SOCK_DGRAM's actual use and
- * everything that is only meaningful on it -- sendmsg()/recvmsg()'s
- * ancillary data, sendto()/recvfrom() used to pick a per-datagram
- * destination/source rather than a connected stream's fixed peer),
- * AF_INET6 sockets, general AF_UNIX pathname sockets, and sockatmark()
- * are all staged for later work (networking-audit.md sec 6, stages
- * 4-6) and are deliberately *not declared* here -- this project's own
- * standing rule (see test/posix-sysmisc.c's file banner) is that a
- * declared-but-undefined symbol is a latent link-error bug, not a
- * lesser form of "not implemented yet", so nothing is declared before
- * it has a body.  The SOCK_, AF_, SO_ and MSG_ constants are all
- * defined regardless (free, and needed so e.g. `socket(AF_INET6, ...)`
- * compiles and fails at runtime with EAFNOSUPPORT rather than at
- * compile time).
+ * Scope, per test/networking-audit.md and this header's own task,
+ * updated for SOCK_DGRAM (2026-09-01): AF_INET with SOCK_STREAM (TCP),
+ * AF_INET with SOCK_DGRAM (UDP), and an anonymous (never
+ * pathname-bound) AF_UNIX with SOCK_DGRAM reached only through
+ * socket()/socketpair() -- see src/socket/socket.c and
+ * src/socket/socketpair.c.  General AF_UNIX pathname sockets (a
+ * sockaddr_un, a real filesystem or abstract name) remain out of scope:
+ * no <sys/un.h> exists in this tree, so there is no address type to
+ * bind() one to in the first place.  sendmsg()/recvmsg()'s ancillary
+ * data, AF_INET6 sockets, and sockatmark() are all still staged for
+ * later work (networking-audit.md sec 6) and are deliberately *not
+ * declared* here -- this project's own standing rule (see
+ * test/posix-sysmisc.c's file banner) is that a declared-but-undefined
+ * symbol is a latent link-error bug, not a lesser form of "not
+ * implemented yet", so nothing is declared before it has a body.  The
+ * SOCK_, AF_, SO_ and MSG_ constants are all defined regardless (free,
+ * and needed so e.g. `socket(AF_INET6, ...)` compiles and fails at
+ * runtime with EAFNOSUPPORT rather than at compile time).
  *
  * getsockname()/getpeername() were on that deferred list until
  * src/socket/getname.c gave them bodies, and the reason they came off
@@ -38,11 +41,18 @@
  * cannot express.
  *
  * sendto()/recvfrom() left that list for the same reason: on a
- * SOCK_STREAM socket (this project's only type) they reduce entirely to
- * send()/recv() plus the one peer address a connected stream already
- * has cached (src/socket/sendrecv.c).  What still needs SOCK_DGRAM --
- * an address supplied per-call rather than fixed at connect() time --
- * remains undeclared exactly like SOCK_DGRAM itself.
+ * connected socket, stream or datagram, they reduce entirely to
+ * send()/recv() plus the one peer address connect()/accept()/
+ * socketpair() already cached (src/socket/sendrecv.c).  What still
+ * needs an unconnected SOCK_DGRAM socket -- a destination supplied
+ * per-call via sendto()'s own dest_addr rather than fixed at connect()
+ * time -- remains out of scope: every SOCK_DGRAM socket this project
+ * can produce (socket(AF_INET, SOCK_DGRAM, ...), socket(AF_UNIX,
+ * SOCK_DGRAM, ...), socketpair(AF_UNIX, SOCK_DGRAM, ...)) is used
+ * connected, matching the one real consumer this scope exists for
+ * (Open POSIX Test Suite's aio_cancel/lio_listio fixtures, which
+ * socketpair() a datagram pair and never call sendto()/recvfrom() with
+ * a real destination).
  */
 #ifndef _SYS_SOCKET_H
 #define _SYS_SOCKET_H
@@ -99,7 +109,7 @@ struct linger {
 #define PF_INET6  AF_INET6
 
 #define SOCK_STREAM    1
-#define SOCK_DGRAM     2  /* not implemented; declared only so it compiles */
+#define SOCK_DGRAM     2  /* AF_INET (UDP) and anonymous AF_UNIX only -- see this header's banner */
 #define SOCK_RAW       3  /* not implemented */
 #define SOCK_SEQPACKET 5  /* not implemented */
 
@@ -124,6 +134,11 @@ struct linger {
 #define SO_BROADCAST  0x0020
 #define SO_LINGER     0x0080
 #define SO_OOBINLINE  0x0100
+/* SO_SNDBUF/SO_RCVBUF: getsockopt() only (src/socket/sockopt.c) -- added
+ * alongside SOCK_DGRAM because the Open POSIX Test Suite's aio_cancel/
+ * lio_listio fixtures (third_party/ltp's aio_test.h setup_aio()) query
+ * SO_SNDBUF right after socketpair() to size the messages they queue,
+ * and need a real answer, not ENOPROTOOPT, to get past setup at all. */
 #define SO_SNDBUF     0x1001
 #define SO_RCVBUF     0x1002
 #define SO_SNDLOWAT   0x1003

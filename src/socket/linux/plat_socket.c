@@ -86,6 +86,13 @@
  * listen=50, getsockname=51, getpeername=52, socketpair=53,
  * setsockopt=54, getsockopt=55 -- again contiguous with, and confirming,
  * this file's existing x86_64 numbers below. */
+/* SYS_getsockopt (added for __plat_socket_getsndbuf()/
+ * __plat_socket_getrcvbuf() below, SOCK_DGRAM, 2026-09-01): slots into
+ * the exact same two contiguous tables this file's own banner comment
+ * above already lays out in full -- aarch64 getsockopt=209 (one past
+ * this file's existing setsockopt=208), x86_64 getsockopt=55 (one past
+ * this file's existing setsockopt=54) -- read off the same tables the
+ * rest of this block already cites, not guessed. */
 #if defined(__aarch64__)
 #define SYS_recvfrom     207
 #define SYS_sendto       206
@@ -95,8 +102,10 @@
 #define SYS_connect      203
 #define SYS_getsockname  204
 #define SYS_setsockopt   208
+#define SYS_getsockopt   209
 #define SYS_shutdown     210
 #define SYS_accept4      242
+#define SYS_socketpair   199
 #elif defined(__x86_64__)
 #define SYS_recvfrom     45
 #define SYS_sendto       44
@@ -107,7 +116,9 @@
 #define SYS_connect      42
 #define SYS_getsockname  51
 #define SYS_setsockopt   54
+#define SYS_getsockopt   55
 #define SYS_accept4      288
+#define SYS_socketpair   53
 #else
 #error "plat_socket.c: unsupported architecture"
 #endif
@@ -195,6 +206,14 @@ static __plat_handle_t box(int fd)
  * never passed through. */
 #define LX_SOL_SOCKET   1
 #define LX_SO_REUSEADDR 2
+/* SO_SNDBUF/SO_RCVBUF (added for SOCK_DGRAM, 2026-09-01): 7/8 are the
+ * real Linux kernel SOL_SOCKET option numbers (confirmed against this
+ * host's own <sys/socket.h> via a throwaway host-gcc oracle program,
+ * the same way LX_SO_REUSEADDR above was), not ntlibc's own 0x1001/
+ * 0x1002 encoding -- so, like SO_REUSEADDR, these are translated rather
+ * than passed through. */
+#define LX_SO_SNDBUF    7
+#define LX_SO_RCVBUF    8
 
 /* ntlibc's own <sys/socket.h> MSG_* bits are a private encoding, not a
  * copy of any host ABI (see that header's own comment: they exist "so
@@ -262,14 +281,21 @@ ssize_t __plat_sock_send(__plat_handle_t h, const void *buf, size_t len, int fla
 	return (ssize_t)ret;
 }
 
-/* socket(): a real socket(2), AF_INET/SOCK_STREAM/IPPROTO_TCP always --
- * this project's only supported triple (src/socket/socket.c's front door
- * has already rejected anything else before calling here), and the same
- * fixed pair the NT backend's __afd_open() bakes into its own open
- * packet rather than taking as parameters. */
-int __plat_socket_open(__plat_handle_t *out)
+/* socket(): a real socket(2), always AF_INET -- this project's only
+ * supported wire address family (src/socket/socket.c's front door has
+ * already rejected anything else before calling here; an anonymous
+ * AF_UNIX socket is one of these two AF_INET transports wearing a
+ * different sa_family at the front door, see socket.c/socketpair.c).
+ * `type` (SOCK_STREAM or SOCK_DGRAM) picks SOCK_STREAM/IPPROTO_TCP or
+ * SOCK_DGRAM/IPPROTO_UDP -- added for SOCK_DGRAM (2026-09-01); before
+ * that this was the same fixed pair the NT backend's __afd_open() bakes
+ * into its own open packet rather than taking as a parameter. */
+int __plat_socket_open(__plat_handle_t *out, int type)
 {
-	long fd = raw_syscall(SYS_socket, (long)AF_INET, (long)SOCK_STREAM, (long)IPPROTO_TCP, 0L, 0L, 0L);
+	int dgram = type == SOCK_DGRAM;
+	long fd = raw_syscall(SYS_socket, (long)AF_INET,
+	                      dgram ? (long)SOCK_DGRAM : (long)SOCK_STREAM,
+	                      dgram ? (long)IPPROTO_UDP : (long)IPPROTO_TCP, 0L, 0L, 0L);
 	if (is_sys_error(fd)) { errno = (int)-fd; return -1; }
 	*out = box((int)fd);
 	return 0;
@@ -370,6 +396,62 @@ int __plat_socket_shutdown(__plat_handle_t h, int how)
 {
 	long ret = raw_syscall(SYS_shutdown, (long)unbox(h), (long)how, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
+/* getsockopt(SO_SNDBUF)/getsockopt(SO_RCVBUF): a real getsockopt(2)
+ * against the real socket every fd this backend hands out is genuinely
+ * backed by -- unlike the NT backend (see plat_socket.h's banner), this
+ * is the kernel's own actual send/receive buffer size, not a stand-in,
+ * so it both answers the caller honestly and governs the real blocking
+ * behaviour third_party/ltp's aio_test.h setup_aio() depends on (it
+ * sizes messages against exactly this number, then queues enough of
+ * them to overflow the buffer this same number describes). */
+static int getbuf(__plat_handle_t h, int optname)
+{
+	int fd = unbox(h);
+	int v = 0;
+	/* unsigned, not long: getsockopt(2)'s optlen out-parameter is a
+	 * kernel socklen_t (4 bytes), matching this project's own
+	 * socklen_t (include/bits/alltypes.h.in) -- a pointer to an 8-byte
+	 * long here would have the kernel write 4 bytes into what this
+	 * code then reads back as 8, the same class of ABI-width bug this
+	 * file's own banner warns against elsewhere. */
+	unsigned argsize = (unsigned)sizeof(v);
+	long ret = raw_syscall(SYS_getsockopt, (long)fd, (long)LX_SOL_SOCKET, (long)optname,
+	                       (long)&v, (long)&argsize, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return v;
+}
+
+int __plat_socket_getsndbuf(__plat_handle_t h)
+{
+	return getbuf(h, LX_SO_SNDBUF);
+}
+
+int __plat_socket_getrcvbuf(__plat_handle_t h)
+{
+	return getbuf(h, LX_SO_RCVBUF);
+}
+
+/* socketpair(): a real socketpair(2), AF_UNIX always -- the only domain
+ * this project's own socketpair() front door ever accepts
+ * (src/socket/socketpair.c).  `type` is handed straight through,
+ * SOCK_CLOEXEC bit and all: unlike socket(2) (no equivalent bit) and
+ * accept(2) (accept4(2) is the one that gained it), Linux's real
+ * socketpair(2) has always accepted SOCK_CLOEXEC/SOCK_NONBLOCK OR'd
+ * into `type` (confirmed against this host's own <sys/socket.h> via a
+ * throwaway host-gcc oracle program, the same way every other flag
+ * translation in this file was), so there is no separate fcntl()
+ * dance needed the way socketpair.c's own fallback construction needs
+ * for its accept()ed end. */
+int __plat_socketpair(int type, __plat_handle_t out[2])
+{
+	int sv[2];
+	long ret = raw_syscall(SYS_socketpair, (long)AF_UNIX, (long)type, 0L, (long)sv, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	out[0] = box(sv[0]);
+	out[1] = box(sv[1]);
 	return 0;
 }
 

@@ -129,7 +129,9 @@ static __inline int __ntlibc_in6_is_zero(const struct in6_addr *a, int upto)
 #define IN6_IS_ADDR_MC_GLOBAL(a) \
 	(IN6_IS_ADDR_MULTICAST(a) && (((a)->s6_addr[1] & 0xf) == 0xe))
 
-/* netinet_in.h.html IPPROTO_*: only what AF_INET/SOCK_STREAM needs is
+/* netinet_in.h.html IPPROTO_*: only what AF_INET/SOCK_STREAM (TCP) and
+ * AF_INET/SOCK_DGRAM (UDP) need -- IPPROTO_TCP and IPPROTO_UDP,
+ * respectively (src/socket/socket.c's protocol argument checks) -- is
  * meaningful here; the others are declared for header conformance. */
 #define IPPROTO_IP   0
 #define IPPROTO_ICMP 1

@@ -7,9 +7,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * The `\Device\Afd` wire protocol: ioctl codes and request/reply
- * structures for AF_INET/SOCK_STREAM sockets, driven directly through
- * NtCreateFile/NtDeviceIoControlFile per test/networking-audit.md sec 1
- * ("Decision: drive AFD directly through ntdll").
+ * structures for AF_INET/SOCK_STREAM and AF_INET/SOCK_DGRAM sockets,
+ * driven directly through NtCreateFile/NtDeviceIoControlFile per
+ * test/networking-audit.md sec 1 ("Decision: drive AFD directly through
+ * ntdll").
  *
  * None of this is documented by Microsoft.  It is cross-checked against
  * two independent sources that agree on it, per the audit:
@@ -38,11 +39,19 @@
  * _AFD_CONTROL_CODE(op, method) for the same operations -- two
  * independent reverse-engineering efforts landed on the same numbers.
  *
- * Only what AF_INET/SOCK_STREAM (this project's declared scope) needs
- * is transcribed: bind, connect, listen, accept (wait-for-listen +
- * accept), send, recv, select/poll, disconnect, and socket creation
- * itself.  UDP-only, AF_UNIX-only and multipoint-only pieces of the
- * real structures are left out.
+ * Only what AF_INET/SOCK_STREAM and AF_INET/SOCK_DGRAM (this project's
+ * declared scope; see <sys/socket.h>'s banner) need is transcribed:
+ * bind, connect, listen (SOCK_STREAM only -- refused for SOCK_DGRAM by
+ * the front door before either backend is reached, see
+ * src/socket/listen.c), accept (wait-for-listen + accept, SOCK_STREAM
+ * only for the same reason), send, recv, select/poll, disconnect, and
+ * socket creation itself, now parametrized by socket type (the
+ * AFD_TRANSPORT_TCP/AFD_TRANSPORT_UDP pair below).  AF_UNIX-only and
+ * multipoint-only pieces of the real structures are still left out: an
+ * anonymous AF_UNIX/SOCK_DGRAM socket (src/socket/socket.c,
+ * src/socket/socketpair.c) is one of the two AF_INET transports above
+ * wearing a different sa_family at the front door, not a third wire
+ * shape here.
  */
 #ifndef _NTLIBC_AFD_H
 #define _NTLIBC_AFD_H
@@ -412,6 +421,39 @@ typedef struct _FILE_FULL_EA_INFORMATION {
  * pointer, which only warns on the pointee-type mismatch; this file
  * needs an actual WCHAR[], so it sidesteps the literal instead. */
 #define AFD_TRANSPORT_TCP { '\\','D','e','v','i','c','e','\\','T','c','p', 0 }
+/* The transport device name for AF_INET/SOCK_DGRAM: "\Device\Udp",
+ * added for SOCK_DGRAM (2026-09-01).  Not independently reverse
+ * engineered the way \Device\Tcp was (this header's socket-creation
+ * banner) -- but it does not need to be.  Two of the three facts that
+ * banner spent its length establishing about \Device\Tcp are facts
+ * about AFD's *open-packet mechanism*, not about TCP specifically, and
+ * apply to any transport device name AFD is handed: which 12-vs-24-byte
+ * packet shape a given afd.sys reads (__afd_open_shape(), decided from
+ * the OS version, not the name), and that a wrong shape corrupts
+ * silently rather than failing loudly.  Both are already handled by
+ * reusing the exact same __afd_build_open_ea_for() codepath \Device\Tcp
+ * goes through, just with a different name and AddressFamily/
+ * SocketType/Protocol -- no new mechanism, so no new blind spot.
+ *
+ * The name itself rests on two things that *are* independently
+ * confirmed, both already recorded in that banner rather than repeated
+ * here: real Windows ws2_32 driving the same instrumented ReactOS
+ * afd.sys this project's own \Device\Tcp finding came from printed
+ * `Success: AfdOpenPacketXX \Device\Udp` for a UDP socket (the control
+ * that ruled out a broken tracer), and it is the name every public
+ * Windows AFD reverse-engineering source (ReactOS's own afd.sys driver,
+ * which implements \Device\Udp identically to \Device\Tcp as a TDI
+ * transport; Lewczak's "Under the Hood of AFD.sys" series) gives for
+ * UDP.  What is NOT independently confirmed, unlike \Device\Tcp, is a
+ * clean bind()/connect()/send()/recv() run through it observed on an
+ * instrumented driver -- this project has no runnable x86_64 Wine in
+ * its own CI/dev sandbox (see this repo's own tooling notes) to supply
+ * that the way test/posix-socket-shape.c's \Device\Tcp run was
+ * supplied, so this is inference from the mechanism plus the name, not
+ * a repeat of that measurement.  socketpair(AF_UNIX, SOCK_DGRAM, ...)'s
+ * NT backend (src/socket/socketpair.c) is the one real consumer of this
+ * device name; its own comment says the same thing in POSIX terms. */
+#define AFD_TRANSPORT_UDP { '\\','D','e','v','i','c','e','\\','U','d','p', 0 }
 #define AFD_ENDPOINT_DEVICE { '\\','D','e','v','i','c','e','\\','A','f','d','\\','E','n','d','p','o','i','n','t', 0 }
 
 #define AFD_EA_NAME "AfdOpenPacketXX"
@@ -919,29 +961,45 @@ typedef struct _AFD_POLL_INFO {
  * src/select/select.c, which has no reason to include <sys/socket.h>)
  * stays self-contained. */
 struct sockaddr;
-/* Open a fresh AFD endpoint handle for AF_INET/SOCK_STREAM: the guts of
- * socket() and of the new handle accept() installs for an incoming
- * connection.  Returns 0, or -1 with errno. */
-int __afd_open(HANDLE *out);
+/* Open a fresh AFD endpoint handle: the guts of socket() and of the new
+ * handle accept() installs for an incoming connection.  `socktype` is
+ * the plain <sys/socket.h> SOCK_STREAM/SOCK_DGRAM value, selecting
+ * \Device\Tcp/IPPROTO_TCP or \Device\Udp/IPPROTO_UDP (see
+ * AFD_TRANSPORT_TCP/AFD_TRANSPORT_UDP above) -- added for SOCK_DGRAM
+ * (2026-09-01); every existing call site passed (implicitly)
+ * SOCK_STREAM before this parameter existed, since AF_INET/SOCK_STREAM
+ * was this project's only transport.  Returns 0, or -1 with errno. */
+int __afd_open(HANDLE *out, int socktype);
 /* The AfdOpenPacketXX EA buffer __afd_open() hands NtCreateFile, split
  * out so it can be inspected without a device: __afd_open_ea_size()
  * returns the exact byte count (no slack -- see AFD_EA_HEADER_SIZE),
- * and __afd_build_open_ea() fills that many bytes at `buf`.  buf must
- * be at least 4-byte aligned, which is what NT's own EA validator
+ * and __afd_build_open_ea() fills that many bytes at `buf`, always for
+ * the AF_INET/SOCK_STREAM/IPPROTO_TCP transport (the only one that
+ * existed when these two no-argument convenience wrappers were
+ * written; test/posix-socket-shape.c relies on that fixed choice).  buf
+ * must be at least 4-byte aligned, which is what NT's own EA validator
  * requires of the whole entry.  test/posix-socket-ea.c re-parses the
  * result and asserts every invariant NT checks; it is the only reason
  * these are separate functions, and it runs on hosts with no working
  * \Device\Afd at all. */
 unsigned long __afd_open_ea_size(void);
 void __afd_build_open_ea(void *buf);
-/* The same two, with the packet shape named rather than detected:
- * AFD_SHAPE_NT4 or AFD_SHAPE_NT6.  These exist so that a test can build
- * and check *both* byte images on any host, including the one shape the
- * host it runs on would never choose -- otherwise the legacy layout
- * would be unasserted everywhere CI can reach.  Library code should
- * call the two above and let __afd_open_shape() decide. */
+/* The same build function, with the packet shape AND the socket type
+ * named rather than detected/fixed: AFD_SHAPE_NT4 or AFD_SHAPE_NT6,
+ * SOCK_STREAM or SOCK_DGRAM.  These exist so that a test can build and
+ * check *any* combination on any host, including ones the host it runs
+ * on would never choose -- otherwise the legacy layout, or the
+ * SOCK_DGRAM/UDP fields, would be unasserted everywhere CI can reach.
+ * Library code should call __afd_open() and let it thread
+ * __afd_open_shape() and its own `socktype` argument through.
+ *
+ * __afd_open_ea_size_for() does NOT take a socktype: "\Device\Tcp" and
+ * "\Device\Udp" are both 11 characters, so the two transports produce
+ * byte-identical packet sizes -- only __afd_build_open_ea_for()'s
+ * *contents* (the name text itself, and the NT6 shape's AddressFamily/
+ * SocketType/Protocol fields) depend on which one is being built. */
 unsigned long __afd_open_ea_size_for(int shape);
-void __afd_build_open_ea_for(int shape, void *buf);
+void __afd_build_open_ea_for(int shape, int socktype, void *buf);
 /* Which shape this platform's afd.sys reads: AFD_SHAPE_NT6 on NT 6.0
  * and later (real Windows, Wine), AFD_SHAPE_NT4 below that (ReactOS,
  * which targets NT 5.2).  Decided from PEB.OSMajorVersion via
@@ -1126,6 +1184,10 @@ int __afd_peername_reply_addr(const void *reply, struct sockaddr *addr, unsigned
 #define AFD_ST_LISTENING  0x02
 #define AFD_ST_CONNECTED  0x04
 #define AFD_ST_REUSEADDR  0x08
+/* SOCK_DGRAM, not SOCK_STREAM.  Numerically identical to
+ * src/internal/plat_socket.h's own __SOCK_ST_DGRAM -- see that header's
+ * banner for why the two definitions must never drift apart. */
+#define AFD_ST_DGRAM      0x10
 
 #endif
 

@@ -66,7 +66,15 @@
  * one-step accept4(2).  addr/len follow accept(2)'s own convention
  * (silently truncate-if-too-small) so the front door can pass its own
  * full-sized local buffer through unchanged and do its usual
- * truncate-into-the-caller's-buffer copy afterward. */
+ * truncate-into-the-caller's-buffer copy afterward.
+ *
+ * SOCK_DGRAM (2026-09-01): __plat_socket_open() gained a `type`
+ * parameter and __plat_socket_getsndbuf()/__plat_socket_getrcvbuf() were
+ * added below; every other function above already generalised for free
+ * (bind/connect/getsockname take a sockaddr and a length regardless of
+ * the underlying transport's stream-vs-datagram nature; listen/accept
+ * are refused a datagram socket entirely by the front door, before
+ * either backend is reached -- see src/socket/listen.c). */
 #ifndef _NTLIBC_PLAT_SOCKET_H
 #define _NTLIBC_PLAT_SOCKET_H
 
@@ -90,13 +98,31 @@ ssize_t __plat_sock_send(__plat_handle_t h, const void *buf, size_t len, int fla
 #define __SOCK_ST_LISTENING 0x02
 #define __SOCK_ST_CONNECTED 0x04
 #define __SOCK_ST_REUSEADDR 0x08
+/* Set by socket()/socketpair() at creation time, never cleared: this
+ * descriptor's underlying transport is SOCK_DGRAM, not SOCK_STREAM.
+ * Consumed by listen.c (EOPNOTSUPP: a datagram socket cannot be marked
+ * accepting connections) and sockopt.c's getsockopt(SO_TYPE).
+ * Numerically identical to afd.h's own AFD_ST_DGRAM, for the same
+ * reason the four bits above already are -- see this banner. */
+#define __SOCK_ST_DGRAM     0x10
 
 /* out required: both real implementations (linux/plat_socket.c,
  * nt/plat_socket.c) write `*out = box(...)`/`*out = ...` unconditionally
  * on their success path, with no NULL check of out itself anywhere.
  * socket.c's one real call site always passes `&h`, the address of its
- * own local, never NULL. */
-int __plat_socket_open(__plat_handle_t *out) __attribute__((nonnull(1)));
+ * own local, never NULL.
+ *
+ * `type` is the plain <sys/socket.h> SOCK_STREAM/SOCK_DGRAM value
+ * (never OR'd with SOCK_CLOEXEC -- socket.c/socketpair.c strip that
+ * before calling here, exactly like they already did before this
+ * parameter existed).  Added for SOCK_DGRAM: this project's only two
+ * creatable transports are AF_INET/SOCK_STREAM/IPPROTO_TCP and
+ * AF_INET/SOCK_DGRAM/IPPROTO_UDP (an anonymous AF_UNIX socket is one of
+ * these two wearing a different sa_family at the front door -- see
+ * socket.c/socketpair.c), and the backend needs to know which one to
+ * actually open; before SOCK_DGRAM existed there was only ever one
+ * choice, so this took no parameter at all. */
+int __plat_socket_open(__plat_handle_t *out, int type) __attribute__((nonnull(1)));
 int __plat_socket_bind(__plat_handle_t h, int reuseaddr, const struct sockaddr *addr, socklen_t len);
 int __plat_socket_connect(__plat_handle_t h, const struct sockaddr *addr, socklen_t len);
 int __plat_socket_listen(__plat_handle_t h, unsigned long backlog);
@@ -126,6 +152,53 @@ int __plat_socket_getsockname(__plat_handle_t h, struct sockaddr *addr, socklen_
  * checking __SOCK_ST_CONNECTED both stay in the front door; only the
  * actual disconnect step is here. */
 int __plat_socket_shutdown(__plat_handle_t h, int how);
+
+/* getsockopt(SOL_SOCKET, SO_SNDBUF/SO_RCVBUF): added for SOCK_DGRAM --
+ * third_party/ltp's aio_test.h setup_aio() (the shared fixture behind
+ * aio_cancel/2-1..7-1 and lio_listio/2-1) calls getsockopt(SO_SNDBUF)
+ * on a socketpair()'d datagram socket immediately after creating it and
+ * needs a real, finite answer to size the messages it then queues
+ * (deliberately more of them than the buffer holds, so at least one
+ * aio_write() blocks and is left cancelable -- the whole point of the
+ * fixture).  Returns the buffer size in bytes on success, or -1 with
+ * errno set.
+ *
+ * The two backends answer this honestly in different senses, and each
+ * one says so in its own body: the Linux backend queries the real
+ * kernel value off the real socket a SOCK_DGRAM fd is genuinely backed
+ * by (src/socket/linux/plat_socket.c), so its answer governs actual
+ * blocking behaviour.  The NT backend has no AFD_INFO wire-protocol
+ * research behind it (src/internal/afd.h's socket-creation banner shows
+ * the depth that kind of research takes, and IOCTL_AFD_GET_INFO's
+ * AFD_INFO/AFD_INFO_SEND_BUFFER_SIZE layout was not attempted this
+ * pass), so it returns a fixed constant instead of ENOPROTOOPT --
+ * honestly labelled as this library's own stand-in, not afd.sys's real
+ * negotiated buffer, in src/socket/nt/plat_socket.c. */
+int __plat_socket_getsndbuf(__plat_handle_t h);
+int __plat_socket_getrcvbuf(__plat_handle_t h);
+
+/* socketpair(): a real, native socketpair(2) if this platform's kernel
+ * has one (Linux does), or -1/ENOSYS if it does not (NT: AFD has no
+ * such primitive -- an endpoint is always opened, then separately
+ * bound/connected).  `type` is SOCK_STREAM or SOCK_DGRAM, optionally
+ * OR'd with SOCK_CLOEXEC exactly as socketpair()'s own caller wrote it
+ * (Linux's real socketpair(2) honors that bit directly, unlike
+ * socket(2)/accept4(2)'s split story elsewhere in this codebase -- see
+ * src/socket/linux/plat_socket.c).  On success, out[0]/out[1] are both
+ * filled; added for SOCK_DGRAM (2026-09-01) because a genuine kernel
+ * AF_UNIX datagram pair has real, mutual send/receive flow control
+ * between the two ends (a full peer receive queue blocks the sender)
+ * that this project's own loopback-UDP fallback
+ * (src/socket/socketpair.c's socketpair_dgram()) does not reproduce --
+ * UDP delivers to the peer's receive queue immediately over loopback
+ * and has no such coupling, which third_party/ltp's aio_test.h fixture
+ * (setup_aio(), the shared basis for aio_cancel/2-1..7-1 and
+ * lio_listio/2-1) depends on to make at least one aio_write() actually
+ * block.  socketpair.c calls this first and falls back to its own
+ * construction only on ENOSYS, so a platform with no native
+ * socketpair(2) still gets a socket, just not this flow-control
+ * fidelity. */
+int __plat_socketpair(int type, __plat_handle_t out[2]);
 
 #endif
 
