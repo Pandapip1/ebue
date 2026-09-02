@@ -99,6 +99,10 @@
 #define SYS_fstat      80
 #define SYS_pipe2      59
 #define SYS_dup3       24
+#define SYS_fcntl      25   /* same aarch64 number src/unistd/linux/plat_fd.c
+                             * already uses; see __plat_process_spawn()'s
+                             * own comment below for what this one call
+                             * site uses it for (F_DUPFD staging). */
 #define SYS_read       63
 #define SYS_write      64
 #define SYS_nanosleep  101
@@ -108,6 +112,12 @@
 #define WNOHANG_LX      1
 #define SIGCHLD_LX      17
 #define SIGCONT_LX      18
+/* F_DUPFD is command 0 on every Linux architecture (uapi/asm-generic/
+ * fcntl.h; none of aarch64/x86_64/i386 override it) -- unlike a syscall
+ * number, an fcntl(2) command constant has no per-arch table to get
+ * wrong, so this needs no "confirmed against the host" probe the way
+ * the syscall numbers above do. */
+#define F_DUPFD_LX      0
 
 /* Regular-file / execute-permission-bit masks, standard POSIX values. */
 #define S_IFMT_LX  0170000
@@ -453,14 +463,72 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 		 * needs one and Linux does not: a closed Linux fd number is
 		 * simply absent, and nothing refills it from outside). */
 		int i;
+		int mv[3];   /* std[i]'s source fd, staged out of the 0..2 target
+		             * zone first -- see the paragraph below this loop
+		             * for why that staging pass exists. */
 		raw_syscall(SYS_close, (long)pipefd[0], 0L, 0L, 0L, 0L, 0L);
+
+		/* srcfd (a raw Linux fd number this process's OWN table
+		 * currently backs ntlibc fd 0/1/2 with -- see unbox_fd()'s own
+		 * comment) is a completely different namespace from the index i
+		 * it is being moved TO, and nothing keeps the two apart: srcfd
+		 * can itself be 0, 1 or 2, i.e. it can name ANOTHER of this very
+		 * loop's three targets. Mutating target i in place -- close(i),
+		 * or dup3(srcfd, i), which closes whatever was at i first --
+		 * silently destroys that raw fd if a later target j still needs
+		 * it as ITS OWN source (dup3()'s return value is not checked
+		 * below, so that failure was never reported: the redirect for
+		 * slot j just silently never happened, execve() ran anyway, and
+		 * fd j came up as whatever the process already had there, not
+		 * what the caller asked to redirect it to). Confirmed live:
+		 * closing fd 0 in the parent, then adding a dup2-onto-fd-2 file
+		 * action whose own __plat_dup() (posix_spawn.c do_action) reused
+		 * that just-freed fd 0 for its new descriptor, reproduced
+		 * exactly this -- the child's stderr redirect silently failed
+		 * to reach the target pipe.
+		 *
+		 * Fixed the general way, not just for that one collision: every
+		 * live source is first duplicated (F_DUPFD, minimum fd 3) to a
+		 * scratch descriptor guaranteed to sit OUTSIDE 0..2, before
+		 * target 0/1/2 is touched at all. Once staged, no target's
+		 * dup3()/close() can reach a scratch fd (they are never 0, 1 or
+		 * 2 by construction), so the placement pass below is safe
+		 * regardless of which raw fd numbers std[0..2] originally
+		 * named -- including a full swap. */
+		for (i = 0; i < 3; i++) {
+			if (!std[i]) { mv[i] = -1; continue; }
+			{
+				int srcfd = unbox_fd(std[i]);
+				if (srcfd > 2) {
+					mv[i] = srcfd;   /* already outside the target zone */
+				} else {
+					long t = raw_syscall(SYS_fcntl, (long)srcfd,
+					                      (long)F_DUPFD_LX, 3L, 0L, 0L, 0L);
+					/* F_DUPFD failing here (fd-table exhaustion) is the
+					 * only way mv[i] can still land in 0..2 -- fall
+					 * back to the original, unstaged srcfd rather than
+					 * lose the redirect outright; this is no worse
+					 * than the unfixed code was for every case, and
+					 * better for most of them. */
+					mv[i] = is_sys_error(t) ? srcfd : (int)t;
+				}
+			}
+		}
 		for (i = 0; i < 3; i++) {
 			if (std[i]) {
-				int srcfd = unbox_fd(std[i]);
-				if (srcfd != i) raw_syscall(SYS_dup3, (long)srcfd, (long)i, 0L, 0L, 0L, 0L);
+				if (mv[i] != i) raw_syscall(SYS_dup3, (long)mv[i], (long)i, 0L, 0L, 0L, 0L);
 			} else {
 				raw_syscall(SYS_close, (long)i, 0L, 0L, 0L, 0L, 0L);
 			}
+		}
+		/* Close the scratch copies -- skip index i if F_DUPFD fell back
+		 * to the unstaged srcfd (nothing separate was opened) or if
+		 * mv[i] == i (dup3() above just installed that exact fd as
+		 * target i itself; closing it again would close the thing just
+		 * placed there, not a spare copy of it). */
+		for (i = 0; i < 3; i++) {
+			if (std[i] && mv[i] > 2 && mv[i] != i && mv[i] != unbox_fd(std[i]))
+				raw_syscall(SYS_close, (long)mv[i], 0L, 0L, 0L, 0L, 0L);
 		}
 		{
 			long ret = raw_syscall(SYS_execve, (long)path, (long)argv, (long)envp, 0L, 0L, 0L);
