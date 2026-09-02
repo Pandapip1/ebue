@@ -70,6 +70,7 @@
 #ifndef NTLIBC_AARCH64_MATH_H
 #define NTLIBC_AARCH64_MATH_H
 
+#include <fenv.h>
 #include <stdint.h>
 /* double_t already comes from ntlibc's own generated bits/alltypes.h
  * (float.h / stdint.h's own typedef) -- no need to redefine it here. */
@@ -363,7 +364,18 @@ static inline double __aa64_scalbn(double x, int n) // NOLINT(bugprone-easily-sw
 	if (n > 1023) {
 		x *= 0x1p1023;
 		n -= 1023;
-		if (n > 1023) { x *= 0x1p1023; n -= 1023; }
+		if (n > 1023) {
+			x *= 0x1p1023;
+			n -= 1023;
+			/* Without this clamp n can still exceed 1023 here (e.g. the
+			 * n==20000 case scalbnl(1.0L,20000) exercises: 20000-1023-1023
+			 * = 17954), and the exponent-field write below is only valid
+			 * for n+1023 in the 11-bit range [0,2046] -- an out-of-range
+			 * value corrupts the sign/exponent bits of u.f instead of
+			 * producing infinity, matching the negative-n branch's own
+			 * `if (n < -1022) n = -1022;` clamp just below. */
+			if (n > 1023) n = 1023;
+		}
 	} else if (n < -1022) {
 		x *= 0x1p-1022;
 		n += 1022;
@@ -509,7 +521,14 @@ static double __aa64_remquo(double x, double y, int *quo)
 		q++;
 	}
 	q &= 0x7fffffff;
-	*quo = sx ^ sy ? -(int)q : (int)q;
+	/* Unsigned quotient magnitude only, matching real x87 FPREM1's C0/
+	 * C1/C3 status-word bits (ldbl_math.h's own __x87_remainder reads
+	 * exactly those, unsigned) -- src/math/remainder.c's shared
+	 * remainder_impl() is the one place that applies the sign of x/y
+	 * to *quo, for both arches uniformly; doing it again here as musl's
+	 * original __rem_pio2-derived source does would sign it twice,
+	 * cancelling back to positive whenever x and y disagree in sign. */
+	*quo = (int)q;
 	return sx ? -x : x;
 }
 
@@ -870,7 +889,17 @@ static double __aa64_log2(double x)
 
 	if (x != x) return x; /* nan */
 	if (x <= 0) {
-		if (x == 0) return -1.0 / 0.0;
+		if (x == 0) {
+			/* pole error (log.html ERRORS): math_errhandling is
+			 * unconditionally MATH_ERREXCEPT here (include/math.h), so this
+			 * is mandatory, not optional -- and unlike real x87 fyl2x
+			 * (whose divide-by-zero flag a genuine zero-operand division
+			 * sets in hardware), "-1.0/0.0" here is two compile-time
+			 * constants that the compiler is free to fold to -inf without
+			 * ever executing a division, so raise the flag explicitly. */
+			feraiseexcept(FE_DIVBYZERO);
+			return -1.0 / 0.0;
+		}
 		return (x - x) / (x - x); /* negative: nan */
 	}
 	if (x == 1.0 / 0.0) return x;
@@ -918,7 +947,9 @@ static double __aa64_exp2(double t)
 
 	if (t != t) return t;
 	if (t >= 1024.0) return 1.0 / 0.0; /* overflow -> +inf */
-	if (t <= -1100.0) return 0.0 * t; /* underflow -> 0 (signed) */
+	if (t <= -1100.0) return 0.0; /* underflow -> +0: 2^t > 0 for all real t,
+	                                * so unlike expm1-style identities there is
+	                                * no negative-zero case to preserve here */
 
 	n = __aa64_rndint(t, 0);
 	f = t - n;
@@ -980,9 +1011,19 @@ static double __aa64_log1p(double x)
 static double __aa64_expm1(double t)
 {
 	static const double LN2 = 0x1.62e42fefa39efp-1;
-	double z = t * LN2;
-	double term = z, sum = z;
+	double z, term, sum;
 	int k;
+
+	/* Zero must return with its own sign (2^0-1 is exactly 0, and this
+	 * matches x87 f2xm1's documented zero-sign-preserving contract --
+	 * see expm1.c's own banner): the loop below cannot produce that
+	 * itself for t==-0.0, since its first step squares z's sign away
+	 * (term = z*(z/2), i.e. (-0.0)*(-0.0) = +0.0) before the addition
+	 * ever sees the original sign. */
+	if (t == 0.0) return t;
+
+	z = t * LN2;
+	term = z; sum = z;
 	for (k = 2; k <= 19; k++) {
 		term *= z / (double)k;
 		sum += term;
