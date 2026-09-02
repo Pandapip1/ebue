@@ -42,7 +42,7 @@ void store_wrong_type(void)
 	struct owner_box box;
 	void *plain = make_plain();
 	box.value = plain; /* ownership-expect: type-field */
-}
+} /* ownership-expect: invalid-transfer-havoc */
 
 void pass_wrong_type(void)
 {
@@ -73,6 +73,14 @@ void move_linear_token_twice(void)
 	inspect_owner(second);
 	(void)third;
 }
+
+void overwrite_live_linear_token(void)
+{
+	void *source withhandle(heap) withtok(heap_free) = make_owner();
+	void *destination withhandle(heap) withtok(heap_free) = make_owner();
+	destination = source; /* ownership-expect: occupied-destination */
+	inspect_owner(destination); /* ownership-expect: occupied-havoc */
+} /* ownership-expect: occupied-drop-unproven */
 
 void copy_around_strict_linear_token(void)
 {

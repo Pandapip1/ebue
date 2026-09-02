@@ -126,29 +126,48 @@ static bool testTransferTable() {
                                        LinearLoanClass::Strict};
   bool Passed = true;
   for (unsigned Loan = 0; Loan < 2; ++Loan)
-    for (unsigned Source = 0; Source < 4; ++Source)
-      for (unsigned Destination = 0; Destination < 4; ++Destination) {
-        TokenTransfer Result = transferToken(
-            States[Source], States[Destination], Loans[Loan]);
-        TokenEffect Effect = Loan == 1 && Source == 2 && Destination == 1
-                                 ? TokenEffect::InvalidateStrictLoans
-                                 : TokenEffect::None;
-        const ExpectedTransfer &Cell = Expected[Source][Destination];
-        bool Matches = Result.SourceBefore == States[Source] &&
-                       Result.DestinationBefore == States[Destination] &&
-                       Result.SourceAfter == Cell.SourceAfter &&
-                       Result.DestinationAfter == Cell.DestinationAfter &&
-                       Result.Events == Cell.Events &&
-                       Result.Effects == Effect &&
-                       Result.permitted() ==
-                           (Cell.Events == TokenEvent::None);
-        if (!Matches)
-          std::fprintf(stderr,
-                       "token-algebra-test: transfer cell loan=%u source=%u "
-                       "destination=%u\n",
-                       Loan, Source, Destination);
-        Passed &= Matches;
-      }
+    for (unsigned Droppable = 0; Droppable < 2; ++Droppable)
+      for (unsigned Source = 0; Source < 4; ++Source)
+        for (unsigned Destination = 0; Destination < 4; ++Destination) {
+          TokenTransfer Result = transferToken(
+              States[Source], States[Destination],
+              {Loans[Loan], Droppable != 0});
+          ExpectedTransfer Cell = Expected[Source][Destination];
+          if (Droppable && Source != 0 && Destination > 1) {
+            if (Source == 1)
+              Cell = {TokenState::Unknown, TokenState::Unknown,
+                      TokenEvent::MissingRequired};
+            else if (Source != Destination)
+              Cell = {TokenState::Unknown, TokenState::Unknown,
+                      TokenEvent::DuplicationClassMismatch};
+            else if (Source == 2)
+              Cell = {TokenState::Absent, TokenState::Linear,
+                      TokenEvent::None};
+            else
+              Cell = {TokenState::Duplicable, TokenState::Duplicable,
+                      TokenEvent::None};
+          }
+          bool StrictLinearMove =
+              Loan == 1 && Source == 2 &&
+              (Destination == 1 || (Droppable && Destination == 2));
+          TokenEffect Effect = StrictLinearMove
+                                   ? TokenEffect::InvalidateStrictLoans
+                                   : TokenEffect::None;
+          bool Matches = Result.SourceBefore == States[Source] &&
+                         Result.DestinationBefore == States[Destination] &&
+                         Result.SourceAfter == Cell.SourceAfter &&
+                         Result.DestinationAfter == Cell.DestinationAfter &&
+                         Result.Events == Cell.Events &&
+                         Result.Effects == Effect &&
+                         Result.permitted() ==
+                             (Cell.Events == TokenEvent::None);
+          if (!Matches)
+            std::fprintf(stderr,
+                         "token-algebra-test: transfer cell loan=%u drop=%u "
+                         "source=%u destination=%u\n",
+                         Loan, Droppable, Source, Destination);
+          Passed &= Matches;
+        }
   return Passed;
 }
 

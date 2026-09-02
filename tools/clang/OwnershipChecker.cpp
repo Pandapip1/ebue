@@ -43,7 +43,12 @@ REGISTER_MAP_WITH_PROGRAMSTATE(CapabilityMap, CapabilityKey, CapabilityKind)
 using SymbolCapabilityKey = std::pair<SymbolRef, const IdentifierInfo *>;
 REGISTER_MAP_WITH_PROGRAMSTATE(SymbolCapabilityMap, SymbolCapabilityKey,
                                CapabilityKind)
-enum class CarrierCapabilityKind : unsigned char { Absent, Linear, Duplicable };
+enum class CarrierCapabilityKind : unsigned char {
+  Unknown,
+  Absent,
+  Linear,
+  Duplicable
+};
 using CarrierCapabilityKey =
     std::pair<const MemRegion *, const IdentifierInfo *>;
 REGISTER_MAP_WITH_PROGRAMSTATE(CarrierCapabilityMap, CarrierCapabilityKey,
@@ -59,6 +64,12 @@ namespace {
 using ntlibc::algebra::excludedSentinel;
 using ntlibc::algebra::findTokenSort;
 using ntlibc::algebra::hasQualifier;
+using ntlibc::algebra::LinearLoanClass;
+using ntlibc::algebra::TokenEvent;
+using ntlibc::algebra::TokenEffect;
+using ntlibc::algebra::TokenState;
+using ntlibc::algebra::TokenTransfer;
+using ntlibc::algebra::transferToken;
 
 struct CapabilityPresence {
   bool Known;
@@ -136,6 +147,8 @@ static CapabilityPresence capabilityFor(ProgramStateRef State,
   if (Carrier)
     if (const CarrierCapabilityKind *CarrierKind =
             State->get<CarrierCapabilityMap>(carrierKey(Carrier, Family))) {
+      if (*CarrierKind == CarrierCapabilityKind::Unknown)
+        return {false, std::nullopt};
       if (*CarrierKind == CarrierCapabilityKind::Absent)
         return {true, std::nullopt};
       return {true, *CarrierKind == CarrierCapabilityKind::Linear
@@ -146,6 +159,49 @@ static CapabilityPresence capabilityFor(ProgramStateRef State,
           underlyingTokenFor(State, Value, Family))
     return {false, *Underlying};
   return {false, std::nullopt};
+}
+
+static TokenState tokenState(CapabilityPresence Presence) {
+  if (!Presence.Kind)
+    return Presence.Known ? TokenState::Absent : TokenState::Unknown;
+  return *Presence.Kind == CapabilityKind::Linear ? TokenState::Linear
+                                                  : TokenState::Duplicable;
+}
+
+static TokenState carrierTokenState(ProgramStateRef State,
+                                    const MemRegion *Carrier,
+                                    const IdentifierInfo *Family) {
+  if (!Carrier)
+    return TokenState::Unknown;
+  const CarrierCapabilityKind *Kind =
+      State->get<CarrierCapabilityMap>(carrierKey(Carrier, Family));
+  if (!Kind)
+    return TokenState::Absent;
+  if (*Kind == CarrierCapabilityKind::Unknown)
+    return TokenState::Unknown;
+  if (*Kind == CarrierCapabilityKind::Absent)
+    return TokenState::Absent;
+  return *Kind == CarrierCapabilityKind::Linear ? TokenState::Linear
+                                                : TokenState::Duplicable;
+}
+
+static ProgramStateRef havocCarrierToken(ProgramStateRef State,
+                                         const MemRegion *Carrier,
+                                         const IdentifierInfo *Family) {
+  return Carrier ? State->set<CarrierCapabilityMap>(
+                       carrierKey(Carrier, Family),
+                       CarrierCapabilityKind::Unknown)
+                 : State;
+}
+
+static ProgramStateRef havocOperationToken(ProgramStateRef State,
+                                           const MemRegion *Carrier,
+                                           SVal Value,
+                                           const IdentifierInfo *Family) {
+  State = havocCarrierToken(State, Carrier, Family);
+  if (const MemRegion *Referent = Value.getAsRegion())
+    State = havocCarrierToken(State, Referent, Family);
+  return removeUnderlyingToken(State, Value, Family);
 }
 
 static std::optional<CapabilityKind> dialectTokenKind(ASTContext &Context,
@@ -2144,6 +2200,9 @@ class OwnershipTypeChecker
     llvm::SmallVector<OwnershipTypeEntry, 4> SourceBundle = bundleFor(Source);
     const MemRegion *SourceCarrier = carrierRegion(Source, C);
     SVal SourceValue = C.getSVal(Source);
+    bool CheckedAssignment = DestinationCarrier &&
+                             DestinationCarrier != SourceCarrier &&
+                             isa<BinaryOperator>(Statement);
 
     State = copyStrictLoans(State, DestinationCarrier, SourceCarrier);
 
@@ -2187,11 +2246,50 @@ class OwnershipTypeChecker
           expressionProvidesStringLiteralToken(Source, Entry.Family,
                                                C.getASTContext()))
         SourceToken.Kind = CapabilityKind::Duplicable;
-      if (!SourceToken.Kind)
-        continue;
       CapabilityKind Required = Entry.Member == OwnershipTypeMember::LinearToken
                                     ? CapabilityKind::Linear
                                     : CapabilityKind::Duplicable;
+      std::optional<TokenTransfer> Transfer;
+      if (CheckedAssignment) {
+        TokenState SourceState = tokenState(SourceToken);
+        TokenState DestinationState =
+            carrierTokenState(State, DestinationCarrier, Entry.Family);
+        const TypedefNameDecl *Token =
+            findTokenSort(C.getASTContext(), Entry.Family->getName());
+        LinearLoanClass Loans = dialectTokenPermitsCarrierCopy(Token)
+                                    ? LinearLoanClass::Permissive
+                                    : LinearLoanClass::Strict;
+        Transfer = transferToken(
+            SourceState, DestinationState,
+            {Loans, hasQualifier(Token, "qual:implicit_drop")});
+        TokenState RequiredState =
+            Required == CapabilityKind::Linear ? TokenState::Linear
+                                               : TokenState::Duplicable;
+        bool WrongSourceClass =
+            (SourceState == TokenState::Linear ||
+             SourceState == TokenState::Duplicable) &&
+            SourceState != RequiredState;
+        if (!Transfer->permitted() || WrongSourceClass) {
+          if (ntlibc::algebra::contains(
+                  Transfer->Events, TokenEvent::DestinationOccupied))
+            report("ownership destination already holds a token", Statement,
+                   State, C);
+          if (ntlibc::algebra::contains(
+                  Transfer->Events,
+                  TokenEvent::DuplicationClassMismatch))
+            report("ownership token duplication class does not match",
+                   Statement, State, C);
+          if (DestinationState == TokenState::Unknown)
+            report("ownership destination token state is not proven",
+                   Statement, State, C);
+          State = havocOperationToken(State, SourceCarrier, SourceValue,
+                                      Entry.Family);
+          State = havocCarrierToken(State, DestinationCarrier, Entry.Family);
+          continue;
+        }
+      }
+      if (!SourceToken.Kind)
+        continue;
       if (*SourceToken.Kind != Required) {
         continue;
       }
@@ -2199,10 +2297,15 @@ class OwnershipTypeChecker
           setCarrierToken(State, DestinationCarrier, Entry.Family, Required);
       if (Required == CapabilityKind::Linear && SourceCarrier &&
           SourceCarrier != DestinationCarrier) {
-        const TypedefNameDecl *Token =
-            findTokenSort(C.getASTContext(), Entry.Family->getName());
-        if (!dialectTokenPermitsCarrierCopy(Token))
+        if (CheckedAssignment &&
+            Transfer->Effects == TokenEffect::InvalidateStrictLoans)
           State = expireStrictLoans(State, SourceCarrier, Entry.Family);
+        else if (!CheckedAssignment) {
+          const TypedefNameDecl *Token =
+              findTokenSort(C.getASTContext(), Entry.Family->getName());
+          if (!dialectTokenPermitsCarrierCopy(Token))
+            State = expireStrictLoans(State, SourceCarrier, Entry.Family);
+        }
         State = removeCarrierToken(State, SourceCarrier, Entry.Family);
       }
     }

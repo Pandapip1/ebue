@@ -51,6 +51,21 @@ void move_linear_token(void)
 	inspect_owner(second);
 }
 
+void move_into_known_empty_destination(void)
+{
+	void *source withhandle(heap) withtok(heap_free) = make_owner();
+	void *destination withhandle(heap) withtok(heap_free) = 0;
+	destination = source;
+	inspect_owner(destination);
+}
+
+void self_assignment_preserves_token(void)
+{
+	void *owner withhandle(heap) withtok(heap_free) = make_owner();
+	owner = owner;
+	inspect_owner(owner);
+}
+
 void borrow_without_moving_linear_token(void)
 {
 	void *owner withhandle(heap) withtok(heap_free) = make_owner();
@@ -65,6 +80,15 @@ void copy_duplicable_token(void)
 	void *second withhandle(shared) withtok(shared_access) = first;
 	inspect_shared(first);
 	inspect_shared(second);
+}
+
+void replace_implicitly_droppable_token(void)
+{
+	void *source withhandle(shared) withtok(shared_access) = make_shared();
+	void *destination withhandle(shared) withtok(shared_access) = make_shared();
+	destination = source;
+	inspect_shared(source);
+	inspect_shared(destination);
 }
 
 void copy_around_permissive_linear_token(void)

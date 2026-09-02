@@ -133,6 +133,11 @@ constexpr TokenTransition applyTokenOperation(TokenState Before,
 
 enum class LinearLoanClass : uint8_t { Permissive, Strict };
 
+struct TokenTransferPolicy {
+  LinearLoanClass Loans;
+  bool DestinationDroppable;
+};
+
 struct TokenTransfer {
   TokenState SourceBefore;
   TokenState DestinationBefore;
@@ -146,19 +151,21 @@ struct TokenTransfer {
 
 /* Assignment copies duplicable authority and moves linear authority.  A
  * strict linear move also asks the path-state adapter to expire every loan
- * rooted in the old carrier.  An occupied destination is never silently
- * overwritten: equal classes report occupation, while unequal classes also
- * report the contradictory multiplicity. */
+ * rooted in the old carrier.  An occupied destination may be replaced only
+ * when its nominal sort is explicitly droppable.  Otherwise equal classes
+ * report occupation, while unequal classes also report the contradictory
+ * multiplicity. */
 constexpr TokenTransfer transferToken(TokenState Source,
                                       TokenState Destination,
-                                      LinearLoanClass Loans) {
+                                      TokenTransferPolicy Policy) {
   if (Source == TokenState::Unknown || Destination == TokenState::Unknown)
     return {Source, Destination, TokenState::Unknown, TokenState::Unknown,
             TokenEvent::StateUnproven, TokenEffect::None};
   TokenEvent Events = TokenEvent::None;
   if (Source == TokenState::Absent)
     Events = Events | TokenEvent::MissingRequired;
-  if (Destination != TokenState::Absent)
+  if (Destination != TokenState::Absent &&
+      !Policy.DestinationDroppable)
     Events = Events | TokenEvent::DestinationOccupied;
   if (Source != TokenState::Absent && Destination != TokenState::Absent &&
       Source != Destination)
@@ -169,7 +176,7 @@ constexpr TokenTransfer transferToken(TokenState Source,
   if (Source == TokenState::Duplicable)
     return {Source, Destination, Source, TokenState::Duplicable,
             TokenEvent::None, TokenEffect::None};
-  TokenEffect Effects = Loans == LinearLoanClass::Strict
+  TokenEffect Effects = Policy.Loans == LinearLoanClass::Strict
                             ? TokenEffect::InvalidateStrictLoans
                             : TokenEffect::None;
   return {Source, Destination, TokenState::Absent, TokenState::Linear,
