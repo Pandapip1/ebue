@@ -38,49 +38,31 @@
  * "narrow to double, compute, widen back" policy again -- and is not
  * needed by anything that links today.
  *
- * LAYOUT (verified against a real oracle, not assumed -- see below):
- * binary128 is 16 bytes, little-endian on this arch (matching x86_64
- * SSE __float128, which is the same IEEE format): the low 8 bytes hold
- * the low 64 bits of the 112-bit stored fraction; the high 8 bytes hold
- * [sign:1][exponent:15, bias 16383][fraction, high 48 bits]. binary64
- * (bias 1023, 11 exponent bits, 52 fraction bits) and binary32 (bias
- * 127, 8 exponent bits, 23 fraction bits) are the ordinary, unremarkable
- * IEEE formats every other file in src/math already assumes.
+ * LAYOUT: binary128 is 16 bytes, little-endian on this arch (matching
+ * x86_64 SSE __float128, which is the same IEEE format): the low 8
+ * bytes hold the low 64 bits of the 112-bit stored fraction; the high
+ * 8 bytes hold [sign:1][exponent:15, bias 16383][fraction, high 48
+ * bits]. binary64 (bias 1023, 11 exponent bits, 52 fraction bits) and
+ * binary32 (bias 127, 8 exponent bits, 23 fraction bits) are the
+ * ordinary, unremarkable IEEE formats every other file in src/math
+ * already assumes.
  *
- * VERIFICATION: this build host is itself real aarch64 hardware (not
- * cross-compiled), so the three functions below were developed and
- * checked outside this freestanding tree first, against a real oracle:
- * a small host program using GCC's native `_Float128` (real IEEE
- * binary128, confirmed byte-for-byte via a `memcpy`-and-print dump of
- * known values -- 1.0, 2.0, 1.5, -1.0, 0.0, 0.1 -- against their
- * well-known bit patterns) exercising the host's OWN real
- * __extenddftf2/__trunctfdf2/__trunctfsf2 (linked in transparently by a
- * normal, non-freestanding build) as ground truth. Checked against:
- * every named boundary a reviewer would ask for by hand (1.0, a value
- * that needs round-to-nearest-even in both directions, DBL_MAX/DBL_MIN/
- * the smallest and largest double subnormals, values that overflow
- * double or float on narrowing, +-0, +-Infinity, NaN) PLUS three
- * independent 2,000,000-iteration fuzz passes (uniform-random raw bit
- * patterns for the extend direction; uniform-random AND
- * exponent-field-biased-toward-double/float's normal/subnormal/overflow
- * boundaries for the truncate directions, since uniform-random exponents
- * essentially never land near a boundary worth exercising) across three
- * different PRNG seeds and BOTH gcc and clang as the reference compiler
- * -- 40,000,000+ conversions total, zero mismatches (NaN payload bits
- * excepted -- see this file's own note on that below). The two real
- * bugs that first round of testing caught (an off-by-one in a
- * subnormal-double exponent, and a missing bit-realignment after
- * clearing a renormalized subnormal's implicit leading bit -- the fuzz
- * output made both obvious from the mismatching bit patterns) are fixed
- * in the code below, not merely noted here.
+ * VERIFICATION: the three functions below were checked against a real
+ * IEEE binary128 oracle -- a host program using GCC's native
+ * `_Float128` and its own real __extenddftf2/__trunctfdf2/__trunctfsf2
+ * -- across every boundary worth checking by hand (1.0, values needing
+ * round-to-nearest-even in both directions, DBL_MAX/DBL_MIN and the
+ * double subnormal extremes, values that overflow double or float on
+ * narrowing, +-0, +-Infinity, NaN) plus randomized fuzzing biased
+ * toward each format's normal/subnormal/overflow boundaries, with zero
+ * mismatches (NaN payload bits excepted -- see below).
  *
  * NaN payloads are deliberately NOT bit-matched against the host
  * compiler's own choice: IEEE 754 does not mandate how a NaN's payload
  * bits propagate across a precision change, only that the result is
  * still some NaN, and gcc/clang's own runtimes disagree on this beyond
- * the quiet bit -- the test harness this file's own verification used
- * accepts any NaN result for a NaN input, exactly as any real caller
- * checking isnan() would.
+ * the quiet bit -- any NaN result for a NaN input is accepted, exactly
+ * as any real caller checking isnan() would.
  */
 #include <stdint.h>
 #include "rtlib.h"   /* this file's own prototypes -- src/internal/rtlib.h's
@@ -174,11 +156,9 @@ long double __extenddftf2(double a)
 		while (!(frac & (1ULL << 51))) { frac <<= 1; shift++; }
 		/* bit51 is now the implicit leading one (the loop's own exit
 		 * condition) -- drop it AND re-align the remaining bits up
-		 * to fill the vacated top bit: a plain mask alone leaves a
-		 * spurious zero at the top and halves the reconstructed
-		 * value (exactly the bug this file's own fuzz-against-a-
-		 * real-oracle verification caught -- see this file's
-		 * banner). */
+		 * to fill the vacated top bit: a plain mask alone would leave
+		 * a spurious zero at the top and halve the reconstructed
+		 * value. */
 		frac = (frac << 1) & 0xFFFFFFFFFFFFFULL;
 		exp15 = (uint64_t)(16383 - 1023 - shift);
 		hi48 = frac >> 4;

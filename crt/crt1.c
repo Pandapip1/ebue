@@ -228,111 +228,45 @@ void __libc_start_main(void)
 
 	/* The PEB comes out of the TEB, not out of an argument.
 	 *
-	 * This used to read a first stack argument, on the reasoning that
-	 * ntdll's RtlUserThreadStart hands the initial thread's start
-	 * routine the PEB.  That is true -- from Vista onwards.  It is a
-	 * statement about one era of NT, not about entry points, and
-	 * ntlibc's images are Subsystem 3 (Windows CUI), which is where the
-	 * era matters:
+	 * Whether the image entry point's own argument holds the PEB
+	 * depends on which era of NT runs it, and ntlibc's images are
+	 * Subsystem 3 (Windows CUI) binaries, which is where the era
+	 * matters:
 	 *
 	 *   - NT 4.0 through Server 2003 start the first thread at
 	 *     kernel32!BaseProcessStart, reached through
-	 *     BaseProcessStartThunk;
+	 *     BaseProcessStartThunk, which calls the entry point with NO
+	 *     arguments at all (PPROCESS_START_ROUTINE is DWORD(WINAPI
+	 *     *)(VOID) -- see ReactOS's dll/win32/kernel32/client/proc.c
+	 *     and i386/thread.S). The PEB is placed in EBX by the initial
+	 *     thread context but never pushed for the callee, so a
+	 *     callee that reads "the first argument" anyway gets
+	 *     whatever the preceding NtSetInformationThread call left in
+	 *     that stack slot -- in practice the pseudo-handle
+	 *     0xFFFFFFFE, so dereferencing it as a PEB faults at address
+	 *     0xE. NT 4.0's own thunk is instruction-for-instruction the
+	 *     same shape.
 	 *   - Vista and later unified process and thread startup on
 	 *     ntdll!RtlUserThreadStart, whose thread parameter *is* the
 	 *     PEB.  ReactOS's ntdll.spec marks RtlUserThreadStart
 	 *     `-stub -version=0x600+' for exactly that reason.
 	 *
-	 * On the pre-Vista path the PEB is put in EBX and then dropped.
-	 * ReactOS's BaseThreadStartThunk and BaseProcessStartThunk differ
-	 * by one instruction -- the thread thunk does `push ebx' for
-	 * lpParameter, the process thunk does not
-	 * (dll/win32/kernel32/client/i386/thread.S) -- and
-	 * BaseProcessStartup duly calls `lpStartAddress()' with no
-	 * arguments, PPROCESS_START_ROUTINE being DWORD(WINAPI *)(VOID)
-	 * (dll/win32/kernel32/client/proc.c).  The initial context does set
-	 * it: `Context->Eax = StartAddress; Context->Ebx = Parameter;'
-	 * (dll/win32/kernel32/client/utils.c).  So the value exists and
-	 * simply never reaches the callee, leaving whatever the preceding
-	 * NtSetInformationThread call left in that slot -- in practice
-	 * NtCurrentThread(), the pseudo-handle 0xFFFFFFFE, so that reading
-	 * ->ProcessParameters off it faulted at address 0xE.
-	 *
-	 * This is not a ReactOS quirk.  NT 4.0's own thunk is
-	 * instruction-for-instruction the same shape
-	 * (xor ebp,ebp / push eax / push 0 / jmp BaseProcessStart),
-	 * measured from an NTSD disassembly by the coordinator who reported
-	 * this; ReactOS is reproducing NT 5.x faithfully rather than
-	 * diverging from it.  Recorded gap: no XP or Server 2003 binary was
-	 * available, so NT 5.x's BaseProcessStart bytes were never actually
-	 * disassembled.  NT 4 is measured, and the XP thunk has the same
-	 * shape, but that last step is inference, not measurement.
-	 *
-	 * Wine cannot testify about any of this: `BaseProcessStart' does
-	 * not appear anywhere under its dlls/ or include/.  It implements
-	 * only the Vista+ shape -- the initial thread is started as
-	 * signal_start_thread(TransferAddress, peb, teb)
-	 * (dlls/ntdll/unix/server.c) and BaseThreadInitThunk passes that
-	 * arg straight to the entry point, pushed on i386 and in %rcx on
-	 * x86_64 (dlls/kernel32/thread.c).  So the old assumption survived
-	 * here precisely because Wine implements the era the assumption
-	 * came from.  Independent corroboration that the eras really do
-	 * differ, from neither ReactOS nor our own code: Wine's own
-	 * kernel32 process test once asserted
-	 *   ok( !((ctx.Esp + 0x10) & 0xfff) || broken( !((ctx.Esp + 4) & 0xfff) ),
-	 * with the comment `winxp, w2k3' (dlls/kernel32/tests/process.c at
-	 * wine f19a0fb6c, line 3445; since deleted upstream) -- XP/2003
-	 * reserve one dword below StackBase where Vista+ reserves 0x10, and
-	 * ReactOS's own `Context->Esp -= sizeof(PVOID)' (utils.c) matches
-	 * the measured w2k3 number.
-	 *
-	 * A related hazard, checked and found NOT to apply here -- recorded
-	 * because the check is worth keeping and the negative result is
-	 * easy to get backwards.  /ENTRY is documented to require __stdcall
-	 * ("The function must be defined to use the __stdcall calling
-	 * convention" -- MSVC's /ENTRY reference, Remarks).  A __stdcall
-	 * entry point taking one argument emits `ret 4' and would therefore
-	 * over-pop BaseProcessStartup's frame on every pre-Vista system,
-	 * corrupting the caller's stack quite apart from the bad read.  Our
-	 * _start was plain C, which tcc compiles as __cdecl, so it never
-	 * had that defect.  Settled by disassembly, not by reasoning from
-	 * the signature:
-	 *
-	 *   i386 before:  mov 0x8(%ebp),%eax / push %eax / call
-	 *                 / add $0x4,%esp / leave / ret   <-- bare `ret'
-	 *   i386 after:   push %ebp / mov %esp,%ebp / call / leave / ret
-	 *
-	 * x86_64 has no callee-pop at all, so no difference is expected
-	 * there and none is seen (`call / leave / ret' before and after).
-	 * This change therefore fixes one defect, the read -- not two.  The
-	 * old signature was still wrong under the documented convention and
-	 * merely harmless under the one we happened to get; `void
-	 * _start(void)' is the unique signature correct under both, since a
-	 * zero-argument callee pops nothing either way.  (In practice the
-	 * epilogue is unreachable anyway -- __libc_start_main ends in
-	 * exit(), which is _Noreturn -- but the signature should not depend
-	 * on that.)
+	 * No Microsoft documentation states what a Windows-subsystem entry
+	 * point receives at all -- the /ENTRY page says only that "the
+	 * parameters and return value depend on if the program is a
+	 * console application, a windows application or a DLL" -- so
+	 * there is no documented argument to read in the first place, on
+	 * any NT version. There is also no reliable way to detect at run
+	 * time which convention a given process got: a stale stack slot
+	 * can look exactly like a valid PEB pointer, the way 0xFFFFFFFE
+	 * does above.
 	 *
 	 * Hence: read the PEB from the TEB, which every thread has before
 	 * any user code runs, on every NT version, whatever the subsystem.
-	 * Note that no Microsoft documentation states what a Windows-
-	 * subsystem entry point receives -- the /ENTRY page says only that
-	 * "the parameters and return value depend on if the program is a
-	 * console application, a windows application or a DLL" -- so there
-	 * was never a documented argument to read in the first place.
-	 *
-	 * Deliberately NOT done: detecting at run time which convention we
-	 * got.  There is no reliable way to tell a passed PEB from a stale
-	 * stack slot that merely looks like one -- that is exactly how this
-	 * bug hid, 0xFFFFFFFE being a plausible-looking pointer.  The short
-	 * version of everything above: the entry-point argument is
-	 * unspecified before Vista and must never be relied on; the TEB is
-	 * the portable source.
 	 *
 	 * __teb() is a two-instruction read of fs:0x18 / gs:0x30 compiled
 	 * into libc.a (src/internal/{i386,x86_64}/teb.c) -- not an ntdll
-	 * import -- so this keeps the property the old comment was really
-	 * defending: no ntdll call happens before __peb exists.  That
+	 * import -- so no ntdll call happens before __peb exists.  That
 	 * matters because RtlGetCurrentPeb(), the obvious alternative, is
 	 * an ntdll import, and under -Wl,--delay-all it would be a
 	 * delay-load stub whose very first resolution needs __peb already
@@ -397,46 +331,27 @@ void __libc_start_main(void)
 /* The raw value of the image entry point's first argument, captured
  * before anything in this file can overwrite or reinterpret it.
  *
- * This exists to be *measured*, not used.  __libc_start_main above no
- * longer reads it -- it takes the PEB from the TEB, for the reasons set
- * out there -- and that separation is exactly what makes this a
- * measurement: the CRT no longer has a stake in the answer.  The old
- * evidence that real Windows passes the PEB here was that this CRT read
- * the slot and nothing crashed, which is not a reading of the value.  The
- * assumption is version-specific, not universal: Vista and later enter at
- * ntdll!RtlUserThreadStart, whose thread parameter is the PEB, but NT 4
- * through Server 2003 enter at kernel32!BaseProcessStart and forward
- * nothing -- which is why ReactOS, which targets that era, declares the
- * entry point as PPROCESS_START_ROUTINE, DWORD (WINAPI *)(VOID).
- * test/entry-arg.c prints this alongside the PEB read out of the TEB and
- * the PEB the kernel reports for the process, so that a log says which of
- * them the entry point was actually handed; its header comment carries the
- * full version axis.
- *
- * Nothing may make this the source of __peb: it is the quantity under
- * measurement, and a consumer would turn the measurement into a
- * tautology. */
+ * This exists to be *measured*, not used.  __libc_start_main above never
+ * reads it -- it takes the PEB from the TEB instead, for the reasons set
+ * out there, on every NT version.  test/entry-arg.c prints this alongside
+ * the PEB read out of the TEB and the PEB the kernel reports for the
+ * process, so that a log says which of them the entry point was actually
+ * handed on the NT version it is run against; its header comment carries
+ * the full version axis. Nothing may make this the source of __peb: it is
+ * the quantity under measurement, and a consumer would turn the
+ * measurement into a tautology. */
 void *__entry_arg0;
 
 /* The second argument slot -- %rdx on x86_64, [%esp+8] on i386 -- captured
- * for exactly one reason: it is the control for __entry_arg0.
- *
- * Nobody claims the entry point takes two arguments.  That is the point.
- * If __entry_arg0 came back holding the PEB and there were no second
- * reading, "we captured the incoming argument" and "we reported the PEB
- * because that is what this code always reports" would produce identical
- * logs.  A second slot read the same way, through the same mechanism, in
- * the same call, cannot hold the PEB by construction -- so a log showing
- * arg0 == PEB and arg1 == something else is a log in which the capture
- * demonstrably reads real machine state rather than synthesising an
- * answer.  If both slots came back equal to the PEB, or both came back
- * zero, that would be a reason to distrust the measurement, and it is
- * only visible because this is here. */
+ * alongside __entry_arg0 as a control: nobody claims the entry point
+ * takes two arguments, so a log showing this slot holding something
+ * other than the PEB confirms the capture reads real incoming machine
+ * state rather than a hardcoded answer. */
 void *__entry_arg1;
 
-/* Both parameters are captured and neither is used.  The first is named
- * arg0, not peb, deliberately: calling it "peb" is what made the original
- * bug look reasonable for as long as it did. */
+/* Both parameters are captured and neither is used.  Named arg0/arg1, not
+ * peb, since whether either slot holds a PEB is exactly what is under
+ * measurement (see above) -- it is not known to be one. */
 void _start(void *arg0, void *arg1)
 {
 	__entry_arg0 = arg0;
