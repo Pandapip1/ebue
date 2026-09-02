@@ -42,7 +42,7 @@ struct _IO_FILE {
 	                          * the contents, not to the file position */
 	unsigned char no_close;  /* fclose must not close fd (stdin/out/err) */
 
-	unsigned char *buf;
+	unsigned char *buf withtok(writable_span(bufsz));
 	size_t bufsz;
 	size_t rpos, rend;       /* unread bytes buf[rpos..rend) */
 	size_t wpos;             /* unwritten bytes buf[0..wpos) */
@@ -67,7 +67,7 @@ struct _IO_FILE {
 	int nwunget;
 
 	/* fmemopen / open_memstream */
-	unsigned char *mem_buf;
+	unsigned char *mem_buf withtok(writable_span(mem_size));
 	size_t mem_size;         /* allocated capacity */
 	size_t mem_len;          /* logical length (the string so far) */
 	size_t mem_pos;          /* current offset */
@@ -109,8 +109,10 @@ int __fill(FILE *f) __attribute__((nonnull(1)));
 
 /* The raw operations every FILE goes through: fd read/write/seek, or the
  * memory-block equivalent when f->is_mem. */
-ssize_t __file_read(FILE *f, void *buf, size_t n) __attribute__((nonnull(1)));
-ssize_t __file_write(FILE *f, const void *buf, size_t n) __attribute__((nonnull(1)));
+ssize_t __file_read(FILE *f, void *buf withtok(writable_span(n)), size_t n)
+	__attribute__((nonnull(1)));
+ssize_t __file_write(FILE *f, const void *buf withtok(readable_span(n)), size_t n)
+	__attribute__((nonnull(1)));
 long long __file_seek(FILE *f, long long off, int whence) __attribute__((nonnull(1)));
 
 /* One wide character from a stream, reporting how many BYTES it

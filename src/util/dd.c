@@ -312,8 +312,9 @@ static int dd_copy_blocked(int ifd, int ofd, const struct dd_opts *o,
 		off = 0;
 		while (off < (size_t)n) {
 			size_t take = (size_t)o->obs - obuf_used;
+			size_t i;
 			if (take > (size_t)n - off) take = (size_t)n - off;
-			memcpy(obuf + obuf_used, ibuf + off, take);
+			for (i = 0; i < take; i++) obuf[obuf_used + i] = ibuf[off + i];
 			obuf_used += take;
 			off += take;
 			if (obuf_used == (size_t)o->obs) {

@@ -112,15 +112,25 @@ static bool tokenApplication(const FunctionDecl *Function,
   while (!Parameters.empty()) {
     auto [Name, Rest] = Parameters.split(',');
     Name = Name.trim();
-    bool Found = false;
-    for (unsigned Index = 0; Index < Function->getNumParams(); ++Index)
-      if (Function->getParamDecl(Index)->getName() == Name) {
-        Arguments.push_back(Index);
-        Found = true;
-        break;
-      }
-    if (!Found)
+    SmallVector<StringRef, 2> Factors;
+    while (!Name.empty()) {
+      auto [Factor, Remaining] = Name.split('*');
+      Factors.push_back(Factor.trim());
+      Name = Remaining;
+    }
+    if (Factors.size() > 2)
       return false;
+    for (StringRef Factor : Factors) {
+      bool Found = false;
+      for (unsigned Index = 0; Index < Function->getNumParams(); ++Index)
+        if (Function->getParamDecl(Index)->getName() == Factor) {
+          Arguments.push_back(Index);
+          Found = true;
+          break;
+        }
+      if (!Found)
+        return false;
+      }
     Parameters = Rest;
   }
   return !Family.empty();
@@ -130,6 +140,7 @@ struct SpanContract {
   MemoryTokenOperation Operation;
   unsigned Pointer;
   unsigned Length;
+  unsigned Multiplier;
   uint64_t Scale;
 };
 
@@ -142,7 +153,8 @@ struct DisjointContract {
 
 static bool operator==(const SpanContract &Left, const SpanContract &Right) {
   return Left.Operation == Right.Operation && Left.Pointer == Right.Pointer &&
-         Left.Length == Right.Length && Left.Scale == Right.Scale;
+         Left.Length == Right.Length && Left.Multiplier == Right.Multiplier &&
+         Left.Scale == Right.Scale;
 }
 
 static bool operator==(const DisjointContract &Left,
@@ -172,7 +184,7 @@ static void tokenContracts(const FunctionDecl *Function,
         bool ByteExtent = hasDialectQualifier(Token, "qual:extent_at_least");
         bool ElementExtent = hasDialectQualifier(Token, "qual:element_extent");
         if ((ByteExtent || ElementExtent) &&
-            Arguments.size() == 1) {
+            (Arguments.size() == 1 || Arguments.size() == 2)) {
           uint64_t Scale = 1;
           if (ElementExtent) {
             QualType Type = Redeclaration->getParamDecl(Pointer)->getType();
@@ -183,7 +195,11 @@ static void tokenContracts(const FunctionDecl *Function,
                         .getTypeSizeInChars(Type->getPointeeType())
                         .getQuantity();
           }
-          SpanContract Contract{Operation, Pointer, Arguments[0], Scale};
+          SpanContract Contract{Operation, Pointer, Arguments[0],
+                                Arguments.size() == 2
+                                    ? Arguments[1]
+                                    : std::numeric_limits<unsigned>::max(),
+                                Scale};
           if (llvm::find(Spans, Contract) == Spans.end())
             Spans.push_back(Contract);
         }
@@ -200,7 +216,16 @@ static void tokenContracts(const FunctionDecl *Function,
 }
 
 static SVal scaledSpanLength(const SpanContract &Contract, SVal Count,
-                             ProgramStateRef State, SValBuilder &Builder) {
+                             SVal Multiplier, ProgramStateRef State,
+                             SValBuilder &Builder) {
+  if (Count.isUnknownOrUndef())
+    return Count;
+  if (Contract.Multiplier != std::numeric_limits<unsigned>::max()) {
+    if (Multiplier.isUnknownOrUndef())
+      return UnknownVal();
+    Count = Builder.evalBinOp(State, BO_Mul, Count, Multiplier,
+                              Builder.getContext().getSizeType());
+  }
   if (Contract.Scale == 1 || Count.isUnknownOrUndef())
     return Count;
   return Builder.evalBinOp(
@@ -1261,7 +1286,16 @@ public:
           Contract.Length, State, C.getLocationContext()).value_or(
           State->getSVal(
               State->getLValue(LengthParameter, C.getLocationContext())));
-      LengthValue = scaledSpanLength(Contract, LengthValue, State,
+      SVal Multiplier = UnknownVal();
+      if (Contract.Multiplier != std::numeric_limits<unsigned>::max()) {
+        const ParmVarDecl *Parameter =
+            CurrentFunction->getParamDecl(Contract.Multiplier);
+        Multiplier = callerArgumentValue(
+            Contract.Multiplier, State, C.getLocationContext()).value_or(
+            State->getSVal(
+                State->getLValue(Parameter, C.getLocationContext())));
+      }
+      LengthValue = scaledSpanLength(Contract, LengthValue, Multiplier, State,
                                      C.getSValBuilder());
       Extent = LengthValue.getAs<DefinedOrUnknownSVal>();
       break;
@@ -1456,13 +1490,19 @@ public:
     for (const SpanContract &Contract : Spans) {
       if (Contract.Operation != MemoryTokenOperation::Grant ||
           Contract.Pointer >= Call.getNumArgs() ||
-          Contract.Length >= Call.getNumArgs())
+          Contract.Length >= Call.getNumArgs() ||
+          (Contract.Multiplier != std::numeric_limits<unsigned>::max() &&
+           Contract.Multiplier >= Call.getNumArgs()))
         continue;
       const MemRegion *Region =
           Call.getArgSVal(Contract.Pointer).getAsRegion();
+      SVal Multiplier =
+          Contract.Multiplier == std::numeric_limits<unsigned>::max()
+              ? UnknownVal()
+              : Call.getArgSVal(Contract.Multiplier);
       SVal Length = scaledSpanLength(Contract,
-                                     Call.getArgSVal(Contract.Length), State,
-                                     Builder);
+                                     Call.getArgSVal(Contract.Length),
+                                     Multiplier, State, Builder);
       std::optional<DefinedOrUnknownSVal> Extent =
           Length.getAs<DefinedOrUnknownSVal>();
       Region = spanProofRegion(Region, State);
@@ -1587,7 +1627,17 @@ public:
       if (std::optional<SVal> CallerLength = callerArgumentValue(
               Contract.Length, State, C.getLocationContext()))
         LengthValue = *CallerLength;
-      LengthValue = scaledSpanLength(Contract, LengthValue, State,
+      SVal Multiplier = UnknownVal();
+      if (Contract.Multiplier != std::numeric_limits<unsigned>::max()) {
+        const ParmVarDecl *Parameter =
+            Function->getParamDecl(Contract.Multiplier);
+        Multiplier = State->getSVal(
+            State->getLValue(Parameter, C.getLocationContext()));
+        if (std::optional<SVal> Caller = callerArgumentValue(
+                Contract.Multiplier, State, C.getLocationContext()))
+          Multiplier = *Caller;
+      }
+      LengthValue = scaledSpanLength(Contract, LengthValue, Multiplier, State,
                                      C.getSValBuilder());
       const MemRegion *Region = PointerValue.getAsRegion();
       std::optional<DefinedOrUnknownSVal> DefinedLength =
@@ -1701,13 +1751,20 @@ public:
       if (Contract.Operation != MemoryTokenOperation::Require)
         continue;
       if (Contract.Pointer >= Call.getNumArgs() ||
-          Contract.Length >= Call.getNumArgs())
+          Contract.Length >= Call.getNumArgs() ||
+          (Contract.Multiplier != std::numeric_limits<unsigned>::max() &&
+           Contract.Multiplier >= Call.getNumArgs()))
         continue;
       const MemRegion *Region =
           Call.getArgSVal(Contract.Pointer).getAsRegion();
+      SVal Multiplier =
+          Contract.Multiplier == std::numeric_limits<unsigned>::max()
+              ? UnknownVal()
+              : Call.getArgSVal(Contract.Multiplier);
       SVal Length = scaledSpanLength(Contract,
                                      Call.getArgSVal(Contract.Length),
-                                     C.getState(), C.getSValBuilder());
+                                     Multiplier, C.getState(),
+                                     C.getSValBuilder());
       std::optional<DefinedOrUnknownSVal> DefinedLength =
           Length.getAs<DefinedOrUnknownSVal>();
       Region = spanProofRegion(Region, ContractState);
@@ -1721,9 +1778,14 @@ public:
       if (Contract.Pointer >= Call.getNumArgs() ||
           Contract.Length >= Call.getNumArgs())
         continue;
+      SVal Multiplier =
+          Contract.Multiplier == std::numeric_limits<unsigned>::max()
+              ? UnknownVal()
+              : Call.getArgSVal(Contract.Multiplier);
       SVal Length = scaledSpanLength(Contract,
                                      Call.getArgSVal(Contract.Length),
-                                     C.getState(), C.getSValBuilder());
+                                     Multiplier, C.getState(),
+                                     C.getSValBuilder());
       ProgramStateRef ProofState = assumeFieldSpan(
           Call.getArgExpr(Contract.Pointer),
           Call.getArgExpr(Contract.Length),
@@ -1880,7 +1942,13 @@ public:
       SVal PointerValue =
           State->getSVal(State->getLValue(Pointer, LC));
       SVal LengthValue = State->getSVal(State->getLValue(Length, LC));
-      LengthValue = scaledSpanLength(Contract, LengthValue, State,
+      SVal Multiplier = UnknownVal();
+      if (Contract.Multiplier != std::numeric_limits<unsigned>::max()) {
+        const ParmVarDecl *Parameter =
+            Function->getParamDecl(Contract.Multiplier);
+        Multiplier = State->getSVal(State->getLValue(Parameter, LC));
+      }
+      LengthValue = scaledSpanLength(Contract, LengthValue, Multiplier, State,
                                      C.getSValBuilder());
       const MemRegion *Region = PointerValue.getAsRegion();
       bool Proven = State->isNull(LengthValue).isConstrainedTrue();
