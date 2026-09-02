@@ -40,6 +40,17 @@ CC=${NTLIBC_CC:-clang}
 OBJ=${NTLIBC_ASAN_OBJ:-$srcdir/obj/asan}
 ARCH=${NTLIBC_ARCH:-x86_64}
 
+# The tag every diagnostic below carries, computed here -- before the
+# ARCH/config-mismatch check just below, which is the first thing that
+# uses it -- rather than down by NTLIBC_SAN_MODE's own case statement,
+# which runs far later.  Mirrors that later logic (SAN_MODE's default and
+# NTLIBC_CFI's override) against the raw env vars, since $SAN_MODE itself
+# does not exist yet.  Under `set -u` an unset $TAG here is not a style
+# nit, it is a crash: the very first diagnostic this script can print
+# (the ARCH mismatch below) referenced $TAG before anything set it.
+TAG=${NTLIBC_SAN_MODE:-asan}
+[ "${NTLIBC_CFI:-0}" = 1 ] && TAG=cfi
+
 # This build compiles src/*.c *natively* (64-bit ELF) but includes
 # obj/include/bits/alltypes.h, which `make` generates from
 # arch/$(ARCH)/bits/alltypes.h.in and which therefore follows whatever
@@ -170,9 +181,13 @@ if [ "${NTLIBC_CFI:-0}" = 1 ]; then
 	SAN="$SAN -fsanitize=cfi-icall"
 	LTOFLAGS="-flto -fno-sanitize-trap=cfi-icall"
 fi
-# The tag every message below carries, so a log says which mode produced
-# it.  In the default mode it is the string those messages have always
-# had, so nothing that reads this output changes.
+# TAG was already computed, near ARCH above, from the same two env vars
+# this recomputes it from ($NTLIBC_SAN_MODE / $NTLIBC_CFI) -- it has to be
+# usable that early for the ARCH/config-mismatch check, well before
+# $SAN_MODE exists. Recorded here as a no-op reassignment, not deleted
+# outright, so a log still says which mode produced it right next to the
+# case statement that decided it, and so nobody "cleans up" the earlier
+# one thinking it is dead code.
 TAG=$SAN_MODE
 [ "${NTLIBC_CFI:-0}" = 1 ] && TAG=cfi
 RTDIR=$($CC -print-file-name=$SAN_RT)
