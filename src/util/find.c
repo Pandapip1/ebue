@@ -518,7 +518,9 @@ static int type_matches(int ch, mode_t mode)
 
 static int match_num(long val, long n, int cmp)
 {
-	return cmp < 0 ? val < n : cmp > 0 ? val > n : val == n;
+	if (cmp < 0) return val < n;
+	if (cmp > 0) return val > n;
+	return val == n;
 }
 
 static long days_since(time_t then)

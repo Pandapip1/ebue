@@ -233,7 +233,8 @@ static char *subst(const char *tmpl, const char *replstr, const char *value)
 {
 	size_t rlen = strlen(replstr), vlen = strlen(value), tlen = strlen(tmpl), occ = 0;
 	const char *p;
-	char *restrict out, *restrict o;
+	char *out;
+	size_t opos;
 
 	if (rlen == 0) {
 		char *r = malloc(tlen + 1);
@@ -243,15 +244,17 @@ static char *subst(const char *tmpl, const char *replstr, const char *value)
 	for (p = tmpl; (p = strstr(p, replstr)) != NULL; p += rlen) occ++;
 	out = malloc(tlen + (vlen > rlen ? (vlen - rlen) * occ : 0) + 1);
 	if (!out) return NULL;
-	o = out;
+	opos = 0;
 	p = tmpl;
 	for (;;) {
 		const char *hit = strstr(p, replstr);
-		if (!hit) { strcpy(o, p); break; } // NOLINT(clang-analyzer-security.insecureAPI.strcpy) -- out was sized above to fit the remainder of tmpl plus every substitution
-		for (size_t i = 0; i < (size_t)(hit - p); i++) o[i] = p[i];
-		o += hit - p;
-		for (size_t i = 0; i < vlen; i++) o[i] = value[i];
-		o += vlen;
+		size_t chunk;
+		if (!hit) { strcpy(out + opos, p); break; } // NOLINT(clang-analyzer-security.insecureAPI.strcpy) -- out was sized above to fit the remainder of tmpl plus every substitution
+		chunk = (size_t)(hit - p);
+		for (size_t i = 0; i < chunk; i++) out[opos + i] = p[i];
+		opos += chunk;
+		for (size_t i = 0; i < vlen; i++) out[opos + i] = value[i];
+		opos += vlen;
 		p = hit + rlen;
 	}
 	return out;
@@ -431,7 +434,8 @@ int __util_xargs_main(int argc, char **argv)
 		ti = 0;
 		while (ti < ntok_used && xstatus < 126) {
 			size_t start = ti, line = toks[ti].line, total_len = 1, k;
-			char *value, *vp;
+			char *value;
+			size_t vpos;
 			char **argv2;
 			while (ti < ntok_used && toks[ti].line == line) {
 				total_len += strlen(toks[ti].text) + 1;
@@ -439,14 +443,14 @@ int __util_xargs_main(int argc, char **argv)
 			}
 			value = malloc(total_len);
 			if (!value) { xstatus = 1; break; }
-			vp = value;
+			vpos = 0;
 			for (k = start; k < ti; k++) {
 				size_t l = strlen(toks[k].text);
-				if (k != start) *vp++ = ' ';
-				for (size_t j = 0; j < l; j++) vp[j] = toks[k].text[j];
-				vp += l;
+				if (k != start) value[vpos++] = ' ';
+				for (size_t j = 0; j < l; j++) value[vpos + j] = toks[k].text[j];
+				vpos += l;
 			}
-			*vp = 0;
+			value[vpos] = 0;
 
 			argv2 = malloc(((size_t)prog_argc + 1) * sizeof(char *));
 			if (!argv2) { free(value); xstatus = 1; break; }

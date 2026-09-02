@@ -429,8 +429,10 @@ int __util_grep_main(int argc, char **argv)
 	multi = nfiles > 1;
 
 	if (!o.fixed) {
-		int cflags = (o.extended ? REG_EXTENDED : 0) | (o.iflag ? REG_ICASE : 0) |
-			((o.xflag || o.wflag) ? 0 : REG_NOSUB);
+		int cflags = 0;
+		if (o.extended) cflags |= REG_EXTENDED;
+		if (o.iflag) cflags |= REG_ICASE;
+		if (!o.xflag && !o.wflag) cflags |= REG_NOSUB;
 		res = __util_mallocarray(pl.n ? pl.n : 1, sizeof *res);
 		if (!res) { __util_diagf("grep: out of memory\n"); pl_free(&pl); return 2; }
 		for (k = 0; k < (int)pl.n; k++) {
@@ -500,7 +502,10 @@ int __util_grep_main(int argc, char **argv)
 	 * even if an error was detected" -- -q's own OPTIONS text, and
 	 * the only documented exception to "an error outranks a match"
 	 * this file otherwise applies (see this file's header). */
-	if (o.qflag) return had_match ? 0 : (had_error ? 2 : 1);
+	if (o.qflag) {
+		if (had_match) return 0;
+		return had_error ? 2 : 1;
+	}
 	if (had_error) return 2;
 	return had_match ? 0 : 1;
 }
