@@ -782,3 +782,66 @@ unsigned constant_stride_for_continue(unsigned bound, int skip)
 	}
 	return i;
 }
+
+static const char *positive_stride_leaf(const char *p, __SIZE_TYPE__ stride)
+{
+	while (*p)
+		p += stride;
+	return p;
+}
+
+static const char *positive_stride_forward(const char *p,
+	__SIZE_TYPE__ stride)
+{
+	return positive_stride_leaf(p, stride);
+}
+
+const char *positive_stride_root(const char *p)
+{
+	return positive_stride_forward(p, sizeof(unsigned));
+}
+
+const char *positive_stride_cast_root(const char *p)
+{
+	return positive_stride_forward(p, (int)sizeof(unsigned));
+}
+
+static const char *positive_stride_assignment_leaf(const char *p,
+	unsigned stride)
+{
+	while (*p)
+		p = p + stride;
+	return p;
+}
+
+const char *positive_stride_assignment_root(const char *p)
+{
+	return positive_stride_assignment_leaf(p, 2);
+}
+
+static const char *positive_stride_cycle_b(const char *, unsigned, unsigned);
+
+static const char *positive_stride_cycle_a(const char *p, unsigned stride,
+	unsigned remaining)
+{
+	while (*p)
+		p += stride;
+	if (remaining)
+		return positive_stride_cycle_b(p, stride, remaining - 1);
+	return p;
+}
+
+static const char *positive_stride_cycle_b(const char *p, unsigned stride,
+	unsigned remaining)
+{
+	while (*p)
+		p += stride;
+	if (remaining)
+		return positive_stride_cycle_a(p, stride, remaining - 1);
+	return p;
+}
+
+const char *positive_stride_cycle_root(const char *p, unsigned remaining)
+{
+	return positive_stride_cycle_a(p, 1, remaining);
+}
