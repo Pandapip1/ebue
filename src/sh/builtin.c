@@ -1152,6 +1152,13 @@ static int bi_crontab(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+static int bi_mailx(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_mailx(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_mailx_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* ==== the dispatcher ==================================================== */
 
 /* `special` is XCU 2.14's distinction, recorded because 2.8.1 hangs
@@ -1255,6 +1262,7 @@ static const struct sh_builtin builtins[] = {
 	{ "at",      0, 0, bi_at },
 	{ "batch",   0, 0, bi_batch },
 	{ "crontab", 0, 0, bi_crontab },
+	{ "mailx",   0, 0, bi_mailx },
 	{ 0, 0, 0, 0 }
 };
 
