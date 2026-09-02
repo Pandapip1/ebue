@@ -5,7 +5,12 @@
  * [-e pattern_list]... [-f pattern_file]... [file...]` (and the two
  * sibling SYNOPSIS forms XCU grep(1p) gives -- one -f with no -e, or a
  * single bare pattern_list operand -- all three collapse to the same
- * pattern-collection logic below).
+ * pattern-collection logic below), plus one real, deliberate extension
+ * beyond XCU's own SYNOPSIS: -w ("select only those lines containing
+ * matches that form whole words" -- every widely-deployed grep,
+ * GNU and BSD alike, has carried this since long before POSIX.1-2008
+ * and scripts routinely assume it exists even though the standard
+ * itself never mandated it).
  *
  * PATTERN SOURCES: "If neither the -e nor the -f option is specified,
  * the first operand ... shall be used as the pattern_list."  -e's own
@@ -102,11 +107,30 @@
  * exactly on output (the "%s" STDOUT format is never followed by an
  * unconditionally-added '\n' -- only the '\n' getline() itself read,
  * if any, is ever re-emitted) rather than silently added or dropped.
- */
+ *
+ * -w ("word match"): a "word" character is [[:alnum:]_] (isalnum() or
+ * '_'), the same de facto definition every real grep uses (it is
+ * exactly a regex \w, which this engine does not implement as its own
+ * escape -- see this file's own header on this engine's limits -- so
+ * -w is implemented as a post-match boundary check instead, the same
+ * technique -x already uses above: a candidate match is accepted only
+ * when the byte immediately before its start (if any) and the byte
+ * immediately at its end (if any) are both non-word bytes.  Unlike -x,
+ * rejecting the regex engine's own leftmost match does not mean no
+ * match exists on the line at all -- "concatenate" contains "cat" only
+ * as a non-word-bounded substring, but a *different* line could contain
+ * both a non-word-bounded and a later word-bounded occurrence of the
+ * same pattern -- so line_matches() below re-searches from just past a
+ * rejected candidate's start (REG_NOTBOL on every retry after the
+ * first, since a retry never begins at the real start of the line)
+ * until either a word-bounded match is found or the pattern truly does
+ * not occur again.  -F's fixed-string path does the same thing with
+ * successive strstr()/strcasestr() calls instead of regexec(). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <ctype.h>
 #include <errno.h>
 #include <regex.h>
 #include "util.h"
@@ -189,10 +213,25 @@ static void pl_free(struct pat_list *pl)
 /* ==== options ============================================================== */
 
 struct grep_opts {
-	int extended, fixed, cflag, iflag, lflag, nflag, qflag, sflag, vflag, xflag;
+	int extended, fixed, cflag, iflag, lflag, nflag, qflag, sflag, vflag, wflag, xflag;
 };
 
 /* ==== matching ============================================================= */
+
+static int is_word_byte(unsigned char c)
+{
+	return isalnum(c) || c == '_';
+}
+
+/* Is a [abs_so, abs_eo) match, found on a line of length len, a whole
+ * word per -w's own rule (see this file's header)?  Called only when
+ * o->wflag is set. */
+static int whole_word_ok(const char *line, size_t len, size_t abs_so, size_t abs_eo)
+{
+	if (abs_so != 0 && is_word_byte((unsigned char)line[abs_so - 1])) return 0;
+	if (abs_eo != len && is_word_byte((unsigned char)line[abs_eo])) return 0;
+	return 1;
+}
 
 /* Tries every pattern against one line (already stripped of its own
  * trailing '\n', if it had one); returns 1 on a match, 0 otherwise.
@@ -205,17 +244,27 @@ static int line_matches(const struct grep_opts *o, const struct pat_list *pl,
 
 	for (k = 0; k < pl->n; k++) {
 		if (o->fixed) {
+			size_t plen = strlen(pl->v[k]);
 			if (o->xflag) {
-				size_t plen = strlen(pl->v[k]);
 				if (plen != len) continue;
 				if (len == 0) return 1;
 				if (o->iflag ? !strncasecmp(line, pl->v[k], len)
 				             : !memcmp(line, pl->v[k], len)) return 1;
-			} else {
+			} else if (!o->wflag) {
 				if (o->iflag ? (strcasestr(line, pl->v[k]) != 0)
 				             : (strstr(line, pl->v[k]) != 0)) return 1;
+			} else if (!plen) {
+				return 1; /* the empty word occurs everywhere, trivially bounded */
+			} else {
+				const char *p = line;
+				while ((p = o->iflag ? strcasestr(p, pl->v[k])
+				                      : strstr(p, pl->v[k])) != 0) {
+					size_t abs_so = (size_t)(p - line);
+					if (whole_word_ok(line, len, abs_so, abs_so + plen)) return 1;
+					p++;
+				}
 			}
-		} else {
+		} else if (!o->wflag) {
 			regmatch_t m;
 			int rc = regexec(&res[k], line, 1, &m, 0);
 			if (rc == 0) {
@@ -223,6 +272,27 @@ static int line_matches(const struct grep_opts *o, const struct pat_list *pl,
 				if (m.rm_so == 0 && (size_t)m.rm_eo == len) return 1;
 			} else if (rc != REG_NOMATCH) {
 				*err = 1;
+			}
+		} else {
+			/* -w with a real regex: the engine's own leftmost match may
+			 * not be word-bounded even though a later one is (see this
+			 * file's header) -- re-search past every rejected candidate
+			 * until a word-bounded match turns up or the pattern is
+			 * exhausted. */
+			size_t offset = 0;
+			for (;;) {
+				regmatch_t m;
+				int rc = regexec(&res[k], line + offset, 1, &m, offset ? REG_NOTBOL : 0);
+				if (rc == REG_NOMATCH) break;
+				if (rc != 0) { *err = 1; break; }
+				{
+					size_t abs_so = offset + (size_t)m.rm_so;
+					size_t abs_eo = offset + (size_t)m.rm_eo;
+					if ((!o->xflag || (abs_so == 0 && abs_eo == len)) &&
+					    whole_word_ok(line, len, abs_so, abs_eo)) return 1;
+					offset = (abs_eo > abs_so ? abs_eo : abs_so + 1);
+					if (offset > len) break;
+				}
 			}
 		}
 	}
@@ -306,6 +376,7 @@ int __util_grep_main(int argc, char **argv)
 		if (!strcmp(arg, "-q")) { o.qflag = 1; continue; }
 		if (!strcmp(arg, "-s")) { o.sflag = 1; continue; }
 		if (!strcmp(arg, "-v")) { o.vflag = 1; continue; }
+		if (!strcmp(arg, "-w")) { o.wflag = 1; continue; }
 		if (!strcmp(arg, "-x")) { o.xflag = 1; continue; }
 		if (!strcmp(arg, "-e") || !strncmp(arg, "-e", 2)) {
 			const char *val;
@@ -359,7 +430,7 @@ int __util_grep_main(int argc, char **argv)
 
 	if (!o.fixed) {
 		int cflags = (o.extended ? REG_EXTENDED : 0) | (o.iflag ? REG_ICASE : 0) |
-			(o.xflag ? 0 : REG_NOSUB);
+			((o.xflag || o.wflag) ? 0 : REG_NOSUB);
 		res = __util_mallocarray(pl.n ? pl.n : 1, sizeof *res);
 		if (!res) { __util_diagf("grep: out of memory\n"); pl_free(&pl); return 2; }
 		for (k = 0; k < (int)pl.n; k++) {

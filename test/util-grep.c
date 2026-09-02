@@ -247,6 +247,39 @@ static void test_grep_dash_x(void)
 	CHECK(out_equals("ab\nab\n"));
 }
 
+/* -w: "cat" must select a line where it occurs as a whole word, and
+ * must NOT select a line where it occurs only as a substring of a
+ * longer word ("concatenate") -- the exact case a grep that silently
+ * ignored -w (falling back to plain substring matching) would get
+ * wrong. */
+static void test_grep_dash_w(void)
+{
+	char *argv[] = { (char *)"grep", (char *)"-w", (char *)"cat", (char *)"scratch/g12", 0 };
+	make_file("scratch/g12", "a cat sat\nconcatenate\ncats\nscatter\ncat\n");
+	CHECK(run(grep_path, argv) == 0);
+	CHECK(out_equals("a cat sat\ncat\n"));
+}
+
+/* -w with -F: the same whole-word requirement applies to a literal
+ * (non-regex) pattern too. */
+static void test_grep_dash_w_fixed(void)
+{
+	char *argv[] = { (char *)"grep", (char *)"-w", (char *)"-F", (char *)"cat", (char *)"scratch/g13", 0 };
+	make_file("scratch/g13", "concatenate\na cat sat\n");
+	CHECK(run(grep_path, argv) == 0);
+	CHECK(out_equals("a cat sat\n"));
+}
+
+/* -w must not reject a whole-word match that merely sits next to
+ * punctuation (non-word bytes) rather than whitespace. */
+static void test_grep_dash_w_punctuation_boundary(void)
+{
+	char *argv[] = { (char *)"grep", (char *)"-w", (char *)"cat", (char *)"scratch/g14", 0 };
+	make_file("scratch/g14", "(cat)\nconcatenate\n");
+	CHECK(run(grep_path, argv) == 0);
+	CHECK(out_equals("(cat)\n"));
+}
+
 /* Exit status: 0 (matched), 1 (no match), >1 (a real error -- here, a
  * genuinely malformed ERE, an unbalanced '('). */
 static void test_grep_exit_status_matched(void)
@@ -296,7 +329,7 @@ static void rmtree_scratch(void)
 {
 	int i;
 	char buf[32];
-	for (i = 1; i <= 11; i++) {
+	for (i = 1; i <= 14; i++) {
 		snprintf(buf, sizeof buf, "scratch/g%d", i);
 		unlink(buf);
 	}
@@ -346,6 +379,9 @@ int main(int argc, char **argv)
 	test_grep_dash_F();
 	test_grep_multiple_e();
 	test_grep_dash_x();
+	test_grep_dash_w();
+	test_grep_dash_w_fixed();
+	test_grep_dash_w_punctuation_boundary();
 	test_grep_exit_status_matched();
 	test_grep_exit_status_no_match();
 	test_grep_exit_status_error();
