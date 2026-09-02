@@ -68,10 +68,38 @@
 # x86_64-win32-tcc but its runtime behaviour under the wine/x86_64
 # profile these rows select remains unverified in this sandbox.
 #
-# COUNTS PASS=1499 BUG=0 UNIMPL=3 NA=105 FLAKY=3
+# 2026-09-02, pthread.h CLOCK_* visibility: the 3 NA rows this note used
+# to cover -- pthread_cancel/2-3.c, pthread_condattr_getclock/1-2.c,
+# pthread_condattr_setclock/1-1.c, each reading "suite fixture ... uses
+# CLOCK_REALTIME without including the required time.h header" -- were
+# blamed on the suite (a real gap in these fixtures relative to strict
+# POSIX, since pthread.h alone does not mandate CLOCK_REALTIME's
+# visibility) rather than on ntlibc. That premise no longer matches
+# reality: include/pthread.h now includes <time.h> directly, so
+# CLOCK_REALTIME (and the rest of the CLOCK_* family) is transitively
+# visible from pthread.h alone here too, the same accepted behaviour
+# musl and glibc already give these exact fixtures -- which is why the
+# fixtures never needed their own time.h include on those platforms
+# either. Rebuilt all 3 against the current tree with x86_64-win32-tcc,
+# the same compile_command() link line tools/posix-opts.py's own
+# build_one() uses (lib/crt1.o + the corpus source + $SUITE/lib/common.c
+# -Llib -lc -lntdll): all 3 now compile and link completely clean, no
+# errors -- pthread_cancel/2-3.c carries one pre-existing, unrelated
+# warning ("function might return no value: 'test_main'"); the other 2
+# have none. Removed below and now resolve via the wildcard PASS row,
+# the same treatment the 12 pthread.h-blocked conversions above got in
+# the 2026-09-01 refresh note, and the same evidence-and-disclosure
+# convention test/libc-test-expected.txt uses for flockfile-list/mntent:
+# this environment has a working x86_64-win32-tcc but no runnable x86_64
+# Wine (see the 2026-09-01 refresh note above for what was tried and why
+# it did not work), so this rests on clean compile/link evidence only,
+# not on an independent Wine run of the built .exe files. COUNTS
+# updated: PASS 1499 -> 1502, NA 105 -> 102.
+#
+# COUNTS PASS=1502 BUG=0 UNIMPL=3 NA=102 FLAKY=3
 # (whole-suite totals once the wildcard default below is applied to every
 # real case tools/posix-opts.py discovers -- not a count of rows in this
-# file, which lists only the 111 explicit exceptions plus the wildcard.)
+# file, which lists only the 109 explicit exceptions plus the wildcard.)
 aio_error/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	baseline disagreed across repeated runs after AIO implementation: PASS when EINPROGRESS was observed and UNRESOLVED when all 128 small writes completed before the probe. Re-reviewed src/thread/aio.c: a single persistent worker thread (aio_worker()) drains requests[] in FIFO order (next_queued()) while submit() enqueues all 128 aio_write() calls back to back; the queue lock and completion handshake (finish_locked(), wake_waiters_locked()) are correct on inspection -- no missing lock or lost wakeup found -- so which of the 128 the checking loop still finds QUEUED/RUNNING is a genuine race between the submitting thread and the worker thread, resolved only by host scheduling, the same load-sensitivity class as the CLOCK_BOUND cases. Could not re-run: this sandbox's Wine cannot execute x86_64 PE binaries (stock aarch64 Wine only ships aarch64-windows support and fails every PE load with STATUS_NOT_SUPPORTED; an x86_64-linux Wine run under qemu-user's ELF emulation instead crashes inside Wine's own PE loader trying to reserve its guest address space), so no fresh pass/fail ratio was collected here and the CI-observed split above is unconfirmed but unchallenged
 aio_read/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNTESTED because prioritized I/O is not supported; asynchronous I/O itself is implemented
 aio_return/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite check is self-contradictory: after probing an invalid aiocb it expects aio_error on a different completed request to return EINVAL
@@ -117,9 +145,6 @@ nanosleep/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	requires fork(), 
 pthread_atfork/3-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
 pthread_attr_setschedpolicy/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the fixture pins itself to one CPU via sched_setaffinity()/CPU_SET (glibc's GNU/Linux cpu_set_t extension, <sched.h>) before exercising scheduling-policy propagation; ntlibc implements neither cpu_set_t nor sched_setaffinity()/sched_getaffinity() today. NT's SetThreadAffinityMask (kernel32, NTLIBC_USE_KERNEL32) is a real per-thread analogue that could eventually back this, but it needs the whole cpu_set_t/CPU_SET/sched_setaffinity surface built first (a separate, larger addition than this one test pair) -- checked and left NA rather than guessed at
 pthread_barrier_destroy/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	fixture publishes ENTERED_THREAD before calling pthread_barrier_wait; destruction during a wait is undefined and measured 20 EBUSY PASS plus 20 pre-entry UNSUPPORTED outcomes
-pthread_cancel/2-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture calls clock_gettime and uses CLOCK_REALTIME without including the required time.h header
-pthread_condattr_getclock/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture uses CLOCK_REALTIME without including the required time.h header
-pthread_condattr_setclock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture uses CLOCK_REALTIME without including the required time.h header
 pthread_create/1-6.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	pthread.h and sys/pstat.h/sys/sysctl.h no longer block this (pthread.h now exists at include/pthread.h; the sysctl/pstat probes are optional and skipped); it now fails at link with tcc: error: unresolved reference to 'setitimer' and 'getitimer', which are deliberately unimplemented -- see include/sys/time.h's own "undefined-ok" comment on getitimer()/setitimer(): a repeating interval timer needs queued signal delivery, and SIGALRM here only arrives through an APC that runs while the thread is in an alertable wait, so repeat expiries would coalesce instead of queueing
 pthread_create/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	pthread.h no longer blocks this (include/pthread.h now exists); it now fails at link with tcc: error: unresolved reference to 'setitimer', which is deliberately unimplemented -- see include/sys/time.h's own "undefined-ok" comment on setitimer(): a repeating interval timer needs queued signal delivery, and SIGALRM here only arrives through an APC that runs while the thread is in an alertable wait, so repeat expiries would coalesce instead of queueing
 pthread_mutex_getprioceiling/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
