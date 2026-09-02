@@ -4284,17 +4284,58 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     bool Truth = false;
   };
 
-  using SMTPath = std::vector<SMTPathStep>;
+  /* Exact paths are ready for a literal transition consumer.  Havoced paths
+   * deliberately quantify an unsupported value and remain a sound
+   * over-approximation for UNSAT proofs.  Unsupported paths contain an effect
+   * whose state has no representation yet and must not be consumed by a
+   * general transition solver. */
+  enum class TransitionSupport {
+    Exact,
+    Havoced,
+    Unsupported,
+  };
 
-  class ScalarSMTQuery {
+  struct SMTPath {
+    std::vector<SMTPathStep> Steps;
+    const CFGBlock *BackedgeSource = nullptr;
+    const CFGBlock *Header = nullptr;
+    TransitionSupport Support = TransitionSupport::Exact;
+  };
+
+  /* A header-to-header CFG path represented independently of the current
+   * strict-rank query.  All paths in a candidate share a Z3 context, and thus
+   * share the same pre/post symbols.  Per-iteration temporaries and havoced
+   * values are existentially bound rather than silently becoming stable
+   * header state. */
+  class TransitionIR {
+  public:
+    struct StateSlot {
+      std::string Identity;
+      z3::expr Before;
+      z3::expr After;
+    };
+
+  private:
     ASTContext &AST;
-    z3::context Z;
+    z3::context &Z;
     z3::solver Solver;
     std::map<const ValueDecl *, z3::expr> Values;
     std::map<const ValueDecl *, z3::expr> InitialValues;
+    std::set<const ValueDecl *> StateDeclarations;
+    std::set<const ValueDecl *> TransientDeclarations;
+    std::vector<StateSlot> State;
+    std::vector<z3::expr> DomainFacts;
+    std::vector<z3::expr> EntryFacts;
+    std::vector<z3::expr> PathFacts;
+    std::vector<z3::expr> PostFacts;
     std::vector<z3::expr> Definedness;
+    std::vector<z3::expr> Existentials;
+    const CFGBlock *BackedgeSource = nullptr;
+    const CFGBlock *Header = nullptr;
+    TransitionSupport Support = TransitionSupport::Exact;
     unsigned Fresh = 0;
     bool Valid = true;
+    bool Finalized = false;
 
     static std::string decimal(const llvm::APInt &Value, bool Signed) {
       llvm::SmallString<64> Buffer;
@@ -4312,7 +4353,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return integer(Value);
     }
 
-    bool addAssertion(const z3::expr &Assertion) {
+    bool addQueryAssertion(const z3::expr &Assertion) {
       /* Every assertion reaches Z3 through this choke point.  A malformed
        * translation is loss of proof, never a solver assertion or an
        * accidentally strengthened formula. */
@@ -4321,6 +4362,14 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         return false;
       }
       Solver.add(Assertion);
+      return true;
+    }
+
+    bool addBaseAssertion(const z3::expr &Assertion,
+                          std::vector<z3::expr> &Facts) {
+      if (!addQueryAssertion(Assertion))
+        return false;
+      Facts.push_back(Assertion);
       return true;
     }
 
@@ -4342,9 +4391,9 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       z3::expr Limit = powerOfTwo(Width);
       if (signedType(Type)) {
         z3::expr Half = powerOfTwo(Width - 1);
-        return addAssertion(Value >= -Half && Value < Half);
+        return addBaseAssertion(Value >= -Half && Value < Half, DomainFacts);
       }
-      return addAssertion(Value >= 0 && Value < Limit);
+      return addBaseAssertion(Value >= 0 && Value < Limit, DomainFacts);
     }
 
     std::optional<z3::expr> convert(z3::expr Value, QualType Type,
@@ -4392,6 +4441,13 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         return std::nullopt;
       Values.emplace(Declaration, Symbol);
       InitialValues.emplace(Declaration, Symbol);
+      if (!TransientDeclarations.count(Declaration)) {
+        StateDeclarations.insert(Declaration);
+      } else {
+        Existentials.push_back(Symbol);
+        if (Support == TransitionSupport::Exact)
+          Support = TransitionSupport::Havoced;
+      }
       return Symbol;
     }
 
@@ -4401,6 +4457,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       z3::expr Symbol = Z.int_const(Name.c_str());
       if (!addTypeBounds(Symbol, Type))
         return std::nullopt;
+      Existentials.push_back(Symbol);
       return Symbol;
     }
 
@@ -4410,15 +4467,23 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         return std::nullopt;
       }
       std::optional<z3::expr> Result = freshValue(Call->getType(), "call");
+      if (Result && Support == TransitionSupport::Exact)
+        Support = TransitionSupport::Havoced;
       return Result;
     }
 
   public:
-    explicit ScalarSMTQuery(ASTContext &AST)
-        : AST(AST), Solver(Z) {
+    explicit TransitionIR(ASTContext &AST, z3::context &Z,
+                          const SMTPath &Path,
+                          const std::set<const ValueDecl *> &Slice)
+        : AST(AST), Z(Z), Solver(Z), BackedgeSource(Path.BackedgeSource),
+          Header(Path.Header), Support(Path.Support) {
       z3::params Parameters(Z);
       Parameters.set("timeout", 100u);
       Solver.set(Parameters);
+      for (const ValueDecl *Declaration : Slice)
+        if (!scalar(Declaration))
+          break;
     }
 
     std::optional<z3::expr> expression(const Expr *Expression) {
@@ -4547,9 +4612,16 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return *Value != 0;
     }
 
-    bool assertCondition(const Expr *Condition, bool Truth) {
+    bool assertEntryCondition(const Expr *Condition, bool Truth) {
       std::optional<z3::expr> Formula = condition(Condition);
-      return Formula && addAssertion(Truth ? *Formula : !*Formula);
+      return Formula && addBaseAssertion(Truth ? *Formula : !*Formula,
+                                         EntryFacts);
+    }
+
+    bool assertPathCondition(const Expr *Condition, bool Truth) {
+      std::optional<z3::expr> Formula = condition(Condition);
+      return Formula && addBaseAssertion(Truth ? *Formula : !*Formula,
+                                         PathFacts);
     }
 
     bool apply(const Stmt *Statement) {
@@ -4560,6 +4632,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
           const auto *Variable = dyn_cast<VarDecl>(Item);
           if (!Variable || !integerType(Variable->getType()))
             continue;
+          TransientDeclarations.insert(Variable);
+          StateDeclarations.erase(Variable);
           if (!Variable->getInit()) {
             if (!scalar(Variable))
               return false;
@@ -4575,6 +4649,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
              * relation.  It may lose a proof, but cannot manufacture one. */
             Valid = true;
             Converted = freshValue(Variable->getType(), "havoc");
+            if (Converted && Support == TransitionSupport::Exact)
+              Support = TransitionSupport::Havoced;
           }
           if (!Converted)
             return false;
@@ -4584,6 +4660,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
             if (!addTypeBounds(Initial, Variable->getType()))
               return false;
             InitialValues.emplace(Variable, Initial);
+            Existentials.push_back(Initial);
           }
           Values.insert_or_assign(Variable, *Converted);
         }
@@ -4616,8 +4693,18 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       if (!Binary || !Binary->isAssignmentOp())
         return true;
       const ValueDecl *Variable = TotalityVisitor::value(Binary->getLHS());
-      if (!Variable || !integerType(Variable->getType()))
+      if (!Variable || !integerType(Variable->getType())) {
+        Support = TransitionSupport::Unsupported;
         return true;
+      }
+      if (!InitialValues.count(Variable)) {
+        z3::expr Initial = Z.int_const(symbolName("v", Variable).c_str());
+        if (!addTypeBounds(Initial, Variable->getType()))
+          return false;
+        InitialValues.emplace(Variable, Initial);
+      }
+      if (!TransientDeclarations.count(Variable))
+        StateDeclarations.insert(Variable);
       std::optional<z3::expr> Updated;
       if (Binary->getOpcode() == BO_Assign) {
         bool SavedValid = Valid;
@@ -4627,6 +4714,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         if (!Updated) {
           Valid = SavedValid;
           Updated = freshValue(Variable->getType(), "havoc");
+          if (Updated && Support == TransitionSupport::Exact)
+            Support = TransitionSupport::Havoced;
         }
       } else if (const auto *Compound =
                      dyn_cast<CompoundAssignOperator>(Binary)) {
@@ -4667,6 +4756,63 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return scalar(Variable);
     }
 
+    void markUnsupported() { Support = TransitionSupport::Unsupported; }
+
+    bool finalize() {
+      if (Finalized)
+        return Valid;
+      Finalized = true;
+      for (const ValueDecl *Declaration : StateDeclarations) {
+        auto Before = InitialValues.find(Declaration);
+        auto Current = Values.find(Declaration);
+        if (Before == InitialValues.end() || Current == Values.end()) {
+          Valid = false;
+          return false;
+        }
+        z3::expr After =
+            Z.int_const(symbolName("post", Declaration).c_str());
+        if (!addTypeBounds(After, Declaration->getType()))
+          return false;
+        if (!addBaseAssertion(After == Current->second, PostFacts))
+          return false;
+        State.push_back(
+            {symbolName("slot", Declaration), Before->second, After});
+      }
+      return Valid;
+    }
+
+    z3::expr conjunction(const std::vector<z3::expr> &Facts) {
+      z3::expr Result = Z.bool_val(true);
+      for (const z3::expr &Fact : Facts)
+        Result = Result && Fact;
+      return Result;
+    }
+
+    z3::expr entryPredicate() { return conjunction(EntryFacts); }
+
+    z3::expr exactRelation() {
+      z3::expr Result = conjunction(DomainFacts) && conjunction(EntryFacts) &&
+                        conjunction(PathFacts) && conjunction(PostFacts);
+      for (const z3::expr &Obligation : Definedness)
+        Result = Result && Obligation;
+      if (!Existentials.empty()) {
+        z3::expr_vector Bound(Z);
+        for (const z3::expr &Symbol : Existentials)
+          Bound.push_back(Symbol);
+        Result = z3::exists(Bound, Result);
+      }
+      return Result;
+    }
+
+    const std::vector<StateSlot> &stateSlice() const { return State; }
+    TransitionSupport support() const { return Support; }
+    const CFGBlock *backedgeSource() const { return BackedgeSource; }
+    const CFGBlock *header() const { return Header; }
+    bool wellFormed() {
+      return Valid && Finalized && BackedgeSource && Header &&
+             entryPredicate().is_bool() && exactRelation().is_bool();
+    }
+
     bool disprovesStrictProgress(const z3::expr &Before,
                                  const z3::expr &After,
                                  ProgressKind Kind) {
@@ -4677,17 +4823,17 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
        * termination proof. */
       for (const z3::expr &Obligation : Definedness) {
         Solver.push();
-        bool Added = addAssertion(!Obligation);
+        bool Added = addQueryAssertion(!Obligation);
         z3::check_result Result = Added ? Solver.check() : z3::unknown;
         Solver.pop();
         if (!Added || Result != z3::unsat)
           return true;
-        if (!addAssertion(Obligation))
+        if (!addQueryAssertion(Obligation))
           return true;
       }
       z3::expr Failure = Kind == ProgressKind::Up ? After <= Before
                                                   : After >= Before;
-      if (!addAssertion(Failure) || !Valid)
+      if (!addQueryAssertion(Failure) || !Valid)
         return true;
       return Solver.check() != z3::unsat;
     }
@@ -4704,6 +4850,25 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return Binary && Binary->isAssignmentOp();
   }
 
+  static void collectTransitionState(
+      const Stmt *Statement, std::set<const ValueDecl *> &References,
+      std::set<const ValueDecl *> &PerIterationDeclarations) {
+    if (!Statement)
+      return;
+    if (const auto *Declaration = dyn_cast<DeclStmt>(Statement))
+      for (const Decl *Item : Declaration->decls())
+        if (const auto *Variable = dyn_cast<VarDecl>(Item))
+          PerIterationDeclarations.insert(Variable);
+    if (const auto *Reference = dyn_cast<DeclRefExpr>(Statement)) {
+      const auto *Declaration = dyn_cast<ValueDecl>(Reference->getDecl());
+      if (Declaration && (Declaration->getType()->isIntegerType() ||
+                          Declaration->getType()->isEnumeralType()))
+        References.insert(Declaration);
+    }
+    for (const Stmt *Child : Statement->children())
+      collectTransitionState(Child, References, PerIterationDeclarations);
+  }
+
   void collectSMTPaths(const CFGBlock *Block, const CFGBlock *Header,
                        SMTPath Path, std::set<const CFGBlock *> Visiting,
                        std::vector<SMTPath> &Paths, bool &Unsupported) const {
@@ -4712,6 +4877,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return;
     }
     if (Block == Header) {
+      Path.Header = Header;
       Paths.push_back(std::move(Path));
       return;
     }
@@ -4722,9 +4888,15 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return;
     }
     for (const CFGElement &Element : *Block)
-      if (std::optional<CFGStmt> Item = Element.getAs<CFGStmt>())
-        if (scalarCFGStatement(Item->getStmt()))
-          Path.push_back({Item->getStmt(), nullptr, false});
+      if (std::optional<CFGStmt> Item = Element.getAs<CFGStmt>()) {
+        const Stmt *Statement = Item->getStmt();
+        if (scalarCFGStatement(Statement)) {
+          Path.Steps.push_back({Statement, nullptr, false});
+        } else if (const auto *Expression = dyn_cast<Expr>(Statement)) {
+          if (Expression->HasSideEffects(Context))
+            Path.Support = TransitionSupport::Unsupported;
+        }
+      }
 
     const Stmt *Terminator = Block->getTerminatorStmt();
     if (Terminator && (isa<SwitchStmt>(Terminator) ||
@@ -4737,7 +4909,9 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     for (const CFGBlock *Successor : Block->succs()) {
       SMTPath Next = Path;
       if (Branch)
-        Next.push_back({nullptr, Branch, Index == 0});
+        Next.Steps.push_back({nullptr, Branch, Index == 0});
+      if (Successor == Header)
+        Next.BackedgeSource = Block;
       collectSMTPaths(Successor, Header, std::move(Next), Visiting,
                       Paths, Unsupported);
       ++Index;
@@ -4815,32 +4989,53 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     collectSMTPaths(BodyEntry, Header, {}, {}, Paths, Unsupported);
     if (Unsupported || Paths.empty())
       return false;
+    std::set<const ValueDecl *> Slice;
+    std::set<const ValueDecl *> PerIterationDeclarations;
+    collectTransitionState(Condition, Slice, PerIterationDeclarations);
+    for (const SMTPath &Path : Paths)
+      for (const SMTPathStep &Step : Path.Steps) {
+        collectTransitionState(Step.Statement, Slice,
+                               PerIterationDeclarations);
+        collectTransitionState(Step.Condition, Slice,
+                               PerIterationDeclarations);
+      }
+    for (const ValueDecl *Declaration : PerIterationDeclarations)
+      Slice.erase(Declaration);
 
     for (const Progress &Candidate : Candidates) {
       const auto *Variable = dyn_cast<VarDecl>(Candidate.Variable);
       assert(Variable && "eligible scalar rank has a variable");
       bool AllStrict = true;
+      z3::context TransitionContext;
       for (const SMTPath &Path : Paths) {
         try {
-          ScalarSMTQuery Query(Context);
+          TransitionIR Query(Context, TransitionContext, Path, Slice);
           std::optional<z3::expr> Before = Query.initial(Variable);
-          if (!Before || (Condition && !Query.assertCondition(Condition, true))) {
+          if (!Before ||
+              (Condition && !Query.assertEntryCondition(Condition, true))) {
             AllStrict = false;
             break;
           }
-          for (const SMTPathStep &Step : Path) {
+          for (const SMTPathStep &Step : Path.Steps) {
+            if ((Step.Statement && containsImpureCall(Step.Statement)) ||
+                (Step.Condition && containsImpureCall(Step.Condition)))
+              Query.markUnsupported();
             if (Step.Statement && !Query.apply(Step.Statement)) {
               AllStrict = false;
               break;
             }
             if (Step.Condition &&
-                !Query.assertCondition(Step.Condition, Step.Truth)) {
+                !Query.assertPathCondition(Step.Condition, Step.Truth)) {
               AllStrict = false;
               break;
             }
           }
           if (!AllStrict)
             break;
+          if (!Query.finalize() || !Query.wellFormed()) {
+            AllStrict = false;
+            break;
+          }
           std::optional<z3::expr> After = Query.current(Variable);
           if (!After || Query.disprovesStrictProgress(*Before, *After,
                                                       Candidate.Kind)) {
