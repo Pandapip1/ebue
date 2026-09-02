@@ -111,6 +111,44 @@ int checked_loop_increment(void)
 	return i;
 }
 
+static int ordered_global_index;
+
+int ordered_global_increment(int limit)
+{
+	if (ordered_global_index >= limit)
+		return 0;
+	return ordered_global_index++;
+}
+
+int ordered_local_decrement(int value, int limit)
+{
+	if (value <= limit)
+		return 0;
+	return value--;
+}
+
+int reversed_ordered_increment(int value, int limit)
+{
+	if (limit > value)
+		return value++;
+	return 0;
+}
+
+int reversed_ordered_decrement(int value, int limit)
+{
+	if (limit < value)
+		return value--;
+	return 0;
+}
+
+int relational_loop_difference(const unsigned char *bytes, int length)
+{
+	int cursor = length;
+	while (cursor > 0 && bytes[cursor - 1] == 0)
+		cursor--;
+	return length - cursor;
+}
+
 /* Pins symbolInterval()'s BO_Rem decomposition of a value materialized
  * into a local and reread past the point where a source-level walk can
  * see the '%' that narrowed it -- src/stdlib/strtod.c's bn_shl() shape

@@ -36,7 +36,9 @@
 #             Path-sensitive Clang checkers require every integer divisor to
 #             be proven nonzero and every shift count to be proven within the
 #             promoted left operand's width, and every signed arithmetic result
-#             to remain representable.
+#             to remain representable.  Its relational side solver requires
+#             Clang/LLVM 18 development files, pkg-config, and Z3 development
+#             headers and library.
 #   ownership currently opt-in while its initial proof backlog is triaged.
 #             Manual header/stub contracts identify producers, reallocations,
 #             and unique freers. Path-sensitive checkers prove every dynamic
@@ -1063,6 +1065,15 @@ stage_arithub() {
 	require_tool clang-18 || return $missing
 	require_tool clang++-18 || return $missing
 	require_tool llvm-config-18 || return $missing
+	require_tool pkg-config || return $missing
+	if ! pkg-config --exists z3; then
+		report_missing "Z3 development headers and library are not installed, so relational arithmetic constraints cannot be proved."
+		return $missing
+	fi
+	if ! z3_flags=$(pkg-config --cflags --libs z3); then
+		report_missing "pkg-config could not resolve Z3 compiler and linker flags."
+		return $missing
+	fi
 	libdir=$(llvm-config-18 --libdir)
 	clang_cpp=$(find "$libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' \
 		-print 2>/dev/null | sort | head -n 1)
@@ -1072,11 +1083,13 @@ stage_arithub() {
 	fi
 
 	plugin=$builddir/ntlibc-arithmetic-ub-checker.so
-	# llvm-config deliberately returns shell words, not one argument.
-	# shellcheck disable=SC2046
-	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
+	# llvm-config and pkg-config deliberately return shell words, not one
+	# argument.
+	# shellcheck disable=SC2046,SC2086
+	clang++-18 -fPIC -shared -DNTLIBC_ARITHMETIC_Z3 \
+		$(llvm-config-18 --cxxflags) \
 		tools/clang/SizeCastChecker.cpp -o "$plugin" "$clang_cpp" \
-		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
+		$(llvm-config-18 --ldflags --libs --system-libs) $z3_flags || return 1
 
 	# These built-ins add a same-operation assumption before a plugin's
 	# PreStmt callback.  Disable only the overlapping checks so ntlibc's
