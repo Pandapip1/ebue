@@ -7,10 +7,18 @@
  * taken as-is; __spawn reports ENOENT if it does not exist.  Anything
  * else is looked up in each directory of PATH, trying the name and then
  * the name with ".exe" appended, which is what Windows expects an image
- * to be called.  PATH here is the Windows variable, whose entries are
- * separated by ';' -- a ':' cannot be the separator because every
- * absolute entry ("C:\Windows") contains one.  An empty entry means the
- * current directory, as on Unix.
+ * to be called (and which __is_program()'s own sniff means a Linux
+ * candidate never actually needs, since it is never named that way, but
+ * trying it costs one extra failed access() and matches Windows PATH
+ * search order exactly).  PATH's entry separator and the character
+ * try_dir() joins a directory to `name` with are both platform, not
+ * fixed: on NT, PATH entries are separated by ';' -- a ':' cannot be
+ * the separator because every absolute entry ("C:\Windows") contains
+ * one -- and a synthesized path is joined with '\\'.  On Linux, PATH
+ * entries are separated by ':' and joined with '/', because that is
+ * what gets handed to the real execve(2)/access() calls afterward, not
+ * to another NT API that would tolerate either.  An empty entry means
+ * the current directory, as on Unix.
  *
  * A candidate needs both access(X_OK), backed by $LXMOD when present,
  * and __is_program(), below: the first two bytes are "MZ" (an image NT's
@@ -116,6 +124,11 @@ static char *try_dir(const char *dir, size_t dlen, const char *name)
 	size_t total;
 	char *p;
 	int need_separator;
+#if defined(__linux__)
+	static const char join[] = "/";
+#else
+	static const char join[] = "\\";
+#endif
 
 	if (dlen > INT_MAX || !__size_add_checked(dlen, nlen, &total) ||
 	    !__size_add_checked(total, 6, &total)) {
@@ -126,7 +139,7 @@ static char *try_dir(const char *dir, size_t dlen, const char *name)
 	if (!p) return 0;
 	need_separator = dlen && dir[dlen - 1] != '/' && dir[dlen - 1] != '\\';
 	snprintf(p, total, "%.*s%s%s", (int)dlen, dir,
-	    need_separator ? "\\" : "", name);
+	    need_separator ? join : "", name);
 	dlen += (size_t)need_separator;
 	if (access(p, X_OK) == 0 && __is_program(p)) return p;
 	snprintf(p + dlen + nlen, 5, ".exe");
@@ -140,15 +153,21 @@ char *__find_program(const char *name, int use_path)
 {
 	const char *path, *p;
 	char *r;
+#if defined(__linux__)
+	static const char psep[] = ":";
+#else
+	static const char psep[] = ";";
+#endif
 	/* The empty string names nothing, and it has to be answered here
 	 * rather than left to the search below.  exec.html's [ENOENT] is
 	 * explicit -- "A component of path or file does not name an
 	 * existing file or path or file is an empty string" -- but "" has
 	 * no directory part, so has_dir() sends it into the PATH loop,
 	 * where try_dir() appends it to a PATH entry and produces
-	 * `<entry>\`: the directory itself, with nothing after it.
-	 * A search implementation can otherwise accidentally turn it into
-	 * `<entry>\`, so reject it before consulting PATH.  __is_program()
+	 * `<entry>\` (or `<entry>/` on Linux): the directory itself, with
+	 * nothing after it.  A search implementation can otherwise
+	 * accidentally turn it into that, so reject it before consulting
+	 * PATH.  __is_program()
 	 * also refuses directories, but this check stays: a shall-fail clause
 	 * should not
 	 * rest on an open flag two functions away, and musl rejects the
@@ -164,7 +183,7 @@ char *__find_program(const char *name, int use_path)
 	if (!path) path = "";
 	p = path;
 	for (;;) {
-		size_t len = strcspn(p, ";");
+		size_t len = strcspn(p, psep);
 		r = try_dir(p, len, name);
 		if (r) return r;
 		p += len;
