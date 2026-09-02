@@ -1042,3 +1042,18 @@ unsigned switch_scalar_progress(unsigned i, unsigned limit, int arm)
 	}
 	return i;
 }
+
+int signed_body_finite_domain(int i, int keep_running)
+{
+	for (;;) {
+		if (!keep_running) return i;
+		i++;
+	}
+}
+
+int signed_body_descent(int i, int keep_running)
+{
+	while (keep_running)
+		i--;
+	return i;
+}

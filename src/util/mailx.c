@@ -199,20 +199,15 @@
 
 /* ==================== small shared helpers ==================== */
 
-/* write(), bounded to at most `len` retry attempts -- the same shape
- * src/util/tee.c's copy loop uses (see that file's own recent fix): a
- * write() that makes no progress at all (0, an error, or, defensively,
- * an impossible over-long count) is a real error, never retried
- * forever. */
-static int write_all_bounded(int fd, const char *buf, size_t len, const char *label)
+/* A write() that makes no progress at all (0, an error, or, defensively,
+ * an impossible over-long count) is a real error, never retried forever. */
+static int write_all(int fd, const char *buf, size_t len, const char *label)
 {
 	size_t left = len;
 	const char *p = buf;
-	size_t remaining = len;
 
-	while (left > 0 && remaining > 0) {
+	while (left > 0) {
 		ssize_t w = write(fd, p, left);
-		remaining--;
 		if (w <= 0 || (size_t)w > left) {
 			if (w >= 0) errno = EIO;
 			__util_diagf("mailx: %s: %s\n", label, strerror(errno));
@@ -220,10 +215,6 @@ static int write_all_bounded(int fd, const char *buf, size_t len, const char *la
 		}
 		p += (size_t)w;
 		left -= (size_t)w;
-	}
-	if (left > 0) {
-		__util_diagf("mailx: %s: write did not make progress\n", label);
-		return -1;
 	}
 	return 0;
 }
@@ -384,7 +375,7 @@ static int ensure_blank_terminated(int fd, const char *label)
 	if (n >= 1 && tail[n - 1] == '\n') pad = "\n";                                  /* one newline short */
 	else pad = "\n\n";                                                              /* line not even newline-terminated */
 
-	return write_all_bounded(fd, pad, strlen(pad), label);
+	return write_all(fd, pad, strlen(pad), label);
 }
 
 /* Builds and appends one real mbox message: the "From " envelope line,
@@ -451,7 +442,7 @@ static int deliver_message(const char *path, const char *login, const char *to_h
 		return -1;
 	}
 
-	if (ensure_blank_terminated(fd, path) == 0 && write_all_bounded(fd, msg, msglen, path) == 0)
+	if (ensure_blank_terminated(fd, path) == 0 && write_all(fd, msg, msglen, path) == 0)
 		rc = 0;
 
 	flock(fd, LOCK_UN);
@@ -693,7 +684,7 @@ static int rewrite_mailbox(int fd, const char *label, const char *buf, const str
 	}
 	for (i = 0; i < n; i++) {
 		if (msgs[i].deleted) continue;
-		if (write_all_bounded(fd, buf + msgs[i].start, msgs[i].end - msgs[i].start, label) < 0)
+		if (write_all(fd, buf + msgs[i].start, msgs[i].end - msgs[i].start, label) < 0)
 			return -1;
 	}
 	return 0;

@@ -2833,3 +2833,153 @@ unsigned switch_repeated_unsigned_progress(unsigned i, unsigned limit,
 	}
 	return i;
 }
+
+unsigned unsigned_body_wrap(unsigned i, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		i++;
+	}
+	return i;
+}
+
+signed char promoted_signed_char_wrap(signed char i, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		i++;
+	}
+	return i;
+}
+
+short promoted_signed_short_wrap(short i, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		i += 3;
+	}
+	return i;
+}
+
+struct narrow_signed_bitfield {
+	int value : 2;
+};
+
+int promoted_signed_bitfield_wrap(struct narrow_signed_bitfield *p,
+	int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		p->value++;
+	}
+	return p->value;
+}
+
+int signed_unsigned_compound_cycle(int i, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		i += 2147483648u;
+	}
+	return i;
+}
+
+int signed_unsigned_unit_compound_cycle(int i, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		i += 1u;
+	}
+	return i;
+}
+
+int signed_unsigned_assignment_cycle(int i, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		i = i + 2147483648u;
+	}
+	return i;
+}
+
+int signed_unsigned_unit_assignment_cycle(int i, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		i = i + 1u;
+	}
+	return i;
+}
+
+int signed_unary_then_unsigned_cycle(int i, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		i++;
+		i += 1u;
+	}
+	return i;
+}
+
+int signed_body_unsigned_increment_cycle(int i, int keep_running)
+{
+	for (; keep_running; i += 1u) { /* totality-expect */
+		i++;
+	}
+	return i;
+}
+
+enum unsigned_step_constant {
+	UNSIGNED_STEP = 2147483648u
+};
+
+int signed_unsigned_enum_cycle(int i, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		i += UNSIGNED_STEP;
+	}
+	return i;
+}
+
+int signed_body_dynamic_step(int i, int step, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		i += step;
+	}
+	return i;
+}
+
+int signed_body_reset(int i, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		i++;
+		i = 0;
+	}
+	return i;
+}
+
+int signed_body_alternating(int i, int reverse, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		if (reverse) i--;
+		else i++;
+	}
+	return i;
+}
+
+int signed_body_early_continue(int i, int skip, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		if (skip) continue;
+		i++;
+	}
+	return i;
+}
+
+int signed_body_condition_reset(int i, int keep_running)
+{
+	while ((i = 0), keep_running) { /* totality-expect */
+		i++;
+	}
+	return i;
+}
+
+int signed_body_asm(int i, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		i++;
+		__asm__ volatile("" : "+r"(i));
+	}
+	return i;
+}

@@ -449,6 +449,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     bool UnitStep = false;
     bool UnitOnly = false;
     const ValueDecl *DynamicStep = nullptr;
+    bool UnaryStep = false;
   };
 
   std::string file(SourceLocation Location) const {
@@ -718,10 +719,12 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
                                const Expr *GuardedStep = nullptr,
                                bool RequiresNonzeroCondition = false,
                                bool UnitStep = false,
-                               const ValueDecl *DynamicStep = nullptr) {
+                               const ValueDecl *DynamicStep = nullptr,
+                               bool UnaryStep = false) {
     return Progress{Variable, Kind, Base, GuardedStep,
                     Access && Access->getType().isVolatileQualified(),
-                    RequiresNonzeroCondition, UnitStep, false, DynamicStep};
+                    RequiresNonzeroCondition, UnitStep, false, DynamicStep,
+                    UnaryStep};
   }
 
   static bool sameRank(const Progress &Left, const Progress &Right) {
@@ -766,10 +769,12 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       const ValueDecl *Base = Member ? value(Member->getBase()) : nullptr;
       if (Unary->isIncrementOp())
         return makeProgress(Variable, ProgressKind::Up, Base,
-                            Unary->getSubExpr(), nullptr, false, true);
+                            Unary->getSubExpr(), nullptr, false, true,
+                            nullptr, true);
       if (Unary->isDecrementOp())
         return makeProgress(Variable, ProgressKind::Down, Base,
-                            Unary->getSubExpr(), nullptr, false, true);
+                            Unary->getSubExpr(), nullptr, false, true,
+                            nullptr, true);
     }
     const auto *Binary = dyn_cast_or_null<BinaryOperator>(Expression);
     if (!Binary)
@@ -2638,6 +2643,38 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
            !mentionsFieldThroughOtherBase(Increment, Rank);
   }
 
+  bool signedFiniteDomainRank(const Progress &Rank,
+                              const Expr *Condition,
+                              const Stmt *Body,
+                              const Expr *Increment) const {
+    /* A unit, directed update of a signed C integer cannot occur on
+     * infinitely many defined backedges.  Its finite value domain is the
+     * rank: execution either exits first or the update overflows, at which
+     * point it was already outside the defined C executions for which this
+     * proof is responsible.  Restrict this to ++/--: even a constant
+     * compound step can be computed in an unsigned type (`i += 1u`) and
+     * converted back to signed, which may cycle without signed-overflow UB.
+     * This is deliberately not an unsigned theorem (wrapping is defined
+     * there), nor a dynamic-step theorem (the step may be zero or reverse
+     * direction). */
+    QualType Type = Rank.Variable->getType();
+    /* Integer promotions make signed char/short updates narrow back to the
+     * lvalue type.  An out-of-range narrowing is implementation-defined,
+     * rather than signed-overflow UB, and can therefore cycle. */
+    const auto *Field = dyn_cast<FieldDecl>(Rank.Variable);
+    return (!Field || !Field->isBitField()) &&
+           Type->isSignedIntegerType() && !Type->isEnumeralType() &&
+           Context.getIntWidth(Type) >= Context.getIntWidth(Context.IntTy) &&
+           Rank.UnaryStep && Rank.UnitStep && !Rank.DynamicStep &&
+           !Rank.GuardedStep &&
+           !Rank.RequiresNonzeroCondition &&
+           !containsAsm(Condition) && !containsAsm(Body) &&
+           !containsAsm(Increment) &&
+           mutation(Condition, Rank) == Mutation::None &&
+           mutation(Increment, Rank) == Mutation::None &&
+           progressOccurrences(Body, Rank) == 1;
+  }
+
   bool stableBound(const Expr *Expression, const Stmt *Body,
                    const Expr *Increment) const {
     if (!Expression)
@@ -4163,6 +4200,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         return "strict-scalar-rank";
       if (pointerObjectDistanceRank(Change, Condition, Body, Increment))
         return "sentinel-distance-rank";
+      if (signedFiniteDomainRank(Change, Condition, Body, Increment))
+        return "strict-scalar-rank";
       if (!Condition && Change.UnitStep &&
           Change.Kind == ProgressKind::Down &&
           Change.Variable->getType()->isIntegerType()) {

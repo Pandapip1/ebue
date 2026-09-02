@@ -402,8 +402,7 @@ static int hexval(int c)
 static int scanword(struct fld *fl, struct nbuf *b, const char *word, int least, int c) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int i = 0, ok = 0;
-	/* The two closed call sites match "nan" and "infinity". */
-	for (unsigned chars_left = 8; chars_left > 0; chars_left--) {
+	for (;;) {
 		if (c == EOF || tolower(c) != word[i]) break;
 		if (!nb_put(b, c)) return -1;
 		i++;
