@@ -72,10 +72,10 @@ static int pv_push(struct pv *p, char *s)
 		oldbytes = p->n * sizeof *p->v;
 		if (oldbytes > bytes) { __free(s); errno = ENOMEM; return -1; }
 		char **nv = (char **)__malloc(bytes);
+		size_t i;
 		if (!nv) { __free(s); return -1; }
 		if (old) {
-			memcpy((void *)nv, (const void *)p->v,
-			    p->n * sizeof *p->v);
+			for (i = 0; i < p->n; i++) nv[i] = p->v[i];
 		}
 		__free((void *)old);
 		p->v = nv;

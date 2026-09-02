@@ -86,14 +86,19 @@ static int fill_he(const char *name, char *buf, size_t bufsz, size_t *needp)
 	if (need > bufsz) { if (needp) *needp = need; return ERANGE; }
 
 	p = buf;
-	memcpy(p, hname, namelen);
+	{
+		size_t j;
+		for (j = 0; j < namelen; j++) p[j] = hname[j];
+	}
 	g_he.h_name = p;
 	p += namelen + pad;
 
 	addrlist = (char **)(void *)p;
 	p += ptrbytes;
 	for (i = 0; i < n; i++) {
-		memcpy(p, &addrs[i], 4);
+		size_t j;
+		const unsigned char *source = (const unsigned char *)&addrs[i];
+		for (j = 0; j < 4; j++) p[j] = (char)source[j];
 		addrlist[i] = p;
 		p += 4;
 	}

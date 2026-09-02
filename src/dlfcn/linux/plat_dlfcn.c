@@ -1464,11 +1464,11 @@ static void run_ctors(struct dlobj *obj, Elf64_Dyn *dyn)
 static void dirname_of(const char *path, char *buf, size_t bufsz)
 {
 	const char *slash = strrchr(path, '/');
-	size_t len;
+	size_t len, i;
 	if (!slash) { buf[0] = 0; return; }
 	len = (size_t)(slash - path) + 1; /* keep the slash itself */
 	if (len >= bufsz) len = bufsz - 1;
-	memcpy(buf, path, len);
+	for (i = 0; i < len; i++) buf[i] = path[i];
 	buf[len] = 0;
 }
 
@@ -1480,7 +1480,8 @@ static int open_needed(const char *dir, const char *name, char *pathbuf, size_t 
 		fd = open(pathbuf, O_RDONLY);
 	}
 	if (fd < 0 && strlen(name) < pathbuf_sz) {
-		memcpy(pathbuf, name, strlen(name) + 1);
+		size_t i, length = strlen(name);
+		for (i = 0; i <= length; i++) pathbuf[i] = name[i];
 		fd = open(name, O_RDONLY);
 	}
 	return fd;
@@ -1703,8 +1704,10 @@ static struct dlobj *load_object(const char *file, int depth)
 			 * the file's real length, not at p_filesz specifically --
 			 * writing it explicitly costs nothing and does not depend
 			 * on that distinction lining up. */
-			memset((char *)segbase + (ph->p_vaddr - vstart) + ph->p_filesz, 0,
-			       filelen - ((ph->p_vaddr - vstart) + ph->p_filesz));
+			{
+				size_t i = (size_t)((ph->p_vaddr - vstart) + ph->p_filesz);
+				for (; i < filelen; i++) ((char *)segbase)[i] = 0;
+			}
 		}
 		alloclen = memend > filelen ? memend : filelen;
 		if (alloclen > filelen) {

@@ -124,7 +124,10 @@ char *__handle_path(HANDLE h)
 	if (!__size_add_checked((size_t)n, 1, &bytes)) { errno = ENOMEM; return 0; }
 	r = __malloc(bytes);
 	if (!r) return 0;
-	if (n) memcpy(r, buf, (size_t)n);
+	if (n) {
+		size_t i;
+		for (i = 0; i < (size_t)n; i++) r[i] = buf[i];
+	}
 	r[n] = 0;
 	return r;
 }

@@ -548,7 +548,10 @@ static int pax_reader_open(struct pax_reader *r, const char *path)
 		if (path) fclose(r->f);
 		return -1;
 	}
-	memcpy(r->first_block, magic, got);
+	{
+		size_t i;
+		for (i = 0; i < got; i++) r->first_block[i] = magic[i];
+	}
 	if (got < USTAR_BLOCK) {
 		__ownership_writable_span(r->first_block + got, USTAR_BLOCK - got);
 		size_t more = fread(r->first_block + got, 1, USTAR_BLOCK - got, r->f);
@@ -647,6 +650,7 @@ static int pax_write_data_from_fd(FILE *out, int fd, unsigned long size, enum pa
 		size_t want = remain < sizeof buf ? remain : sizeof buf;
 		ssize_t got = read(fd, buf, want);
 		if (got <= 0) { if (got < 0) return -1; break; }
+		__ownership_readable_span(buf, (size_t)got);
 		if (fwrite(buf, 1, (size_t)got, out) != (size_t)got) return -1;
 		remain -= (unsigned long)got;
 	}

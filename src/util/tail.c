@@ -253,6 +253,7 @@ static int tail_follow_drain(struct tail_follow_target *t, off_t new_size)
 			return -1;
 		}
 		if (r == 0) break;   /* raced with a truncation; next poll catches up */
+		__ownership_readable_span(buf, (size_t)r);
 		if (write_all(buf, (size_t)r) < 0) {
 			__util_diagf("tail: %s: %s\n", t->label, strerror(errno));
 			return -1;
@@ -297,6 +298,7 @@ static int tail_follow(struct tail_follow_target *targets, int ntargets)
 				return -1;
 			}
 			if (r == 0) return 0;   /* writer closed: input exhausted */
+			__ownership_readable_span(buf, (size_t)r);
 			if (write_all(buf, (size_t)r) < 0) {
 				__util_diagf("tail: %s: %s\n", targets[0].label, strerror(errno));
 				return -1;

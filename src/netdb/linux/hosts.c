@@ -108,7 +108,10 @@ int __hosts_lookup(const char *name, struct in_addr *addrs, int maxaddrs,
 		if (found == 0 && canon && canonsz > 0) {
 			size_t n = strlen(nametok);
 			if (n >= canonsz) n = canonsz - 1;
-			memcpy(canon, nametok, n);
+			{
+				size_t i;
+				for (i = 0; i < n; i++) canon[i] = nametok[i];
+			}
 			canon[n] = '\0';
 		}
 		if (found < maxaddrs) addrs[found] = a;
@@ -147,7 +150,10 @@ int __hosts_lookup_reverse(const struct in_addr *addr, char *name, size_t namesz
 		if (namesz > 0) {
 			size_t n = strlen(nametok);
 			if (n >= namesz) n = namesz - 1;
-			memcpy(name, nametok, n);
+			{
+				size_t i;
+				for (i = 0; i < n; i++) name[i] = nametok[i];
+			}
 			name[n] = '\0';
 		}
 		found = 1;
@@ -184,7 +190,10 @@ int __hosts_read_entry(FILE *f, struct in_addr *addr,
 		if (namesz > 0) {
 			size_t l = strlen(canontok);
 			if (l >= namesz) l = namesz - 1;
-			memcpy(name, canontok, l);
+			{
+				size_t i;
+				for (i = 0; i < l; i++) name[i] = canontok[i];
+			}
 			name[l] = '\0';
 		}
 
@@ -200,7 +209,10 @@ int __hosts_read_entry(FILE *f, struct in_addr *addr,
 			if (*rest) *rest++ = '\0';
 
 			if (n < maxaliases && off + toklen + 1 <= aliasbufsz) {
-				memcpy(aliasbuf + off, tok, toklen);
+				{
+					size_t i;
+					for (i = 0; i < toklen; i++) aliasbuf[off + i] = tok[i];
+				}
 				aliasbuf[off + toklen] = '\0';
 				aliases[n++] = aliasbuf + off;
 				off += toklen + 1;

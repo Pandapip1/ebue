@@ -348,8 +348,15 @@ static void linux_setup_tls(long *auxv)
 	data = base + tcb_size;
 	data = (unsigned char *)(((unsigned long)data + data_align - 1) & ~(data_align - 1));
 
-	if (tls_filesz) memcpy(data, (void *)tls_vaddr, tls_filesz);
-	if (tls_memsz > tls_filesz) memset(data + tls_filesz, 0, tls_memsz - tls_filesz);
+	if (tls_filesz) {
+		size_t i;
+		const unsigned char *source = (const unsigned char *)tls_vaddr;
+		for (i = 0; i < tls_filesz; i++) data[i] = source[i];
+	}
+	if (tls_memsz > tls_filesz) {
+		size_t i;
+		for (i = tls_filesz; i < tls_memsz; i++) data[i] = 0;
+	}
 
 	/* The DTV array itself -- see this function's own updated banner
 	 * above and src/dlfcn/linux/plat_dlfcn.c's TLS_DTV_INITIAL_CAPACITY
@@ -374,7 +381,10 @@ static void linux_setup_tls(long *auxv)
 	                                                              * is no worse than before this
 	                                                              * change for that path. */
 	dtv = (void **)dtv_mm;
-	memset(dtv, 0, TLS_DTV_INITIAL_CAPACITY * sizeof(void *));
+	{
+		size_t i;
+		for (i = 0; i < TLS_DTV_INITIAL_CAPACITY; i++) dtv[i] = 0;
+	}
 
 	{
 		unsigned char *tp = data - tcb_size;

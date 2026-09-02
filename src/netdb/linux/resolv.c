@@ -229,7 +229,10 @@ static int build_query(unsigned char *buf, size_t bufsz, const char *name, uint1
 		if (labellen == 0 || labellen > 63) return -1;
 		if (pos + 1 + labellen > bufsz - 5) return -1;
 		buf[pos++] = (unsigned char)labellen;
-		memcpy(buf + pos, label, labellen);
+		{
+			size_t i;
+			for (i = 0; i < labellen; i++) buf[pos + i] = (unsigned char)label[i];
+		}
 		pos += labellen;
 		p += labellen;
 		if (*p == '.') p++;

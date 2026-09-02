@@ -102,19 +102,17 @@ static int fill_from_fields(struct passwd *pw, const struct pwd_fields *f,
 	size_t dl = strlen(f->home) + 1;
 	size_t sl = strlen(f->shell) + 1;
 	size_t need = nl + dl + sl;
+	size_t i;
 
 	if (need > bufsz) { if (needp) *needp = need; return ERANGE; }
 
-	__ownership_writable_span(buf, nl);
-	memcpy(buf, f->name, nl);
+	for (i = 0; i < nl; i++) buf[i] = f->name[i];
 	pw->pw_name = buf;
 	buf += nl;
-	__ownership_writable_span(buf, dl);
-	memcpy(buf, f->home, dl);
+	for (i = 0; i < dl; i++) buf[i] = f->home[i];
 	pw->pw_dir = buf;
 	buf += dl;
-	__ownership_writable_span(buf, sl);
-	memcpy(buf, f->shell, sl);
+	for (i = 0; i < sl; i++) buf[i] = f->shell[i];
 	pw->pw_shell = buf;
 
 	pw->pw_uid = (uid_t)strtoul(f->uid_s, NULL, 10);

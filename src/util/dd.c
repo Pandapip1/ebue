@@ -199,6 +199,7 @@ static int write_all(int fd, const char *buf, size_t n, const char *what)
 {
 	size_t off = 0;
 	while (off < n) {
+		__ownership_readable_span(buf + off, n - off);
 		ssize_t w = write(fd, buf + off, n - off);
 		if (w < 0) {
 			if (errno == EINTR) continue;

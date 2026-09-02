@@ -189,8 +189,8 @@ static void process_field_mode(FILE *f, const struct range *ranges, size_t nr, c
 
 		if (!memchr(line, delim, ulen)) {
 			if (!suppress) {
-				__ownership_readable_span(line, ulen);
-				fwrite(line, 1, ulen, stdout);
+				size_t i;
+				for (i = 0; i < ulen; i++) fputc((unsigned char)line[i], stdout);
 				if (had_nl) fputc('\n', stdout);
 			}
 			continue;

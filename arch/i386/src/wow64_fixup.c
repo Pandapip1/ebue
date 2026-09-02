@@ -273,7 +273,10 @@ static int gate_init(void)
 	code[0x19] = 0xA3; memcpy(code + 0x1A, &rs, 4);
 	code[0x1E] = 0xC3;
 
-	memcpy(gate_page, code, sizeof code);
+	{
+		size_t i;
+		for (i = 0; i < sizeof code; i++) gate_page[i] = code[i];
+	}
 	return 0;
 }
 
@@ -295,7 +298,10 @@ static ULONG gate_call(ULONGLONG target, ULONG arg1, ULONG arg2) // NOLINT(bugpr
 
 	if (gate_init()) return (ULONG)-1;
 	memcpy(blob + 13, &target, 8);
-	memcpy(gate_page + 0x40, blob, sizeof blob);
+	{
+		size_t i;
+		for (i = 0; i < sizeof blob; i++) gate_page[0x40 + i] = blob[i];
+	}
 	gate_arg1 = arg1;
 	gate_arg2 = arg2;
 	__asm__ __volatile__("call *%0" : : "r"(gate_page) : "eax", "ecx", "edx", "memory");
@@ -329,7 +335,8 @@ void __wow64_fixup_clone(HANDLE process, HANDLE thread) // NOLINT(bugprone-easil
 	{
 		unsigned char raw[0x4D0 + 16], *ctx = align16(raw);
 		ULONG flags = CTX64_CONTROL_INTEGER_SEGMENTS;
-		memset(ctx, 0, 0x4D0);
+		size_t i;
+		for (i = 0; i < 0x4D0; i++) ctx[i] = 0;
 		memcpy(ctx + 0x30, &flags, 4);                        /* ContextFlags */
 		if (gate_call(nt_get_context64, (ULONG)thread, (ULONG)ctx)) return;
 		memcpy(&rsp, ctx + 0x98, 8);                           /* Rsp */
@@ -344,7 +351,8 @@ void __wow64_fixup_clone(HANDLE process, HANDLE thread) // NOLINT(bugprone-easil
 		unsigned char raw[0x4D0 + 16], *ctx = align16(raw);
 		ULONG flags = CTX64_CONTROL, eflags = 0x202;
 		USHORT cs = 0x33, ss = 0x2B;
-		memset(ctx, 0, 0x4D0);
+		size_t i;
+		for (i = 0; i < 0x4D0; i++) ctx[i] = 0;
 		memcpy(ctx + 0x30, &flags, 4);                         /* ContextFlags */
 		memcpy(ctx + 0x38, &cs, 2);                            /* SegCs */
 		memcpy(ctx + 0x42, &ss, 2);                            /* SegSs */
@@ -365,7 +373,8 @@ void __wow64_fixup_clone(HANDLE process, HANDLE thread) // NOLINT(bugprone-easil
 		unsigned char raw[0x2CC + 16], *ctx = align16(raw);
 		ULONG flags = CTX32_FULL, eax = STATUS_PROCESS_CLONED;
 		NTSTATUS st;
-		memset(ctx, 0, 0x2CC);
+		size_t i;
+		for (i = 0; i < 0x2CC; i++) ctx[i] = 0;
 		memcpy(ctx, &flags, 4);                                /* ContextFlags */
 		st = NtGetContextThread(thread, ctx);
 		if (!NT_SUCCESS(st)) return;

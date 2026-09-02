@@ -150,6 +150,7 @@ static int split_by_bytes(FILE *in, const char *prefix, int suflen, long bcount)
 		if (got == 0) break;
 		out = open_piece(prefix, suflen, piece++, namebuf, sizeof namebuf);
 		if (!out) { free(buf); return -1; }
+		__ownership_readable_span(buf, got);
 		if (fwrite(buf, 1, got, out) != got) {
 			/* The write failure is primary; close only releases the piece. */
 			(void)fclose(out);

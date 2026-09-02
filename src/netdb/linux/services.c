@@ -92,7 +92,10 @@ static int parse_serv_line(char *line)
 
 	n = strlen(proto);
 	if (n >= sizeof g_se_proto) n = sizeof g_se_proto - 1;
-	memcpy(g_se_proto, proto, n);
+	{
+		size_t i;
+		for (i = 0; i < n; i++) g_se_proto[i] = proto[i];
+	}
 	g_se_proto[n] = '\0';
 
 	for (;;) {

@@ -122,8 +122,10 @@ static void concat_serial(FILE *f, const char *delims, size_t ndelim)
 	while ((len = getline(&line, &cap, f)) >= 0) {
 		if (len > 0 && line[len - 1] == '\n') line[--len] = 0;
 		if (any) fputc(delims[k++ % ndelim], stdout);
-		__ownership_readable_span(line, (size_t)len);
-		fwrite(line, 1, (size_t)len, stdout);
+		{
+			ssize_t i;
+			for (i = 0; i < len; i++) fputc((unsigned char)line[i], stdout);
+		}
 		any = 1;
 	}
 	free(line);

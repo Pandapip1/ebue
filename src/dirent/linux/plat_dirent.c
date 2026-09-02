@@ -172,7 +172,6 @@ int __plat_dir_decode_one(const void *buf, size_t buflen, size_t *pos, struct __
 	 * stack bytes through it. See src/dirent/nt/plat_dirent.c's own
 	 * __plat_dir_decode_one() for the fuller reasoning (same fix,
 	 * same struct, independently needed here). */
-	__ownership_writable_span(out, sizeof *out);
 	memset(out, 0, sizeof *out);
 
 	out->ino = (ino_t)d->d_ino;

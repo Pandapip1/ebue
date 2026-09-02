@@ -493,13 +493,13 @@ void __plat_hostname(char *buf, size_t bufsz)
 	struct { char sysname[65]; char nodename[65]; char release[65];
 	         char version[65]; char machine[65]; char domainname[65]; } raw;
 	const char *h;
-	size_t n;
+	size_t n, i;
 	long ret = raw_syscall(SYS_uname, (long)&raw, 0L, 0L, 0L, 0L, 0L);
 	h = is_sys_error(ret) ? "localhost" : raw.nodename;
 	n = strlen(h);
 	if (!bufsz) return;
 	if (n >= bufsz) n = bufsz - 1;
-	memcpy(buf, h, n);
+	for (i = 0; i < n; i++) buf[i] = h[i];
 	buf[n] = '\0';
 }
 
