@@ -82,12 +82,10 @@ EXTRA=${NTLIBC_ASAN_EXTRA:-}
 # LeakSanitizer is on, and that is the point.  ntlibc's malloc is
 # RtlAllocateHeap, which fuzz/ntstubs.c answers with ASan's own allocator,
 # so LSan sees every ntlibc allocation with a full ntlibc stack -- there is
-# nothing here it cannot account for and no suppression file is needed.  It
-# used to be off for no better reason than that it was off by default in
-# the fuzzers this was modelled on, and that cost real bugs: sscanf leaked
-# a BUFSIZ block per call from the first commit until 64ea74e, through a
-# green `make check` the whole time, and LSan reports it in one run.  Set
-# NTLIBC_LEAKS=0 only to isolate some other failure.
+# nothing here it cannot account for and no suppression file is needed.
+# Leaving it off costs real bugs: sscanf leaking a BUFSIZ block per call
+# went unnoticed through a green `make check` until LSan caught it in one
+# run.  Set NTLIBC_LEAKS=0 only to isolate some other failure.
 LEAKS=${NTLIBC_LEAKS:-1}
 
 # See the long comment in tools/fuzz.sh: with $DEBUGINFOD_URLS set (Ubuntu

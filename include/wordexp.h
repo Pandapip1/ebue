@@ -6,51 +6,34 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * <wordexp.h>: shell word expansion.  See src/wordexp/wordexp.c for the
- * parser/expander and its own extensive header comment.
+ * <wordexp.h>: shell word expansion, as described in XCU Word
+ * Expansions (wordexp.html DESCRIPTION).  See src/wordexp/wordexp.c
+ * for the parser/expander.
  *
- * wordexp.html DESCRIPTION says wordexp() performs expansion "as
- * described in XCU Word Expansions", i.e. as if by the shell in XBD
- * Shell Command Language.  This header used to open by explaining that
- * this platform had no such shell and that command substitution
- * ($(cmd)/`cmd`) was therefore refused outright with WRDE_CMDSUB,
- * because cmd.exe -- what src/stdio/misc.c's popen() and
- * src/stdlib/system.c hand shell work to -- cannot parse $(...) at all.
+ * Command substitution ($(cmd)/`cmd`) runs through ntlibc's own
+ * internal POSIX shell (src/sh/, see test/sh-design.md for why a libc
+ * grew one and how it links) via __sh_cmdsub() (src/internal/libc.h):
+ * the command list is parsed and executed in-process, in the subshell
+ * environment XCU 2.6.3/2.12 require, with standard output captured
+ * and trailing <newline> sequences removed.  A program that never
+ * calls wordexp()/system()/popen() never links any of it, since
+ * libc.a only pulls in members that satisfy an undefined symbol.
  *
- * That gap is closed.  ntlibc now has a POSIX shell of its own
- * (src/sh/, see test/sh-design.md for why a libc grew one and how it
- * links): a set of internal functions compiled into the same libc.a,
- * not a separate interpreter image discovered on PATH.  wordexp() runs
- * a command substitution by calling straight into it (__sh_cmdsub(),
- * src/internal/libc.h), so the substituted command list is parsed and
- * executed in-process, in the subshell environment XCU 2.6.3/2.12
- * require, with its standard output captured and its trailing
- * <newline> sequences removed.  A program that never calls
- * wordexp()/system()/popen() still never links any of it: libc.a is an
- * archive, and a member is pulled in only to satisfy an undefined
- * symbol.
+ * WRDE_NOCMD: "[f]ail if command substitution is requested" --
+ * wordexp() returns WRDE_CMDSUB for a $(...) or `...` only when the
+ * caller passed WRDE_NOCMD; without it, the substitution runs.  It
+ * never affects arithmetic expansion, which XBD 2.6.4 gives precedence
+ * over command substitution ("$((" is read as arithmetic whenever it
+ * parses as one, and only otherwise as a command substitution starting
+ * with a subshell).
  *
- * WRDE_NOCMD accordingly means what the standard says it means, and
- * only now has anything to refuse: "[f]ail if command substitution is
- * requested" -- wordexp() returns WRDE_CMDSUB for a $(...) or `...`
- * when, and only when, the caller passed WRDE_NOCMD.  Without it, the
- * substitution runs.  It never affects arithmetic expansion, which is
- * not command substitution and which XBD 2.6.4 does not gate behind it;
- * "$((" is read as an arithmetic expansion whenever it parses as one,
- * exactly as 2.6.4 requires ("arithmetic expansion has precedence"),
- * and only otherwise as a command substitution starting with a
- * subshell.
- *
- * What the shell behind that call-out does and does not cover is
- * src/sh/sh.h's banner and test/sh-design.md's business, not this
- * header's -- but one consequence is visible here: a substitution whose
- * command uses a construct that shell has no grammar for (if/while/
- * for/case, functions, aliases) comes back as WRDE_SYNTAX, the same
- * code src/wordexp/arith.c's header documents doing double duty for a
- * malformed arithmetic expression.  A command that simply fails, or is
- * not found, is NOT an error here: the substitution succeeds with
- * whatever the command wrote to standard output (nothing, typically),
- * exactly as in any shell.
+ * A substitution whose command uses a construct the internal shell has
+ * no grammar for (if/while/for/case, functions, aliases) comes back as
+ * WRDE_SYNTAX, the same code src/wordexp/arith.c uses for a malformed
+ * arithmetic expression.  A command that simply fails, or is not
+ * found, is NOT an error here: the substitution succeeds with whatever
+ * it wrote to standard output (nothing, typically), exactly as in any
+ * shell.
  *
  * Implemented, none of which needs the shell: tilde expansion (~ and
  * ~user, via getenv("HOME") and include/pwd.h's getpwnam()), parameter
@@ -68,16 +51,13 @@
  * results; double-quoted results are not split.  Unquoted whitespace in
  * the input language separates words independently of IFS.
  *
- * One thing this header used to list as missing and no longer is: XCU
- * 2.6's empty-field rule.  "If the complete expansion appropriate for a
- * word results in an empty field, that empty field shall be deleted
- * from the list of fields ... unless the original word contained
- * single-quote or double-quote characters" -- so an unquoted expansion
- * of an unset or null parameter now produces no field at all, where it
- * used to produce one empty one, and "$UNSET" still produces the empty
- * field the quotes require.  That changed because the shell behind
- * __sh_cmdsub() grew positional parameters and `f $1` with none set
- * passing one empty argument is the same defect under another name.
+ * Per XCU 2.6's empty-field rule ("If the complete expansion
+ * appropriate for a word results in an empty field, that empty field
+ * shall be deleted from the list of fields ... unless the original
+ * word contained single-quote or double-quote characters"), an
+ * unquoted expansion of an unset or null parameter produces no field
+ * at all, while "$UNSET" still produces the empty field the quotes
+ * require.
  *
  * The caller has no positional-parameter context, so $1/${10}/$@/$*
  * expand as an empty parameter list and $# expands to "0".  The shell
@@ -86,12 +66,10 @@
  * src/sh/param.c.  $? remains private to that entry point because an
  * arbitrary wordexp() caller has no last-pipeline status.
  *
- * wordexp_t layout and the WRDE_* flags plus WRDE_BADCHAR through
- * WRDE_SYNTAX values are fixed at test/posix-glob.c's choices (that file predates this
- * header and declares its own local, unmodified copies of them, and
- * calls wordexp() through that local prototype rather than this
- * header -- matching values here is what lets a flags/return value
- * built from one file's macros mean the same thing to the other).
+ * wordexp_t's layout and the WRDE_* flags plus the WRDE_BADCHAR through
+ * WRDE_SYNTAX values must match test/posix-glob.c's own local copies of
+ * them (that file declares its own prototype rather than including
+ * this header).
  */
 #ifndef _WORDEXP_H
 #define _WORDEXP_H
@@ -123,18 +101,10 @@ typedef struct {
 #define WRDE_NOSPACE	4
 #define WRDE_SYNTAX	5
 
-/* pwordexp is required: src/wordexp/wordexp.c's own body dereferences
- * it unconditionally on every return path (either the success path's
- * `pwordexp->we_wordv = v;`, or the immediate-syntax-failure path's
- * `pwordexp->we_wordc = 0; pwordexp->we_wordv = 0;`). words is
- * deliberately NOT marked -- wordexp() itself never dereferences it
- * directly, only forwards it into validate_words()/expand_impl()
- * (both already required there), the same "nothing left in this
- * function's own body to describe" reasoning 9be895e's own
- * feholdexcept/feupdateenv established. wordfree() is NOT marked
- * either: it has a real, load-bearing defensive check of its own
- * (`if (!pwordexp || !pwordexp->we_wordv) return;`), matching the
- * setenv/unsetenv precedent for a genuinely optional pointer. */
+/* pwordexp is required: wordexp() dereferences it unconditionally on
+ * every return path. words is not marked -- wordexp() only forwards
+ * it into validate_words()/expand_impl(). wordfree() accepts NULL (and
+ * a zeroed wordexp_t) by design and is not marked either. */
 int wordexp(const char *__restrict, wordexp_t *__restrict, int)
     __attribute__((nonnull(2)));
 void wordfree(wordexp_t *);

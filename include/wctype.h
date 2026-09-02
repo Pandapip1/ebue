@@ -14,16 +14,11 @@
  * type POSIX text elsewhere implicitly assumes.  What follows from that,
  * documented once here rather than per function:
  *
- *  - Classification and case mapping ARE real Unicode, not ASCII-only.
- *    An earlier revision of this header took the opposite position --
- *    ASCII-only, deliberately mirroring ctype.h's is*() family so that
- *    iswalpha() could never disagree with isalpha() -- on the theory
- *    that the C locale does not require classifying anything outside
- *    the portable character set.  That position has been reopened: this
- *    tree's own encoding story is UTF-8-only end to end (src/internal/
- *    utf.c), and a C library that decodes UTF-8 correctly but then
- *    tells every caller that "é" is not a letter is a worse library,
- *    not a more consistent one.  isw*()/tow*() (src/ctype/isw*.c,
+ *  - Classification and case mapping ARE real Unicode, not ASCII-only:
+ *    this tree's own encoding story is UTF-8-only end to end
+ *    (src/internal/utf.c), and a C library that decodes UTF-8 correctly
+ *    but then tells every caller that "é" is not a letter would be a
+ *    worse library, not a more consistent one.  isw*()/tow*() (src/ctype/isw*.c,
  *    src/ctype/tow*.c) now answer from real Unicode Character Database
  *    data -- General_Category, the Alphabetic/Uppercase/Lowercase/
  *    White_Space/Hex_Digit derived properties, and the simple case
@@ -50,12 +45,11 @@
  *    tree's UTF-8 model (it is always a lead or continuation byte of a
  *    multi-byte sequence), so isalpha() answering false for it is
  *    already the UTF-8-correct answer, not an ASCII limitation this
- *    header needed to match. The two families no longer need to agree
- *    past 0x7f, and now genuinely do not: iswalpha(L'\xe9') (the
- *    decoded code point U+00E9, é) is true where isalpha(0xe9) (one raw
- *    UTF-8 lead byte, not a character) stays false. That is UTF-8
- *    correctness, not the inconsistency an earlier revision of this
- *    comment worried about.
+ *    header needed to match. The two families do not need to agree
+ *    past 0x7f: iswalpha(L'\xe9') (the decoded code point U+00E9, é) is
+ *    true where isalpha(0xe9) (one raw UTF-8 lead byte, not a
+ *    character) stays false. That is UTF-8 correctness, not an
+ *    inconsistency.
  *
  *  - A lone surrogate half (0xd800-0xdfff) is not a valid character;
  *    iswalpha.html's DESCRIPTION restricts the domain to "a valid

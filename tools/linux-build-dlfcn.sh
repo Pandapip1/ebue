@@ -26,9 +26,8 @@
 # lib/libc.a itself is now built via the REAL configure/Makefile
 # (unlike linux-build-crt.sh's curated FILES list, which predates most
 # of this platform pilot's own build-out and is now stricter than the
-# tree actually needs -- confirmed empirically this pass: `make
-# lib/libc.a` for PLATFORM=linux/aarch64 now builds cleanly end to end,
-# no curated file list required).
+# tree actually needs: `make lib/libc.a` for PLATFORM=linux/aarch64
+# builds cleanly end to end, no curated file list required).
 #
 # The target .so (fuzz/linux_pilot_test_dlopen_lib.c) and its TLS-
 # bearing sibling (fuzz/linux_pilot_test_dlopen_tlslib.c) are each

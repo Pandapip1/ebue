@@ -9,69 +9,43 @@
  * <netdb.h>: https://pubs.opengroup.org/onlinepubs/9699919799/
  * basedefs/netdb.h.html, functions/freeaddrinfo.html (which also
  * specifies getaddrinfo), functions/gai_strerror.html. See
- * test/posix-netdb.c's own header comment for the fuller audit of
- * which <netdb.h> interfaces exist in this edition of POSIX at all
- * (getnameinfo() and the four database families -- host/network/
- * protocol/service -- are POSIX-mandatory too; gethostbyname()/
- * gethostbyaddr()/h_errno are NOT, having been removed from this
- * edition, per that file's own verified check against the 2017a
- * page's own function list).
+ * test/posix-netdb.c's own header comment for which <netdb.h>
+ * interfaces this edition of POSIX actually mandates (getnameinfo()
+ * and the four database families -- host/network/protocol/service --
+ * are POSIX-mandatory too; gethostbyname()/gethostbyaddr()/h_errno are
+ * NOT, having been removed from this edition).
  *
- * ============================================================
- * WHAT THIS PASS BUILDS, PRECISELY, AND WHY
- * ============================================================
+ * ntlibc implements its own statically-linked "files"/"dns" NSS
+ * services -- a real hosts-file backend, a minimal UDP DNS stub
+ * resolver, and an /etc/nsswitch.conf parser choosing between them
+ * (see src/netdb/linux/nsswitch.c's own banner) -- rather than
+ * dlopen()ing glibc's own libnss_*.so.2. gethostbyname() is kept as a
+ * disclosed legacy/XSI extension outside this POSIX edition, since it
+ * remains a common way real programs ask "what is this host's
+ * address", and it is a thin second front door onto the same
+ * __hosts_resolve() walk getaddrinfo() itself uses, not a second
+ * resolver.
  *
- * Task scope (see the top-level NSS task banner this pass was briefed
- * with): a real hosts-file backend, a real minimal UDP DNS stub
- * resolver, and a real /etc/nsswitch.conf parser deciding between
- * them -- ntlibc's own statically-linked "files"/"dns" NSS services,
- * not an attempt to dlopen() glibc's own libnss_*.so.2 (see
- * src/netdb/linux/nsswitch.c's own banner for the full reasoning,
- * which mirrors src/dlfcn/linux/plat_dlfcn.c's own NSS paragraph).
- * That is exactly getaddrinfo()/freeaddrinfo()/gai_strerror() (the one
- * function family POSIX actually requires no separate database
- * enumeration API for) plus gethostbyname() (explicitly requested by
- * name in the task brief despite being outside this edition of
- * POSIX -- kept as a real, disclosed legacy/XSI-shaped extension,
- * since it remains the single most common way real C programs still
- * ask "what is this host's address", and it is a thin second front
- * door onto the exact same __hosts_resolve() walk getaddrinfo()
- * itself uses, not a second resolver).
+ * getnameinfo() (src/netdb/linux/getnameinfo.c) does a real reverse
+ * /etc/hosts walk before falling back to numeric, but sends no PTR DNS
+ * query, so a name that exists only in DNS (never in the local hosts
+ * file) still falls back to numeric -- see that file's own banner. The
+ * four enumerable databases (host/network/protocol/service) are real
+ * /etc/hosts(5)/etc/networks(5)/etc/protocols(5)/etc/services(5)
+ * parsers (src/netdb/linux/hostent.c, networks.c, protocols.c,
+ * services.c), each treating a missing file as a clean empty database
+ * rather than an error (see networks.c's own banner for why that
+ * matters most for /etc/networks specifically: most real machines have
+ * none).
  *
- * UPDATE (this pass): every database family the previous pass declined
- * is now real. getnameinfo() (src/netdb/linux/getnameinfo.c) does a
- * genuine reverse /etc/hosts walk (__hosts_lookup_reverse(), src/netdb/
- * linux/hosts.c) before falling back to numeric -- the one piece the
- * old banner said hosts.c didn't build yet, built now as exactly the
- * "small addition on top of the forward scan" that banner already
- * anticipated. Its OWN remaining gap, disclosed rather than silently
- * fixed: no PTR DNS query type is sent, so a name that exists only in
- * DNS (never in the local hosts file) still falls back to numeric --
- * see that file's own banner. The four enumerable databases (host/
- * network/protocol/service) are real /etc/hosts(5) (sequential this
- * time, not by-name)/etc/networks(5)/etc/protocols(5)/etc/services(5)
- * parsers -- src/netdb/linux/hostent.c's sethostent()/gethostent()/
- * endhostent(), and src/netdb/linux/networks.c, protocols.c,
- * services.c respectively -- each following the identical
- * fopen()-returns-NULL-is-a-clean-empty-database shape __hosts_lookup()
- * already established (see networks.c's own banner for why that matters
- * most for /etc/networks specifically: most real machines have none).
- *
- * Deliberately NOT built this pass (a real gap, not a decline --
- * documented per this project's own house style rather than silently
- * absent):
- *
- *   - AF_INET6/AAAA records anywhere in this header's real behavior:
- *     this project's socket layer has no IPv6 transport yet (see
- *     <sys/socket.h>'s own banner), so getaddrinfo() with
- *     ai_family == AF_INET6 fails cleanly with EAI_FAMILY rather than
- *     silently degrading to IPv4 or fabricating an unusable IPv6
- *     result. AF_UNSPEC (the default) is treated as "give me whatever
- *     this implementation supports", which today means IPv4 only --
- *     conformant: DESCRIPTION only requires returning addresses "for
- *     each of the address families that comply with the ai_family
- *     value", and IPv6 does not comply with anything this
- *     implementation offers.
+ * No IPv6 transport: this project's socket layer has no IPv6 support
+ * (see <sys/socket.h>'s own banner), so getaddrinfo() with
+ * ai_family == AF_INET6 fails cleanly with EAI_FAMILY rather than
+ * silently degrading to IPv4 or fabricating an unusable IPv6 result.
+ * AF_UNSPEC (the default) resolves to IPv4 only -- conformant, since
+ * DESCRIPTION only requires addresses "for each of the address
+ * families that comply with the ai_family value", and IPv6 does not
+ * comply with anything this implementation offers.
  *
  * struct addrinfo's ai_addr/ai_canonname are heap-owned by
  * getaddrinfo() and released by freeaddrinfo(); see
@@ -276,9 +250,7 @@ struct servent *getservbyport(int, const char *);
  * also read h_errno on failure, and a gethostbyname() with no way to
  * distinguish "not found" from "server down" would be a materially
  * worse extension than the one being added). herror()/hstrerror() are
- * NOT provided: nothing in this pass's own scope calls them, and
- * adding them speculatively would be exactly the gold-plating this
- * project's own house style avoids. */
+ * not provided. */
 extern int h_errno;
 #define HOST_NOT_FOUND 1
 #define TRY_AGAIN      2

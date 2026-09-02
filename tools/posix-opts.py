@@ -518,9 +518,10 @@ def main() -> int:
             return out
 
         # Phase one: everything that asserts on return values, in parallel.
-        # This is the bulk -- and it used to be the whole run, serially,
-        # which is why a full sweep took ~39 minutes and CI's 30-minute
-        # wall killed it on every push without it ever reporting anything.
+        # This is the bulk, and it runs in parallel because a full serial
+        # sweep takes ~39 minutes -- longer than CI's 30-minute wall,
+        # which would kill it on every push without it ever reporting
+        # anything.
         progress(f"posix-opts: running {len(bulk)} case(s) at {args.jobs} "
                  f"job(s), {args.attempts} attempt(s) each")
         if bulk:
