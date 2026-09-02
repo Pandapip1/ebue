@@ -1369,7 +1369,16 @@ static int ed_exec_one(struct ed *ed, const char *cmdline, struct linesrc *texts
 	case 'q': case 'Q':
 		if (rg.n) return ed_fail(ed, "address not allowed here");
 		if (require_eol(ed, p) < 0) return ED_ERR;
-		if (cmd == 'q' && ed->modified) {
+		/* The "warn once, then let a repeated q take effect" latch below
+		 * exists purely so an interactive user gets a chance to save
+		 * unsaved work before it is lost -- there is no user to give a
+		 * second chance to when reading a fixed, non-interactive script
+		 * (-s), and such a script has no way to "retype" q in response
+		 * to a warning it never sees: its next line is whatever command
+		 * comes next, not necessarily another q.  So -s runs the plain
+		 * q it was given immediately, same as it already does for the
+		 * unconditional Q. */
+		if (cmd == 'q' && ed->modified && !ed->suppress) {
 			if (ed->pending_quit != 'q') { ed->pending_quit = 'q'; return ed_fail(ed, "buffer modified since last write"); }
 		}
 		ed->pending_quit = 0;
