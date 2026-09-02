@@ -782,6 +782,17 @@ obj/test/util-mail.exe: obj/bin/mailx.exe $(SH_EXE)
 # and a real, unmodified excerpt of GNU grep's own grep.1.
 obj/test/util-man.exe: obj/bin/man.exe $(SH_EXE)
 
+# test/util-strip.c: Tier 7 (Software Development option tier)'s
+# strip(1p), spawned as obj/bin/strip.exe and exercised as a shell
+# built-in via obj/sh/sh.exe -c. Its core assertion is behavioral, not
+# a smoke test: it copies a real, already-built obj/bin/*.exe, strips
+# the copy, and spawns the STRIPPED copy to confirm it still runs and
+# produces correct output -- see src/util/strip.c's own header banner
+# for why that is this utility's real acceptance test, not just "the
+# file got smaller" -- so obj/bin/cat.exe (a small, simple real
+# fixture) is a prerequisite here too, alongside strip.exe and sh.exe.
+obj/test/util-strip.exe: obj/bin/strip.exe obj/bin/cat.exe $(SH_EXE)
+
 # test/delayall.c and its plugin DLL: proof that an *unmodified* program
 # (plain extern, ordinary call, no ntlibc-specific macro at the call
 # site) gets $ORIGIN delay loading through -Wl,--delay-all and

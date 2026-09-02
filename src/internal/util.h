@@ -576,6 +576,18 @@ int __util_man_main(
 	int argc, char **argv elements_withtok(null_terminated, argc))
 	__attribute__((nonnull(2)));
 
+/* Tier 7 (Software Development option tier, follow-on work per this
+ * project's own POSIX-utilities plan): strip(1p) -- removes the symbol
+ * table and debugging information from an ELF64 executable/shared
+ * object (ET_EXEC/ET_DYN only) or, in a deliberately narrower bonus
+ * scope, a PE image's legacy COFF symbol table and Debug Data
+ * Directory entry -- see src/util/strip.c's own header banner for the
+ * full, cited safety design (why this utility, uniquely among this
+ * batch, is built around "never touch a byte this file cannot prove is
+ * safe to move" rather than "strip everything a real GNU strip would").
+ * Not __pure__: it reads a real file and, absent -o, overwrites it. */
+int __util_strip_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 #endif
 
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
