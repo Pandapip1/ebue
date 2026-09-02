@@ -11,11 +11,7 @@
  * The PATH-searching forms are exercised here too: test_exec_path()
  * calls execvp(), which resolves through __find_program()
  * (src/process/find_program.c) before handing the resolved image to the
- * same __spawn() path execv() uses.  This paragraph used to say the file
- * was "expected to FAIL TO LINK" because __find_program was declared and
- * defined nowhere.  That was true when a25a370 wrote it and stopped
- * being true ten commits later, when abe9fc4 added
- * src/process/find_program.c.
+ * same __spawn() path execv() uses.
  */
 /* wait3()/wait4()/setenv()/clock_gettime() below are all feature-test
  * gated in ntlibc's own headers (see include/sys/wait.h's own comment on
@@ -590,11 +586,11 @@ static long long timeval_usec(const struct timeval *tv)
  * charged either one quantum or *zero*, depending on nothing but
  * whether it happened to span an interrupt.
  *
- * test/posix-grp.c's identical floor flaked on exactly that in CI run
- * 32796247127: a real-Windows x86_64 runner charged its child zero,
- * while the slower i386 and kernel32 legs of the same run charged it
- * one and passed.  This file's version was written with the same hole
- * and had merely not been unlucky yet -- and its own comment concluded
+ * test/posix-grp.c's identical floor flaked on exactly that: a
+ * real-Windows x86_64 runner charged its child zero, while the slower
+ * i386 and kernel32 legs of the same run charged it one and passed.
+ * This file's version was written with the same hole and had merely
+ * not been unlucky yet -- and its own comment concluded
  * the margin "cannot be widened, only made visible", because the
  * quantity was whatever the previously-reaped `--exit 7` children
  * happened to be charged, which is not under this test's control.
@@ -992,8 +988,7 @@ int main(int argc, char **argv)
 	 * every other CHECK in this file). Not run against NT: its own
 	 * exec() family correctly does not preserve pid at all (documented
 	 * fork+wait stand-in, src/process/exec.c's own banner), so this
-	 * property is Linux-only by design, not merely by what this pass
-	 * touched. */
+	 * property is Linux-only by design. */
 	CHECK(run_role(argv[0], "--exec-pid") == RC_OK);
 #endif
 	/* the exec'd image's exit code is what exec's caller exits with */

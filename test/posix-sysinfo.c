@@ -766,7 +766,7 @@ static void test_times_cpu_agrees_with_clock_gettime(void)
 	would put an unreachable re-exec path into every run of this
 	binary.
 
-	UPDATE: the "Ask NT" route above is now implemented, not just
+	The "Ask NT" route above is now implemented, not just
 	scoped -- src/process/nt/plat_process.c's create_child_job()
 	places every spawned/forked child in its own job before its
 	first instruction runs (ordinary job-membership inheritance
@@ -783,9 +783,9 @@ static void test_times_cpu_agrees_with_clock_gettime(void)
 	STILL BUG, NOT RE-MEASURED.  This comment's own ACCEPTANCE
 	CRITERION said to re-measure rather than inherit a dated "this
 	platform cannot" -- the same discipline applies in the other
-	direction to a fresh "this now works": Wine was confirmed broken
-	in the sandbox that built the above, so the assertion below has
-	never actually run, on Wine or real Windows, against this code.
+	direction to a fresh "this now works": without a working Wine or
+	real Windows to run against, the assertion below has never
+	actually been run against this code.
 	The specific worry this comment already names for the
 	neighbouring API -- stock Wine's NtQueryInformationProcess()
 	historically answered ProcessTimes for the wrong handle

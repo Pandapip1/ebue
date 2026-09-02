@@ -389,8 +389,8 @@ static void test_exit_runs_atexit_Exit_does_not(const char *self)
  * atexit_terminate_99 registered in each child: if abort() ran it,
  * the child would report a clean-looking exit(99) instead of an
  * abnormal death.  WINEDEBUG/WINEDLLOVERRIDES must be set by the
- * caller (per test/POSIX-COVERAGE.md / this session's brief) or the
- * crash pops a modal debugger dialog that hangs the run. ---- */
+ * caller (see test/POSIX-COVERAGE.md) or the crash pops a modal
+ * debugger dialog that hangs the run. ---- */
 static void test_abort_not_via_atexit_and_overrides(const char *self)
 {
 	int status;

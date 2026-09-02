@@ -599,10 +599,11 @@ static void test_stat_dir_size_is_zero(void)
  * fence that names the alternative and says we did not do it is
  * describing UNIMPL, whatever tag it wears.
  *
- * Retagged, not reopened: the decision to stay out of ACL editing may
- * well be right (it is a large amount of surface, and a POSIX-mode ->
- * DACL mapping has real design questions about which SIDs stand in for
- * "group" and "other").  What changes is only that these say so.
+ * Staying out of ACL editing may well be the right call (it is a large
+ * amount of surface, and a POSIX-mode -> DACL mapping has real design
+ * questions about which SIDs stand in for "group" and "other"), but
+ * that is a choice, not a platform limit, so these are tagged BUG
+ * rather than N/A.
  *
  * test/POSIX-COVERAGE.md's "re-audit against real Windows rather than
  * Wine" note applies with force here: Wine's DACL emulation over a Unix
@@ -629,15 +630,13 @@ static void test_stat_dir_size_is_zero(void)
        * "which ntlibc's chmod() does not attempt" -- is a choice, not a
        * platform limit.  See the banner above this group.
        *
-       * RE-AUDITED, STILL BUG, DELIBERATELY NOT ATTEMPTED THIS PASS.
-       * $LXMOD (src/stat/lxmod.c, wired into chmod()/stat() since
-       * c9411f8) DOES already persist and read back a full 07777 mode
-       * on a system where the EA write succeeds -- traced by hand
-       * through __plat_chmod()/mode_from_attrs() -- and chmod(path, 0)
-       * -> lxmod=0 -> stat() reporting 0 looked, at first, like it
-       * might already satisfy exactly this fence with no code change
-       * at all. Two independent findings closed that off, one fatal by
-       * itself:
+       * Still a BUG, not closed by $LXMOD: src/stat/lxmod.c, wired into
+       * chmod()/stat(), DOES already persist and read back a full
+       * 07777 mode on a system where the EA write succeeds -- traced
+       * through __plat_chmod()/mode_from_attrs() -- which might suggest
+       * chmod(path, 0) -> lxmod=0 -> stat() reporting 0 already
+       * satisfies this fence with no code change. It does not, for two
+       * independent reasons, one fatal by itself:
        *
        * (1) src/stat/nt/plat_stat.c:165's own comment: "Wine through
        *     10.x stubs NtSetEaFile as ACCESS_DENIED." The CI leg this
@@ -674,11 +673,10 @@ static void test_stat_dir_size_is_zero(void)
        * Writing real NT security-descriptor construction from scratch
        * -- new ntdll declarations, SID/ACL buffer sizing, and a
        * POSIX-mode -> DACL mapping design with no existing precedent
-       * in this tree to check against -- with no working Wine in this
-       * session to verify a single byte of it against real NT
-       * behaviour, is exactly the "rushing a wrong fix" the task asked
-       * to avoid rather than commit. Left for a session that can
-       * measure. */
+       * in this tree to check against -- needs a working Wine (or real
+       * NT) to verify against, which was not available when this was
+       * last audited; left unimplemented rather than risk an unverified
+       * mapping. */
 static void test_chmod_cannot_clear_read_bits(void)
 {
 	struct stat st;
@@ -714,17 +712,15 @@ static void test_chmod_cannot_clear_read_bits(void)
        * need all of.  The aggregate is a property of the mapping ntlibc
        * chose, not of NTFS.  See the banner above this group.
        *
-       * RE-AUDITED, STILL BUG: this is the case that PROVES $LXMOD
-       * alone (src/stat/lxmod.c) cannot close this group -- traced by
-       * hand, fchmod(fd, 0020) persists lxmod=0020 exactly, so stat()
-       * would report 0020, not the 0640 this test requires. 0640 (owner
-       * rw, group r-only, other none) is not a literal bit round-trip
-       * of anything requested here; it is what a real DACL mapping
-       * would produce under a "write implies read, owner always keeps
-       * rw" rule this tree has never implemented. See the fuller note
-       * on test_chmod_cannot_clear_read_bits just above for why that
-       * real ACL work was not attempted this pass (no working Wine in
-       * this session to check any of it against real NT). */
+       * This is the case that proves $LXMOD alone (src/stat/lxmod.c)
+       * cannot close this group: fchmod(fd, 0020) persists lxmod=0020
+       * exactly, so stat() would report 0020, not the 0640 this test
+       * requires. 0640 (owner rw, group r-only, other none) is not a
+       * literal bit round-trip of anything requested here; it is what a
+       * real DACL mapping would produce under a "write implies read,
+       * owner always keeps rw" rule this tree has never implemented.
+       * See test_chmod_cannot_clear_read_bits just above for why that
+       * ACL work is not done here. */
 static void test_chmod_group_other_write_aliases_owner(void)
 {
 	struct stat st;
@@ -1210,9 +1206,7 @@ static void test_mkdirat(void)
  * NT stays a permanent stub here -- see test/POSIX-GAP-ACCOUNTING.md's
  * "permanent degenerate stubs" table, which records mkfifo/mkfifoat as
  * ENOSYS (NT named pipes exist and are pure NTDLL, but nobody has
- * mapped FIFO semantics onto them) and mknod/mknodat as EPERM; that
- * table, and everything below through the #else, is unchanged by this
- * comment's own update.
+ * mapped FIFO semantics onto them) and mknod/mknodat as EPERM.
  *
  * Linux is not a stub: mknodat(2) is real there (src/stat/linux/
  * plat_stat.c's own __plat_mknod(), src/stat/chmod.c's front doors),
@@ -1224,10 +1218,9 @@ static void test_mkdirat(void)
  * caller is privileged" -- so those are asserted as plain successes,
  * S_ISFIFO and all. mknod() with S_IFCHR is the one case whose outcome
  * genuinely depends on this process's own privilege (CAP_MKNOD), which
- * a test run cannot assume either way -- verified during this pass:
- * this sandbox's own unprivileged (uid 1000) process still had it,
- * succeeding -- so both real outcomes are checked instead of assuming
- * one: a real character-special node with S_ISCHR if the kernel allowed
+ * a test run cannot assume either way, so both real outcomes are
+ * checked instead of assuming one: a real character-special node with
+ * S_ISCHR if the kernel allowed
  * it, mknod.html's own "[EPERM] The invoking process does not have
  * appropriate privileges and the file type is not FIFO-special" and no
  * file if it did not. */

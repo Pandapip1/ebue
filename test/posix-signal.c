@@ -639,8 +639,8 @@ static void test_realtime_signal_queue(void)
 	CHECK(sigpending(&pend) == 0 && sigismember(&pend, sig) == 0);
 
 	/* A pending member must be returned immediately even with the largest
-	 * valid relative timeout; UBSan covers the conversion before the queue
-	 * scan, which used to overflow in signed nanoseconds. */
+	 * valid relative timeout: the conversion to an absolute deadline must
+	 * not overflow signed nanoseconds before the queue scan runs. */
 	value.sival_int = 33;
 	CHECK(sigqueue(getpid(), sig, value) == 0);
 	CHECK(sigtimedwait(&set, &info, &huge) == sig);
@@ -1379,19 +1379,16 @@ static void test_sa_nocldwait(void)
 }
 
 /* __wait_encode_status(): the exit-code -> wait-status mapping.
- * Exercises the property the task brief specifically calls out: a
- * signal death is encoded as 0xE0DE00xx (__NT_SIGNAL_EXIT in
+ * A signal death is encoded as 0xE0DE00xx (__NT_SIGNAL_EXIT in
  * src/internal/libc.h), chosen precisely so it cannot collide with any
- * of the 256 real exit codes -- the bug fixed this session (commit
- * "waitpid: stop decoding exit codes 129-192 as signal deaths") was
- * exactly that collision for the shell-style 128+signo scheme. */
+ * of the 256 real exit codes -- unlike the shell-style 128+signo
+ * scheme, which conflates exit codes 129..192 with a signal death. */
 static void test_wait_encode_status(void)
 {
 	int i, st;
 
 	/* Every exit code 0..255 round-trips as WIFEXITED with that code,
-	 * and is never mistaken for WIFSIGNALED -- the specific property
-	 * that regressed before this session's fix (sys_wait.h.html:
+	 * and is never mistaken for WIFSIGNALED (sys_wait.h.html:
 	 * WIFEXITED/WEXITSTATUS/WIFSIGNALED are mutually exclusive). */
 	for (i = 0; i < 256; i++) {
 		st = __wait_encode_status(i);
@@ -1427,9 +1424,9 @@ static void test_wait_encode_status(void)
 	st = __wait_encode_status(NT_SIGNAL_EXIT(SIGKILL));
 	CHECK(!WCOREDUMP(st));
 
-	/* The specific collision that was fixed this session: exit codes
-	 * 129..192, under the old 128+signo scheme, decoded as signal
-	 * deaths. They must not, under any exit code 0..255. */
+	/* The collision case: under a 128+signo scheme, exit codes 129..192
+	 * would decode as signal deaths. They must not, for any exit code
+	 * 0..255. */
 	for (i = 129; i <= 192; i++) {
 		st = __wait_encode_status(i);
 		CHECK(WIFEXITED(st) && !WIFSIGNALED(st) && WEXITSTATUS(st) == i);
