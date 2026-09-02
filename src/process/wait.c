@@ -410,6 +410,15 @@ reap:
 	 * time.  It does not: c->done is set above, and every path that sees
 	 * done == 1 returns the recorded status without touching the handle
 	 * again. */
+	/* Both reads a backend's cached reap info could ever need to survive
+	 * for are done as of the line above (exit code just above that, and
+	 * fill_child_rusage()'s __plat_process_times() unconditionally, this
+	 * comment's own point) -- c->done/c->status now hold the answer for
+	 * any WNOWAIT repeat, so the backend's own copy, if it kept one, is
+	 * safe to release regardless of `nowait`. See
+	 * __plat_process_reap_release()'s own comment (plat_process.h) for
+	 * why a backend needs this at all. */
+	__plat_process_reap_release(c->h);
 	if (!nowait) __child_remove(c);
 	return pid;
 }

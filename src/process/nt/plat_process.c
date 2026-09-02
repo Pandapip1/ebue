@@ -208,6 +208,15 @@ int __plat_process_times(__plat_handle_t h, __plat_handle_t job,
 	return 0;
 }
 
+/* No-op here: see plat_process.h's own comment on this call for why --
+ * this backend has nothing to release. `h` stays queryable until
+ * __child_remove()'s __plat_close(h) closes it, independent of whether
+ * wait.c has read this reap's exit code/times yet. */
+void __plat_process_reap_release(__plat_handle_t h)
+{
+	(void)h;
+}
+
 int __plat_process_resume(__plat_handle_t h)
 {
 	NTSTATUS st = NtResumeProcess(h);
