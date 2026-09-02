@@ -28,6 +28,10 @@
  *
  * Needs a real fork() and so, like fork-win.c, only runs on Windows CI.
  */
+/* kill() is feature-test gated in include/signal.h; same define most
+ * other test/*.c already carry for the same reason (see
+ * test/posix-glob.c's comment on this exact define). */
+#define _GNU_SOURCE
 #include <errno.h>
 #include <signal.h>
 #include <string.h>

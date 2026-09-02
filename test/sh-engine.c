@@ -57,6 +57,11 @@
  *   utilities/test.html (OPERANDS, EXTENDED DESCRIPTION, EXIT STATUS)
  *   utilities/true.html  utilities/false.html  utilities/cd.html
  */
+/* fmemopen()/mkstemp()/strdup()/setenv()/unsetenv() are feature-test
+ * gated in include/stdio.h and include/stdlib.h; same define most
+ * other test/*.c already carry for the same reason (see
+ * test/posix-glob.c's comment on this exact define). */
+#define _GNU_SOURCE
 #include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>

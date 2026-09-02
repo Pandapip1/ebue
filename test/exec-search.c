@@ -37,6 +37,10 @@
  * absolute; a copy of those bytes is a real, runnable NT image, which no
  * synthesized fixture would be.
  */
+/* setenv() is feature-test gated in include/stdlib.h; same define most
+ * other test/*.c already carry for the same reason (see
+ * test/posix-glob.c's comment on this exact define). */
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

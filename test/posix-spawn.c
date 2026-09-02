@@ -49,6 +49,11 @@
  * observed errno and exits 77 rather than reporting a pass over
  * assertions that never ran.
  */
+/* setenv() and the sigprocmask()/sigemptyset()/sigaddset() family are
+ * feature-test gated in include/stdlib.h and include/signal.h; same
+ * define most other test/*.c already carry for the same reason (see
+ * test/posix-glob.c's comment on this exact define). */
+#define _GNU_SOURCE
 #include "test-policy.h"
 #include <spawn.h>
 #include <unistd.h>

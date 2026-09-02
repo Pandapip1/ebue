@@ -74,6 +74,16 @@
  * Unicode 15.0.0; see include/wctype.h's banner comment), plus
  * wcwidth/wcswidth (src/string/wcwidth.c, wcswidth.c), likewise real.
  */
+/* fileno()/newlocale()/freelocale()/LC_ALL_MASK are feature-test gated
+ * in include/stdio.h and include/locale.h; same define most other
+ * test/*.c already carry for the same reason (see test/posix-glob.c's
+ * comment on this exact define). Load-bearing here in a way it is not
+ * everywhere else: clang's -std=c99 predefines __STRICT_ANSI__, which
+ * turns off include/features.h's own default _XOPEN_SOURCE fallback
+ * (the `!defined(__STRICT_ANSI__)` arm), so an undefined macro here
+ * would not merely hide a few extension symbols -- it would drop this
+ * whole file back to bare C99 visibility. */
+#define _GNU_SOURCE
 #include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>

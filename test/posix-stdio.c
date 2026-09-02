@@ -9,6 +9,12 @@
  * clauses that file's checks do not exercise, with a citation on every
  * assertion. Run headless under Wine, same as test/stdio.c.
  */
+/* strdup()/mkstemp()/fileno()/fmemopen()/open_memstream()/fseeko()/
+ * ftello() are feature-test gated in include/string.h, include/stdlib.h
+ * and include/stdio.h; same define most other test/*.c already carry
+ * for the same reason (see test/posix-glob.c's comment on this exact
+ * define). */
+#define _GNU_SOURCE
 #include "test-policy.h"
 #include <stdio.h>
 #include <stddef.h>

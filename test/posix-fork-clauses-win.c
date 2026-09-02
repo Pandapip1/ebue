@@ -33,6 +33,11 @@
  * is an emulation of the primitive under test, so the windows-test
  * legs are the authority for everything below.
  */
+/* sigset_t and the sigemptyset()/sigismember()/sigpending() family are
+ * feature-test gated in include/signal.h; same define most other
+ * test/*.c already carry for the same reason (see test/posix-glob.c's
+ * comment on this exact define). */
+#define _GNU_SOURCE
 #include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>

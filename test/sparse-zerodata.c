@@ -164,6 +164,10 @@
  * src/internal/ on the include path -- the same hand-declaration
  * convention test/posix-errno.c and test/posix-signal.c already use.
  */
+/* mkdtemp() is feature-test gated in include/stdlib.h; same define
+ * most other test/*.c already carry for the same reason (see
+ * test/posix-glob.c's comment on this exact define). */
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

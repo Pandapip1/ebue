@@ -66,6 +66,10 @@
  * and report on the token rather than on NT's rule.  It stays
  * unasserted rather than being folded into this one.
  */
+/* kill() is feature-test gated in include/signal.h; same define most
+ * other test/*.c already carry for the same reason (see
+ * test/posix-glob.c's comment on this exact define). */
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <errno.h>
 #include <signal.h>

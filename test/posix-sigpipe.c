@@ -58,6 +58,10 @@
  * RtlCloneUserProcess/fork does not), so all of this runs on the Wine
  * leg as well as the real-Windows one.
  */
+/* fdopen() is feature-test gated in include/stdio.h; same define most
+ * other test/*.c already carry for the same reason (see
+ * test/posix-glob.c's comment on this exact define). */
+#define _GNU_SOURCE
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>

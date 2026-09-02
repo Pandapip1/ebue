@@ -6,6 +6,12 @@
  * Each block cites the page it was checked against under
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/<name>.html
  */
+/* stpncpy()/memccpy()/strtok_r()/strcoll_l() and LC_GLOBAL_LOCALE are
+ * feature-test gated in include/string.h/include/strings.h and
+ * include/locale.h; same define most other test/*.c already carry for
+ * the same reason (see test/posix-glob.c's comment on this exact
+ * define). */
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
