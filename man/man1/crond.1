@@ -1,0 +1,107 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH CROND 8 "2026" "ntlibc" "ntlibc System Commands"
+.SH NAME
+crond \- run commands scheduled in the user's crontab
+.SH SYNOPSIS
+.B crond
+.SH DESCRIPTION
+.B crond
+is the background daemon that actually runs the commands scheduled by
+.BR crontab (1).
+Installing a crontab only writes a file; nothing in it runs unless an
+instance of
+.B crond
+is running to notice it. Like
+.BR atd (1),
+.B crond
+is a standalone program only, meant to run indefinitely rather than
+return control to whatever started it, so it is not available as a
+shell built\-in.
+.PP
+Once running,
+.B crond
+repeatedly polls the modification time of the current crontab file (as
+installed by
+.BR crontab (1))
+and reparses it only when that time changes. Once per distinct
+wall\-clock minute \(em never more than once for the same minute, and
+never before it \(em every entry in the most recently parsed crontab is
+checked against the current local time, and every entry whose schedule
+matches is run.
+.PP
+Each due entry's command is run through the shell. Within the command
+field, a
+.RB \` % \'
+character not immediately preceded by a backslash ends the command
+text and begins the command's own standard input; every subsequent
+unescaped
+.RB \` % \'
+in that trailing text becomes a newline within that input.
+.RB \` \e% \'
+anywhere in the field unescapes to a literal
+.RB \` % \'
+and never itself splits the field.
+.PP
+There being no mail transport to fulfill cron's traditional "mail the
+job's output" behavior, each run's combined standard output and
+standard error is instead appended to a log file in the crontab spool
+directory, preceded by a header line naming the command and the time
+it ran, so that a user can see what their crontab has been doing.
+.PP
+A crontab line that looks like an environment\-variable assignment
+(e.g.
+.RB \` MAILTO=user \' )
+is skipped, with a diagnostic to
+.BR crond 's
+own standard error, since there is no mail subsystem to route such an
+assignment to. A line that fails to parse as five schedule fields
+followed by a command is likewise skipped with a diagnostic, rather
+than aborting the reload of the rest of the file; since
+.BR crontab (1)
+itself already refuses to install a crontab containing such a line, a
+malformed line found here means the file was edited by hand after
+installation, and every other, valid entry is still worth running.
+.PP
+Multiple entries due in the same minute are all started without
+waiting for one another, and a long\-running entry never delays another
+due entry, or the entirely separate
+.BR atd (1)
+process, from noticing its own due jobs.
+.PP
+On receipt of
+.B SIGTERM
+or
+.BR SIGINT ,
+.B crond
+finishes the poll currently in progress, waits for and reaps any
+commands it has already started, and exits; it does not kill commands
+that are still running.
+.SH OPERANDS
+None.
+.SH ENVIRONMENT
+.TP
+.B NTLIBC_CROND_POLL_MS
+Overrides the poll interval, in milliseconds (default 1000). Ignored
+unless it parses as a positive integer. This does not change how often
+a schedule is actually evaluated against the wall clock \(em that
+remains exactly once per real minute \(em only how promptly a newly
+due minute, or a newly installed crontab, is noticed; it exists purely
+to speed up testing.
+.SH EXIT STATUS
+.TP
+.B 0
+.B crond
+ran until it received
+.B SIGTERM
+or
+.B SIGINT
+and shut down normally.
+.TP
+.B 1
+The crontab spool directory or crontab path could not be accessed.
+.SH SEE ALSO
+.BR crontab (1),
+.BR at (1),
+.BR atd (1),
+.BR batch (1)

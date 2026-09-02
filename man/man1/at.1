@@ -1,0 +1,249 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH AT 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+at \- schedule a command for later execution
+.SH SYNOPSIS
+.B at
+.RB [ \-m ]
+.RB [ \-f
+.IR file ]
+.RB [ \-q
+.IR queue ]
+.B \-t
+.I time
+.br
+.B at
+.RB [ \-m ]
+.RB [ \-f
+.IR file ]
+.RB [ \-q
+.IR queue ]
+.I timespec
+.RI [ timespec ]\ .\|.\|.
+.br
+.B at
+.B \-r
+.I job_id
+.RI [ job_id ]\ .\|.\|.
+.br
+.B at
+.B \-l
+.B \-q
+.I queue
+.br
+.B at
+.B \-l
+[\fIjob_id\fR ...]
+.SH DESCRIPTION
+.B at
+reads a shell command script from
+.I file
+(if
+.B \-f
+is given) or from standard input, and submits it as a job to be run once,
+at a later time computed from either
+.B \-t
+.I time
+or a
+.I timespec
+operand sequence. Submission only queues the job: it is actually executed
+later, out of process, by the
+.BR atd (1)
+daemon, which must be running for any submitted job to ever run.
+.PP
+On successful submission, a decimal job identifier and the resolved run
+time are printed to standard error as
+"\fBjob\fR \fIid\fR \fBat\fR \fItime\fR".
+.PP
+.B at
+.B \-l
+lists pending jobs (all of them, or only the ones named by
+.I job_id
+operands, or only those in a given
+.BR \-q ) .
+Each listed job is printed as its id, a tab, and the job's scheduled run
+time (and, if it is not in the default queue, the queue letter).
+.PP
+.B at
+.B \-r
+removes the named jobs from the spool; a job already claimed or run by
+.B atd
+can still be removed, but has no further effect.
+.SH OPTIONS
+.TP
+.B \-m
+Accepted for compatibility (real
+.BR at (1p)
+uses this to request mail notification of a job's output on completion).
+Has no effect on this implementation's behavior: every job's captured
+output is retained regardless of whether
+.B \-m
+is given, since there is no mail transport to make a mail-versus-discard
+distinction meaningful.
+.TP
+.BI \-f " file"
+Read the job's command script from
+.I file
+instead of standard input.
+.TP
+.BI \-q " queue"
+Submit the job to (or, with
+.BR \-l ", list only jobs in)"
+queue
+.IR queue ,
+a single letter. Only the first character of
+.I queue
+is significant. If omitted, or given as an empty string, the job is
+submitted to queue
+.RB \` a \' .
+Queue letters are recorded and reported back by
+.B \-l
+but otherwise do not affect how or when a job runs, with one exception:
+a job submitted to queue
+.RB \` b \'
+(the queue
+.BR batch (1)
+itself submits to) is deferred by
+.B atd
+while system load is high, in keeping with
+.BR batch (1p) 's
+own "run when the system is not too busy" behavior.
+.IP
+When
+.B \-l
+is combined with one or more
+.I job_id
+operands,
+.B \-q
+is ignored: the named jobs are always listed regardless of their queue.
+.TP
+.BI \-t " time"
+Submit the job to run at the given absolute
+.IR time ,
+in the same
+\fI[[CC]YY]MMDDhhmm[.SS]\fR
+format
+.BR touch (1)'s
+own
+.B \-t
+option accepts (all-numeric fields, two digits each except the optional
+leading century/year prefix; see
+.BR touch (1)
+for the full field breakdown). Mutually exclusive with a
+.I timespec
+operand sequence.
+.TP
+.B \-l
+List pending jobs instead of submitting one.
+.TP
+.B \-r
+Remove the named jobs instead of submitting one.
+.SH OPERANDS
+.TP
+.I timespec
+One or more shell words forming a time specification, used in place of
+.B \-t
+.IR time .
+The recognized grammar is:
+.RS
+.PP
+.nf
+timespec  := nowspec | time [date] [increment]
+nowspec   := "now" [increment]
+time      := hr24clock_hr_min | hr24clock_hour ':' minute
+           | wallclock_hr_min am_pm | wallclock_hour ':' minute am_pm
+           | "noon" | "midnight"
+date      := month_name day_number [',' year_number]
+           | day_of_week | "today" | "tomorrow" | iso_date
+increment := '+' number period | "next" period
+period    := "minute(s)" | "hour(s)" | "day(s)" | "week(s)"
+           | "month(s)" | "year(s)"
+.fi
+.RE
+.IP
+.I month_name
+and
+.I day_of_week
+are matched case-insensitively against their first three letters (e.g.
+.RB \` sep \'
+or
+.RB \` September \'
+both match September).
+.I iso_date
+is an extension beyond the standard grammar: a bare
+\fICCYY\-MM\-DD\fR
+date, accepted anywhere
+.I date
+is, and also accepted completely on its own with no leading
+.I time
+word, in which case the time of day defaults to midnight.
+.I timezone_name
+(a trailing word after
+.IR time ,
+per the standard grammar) is not implemented: a trailing word that is
+not a valid
+.IR date ,
+.IR increment ,
+or the end of the operand list is a parse failure, since this
+implementation has no time zone name database to resolve it against.
+.IP
+A bare
+.I time
+with no
+.I date
+rolls forward to tomorrow if that time of day has already passed today.
+A
+.I day_of_week
+with no explicit time correction rolls forward a week at a time until
+the result is in the future. A
+.I month_name day_number
+with no
+.I year_number
+rolls the year forward by one if that date has already passed this
+year.
+.RB \` today \' ,
+.RB \` tomorrow \' ,
+and the
+.I iso_date
+form never roll forward this way: whatever date is named is what gets
+scheduled, even if it names a time already in the past.
+.IP
+Because
+.I timespec
+words are ordinary shell arguments and this utility's own option
+parsing stops at the first word beginning with
+.B \-
+that it does not recognize, a
+.I timespec
+word must not itself begin with
+.BR \- ;
+use
+.B \-\-
+to end option parsing first if that is unavoidable.
+.TP
+.I job_id
+A decimal job identifier, as printed at submission time or by
+.BR \-l .
+.SH EXIT STATUS
+.TP
+.B 0
+The job was successfully submitted, removed, or listed.
+.TP
+.B 1
+An error occurred: an invalid or incomplete option, a missing or
+unparsable time specification, both a
+.I timespec
+and
+.B \-t
+given together, extra operands after
+.BR \-t ,
+a named
+.I job_id
+that does not exist, or a failure accessing the job spool.
+.SH SEE ALSO
+.BR atd (1),
+.BR batch (1),
+.BR crontab (1),
+.BR crond (1),
+.BR touch (1)

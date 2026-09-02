@@ -1,0 +1,45 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH TTY 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+tty \- return the terminal name of standard input
+.SH SYNOPSIS
+.B tty
+.RB [ \-s ]
+.SH DESCRIPTION
+.B tty
+writes to standard output the name of the terminal open as standard
+input, using the same name
+.BR ttyname (3)
+would return for that descriptor. If standard input is not a
+terminal, the line
+"\fBnot a tty\fR"
+is written instead.
+.SH OPTIONS
+.TP
+.B \-s
+Silent: suppress the name (or
+"\fBnot a tty\fR" )
+line entirely; report the result only through the exit status. This
+option was removed from the POSIX specification as of Issue 6, but is
+implemented here as the widely supported extension every common
+.BR tty (1)
+still carries forward from the earlier standard.
+.SH OPERANDS
+None.
+.SH EXIT STATUS
+.TP
+.B 0
+Standard input is a terminal.
+.TP
+.B 1
+Standard input is not a terminal.
+.TP
+.B >1
+An error occurred: an invalid option, a write failure, or a failure
+determining whether standard input is a terminal for a reason other
+than it simply not being one.
+.SH SEE ALSO
+.BR mesg (1),
+.BR write (1),
+.BR stty (1)

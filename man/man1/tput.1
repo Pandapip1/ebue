@@ -1,0 +1,164 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH TPUT 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+tput \- initialize a terminal or query its capabilities
+.SH SYNOPSIS
+.B tput
+.RB [ \-T
+.IR type ]
+.I clear
+.br
+.B tput
+.RB [ \-T
+.IR type ]
+.I init
+.br
+.B tput
+.RB [ \-T
+.IR type ]
+.I reset
+.br
+.B tput
+.RB [ \-T
+.IR type ]
+.I capname
+.RI [ arg ...]
+.SH DESCRIPTION
+.B tput
+looks up and prints the control sequence for a named terminal
+capability, or the numeric value of one, for the terminal type given
+by
+.B \-T
+.IR type ,
+or by
+.B $TERM
+if
+.B \-T
+is not given, or (if
+.B $TERM
+is also unset or empty)
+.RB \` dumb \' .
+.PP
+Terminal capabilities are looked up in a fixed, built\-in table
+covering five terminal types \(em
+.BR xterm ", " xterm\-256color ", " vt100 ", " ansi ", and " dumb
+\(em rather than read from a system terminfo or termcap database: this
+implementation runs in environments (a from\-scratch bootstrap, and
+Windows) that cannot be relied on to have one installed at all. A
+.B \-T
+.I type
+or
+.B $TERM
+value naming any other terminal type is refused.
+.PP
+.B clear
+is both a standard operand and a capability name, and shares the same
+table entry either way.
+.B init
+and
+.B reset
+always succeed and write nothing, for every terminal type in the
+table: none of them define an initialization or reset sequence, which
+is a legitimate, specification\-permitted outcome, not a lookup
+failure.
+.SH OPTIONS
+.TP
+.BI \-T " type"
+Use
+.I type
+in place of
+.BR $TERM .
+May also be written attached, as
+.BI \-T type
+with no space. Takes precedence over
+.B $TERM
+when both would otherwise apply.
+.SH OPERANDS
+.TP
+.B clear
+Print the sequence that clears the screen and homes the cursor.
+.TP
+.B init
+Write nothing; always succeeds.
+.TP
+.B reset
+Write nothing; always succeeds.
+.TP
+.B cols
+Print the terminal's width, in columns. If standard output is itself a
+terminal, its actual current width is queried and printed; otherwise
+(or if that query fails) the selected terminal type's fixed table
+value is printed. All five built\-in terminal types define 80.
+.TP
+.B lines
+Print the terminal's height, in rows, the same way
+.B cols
+does for width. The
+.B dumb
+terminal type defines no line count at all, so
+.B lines
+against it (with standard output not itself a live terminal to query)
+prints nothing and fails.
+.TP
+.BR bold ", " smso ", " rmso ", " smul ", " rmul ", " rev ", " sgr0
+Print the sequence to, respectively: enter bold, enter standout mode,
+exit standout mode, enter underline, exit underline, enter reverse
+video, and turn off all attributes. Not defined for the
+.B dumb
+terminal type, against which each of these fails and prints nothing.
+.TP
+.BI "cup " row " " col
+Print the sequence to move the cursor to
+.I row
+and
+.IR col ,
+each given as a non\-negative integer, 0\-based (the first row and
+column are both 0). Not defined for the
+.B dumb
+terminal type.
+.SH APPLICATION USAGE
+No general terminfo parameter\-string interpreter is implemented;
+.B cup
+is the only parameterized capability recognized, and is handled as a
+special case. There is no
+.B longname
+operand, and no
+.B $COLUMNS / $LINES
+environment override for
+.BR cols / lines ;
+only a live terminal query or the built\-in table's fixed value is
+ever consulted.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+The selected terminal type's table entry does not define the
+requested capability.
+.TP
+.B 2
+A required operand is missing, an argument to
+.B \-T
+is missing, or a parameterized capability
+.RB ( cup )
+was given the wrong number of arguments.
+.TP
+.B 3
+.B \-T
+.I type
+or
+.B $TERM
+names a terminal type outside the built\-in table.
+.TP
+.B 4
+The operand is neither
+.BR clear ", " init ", or " reset
+nor a recognized capability name.
+.TP
+.B 5
+A write failure occurred while printing a capability's sequence.
+.SH SEE ALSO
+.BR stty (1),
+.BR tty (1)

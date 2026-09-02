@@ -1,0 +1,51 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH BATCH 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+batch \- schedule a command for execution when system load permits
+.SH SYNOPSIS
+.B batch
+.SH DESCRIPTION
+.B batch
+reads a shell command script from standard input and submits it as a
+job to be run as soon as the system's load allows, equivalent to
+.RB \` "at \-q b \-m now" \' .
+As with
+.BR at (1),
+submission only queues the job in the spool for
+.BR atd (1)
+to actually execute later; the submitted time is the moment
+.B batch
+is invoked.
+.PP
+On successful submission, a decimal job identifier and the submission
+time are printed to standard error as
+"\fBjob\fR \fIid\fR \fBat\fR \fItime\fR".
+.PP
+Once a job submitted this way becomes due (immediately, since it is
+submitted for "now"),
+.BR atd (1)
+defers actually starting it for as long as the system's one\-minute
+load average is at or above 1.5, retrying on each subsequent poll,
+matching
+.BR batch (1p) 's
+own "run using algorithms, based on unspecified factors" wording. On a
+platform with no load\-average facility to consult, this deferral does
+not apply, and the job runs at the next poll after submission.
+.SH OPTIONS
+None.
+.SH OPERANDS
+None. Any operand is refused as unexpected.
+.SH EXIT STATUS
+.TP
+.B 0
+The job was successfully submitted.
+.TP
+.B 1
+An unexpected operand was given, or the job could not be submitted
+(e.g. the job spool could not be accessed).
+.SH SEE ALSO
+.BR at (1),
+.BR atd (1),
+.BR crontab (1),
+.BR crond (1)
