@@ -28,115 +28,33 @@
  *     kernel32 is not in the picture on this path at all.)
  *
  *   - A *closed* standard descriptor cannot be represented by writing 0
- *     (NULL) *or* (HANDLE)(LONG_PTR)-1 (INVALID_HANDLE_VALUE) into the
- *     field.  Something between the write here and the child's first
- *     instruction replaces it.  What is known about that something,
- *     sorted by how well it is known:
+ *     (NULL) or (HANDLE)(LONG_PTR)-1 (INVALID_HANDLE_VALUE) into the
+ *     field: on real Windows 11, something between the write here and
+ *     the child's first instruction silently replaces either one with a
+ *     live, open descriptor (measured; neither kernel32 nor kernelbase
+ *     is even mapped into these -nostdlib/-lntdll-only processes at that
+ *     point, so it is not a kernel32-side console/std-handle bring-up
+ *     doing it, and the exact replacing actor -- ntdll on either side of
+ *     the call, or the kernel itself -- is not identified).  The
+ *     replacement is value-blind, not keyed to either sentinel, so a
+ *     third magic value would fare no better.  What works instead is
+ *     handing the field a real, valid, non-NULL, non-pseudo HANDLE that
+ *     is not a file, console or pipe -- closed_placeholder() below
+ *     duplicates the current-process pseudohandle for this.  The
+ *     receiving side still refuses to install it, because
+ *     __handle_type() cannot identify a process handle (src/internal/
+ *     fd.c install_std), so the descriptor comes up closed in the child
+ *     either way.
  *
- *     Measured.  NULL fails on real Windows.  -1 fails on real Windows
- *     as well (CI run 32703368816, the first real-Windows run to include
- *     the -1 attempt): in both cases the child came up with a live, open
- *     descriptor on all three windows-test legs.  A real-but-rejected
- *     handle works (run 32725836191, all three legs green).  Two
- *     unrelated sentinels failing identically is the useful part: the
- *     fix-up is *value-blind*.  It replaces whatever the caller wrote
- *     without inspecting it, which is why looking for a third magic
- *     value would not have worked either.
- *
- *     Ruled out.  Every kernel32/kernelbase mechanism, on the flat
- *     ground that neither DLL is in these processes.  tools/
- *     linkcheck.sh:525 and the Makefile's test rule both link
- *     `-nostdlib ... -lc -lntdll`, ntdll only; a built artifact agrees
- *     (the test executables import ntdll.dll and nothing else,
- *     Subsystem 3 = CUI); configure defaults kernel32=no, and the one
- *     CI leg built --enable-kernel32 still reaches kernel32 by
- *     LdrLoadDll at signal-setup time (src/signal/signal.c), not by import.  So at the
- *     moment __fd_init (src/internal/fd.c) reads StandardInput,
- *     kernelbase has never been mapped into the child.  That disposes of
- *     ConDllInitialize, BasepInitConsole, SetUpHandles, the CSRSS/ConSrv
- *     handoff, AllocConsole's NULL-backfill and lazy GetStdHandle alike
- *     -- and of the earlier revisions of this comment, which blamed "the
- *     child's own kernelbase.dll console/std-handle bring-up, which
- *     every CUI-subsystem process still goes through".  That code never
- *     ran here.  (The rprichard/win32-console-docs "CreateProcess
- *     (modern)" and "AllocConsole, AttachConsole (modern)" rule sets
- *     that earlier revisions leaned on are accurate; they are just rules
- *     about kernel32 functions this file does not call.)
- *
- *     Unknown.  Which actor actually does it.  Three remain: ntdll on
- *     the parent side, ntdll on the child side (LdrpInitializeProcess),
- *     or the kernel inside NtCreateUserProcess.  Nothing measured so far
- *     separates them, and this comment deliberately does not guess.
- *     test/spawn-stdhandle-attr.c is the probe built to separate them;
- *     it prints the raw values rather than asserting anything about
- *     them.
- *
- *     Leading candidate -- inference, not a finding.
- *     PS_ATTRIBUTE_STD_HANDLE_INFO / PsAttributeStdHandleInfo (phnt,
- *     ntpsapi.h:3232, structure and states at :3364-3390).  Its
- *     PsAlwaysDuplicate state duplicates the standard handles
- *     unconditionally -- value-blind -- and it is consumed during
- *     process creation, before the child runs an instruction.  Both
- *     properties match the measurement.  The tension against it: a
- *     zeroed attribute means PsNeverDuplicate, which is enumerator 0,
- *     and that predicts *no* fix-up, contradicting what was measured.
- *     For the candidate to survive, either ntdll supplies the attribute
- *     explicitly with a non-zero state, or the kernel's default in the
- *     attribute's absence is not the zero enumerator.  Neither has been
- *     shown.
- *
- *     What does work, and is what this file does: hand the field a real,
- *     valid, non-NULL, non-pseudo HANDLE that is not a file, console or
- *     pipe, so that a value-blind fix-up has nothing to fix up and a
- *     value-*sensitive* one has no sentinel to recognise.
- *     closed_placeholder() below duplicates the current-process
- *     pseudohandle for this.  The receiving side still refuses to
- *     install it, because __handle_type() cannot identify it
- *     (src/internal/fd.c install_std; NtQueryVolumeInformationFile
- *     answers STATUS_OBJECT_TYPE_MISMATCH for a process handle --
- *     verified directly with a standalone probe, not assumed), so the
- *     descriptor comes up closed in the child either way.
- *
- *     That this survives is measured, not inferred, and the measurement
- *     matters because the OS does rewrite std handle slots in one case.
- *     The rule (Windows 11 Pro 22621): if the child *inherits* the
- *     parent's console, a NULL std slot stays NULL; if a console is
- *     *allocated* for the child -- because the parent had none, or
- *     CREATE_NEW_CONSOLE, or CREATE_NO_WINDOW -- each NULL slot is
- *     filled per-slot, and non-NULL slots are left exactly as passed.
- *     A process handle in a std slot was then measured on both routes
- *     specifically, since every earlier cell had used a file handle:
- *     it is preserved unchanged either way.
- *
- *     So this file is immune to the fill path by construction, and not
- *     by luck: it never passes NULL, and non-NULL is never touched.
- *     The reason to state it as a rule rather than a result is that a
- *     bootstrap build, a CI runner or any detached process has no
- *     console, so its children take the *allocating* route -- the one
- *     that rewrites slots -- rather than the interactive inheriting
- *     one.  Code that reasons "we passed NULL, so the child sees NULL"
- *     would be correct only in the interactive case.  Representing a
- *     closed descriptor as something the child will reject, rather than
- *     as absence, is what makes the two routes agree: absence is what
- *     the OS feels entitled to fill in.
- *
- *     Not measured: a session-0 / service-context parent.  A detached
- *     interactive-user parent is not the same thing, and CI cannot
- *     close the gap -- GitHub's runner is an interactive user, so its
- *     legs re-measure the detached shape rather than a service.  If a
- *     service parent turns out not to get a console allocated for its
- *     children, the fill would not happen there.
- *
- *     Wine not reproducing any of this is consistent with the above
- *     rather than evidence about it.  Nothing in the Wine tree reads
- *     PsAttributeStdHandleInfo -- include/winternl.h:4131 and :4167
- *     define the enumerator and the PS_ATTRIBUTE_STD_HANDLE_INFO macro
- *     and that is the entirety of the hits -- and
- *     dlls/ntdll/unix/env.c's create_startup_info copies hStdInput/
- *     hStdOutput/hStdError through by value for a process created with
- *     PROCESS_CREATE_FLAGS_INHERIT_HANDLES, which is exactly what
- *     RtlCreateUserProcess(inherit=TRUE) asks for.  So under Wine the
- *     caller's value survives verbatim, whatever it is.
+ *     This also has to survive Windows filling in NULL std-handle slots
+ *     when it allocates a new console for the child -- which it does
+ *     whenever the parent has none (a detached process, a CI runner, a
+ *     service), as opposed to the child inheriting the parent's console,
+ *     where a NULL slot is left alone.  A live placeholder handle is
+ *     preserved unchanged on both routes; a NULL slot is not.  That is
+ *     why passing NULL for "closed" is not equivalent to what this file
+ *     does, and why the difference only shows up for a detached parent
+ *     rather than an interactive one.
  *
  * The command line is built by the quoting rules CommandLineToArgvW and
  * every Windows C runtime agree on, so that an argument with spaces,
@@ -226,9 +144,7 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 		/* The table grows on demand (src/process/children.c), so this
 		 * only happens when the heap is exhausted.  Degrade rather than
 		 * fail the spawn: the process still runs, but it is unwaitable
-		 * -- waitpid() only ever consults the table (src/process/wait.c
-		 * used to reopen the pid instead, which was wrong; see the
-		 * comment there). */
+		 * -- waitpid() only ever consults the table (src/process/wait.c). */
 		__plat_close(process);
 		if (job) __plat_close(job);
 	}

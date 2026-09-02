@@ -40,10 +40,7 @@
  * exactly the "unless an intervening call ... returned NULL and set
  * the error condition" exception dlerror.html itself carves out;
  * nothing else in this file needs to special-case a successful call at
- * all. This logic is identical to what used to live directly in this
- * file's own dlerror() before the platform split (git history), moved
- * to call through __plat_dlerror()/_seq() instead of ntlibc_rpath_
- * error()/_seq() directly.
+ * all.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc

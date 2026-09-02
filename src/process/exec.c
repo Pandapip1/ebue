@@ -139,64 +139,29 @@ int execv(const char *path, char *const argv[])
  *
  * Which sh, and why: this libc's own, called as a function --
  * __sh_run_script() (src/sh/script.c) -- and not spawned as a second
- * image.  The reverse was tried first and is worth stating, because it
- * is the version a reader will otherwise reinvent: find an sh.exe
- * beside the calling image, else "sh" on PATH, and execve() it.  Both
- * halves are wrong, and the shell's design note had already ruled on
- * both in its "reuse rule" -- the shell "is a set of internal functions
- * compiled into libc.a", its callers "call those functions directly and
- * never spawn an external interpreter".  This clause is not an
- * exception to that rule; it is the case the rule was written for.
+ * image, per the shell's own design note (its "reuse rule"): it "is a
+ * set of internal functions compiled into libc.a", and callers "call
+ * those functions directly and never spawn an external interpreter."
+ * This clause is the case the rule was written for, not an exception
+ * to it.
  *
- *  - PATH.  Resolving the interpreter through PATH hands whoever can
- *    set PATH arbitrary code execution in *every* process that execs a
- *    script, and the victim did nothing wrong: it called execvp() on a
- *    file it was entitled to run.  It is no answer that the same PATH
- *    already chose `file` -- `file` is a script this process meant to
- *    run, while the interpreter is a native image the process never
- *    named at all, so PATH is being trusted for strictly more than the
- *    caller trusted it for.  include/ntlibc/rpath.h refuses the same
- *    bargain for $ORIGIN DLL search, and the design note refuses it by
- *    name for wordexp().
- *  - Beside the image.  This one is not a vulnerability, it is a
- *    standing maintenance burden that has already come due: "sh.exe is
- *    next to the running program" is true of `make install` and of
- *    nothing else, so every build layout that is not that one -- the
- *    sanitizer objdir, the packaging of the test binaries for a real
- *    Windows runner -- has to be taught to place a copy, or the clause
- *    silently stops working there.  A more careful search does not
- *    remove that burden; it moves it.
+ * Spawning sh as a second image was rejected on two counts.  Resolving
+ * the interpreter through PATH would hand whoever can set PATH
+ * arbitrary code execution in every process that execs a script -- the
+ * script named by `file` is one the caller chose to run, but the
+ * interpreter never was, so PATH would be trusted for strictly more
+ * than the caller trusted it for (include/ntlibc/rpath.h refuses the
+ * same bargain for $ORIGIN DLL search).  And locating an sh.exe beside
+ * the running image only holds for `make install`'s own layout,
+ * breaking silently for every other build or packaging layout.
  *
- * What made the second image look necessary was the claim that running
- * the script in this process "would leave the old image underneath the
- * new one".  That is true, and it is already true of execve() above:
- * nothing here replaces an address space, because NT has no primitive
- * that does.  Every exec in this file is a stand-in that keeps the
- * caller's image alive, runs the program, and ends the process with the
- * program's status.  __sh_run_script() is that same stand-in with the
- * spawn taken out, so it takes the same measures in the same order --
- * cloexec descriptors closed once the interpreter is committed to, and
- * _exit() rather than exit() so the caller's atexit handlers and stdio
- * buffers die with it, exactly as exec.html requires.
- *
- * The interpreter contract being bigger than the engine was the other
- * objection, and it was a real one: sh(1p)'s operand handling and the
- * up-front refusal of what the engine would otherwise *misread* rather
- * than diagnose (`case`, the still-literal special parameters) lived in
- * sh/main.c, out of reach from here.  They live in src/sh/script.c now,
- * which is where the reuse rule always implied they belonged, and
- * sh/main.c is the one-line main() over them the note describes.  Both
- * callers of the clause get the whole utility, refusals included; there
- * is nothing left to duplicate.
- *
- * What this does cost is linkage: the note's third reason for the
- * in-process rule is that the shell "costs nothing to programs that do
- * not use it", and a reference from this file pulls the command
- * language into every program that calls any exec function.  That is
- * accepted, not overlooked.  The clause requires an interpreter to be
- * *available* to every execvp() caller; the only way to keep it out of
- * the link is to make its availability depend on the filesystem, which
- * is the thing being fixed.
+ * Running the interpreter in this process does not "leave the old
+ * image underneath the new one" any more than execve() above does:
+ * nothing here ever replaces an address space, since NT has no
+ * primitive that does.  __sh_run_script() is the same exec stand-in
+ * with the spawn taken out, so it closes cloexec descriptors and calls
+ * _exit() rather than exit() in the same order execve() does, exactly
+ * as exec.html requires.
  *
  * Returns only on failure, like every other exec path here. */
 static int shell_fallback(const char *path, char *const argv[], char *const envp[]) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
