@@ -3905,7 +3905,78 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return value(Expression) == Source;
   }
 
-  bool bodyHasGuardedDynamicDescent(const Stmt *Body,
+  bool samePositiveIntegerConstant(const Expr *Left,
+                                   const Expr *Right,
+                                   QualType RankType) const {
+    if (!Left || !Right || !Left->getType()->isIntegerType() ||
+        !Right->getType()->isIntegerType())
+      return false;
+    Expr::EvalResult LeftValue;
+    Expr::EvalResult RightValue;
+    if (!Left->EvaluateAsInt(LeftValue, Context) ||
+        !Right->EvaluateAsInt(RightValue, Context) ||
+        !LeftValue.Val.getInt().isStrictlyPositive())
+      return false;
+    llvm::APSInt Maximum = llvm::APSInt::getMaxValue(
+        Context.getIntWidth(RankType), true);
+    return llvm::APSInt::compareValues(LeftValue.Val.getInt(),
+                                       RightValue.Val.getInt()) == 0 &&
+           llvm::APSInt::compareValues(LeftValue.Val.getInt(), Maximum) <= 0;
+  }
+
+  bool clampedStepInitializer(const VarDecl *Step,
+                              const Progress &Rank) const {
+    if (!Step->getInit() || containsCall(Step->getInit()) ||
+        !Rank.Variable->getType()->isUnsignedIntegerType() ||
+        Step->getType().getCanonicalType().getUnqualifiedType() !=
+            Rank.Variable->getType().getCanonicalType().getUnqualifiedType())
+      return false;
+    const auto *Choice =
+        dyn_cast_or_null<ConditionalOperator>(ignore(Step->getInit()));
+    QualType ChoiceType = Choice ? Choice->getType() : QualType();
+    if (!Choice || !ChoiceType->isUnsignedIntegerType() ||
+        Context.getIntWidth(ChoiceType) <
+            Context.getIntWidth(Rank.Variable->getType()))
+      return false;
+    const auto *Comparison =
+        dyn_cast_or_null<BinaryOperator>(ignore(Choice->getCond()));
+    if (!Comparison || !BinaryOperator::isComparisonOp(
+                           Comparison->getOpcode()))
+      return false;
+
+    const Expr *ConstantArm = nullptr;
+    const Expr *ConstantBound = nullptr;
+    bool RankWhenTrue = false;
+    bool RankLeft = rankAccess(Comparison->getLHS(), Rank);
+    bool RankRight = rankAccess(Comparison->getRHS(), Rank);
+    if (rankAccess(Choice->getTrueExpr(), Rank)) {
+      ConstantArm = Choice->getFalseExpr();
+      RankWhenTrue = true;
+    } else if (rankAccess(Choice->getFalseExpr(), Rank)) {
+      ConstantArm = Choice->getTrueExpr();
+    } else {
+      return false;
+    }
+    BinaryOperatorKind Opcode = Comparison->getOpcode();
+    if (RankWhenTrue && RankLeft &&
+        (Opcode == BO_LT || Opcode == BO_LE))
+      ConstantBound = Comparison->getRHS();
+    else if (RankWhenTrue && RankRight &&
+             (Opcode == BO_GT || Opcode == BO_GE))
+      ConstantBound = Comparison->getLHS();
+    else if (!RankWhenTrue && RankLeft &&
+             (Opcode == BO_GT || Opcode == BO_GE))
+      ConstantBound = Comparison->getRHS();
+    else if (!RankWhenTrue && RankRight &&
+             (Opcode == BO_LT || Opcode == BO_LE))
+      ConstantBound = Comparison->getLHS();
+    else
+      return false;
+    return samePositiveIntegerConstant(ConstantArm, ConstantBound,
+                                       Rank.Variable->getType());
+  }
+
+  bool bodyHasGuardedDynamicDescent(const Expr *Condition, const Stmt *Body,
                                     const Progress &Rank) const {
     const auto *Step = dyn_cast_or_null<VarDecl>(Rank.DynamicStep);
     const auto *RankVariable = dyn_cast_or_null<VarDecl>(Rank.Variable);
@@ -3935,16 +4006,24 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
             if (!Step->getInit())
               return false;
             Defined = true;
-            Facts = 0;
+            Facts = clampedStepInitializer(Step, Rank) &&
+                            rankNonzeroWhen(Condition, Rank, true)
+                        ? StepPositive | StepAtMostRank
+                        : 0;
           }
         continue;
       }
       if (!Defined)
         continue;
       if (const auto *Guard = dyn_cast<IfStmt>(Child)) {
-        if (Guard->getInit() || Guard->getConditionVariableDeclStmt() ||
-            containsCall(Guard->getCond()))
+        if (Guard->getInit() || Guard->getConditionVariableDeclStmt())
           return false;
+        /* A call in a later condition cannot modify either unescaped local
+         * scalar (checked above).  It may fail to return, but if it does
+         * return the initializer's clamp facts remain true.  Such a call
+         * cannot establish new facts, so simply skip it here. */
+        if (containsCall(Guard->getCond()))
+          continue;
         if (exitsBeforeBackedge(Guard->getThen()))
           Facts |= descentFacts(Guard->getCond(), false, Rank, Step);
         else if (Guard->getElse() && exitsBeforeBackedge(Guard->getElse()))
@@ -4912,7 +4991,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       if (strictComparison(Condition, Change, Body, Increment))
         return "strict-scalar-rank";
       if (Change.DynamicStep && Change.Kind == ProgressKind::Down &&
-          bodyHasGuardedDynamicDescent(Body, Change))
+          bodyHasGuardedDynamicDescent(Condition, Body, Change))
         return "strict-scalar-rank";
       if (Change.DynamicStep && Change.Kind == ProgressKind::Up &&
           bodyHasGuardedDynamicAscent(Condition, Body, Increment, Change))
