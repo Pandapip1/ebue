@@ -6,9 +6,5 @@
 void explicit_bzero(void *d, size_t n)
 {
 	volatile unsigned char *p = d;
-	while (n) {
-		*p = 0;
-		p++;
-		n--;
-	}
+	for (size_t i = 0; i < n; i++) p[i] = 0;
 }

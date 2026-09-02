@@ -5,11 +5,14 @@
 #include <features.h>
 #include "ownership_stubs.h"
 
-/* Whether the n-byte spans [a, a+n) and [b, b+n) do NOT overlap. */
-__wraps static int spans_disjoint(const void *a, const void *b, size_t n)
+/* If the n-byte spans [a, a+n) and [b, b+n) do NOT overlap, record that fact
+ * for the ownership analyzer and report true; otherwise report false. */
+__wraps static int mark_if_disjoint(void *a, const void *b, size_t n)
 {
 	uintptr_t distance = (uintptr_t)b - (uintptr_t)a;
-	return distance - n <= -2*n;
+	if (distance - n > -2*n) return 0;
+	__ownership_disjoint_span(a, b, n);
+	return 1;
 }
 
 __wraps void *memmove(void *dest withtok(writable_span(n)),
@@ -19,22 +22,11 @@ __wraps void *memmove(void *dest withtok(writable_span(n)),
 	const unsigned char *s = src;
 
 	if (d == s) return d;
-	if (spans_disjoint(d, s, n)) {
-		__ownership_disjoint_span(d, s, n);
-		return memcpy(d, s, n);
-	}
+	if (mark_if_disjoint(d, s, n)) return memcpy(d, s, n);
 	if ((uintptr_t)d < (uintptr_t)s) {
-		while (n > 0) {
-			*d = *s;
-			d++;
-			s++;
-			n--;
-		}
+		for (size_t i = 0; i < n; i++) d[i] = s[i];
 	} else {
-		while (n) {
-			n--;
-			d[n] = s[n];
-		}
+		for (size_t i = n; i > 0; i--) d[i - 1] = s[i - 1];
 	}
 	return dest;
 }
