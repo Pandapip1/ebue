@@ -131,7 +131,7 @@ static int emit_token(struct tok **arrp, size_t *np, size_t *capp, struct buf *c
 	}
 	text = malloc(cur->len + 1);
 	if (!text) return -1;
-	memcpy(text, cur->p, cur->len);
+	for (size_t i = 0; i < cur->len; i++) text[i] = cur->p[i];
 	text[cur->len] = 0;
 	(*arrp)[*np].text = text;
 	(*arrp)[*np].line = tokline;
@@ -237,7 +237,7 @@ static char *subst(const char *tmpl, const char *replstr, const char *value)
 
 	if (rlen == 0) {
 		char *r = malloc(tlen + 1);
-		if (r) memcpy(r, tmpl, tlen + 1);
+		if (r) for (size_t i = 0; i <= tlen; i++) r[i] = tmpl[i];
 		return r;
 	}
 	for (p = tmpl; (p = strstr(p, replstr)) != NULL; p += rlen) occ++;
@@ -248,9 +248,9 @@ static char *subst(const char *tmpl, const char *replstr, const char *value)
 	for (;;) {
 		const char *hit = strstr(p, replstr);
 		if (!hit) { strcpy(o, p); break; } // NOLINT(clang-analyzer-security.insecureAPI.strcpy) -- out was sized above to fit the remainder of tmpl plus every substitution
-		memcpy(o, p, (size_t)(hit - p));
+		for (size_t i = 0; i < (size_t)(hit - p); i++) o[i] = p[i];
 		o += hit - p;
-		memcpy(o, value, vlen);
+		for (size_t i = 0; i < vlen; i++) o[i] = value[i];
 		o += vlen;
 		p = hit + rlen;
 	}
@@ -443,7 +443,7 @@ int __util_xargs_main(int argc, char **argv)
 			for (k = start; k < ti; k++) {
 				size_t l = strlen(toks[k].text);
 				if (k != start) *vp++ = ' ';
-				memcpy(vp, toks[k].text, l);
+				for (size_t j = 0; j < l; j++) vp[j] = toks[k].text[j];
 				vp += l;
 			}
 			*vp = 0;
