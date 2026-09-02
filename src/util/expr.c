@@ -125,24 +125,62 @@ static const char *peek(struct expr_ctx *c)
 	return c->i < c->n ? c->v[c->i] : NULL;
 }
 
+/* Allocation failure here does NOT call exit(): __util_expr_main() runs
+ * in-process as a shell builtin with no fork (src/sh/builtin.c's
+ * bi_expr()), and src/internal/util.h's own header says every
+ * __util_<name>_main() "returns a real process exit status ... never a
+ * raw errno or a boolean" for exactly that reason -- calling exit() from
+ * here would tear down the whole shell process over one failed malloc()
+ * in a single command, the same class of mistake src/util/dd.c's header
+ * comment documents (and avoids) for its own SIGINT handling.
+ *
+ * c->err is set via xerr() instead, exactly like every other error in
+ * this file, and __util_expr_main() checks it before ever printing a
+ * result built from the sentinel dupstr()/numstr() return on failure.
+ *
+ * THE SENTINEL CANNOT BE NULL.  parse_and()/parse_or() below call
+ * null_or_zero() on an operand as soon as they see a following '&'/'|'
+ * token -- unconditionally, not gated on c->err first (see either
+ * function).  A NULL value reaching there would be a null-pointer
+ * dereference the first time an OOM'd sub-expression met '&' or '|'.  A
+ * static one-byte buffer is dereferenceable -- null_or_zero() reads it
+ * as the empty string, which is the correct "null or zero" answer for a
+ * value this parser could not actually build -- without being a real
+ * allocation.
+ *
+ * THAT IN TURN MEANS IT MUST NEVER REACH A REAL free().  Every value
+ * this parser produces is eventually freed (do_arith()/do_cmp()/
+ * do_match()'s consume(heap_allocated) parameters below, parse_and()/
+ * parse_or()'s explicit free(), __util_expr_main()'s own free(result)),
+ * and oom_sentinel is not a heap allocation -- free()ing it would be
+ * undefined behaviour, freeing memory malloc() never returned.  Every
+ * one of those sites therefore compares against oom_sentinel before
+ * calling free(), the same shape as this codebase's ordinary
+ * `if (p) free(p);` guard for an optional pointer, just against this
+ * sentinel instead of NULL, so this value can flow anywhere a genuine
+ * dupstr()/numstr() result can. */
+static char oom_sentinel[1];
+
 withtok(heap_allocated)
-static char *dupstr(const char *s) __attribute__((nonnull(1)));
+static char *dupstr(struct expr_ctx *c, const char *s) __attribute__((nonnull(1, 2)));
 withtok(heap_allocated)
-static char *dupstr(const char *s)
+static char *dupstr(struct expr_ctx *c, const char *s)
 {
 	size_t n = strlen(s) + 1;
 	char *p = malloc(n);
-	if (!p) { __util_diagf("expr: out of memory\n"); exit(2); }
+	if (!p) { xerr(c, "out of memory"); return oom_sentinel; }
 	memcpy(p, s, n);
 	return p;
 }
 
 withtok(heap_allocated)
-static char *numstr(long n)
+static char *numstr(struct expr_ctx *c, long n) __attribute__((nonnull(1)));
+withtok(heap_allocated)
+static char *numstr(struct expr_ctx *c, long n)
 {
 	char buf[32];
 	snprintf(buf, sizeof buf, "%ld", n);
-	return dupstr(buf);
+	return dupstr(c, buf);
 }
 
 withtok(heap_allocated)
@@ -179,10 +217,10 @@ static char *do_arith(struct expr_ctx *c, char *a consume(heap_allocated), const
 {
 	long x, y, r;
 	char *result;
-	if (c->err) { result = dupstr(""); goto done; }
+	if (c->err) { result = dupstr(c, ""); goto done; }
 	if (!is_num_candidate(a) || !is_num_candidate(b)) {
 		xerr(c, "non-numeric argument");
-		result = dupstr("");
+		result = dupstr(c, "");
 		goto done;
 	}
 	x = strtol(a, NULL, 10);
@@ -191,13 +229,13 @@ static char *do_arith(struct expr_ctx *c, char *a consume(heap_allocated), const
 	else if (!strcmp(op, "-")) r = x - y;
 	else if (!strcmp(op, "*")) r = x * y;
 	else {
-		if (y == 0) { xerr(c, "division by zero"); result = dupstr(""); goto done; }
+		if (y == 0) { xerr(c, "division by zero"); result = dupstr(c, ""); goto done; }
 		r = !strcmp(op, "/") ? x / y : x % y;
 	}
-	result = numstr(r);
+	result = numstr(c, r);
 done:
-	free(a);
-	free(b);
+	if (a != oom_sentinel) free(a);
+	if (b != oom_sentinel) free(b);
 	return result;
 }
 
@@ -211,7 +249,7 @@ static char *do_cmp(struct expr_ctx *c, char *a consume(heap_allocated), const c
 	int r;
 	const char *value;
 	char *result;
-	if (c->err) { result = dupstr(""); goto done; }
+	if (c->err) { result = dupstr(c, ""); goto done; }
 	if (is_num_candidate(a) && is_num_candidate(b)) {
 		long x = strtol(a, NULL, 10), y = strtol(b, NULL, 10);
 		r = x < y ? -1 : x > y ? 1 : 0;
@@ -225,10 +263,10 @@ static char *do_cmp(struct expr_ctx *c, char *a consume(heap_allocated), const c
 	else if (!strcmp(op, "<=")) value = r <= 0 ? "1" : "0";
 	else if (!strcmp(op, ">")) value = r > 0 ? "1" : "0";
 	else value = r >= 0 ? "1" : "0"; /* ">=" */
-	result = dupstr(value);
+	result = dupstr(c, value);
 done:
-	free(a);
-	free(b);
+	if (a != oom_sentinel) free(a);
+	if (b != oom_sentinel) free(b);
 	return result;
 }
 
@@ -244,11 +282,11 @@ static char *do_match(struct expr_ctx *c, char *a consume(heap_allocated),
 	int rc, matched;
 	char *result;
 
-	if (c->err) { result = dupstr(""); goto done; }
+	if (c->err) { result = dupstr(c, ""); goto done; }
 	rc = regcomp(&re, pat, 0);
 	if (rc) {
 		xerr(c, "invalid regular expression");
-		result = dupstr("");
+		result = dupstr(c, "");
 		goto done;
 	}
 	rc = regexec(&re, a, 2, pm, 0);
@@ -257,21 +295,21 @@ static char *do_match(struct expr_ctx *c, char *a consume(heap_allocated),
 		if (matched && pm[1].rm_so >= 0) {
 			regoff_t len = pm[1].rm_eo - pm[1].rm_so;
 			result = malloc((size_t)len + 1);
-			if (!result) { xerr(c, "out of memory"); result = dupstr(""); }
+			if (!result) { xerr(c, "out of memory"); result = dupstr(c, ""); }
 			else {
 				memcpy(result, a + pm[1].rm_so, (size_t)len);
 				result[len] = 0;
 			}
 		} else {
-			result = dupstr("");
+			result = dupstr(c, "");
 		}
 	} else {
-		result = matched ? numstr(pm[0].rm_eo - pm[0].rm_so) : dupstr("0");
+		result = matched ? numstr(c, pm[0].rm_eo - pm[0].rm_so) : dupstr(c, "0");
 	}
 	regfree(&re);
 done:
-	free(a);
-	free(pat);
+	if (a != oom_sentinel) free(a);
+	if (pat != oom_sentinel) free(pat);
 	return result;
 }
 
@@ -280,7 +318,7 @@ withtok(heap_allocated)
 static char *parse_primary(struct expr_ctx *c)
 {
 	const char *tok = peek(c);
-	if (!tok) { xerr(c, "syntax error: unexpected end of expression"); return dupstr(""); }
+	if (!tok) { xerr(c, "syntax error: unexpected end of expression"); return dupstr(c, ""); }
 	if (!strcmp(tok, "(")) {
 		char *v;
 		c->i++;
@@ -290,9 +328,9 @@ static char *parse_primary(struct expr_ctx *c)
 		c->i++;
 		return v;
 	}
-	if (!strcmp(tok, ")")) { xerr(c, "syntax error: unexpected ')'"); return dupstr(""); }
+	if (!strcmp(tok, ")")) { xerr(c, "syntax error: unexpected ')'"); return dupstr(c, ""); }
 	c->i++;
-	return dupstr(tok);
+	return dupstr(c, tok);
 }
 
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested expr grouping and is depth-bounded by argc
@@ -364,11 +402,11 @@ static char *parse_and(struct expr_ctx *c)
 		c->i++;
 		rhs = parse_cmp(c);
 		if (null_or_zero(v) || null_or_zero(rhs)) {
-			free(v);
-			free(rhs);
-			v = dupstr("0");
+			if (v != oom_sentinel) free(v);
+			if (rhs != oom_sentinel) free(rhs);
+			v = dupstr(c, "0");
 		} else {
-			free(rhs);
+			if (rhs != oom_sentinel) free(rhs);
 		}
 	}
 	return v;
@@ -384,10 +422,10 @@ static char *parse_or(struct expr_ctx *c)
 		c->i++;
 		rhs = parse_and(c);
 		if (null_or_zero(v)) {
-			free(v);
+			if (v != oom_sentinel) free(v);
 			v = rhs;
 		} else {
-			free(rhs);
+			if (rhs != oom_sentinel) free(rhs);
 		}
 	}
 	return v;
@@ -411,10 +449,10 @@ int __util_expr_main(int argc, char **argv)
 
 	result = parse_or(&c);
 	if (!c.err && c.i != c.n) xerr(&c, "syntax error: unexpected argument");
-	if (c.err) { free(result); return 2; }
+	if (c.err) { if (result != oom_sentinel) free(result); return 2; }
 
 	printf("%s\n", result);
 	status = null_or_zero(result) ? 1 : 0;
-	free(result);
+	if (result != oom_sentinel) free(result);
 	return status;
 }
