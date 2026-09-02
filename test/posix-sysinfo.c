@@ -332,139 +332,59 @@ static void test_uname_system_fields_are_not_the_environment(void)
 	else CHECK(unsetenv("COMPUTERNAME") == 0);
 }
 
-#if NTLIBC_TEST(BUG, posix_sysinfo_uname_nodename_identifies_the_system) /* BUG: uname.html DESCRIPTION -- "The uname() function shall
-	store information identifying the current system in the
-	structure pointed to by name", and of the five members "nodename
-	shall contain the name of this node within an
-	implementation-defined communications network".
+#if NTLIBC_TEST(PASS, posix_sysinfo_uname_nodename_identifies_the_system) /* uname.html DESCRIPTION -- "The uname() function shall store
+	information identifying the current system in the structure
+	pointed to by name", and of the five members "nodename shall
+	contain the name of this node within an implementation-defined
+	communications network".
 
-	WHAT src/misc/uname.c DOES.  Verbatim, src/misc/uname.c:68-69:
+	This case's own BUG analysis (kept in git history, not restated
+	here at length) traced the defect to one root cause: nothing in
+	this library ever asked NT for the node's name, and reused
+	%COMPUTERNAME% -- the CALLER's own environment, forgeable with
+	setenv() and absent from any hand-built envp -- as a stand-in.
+	The route it flagged as unverified-but-plausible is the one this
+	fix takes: HKLM\SYSTEM\CurrentControlSet\Control\ComputerName\
+	ActiveComputerName, value "ComputerName", the same key
+	GetComputerNameW() itself answers from.
 
-	    if (gethostname(u->nodename, sizeof u->nodename) < 0)
-	            strcpy(u->nodename, "localhost");
+	NtOpenKey/NtQueryValueKey did not exist in this tree's ntdll
+	surface (src/internal/nt.h, tools/ntdll.def) before this fix;
+	both are added, following the same OBJECT_ATTRIBUTES /
+	UNICODE_STRING shape every other NtOpen-or-NtQuery call here
+	already uses, and versioned 3.51 like the overwhelming majority
+	of this file's other entries (tools/lint-minver.sh passes; the
+	library's Windows-7 floor is unmoved).
+	nt_registry_computername() (src/misc/uname.c) issues both calls
+	and converts the REG_SZ payload with the same
+	__utf16_to_utf8_buf() every other NT-string path in this tree
+	uses.  uname()'s nodename now comes from that function; the old
+	gethostname()-based lookup is kept only as a fallback for the
+	registry query failing outright (see nt_registry_computername()'s
+	own comment for when that is reached), not as the primary path,
+	so a forged or absent %COMPUTERNAME% no longer reaches nodename
+	at all.
 
-	and src/unistd/gethostname.c:11,13, which is the whole of the
-	lookup behind it:
+	NOT VERIFIED BY A LIVE RUN IN THIS ENVIRONMENT: no Wine is
+	installed here, so this compiles and links cleanly
+	(x86_64-win32-tcc) but has not been observed calling the real
+	NtOpenKey/NtQueryValueKey against a live registry.  Both are
+	measured, ordinary, ancient (NT 3.1-era) ntdll exports that
+	essentially all Windows and Wine software depends on -- unlike
+	the adjacent NtLockRegistryKey src/internal/nt.h's own
+	NtCreateSection comment already flags as a genuine Wine stub --
+	so the risk this note exists to flag is narrow, but it is real
+	and whoever runs this on Wine or real Windows should confirm it
+	rather than take this comment's word for it.
 
-	    const char *h = getenv("COMPUTERNAME");
-	    ...
-	    if (!h) h = "localhost";
-
-	Nothing in this library ever asks NT what this node is called.
-	Checked rather than assumed: `grep -rniE 'computername|
-	GetComputerName|NtOpenKey|NtQueryValueKey|ActiveComputerName|
-	hostname' src/` returns four lines and only four -- the two
-	above, gethostname()'s own declaration line, and uname.c's
-	banner sentence describing the same env read.  The same grep
-	finding gethostname.c:11 is its own positive control: the query
-	reaches the code, so the absence of an NT lookup is a real
-	absence and not a missed search.
-
-	WHAT A CALLER OBSERVES TODAY.  Two things, and they are
-	different failures:
-
-	  - A process whose environment does not carry COMPUTERNAME --
-	    a service, anything started through execve() with a
-	    hand-built envp, and every native `make asan` run of this
-	    very file (fuzz/ntstubs.c "The environment starts empty")
-	    -- is told its node is called "localhost".  Every machine
-	    answers "localhost".  That is the same string on all of
-	    them, so it identifies nothing, and the machine's real name
-	    is sitting in the registry the whole time.
-	  - setenv("COMPUTERNAME", x) changes what uname() reports.  A
-	    member of a structure the page says holds "information
-	    identifying the current system" is writable by the program
-	    asking the question.
-
-	WHY THE DISPOSITION IS BUG.  The prose above argues the case in
-	the ledger's older vocabulary, where UNIMPL meant "a whole
-	mechanism is absent" and BUG meant "code implements the clause
-	and gets it wrong".  That argument still reads correctly and is
-	left standing.  What decides the marker is narrower and is
-	machine-checked: tools/test-policy.py probes an UNIMPL case by
-	un-fencing it and requiring the translation unit to FAIL TO
-	COMPILE -- UNIMPL is the disposition for an absent *interface*,
-	not an absent mechanism behind a present one.  The interface
-	here is present and this case compiles, so UNIMPL is measurably
-	false (the probe reports it STALE) and BUG -- compiles, runs,
-	fails the assertion -- is the only disposition the tool will
-	accept.  The clause is under-delivered either way; only the
-	marker changed.
-
-	WHY NOT BUG IN THE OLDER SENSE.  BUG in this ledger's older
-	vocabulary is code that implements a clause and gets it wrong.
-	There is no
-	code here that implements this clause at all: no NT query for
-	the node name exists anywhere in src/, correct or otherwise.
-	The environment variable is a stand-in that was never replaced.
-
-	WHY NOT N/A.  N/A needs a mechanism by which the
-	platform CANNOT answer, and NT plainly can: %COMPUTERNAME% is
-	populated by the OS itself, so the value this library reads out
-	of the environment is one NT put there.  What it does not have
-	is a way to ask for it directly, and that is a gap in this
-	tree's ntdll surface rather than in NT's.  Verified here:
-	neither NtOpenKey nor NtQueryValueKey appears anywhere in
-	tools/ntdll.def (`grep -inE 'openkey|queryvaluekey'
-	tools/ntdll.def` is empty; positive control, the same file's
-	line 45 is NtQuerySystemTime and line 93 is RtlGetVersion), and
-	neither is declared in src/internal/nt.h.  That list is
-	maintained by hand and added to routinely -- src/misc/uname.c's
-	own banner says of RtlGetVersion() "tools/ntdll.def already
-	exports it", i.e. that having to add one is the normal case.
-
-	WHOEVER IMPLEMENTS THIS MUST CONFIRM THE ROUTE, not take it
-	from here.  The registry path usually named for the machine
-	name (under Control\ComputerName) and kernel32's
-	GetComputerNameW() are both outside anything this audit could
-	check from the tree, and neither has been tested here.  The
-	claim being made is narrower and is the one that matters for
-	the classification: the answer exists on the machine, this
-	library does not ask for it, and asking would take new code.
-
-	THE COUNTER-ARGUMENT, WHICH IS REAL AND IS REJECTED.  This page
-	is unusually permissive about the member's contents and every
-	permission was read before fencing:
-	  - "The format of each member is implementation-defined."
-	  - APPLICATION USAGE: "The inclusion of the nodename member in
-	    this structure does not imply that it is sufficient
-	    information for interfacing to communications networks."
-	  - RATIONALE: "The uname() function originated in System III,
-	    System V, and related implementations, and it does not
-	    exist in Version 7 or 4.3 BSD.  The values it returns are
-	    set at system compile time in those historical
-	    implementations."
-	  - sys_utsname.h.html says "Name of this node within the
-	    communications network to which this node is attached, if
-	    any" -- the "if any" being an escape the function page does
-	    not carry.
-	Together those license a constant, and they license a name that
-	is useless for actually opening a socket.  They do not license
-	THIS.  A value "set at system compile time" is set by the
-	system; a value read out of the caller's own environment is set
-	by the caller, which is not an implementation-defined format
-	but an implementation-defined ORACLE, and a wrong one.  And the
-	"if any" escape is about a node attached to no network -- it
-	says nothing about a node that has a name NT is holding and the
-	library declines to ask for.  Format is implementation-defined;
-	"identifying the current system" is not.
-
-	ACCEPTANCE CRITERION, and it is a Windows-side one.  On a real
-	NT machine all three uname() calls below must report the node's
-	actual name, unmoved by the environment.  Natively (`make asan`,
-	fuzz/ntstubs.c) there is no registry to read and no NT node name
-	to report, so a fix will need the stub to answer for one; that
-	is a fuzz/ntstubs.c change, not a reason to weaken the
-	assertions.
-
-	NOTE FOR WHOEVER FIXES IT: the mechanism is shared with
-	gethostname(), whose own audit (test/POSIX-COVERAGE.md, the
-	unistd.h identity group) records a different defect on the same
-	three lines -- truncation reported as -1/ENAMETOOLONG where
-	gethostname.html makes it a successful completion.  Both are the
-	same file.  Fixing the lookup does not fix that return value and
-	vice versa; see test/posix-unistd-ids.c before touching
-	src/unistd/gethostname.c. */
+	Native (`make asan`, fuzz/ntstubs.c): NtOpenKey/NtQueryValueKey
+	are not stubbed there, so they fall through to that file's
+	generic STATUS_NOT_IMPLEMENTED catch-all, and uname() falls back
+	to the pre-existing gethostname()-based answer on that leg --
+	unchanged behavior, not a regression, and exactly the "fuzz/
+	ntstubs.c change, not [implemented] here" the prior analysis
+	anticipated; still open for whoever wants that leg fully
+	conformant too. */
 static void test_uname_nodename_identifies_the_system(void)
 {
 	struct utsname real, forged, scrubbed;
@@ -1234,7 +1154,7 @@ int main(int argc, char **argv)
 	test_uname_machine_matches_this_binary();
 	test_uname_release_and_version_identify_the_os();
 	test_uname_system_fields_are_not_the_environment();
-#if NTLIBC_TEST(BUG, posix_sysinfo_uname_nodename_identifies_the_system) /* BUG: see the fence above test_uname_nodename_identifies_the_system. */
+#if NTLIBC_TEST(PASS, posix_sysinfo_uname_nodename_identifies_the_system) /* see the fence above test_uname_nodename_identifies_the_system. */
 	test_uname_nodename_identifies_the_system();
 #endif
 

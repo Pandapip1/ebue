@@ -22,6 +22,15 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* netinet_in.h.html: "extern const struct in6_addr in6addr_any" / "...
+ * in6addr_loopback".  Real storage, not a stand-in for a socket
+ * transport this tree does not have yet (AF_INET6 sockets remain
+ * staged, see <netinet/in.h>'s banner) -- these two are just the
+ * all-zero and ::1 byte patterns IN6ADDR_ANY_INIT/IN6ADDR_LOOPBACK_INIT
+ * already spell out, given linkage so `&in6addr_any` compiles. */
+const struct in6_addr in6addr_any = IN6ADDR_ANY_INIT;
+const struct in6_addr in6addr_loopback = IN6ADDR_LOOPBACK_INIT;
+
 /* htonl.html: "convert...to network byte order". */
 uint32_t htonl(uint32_t h)
 {

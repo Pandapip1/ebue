@@ -59,10 +59,12 @@ void *realloc(void *p consume_if_nonnull_return(heap_allocated), size_t n)
 	return q;
 }
 
-withtok(internal_heap_allocated)
-withtok(writable_span(n))
-void *__malloc(size_t n) { return malloc(n); }
-void __free(void *p consume(internal_heap_allocated)) { free(p); }
+/* __malloc()/__free() -- the separate allocator crt/crt1.c uses before
+ * main() runs -- used to be two thin wrappers right here.  They moved to
+ * their own translation unit, src/malloc/crt_alloc.c: see that file's
+ * banner for the mechanical link-time reason (a duplicate-symbol error
+ * against any program, like musl's flockfile-list.c regression test,
+ * that interposes its own malloc()/calloc()/free()/realloc()). */
 
 size_t malloc_usable_size(void *p)
 {

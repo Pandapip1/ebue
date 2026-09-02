@@ -1354,8 +1354,42 @@ typedef struct __nt_file_get_ea_information {
 	char EaName[1];
 } __NT_FILE_GET_EA_INFORMATION;
 
+/* ---- registry (src/misc/uname.c's node-name lookup) ------------------
+ * KEY_QUERY_VALUE: the one access right this tree ever asks a registry
+ * key for -- ntdll's own winnt.h numbering, not invented here.
+ * KeyValuePartialInformation: the NtQueryValueKey information class
+ * whose payload is "the value's raw data, with a leading TitleIndex/
+ * Type/DataLength header" -- the shape every caller wants when it
+ * already knows the value's type (REG_SZ here) and just wants the
+ * bytes. Both are genuine ntdll exports, not stubs: real Windows and
+ * Wine both depend on registry access working for essentially
+ * everything, unlike the adjacent NtLockRegistryKey this file's own
+ * NtCreateSection comment already flags as a Wine stub -- see this
+ * project's own WHOEVER-IMPLEMENTS-THIS note in test/posix-sysinfo.c's
+ * uname() fence for the one thing that note could not verify from this
+ * tree alone (confirm on the actual Wine/Windows leg, not by more
+ * reading here). */
+#define KEY_QUERY_VALUE 0x0001
+
+typedef enum _KEY_VALUE_INFORMATION_CLASS {
+	KeyValueBasicInformation,
+	KeyValueFullInformation,
+	KeyValuePartialInformation,
+	KeyValueFullInformationAlign64,
+	KeyValuePartialInformationAlign64,
+} KEY_VALUE_INFORMATION_CLASS;
+
+typedef struct _KEY_VALUE_PARTIAL_INFORMATION {
+	ULONG TitleIndex;
+	ULONG Type;
+	ULONG DataLength;
+	UCHAR Data[1];
+} KEY_VALUE_PARTIAL_INFORMATION, *PKEY_VALUE_PARTIAL_INFORMATION;
+
 /* ---- prototypes ------------------------------------------------------ */
 NTSTATUS NTAPI NtClose(HANDLE);
+NTSTATUS NTAPI NtOpenKey(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
+NTSTATUS NTAPI NtQueryValueKey(HANDLE, PUNICODE_STRING, KEY_VALUE_INFORMATION_CLASS, PVOID, ULONG, PULONG);
 NTSTATUS NTAPI NtCreateFile(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK, LARGE_INTEGER *, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
 NTSTATUS NTAPI NtOpenFile(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK, ULONG, ULONG);
 NTSTATUS NTAPI NtReadFile(HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID, PIO_STATUS_BLOCK, PVOID, ULONG, LARGE_INTEGER *, PULONG);

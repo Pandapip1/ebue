@@ -629,20 +629,25 @@ int main(void)
 		close(listener);
 	}
 
-	/* UDP (sendto/recvfrom/SOCK_DGRAM's actual use), AF_INET6
-	 * (sockaddr_in6/in6_addr/getaddrinfo's AF_INET6 path), pathname
-	 * AF_UNIX (struct sockaddr_un) and sockatmark() are all
-	 * staged for later work, per
-	 * test/networking-audit.md sec 6 (stages 4-6) -- not merely
-	 * untested, genuinely not implemented, and (per this project's own
-	 * standing rule, test/posix-sysmisc.c's file banner) not even
-	 * declared in <sys/socket.h>/<netinet/in.h> (see that header's own
-	 * banner), so none of this can even be written outside an #if 0
-	 * fence. */
-#if NTLIBC_TEST(UNIMPL, posix_socket_send_recv_and_socketpair_interfaces) /* UNIMPL: sys_socket.h.html's remaining function list --
-	sendto()/recvfrom()/sendmsg()/recvmsg() (UDP and ancillary
-	data) -- networking-audit.md sec 6 stages 5/6/7.  SOCK_STREAM
-	socketpair() is covered above; SOCK_DGRAM remains with UDP. */
+	/* UDP proper (SOCK_DGRAM's actual use, and the per-datagram
+	 * addressing sendmsg()/recvmsg()'s ancillary data depend on),
+	 * general pathname AF_UNIX (struct sockaddr_un) and sockatmark()
+	 * remain staged for later work, per test/networking-audit.md sec 6
+	 * (stages 4-6) -- not merely untested, genuinely not implemented,
+	 * and (per this project's own standing rule, test/posix-sysmisc.c's
+	 * file banner) not even declared in <sys/socket.h> (see that
+	 * header's own banner), so none of that can even be written outside
+	 * an #if 0 fence.  sendto()/recvfrom() and struct sockaddr_in6 came
+	 * off that list -- see the two cases below for why each one did. */
+#if NTLIBC_TEST(PASS, posix_socket_send_recv_and_socketpair_interfaces) /* sys_socket.h.html's sendto()/recvfrom(): on the one socket
+	type this project has, SOCK_STREAM, both reduce to send()/recv()
+	plus the fixed peer address a connected stream already carries
+	(sendto.html: "If the socket is connected, the dest_addr
+	argument shall be ignored"; recvfrom.html's address is that same
+	peer coming back the other way) -- src/socket/sendrecv.c now
+	implements exactly that reduction, with no SOCK_DGRAM machinery
+	involved.  sendmsg()/recvmsg() (ancillary data) and UDP proper
+	remain out of scope -- see the comment above this case. */
 	{
 		int sv[2];
 		char b[4];
@@ -651,11 +656,17 @@ int main(void)
 		recvfrom(sv[1], b, sizeof b, 0, 0, 0);
 	}
 #endif
-#if NTLIBC_TEST(UNIMPL, posix_socket_ipv6_address_types) /* UNIMPL: netinet_in.h.html's struct sockaddr_in6/struct
-	in6_addr/IN6_IS_ADDR_* -- networking-audit.md sec 6 does not
-	stage AF_INET6 explicitly (it stages AF_UNIX and UDP), but this
-	project's task for this file scoped AF_INET/SOCK_STREAM only,
-	so IPv6 is deferred the same way. */
+#if NTLIBC_TEST(PASS, posix_socket_ipv6_address_types) /* netinet_in.h.html's struct sockaddr_in6, the IN6_IS_ADDR_
+	address-predicate macros, IN6ADDR_..._INIT, in6addr_any and
+	in6addr_loopback are now declared and
+	src/socket/inet.c.  This is a type and some byte-test macros/
+	constants, not an AF_INET6 transport -- socket(AF_INET6, ...)
+	still and correctly fails EAFNOSUPPORT (src/socket/socket.c),
+	exactly like the AF_INET6 macro itself already did before this
+	struct existed.  Nothing here needed networking-audit.md sec 6's
+	staged AFD work: a struct definition and pure byte-comparison
+	macros carry no undefined symbol for this project's "declared-
+	but-undefined is a link-error bug" rule to apply to. */
 	{
 		struct sockaddr_in6 a6;
 		a6.sin6_family = AF_INET6;

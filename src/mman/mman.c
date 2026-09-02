@@ -128,6 +128,14 @@ struct mapping {
 	int filebacked;         /* section view, not a private anonymous
 	                          * reservation -- see plat_mem.h */
 	__plat_handle_t writeback; /* independent writable MAP_SHARED file handle */
+	/* The fildes/off mmap() itself was called with, kept only for
+	 * posix_mem_offset() to hand back (posix_mem_offset.html: "the
+	 * descriptor used (via mmap()) to establish the mapping").
+	 * Meaningless when !filebacked -- posix_mem_offset() never reads
+	 * these for an anonymous mapping, it answers EACCES first (see
+	 * this file's posix_mem_offset()). */
+	int mm_fd;
+	off_t mm_off;
 };
 
 /* POSIX permits an implementation-defined mapping limit and EMFILE at
@@ -559,6 +567,8 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) // NO
 			m->base = base;
 			m->filebacked = 1;
 			m->writeback = writeback;
+			m->mm_fd = fd;
+			m->mm_off = off;
 			if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
 				__plat_mem_unmap_view(base, npages * MMAP_PAGE);
 				if (m->writeback) __plat_close(m->writeback);
@@ -621,6 +631,8 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) // NO
 		m->base = base;
 		m->filebacked = 1;
 		m->writeback = writeback;
+		m->mm_fd = fd;
+		m->mm_off = off;
 		if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
 			__plat_mem_unmap_view(base, npages * MMAP_PAGE);
 			if (m->writeback) __plat_close(m->writeback);
@@ -645,6 +657,8 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) // NO
 	m->base = base;
 	m->filebacked = 0;
 	m->writeback = __PLAT_HANDLE_NULL;
+	m->mm_fd = -1;
+	m->mm_off = 0;
 	if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
 		__plat_mem_release(base, size);
 		free(m->live);
@@ -944,6 +958,108 @@ int munlockall(void)
 		errno = saved;
 		return -1;
 	}
+	return 0;
+}
+
+/* posix_madvise(): https://pubs.opengroup.org/onlinepubs/9699919799/
+ * functions/posix_madvise.html.  DESCRIPTION: "shall advise the
+ * implementation on the expected behavior...with respect to the data in
+ * the memory starting at address addr, and continuing for len bytes,"
+ * and "shall have no effect on the semantics of access to memory in the
+ * specified range, although it may affect the performance of access."
+ * This implementation has no page-replacement heuristic for any advice
+ * value to steer, so every valid one is genuinely a no-op -- see
+ * <sys/mman.h>'s banner for why that is not the same thing as a stub.
+ * ERRORS: "[EINVAL] The value of advice is invalid" and "[ENOMEM]
+ * Addresses in the range starting at addr and continuing for len bytes
+ * are partly or completely outside the range allowed for the address
+ * space of the calling process" -- the latter checked against the same
+ * mapping registry mmap()/munmap()/mlock() already maintain, via the
+ * same find_containing() munmap()'s MAP_FIXED path uses. */
+int posix_madvise(void *addr, size_t len, int advice)
+{
+	if (advice != POSIX_MADV_NORMAL && advice != POSIX_MADV_SEQUENTIAL &&
+	    advice != POSIX_MADV_RANDOM && advice != POSIX_MADV_WILLNEED &&
+	    advice != POSIX_MADV_DONTNEED)
+		return EINVAL;
+
+	if (!find_containing(addr, len))
+		return ENOMEM;
+
+	return 0;
+}
+
+/* posix_typed_mem_open(): https://pubs.opengroup.org/onlinepubs/
+ * 9699919799/functions/posix_typed_mem_open.html.  "shall establish a
+ * connection between the typed memory object specified by...name and a
+ * file descriptor."  Which typed memory pools exist is entirely
+ * implementation-defined (RATIONALE), and this implementation ships
+ * none -- there is no NT concept this could honestly wire to (a "typed
+ * memory object" names a distinct, bounded pool of physical memory with
+ * its own characteristics, e.g. a DMA-capable region; ntlibc has one
+ * general-purpose virtual address space and no such pools to name) --
+ * so ERRORS' "[ENOENT] The named typed memory object does not exist" is
+ * this system's real, permanent answer for every name, not a stand-in
+ * for one that will exist later.  See <sys/mman.h>'s banner. */
+int posix_typed_mem_open(const char *name, int oflag, int tflag)
+{
+	(void)name;
+	(void)oflag;
+
+	if (tflag != POSIX_TYPED_MEM_ALLOCATE &&
+	    tflag != POSIX_TYPED_MEM_ALLOCATE_CONTIG &&
+	    tflag != POSIX_TYPED_MEM_MAP_ALLOCATABLE) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	errno = ENOENT;
+	return -1;
+}
+
+/* posix_typed_mem_get_info(): https://pubs.opengroup.org/onlinepubs/
+ * 9699919799/functions/posix_typed_mem_get_info.html.  Since
+ * posix_typed_mem_open() above never succeeds, no fildes value this
+ * process could hold was ever established as a typed memory descriptor
+ * -- ERRORS' "[EBADF] The fildes argument is not a valid open file
+ * descriptor" (for typed-memory purposes; no other kind honestly
+ * reaches this function) is therefore this implementation's only real
+ * outcome for any input. */
+int posix_typed_mem_get_info(int fildes, struct posix_typed_mem_info *info)
+{
+	(void)fildes;
+	(void)info;
+	errno = EBADF;
+	return -1;
+}
+
+/* posix_mem_offset(): https://pubs.opengroup.org/onlinepubs/9699919799/
+ * functions/posix_mem_offset.html.  "shall return in the variable
+ * pointed to by off a value that identifies the offset...of the memory
+ * block currently mapped at addr[, and] in the variable pointed to by
+ * fildes, the descriptor used (via mmap()) to establish the mapping."
+ * Answered from the same mapping registry mmap() already keeps (struct
+ * mapping's mm_fd/mm_off, set at every file-backed mmap() call site).
+ * ERRORS: "[EACCES] The region...was not established via a memory
+ * object" -- an anonymous mapping, mm_fd/mm_off meaningless for it, see
+ * struct mapping's own comment -- and "[ENOMEM] The addresses in the
+ * range...are outside the range allowed for the address space," which
+ * find_containing() returning NULL covers whether addr is unmapped
+ * entirely or the range crosses into a different mapping. */
+int posix_mem_offset(const void *__restrict addr, size_t len,
+                      off_t *__restrict off, size_t *__restrict contig_len,
+                      int *__restrict fildes)
+{
+	struct mapping *m = find_containing(addr, len);
+	size_t remaining;
+
+	if (!m) { errno = ENOMEM; return -1; }
+	if (!m->filebacked) { errno = EACCES; return -1; }
+
+	*off = m->mm_off + (off_t)addr_diff(addr, m->base);
+	*fildes = m->mm_fd;
+	remaining = m->npages * MMAP_PAGE - addr_diff(addr, m->base);
+	*contig_len = remaining < len ? remaining : len;
 	return 0;
 }
 

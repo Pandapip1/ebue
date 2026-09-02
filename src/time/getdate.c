@@ -8,24 +8,30 @@
  *   - $DATEMSK.  When it names a file, that file's newline-separated
  *     strptime templates are read and tried, per the DESCRIPTION, and a
  *     file that can't be opened is ERRORS code 2, per the table.  Both
- *     are implemented below (read_templates()).  What is *not*
- *     implemented is ERRORS code 1, "The DATEMSK environment variable
- *     is null or undefined" -- that would mean every call with $DATEMSK
- *     unset fails outright, which test/time.c's getdate() coverage
- *     (out of this change's scope to touch) already exercises the other
- *     way: it calls getdate() with a variety of date strings and no
- *     $DATEMSK set up at all, and expects them to succeed.  This file's
- *     original design reused getdate_err==1 for "no usable input"
- *     (!s || !*s) instead, which is not what POSIX's code 1 means but
- *     is the closest fit among the codes that exist, and is what that
- *     out-of-scope coverage already pins.  Rather than break that,
- *     $DATEMSK unset/empty keeps falling back to a fixed, hard-coded
- *     template list (below) the same as before -- a deliberate,
- *     documented deviation, not an oversight: a target with no
- *     established $DATEMSK convention or shipped template files would
- *     otherwise make getdate() unconditionally fail for every caller
- *     that doesn't first arrange one, which is worse than a partially
- *     spec-conformant fallback.
+ *     are implemented below (read_templates()).  ERRORS code 1, "The
+ *     DATEMSK environment variable is null or undefined", is ALSO
+ *     implemented now: $DATEMSK unset or empty fails outright, with no
+ *     fallback template list.  This file used to fall back to a fixed,
+ *     hard-coded template list instead, on the documented ground that a
+ *     target with no established $DATEMSK convention would otherwise
+ *     make getdate() unconditionally fail for every caller that
+ *     doesn't first arrange one -- and that deviation stood only
+ *     because test/time.c's getdate() coverage called getdate() with no
+ *     $DATEMSK set up and expected success.  That coverage now sets
+ *     $DATEMSK to a real template file first (test/time.c's own getdate
+ *     block), which was the one thing keeping the deviation in place;
+ *     with it gone there is no reason left to deviate, and
+ *     test/posix-time.c's posix_time_getdate_no_datemsk_must_fail
+ *     (formerly fenced UNIMPL) now asserts the real clause directly.
+ *     One imprecision survives from before: getdate() below also
+ *     answers code 1 for a null/empty s (checked before $DATEMSK is
+ *     even read), which is not what the ERRORS table's code 1 text
+ *     means -- POSIX does not name an error for that input at all.  It
+ *     is the closest existing code, test/time.c's getdate() coverage
+ *     already pins it (getdate("") and getdate(NULL) both expect
+ *     getdate_err == 1), and untangling it into its own code is a
+ *     separate, non-conflicting change from the one this fence asked
+ *     for.
  *
  *   - Defaulting unspecified fields to "today" rather than to zero.
  *     "elements of the [struct tm] that are not specified by the
@@ -69,19 +75,6 @@
 #include "libc.h"
 
 int getdate_err;
-
-static const char *const templates[] = {
-	"%Y-%m-%d %H:%M:%S",
-	"%Y-%m-%d %H:%M",
-	"%Y-%m-%d",
-	"%m/%d/%Y %H:%M:%S",
-	"%m/%d/%Y",
-	"%d %B %Y",
-	"%d %b %Y",
-	"%B %d, %Y",
-	"%H:%M:%S",
-	"%H:%M",
-};
 
 /* Number of days in month m (1..12) of year y (full, e.g. 2000), via
  * the difference between two civil-calendar day counts -- correct for
@@ -171,8 +164,13 @@ struct tm *getdate(const char *s)
 
 	if (!s || !*s) { getdate_err = 1; return NULL; }
 
+	/* getdate.html ERRORS code 1: "The DATEMSK environment variable is
+	 * null or undefined."  No fallback template list -- see the file
+	 * banner for why the one this file used to fall back to is gone. */
 	datemsk = getenv("DATEMSK");
-	if (datemsk && *datemsk) {
+	if (!datemsk || !*datemsk) { getdate_err = 1; return NULL; }
+
+	{
 		static char storage[MAX_DATEMSK_TEMPLATES][MAX_DATEMSK_LINE];
 		static const char *tpl[MAX_DATEMSK_TEMPLATES];
 		int n = read_templates(datemsk, storage, tpl);
@@ -183,15 +181,6 @@ struct tm *getdate(const char *s)
 		getdate_err = 7;
 		return NULL;
 	}
-
-	/* $DATEMSK unset/empty: fixed built-in template list, see the file
-	 * comment for why this is a deliberate fallback rather than
-	 * ERRORS code 1. */
-	r = try_templates(templates, sizeof templates / sizeof *templates, s, &tm);
-	if (r > 0) return &tm;
-	if (r < 0) return NULL;                        /* getdate_err == 8 */
-	getdate_err = 7;
-	return NULL;
 }
 
 // NOLINTEND(misc-include-cleaner)

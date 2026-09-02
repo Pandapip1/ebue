@@ -799,7 +799,17 @@ static void test_posix_mman_mlockall_munlockall(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_mman_posix_madvise_advice)
+#if NTLIBC_TEST(PASS, posix_mman_posix_madvise_advice) /* posix_madvise() is now declared and implemented (<sys/mman.h>,
+	src/mman/mman.c) -- a real, complete implementation, not a
+	stub: every valid advice value is a genuine no-op (this
+	implementation has no page-replacement heuristic for any of
+	them to steer, and posix_madvise.html's own DESCRIPTION permits
+	exactly that), and both ERRORS clauses below are checked for
+	real, EINVAL against the five POSIX_MADV_* values and ENOMEM
+	against the same mapping registry mmap()/munmap() maintain.
+	See <sys/mman.h>'s banner for why declaring this one does not
+	fall under the "declaring a stub is worse than not declaring
+	it" rule the header used to cite for it. */
 static void test_posix_mman_posix_madvise_advice(void)
 {
 	void *p = mmap(NULL, PG, PROT_READ | PROT_WRITE,
@@ -841,7 +851,21 @@ static void test_posix_mman_posix_madvise_advice(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_mman_typed_mem_open_offset)
+#if NTLIBC_TEST(PASS, posix_mman_typed_mem_open_offset) /* The three functions this case exercises -- posix_typed_mem_open(),
+	posix_typed_mem_get_info(), posix_mem_offset() -- are now
+	declared and implemented (<sys/mman.h>, src/mman/mman.c), each
+	giving this implementation's real, permanent answer rather than
+	a stub: posix_typed_mem_open() validates tflag for real and
+	then ENOENT for every name, because this implementation ships
+	no typed memory pools, full stop; posix_typed_mem_get_info()
+	answers EBADF for every fildes, because nothing can ever create
+	the typed-memory descriptor posix_typed_mem_open() never hands
+	out; posix_mem_offset() answers from the same mapping registry
+	mmap() already keeps (struct mapping now carries the fildes/
+	offset a file-backed mapping was opened with), EACCES for an
+	anonymous mapping and ENOMEM for an address outside any mapping
+	this process owns.  See <sys/mman.h>'s banner for the fuller
+	argument each one makes. */
 static void test_posix_mman_typed_mem_open_offset(void)
 {
 	struct posix_typed_mem_info info;
