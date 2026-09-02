@@ -18,23 +18,15 @@ void *memcpy(void *__restrict dest withtok(writable_span(n))
 	if (n >= 4*sizeof(size_t) && ((uintptr_t)d & (sizeof(size_t)-1)) == ((uintptr_t)s & (sizeof(size_t)-1))) {
 		size_t align_bytes = (sizeof(size_t) -
 			((uintptr_t)d & (sizeof(size_t)-1))) & (sizeof(size_t)-1);
-		while (align_bytes > 0) {
-			*d = *s;
-			d++;
-			s++;
-			n--;
-			align_bytes--;
-		}
+		for (size_t i = 0; i < align_bytes; i++) d[i] = s[i];
+		d += align_bytes;
+		s += align_bytes;
+		n -= align_bytes;
 		for (; n >= sizeof(size_t);
 		     n -= sizeof(size_t), d += sizeof(size_t), s += sizeof(size_t))
 			*(size_t *)d = *(const size_t *)s;
 	}
-	while (n > 0) {
-		*d = *s;
-		d++;
-		s++;
-		n--;
-	}
+	for (size_t i = 0; i < n; i++) d[i] = s[i];
 	return dest;
 }
 
