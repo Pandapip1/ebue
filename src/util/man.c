@@ -9,92 +9,113 @@
  * WHAT THIS IS, AND WHY IT IS SHAPED THIS WAY
  * ============================================================
  *
- * A real `man` has two genuinely separate jobs: FIND the right page,
- * and FORMAT it. Formatting a real man page means running a real
- * troff/groff interpreter over `man`- or `mdoc`-macro-package source.
- * Building a general troff engine is its own enormous project (real
- * groff is enormous) and is explicitly out of scope here. What IS in
- * scope, per this project's own explicit direction, is a real parser
- * and formatter for the specific macro subset the overwhelming
- * majority of real-world man pages actually use: .TH, .SH/.SS,
- * .TP/.IP, .PP/.LP, .B/.I and the six standard alternating-font pairs
- * (.BI/.BR/.IR plus, for free from the same one shared helper, the
- * other three of the six: .IB/.RB/.RI), .RS/.RE, .nf/.fi, .br (a
- * one-line addition beyond the originally named set -- see man_
- * process_line()'s own ".br" case for why real pages, including this
- * project's own SYNOPSIS sections and the real GNU grep.1 fixture
- * below, make it a practical necessity rather than scope creep), and
- * a documented common subset of escape sequences. This file IS that
- * engine, not a wrapper around a real one.
+ * A real `man` has two separate jobs: FIND the right page, and FORMAT
+ * it. Formatting means running a troff/groff interpreter over `man`-
+ * or `mdoc`-macro-package source; a general troff engine is its own
+ * enormous project and out of scope. In scope is a real parser and
+ * formatter for the macro subset the overwhelming majority of real-
+ * world man pages use: .TH, .SH/.SS, .TP/.IP, .PP/.LP, .B/.I and all
+ * six alternating-font pairs (.BI/.BR/.IR/.IB/.RB/.RI, one shared
+ * helper), .RS/.RE, .nf/.fi, .br (real pages routinely need it to keep
+ * alternate SYNOPSIS forms on separate lines), .ds/.nr/.rn (string/
+ * number registers -- see "REGISTERS" below), and a common subset of
+ * escape sequences. This file IS that engine, not a wrapper around a
+ * real one.
  *
  * ---- WHAT IS DELIBERATELY NOT IMPLEMENTED, AND WHY --------------------
  *
- *  - .TS/.TE (tbl tables) and .EQ/.EN (eqn equations): each is its own
- *    real sub-language with its own grammar, comparable in size to
- *    this whole file. A page using either degrades gracefully (see
- *    "UNKNOWN-MACRO DEGRADATION" below) -- the table/equation's own
- *    markup lines are skipped rather than dumped as raw garbage, which
- *    means the reader loses that one table/equation's content but
- *    every other section of the same page still renders correctly.
- *  - .de/.ig (user macro definitions) -- a real `man` page in the
- *    wild (this project's own test fixture, a real, unmodified copy of
- *    GNU grep's grep.1, proves this is not a theoretical concern) can
- *    open a `.de NAME` ... `..` block whose BODY LINES are template
- *    text for a macro that is never invoked here (since custom macros
- *    aren't executed at all) -- so those lines must never be treated
- *    as real page content, or output would be corrupted with literal
- *    macro-definition source (e.g. a raw `\$1` placeholder). This
- *    file tracks .de/.ig spans specifically (skip-until-terminating
- *    ".." line) to prevent exactly that corruption; see in_macro_def
- *    below. This is the one piece of "custom macro" handling here, and
- *    it exists purely to avoid corruption, not to execute anything.
- *  - .if/.ie/.el (conditional text) -- real condition evaluation
- *    (device tests, number-register comparisons, string comparisons)
- *    is out of scope for the same reason .TS/.EQ are: it is a real
- *    expression language. Unlike .de, NOT tracking a conditional's
- *    `\{ ... \}` block span does not corrupt output the way not
- *    tracking .de would -- at worst, text meant to be conditional is
- *    always shown (every line inside such a block still individually
- *    parses as either a known macro, an unknown-and-skipped macro, or
- *    ordinary text), which is a reasonable, honestly-documented
- *    over-inclusion rather than the corruption .de would cause. That
- *    asymmetry is why one gets real span-tracking and the other does
- *    not.
- *  - .ds/.nr/.rn/.am and friends (string/number register definitions,
- *    macro renaming): unsupported: no register table is kept here.
- *    Any escape that INTERPOLATES a register (\*(xx, \n(xx, \k, \s...)
- *    is recognised and consumed (so its raw syntax never leaks into
- *    output) but always resolves to nothing/roman -- see decode_text()
- *    below.
- *  - gzip-compressed pages (the overwhelmingly common real-world
- *    on-disk form -- every page under /usr/share/man on a real Linux
- *    system is normally *.gz): NOT decompressed. That needs a real
- *    DEFLATE implementation, which is its own project, not a troff
- *    detail. If the only candidate found for a name is a .gz file,
- *    this says so explicitly (see find_page() below) rather than
- *    silently reporting "no manual entry".
- *  - Hyphenation and full justification (spreading inter-word spaces
- *    to make both margins flush, which real troff's fill+adjust mode
- *    does by default): not implemented. Output here is ordinary
- *    ragged-right greedy word-wrap. Every real `man` this project
- *    could be compared against still reads fine ragged-right; flush-
- *    both-margins text is a cosmetic nicety, not a comprehension one.
+ *  - .TS/.TE (tbl) and .EQ/.EN (eqn): each is its own real sub-
+ *    language comparable in size to this whole file. Skipped like any
+ *    unknown macro (see "UNKNOWN-MACRO DEGRADATION" below): that one
+ *    table or equation is lost, the rest of the page still renders.
+ *  - .de/.ig (user macro definitions): bodies are never executed, but
+ *    their lines ARE tracked and skipped as a span (in_macro_def
+ *    below) -- otherwise a macro body's raw template text (e.g. a
+ *    literal `\$1`) would print as if it were real page content. This
+ *    is the one piece of macro handling here, purely to avoid that
+ *    corruption, not to run anything.
+ *  - .am (append to a user macro): needs the macro storage .de doesn't
+ *    keep (Tier 2 of this project's own troff-engine plan) -- there's
+ *    nothing yet to append to.
+ *  - .if/.ie/.el (conditionals): real condition evaluation is its own
+ *    expression language, same reason as .TS/.EQ. Unlike .de, not
+ *    tracking a conditional's `\{ ... \}` span doesn't corrupt output
+ *    -- guarded text just always shows, since every line inside still
+ *    parses as a normal request or text line on its own. That's why
+ *    .de gets real span-tracking and .if doesn't.
+ *  - \k (mark register) and \s (point-size change): recognised and
+ *    consumed only -- no horizontal-motion tracking or point-size
+ *    concept exists here for them to act on.
+ *  - gzip-compressed pages (the normal on-disk form under a real
+ *    /usr/share/man): NOT decompressed -- needs a real DEFLATE
+ *    implementation. find_page() reports this explicitly rather than
+ *    a plain "no manual entry".
+ *  - Hyphenation and full justification (real troff's fill+adjust
+ *    spreads inter-word spaces to flush both margins): not
+ *    implemented. Output is ordinary ragged-right greedy word-wrap.
  *
  * ---- UNKNOWN-MACRO DEGRADATION ------------------------------------------
  *
- * Any `.xx` request line this file does not implement (including every
- * one this banner just listed as out of scope) is silently skipped --
- * one line consumed, nothing emitted, parsing continues with the next
- * line. This matches real troff's own behaviour for a macro with no
- * defined body: the request is a no-op, not an error, and it does NOT
- * consume any following text lines as part of itself (troff requests
- * only ever "eat" following lines when the request specifically says
- * so, which is exactly why .de/.ig above are the one deliberate
- * exception). Passing the raw troff request line through as text was
- * rejected on purpose: a stray ".ie \n(.g \{\" line printed verbatim
- * into the middle of a paragraph is *more* confusing than a silently
- * absent no-op, matching this project's own dd.c/sed.c/awk.c precedent
- * of "diagnose or degrade cleanly, never corrupt."
+ * Any `.xx` request this file doesn't implement is silently skipped:
+ * one line consumed, nothing emitted, no following lines swallowed.
+ * This matches real troff's own behaviour for a macro with no defined
+ * body (a no-op, not an error) -- .de/.ig above are the one deliberate
+ * exception, because only they can corrupt output otherwise. Passing
+ * the raw request line through as text was rejected on purpose: a
+ * stray ".ie \n(.g \{\" line printed into the middle of a paragraph is
+ * more confusing than a silent no-op.
+ *
+ * ============================================================
+ * REGISTERS: .ds/.nr/.rn, AND \* / \n INTERPOLATION
+ * ============================================================
+ *
+ * One name -> value table (struct man_regtab below) holds both STRING
+ * registers (`.ds NAME text`, read with `\*(xx`/`\*x`/`\*[...]`) and
+ * NUMBER registers (`.nr NAME value [increment]`, read with
+ * `\n(xx`/`\nx`/`\n[...]`, or auto-incremented/-decremented by the
+ * register's own INCREMENT step with `\n+xx`/`\n-xx`). Real troff
+ * keeps strings and number registers in two separate name spaces; this
+ * file merges them into one, a deliberate simplification -- looking a
+ * name up under the wrong kind behaves exactly like looking up a name
+ * that was never defined (empty / 0), which no real page distinguishes
+ * from in practice.
+ *
+ * `.nr NAME VALUE` sets NAME outright; a leading `+`/`-` on VALUE
+ * instead adds/subtracts from NAME's current value (0 if undefined),
+ * matching real troff's absolute-vs-relative `.nr` syntax. VALUE and
+ * INCREMENT are register-interpolated first, then must be a plain
+ * signed decimal integer -- NOT a general arithmetic expression (real
+ * troff's `.nr`/`.if` share one numeric-expression evaluator; that's
+ * Tier 3 of this project's own troff-engine plan, not duplicated
+ * here). A VALUE that isn't plain once interpolated (e.g. GNU grep's
+ * own grep.1 fixture has `.nr mG \n(.g-1`, which decodes to the
+ * expression "1-1") leaves the register untouched, the same honest-
+ * no-op precedent as "UNKNOWN-MACRO DEGRADATION" above.
+ *
+ * `.rn OLD NEW` renames whichever register OLD names to NEW; OLD not
+ * existing is a no-op, NEW already existing is silently overwritten --
+ * both match real troff. (Real troff's own `.rn` only ever covered
+ * macros/strings, never number registers, because of the name-space
+ * split above; merging the two name spaces here means `.rn` naturally
+ * covers both kinds too.)
+ *
+ * An interpolated register that was never defined resolves to an
+ * empty string (`\*`) or `0` (`\n`), matching real troff.
+ *
+ * A small set of READ-ONLY built-in number registers, checked ahead of
+ * the user table so a page can never shadow them via `.nr`: `\n(.g` is
+ * always 1 (real groff defines it as 1, AT&T troff leaves it 0; pages
+ * use it to detect "is this groff" before using a groff extension --
+ * answering 1 is the honest choice for an engine that targets groff-
+ * era pages and doesn't implement every groff extension, since any
+ * specific one it lacks still degrades cleanly on its own). `\n(mo`/
+ * `\n(dy`/`\n(yr` are the current month/day-of-month/year -- `yr`
+ * deliberately keeps troff's own wart of year MINUS 1900 (126 in 2026,
+ * not "26"), since pages that check it at all expect that exact
+ * convention. `\n(.s`/`\n(.f` (point size / current font) are fixed
+ * dummy values (10, 1): this file has no real point-size concept and
+ * only a depth-1 font "stack" (see \fP below), so there's nothing real
+ * to report.
  *
  * ============================================================
  * ESCAPE SEQUENCES IMPLEMENTED
@@ -102,150 +123,101 @@
  *
  * See decode_text() for the exhaustive switch. Summary: \- \_ \& \e \c
  * \% \(space) \0 \| \^ \' \` \. \\ (literal-character/spacing
- * escapes), \" (comment to end of line, recognised both here and as a
- * whole-line `.\"` request), \fX \f(XX \f[...] (font change: B/I are
- * real, everything else -- R, P, numbered fonts, named fonts like CW
- * -- maps to "roman/reset", a documented simplification: this file
- * keeps no font *stack*, so \fP ("previous font") cannot distinguish
- * "the font two changes ago" from plain roman; every real page this
- * was tested against only ever nests one level deep in practice, where
- * that distinction never arises), \(xx (a built-in table of the
- * commonest named glyphs -- copyright, bullet, em/en dash, the curly-
- * quote family; unrecognised two-character names are dropped, not
- * guessed at), and \*(xx/\*x/\*[...] \n... \s... \k... \h... \v...
- * \w... \x... \X... \H... \V... (register interpolation and
- * motion/size requests: recognised and consumed so their syntax can
- * never leak into rendered text, but never resolve to real output --
- * see the .ds/.nr bullet above for why). Any other \X falls back to
- * printing X literally, troff's own "protect this character" meaning
- * for an escape this file does not otherwise know.
+ * escapes), \" (comment to end of line, also a whole-line `.\"`
+ * request), \fX \f(XX \f[...] (font change: B/I are real; everything
+ * else -- R, P, numbered/named fonts -- maps to roman/reset, since
+ * this file keeps no font *stack* and every real page tested only ever
+ * nests one level deep, where \fP's "previous font" distinction never
+ * arises), \(xx (a built-in table of the commonest named glyphs;
+ * unrecognised names are dropped, not guessed at), \*(xx/\*x/\*[...]
+ * and \n(xx/\nx/\n[...]/\n+xx/\n-xx (register interpolation -- real,
+ * see "REGISTERS" above), and \s... \k... \h... \v... \w... \x... \X...
+ * \H... \V... (point-size/mark/motion/size requests: recognised and
+ * consumed so their syntax never leaks into output, but resolve to
+ * nothing -- nothing here tracks point size or horizontal motion). Any
+ * other \X falls back to printing X literally, troff's own "protect
+ * this character" meaning for an unknown escape.
  *
  * ============================================================
  * RENDERING: WHERE BOLD/ITALIC COME FROM, AND HOW WIDTH IS CHOSEN
  * ============================================================
  *
  * Font state is carried through word-wrapping as three zero-width
- * marker bytes (MAN_M_BOLD/MAN_M_ITAL/MAN_M_ROMAN -- C0 control codes
- * no real troff source uses, and defensively stripped from raw input
- * on the way in so a hostile page could never forge them, see
- * decode_text()'s very first check) embedded directly in the styled
- * text stream. Wrapping measures width by codepoint (skipping UTF-8
- * continuation bytes and the marker bytes themselves), so the small
- * built-in \(xx table's multi-byte UTF-8 output still counts as one
- * column each, not one column per byte.
+ * marker bytes (MAN_M_BOLD/MAN_M_ITAL/MAN_M_ROMAN -- control codes no
+ * real troff source uses, and stripped from raw input on the way in so
+ * a hostile page can't forge them) embedded in the styled text stream.
+ * Wrapping measures width by codepoint, skipping UTF-8 continuation
+ * bytes and marker bytes, so multi-byte \(xx glyphs still count as one
+ * column each.
  *
- * The actual bytes those markers become depend on where the formatted
- * text is going, chosen once in man_display() below:
+ * The marker bytes' actual output depends on the destination, chosen
+ * once in man_display() below:
  *
- *   - Direct to a real terminal, or through this file's own built-in
- *     "--More--" pager (both cases: this file is fully in control of
- *     what interprets the bytes) -- real ANSI SGR (`\033[1m` bold,
- *     `\033[4m` italic/underline, `\033[0m` reset). This project's own
- *     src/util/tabs.c already writes a raw ANSI CSI sequence directly
- *     to a terminal (`\033[3g`) with no capability-database lookup, so
- *     "assume ANSI SGR is the honest common case" already has
- *     precedent here, not invented for this file.
- *   - Handed to an external $PAGER, or written to a non-terminal
- *     stdout (redirected to a file, piped): classic nroff overstrike
- *     (`X\bX` for bold, `_\bX` for italic/underline). This is the
- *     traditional -Tascii man-page convention, and deliberately the
- *     safer choice here specifically *because* it is external: this
- *     file cannot know whether an arbitrary $PAGER honours ANSI SGR
- *     (`less` needs an explicit -R the user may not have set), but
- *     both `less` and `more` have understood backspace-overstrike as
- *     bold/underline by default since long before either supported
- *     color, and a plain non-terminal destination (or a `| cat`) is
- *     exactly the case a real nroff pipeline expects a reader to run
- *     through `col -b` if they want the overstrike sequences gone.
+ *   - Direct to a terminal, or this file's own "--More--" pager: real
+ *     ANSI SGR (`\033[1m` bold, `\033[4m` italic/underline, `\033[0m`
+ *     reset) -- this file fully controls what interprets the bytes
+ *     either way.
+ *   - An external $PAGER, or non-terminal stdout: classic nroff
+ *     overstrike (`X\bX` bold, `_\bX` italic/underline) instead --
+ *     safer specifically because it's external: this file can't know
+ *     whether an arbitrary $PAGER honours ANSI SGR (`less` needs an
+ *     explicit -R), but both `less` and `more` have understood
+ *     backspace-overstrike by default since long before either
+ *     supported color.
  *
- * Terminal width: ioctl(TIOCGWINSZ) first (real on this project's NT
- * backend via kernel32's GetConsoleScreenBufferInfo -- src/ioctl/
- * ioctl.c's own banner; on this project's native-Linux backend
- * TIOCGWINSZ is not yet wired to a real syscall, so this always falls
- * through there, which is a real, already-documented gap in
- * src/ioctl/ioctl.c, not something invented by this file), then
- * $COLUMNS if it parses as a positive integer, then a fixed 80 --
- * exactly src/util/ls.c's own term_width() fallback chain, with the
- * ioctl attempt added first because man's whole job is laying text out
- * for the terminal, unlike ls's optional multi-column mode. Height
- * (for the built-in pager's page size) follows the same chain against
- * ws_row/$LINES/24.
+ * Terminal width: ioctl(TIOCGWINSZ) first, then $COLUMNS if positive,
+ * then a fixed 80 -- src/util/ls.c's own fallback chain, ioctl moved
+ * first since laying out text for the terminal is man's whole job.
+ * Height follows the same chain against ws_row/$LINES/24.
  *
  * ============================================================
  * PAGING
  * ============================================================
  *
- * If stdout is not a terminal: no paging at all, the formatted text
- * goes straight to stdout -- matching how `less`/`more` themselves
- * degrade when piped.
- * If stdout IS a terminal: $PAGER (split on whitespace only -- no
- * shell-quoting support, a deliberate, small, documented limit) is
- * spawned via this project's own __find_program()/__spawn() with the
- * formatted output written to a real mkstemp() file passed as its
- * last argument (a pipe was deliberately rejected: it would need
- * either a second process/thread to drain it concurrently with the
- * pager reading, or risk deadlock if the pager doesn't read until it
- * has seen EOF -- a temp file sidesteps that entirely, the same
- * tradeoff a number of historical `man` implementations made). If
- * $PAGER is unset, a minimal built-in "--More--" pager runs instead --
- * necessarily line-buffered (an Enter-terminated prompt, not a real
- * single-keystroke read) rather than putting the terminal in raw mode
- * the way `more`/`less` do, because this project's own termios(3)
- * (src/termios/termios.c's own banner) only has real ICANON/raw-mode
- * control on its NT/kernel32 backend -- there is no native-Linux path
- * to it yet. This is a real, already-documented platform constraint
- * being honoured, not a shortcut invented for this file.
+ * Not a terminal: no paging, formatted text goes straight to stdout.
+ * A terminal: $PAGER (split on whitespace only, no shell-quoting) is
+ * spawned via __find_program()/__spawn() against a real mkstemp() file
+ * holding the formatted output -- a pipe was rejected, since it would
+ * need either a drainer thread or risk deadlock if the pager doesn't
+ * read until EOF. If $PAGER is unset, a minimal built-in "--More--"
+ * pager runs instead, necessarily Enter-terminated rather than single-
+ * keystroke: this project's termios(3) only has real raw-mode control
+ * on its NT backend, not native-Linux yet.
  *
  * ============================================================
  * FINDING A PAGE
  * ============================================================
  *
- * `$MANPATH`, colon-separated, each entry a directory containing
- * man1/, man2/, ... subdirectories -- the same layout every real Unix
- * `man` uses. If MANPATH is unset or empty, the fallback list is
- * "/usr/share/man:/usr/local/share/man": the conventional real-Linux
- * locations (harmless on this project's NT target, where they simply
- * never exist, giving the same clean "no manual entry" any unset-
- * MANPATH `man` produces on a fresh machine). `$MANSECT` (also colon-
- * separated) overrides the default section search order
- * "1:2:3:4:5:6:7:8:9" when no explicit section operand is given.
- * POSIX's own man(1p) SYNOPSIS is only `man [-k] name...` -- no
- * section operand at all -- but every real `man` in practice also
- * accepts a leading bare section (`man 3 printf`), implemented here as:
- * if two or more operands are given and the first looks like a section (matches
- * ^[0-9][A-Za-z0-9]*$), it restricts every name operand that follows,
- * exactly like every real `man`.
+ * `$MANPATH`, colon-separated, each entry a directory of man1/, man2/,
+ * ... subdirectories. Unset/empty falls back to "/usr/share/man:/usr/
+ * local/share/man". `$MANSECT` (also colon-separated) overrides the
+ * default section search order "1:2:...:9" when no section operand is
+ * given. POSIX's own man(1p) SYNOPSIS has no section operand at all,
+ * but every real `man` also accepts a leading bare section (`man 3
+ * printf`): implemented here as "if >=2 operands are given and the
+ * first matches ^[0-9][A-Za-z0-9]*$, it restricts every name that
+ * follows."
  *
- * -k (POSIX: "[i]nterprets name operands as keywords for searching a
- * utilities summary database... match[ing] the pattern of a grep
- * search"): implemented as a real, honest degrade -- there is no
- * prebuilt whatis database here (building/maintaining one is its own
- * subsystem, `makewhatis`, out of scope), so -k does the equivalent
- * scan directly: walk MANPATH, read every page's `.SH NAME` line, and
- * substring-match (case-insensitively) each keyword against it. This
- * is exactly what real `man -k` itself falls back to ("using slow
- * method") when no cached database exists, so it is not a fabricated
- * shortcut, just the one code path this file bothers to implement.
+ * -k: no prebuilt whatis database exists here (that's its own
+ * subsystem, `makewhatis`), so -k walks MANPATH, reads every page's
+ * `.SH NAME` line, and substring-matches (case-insensitively) each
+ * keyword against it -- exactly the "slow method" real `man -k` itself
+ * falls back to without a cached database.
  *
  * ---- THIS REPOSITORY'S OWN man/man1/ PAGES -------------------------------
  *
- * This project ships a handful of real, hand-written man pages for its
- * own utilities under man/man1/ (true.1, false.1, cat.1, echo.1,
- * mkdir.1, man.1) -- not installed anywhere by the build: this
- * project's Makefile has no existing $(prefix)-relative default-
- * search-path precedent to extend, unlike $(bindir)/$(libdir)/
- * $(includedir), and inventing one without a real installed-tree
- * convention to match would be guessing, not implementing. They exist
- * to prove the macro subset above against real, useful content (point
- * $MANPATH at man/ in a checkout and `man true` works today) and,
- * together with test/util-man.c's
- * embedded copy of real-world GNU grep.1 content, to prove this
- * formatter against troff nobody wrote by hand for this project.
+ * man/man1/ (true.1, false.1, cat.1, echo.1, mkdir.1, man.1) is not
+ * installed by the build -- there's no existing $(prefix)-relative
+ * default-search-path precedent to extend the way $(bindir)/
+ * $(libdir)/$(includedir) have. These pages exist to prove the macro
+ * subset above against real, useful content ($MANPATH pointed at man/
+ * in a checkout, `man true` works today), alongside test/util-man.c's
+ * embedded real GNU grep.1 excerpt, which proves this formatter
+ * against troff nobody wrote by hand for this project.
  *
  * Never calls exit()/_exit(): __util_man_main() can run in-process as
- * a shell built-in (src/sh/builtin.c) exactly like every other utility
- * in src/util/ -- see src/util/dd.c's own header comment for why that
- * rule matters and what it would break.
+ * a shell built-in (src/sh/builtin.c) like every other src/util/
+ * utility -- see src/util/dd.c's own header comment for why.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -261,6 +233,7 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <ctype.h>
+#include <time.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
@@ -380,11 +353,182 @@ static size_t man_skip_delim_arg(const char *s, size_t n, size_t i)
 	return i;
 }
 
+/* ==== register table: .ds/.nr/.rn and \* / \n interpolation =========== *
+ * See this file's own header comment ("REGISTERS: .ds/.nr/.rn, AND
+ * \* / \n INTERPOLATION") for the full design rationale -- summary: one
+ * table holds both string and number registers (a documented
+ * simplification of real troff's two separate name spaces), looked
+ * up by name, with a small set of read-only built-in number registers
+ * checked ahead of it. */
+
+enum man_reg_kind { MAN_REG_STRING, MAN_REG_NUMBER };
+
+struct man_reg {
+	char *name;             /* malloc'd */
+	enum man_reg_kind kind;
+	char *str;               /* MAN_REG_STRING: malloc'd value */
+	long num;                /* MAN_REG_NUMBER: current value */
+	long incr;                /* MAN_REG_NUMBER: \n+xx/\n-xx step, from .nr's optional third argument */
+};
+
+struct man_regtab { struct man_reg *v; size_t n, cap; };
+
+static void man_regtab_free(struct man_regtab *t)
+{
+	size_t i;
+	for (i = 0; i < t->n; i++) { free(t->v[i].name); free(t->v[i].str); }
+	free(t->v);
+	t->v = 0; t->n = t->cap = 0;
+}
+
+static struct man_reg *man_reg_find(struct man_regtab *t, const char *name)
+{
+	size_t i;
+	for (i = 0; i < t->n; i++)
+		if (!strcmp(t->v[i].name, name)) return &t->v[i];
+	return 0;
+}
+
+/* Finds `name`'s existing slot, or grows the table and creates a
+ * fresh (zeroed) one. Returns NULL only on allocation failure. */
+static struct man_reg *man_reg_get_or_create(struct man_regtab *t, const char *name)
+{
+	struct man_reg *r = man_reg_find(t, name);
+	char *dup;
+
+	if (r) return r;
+
+	if (t->n + 1 > t->cap) {
+		size_t newcap;
+		struct man_reg *g;
+		if (!__util_array_capacity(t->cap, t->n, 1, 8, sizeof *t->v, &newcap)) return 0;
+		g = __util_reallocarray(t->v, newcap, sizeof *t->v);
+		if (!g) return 0;
+		t->v = g; t->cap = newcap;
+	}
+	dup = strdup(name);
+	if (!dup) return 0;
+	r = &t->v[t->n++];
+	memset(r, 0, sizeof *r);
+	r->name = dup;
+	return r;
+}
+
+static int man_reg_set_string(struct man_regtab *t, const char *name, const char *value)
+{
+	struct man_reg *r = man_reg_get_or_create(t, name);
+	char *dup;
+	if (!r) return 0;
+	dup = strdup(value);
+	if (!dup) return 0;
+	free(r->str);
+	r->str = dup;
+	r->kind = MAN_REG_STRING;
+	return 1;
+}
+
+/* set_incr false leaves an existing register's auto-increment step
+ * untouched (real troff's own .nr: the increment argument is
+ * optional, and omitting it does not reset a previously-set step). */
+static int man_reg_set_number(struct man_regtab *t, const char *name, long value, long incr, int set_incr)
+{
+	struct man_reg *r = man_reg_get_or_create(t, name);
+	if (!r) return 0;
+	if (r->kind == MAN_REG_STRING) { free(r->str); r->str = 0; }
+	r->kind = MAN_REG_NUMBER;
+	r->num = value;
+	if (set_incr) r->incr = incr;
+	return 1;
+}
+
+/* Removes the register named `name`, if any (silent no-op if not
+ * found) -- used by man_do_rn() so renaming onto an existing name
+ * overwrites it, matching real troff's own .rn behaviour. */
+static void man_reg_remove(struct man_regtab *t, const char *name)
+{
+	size_t i, j;
+	for (i = 0; i < t->n; i++) {
+		if (strcmp(t->v[i].name, name) != 0) continue;
+		free(t->v[i].name);
+		free(t->v[i].str);
+		for (j = i; j + 1 < t->n; j++) t->v[j] = t->v[j + 1];
+		t->n--;
+		return;
+	}
+}
+
+/* Built-in read-only number registers real pages actually probe --
+ * see this file's own header comment for exactly which ones and why
+ * each value was chosen. Returns 1 and sets *out if `name` is one of
+ * them, 0 otherwise (falls through to the user-defined table). */
+static int man_builtin_number(const char *name, long *out)
+{
+	if (!strcmp(name, ".g")) { *out = 1; return 1; }
+	if (!strcmp(name, ".s")) { *out = 10; return 1; }
+	if (!strcmp(name, ".f")) { *out = 1; return 1; }
+	if (!strcmp(name, "mo") || !strcmp(name, "dy") || !strcmp(name, "yr")) {
+		time_t now = time(0);
+		struct tm tmv;
+		if (!localtime_r(&now, &tmv)) { *out = 0; return 1; }
+		if (!strcmp(name, "mo")) *out = tmv.tm_mon + 1;
+		else if (!strcmp(name, "dy")) *out = tmv.tm_mday;
+		else *out = tmv.tm_year; /* real troff wart: year MINUS 1900, see header comment */
+		return 1;
+	}
+	return 0;
+}
+
+static long man_lookup_number(struct man_regtab *t, const char *name)
+{
+	long v;
+	struct man_reg *r;
+	if (man_builtin_number(name, &v)) return v;
+	r = man_reg_find(t, name);
+	if (!r || r->kind != MAN_REG_NUMBER) return 0; /* undefined, or defined as the other kind: 0, same as real troff's undefined-register default */
+	return r->num;
+}
+
+static const char *man_lookup_string(struct man_regtab *t, const char *name)
+{
+	struct man_reg *r = man_reg_find(t, name);
+	if (!r || r->kind != MAN_REG_STRING) return 0; /* undefined, or defined as the other kind: empty, same as real troff's undefined-register default */
+	return r->str;
+}
+
+/* Extracts a register name from one of the three name-syntaxes a
+ * register-interpolation escape (`\*`/`\n`) can use, starting at
+ * s[i]: `(xx` (exactly two characters), `[...]` (bracket-delimited,
+ * any length, truncated to namesz-1 if longer -- real register names
+ * this long do not occur in practice), or a single bare character.
+ * Writes the NUL-terminated name into `name` and returns the new
+ * index. */
+static size_t man_read_reg_name(const char *s, size_t n, size_t i, char *name, size_t namesz)
+{
+	size_t k = 0;
+
+	if (i < n && s[i] == '(') {
+		i++;
+		if (i < n) { if (k + 1 < namesz) name[k++] = s[i]; i++; }
+		if (i < n) { if (k + 1 < namesz) name[k++] = s[i]; i++; }
+	} else if (i < n && s[i] == '[') {
+		i++;
+		while (i < n && s[i] != ']') { if (k + 1 < namesz) name[k++] = s[i]; i++; }
+		if (i < n) i++;
+	} else if (i < n) {
+		if (k + 1 < namesz) name[k++] = s[i];
+		i++;
+	}
+	name[k] = 0;
+	return i;
+}
+
 /* Escape/glyph decoder: appends the rendering of one chunk of raw
  * troff text (a whole text line, or one macro argument) to `out`,
  * expanding the escapes this file's own header comment documents.
- * See that comment for the exact, exhaustive list. */
-static int decode_text(struct man_buf *out, const char *s, size_t n)
+ * See that comment for the exact, exhaustive list. `regs` is the
+ * register table \* / \n interpolation escapes read (and, indirectly
+ * through man_do_ds()/man_do_nr(), write). */
+static int decode_text(struct man_regtab *regs, struct man_buf *out, const char *s, size_t n)
 {
 	size_t i = 0;
 
@@ -432,19 +576,41 @@ static int decode_text(struct man_buf *out, const char *s, size_t n)
 			if (rep && !mbuf_appendstr(out, rep)) return 0;
 			break;
 		}
-		case '*': /* string register interpolation: unsupported */
+		case '*': { /* string register interpolation: \*(xx / \*x / \*[...] */
+			char regname[64];
+			const char *val;
 			i++;
-			if (i < n && s[i] == '(') { i++; if (i < n) i++; if (i < n) i++; }
-			else if (i < n && s[i] == '[') { i++; while (i < n && s[i] != ']') i++; if (i < n) i++; }
-			else if (i < n) { i++; }
+			i = man_read_reg_name(s, n, i, regname, sizeof regname);
+			val = man_lookup_string(regs, regname);
+			if (val && !mbuf_appendstr(out, val)) return 0;
 			break;
-		case 'n': /* number register interpolation: unsupported */
+		}
+		case 'n': { /* number register interpolation: \n(xx / \nx / \n[...] / \n+xx / \n-xx */
+			char regname[64];
+			char numbuf[24];
+			int autoincr = 0, decr = 0;
+			long v;
 			i++;
-			if (i < n && (s[i] == '+' || s[i] == '-')) i++;
-			if (i < n && s[i] == '(') { i++; if (i < n) i++; if (i < n) i++; }
-			else if (i < n && s[i] == '[') { i++; while (i < n && s[i] != ']') i++; if (i < n) i++; }
-			else if (i < n) { i++; }
+			if (i < n && (s[i] == '+' || s[i] == '-')) { autoincr = 1; decr = (s[i] == '-'); i++; }
+			i = man_read_reg_name(s, n, i, regname, sizeof regname);
+			if (autoincr) {
+				struct man_reg *r = man_reg_find(regs, regname);
+				/* Auto-incrementing an undefined (or wrong-kind)
+				 * register: real troff treats it as starting at 0
+				 * with a 0 step, so the result is 0 either way. */
+				if (r && r->kind == MAN_REG_NUMBER) {
+					r->num += decr ? -r->incr : r->incr;
+					v = r->num;
+				} else {
+					v = 0;
+				}
+			} else {
+				v = man_lookup_number(regs, regname);
+			}
+			snprintf(numbuf, sizeof numbuf, "%ld", v);
+			if (!mbuf_appendstr(out, numbuf)) return 0;
 			break;
+		}
 		case 'k': /* mark register: unsupported */
 			i++;
 			if (i < n && s[i] == '(') { i++; if (i < n) i++; if (i < n) i++; }
@@ -606,6 +772,7 @@ struct man_ctx {
 	                          * case's own comment) */
 	int had_output;         /* has anything at all been written to doc yet */
 	int in_macro_def;       /* inside a .de/.ig ... .. span: skip everything */
+	struct man_regtab regs; /* .ds/.nr/.rn register table -- see decode_text() */
 };
 
 static int man_ctx_init(struct man_ctx *c, int width)
@@ -622,6 +789,7 @@ static void man_ctx_free(struct man_ctx *c)
 	mbuf_free(&c->doc);
 	mbuf_free(&c->acc);
 	free(c->pending_prefix);
+	man_regtab_free(&c->regs);
 }
 
 /* Blank-line-before-a-new-block bookkeeping: exactly one blank line
@@ -760,7 +928,7 @@ static int man_acc_add_font(struct man_ctx *c, const char *text, int font)
 {
 	if (c->acc.len > 0) { if (!mbuf_appendc(&c->acc, ' ')) return 0; }
 	if (font) { if (!mbuf_appendc(&c->acc, (char)font)) return 0; }
-	if (!decode_text(&c->acc, text, strlen(text))) return 0;
+	if (!decode_text(&c->regs, &c->acc, text, strlen(text))) return 0;
 	if (font) { if (!mbuf_appendc(&c->acc, MAN_M_ROMAN)) return 0; }
 	return 1;
 }
@@ -808,7 +976,7 @@ static void man_th(struct man_ctx *c, struct man_argv *a,
 
 	for (i = 0; i < 5; i++) mbuf_reset(slots[i]);
 	for (i = 0; i < a->n && i < 5; i++)
-		if (!decode_text(slots[i], a->v[i], strlen(a->v[i]))) return;
+		if (!decode_text(&c->regs, slots[i], a->v[i], strlen(a->v[i]))) return;
 }
 
 static int man_center3(struct man_buf *doc, int width, const char *l, const char *ctr, const char *r)
@@ -855,6 +1023,111 @@ static void man_strip_comment(char *line)
 	}
 }
 
+/* .ds NAME STRING...: defines/redefines a string register. STRING is
+ * every remaining token, escape-decoded and rejoined with a single
+ * space -- the same "join what man_tokenize split, add a single space
+ * back" approach the .SH/.SS heading construction above already
+ * uses. */
+static int man_do_ds(struct man_ctx *c, struct man_argv *a)
+{
+	struct man_buf val;
+	size_t i;
+	int ok = 1;
+
+	if (a->n < 1) return 1; /* ".ds" with no name: nothing to define */
+
+	memset(&val, 0, sizeof val);
+	for (i = 1; i < a->n && ok; i++) {
+		if (i > 1 && !mbuf_appendc(&val, ' ')) ok = 0;
+		if (ok && !decode_text(&c->regs, &val, a->v[i], strlen(a->v[i]))) ok = 0;
+	}
+	if (ok) ok = man_reg_set_string(&c->regs, a->v[0], val.data ? val.data : "");
+	mbuf_free(&val);
+	return ok;
+}
+
+/* Parses one decode_text()'d, plain (non-arithmetic) troff numeric
+ * expression -- an optional leading `+`/`-` followed by decimal
+ * digits, and nothing else. Real troff's `.nr` numeric expressions
+ * also allow full arithmetic (`\n(.g-1`, `+`/`-`/`*`/`/` and more);
+ * that shared evaluator is out of scope here (see this file's header
+ * comment, "REGISTERS"), so an expression this simple form can't
+ * parse is rejected rather than guessed at. */
+static int man_parse_plain_number(const char *s, long *out)
+{
+	char *end;
+	long v;
+	if (!s || !*s) return 0;
+	v = strtol(s, &end, 10);
+	if (end == s || *end != 0) return 0;
+	*out = v;
+	return 1;
+}
+
+/* .nr NAME VALUE [INCR]: defines/redefines a number register. VALUE
+ * and INCR are register-interpolated first (so `.nr x \n(y` works),
+ * then each must be a plain signed integer per man_parse_plain_
+ * number() -- a VALUE that isn't (e.g. an arithmetic expression) is
+ * an honest no-op, register left untouched. A leading `+`/`-` on
+ * VALUE means "add/subtract from NAME's current value" rather than
+ * setting it outright, real troff's own distinction; the sign is read
+ * straight off the decoded text, so no separate relative/absolute
+ * flag is needed. */
+static int man_do_nr(struct man_ctx *c, struct man_argv *a)
+{
+	struct man_buf val, incrbuf;
+	long parsed, incr = 0;
+	int have_incr = 0;
+	int ok;
+
+	if (a->n < 2) return 1; /* ".nr NAME" with no value: nothing to set */
+
+	memset(&val, 0, sizeof val);
+	memset(&incrbuf, 0, sizeof incrbuf);
+	ok = decode_text(&c->regs, &val, a->v[1], strlen(a->v[1]));
+	if (ok && a->n >= 3) ok = decode_text(&c->regs, &incrbuf, a->v[2], strlen(a->v[2]));
+	if (ok && a->n >= 3) have_incr = man_parse_plain_number(incrbuf.data, &incr);
+
+	if (ok && man_parse_plain_number(val.data, &parsed)) {
+		struct man_reg *existing = man_reg_find(&c->regs, a->v[0]);
+		long current = (existing && existing->kind == MAN_REG_NUMBER) ? existing->num : 0;
+		int relative = val.data[0] == '+' || val.data[0] == '-';
+		long newval = relative ? current + parsed : parsed;
+		ok = man_reg_set_number(&c->regs, a->v[0], newval, incr, have_incr);
+	}
+
+	mbuf_free(&val);
+	mbuf_free(&incrbuf);
+	return ok;
+}
+
+/* .rn OLD NEW: renames the register (string or number, whichever is
+ * defined -- see this file's header comment for why this table
+ * doesn't separate string/number name spaces the way real troff
+ * technically does) named OLD to NEW. OLD not existing is a silent
+ * no-op; NEW already existing is silently overwritten; both match
+ * real troff's own .rn behaviour. */
+static int man_do_rn(struct man_ctx *c, struct man_argv *a)
+{
+	struct man_reg *old;
+	char *newname;
+
+	if (a->n < 2 || !strcmp(a->v[0], a->v[1])) return 1;
+	if (!man_reg_find(&c->regs, a->v[0])) return 1; /* OLD doesn't exist: nothing to rename */
+
+	/* Overwrite any existing NEW first, then re-find OLD by name --
+	 * man_reg_remove() can shift the table, invalidating any pointer
+	 * taken before it ran. */
+	man_reg_remove(&c->regs, a->v[1]);
+	old = man_reg_find(&c->regs, a->v[0]);
+
+	newname = strdup(a->v[1]);
+	if (!newname) return 0;
+	free(old->name);
+	old->name = newname;
+	return 1;
+}
+
 static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 {
 	man_strip_comment(line);
@@ -873,7 +1146,7 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 			struct man_buf tmp;
 			int ok = 1;
 			memset(&tmp, 0, sizeof tmp);
-			if (!decode_text(&tmp, line, strlen(line))) { mbuf_free(&tmp); return 0; }
+			if (!decode_text(&c->regs, &tmp, line, strlen(line))) { mbuf_free(&tmp); return 0; }
 			if (tmp.len == 0) {
 				ok = mbuf_appendc(&c->doc, '\n');
 			} else {
@@ -928,7 +1201,7 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 			if (!man_flush_paragraph(c)) { man_argv_free(&a); return 0; }
 			for (i = 0; i < a.n && ok; i++) {
 				if (i && !mbuf_appendc(&heading, ' ')) ok = 0;
-				if (ok && !decode_text(&heading, a.v[i], strlen(a.v[i]))) ok = 0;
+				if (ok && !decode_text(&c->regs, &heading, a.v[i], strlen(a.v[i]))) ok = 0;
 			}
 			if (ok) {
 				int is_sh = !strcmp(name, "SH");
@@ -1050,7 +1323,7 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 				ok = mbuf_appendc(&tmp, (char)font);
 				for (i = 0; i < a.n && ok; i++) {
 					if (i && !mbuf_appendc(&tmp, ' ')) { ok = 0; break; }
-					ok = decode_text(&tmp, a.v[i], strlen(a.v[i]));
+					ok = decode_text(&c->regs, &tmp, a.v[i], strlen(a.v[i]));
 				}
 				if (ok) ok = mbuf_appendc(&tmp, MAN_M_ROMAN);
 				if (ok && tmp.len > 0) {
@@ -1084,15 +1357,21 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 			for (i = 0; i < a.n && ok; i++) {
 				int font = (i % 2 == 0) ? f1 : f2;
 				if (!mbuf_appendc(&c->acc, (char)font)) { ok = 0; break; }
-				if (!decode_text(&c->acc, a.v[i], strlen(a.v[i]))) { ok = 0; break; }
+				if (!decode_text(&c->regs, &c->acc, a.v[i], strlen(a.v[i]))) { ok = 0; break; }
 				if (!mbuf_appendc(&c->acc, MAN_M_ROMAN)) { ok = 0; break; }
 			}
 			if (ok) ok = man_maybe_consume_tag(c);
+		} else if (!strcmp(name, "ds")) {
+			ok = man_do_ds(c, &a);
+		} else if (!strcmp(name, "nr")) {
+			ok = man_do_nr(c, &a);
+		} else if (!strcmp(name, "rn")) {
+			ok = man_do_rn(c, &a);
 		}
-		/* Any other request name (.ds, .nr, .if, .ie, .el, .TS, .EQ,
-		 * .ad, .na, .hy, .sp, .br, .ce, .in, .ll, ...): unimplemented,
-		 * silently skipped -- see this file's own "UNKNOWN-MACRO
-		 * DEGRADATION" header comment. */
+		/* Any other request name (.if, .ie, .el, .TS, .EQ, .ad, .na,
+		 * .hy, .sp, .ce, .in, .ll, ...): unimplemented, silently
+		 * skipped -- see this file's own "UNKNOWN-MACRO DEGRADATION"
+		 * header comment. */
 		man_argv_free(&a);
 		return ok;
 	}
