@@ -66,7 +66,8 @@
 #include <errno.h>
 #include <stdio.h>
 
-int __util_mesg_main(int argc, char **argv)
+int __util_mesg_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	struct term_ident t;
 	struct stat st;

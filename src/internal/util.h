@@ -150,7 +150,9 @@ int __util_dirname_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_pathchk_main(
 	int argc, char **argv elements_withtok(null_terminated, argc))
 	__attribute__((nonnull(2)));
-int __util_pwd_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_pwd_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 int __util_readlink_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_realpath_main(int argc, char **argv) __attribute__((nonnull(2)));
 
@@ -169,20 +171,30 @@ int __util_rm_main(int argc, char **argv) __attribute__((nonnull(2)));
  * into its own diagnostic, or -- test's own reasoning, restated here --
  * simply because a real argv from a real caller is never NULL and this
  * says so). */
-int __util_chmod_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_chmod_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 /* Both ignore their arguments entirely and return a fixed status, so
  * both are genuinely side-effect-free regardless of what is passed --
  * pure in the strict __attribute__ sense, not just in the true(1p)/
  * false(1p) naming sense. */
 int __util_false_main(int argc, char **argv) __attribute__((__pure__));
-int __util_ln_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_ln_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 int __util_mkdir_main(
 	int argc, char **argv elements_withtok(null_terminated, argc))
 	__attribute__((nonnull(2)));
-int __util_mkfifo_main(int argc, char **argv) __attribute__((nonnull(2)));
-int __util_rmdir_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_mkfifo_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
+int __util_rmdir_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 int __util_test_main(int argc, char **argv) __attribute__((nonnull(2)));
-int __util_touch_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_touch_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 int __util_true_main(int argc, char **argv) __attribute__((__pure__));
 
 /* Tier 2: text I/O utilities (XCU cat(1p), echo(1p), tee(1p), wc(1p),
@@ -430,7 +442,9 @@ int __util_timeout_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_stty_main(
 	int argc, char **argv elements_withtok(null_terminated, argc))
 	__attribute__((nonnull(2)));
-int __util_tty_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_tty_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 
 /* Tier 8 (this project's own POSIX-utilities plan originally deferred
  * both of the utilities below as needing infrastructure the plan
@@ -485,7 +499,9 @@ unsigned __util_sccs_checksum(const char *buf, size_t len) __attribute__((nonnul
  * util_write.c, not write.c, to avoid the same ar member-name
  * collision src/util/util_basename.c's header explains in full (this
  * time against src/unistd/write.c, the write(2) syscall). */
-int __util_mesg_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_mesg_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 int __util_write_main(int argc, char **argv) __attribute__((nonnull(2)));
 
 /* at(1p)/batch(1p)/crontab(1p), plus the two standalone-only daemons

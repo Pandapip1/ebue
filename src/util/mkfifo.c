@@ -39,7 +39,8 @@
 #include "util.h"
 #include "modeparse.h"
 
-int __util_mkfifo_main(int argc, char **argv)
+int __util_mkfifo_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int i, fail = 0;
 	const char *mode_spec = 0;
