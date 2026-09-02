@@ -375,7 +375,18 @@ static int env_set(char ***vp, size_t *n, size_t *cap, char *entry, size_t namel
  * `environ` directly -- a substituted/run command must never be able
  * to clobber the caller's environ) with each assignment applied on
  * top. *out_n receives the entry count (excluding the NULL
- * terminator); returns NULL on OOM. */
+ * terminator); returns NULL on OOM.
+ *
+ * A prefix assignment to a read-only name (readonly(1p), same
+ * enforcement point exec_assignment_only() documents above) is
+ * rejected the same way that function rejects one of several
+ * NAME=value operands: a diagnostic in the same format, and that one
+ * name's override is skipped while the rest of the prefix -- and the
+ * command itself -- proceeds. There is no *status here to force
+ * nonzero the way exec_assignment_only() does, and there should not
+ * be one: real shells run `FOO=bar cmd` after rejecting a read-only
+ * FOO override, with the command's own exit status untouched by the
+ * rejection. */
 /* out_n is a required out-parameter: `*out_n = n;` is unconditional on
  * the only path that does not already return 0 (OOM), and no real call
  * site (spawn_stage() below) passes NULL. assigns is deliberately left
@@ -412,6 +423,12 @@ static char **build_child_envp(const struct sh_word *assigns, size_t *out_n)
 		char *name, *val, *entry;
 		size_t nlen, vlen;
 		if (split_assignment(a->text, &name, &val)) { free_strv(v, n); return 0; }
+		if (__sh_readonly_is(name)) {
+			(void)fprintf(stderr, "%s: readonly variable\n", name);
+			__free(name);
+			__free(val);
+			continue;
+		}
 		nlen = strlen(name);
 		vlen = strlen(val);
 		entry = __malloc(nlen + 1 + vlen + 1);
@@ -1796,7 +1813,23 @@ static int exec_loop(const struct sh_command *cmd, int *status)
  * something exported it.  That is the
  * pre-existing deviation the whole variable story has, not a new one
  * this construct introduces -- `X=1; cmd` already behaves the same way
- * -- and it is stated here rather than left for someone to find. */
+ * -- and it is stated here rather than left for someone to find.
+ *
+ * Every one of those setenv()s is therefore a real assignment to
+ * `cmd->name`, so it gets the same read-only check exec_assignment_only()
+ * above uses (same __sh_readonly_is() call, same diagnostic). `cmd->name`
+ * does not change between iterations, so once it is marked read-only the
+ * very first would-be setenv() rejects it; there is no "run the rest of
+ * the items anyway" recovery to fall back to the way there is when
+ * multiple *different* names share one assignment-only command, so the
+ * whole `for` completes immediately with *status left nonzero and its
+ * body never entered -- matching bash/dash, which likewise run zero
+ * iterations of `for readonly_var in ...` rather than skipping just the
+ * first. An empty item list (no positional parameters, or `for f in ;`)
+ * still exits 0 with no diagnostic either way: the check only fires at
+ * the point an item would actually be assigned, so a loop that was
+ * always going to run zero iterations behaves as if `name` were never
+ * read-only at all -- also matching bash/dash. */
 // NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_for(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
@@ -1824,6 +1857,11 @@ static int exec_for(const struct sh_command *cmd, int *status)
 	if (!cmd->have_in) {
 		int n = __sh_param_count(), k;
 		for (k = 1; k <= n; k++) {
+			if (__sh_readonly_is(cmd->name)) {
+				(void)fprintf(stderr, "%s: readonly variable\n", cmd->name);
+				*status = 1;
+				break;
+			}
 			if (setenv(cmd->name, __sh_param_get(k), 1) < 0) return -1;
 			rc = __sh_exec_list(cmd->body, status);
 			if (rc) break;
@@ -1843,6 +1881,11 @@ static int exec_for(const struct sh_command *cmd, int *status)
 	}
 
 	for (i = 0; i < we.we_wordc; i++) {
+		if (__sh_readonly_is(cmd->name)) {
+			(void)fprintf(stderr, "%s: readonly variable\n", cmd->name);
+			*status = 1;
+			break;
+		}
 		if (setenv(cmd->name, we.we_wordv[i], 1) < 0) { rc = -1; break; }
 		rc = __sh_exec_list(cmd->body, status);
 		if (rc) break;
