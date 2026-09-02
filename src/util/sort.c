@@ -380,6 +380,28 @@ static void merge_sort(struct line *lines, size_t n, const struct sort_opts *o)
 
 /* ==== -k parsing =========================================================== */
 
+/* Consumes a run of 'b'/'d'/'f'/'i'/'n'/'r' modifier letters at `*pp`
+ * (present identically after both field_start and field_end in a -k
+ * spec's grammar -- see parse_keydef() below), setting the matching
+ * k->m* flag and k->has_mod for each. */
+static void parse_key_mods(const char **pp, struct sort_key *k)
+{
+	const char *p = *pp;
+	while (*p && strchr("bdfinr", *p)) {
+		k->has_mod = 1;
+		switch (*p) { // NOLINT(bugprone-switch-missing-default-case) -- the enclosing strchr guard restricts the modifier to these cases
+		case 'b': k->mb = 1; break;
+		case 'd': k->md = 1; break;
+		case 'f': k->mf = 1; break;
+		case 'i': k->mi = 1; break;
+		case 'n': k->mn = 1; break;
+		case 'r': k->mr = 1; break;
+		}
+		p++;
+	}
+	*pp = p;
+}
+
 static int parse_keydef(const char *spec, struct sort_key *k)
 {
 	const char *p = spec;
@@ -401,18 +423,7 @@ static int parse_keydef(const char *spec, struct sort_key *k)
 		k->c1 = (int)v;
 		p = end;
 	}
-	while (*p && strchr("bdfinr", *p)) {
-		k->has_mod = 1;
-		switch (*p) { // NOLINT(bugprone-switch-missing-default-case) -- the enclosing strchr guard restricts the modifier to these cases
-		case 'b': k->mb = 1; break;
-		case 'd': k->md = 1; break;
-		case 'f': k->mf = 1; break;
-		case 'i': k->mi = 1; break;
-		case 'n': k->mn = 1; break;
-		case 'r': k->mr = 1; break;
-		}
-		p++;
-	}
+	parse_key_mods(&p, k);
 	if (*p == ',') {
 		p++;
 		if (!isdigit((unsigned char)*p)) return -1;
@@ -429,18 +440,7 @@ static int parse_keydef(const char *spec, struct sort_key *k)
 			k->c2 = (int)v;
 			p = end;
 		}
-		while (*p && strchr("bdfinr", *p)) {
-			k->has_mod = 1;
-			switch (*p) { // NOLINT(bugprone-switch-missing-default-case) -- the enclosing strchr guard restricts the modifier to these cases
-			case 'b': k->mb = 1; break;
-			case 'd': k->md = 1; break;
-			case 'f': k->mf = 1; break;
-			case 'i': k->mi = 1; break;
-			case 'n': k->mn = 1; break;
-			case 'r': k->mr = 1; break;
-			}
-			p++;
-		}
+		parse_key_mods(&p, k);
 		k->has_end = 1;
 	}
 	if (*p) return -1;
