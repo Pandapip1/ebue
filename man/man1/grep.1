@@ -1,0 +1,278 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH GREP 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+grep \- search text for lines matching a pattern
+.SH SYNOPSIS
+.B grep
+.RB [ \-E | \-F ]
+.RB [ \-c | \-l | \-q ]
+.RB [ \-i ]
+.RB [ \-n ]
+.RB [ \-s ]
+.RB [ \-v ]
+.RB [ \-w ]
+.RB [ \-x ]
+.BI \-e " pattern_list"
+.RI [ \-e " pattern_list" ]\ .\|.\|.
+.RI [ \-f " pattern_file" ]\ .\|.\|.
+.RI [ file ]\ .\|.\|.
+.br
+.B grep
+.RB [ \-E | \-F ]
+.RB [ \-c | \-l | \-q ]
+.RB [ \-i ]
+.RB [ \-n ]
+.RB [ \-s ]
+.RB [ \-v ]
+.RB [ \-w ]
+.RB [ \-x ]
+.RI [ \-e " pattern_list" ]\ .\|.\|.
+.BI \-f " pattern_file"
+.RI [ \-f " pattern_file" ]\ .\|.\|.
+.RI [ file ]\ .\|.\|.
+.br
+.B grep
+.RB [ \-E | \-F ]
+.RB [ \-c | \-l | \-q ]
+.RB [ \-i ]
+.RB [ \-n ]
+.RB [ \-s ]
+.RB [ \-v ]
+.RB [ \-w ]
+.RB [ \-x ]
+.I pattern_list
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B grep
+reads each
+.I file
+operand (or standard input, if none are given, or if a
+.I file
+operand is exactly
+.BR \- ),
+and writes to standard output every line that matches at least one of
+the collected patterns, or, if
+.B \-v
+is given, every line that matches none of them.
+.PP
+Patterns are collected from exactly one of three sources, chosen by
+what is given on the command line: one or more
+.B \-e
+options, one or more
+.B \-f
+options, or, only when neither
+.B \-e
+nor
+.B \-f
+is given at all, a single
+.I pattern_list
+operand (the first non-option argument). Each
+.B \-e
+argument, and the bare
+.I pattern_list
+operand, is itself split into one or more patterns on any embedded
+<newline> bytes it contains; each line of a
+.B \-f
+.I pattern_file
+contributes exactly one pattern, and a missing final newline in that
+file is tolerated. Multiple
+.B \-e
+and
+.B \-f
+options may be combined; every pattern they contribute is collected in
+the order their options appear on the command line.
+.PP
+Unless
+.B \-F
+is given, each pattern is a regular expression: a basic regular
+expression by default, or an extended regular expression under
+.BR \-E .
+This library recognizes only the C/POSIX locale, so
+.BR \-i 's
+case-folding is a plain byte-value case fold, not a locale-aware one,
+and no character class or collation stronger than that locale actually
+has is available to a pattern.
+.PP
+No option accepted by
+.B grep
+is ever bundled with another; each is always its own separate
+argument, never combined the way
+.B \-i
+and
+.B \-n
+could be combined into
+.BR \-in .
+.PP
+When no
+.I file
+operand is given, or one is given as
+.BR \- ,
+standard input is read and reported (for
+.BR \-l ,
+.BR \-c ,
+and the line-prefix below) as "(standard input)". Each selected line
+is preceded by its
+.I file
+operand's name (or "(standard input)") followed by a colon whenever
+more than one
+.I file
+operand was given on the command line \(em this depends on how many
+.I file
+operands were given, not on how many of them actually contained a
+match.
+.PP
+A line's own trailing newline, if it had one, is preserved on output
+exactly as read; a final line with no trailing newline is written
+without one being added.
+.SH OPTIONS
+.TP
+.B \-E
+Interpret every pattern as an extended regular expression, instead of
+a basic regular expression. Mutually exclusive with
+.BR \-F .
+.TP
+.B \-F
+Interpret every pattern as a fixed string, matched literally, not as a
+regular expression. Mutually exclusive with
+.BR \-E .
+.TP
+.B \-c
+Instead of the matching lines themselves, write a count of matching
+lines to standard output: one count per
+.I file
+operand (prefixed with that file's name if more than one operand was
+given), or a single count if reading standard input. Mutually
+exclusive with
+.B \-l
+and
+.BR \-q .
+.TP
+.B \-i
+Match without regard to the case of alphabetic characters.
+.TP
+.B \-l
+Instead of the matching lines themselves, write only the name of each
+.I file
+(or "(standard input)") that contains at least one matching line, once each, as soon as its
+first match is found. Mutually exclusive with
+.B \-c
+and
+.BR \-q .
+.TP
+.B \-n
+Precede each output line with its 1-based line number within its own
+file, followed by a colon.
+.TP
+.B \-q
+Write nothing to standard output; stop reading as soon as any line
+matches (without even finishing the file it was found in, or reading
+any further files). Mutually exclusive with
+.B \-c
+and
+.BR \-l .
+See EXIT STATUS for how
+.B \-q
+changes the exit status rules.
+.TP
+.B \-s
+Suppress the diagnostic ordinarily written when a
+.I file
+operand cannot be opened for reading. Does not suppress the
+diagnostic
+.B grep
+writes when a pattern's own matching attempt against one input line
+runs out of budget (see APPLICATION USAGE) \(em that condition is not
+one of the error messages this option's own description scopes it to.
+.TP
+.B \-v
+Select the lines that do
+.B not
+match any pattern, instead of the ones that do.
+.TP
+.B \-w
+Select only matches that form whole words: a candidate match is
+accepted only when the byte immediately before its first character
+(if any) and the byte immediately after its last character (if any)
+are both outside the set of alphanumeric characters and the
+underscore character.
+This option is not required by POSIX, but is implemented because
+essentially every widely-deployed
+.B grep
+provides it and scripts routinely assume it exists.
+.TP
+.B \-x
+Select only matches that span an entire line, from its very first
+byte to its very last.
+.TP
+.BI \-e " pattern_list"
+Add the pattern(s) in
+.I pattern_list
+(see DESCRIPTION) to the collected pattern list. May be given more
+than once.
+.I pattern_list
+may follow
+.B \-e
+directly in the same argument, or as the next argument.
+.TP
+.BI \-f " pattern_file"
+Add one pattern per line of
+.I pattern_file
+to the collected pattern list. May be given more than once.
+.I pattern_file
+is opened as an ordinary pathname; unlike a
+.I file
+operand,
+.B \-
+here does not mean standard input.
+.SH OPERANDS
+.TP
+.I pattern_list
+The pattern (or patterns; see DESCRIPTION) to match, used only when
+neither
+.B \-e
+nor
+.B \-f
+was given.
+.TP
+.I file
+A pathname of a file to search, or
+.B \-
+for standard input. If no
+.I file
+operand is given, standard input is searched.
+.SH APPLICATION USAGE
+.B grep
+enforces a bounded amount of work when attempting to match a pattern
+against one input line. If that budget is exhausted before a match (or
+the absence of one) can be determined, the line is treated as not
+matching that particular pattern \(em matching continues with the
+remaining patterns and the remaining lines of input, rather than the
+whole run being aborted \(em but a diagnostic is written once and the
+overall exit status is forced nonzero for the run.
+.B \-s
+does not suppress that diagnostic.
+.SH EXIT STATUS
+.TP
+.B 0
+At least one line was selected.
+.TP
+.B 1
+No lines were selected, and no error occurred.
+.TP
+.B 2
+An error occurred: invalid usage, an invalid pattern, a
+.I file
+that could not be opened or read (even when
+.B \-s
+suppressed the message), an out-of-memory condition, or a pattern that
+ran out of matching budget on some line (see APPLICATION USAGE). With
+.BR \-q ,
+this exit status is used only if no line was ever selected either;
+if a line was selected, the exit status is 0 even if an error also
+occurred during the same run.
+.SH SEE ALSO
+.BR sed (1),
+.BR ed (1),
+.BR expr (1),
+.BR find (1)

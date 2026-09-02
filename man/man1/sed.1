@@ -1,0 +1,475 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH SED 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+sed \- filter and transform text using a script of editing commands
+.SH SYNOPSIS
+.B sed
+.RB [ \-n ]
+.I script
+.RI [ file ]\ .\|.\|.
+.br
+.B sed
+.RB [ \-n ]
+.RI [ \-e " script" ]\ .\|.\|.
+.RI [ \-f " script_file" ]\ .\|.\|.
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B sed
+reads each
+.I file
+operand (or standard input, if none are given, or if a
+.I file
+operand is exactly
+.BR \- )
+fully into memory, then repeatedly applies the assembled editing
+script to it one input line at a time (a "cycle"), writing the result
+of each cycle to standard output as it goes; line numbers used by
+addresses count cumulatively across every
+.I file
+operand, as if all of them were one input.
+.PP
+Unless
+.B \-n
+is given, the pattern space is written to standard output at the end
+of every cycle that was not deleted; a leading "#n" as the first two
+bytes of the assembled script has the same effect as
+.BR \-n .
+.PP
+If neither
+.B \-e
+nor
+.B \-f
+is given at all, the first operand is
+.IR script ,
+and every remaining operand is a
+.IR file .
+Otherwise every operand is a
+.IR file ,
+and the script is the concatenation of every
+.B \-e
+and
+.B \-f
+argument, in the order their options appear on the command line; a
+newline is inserted between two consecutive pieces only when the
+first of the two came from
+.BR \-e .
+.SH REGULAR EXPRESSIONS
+Every regular expression in a script (an address, or the left half of
+.BR s /// )
+is a basic regular expression; there is no extended-regular-expression
+mode. An empty regular expression, written
+.B //
+(or, with a custom delimiter, that same delimiter used twice in a row
+right after the backslash)
+reuses whichever regular expression was most recently
+.I used
+by any address or
+.BR s /// ,
+not necessarily the one written immediately before it in the script.
+.SH ADDRESSES
+Any command may be preceded by zero, one, or two addresses.
+.TP
+no address
+The command applies to every cycle.
+.TP
+one address
+The command applies only to the cycle(s) the address selects.
+.TP
+.I addr1\c
+.BR , \c
+.I addr2
+The command applies to a range of lines: starting at the first line
+.I addr1
+selects, through the next line at or after it that
+.I addr2
+selects (or through the last line of input, if
+.I addr2
+never subsequently matches). If
+.I addr2
+is a line number less than or equal to the line number that opened the
+range, the range is exactly that one line. Once a range has closed,
+.I addr1
+is searched for again starting at the following line; it is never
+re-triggered while its own range is still open.
+.PP
+Each address is one of:
+.TP
+.I number
+A decimal line number.
+.TP
+.B $
+The last line of input.
+.TP
+.IB / bre /
+or
+.IB \e c bre c
+A context address (any byte
+.I c
+other than backslash or newline may be used as the delimiter in the
+second form): selected on any cycle whose pattern space the basic
+regular expression
+.I bre
+matches.
+.PP
+Any address (including the second address of a range) may be followed
+by
+.B !
+to select the opposite of what it would otherwise select.
+.SH COMMANDS
+.TP
+.IB [ addr ]\c
+.BR a \e
+.I text
+Queue
+.I text
+for output; see OUTPUT TIMING below. At most one address may be given.
+.TP
+.IB [ addr ]\c
+.BR i \e
+.I text
+Write
+.I text
+to standard output immediately. At most one address may be given.
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR c \e
+.I text
+Delete the addressed lines from the pattern space and write
+.I text
+in their place (once, when a two-address range closes, not once per
+line in the range).
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR d
+Delete the pattern space and start the next cycle without writing it.
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR D
+If the pattern space contains a newline, delete everything through the
+first one and restart the current cycle's commands from the beginning
+with the remainder, without reading a new line of input; otherwise,
+the same as
+.BR d .
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR g
+Replace the pattern space with a copy of the hold space.
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR G
+Append a newline and a copy of the hold space to the pattern space.
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR h
+Replace the hold space with a copy of the pattern space.
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR H
+Append a newline and a copy of the pattern space to the hold space.
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR x
+Exchange the pattern space and the hold space.
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR n
+Unless
+.B \-n
+is in effect, write the pattern space to standard output; then replace
+it with the next line of input. If there is no next line, quit without
+starting a new cycle (this happens only after the write above has
+already run).
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR N
+Append a newline and the next line of input to the pattern space. If
+there is no next line, quit without starting a new cycle and without
+any output at all for this incomplete final cycle.
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR p
+Write the pattern space to standard output.
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR P
+Write the pattern space to standard output, up through its first
+embedded newline (or all of it, if it has none).
+.TP
+.IB [ addr ]\c
+.BR q
+Finish the current cycle's normal end-of-cycle output (unless
+.BR \-n )
+then quit. At most one address may be given.
+.TP
+.IB [ addr ]\c
+.B =
+Write the current cumulative line number to standard output. At most
+one address may be given.
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR l
+Write the pattern space to standard output in a visually unambiguous
+form: non-printable and non-ASCII bytes are written as backslash
+escapes, long lines are folded at a fixed width of 70 columns, and the
+result is terminated with an unescaped
+.BR $ .
+.TP
+.IB [ addr ]\c
+.BR r " file"
+Queue the contents of
+.I file
+for output; see OUTPUT TIMING below.
+.I file
+is read fresh at the moment it is actually written, not when
+.B r
+itself runs; a
+.I file
+that is missing or cannot be read is treated as empty. At most one
+address may be given.
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR w " file"
+Append the pattern space, followed by a newline, to
+.IR file .
+.I file
+is opened (and truncated) at most once per distinct name for the
+whole run, no matter how many times
+.B w
+writes to it. The names
+.B /dev/stdout
+and
+.B /dev/stderr
+are recognized specially and write to
+.BR sed 's
+own standard output or standard error instead of a real file of that
+name.
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR s / bre / replacement / flags
+Substitute
+.I replacement
+for text matching
+.I bre
+in the pattern space. Any byte other than backslash or newline may be
+used as the delimiter in place of
+.BR / ,
+consistently, in all three fields.
+.I flags
+is zero or more of: a decimal occurrence number (default 1, selecting
+which match to act on);
+.B g
+(also replace every match from the numbered occurrence onward, instead
+of only that one);
+.B p
+(write the pattern space if a substitution was actually made); and
+.BI w\  file
+(append the pattern space to
+.I file ,
+the same way the
+.B w
+command does, if a substitution was actually made \(em this consumes
+the rest of the line, so it must be the last flag given).
+.I replacement
+may contain
+.B &
+(the whole matched text) and
+.BI \e n
+for
+.I n
+1\(en9 (the text matched by the
+.IR n th
+parenthesized subexpression of
+.IR bre ).
+.TP
+.IB [ addr1 , addr2 ]\c
+.BR y / string1 / string2 /
+Transliterate: replace every byte in the pattern space that equals a
+byte of
+.I string1
+with the byte at the same position in
+.IR string2 .
+Any byte other than backslash or newline may be used as the delimiter
+in place of
+.BR / .
+.I string1
+and
+.I string2
+must be the same length after their own backslash escapes are
+resolved.
+.TP
+.BI : label
+Define
+.I label
+as a branch target for
+.B b
+and
+.BR t .
+May not be preceded by an address.
+.TP
+.IB [ addr1 , addr2 ]\c
+.BI b\  label
+Branch to the command following
+.BI : label
+(or, if
+.I label
+is omitted, to the end of the script), starting the next command from
+there instead of falling through in script order.
+.TP
+.IB [ addr1 , addr2 ]\c
+.BI t\  label
+Like
+.BR b ,
+but branches only if at least one successful substitution has
+happened since the last line was read or the last
+.B t
+branched; taking the branch clears that condition.
+.TP
+.B #
+A comment: the rest of the line is ignored. (Only meaningful as the
+very first thing in the script does "#n" have the additional effect
+described under DESCRIPTION.)
+.TP
+.IB [ addr1 , addr2 ]\c
+.B {
+.I commands
+.B }
+Groups
+.I commands
+under one address or address range, exactly as if each of them had
+that same address or range of its own.
+.SH OUTPUT TIMING
+Text queued by
+.B a
+or
+.B r
+is written to standard output just before the next attempt to read a
+line of input during
+.B N
+or
+.BR n ,
+or when the script reaches its own end for the current cycle \(em
+never at the point where
+.B a
+or
+.B r
+itself runs. Entries queue in the order they were applied and are
+written in that same order.
+.B i
+is not queued at all; it always writes immediately.
+.SH TRAILING NEWLINE
+.B sed
+does not track whether the very last line of the very last
+.I file
+operand originally lacked a trailing newline: every line read has any
+trailing newline of its own stripped before it reaches the script, and
+every line
+.B sed
+writes gets exactly one newline added back, regardless of what the
+original input had.
+.SH OPTIONS
+.TP
+.B \-n
+Suppress the automatic end-of-cycle write of the pattern space to
+standard output; only explicit output commands
+.RB ( p ,
+.BR P ,
+.BR l ,
+and
+.BR s /// 's
+.B p
+flag) produce output.
+.TP
+.BI \-e " script"
+Append
+.I script
+to the editing script (see DESCRIPTION for how
+.BR \-e ,
+.BR \-f ,
+and a bare
+.I script
+operand interact). May be given more than once.
+.TP
+.BI \-f " script_file"
+Append the contents of
+.I script_file
+to the editing script.
+.I script_file
+may be
+.B \-
+for standard input. May be given more than once.
+.SH OPERANDS
+.TP
+.I script
+The editing script, used only when neither
+.B \-e
+nor
+.B \-f
+was given.
+.TP
+.I file
+A pathname of an input file, or
+.B \-
+for standard input. If none are given, standard input is read.
+.SH APPLICATION USAGE
+The following are not implemented, and are refused with a diagnostic
+and a nonzero exit status rather than being silently approximated:
+in-place editing;
+an extended-regular-expression mode;
+a
+.B Q
+command (immediate quit with no final automatic write);
+an exit-code operand on
+.B q
+or
+.BR Q ;
+case-insensitive or multiline
+.RB ( i / I ,
+.BR m / M )
+flags on
+.BR s /// ;
+.BR \eU / \eL / \eE
+case-conversion escapes in a
+.B s///
+replacement;
+the
+.BR 0 , /re/
+address form;
+an explicit line-wrap-length operand on
+.BR l ,
+which is always 70 columns here; and the one-line
+.IB a\  text\c
+,
+.IB i\  text\c
+,
+.IB c\  text
+shorthand some other implementations accept without the backslash \(em
+.BR a \e ,
+.BR i \e ,
+and
+.B c\e
+here always require the backslash-then-newline form described above,
+or text directly on the same line right after the backslash.
+.SH EXIT STATUS
+.TP
+.B 0
+Every line of input was processed successfully.
+.TP
+.B >0
+An error occurred: invalid usage, an invalid option, a script that
+could not be parsed (an unknown command, an unterminated expression,
+unbalanced
+.B {
+and
+.BR } ,
+a branch to an undefined label, an invalid regular expression, or
+.BR y /// 's
+two strings differing in length), a
+.I file
+that could not be opened or read, an empty regular expression used
+before any regular expression had yet been used at all, or a failure
+writing output.
+.SH SEE ALSO
+.BR grep (1),
+.BR ed (1),
+.BR expr (1)

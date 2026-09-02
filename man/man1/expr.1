@@ -1,0 +1,150 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH EXPR 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+expr \- evaluate an expression
+.SH SYNOPSIS
+.B expr
+.I argument ...
+.SH DESCRIPTION
+.B expr
+evaluates the expression formed from its
+.I argument
+operands (each already one token; whatever invoked
+.BR expr ,
+typically a shell, is responsible for having word-split the
+expression the way its grammar needs) and writes the result, followed
+by a newline, to standard output.
+.SS Grammar
+In order of increasing precedence, every binary operator below is
+left-associative:
+.PP
+.RS
+.nf
+expr1 | expr2
+expr1 & expr2
+expr1 { = > >= < <= != } expr2
+expr1 { + \- } expr2
+expr1 { * / % } expr2
+expr1 : expr2
+( expr1 )
+.fi
+.RE
+.TP
+.IB expr1 " | " expr2
+.I expr1 ,
+if it is neither the empty string nor (when it is a numeric candidate;
+see below) zero; otherwise
+.IR expr2 .
+.TP
+.IB expr1 " & " expr2
+.I expr1 ,
+if neither
+.I expr1
+nor
+.I expr2
+is null or zero (see below); otherwise
+.BR 0 .
+.TP
+.IB expr1\ op\ expr2
+where
+.I op
+is one of
+.BR = ", " > ", " >= ", " < ", " <= ", or " != .
+.B 1
+if the comparison holds,
+.B 0
+if not; see Numeric vs. string operands below for which kind of
+comparison is used.
+.TP
+.IB expr1\ op\ expr2
+where
+.I op
+is
+.B +
+or
+.BR \- .
+The integer sum or difference; both operands must be numeric
+candidates, or the whole expression is invalid.
+.TP
+.IB expr1\ op\ expr2
+where
+.I op
+is
+.BR * ", " / ", or " % .
+The integer product, quotient, or remainder; both operands must be
+numeric candidates; division or remainder by zero is invalid.
+.TP
+.IB expr1 " : " expr2
+Match:
+.I expr2
+is always a basic regular expression, regardless of whether it looks
+numeric, implicitly anchored to the start of
+.I expr1
+(a match that does not start at the very first character does not
+count). The result is the text captured by the first
+.BI \e( \|.\|.\|.\e)
+subexpression in
+.I expr2
+if it contains one, or, if it does not, the number of characters
+matched. If
+.I expr2
+contains no
+.BI \e( \|.\|.\|.\e)
+and does not match at all, the result is
+.BR 0 ;
+if it does contain one but that subexpression did not itself
+participate in the match, the result is the empty string.
+.TP
+.RI "( " expr1 " )"
+.I expr1 ,
+evaluated first.
+.SS Numeric vs. string operands
+An operand consisting only of an optional leading
+.B \-
+followed by one or more digits is a numeric candidate.
+.BR + ", " \- ", " * ", " / ", and " %
+always require both operands to be numeric candidates. The comparison
+operators
+.RB ( = ", " > ", " >= ", " < ", " <= ", " != )
+compare as integers only when both operands are numeric candidates;
+otherwise they compare as byte strings, since this library recognizes
+only the C locale and has no stronger collation to fall back on.
+.B |
+and
+.B &
+(and
+.BR expr 's
+own exit-status decision) treat an operand as "null or zero" when it
+is either the empty string or a numeric candidate whose value is 0; a
+non-numeric, non-empty string is never null-or-zero.
+.B :
+always treats both of its operands as plain strings, regardless of
+whether either looks numeric.
+.SH OPERANDS
+.TP
+.I argument
+One token of the expression; see Grammar above. At least one is
+required.
+.SH EXIT STATUS
+.TP
+.B 0
+The expression evaluated to neither the empty string nor a numeric
+zero.
+.TP
+.B 1
+The expression evaluated to the empty string, or to a numeric
+candidate whose value is 0.
+.TP
+.B 2
+The expression was invalid: a syntax error, a missing or extra
+operand, a non-numeric operand given to an arithmetic operator,
+division or remainder by zero, or an invalid regular expression given
+to
+.BR : .
+.SH APPLICATION USAGE
+This implementation has no case that exits above 2; every failure it
+can detect is classified as "the expression is invalid".
+.SH SEE ALSO
+.BR sed (1),
+.BR grep (1)

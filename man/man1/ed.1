@@ -1,0 +1,478 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH ED 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+ed \- line-oriented text editor
+.SH SYNOPSIS
+.B ed
+.RB [ \-s ]
+.RI [ \-p " string" ]
+.RI [ file ]
+.SH DESCRIPTION
+.B ed
+is a line-oriented text editor. It keeps an in-memory buffer of lines,
+loaded at startup from
+.I file
+if given (an empty buffer otherwise), and then repeatedly reads one
+line from standard input as a command, executes it, and (unless
+.B \-s
+was given) writes a prompt string first if prompting is enabled.
+.PP
+Almost every command may be preceded by an address, or a pair of
+addresses separated by
+.B ,
+or
+.BR \; ,
+selecting the line or range of lines the command acts on; most default
+to the current line when no address is given. A command that does not
+accept an address at all
+.RB ( e ,
+.BR E ,
+.BR f ,
+.BR q ,
+.BR Q ,
+.BR u ,
+.BR H ,
+.BR h ,
+.BR P ,
+and
+.BR ! )
+reports an error if given one anyway. The one exception is
+.BR = ,
+which is allowed to resolve to address 0 on an empty buffer, since it
+only ever reports a number and never touches buffer content.
+.PP
+A command line consisting of just an address (no command letter at
+all) prints the addressed line(s), setting the current line to the
+last one printed; with no address either, it prints the line after the
+current one.
+.PP
+Whenever a command cannot be carried out as written, a single
+.B ?
+is written to standard output; if help mode
+(see the
+.B H
+command) is on, an explanation follows on the next line.
+.SH ADDRESSES
+.TP
+.B .
+The current line.
+.TP
+.B $
+The last line of the buffer.
+.TP
+.I number
+An absolute line number.
+0 is a valid address only where a specific command's own description
+below allows it.
+.TP
+.BI ' x
+The line marked with the lowercase letter
+.I x
+(see the
+.B k
+command).
+.TP
+.IB / bre /
+Search forward, starting after the current line and wrapping around to
+the beginning of the buffer if necessary, for the next line whose
+contents the basic regular expression
+.I bre
+matches. An empty
+.B //
+reuses whichever regular expression was most recently used by any
+search or
+.BR s /// .
+.TP
+.IB ? bre ?
+The same, but searching backward and wrapping around to the end of the
+buffer.
+.TP
+.RI [ addr ]+ n ", " [ addr ]- n
+Relative to the address component before it (or to the current line,
+if there is none):
+.I n
+lines later or earlier. A bare
+.B +
+or
+.B \-
+means 1. A bare
+.I n
+with no sign, following another address component, also means
+.BR + n .
+Any number of these may be chained.
+.PP
+Two addresses joined with
+.B ,
+form a range; a bare
+.B ,
+means
+.BR 1,$ .
+Two addresses joined with
+.B \;
+form the same kind of range, except that the current line is set to
+the first address before the second one is evaluated, so a relative
+second address is relative to the first, not to whatever the current
+line was beforehand; a bare
+.B \;
+means
+.BR .,$ .
+.SH COMMANDS
+.TP
+.RI [ addr ] a
+Append text (see TEXT INPUT below) after the addressed line (default
+the current line; 0 is valid, meaning before the first line). The
+current line becomes the last line entered.
+.TP
+.RI [ addr ] i
+Insert text before the addressed line (default the current line; 0 is
+treated as 1). The current line becomes the last line entered.
+.TP
+.RI [ addr1 , addr2 ] c
+Change: delete the addressed lines (default the current line) and
+insert text (see TEXT INPUT below) in their place.
+.TP
+.RI [ addr1 , addr2 ] d [ p | l | n ]
+Delete the addressed lines (default the current line). An optional
+trailing
+.BR p ", " l ", or " n
+prints the new current line, in the same format those letters give the
+.B p
+command below.
+.TP
+.RI [ addr1 , addr2 ] j [ p | l | n ]
+Join the addressed lines (default the current line and the line after
+it) into a single line, replacing them. Joining a range of only one
+line leaves it unchanged. The trailing letter behaves as for
+.BR d .
+.TP
+.RI [ addr1 , addr2 ] m " addr3" [ p | l | n ]
+Move the addressed lines (default the current line) to just after
+.I addr3
+.RI ( addr3
+may be 0, meaning before the first line, but may not fall within the
+range being moved). The trailing letter behaves as for
+.BR d .
+.TP
+.RI [ addr1 , addr2 ] t " addr3" [ p | l | n ]
+Like
+.BR m ,
+but copies the addressed lines instead of moving them; the source
+lines are left in place.
+.TP
+.RI [ addr1 , addr2 ] p
+Print the addressed lines (default the current line) plainly, setting
+the current line to the last one printed.
+.TP
+.RI [ addr1 , addr2 ] n
+Like
+.BR p ,
+but precedes each line with its line number and a tab.
+.TP
+.RI [ addr1 , addr2 ] l
+Like
+.BR p ,
+but in a visually unambiguous form: non-printable bytes are backslash
+escaped, and each line ends with an unescaped
+.BR $ .
+.TP
+.RI [ addr ] =
+Print the line number of the addressed line (default the last line of
+the buffer; 0 for an empty buffer).
+.TP
+.RI [ addr1 , addr2 ] s / bre / replacement / flags
+Substitute
+.I replacement
+for text matching the basic regular expression
+.I bre
+on each addressed line (default the current line). Any byte may be
+used as the delimiter in place of
+.BR / .
+.I flags
+is zero or more of: a decimal occurrence number (default 1); a
+trailing
+.B g
+(replace every match from that occurrence onward, instead of only
+that one); and a trailing
+.BR p ", " l ", or " n
+(print the last line actually changed, in the format those letters
+give
+.B p
+above). An empty
+.B //
+reuses the last regular expression used by any search or
+.BR s /// ;
+a replacement text of exactly
+.B %
+reuses the previous replacement text. The replacement may contain
+.B &
+(the whole matched text) and
+.BI \e n
+for
+.I n
+1\(en9 (text matched by the
+.IR n th
+parenthesized subexpression of
+.IR bre ).
+.TP
+.RI [ addr ] k x
+Mark the addressed line (default the current line) with the lowercase
+letter
+.IR x ,
+so it can later be addressed as
+.BI ' x .
+.TP
+.B u
+Undo the effect of the most recently executed buffer-modifying command
+(one of
+.BR a ", " c ", " d ", " g ", " i ", " j ", " m ", " r ", " s ", " t ", " u ", " v ", " G ", " V ;
+one whole
+.BR g / v / G / V
+invocation counts as a single unit). Running
+.B u
+again undoes the undo itself; only one level of undo is kept.
+.TP
+.BI e\  file
+Replace the buffer with the contents of
+.IR file .
+Refuses once, with an error, if the current buffer has unsaved
+changes; running
+.B e
+a second time with the same argument proceeds anyway.
+With no argument, reloads the remembered filename.
+.I file
+becomes the new remembered filename either way.
+.TP
+.BI E\  file
+Like
+.BR e ,
+but never refuses over unsaved changes.
+.TP
+.BI e\ ! command\c
+,\  \c
+.BI E\ ! command
+Run
+.I command
+through the shell and load its output into the buffer instead of a
+file, with the same unsaved-changes behavior as
+.B e
+or
+.B E
+respectively. A
+.B %
+anywhere in
+.I command
+expands to the remembered filename;
+.B \e%
+is a literal
+.BR % .
+.TP
+.BI f\  file
+With an argument, set the remembered filename to
+.I file
+without loading anything. With no argument, print the remembered
+filename.
+.TP
+.RI [ addr ] r " file"
+Read
+.I file
+(or the remembered filename, if none is given) and insert its contents
+after the addressed line (default the last line; 0 is valid, meaning
+before the first line).
+.TP
+.RI [ addr ] r\ ! command
+Run
+.I command
+through the shell and insert its output the same way.
+.TP
+.RI [ addr1 , addr2 ] w " file"
+Write the addressed lines (default the whole buffer) to
+.I file
+(or the remembered filename, if none is given). If
+.I file
+is the first filename ever associated with this buffer and the whole
+buffer was written, the buffer is marked as having no unsaved changes.
+.TP
+.RI [ addr1 , addr2 ] w\ ! command
+Pipe the addressed lines to
+.IR command 's
+standard input instead of writing to a file.
+.TP
+.B !command
+Run
+.I command
+through the shell (with
+.B %
+and
+.B \e%
+expanded as above). With no argument, repeats the last
+.B !
+command given.
+.TP
+.B H
+Toggle whether an explanation follows each
+.B ?
+error report.
+.TP
+.B h
+Print the explanation for the most recent error, regardless of whether
+.B H
+is currently on.
+.TP
+.B P
+Toggle whether a prompt string is printed before reading each command.
+.TP
+.B q
+Quit. Refuses once, with an error, if the buffer has unsaved changes
+(except under
+.B \-s ,
+where there is no interactive user to give a second chance to, so
+.B q
+always quits immediately); running
+.B q
+a second time in a row proceeds anyway.
+.TP
+.B Q
+Quit unconditionally, even with unsaved changes.
+.TP
+.RI [ addr1 , addr2 ] g / bre / command\-list
+For every line in the addressed range (default the whole buffer) that
+.I bre
+matches, mark it; then execute
+.I command\-list
+(one or more commands, one per line, a line continued onto the next
+with a trailing backslash; an empty
+.I command\-list
+means a bare
+.BR p )
+against each marked line in turn, in line order.
+.BR a ", " i ", " c ,
+and nested
+.BR g / v / G / V
+commands are not permitted inside
+.IR command\-list .
+.TP
+.RI [ addr1 , addr2 ] v / bre / command\-list
+Like
+.BR g ,
+but for the lines
+.I bre
+does
+.B not
+match.
+.TP
+.RI [ addr1 , addr2 ] G / bre /
+Interactive form of
+.BR g :
+for each matching line in turn, print it, then read one command line
+from standard input and execute it against that line; a bare
+.B &
+repeats the last command executed this way.
+.TP
+.RI [ addr1 , addr2 ] V / bre /
+The interactive form of
+.BR v .
+.SH TEXT INPUT
+.BR a ", " i ", and " c
+collect the text to insert (or change to) from the following lines of
+input, up to but not including a line that consists of exactly a
+single
+.BR . ,
+which is required and is not itself part of the text.
+.SH OPTIONS
+.TP
+.BI \-p " string"
+Set the command prompt to
+.I string
+and turn prompting on, as if
+.B P
+had been typed once at startup. Without
+.BR \-p ,
+prompting starts off, and the default prompt (if it is ever turned on
+with
+.BR P )
+is
+.BR * .
+.TP
+.B \-s
+Suppress the byte-count messages
+.BR e ", " E ", " r ", and " w
+would otherwise print, and make
+.B q
+quit immediately without the unsaved-changes confirmation described
+under the
+.B q
+command above.
+.SH OPERANDS
+.TP
+.I file
+A pathname to load into the buffer at startup. If it does not exist
+yet, the buffer starts empty, the name is remembered, and this is
+treated as a normal condition, not an error. If no
+.I file
+operand is given, the buffer starts empty with no remembered filename.
+.SH APPLICATION USAGE
+The following, present in some other
+.B ed
+implementations, are not implemented here:
+an
+.B W
+(append-write) command;
+a
+.B #
+comment command;
+a
+.B %
+address synonym for
+.B 1,$
+(use
+.B 1,$
+or a bare
+.B ,
+instead).
+.PP
+Receiving SIGHUP between top-level commands does not necessarily
+terminate the process running
+.BR ed :
+if the buffer has unsaved changes, it is written, on a best-effort
+basis, to a file named
+.B ed.hup
+in the current directory, and command reading then stops, as if
+.B Q
+had been given. This is noticed only between top-level commands, not
+while a lengthy
+.BR g / v / G / V
+command-list is running or while
+.B ed
+is waiting for text input.
+.PP
+Within a
+.BR g / v
+command-list, if a sub-command shifts or deletes other lines still
+waiting to be visited in that invocation's own set of matched lines,
+the line numbers of those still-pending lines are kept accurate, and
+any whose line was deleted are skipped; however, a still-pending
+line's own content being rewritten in place by an unrelated
+substitution is not separately detected, so it is still visited even
+though its content may no longer be what originally matched.
+.PP
+The
+.B l
+command does not fold long lines at any particular width; each
+addressed line always produces exactly one
+.B l
+-formatted output line, however long.
+.SH EXIT STATUS
+.TP
+.B 0
+.B ed
+ran to completion without any command ever failing.
+.TP
+.B 1
+At least one command failed (reported with a
+.BR ? )
+at some point during the run, even if the run subsequently continued
+and completed normally.
+.SH SEE ALSO
+.BR sed (1),
+.BR grep (1)

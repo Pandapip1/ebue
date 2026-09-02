@@ -1,0 +1,276 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH FIND 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+find \- walk a file hierarchy evaluating an expression against every entry
+.SH SYNOPSIS
+.B find
+.RI [ path ...]
+.RI [ expression ]
+.SH DESCRIPTION
+.B find
+walks the file hierarchy rooted at each
+.I path
+operand (or
+.BR . ,
+if none are given), evaluating
+.I expression
+once against every file and directory it visits, and performing
+whatever actions
+.IR expression 's
+.BR \-exec ", " \-ok ", or " \-print
+primaries request for each entry where
+.I expression
+evaluates true. Symbolic links are never followed as if they were the
+directories they point to.
+.PP
+If
+.I expression
+contains no
+.BR \-exec ", " \-ok ", or " \-print
+at all, an implicit
+.B \-print
+is applied to every entry
+.I expression
+would otherwise just be evaluated for and then discard the result of
+\(em exactly as if the whole expression, as given, were parenthesized
+and followed by
+.BR "\-a \-print" .
+A wholly absent
+.I expression
+is equivalent to a bare
+.BR \-print .
+.SS Expression syntax
+An expression combines primaries, each of which tests or acts on the
+entry currently being visited, using:
+.TP
+.B ! " " expr
+True if
+.I expr
+is false. Binds tighter than either of the two below.
+.TP
+.IR expr1 " " expr2 ", or " expr1 " " \-a " " expr2
+True if both are true. Implicit juxtaposition and an explicit
+.B \-a
+bind equally, tighter than
+.BR \-o .
+.I expr2
+is evaluated only if
+.I expr1
+is true.
+.TP
+.IR expr1 " " \-o " " expr2
+True if either is true. Binds loosest.
+.I expr2
+is evaluated only if
+.I expr1
+is false.
+.TP
+.RI "( " expr " )"
+Grouping.
+.SS Primaries
+.TP
+.BI \-name " pattern"
+True if the entry's own filename (the last component of its path)
+matches the shell pattern
+.IR pattern .
+.TP
+.BI \-path " pattern"
+True if the entry's whole path, as constructed from the
+.I path
+operand it was reached through, matches
+.IR pattern .
+.TP
+.BI \-type " c"
+True if the entry's type is
+.IR c :
+.B b
+block special,
+.B c
+character special,
+.B d
+directory,
+.B l
+symbolic link,
+.B p
+FIFO,
+.B f
+regular file, or
+.B s
+socket.
+.TP
+.BI \-perm\ [ \- ] mode
+.I mode
+is an octal permission value. Without the leading
+.BR \- ,
+true if the entry's permission bits are exactly
+.IR mode ;
+with it, true if every bit set in
+.I mode
+is also set in the entry's permission bits. There is no symbolic
+mode-change grammar accepted here, only an octal value.
+.TP
+.BI \-user " user"
+True if the entry is owned by
+.IR user ,
+a name resolved against the system's user database, or, if not found
+by name, a literal decimal user ID.
+.TP
+.BI \-group " group"
+The same, for the entry's group, by group name or a literal decimal
+group ID.
+.TP
+.BI \-size\ [ + | \- ] n [ c ]
+True if the entry's size \(em in 512-byte blocks, rounded up, or in
+bytes if
+.I n
+is followed by
+.BR c \(em
+is more than
+.I n
+(with a leading
+.BR + ),
+less than
+.I n
+(with a leading
+.BR \- ),
+or exactly
+.IR n .
+.TP
+.BI \-links\ [ + | \- ] n
+True if the entry's hard-link count compares to
+.I n
+the same way.
+.TP
+.BR \-atime ", " \-mtime ", " \-ctime\ [ + | \- ] n
+True if the entry's access, modification, or status-change time,
+expressed as a whole number of 24-hour periods before the moment
+.B find
+started running, compares to
+.I n
+the same way.
+.TP
+.BI \-newer " file"
+True if the entry's modification time is later than
+.IR file 's.
+.TP
+.B \-prune
+Always true. If the entry is a directory, none of its descendants are
+visited at all, for the walk of the
+.I path
+operand currently in progress (a later
+.I path
+operand's own walk starts fresh).
+.TP
+.B \-print
+Always true. Prints the entry's path, followed by a newline.
+.TP
+.BI "\-exec utility " "[argument ...]" " ;"
+Runs
+.I utility
+with the given arguments (any argument that is exactly
+.B {}
+is replaced with the entry's path), waits for it to finish, and is
+true if and only if it exits 0. The terminating
+.B ;
+must be its own argument.
+.TP
+.BI "\-exec utility " "[argument ...]" " {} +"
+Like the above, except the argument immediately before the final
+.B +
+must be exactly
+.BR {} ,
+and instead of running once per entry,
+.I utility
+is invoked one or more times, each with as many matched entries'
+paths appended as fit within a real command-line length limit. Every
+invocation of every
+.BR "{} +" -form
+.B \-exec
+or
+.B \-ok
+in the whole expression is deferred until the entire walk (of every
+.I path
+operand) has finished; none of them begin running while the walk is
+still in progress. Always true.
+.TP
+.BI "\-ok utility " "[argument ...]" " ;"
+Like the
+.B ;
+form of
+.BR \-exec ,
+but first prints the command and a
+.BR "? " ,
+and only actually runs it if a response read from standard input
+begins (after any leading blanks) with
+.B y
+or
+.BR Y ;
+otherwise it is false without running anything.
+.TP
+.BI "\-ok utility " "[argument ...]" " {} +"
+Like the
+.B {} +
+form of
+.BR \-exec ,
+but each batch is confirmed the same way, individually, before it
+runs.
+.SH OPERANDS
+.TP
+.I path
+A starting point for the walk. Up to 128 may be given; if none are
+given,
+.B .
+is used.
+.TP
+.I expression
+The expression described above. A wholly absent
+.I expression
+is equivalent to a bare
+.BR \-print .
+.SH APPLICATION USAGE
+.BR \-H " and " \-L ,
+which in the POSIX synopsis for
+.B find
+choose whether symbolic links named directly as
+.I path
+operands are followed, are not implemented; giving either is treated
+as an unknown predicate and reported as an error.
+.PP
+.BR \-xdev ", " \-nouser ", " \-nogroup ", and " \-depth
+are not implemented; each is refused with a diagnostic rather than
+silently ignored.
+.PP
+Because the underlying directory walk offers no way to skip just one
+subtree without also stopping the entire walk, a directory matched by
+.B \-prune
+still has its own contents read from the filesystem before being
+skipped; no action ever runs on anything under it, but that one read
+is not saved.
+.PP
+.B \-ok
+reads its confirmation from standard input directly, not from the
+controlling terminal; a piped standard input is consulted like any
+other.
+.SH EXIT STATUS
+.TP
+.B 0
+Every
+.I path
+operand was walked without error.
+.TP
+.B 1
+An error occurred while walking: an unreadable directory, a file that
+could not be stat'd, a
+.B \-exec
+or
+.B \-ok
+utility that could not be found or spawned, or an out-of-memory
+condition.
+.TP
+.B 2
+.I expression
+was malformed. This is reported immediately, before any walk begins.
+.SH SEE ALSO
+.BR xargs (1),
+.BR grep (1)
