@@ -5,6 +5,102 @@ struct node {
 	struct node *next;
 };
 
+__SIZE_TYPE__ untrusted_sentinel_length(const char *);
+
+__SIZE_TYPE__ inclusive_untrusted_length(const char *s)
+{
+	__SIZE_TYPE__ length = untrusted_sentinel_length(s);
+	__SIZE_TYPE__ i;
+	for (i = 0; i <= length; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+__SIZE_TYPE__ strlen(
+	const char * __attribute__((annotate("withtok:null_terminated"))));
+
+__SIZE_TYPE__ wcslen(const __WCHAR_TYPE__ *);
+
+__SIZE_TYPE__ missing_terminator_contract(const __WCHAR_TYPE__ *s)
+{
+	__SIZE_TYPE__ length = wcslen(s);
+	__SIZE_TYPE__ i;
+	for (i = 0; i <= length; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+__SIZE_TYPE__ indirect_sentinel_length(const char *s)
+{
+	__SIZE_TYPE__ (*scan)(const char *) = strlen;
+	__SIZE_TYPE__ length = scan(s);
+	__SIZE_TYPE__ i;
+	for (i = 0; i <= length; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+__SIZE_TYPE__ length_plus_one(const char *s)
+{
+	__SIZE_TYPE__ length = strlen(s) + 1;
+	__SIZE_TYPE__ i;
+	for (i = 0; i <= length; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+__SIZE_TYPE__ mutated_length_snapshot(const char *s)
+{
+	__SIZE_TYPE__ length = strlen(s);
+	__SIZE_TYPE__ i;
+	length++;
+	for (i = 0; i <= length; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+void mutate_size(__SIZE_TYPE__ *);
+
+__SIZE_TYPE__ aliased_length_snapshot(const char *s)
+{
+	__SIZE_TYPE__ length = strlen(s);
+	__SIZE_TYPE__ i;
+	mutate_size(&length);
+	for (i = 0; i <= length; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+static __SIZE_TYPE__ global_length_snapshot;
+
+__SIZE_TYPE__ global_sentinel_length(const char *s)
+{
+	__SIZE_TYPE__ i;
+	global_length_snapshot = strlen(s);
+	for (i = 0; i <= global_length_snapshot; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+__SIZE_TYPE__ volatile_sentinel_length(const char *s)
+{
+	volatile __SIZE_TYPE__ length = strlen(s);
+	__SIZE_TYPE__ i;
+	for (i = 0; i <= length; i++) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned short narrowed_sentinel_length(const char *s)
+{
+	__SIZE_TYPE__ raw = strlen(s);
+	unsigned short length = raw;
+	unsigned short i;
+	for (i = 0; i <= length; i++) { /* totality-expect */
+	}
+	return i;
+}
+
 void unconditional_loop(void)
 {
 	for (;;) { /* totality-expect */

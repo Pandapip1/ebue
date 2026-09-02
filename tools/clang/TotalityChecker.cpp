@@ -5,6 +5,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ParentMapContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/Basic/Builtins.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendPluginRegistry.h"
 #include "clang/Lex/Lexer.h"
@@ -2379,6 +2380,88 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return boundFitsRank(Bound, Variable, false);
   }
 
+  static bool nullTerminatedParameter(const FunctionDecl *Function,
+                                      unsigned Argument) {
+    if (!Function)
+      return false;
+    for (const FunctionDecl *Redeclaration : Function->redecls()) {
+      if (Argument >= Redeclaration->getNumParams())
+        continue;
+      for (const AnnotateAttr *Attribute :
+           Redeclaration->getParamDecl(Argument)->specific_attrs<AnnotateAttr>())
+        if (Attribute->getAnnotation() == "withtok:null_terminated")
+          return true;
+    }
+    return false;
+  }
+
+  bool trustedSentinelLength(const FunctionDecl *Function) const {
+    /* strlen/wcslen return the number of elements before a terminator that
+     * their parameter contract says exists in a valid finite C object.  The
+     * terminator therefore occupies the following element, so that count is
+     * strictly below the maximum of its size_t-like return domain.  Identity
+     * comes from clang's standard builtin table in standalone fixtures, or
+     * from this project's actual public declaration when -fno-builtin is in
+     * force; a same-named user function is not enough.  A visible replacement
+     * definition is rejected outright: inspecting only its return expressions
+     * would be unsound (a negative signed value can convert to SIZE_MAX), while
+     * the standard/header declaration is the existing semantic contract used
+     * by cross-translation-unit calls. */
+    if (!Function || !nullTerminatedParameter(Function, 0))
+      return false;
+    StringRef DeclaredName = Function->getName();
+    if (DeclaredName != "strlen" && DeclaredName != "wcslen")
+      return false;
+    unsigned BuiltinID = Function->getBuiltinID();
+    bool CompilerBuiltin = BuiltinID &&
+        Context.BuiltinInfo.getName(BuiltinID) == DeclaredName;
+    bool ProjectDeclaration = false;
+    for (const FunctionDecl *Redeclaration : Function->redecls()) {
+      StringRef Header = SM.getFilename(
+          SM.getExpansionLoc(Redeclaration->getLocation()));
+      ProjectDeclaration |=
+          (DeclaredName == "strlen" && Header == "include/string.h") ||
+          (DeclaredName == "wcslen" && Header == "include/wchar.h");
+    }
+    if (!CompilerBuiltin && !ProjectDeclaration)
+      return false;
+    return !Function->getDefinition();
+  }
+
+  bool sentinelLengthSnapshot(const Expr *Expression,
+                              const ValueDecl *Rank,
+                              std::vector<const VarDecl *> &Seen) const {
+    /* Carry the fact only through address-untaken, never-written automatic
+     * locals of exactly the rank's arithmetic type.  This admits direct
+     * snapshots and same-type copies without turning casts, arithmetic, or
+     * mutable aliases into range facts. */
+    const auto *Snapshot = dyn_cast_or_null<VarDecl>(value(Expression));
+    if (!Snapshot || !Current || !Snapshot->hasLocalStorage() ||
+        Snapshot->getType().isVolatileQualified() || !Snapshot->hasInit() ||
+        Snapshot->getType().getCanonicalType().getUnqualifiedType() !=
+            Rank->getType().getCanonicalType().getUnqualifiedType() ||
+        addressTaken(Current->getBody(), Snapshot) ||
+        writesVariable(Current->getBody(), Snapshot) ||
+        llvm::is_contained(Seen, Snapshot))
+      return false;
+    Seen.push_back(Snapshot);
+    const Expr *Initializer = ignore(Snapshot->getInit());
+    if (const auto *Call = dyn_cast_or_null<CallExpr>(Initializer)) {
+      const FunctionDecl *Callee = Call->getDirectCallee();
+      return Callee && Call->getNumArgs() == 1 &&
+             trustedSentinelLength(Callee) &&
+             Callee->getReturnType().getCanonicalType().getUnqualifiedType() ==
+                 Snapshot->getType().getCanonicalType().getUnqualifiedType();
+    }
+    return sentinelLengthSnapshot(Initializer, Rank, Seen);
+  }
+
+  bool sentinelLengthSnapshot(const Expr *Expression,
+                              const ValueDecl *Rank) const {
+    std::vector<const VarDecl *> Seen;
+    return sentinelLengthSnapshot(Expression, Rank, Seen);
+  }
+
   bool belowTypeMaximumAfterConversion(
       const Expr *Bound, const ValueDecl *Variable) const {
     const Expr *Source = ignore(Bound);
@@ -2398,7 +2481,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
           Constant.Val.getInt().isNegative())
         return false;
     }
-    return belowTypeMaximum(Bound, Variable);
+    return belowTypeMaximum(Bound, Variable) ||
+           sentinelLengthSnapshot(Bound, Variable);
   }
 
   bool atMostTypeMaximum(const Expr *Bound,
