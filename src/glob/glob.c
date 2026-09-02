@@ -28,12 +28,13 @@
 #include <limits.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <errno.h>
 #include "libc.h"
 #include "ownership_stubs.h"
 
 struct pv {
-	char **v;
+	char **v withtok(readable_elements(n)) withtok(writable_elements(cap));
 	size_t n, cap;
 };
 
@@ -64,13 +65,17 @@ static int pv_push(struct pv *p, char *s)
 	if (!s) return -1;
 	if (p->n == p->cap) {
 		char **old = p->v;
-		size_t nc;
+		size_t nc, bytes, oldbytes;
 		if (!__array_next_capacity(p->cap, p->n, 1, 16,
 		    sizeof *p->v, &nc)) { __free(s); errno = ENOMEM; return -1; }
-		char **nv = (char **)__malloc(nc * sizeof *nv);
+		bytes = nc * sizeof *p->v;
+		oldbytes = p->n * sizeof *p->v;
+		if (oldbytes > bytes) { __free(s); errno = ENOMEM; return -1; }
+		char **nv = (char **)__malloc(bytes);
 		if (!nv) { __free(s); return -1; }
 		if (old) {
-			memcpy((void *)nv, (const void *)old, p->n * sizeof *nv);
+			memcpy((void *)nv, (const void *)p->v,
+			    p->n * sizeof *p->v);
 		}
 		__free((void *)old);
 		p->v = nv;
@@ -206,10 +211,10 @@ static int join(char *out withtok(writable_span(outcap)), size_t outcap,
 		if (need >= outcap - 1) return -1;
 		need++;
 	}
-	memcpy(out, prefix, preflen);
-	memcpy(out + preflen, name, namelen);
-	if (want_slash) out[preflen + namelen] = '/';
-	out[need] = 0;
+	if (need > INT_MAX) return -1;
+	if (snprintf(out, outcap, "%s%s%s", prefix, name,
+	    want_slash ? "/" : "") != (int)need)
+		return -1;
 	*outlen = need;
 	return 0;
 }
@@ -381,15 +386,21 @@ static int do_glob(char *prefix withtok(readable_span(prefixcap)),
 		return pv_push(out, xstrdup(newprefix)) ? -1 : 0;
 	} else {
 		const char *dirpath = preflen ? prefix : ".";
-		char *segbuf = __malloc(seglen + 1);
+		char *segbuf;
 		int dot_ok;
 		DIR *dp;
 		struct dirent *d;
 		int rc = 0;
 
+		if (seglen > INT_MAX) { errno = ENOMEM; return -1; }
+		segbuf = __malloc(seglen + 1);
 		if (!segbuf) return -1;
-		memcpy(segbuf, pat, seglen);
-		segbuf[seglen] = 0;
+		if (snprintf(segbuf, seglen + 1, "%.*s", (int)seglen, pat) !=
+		    (int)seglen) {
+			__free(segbuf);
+			errno = ENOMEM;
+			return -1;
+		}
 		dot_ok = seglen > 0 && (pat[0] == '.' ||
 			(!(flags & GLOB_NOESCAPE) && pat[0] == '\\' && seglen > 1 && pat[1] == '.'));
 

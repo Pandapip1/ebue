@@ -1021,6 +1021,14 @@ public:
       if (ExtentSymbol && LengthSymbol) {
         if (State->contains<ProvenLessEqual>({LengthSymbol, ExtentSymbol}))
           return true;
+        /* A strict upper bound is stronger than the non-strict bound a
+         * span requires.  BranchCondition records `length < remaining`
+         * separately (notably from the false edge of
+         * `if (length >= remaining) return`), so retain that proof here
+         * instead of requiring source code to spell the equivalent `>`
+         * guard merely for the analyzer. */
+        if (State->contains<ProvenLessThan>({LengthSymbol, ExtentSymbol}))
+          return true;
         if (const auto *OffsetLength = dyn_cast<SymIntExpr>(LengthSymbol))
           if (OffsetLength->getOpcode() == BO_Add &&
               !OffsetLength->getRHS().isNegative() &&
@@ -1290,6 +1298,8 @@ public:
     if (!RemainingSymbol || !LengthSymbol)
       return false;
     if (State->contains<ProvenLessEqual>({LengthSymbol, RemainingSymbol}))
+      return true;
+    if (State->contains<ProvenLessThan>({LengthSymbol, RemainingSymbol}))
       return true;
     SymbolRef DynamicRemaining =
         getDynamicExtentWithOffset(State, Pointer).getAsSymbol();
