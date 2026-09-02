@@ -290,7 +290,8 @@ HARNESSES = strtod printf scanf utf path strptime strtol strftime \
             shparse inet string search getopt env time pathname getdate \
             iconv strfmon catgets m4 sed ed awk grep expr \
             resolv nsswitch patch pax ar \
-            util_printf tr find xargs cut
+            util_printf tr find xargs cut \
+            uudecode uuencode test
 EXES = $(HARNESSES:%=$(OUT)/fuzz_%)
 SHIM_OBJ = $(SHIM_SRC:%.c=$(OUT)/%.o)
 COVSHIM_OBJ = $(SHIM_SRC:%.c=$(COVOUT)/%.o)
