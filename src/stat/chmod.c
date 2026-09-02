@@ -28,7 +28,7 @@ int fchmod(int fd, mode_t mode) // NOLINT(bugprone-easily-swappable-parameters) 
 	path = __handle_path(f->h);
 	if (!path) { errno = e; return -1; }
 	r = fchmodat(AT_FDCWD, path, mode, 0);
-	free(path);
+	__free(path);
 	return r;
 }
 

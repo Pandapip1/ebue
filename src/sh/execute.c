@@ -1193,7 +1193,7 @@ static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int en
 	if (pid < 0 && errno == ENOEXEC &&
 	    run_interpreted(resolved, &we, &out->special) == 0)
 		ran = 1;
-	__free(resolved);
+	free(resolved);
 	wordfree(&we);
 	free_strv(envp, envn);
 	if (pid < 0) {

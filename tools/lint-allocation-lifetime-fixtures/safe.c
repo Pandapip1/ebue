@@ -10,6 +10,23 @@ void local_release(void)
 }
 
 withtok(heap_allocated)
+void *heap_boundary(size_t size)
+{
+	return backend_alloc(size);
+}
+
+void free(void *object consume(heap_allocated))
+{
+	backend_free(object);
+}
+
+withtok(widget_allocated)
+void *nested_boundary(size_t size)
+{
+	return heap_boundary(size);
+}
+
+withtok(heap_allocated)
 void *nullable_producer(void);
 
 withtok(heap_allocated)
@@ -68,6 +85,17 @@ void *make_widget(void) withtok(widget_allocated)
 void destroy_widget(void *widget consume(widget_allocated))
 {
 	free(widget);
+}
+
+withtok(widget_allocated)
+void *make_or_cleanup_widget(int fail)
+{
+	void *widget = malloc(16);
+	if (fail) {
+		destroy_widget(widget);
+		return 0;
+	}
+	return widget;
 }
 
 void use_contract(void)

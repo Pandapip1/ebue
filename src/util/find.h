@@ -3,9 +3,11 @@
 #ifndef UTIL_FIND_H
 #define UTIL_FIND_H
 
+#include <allocation_tokens.h>
 #include <ownership.h>
 
 tokdef find_expression_allocated
-	dynamic_storage;
+	dynamic_storage
+	implemented_by(heap_allocated);
 
 #endif

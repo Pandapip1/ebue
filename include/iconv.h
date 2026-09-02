@@ -40,6 +40,7 @@ extern "C" {
 #endif
 
 #include <features.h>
+#include <allocation_tokens.h>
 #include <ownership.h>
 
 #define __NEED_size_t
@@ -50,6 +51,7 @@ typedef void *iconv_t;
 
 tokdef iconv_opened
 	dynamic_storage
+	implemented_by(heap_allocated)
 	sentinel_exclude(-1);
 
 withtok(iconv_opened)

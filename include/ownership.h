@@ -15,6 +15,8 @@
 #define l_unlimited __attribute__((annotate("qual:l_unlimited")))
 #define implicit_drop __attribute__((annotate("qual:implicit_drop")))
 #define dynamic_storage __attribute__((annotate("qual:dynamic_storage")))
+#define implemented_by(token_name) \
+	__attribute__((annotate("qual:implemented_by=" #token_name)))
 #define string_literal __attribute__((annotate("qual:string_literal")))
 #define extent_at_least __attribute__((annotate("qual:extent_at_least")))
 #define element_extent __attribute__((annotate("qual:element_extent")))

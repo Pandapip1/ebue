@@ -1179,6 +1179,11 @@ stage_ownership() {
 		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
 	"$token_test" || return 1
 
+	lifecycle_test=$builddir/lifecycle-algebra-test
+	clang++-18 -std=c++17 -Wall -Wextra -Werror \
+		tools/clang/LifecycleAlgebraTest.cpp -o "$lifecycle_test" || return 1
+	"$lifecycle_test" || return 1
+
 	plugin=$builddir/ntlibc-ownership-checker.so
 	# llvm-config deliberately returns shell words, not one argument.
 	# shellcheck disable=SC2046

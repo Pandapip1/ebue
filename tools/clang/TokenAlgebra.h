@@ -251,7 +251,6 @@ enum class TokenImplementationStatus : uint8_t {
   Conflicting,
   Self,
   Cyclic,
-  Chained,
   Unsupported,
 };
 
@@ -303,11 +302,15 @@ rawTokenImplementation(const TokenSort *External) {
                                       Selected};
 }
 
-/* Resolve an exact, one-hop nominal implementation permission.  A mapping is
+/* Resolve an exact, one-edge nominal implementation permission.  A mapping is
  * not an equivalence: it is consumed only by lifecycle producer/freer
- * boundaries.  The referenced token must be a terminal dynamic-storage sort;
- * self references, cycles, and otherwise-valid chains are rejected so an
- * adapter cannot silently compose permissions. */
+ * boundaries, and the returned Internal is always the directly declared
+ * target.  The visible graph may contain further acyclic edges because real
+ * implementations have nested boundaries (public allocator -> platform
+ * allocator -> kernel allocator), but an adapter must cross those edges in
+ * separate boundary transitions.  Validate the whole reachable graph here so
+ * a malformed tail, unknown sort, unsupported sort, or cycle cannot make an
+ * otherwise plausible prefix usable. */
 inline TokenImplementation tokenImplementation(clang::ASTContext &Context,
                                                const TokenSort *External) {
   RawTokenImplementation Raw = rawTokenImplementation(External);
@@ -323,25 +326,23 @@ inline TokenImplementation tokenImplementation(clang::ASTContext &Context,
     return {TokenImplementationStatus::Unsupported, External, Internal};
 
   llvm::SmallPtrSet<const TokenSort *, 8> Seen;
-  Seen.insert(External);
-  const TokenSort *Current = Internal;
-  bool Chained = false;
+  const TokenSort *Current = External;
   for (;;) {
     if (!Seen.insert(Current).second)
       return {TokenImplementationStatus::Cyclic, External, Internal};
     RawTokenImplementation NextRaw = rawTokenImplementation(Current);
     if (NextRaw.Status == TokenImplementationStatus::Missing)
       break;
-    Chained = true;
     if (NextRaw.Status != TokenImplementationStatus::Valid)
-      return {TokenImplementationStatus::Chained, External, Internal};
+      return {NextRaw.Status, External, Internal};
     const TokenSort *Next = findTokenSort(Context, NextRaw.Name);
     if (!Next)
-      return {TokenImplementationStatus::Chained, External, Internal};
+      return {TokenImplementationStatus::UnknownFamily, External, Internal};
+    if (!hasQualifier(Current, "qual:dynamic_storage") ||
+        !hasQualifier(Next, "qual:dynamic_storage"))
+      return {TokenImplementationStatus::Unsupported, External, Internal};
     Current = Next;
   }
-  if (Chained)
-    return {TokenImplementationStatus::Chained, External, Internal};
   return {TokenImplementationStatus::Valid, External, Internal};
 }
 

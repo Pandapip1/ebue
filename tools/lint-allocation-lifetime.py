@@ -18,14 +18,25 @@ DIAGNOSTIC = re.compile(
     r"^(.*?):(\d+):(\d+): warning: "
     r"(dynamic allocation is not freed before function exit|"
     r"returned allocation has no dynamic-storage token contract|"
-    r"consume function exits without releasing its argument); "
+    r"consume function exits without releasing its argument|"
+    r"allocation lifecycle state is not proven|"
+    r"allocation is not proven live|"
+    r"allocation result overwrites a live allocation|"
+    r"allocation is already released|"
+    r"allocation family does not match operation|"
+    r"allocation family morphism is not proven|"
+    r"allocation family morphism does not match operation); "
     r"context '(.*)'; allocation '(.*)' \[ntlibc\.AllocationLifetime\]$"
 )
 CONTRACT = re.compile(
     r"^ntlibc-allocation-contract: "
     r"(returns-declaration|returns-definition-explicit|"
     r"returns-definition-inherited|definition|takes-declaration|"
-    r"takes-definition-explicit|takes-definition-inherited)"
+    r"takes-definition-explicit|takes-definition-inherited|"
+    r"implementation-valid|implementation-malformed|"
+    r"implementation-unknown-family|implementation-conflicting|"
+    r"implementation-self|implementation-cyclic|"
+    r"implementation-unsupported)"
     r"\t([^\t]+)\t([^\t]+)\t(.*)$"
 )
 
@@ -91,6 +102,12 @@ def validate_contracts(contracts: set[tuple[str, str, str]], fixture: bool) -> l
         elif kind == "takes-definition-inherited":
             inherited.setdefault(family, set()).add(function)
     errors = []
+    for kind, external, internal in sorted(contracts):
+        if kind.startswith("implementation-") and kind != "implementation-valid":
+            errors.append(
+                f"token family '{external}' has rejected implementation "
+                f"mapping '{internal}' ({kind.removeprefix('implementation-')})"
+            )
     for family, functions in sorted(producer_inherited.items()):
         for producer in sorted(functions - producer_explicit.get(family, set())):
             errors.append(

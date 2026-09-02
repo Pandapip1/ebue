@@ -71,10 +71,12 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <allocation_tokens.h>
 #include <ownership.h>
 
 tokdef child_environment_allocated
-	dynamic_storage;
+	dynamic_storage
+	implemented_by(internal_heap_allocated);
 
 /* ---- words --------------------------------------------------------------
  * `text` is the raw source text of the word: quotes and backslashes are

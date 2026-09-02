@@ -41,8 +41,51 @@ void broken_destroy(void *object consume(broken_allocated))
 void wrong_freer(void)
 {
 	void *object = make_broken();
-	free(object);
+	free(object); /* allocation-lifetime-expect: direct wrong-family release */
 } /* allocation-lifetime-expect: wrong-family */
+
+void double_release(void)
+{
+	void *object = malloc(8);
+	free(object);
+	free(object); /* allocation-lifetime-expect: double release */
+}
+
+withtok(widget_allocated)
+void *skip_implementation_edge(void)
+{
+	return backend_alloc(8); /* allocation-lifetime-expect: direct A-to-C producer */
+}
+
+void skip_release_edge(void)
+{
+	void *object = make_widget();
+	backend_free(object); /* allocation-lifetime-expect: direct A-to-C release */
+} /* allocation-lifetime-expect: direct A-to-C lifecycle havoc */
+
+withtok(missing_implementation_allocated)
+void *make_missing_implementation(void)
+{
+	return malloc(8); /* allocation-lifetime-expect: missing producer morphism */
+}
+
+void destroy_missing_implementation(
+	void *object consume(missing_implementation_allocated))
+{
+	free(object); /* allocation-lifetime-expect: missing freer morphism */
+} /* allocation-lifetime-expect: missing freer lifecycle havoc */
+
+withtok(sentinel_implementation_allocated)
+void *make_wrong_implementation(void)
+{
+	return malloc(8); /* allocation-lifetime-expect: wrong producer morphism */
+}
+
+void destroy_wrong_implementation(
+	void *object consume(sentinel_implementation_allocated))
+{
+	free(object); /* allocation-lifetime-expect: wrong freer morphism */
+} /* allocation-lifetime-expect: wrong freer lifecycle havoc */
 
 void leaked_sentinel_result(int fail)
 {
@@ -60,3 +103,7 @@ void inherited_destroy(void *object)
 {
 	free(object);
 } /* allocation-contract-expect: inherited attribute is an error */
+
+/* allocation-contract-expect: unknown implementation family is an error */
+/* allocation-contract-expect: malformed implementation is an error */
+/* allocation-contract-expect: conflicting implementation is an error */

@@ -14,11 +14,13 @@ extern "C" {
 #endif
 
 #include <features.h>
+#include <allocation_tokens.h>
 #include <ownership.h>
 #include <memory_tokens.h>
 
 tokdef directory_stream_open
-	dynamic_storage;
+	dynamic_storage
+	implemented_by(internal_heap_allocated);
 
 #define __NEED_ino_t
 #define __NEED_off_t

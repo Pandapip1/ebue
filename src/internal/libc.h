@@ -22,9 +22,6 @@
 #include "thread_annotations.h"
 #include "plat_handle.h"
 
-tokdef internal_heap_allocated
-	dynamic_storage;
-
 /* ---- lockset (Clang Thread Safety Analysis) capability tokens ---------
  * Two internal locks get a NTLIBC_CAPABILITY token here: __sig_lock()/
  * __sig_unlock() (a real function pair, acquire/release-annotated

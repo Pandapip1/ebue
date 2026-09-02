@@ -75,11 +75,17 @@ char *realpath(const char *__restrict path,
 	for (q = p; *q; q++) if (*q == '\\') *q = '/';
 	len = strlen(p);
 	if (len > 3 && p[len-1] == '/') p[--len] = 0;
-	if (!resolved) return p;
-	if (len + 1 > PATH_MAX) { free(p); errno = ENAMETOOLONG; return 0; }
+	if (!resolved) {
+		resolved = malloc(len + 1);
+		if (!resolved) { __free(p); return 0; }
+		memcpy(resolved, p, len + 1);
+		__free(p);
+		return resolved;
+	}
+	if (len + 1 > PATH_MAX) { __free(p); errno = ENAMETOOLONG; return 0; }
 	__ownership_writable_span(resolved, len + 1);
 	memcpy(resolved, p, len + 1);
-	free(p);
+	__free(p);
 	return resolved;
 }
 

@@ -249,6 +249,12 @@ typedef struct { char byte; } self_mapping
 typedef struct { char byte; } chained_mapping
   __attribute__((annotate("qual:dynamic_storage"),
                  annotate("qual:implemented_by=wrapper_family")));
+typedef struct { char byte; } chained_malformed
+  __attribute__((annotate("qual:dynamic_storage"),
+                 annotate("qual:implemented_by=malformed_mapping")));
+typedef struct { char byte; } chained_unknown
+  __attribute__((annotate("qual:dynamic_storage"),
+                 annotate("qual:implemented_by=unknown_mapping")));
 typedef struct cycle_a cycle_a
   __attribute__((annotate("qual:dynamic_storage"),
                  annotate("qual:implemented_by=cycle_b")));
@@ -323,9 +329,17 @@ typedef struct { char byte; } unsupported_internal
   Passed &= require(Implementation("self_mapping").Status ==
                         TokenImplementationStatus::Self,
                     "self implementation was accepted");
-  Passed &= require(Implementation("chained_mapping").Status ==
-                        TokenImplementationStatus::Chained,
-                    "chained implementation was accepted");
+  TokenImplementation Chained = Implementation("chained_mapping");
+  Passed &= require(Chained.valid() &&
+                        Chained.Internal ==
+                            findTokenSort(Context, "wrapper_family"),
+                    "valid acyclic graph did not preserve its direct edge");
+  Passed &= require(Implementation("chained_malformed").Status ==
+                        TokenImplementationStatus::Malformed,
+                    "malformed graph tail was accepted");
+  Passed &= require(Implementation("chained_unknown").Status ==
+                        TokenImplementationStatus::UnknownFamily,
+                    "unknown graph tail was accepted");
   Passed &= require(Implementation("cycle_a").Status ==
                         TokenImplementationStatus::Cyclic,
                     "cyclic implementation was accepted");

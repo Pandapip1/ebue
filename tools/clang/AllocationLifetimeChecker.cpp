@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: (C) 2026 Gavin John
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "LifecycleAlgebra.h"
+#include "TokenAlgebra.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/Expr.h"
@@ -12,7 +14,6 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
-#include "TokenAlgebra.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -29,14 +30,39 @@ REGISTER_MAP_WITH_PROGRAMSTATE(AllocationFrame, SymbolRef,
                                const StackFrameContext *)
 REGISTER_MAP_WITH_PROGRAMSTATE(AllocationFamily, SymbolRef,
                                const IdentifierInfo *)
+REGISTER_MAP_WITH_PROGRAMSTATE(AllocationLifecycle, SymbolRef,
+                               ntlibc::algebra::LifecycleState)
 REGISTER_MAP_WITH_PROGRAMSTATE(FreerObligation, SymbolRef, bool)
 REGISTER_MAP_WITH_PROGRAMSTATE(ReplacedBy, SymbolRef, SymbolRef)
 
 namespace {
 
+using ntlibc::algebra::absentLifecycle;
+using ntlibc::algebra::applyLifecycleOperation;
+using ntlibc::algebra::contains;
+using ntlibc::algebra::dischargeLifecycle;
 using ntlibc::algebra::excludedSentinel;
 using ntlibc::algebra::findTokenSort;
 using ntlibc::algebra::hasQualifier;
+using ntlibc::algebra::LifecycleEvent;
+using ntlibc::algebra::LifecycleFact;
+using ntlibc::algebra::LifecycleFamilyId;
+using ntlibc::algebra::LifecycleFamilyMorphism;
+using ntlibc::algebra::LifecycleMorphismTransition;
+using ntlibc::algebra::LifecycleOperation;
+using ntlibc::algebra::LifecycleState;
+using ntlibc::algebra::LifecycleTransition;
+using ntlibc::algebra::liveLifecycle;
+using ntlibc::algebra::observeLifecycleExit;
+using ntlibc::algebra::replaceLifecycle;
+using ntlibc::algebra::ReplacementOutcome;
+using ntlibc::algebra::RawTokenImplementation;
+using ntlibc::algebra::rawTokenImplementation;
+using ntlibc::algebra::retagLifecycle;
+using ntlibc::algebra::TokenImplementation;
+using ntlibc::algebra::TokenImplementationStatus;
+using ntlibc::algebra::tokenImplementation;
+using ntlibc::algebra::unknownLifecycle;
 
 struct TokenContract {
   const IdentifierInfo *Family;
@@ -81,15 +107,6 @@ returnsOwnership(const FunctionDecl *Function) {
   return std::nullopt;
 }
 
-static bool takesAnyArgument(const FunctionDecl *Function, unsigned Argument) {
-  if (!Function)
-    return false;
-  if (Argument < Function->getNumParams() &&
-      annotationFamily(Function->getParamDecl(Argument), "consume:"))
-    return true;
-  return false;
-}
-
 /* A reallocation input is consumed only when the returned pointer is nonnull.
  * This remains declaration-driven: the checker contains no allocator names. */
 static std::optional<unsigned>
@@ -106,8 +123,8 @@ reallocatedArgument(const FunctionDecl *Function) {
 /* Some POSIX interfaces return the caller's buffer when it is nonnull and
  * allocate one only when that argument is null.  The ordinary returns
  * attribute would incorrectly make both results owned. */
-static std::optional<unsigned>
-returnedArgument(const FunctionDecl *Function, const IdentifierInfo *Family) {
+static std::optional<unsigned> returnedArgument(const FunctionDecl *Function,
+                                                const IdentifierInfo *Family) {
   if (!Function)
     return std::nullopt;
   if (!Family)
@@ -123,16 +140,6 @@ returnedArgument(const FunctionDecl *Function, const IdentifierInfo *Family) {
     ++Argument;
   }
   return std::nullopt;
-}
-
-static bool takesArgument(const FunctionDecl *Function,
-                          const IdentifierInfo *Family, unsigned Argument) {
-  if (!Function || !Family)
-    return false;
-  if (Argument < Function->getNumParams() &&
-      annotationFamily(Function->getParamDecl(Argument), "consume:") == Family)
-    return true;
-  return false;
 }
 
 static std::string sourceText(const Stmt *Statement, CheckerContext &C) {
@@ -165,11 +172,88 @@ static std::string contextName(CheckerContext &C) {
   return Current ? Current->getDeclKindName() : "unknown";
 }
 
+static StringRef implementationStatusName(TokenImplementationStatus Status) {
+  switch (Status) {
+  case TokenImplementationStatus::Missing:
+    return "missing";
+  case TokenImplementationStatus::Valid:
+    return "valid";
+  case TokenImplementationStatus::Malformed:
+    return "malformed";
+  case TokenImplementationStatus::UnknownFamily:
+    return "unknown-family";
+  case TokenImplementationStatus::Conflicting:
+    return "conflicting";
+  case TokenImplementationStatus::Self:
+    return "self";
+  case TokenImplementationStatus::Cyclic:
+    return "cyclic";
+  case TokenImplementationStatus::Unsupported:
+    return "unsupported";
+  }
+  return "unsupported";
+}
+
 class AllocationLifetimeChecker
-    : public Checker<check::ASTDecl<FunctionDecl>, check::BeginFunction,
+    : public Checker<check::ASTDecl<FunctionDecl>,
+                     check::ASTDecl<TypedefNameDecl>, check::BeginFunction,
                      check::PreCall, check::PostCall,
                      check::PostStmt<BinaryOperator>, check::EndFunction> {
   mutable std::unique_ptr<BugType> BT;
+
+  static LifecycleFamilyId familyId(const IdentifierInfo *Family) {
+    return {static_cast<uint64_t>(reinterpret_cast<std::uintptr_t>(Family))};
+  }
+
+  static LifecycleFamilyId familyId(const ntlibc::algebra::TokenSort *Family) {
+    return familyId(Family ? Family->getIdentifier() : nullptr);
+  }
+
+  static std::optional<LifecycleFamilyMorphism>
+  implementationMorphism(ASTContext &Context,
+                         const IdentifierInfo *External) {
+    TokenImplementation Implementation = tokenImplementation(
+        Context, findTokenSort(Context, External ? External->getName() : ""));
+    if (!Implementation.valid())
+      return std::nullopt;
+    return LifecycleFamilyMorphism{familyId(Implementation.External),
+                                   familyId(Implementation.Internal)};
+  }
+
+  static bool hasLifecycleFact(ProgramStateRef State, SymbolRef Symbol) {
+    return Symbol && State->get<AllocationLifecycle>(Symbol);
+  }
+
+  static LifecycleFact lifecycleFor(ProgramStateRef State, SymbolRef Symbol) {
+    if (!Symbol)
+      return unknownLifecycle();
+    const LifecycleState *Phase = State->get<AllocationLifecycle>(Symbol);
+    if (!Phase)
+      return unknownLifecycle();
+    if (*Phase == LifecycleState::Unknown)
+      return unknownLifecycle();
+    if (*Phase == LifecycleState::Absent)
+      return absentLifecycle();
+    const IdentifierInfo *const *Family = State->get<AllocationFamily>(Symbol);
+    LifecycleFamilyId Id =
+        Family ? familyId(*Family) : ntlibc::algebra::NoLifecycleFamily;
+    return {*Phase, Id};
+  }
+
+  static ProgramStateRef setLifecycleFact(ProgramStateRef State,
+                                          SymbolRef Symbol, LifecycleFact Fact,
+                                          const IdentifierInfo *Family) {
+    if (!Symbol)
+      return State;
+    State = State->set<AllocationLifecycle>(Symbol, Fact.State);
+    if ((Fact.State == LifecycleState::Live ||
+         Fact.State == LifecycleState::Released) &&
+        Family)
+      return State->set<AllocationFamily>(Symbol, Family);
+    if (Fact.State == LifecycleState::Absent)
+      return State->remove<AllocationFamily>(Symbol);
+    return State;
+  }
 
   static ProgramStateRef forget(ProgramStateRef State, SymbolRef Symbol) {
     if (!Symbol)
@@ -177,6 +261,7 @@ class AllocationLifetimeChecker
     return State->remove<AllocationOrigin>(Symbol)
         ->remove<AllocationFrame>(Symbol)
         ->remove<AllocationFamily>(Symbol)
+        ->remove<AllocationLifecycle>(Symbol)
         ->remove<FreerObligation>(Symbol)
         ->remove<ReplacedBy>(Symbol);
   }
@@ -191,13 +276,15 @@ class AllocationLifetimeChecker
     State = State->set<AllocationOrigin>(Symbol, Origin);
     State = State->set<AllocationFrame>(Symbol, Frame);
     State = State->set<AllocationFamily>(Symbol, Family);
+    LifecycleTransition Acquired = applyLifecycleOperation(
+        absentLifecycle(), familyId(Family), LifecycleOperation::Acquire);
+    State = State->set<AllocationLifecycle>(Symbol, Acquired.After.State);
     return State->set<FreerObligation>(Symbol, IsFreerObligation);
   }
 
   static bool belongsToFrame(ProgramStateRef State, SymbolRef Symbol,
                              const StackFrameContext *Frame) {
-    const StackFrameContext *const *Owner =
-        State->get<AllocationFrame>(Symbol);
+    const StackFrameContext *const *Owner = State->get<AllocationFrame>(Symbol);
     return Owner && *Owner == Frame;
   }
 
@@ -235,7 +322,7 @@ class AllocationLifetimeChecker
    * before checkEndFunction, but `if (replacement) free(replacement); else
    * free(old);` has the decisive fact available at each of these two calls. */
   static ProgramStateRef retireReallocationPeer(ProgramStateRef State,
-                                                 SymbolRef Consumed) {
+                                                SymbolRef Consumed) {
     SymbolRef Current = Consumed;
     for (;;) {
       SymbolRef Predecessor = nullptr;
@@ -261,17 +348,55 @@ class AllocationLifetimeChecker
     if (!BT)
       BT = std::make_unique<BugType>(this, "Unreleased dynamic allocation",
                                      categories::MemoryError);
-    std::string Message =
-        (Reason + "; context '" + contextName(C) + "'; allocation '" +
-         sourceText(Statement, C) + "'")
-            .str();
+    std::string Message = (Reason + "; context '" + contextName(C) +
+                           "'; allocation '" + sourceText(Statement, C) + "'")
+                              .str();
     auto Report = std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
     if (Statement)
       Report->addRange(Statement->getSourceRange());
     C.emitReport(std::move(Report));
   }
 
+  void reportLifecycleEvents(LifecycleEvent Events, const Stmt *Statement,
+                             ProgramStateRef State, CheckerContext &C) const {
+    if (contains(Events, LifecycleEvent::StateUnproven))
+      report("allocation lifecycle state is not proven", Statement, State, C);
+    if (contains(Events, LifecycleEvent::MissingLive))
+      report("allocation is not proven live", Statement, State, C);
+    if (contains(Events, LifecycleEvent::AlreadyLive))
+      report("allocation result overwrites a live allocation", Statement, State,
+             C);
+    if (contains(Events, LifecycleEvent::AlreadyReleased))
+      report("allocation is already released", Statement, State, C);
+    if (contains(Events, LifecycleEvent::FamilyMismatch))
+      report("allocation family does not match operation", Statement, State, C);
+    if (contains(Events, LifecycleEvent::MorphismMissing))
+      report("allocation family morphism is not proven", Statement, State, C);
+    if (contains(Events, LifecycleEvent::MorphismMismatch))
+      report("allocation family morphism does not match operation", Statement,
+             State, C);
+  }
+
 public:
+  void checkASTDecl(const TypedefNameDecl *Token, AnalysisManager &,
+                    BugReporter &) const {
+    RawTokenImplementation Raw = rawTokenImplementation(Token);
+    if (Raw.Status == TokenImplementationStatus::Missing)
+      return;
+    TokenImplementation Implementation =
+        tokenImplementation(Token->getASTContext(), Token);
+    const SourceManager &SM = Token->getASTContext().getSourceManager();
+    SourceLocation Location = SM.getExpansionLoc(Token->getLocation());
+    StringRef Internal =
+        Implementation.Internal ? Implementation.Internal->getName() : Raw.Name;
+    llvm::errs() << "ntlibc-allocation-contract: implementation-"
+                 << implementationStatusName(Implementation.Status) << '\t'
+                 << Token->getName() << '\t'
+                 << (Internal.empty() ? StringRef("-") : Internal) << '\t'
+                 << SM.getFilename(Location) << '\t'
+                 << SM.getSpellingLineNumber(Location) << '\n';
+  }
+
   void checkASTDecl(const FunctionDecl *Function, AnalysisManager &,
                     BugReporter &) const {
     if (!Function->getIdentifier())
@@ -291,14 +416,13 @@ public:
           Family.contains(':') ||
           !isDynamicStorageToken(Function->getASTContext(), Family))
         continue;
-      StringRef Kind = !Function->doesThisDeclarationHaveABody()
-                           ? "returns-declaration"
-                           : Attribute->isInherited()
-                                 ? "returns-definition-inherited"
-                                 : "returns-definition-explicit";
-      llvm::errs() << "ntlibc-allocation-contract: " << Kind << '\t'
-                   << Family << '\t' << Function->getName() << '\t' << Path
-                   << '\t' << Line << '\n';
+      StringRef Kind =
+          !Function->doesThisDeclarationHaveABody() ? "returns-declaration"
+          : Attribute->isInherited() ? "returns-definition-inherited"
+                                     : "returns-definition-explicit";
+      llvm::errs() << "ntlibc-allocation-contract: " << Kind << '\t' << Family
+                   << '\t' << Function->getName() << '\t' << Path << '\t'
+                   << Line << '\n';
     }
     unsigned Argument = 1;
     for (const ParmVarDecl *Parameter : Function->parameters()) {
@@ -309,14 +433,13 @@ public:
             Family.contains(':') ||
             !isDynamicStorageToken(Function->getASTContext(), Family))
           continue;
-        StringRef Kind = !Function->doesThisDeclarationHaveABody()
-                             ? "takes-declaration"
-                             : Attribute->isInherited()
-                                   ? "takes-definition-inherited"
-                                   : "takes-definition-explicit";
-        llvm::errs() << "ntlibc-allocation-contract: " << Kind << '\t'
-                     << Family << '\t' << Function->getName() << '\t'
-                     << Argument << '\t' << Path << '\t' << Line << '\n';
+        StringRef Kind =
+            !Function->doesThisDeclarationHaveABody() ? "takes-declaration"
+            : Attribute->isInherited() ? "takes-definition-inherited"
+                                       : "takes-definition-explicit";
+        llvm::errs() << "ntlibc-allocation-contract: " << Kind << '\t' << Family
+                     << '\t' << Function->getName() << '\t' << Argument << '\t'
+                     << Path << '\t' << Line << '\n';
       }
       ++Argument;
     }
@@ -338,8 +461,8 @@ public:
     for (const auto &[Family, Parameter] : Inputs) {
       llvm::SmallVector<ProgramStateRef, 4> NextStates;
       for (ProgramStateRef State : States) {
-        SVal Value = State->getSVal(
-            State->getLValue(Parameter, C.getLocationContext()));
+        SVal Value =
+            State->getSVal(State->getLValue(Parameter, C.getLocationContext()));
         SymbolRef Symbol = Value.getAsLocSymbol(true);
         std::optional<DefinedOrUnknownSVal> Defined =
             Value.getAs<DefinedOrUnknownSVal>();
@@ -348,9 +471,8 @@ public:
           continue;
         }
         ProgramStateRef ValueState = State;
-        if (std::optional<int64_t> Sentinel =
-                excludedSentinel(findTokenSort(Function->getASTContext(),
-                                               Family->getName()))) {
+        if (std::optional<int64_t> Sentinel = excludedSentinel(
+                findTokenSort(Function->getASTContext(), Family->getName()))) {
           DefinedSVal SentinelValue = C.getSValBuilder().makeIntVal(
               static_cast<uint64_t>(*Sentinel), Parameter->getType());
           DefinedOrUnknownSVal IsSentinel =
@@ -385,22 +507,78 @@ public:
     bool Changed = false;
     const FunctionDecl *Function = functionOf(Call);
     for (unsigned Argument = 0; Argument < Call.getNumArgs(); ++Argument) {
-      SymbolRef Symbol = Call.getArgSVal(Argument).getAsLocSymbol(true);
-      if (!Symbol)
+      if (!Function || Argument >= Function->getNumParams())
         continue;
-      const IdentifierInfo *const *Family =
-          State->get<AllocationFamily>(Symbol);
-      if (!Family)
+      const IdentifierInfo *Expected =
+          annotationFamily(Function->getParamDecl(Argument), "consume:");
+      if (!Expected)
+        continue;
+      SymbolRef Symbol = Call.getArgSVal(Argument).getAsLocSymbol(true);
+      if (!hasLifecycleFact(State, Symbol))
         continue;
       const bool *Freer = State->get<FreerObligation>(Symbol);
-      bool Consumed = takesArgument(Function, *Family, Argument) ||
-                      (Freer && *Freer &&
-                       belongsToFrame(State, Symbol, C.getStackFrame()) &&
-                       takesAnyArgument(Function, Argument));
-      if (!Consumed)
-        continue;
-      State = retireReallocationPeer(State, Symbol);
-      State = forget(State, Symbol);
+      const IdentifierInfo *const *Actual =
+          State->get<AllocationFamily>(Symbol);
+      bool ScopedDischarge =
+          Freer && *Freer && belongsToFrame(State, Symbol, C.getStackFrame());
+      const auto *CurrentFunction = dyn_cast_or_null<FunctionDecl>(
+          C.getLocationContext()->getDecl());
+      std::optional<TokenContract> CurrentReturns =
+          returnsOwnership(CurrentFunction);
+      bool ScopedProducerCleanup =
+          (!Freer || !*Freer) && Actual && *Actual != Expected &&
+          belongsToFrame(State, Symbol, C.getStackFrame()) && CurrentReturns &&
+          CurrentReturns->Family == Expected;
+      LifecycleFact After;
+      LifecycleEvent Events;
+      const IdentifierInfo *ResultFamily = Expected;
+      if (ScopedDischarge && Actual && *Actual == Expected) {
+        LifecycleTransition Released = applyLifecycleOperation(
+            lifecycleFor(State, Symbol), familyId(Expected),
+            LifecycleOperation::Release);
+        After = Released.After;
+        Events = Released.Events;
+      } else if (ScopedDischarge) {
+        std::optional<LifecycleFamilyMorphism> Permission =
+            Actual ? implementationMorphism(C.getASTContext(), *Actual)
+                   : std::nullopt;
+        LifecycleFamilyMorphism Morphism = Permission.value_or(
+            LifecycleFamilyMorphism{ntlibc::algebra::NoLifecycleFamily,
+                                     ntlibc::algebra::NoLifecycleFamily});
+        LifecycleMorphismTransition Discharged = dischargeLifecycle(
+            lifecycleFor(State, Symbol), familyId(Expected), Morphism);
+        After = Discharged.After;
+        Events = Discharged.Events;
+        if (Actual)
+          ResultFamily = *Actual;
+      } else if (ScopedProducerCleanup) {
+        std::optional<LifecycleFamilyMorphism> Permission =
+            implementationMorphism(C.getASTContext(), Expected);
+        LifecycleFamilyMorphism Morphism = Permission.value_or(
+            LifecycleFamilyMorphism{ntlibc::algebra::NoLifecycleFamily,
+                                     ntlibc::algebra::NoLifecycleFamily});
+        LifecycleMorphismTransition Retagged = retagLifecycle(
+            lifecycleFor(State, Symbol), familyId(Expected), Morphism);
+        After = Retagged.After;
+        Events = Retagged.Events;
+        if (Retagged.permitted()) {
+          LifecycleTransition Released = applyLifecycleOperation(
+              Retagged.After, familyId(Expected), LifecycleOperation::Release);
+          After = Released.After;
+          Events = Events | Released.Events;
+        }
+      } else {
+        LifecycleTransition Released = applyLifecycleOperation(
+            lifecycleFor(State, Symbol), familyId(Expected),
+            LifecycleOperation::Release);
+        After = Released.After;
+        Events = Released.Events;
+      }
+      if (After.State == LifecycleState::Released)
+        State = retireReallocationPeer(State, Symbol);
+      State = setLifecycleFact(State, Symbol, After, ResultFamily);
+      if (const Stmt *Statement = Call.getOriginExpr())
+        reportLifecycleEvents(Events, Statement, State, C);
       Changed = true;
     }
     if (Changed)
@@ -437,9 +615,8 @@ public:
         ReturnValue.getAs<DefinedOrUnknownSVal>();
     if (!Defined)
       return;
-    if (std::optional<int64_t> Sentinel =
-            excludedSentinel(findTokenSort(Function->getASTContext(),
-                                           Returns->Family->getName()))) {
+    if (std::optional<int64_t> Sentinel = excludedSentinel(findTokenSort(
+            Function->getASTContext(), Returns->Family->getName()))) {
       DefinedSVal SentinelValue = C.getSValBuilder().makeIntVal(
           static_cast<uint64_t>(*Sentinel), Function->getReturnType());
       DefinedOrUnknownSVal IsSentinel =
@@ -452,20 +629,51 @@ public:
       State = ValueState;
     }
     auto [NonNullState, NullState] = State->assume(*Defined);
-    if (NullState)
+    std::optional<unsigned> Reallocated = reallocatedArgument(Function);
+    SymbolRef Old = Reallocated && *Reallocated < Call.getNumArgs()
+                        ? Call.getArgSVal(*Reallocated).getAsLocSymbol(true)
+                        : nullptr;
+    const IdentifierInfo *Family = Returns->Family;
+    if (NullState) {
+      if (Old && hasLifecycleFact(NullState, Old)) {
+        LifecycleFact Source = lifecycleFor(NullState, Old);
+        auto Failed = replaceLifecycle(Source, absentLifecycle(),
+                                       ReplacementOutcome::Failed,
+                                       {familyId(Family), true});
+        NullState =
+            setLifecycleFact(NullState, Old, Failed.SourceAfter, Family);
+        if (const Stmt *Statement = Call.getOriginExpr())
+          reportLifecycleEvents(Failed.Events, Statement, NullState, C);
+      }
       C.addTransition(NullState);
+    }
     if (!NonNullState)
       return;
-    const IdentifierInfo *Family = Returns->Family;
+    /* An inlined forwarding wrapper (for example reallocarray -> realloc)
+     * produces both inner and outer PostCall events for the same successful
+     * replacement.  ReplacedBy records that the inner contract already
+     * consumed this generation on the current path; applying the lifecycle
+     * table a second time would manufacture a double-release event. */
+    bool ReplacementAlreadyApplied =
+        Old && hasLifecycleFact(NonNullState, Old) &&
+        replacedOnThisPath(NonNullState, Old, C);
+    if (Reallocated && !ReplacementAlreadyApplied) {
+      LifecycleFact Source = Old && hasLifecycleFact(NonNullState, Old)
+                                 ? lifecycleFor(NonNullState, Old)
+                                 : absentLifecycle();
+      auto Succeeded = replaceLifecycle(Source, absentLifecycle(),
+                                        ReplacementOutcome::Succeeded,
+                                        {familyId(Family), true});
+      if (Old && hasLifecycleFact(NonNullState, Old))
+        NonNullState =
+            setLifecycleFact(NonNullState, Old, Succeeded.SourceAfter, Family);
+      if (const Stmt *Statement = Call.getOriginExpr())
+        reportLifecycleEvents(Succeeded.Events, Statement, NonNullState, C);
+    }
     NonNullState = track(NonNullState, Result, Call.getOriginExpr(),
                          C.getStackFrame(), Family, false);
-    if (std::optional<unsigned> Argument =
-            reallocatedArgument(functionOf(Call));
-        Argument && *Argument < Call.getNumArgs()) {
-      SymbolRef Old = Call.getArgSVal(*Argument).getAsLocSymbol(true);
-      if (Old && NonNullState->get<AllocationFamily>(Old))
-        NonNullState = NonNullState->set<ReplacedBy>(Old, Result);
-    }
+    if (Old && hasLifecycleFact(NonNullState, Old))
+      NonNullState = NonNullState->set<ReplacedBy>(Old, Result);
     C.addTransition(NonNullState);
   }
 
@@ -475,25 +683,28 @@ public:
    * and that a linear source is not copied.  This is what lets a composite
    * owner collect children without making every constructor look like it
    * leaked each child at function exit. */
-  void checkPostStmt(const BinaryOperator *Statement,
-                     CheckerContext &C) const {
+  void checkPostStmt(const BinaryOperator *Statement, CheckerContext &C) const {
     if (!Statement->isAssignmentOp())
       return;
-    const ValueDecl *Destination =
-        destinationDeclaration(Statement->getLHS());
+    const ValueDecl *Destination = destinationDeclaration(Statement->getLHS());
     const IdentifierInfo *DestinationFamily =
         annotationFamily(Destination, "withtok:");
     if (!DestinationFamily)
       return;
-    SymbolRef Source =
-        C.getSVal(Statement->getRHS()).getAsLocSymbol(true);
+    SymbolRef Source = C.getSVal(Statement->getRHS()).getAsLocSymbol(true);
     if (!Source)
       return;
     ProgramStateRef State = C.getState();
     const IdentifierInfo *const *SourceFamily =
         State->get<AllocationFamily>(Source);
-    if (!SourceFamily || *SourceFamily != DestinationFamily ||
+    if (!SourceFamily || !hasLifecycleFact(State, Source) ||
         !belongsToFrame(State, Source, C.getStackFrame()))
+      return;
+    LifecycleTransition Transfer = applyLifecycleOperation(
+        lifecycleFor(State, Source), familyId(DestinationFamily),
+        LifecycleOperation::RequireLive);
+    reportLifecycleEvents(Transfer.Events, Statement, State, C);
+    if (!Transfer.permitted())
       return;
     C.addTransition(forget(State, Source));
   }
@@ -515,23 +726,62 @@ public:
                Origin ? *Origin : Return, State, C);
         return;
       }
-      State = forget(State, Returned);
+      const IdentifierInfo *const *Actual =
+          State->get<AllocationFamily>(Returned);
+      LifecycleFact After;
+      LifecycleEvent Events;
+      bool Permitted = false;
+      if (Actual && *Actual == Returns->Family) {
+        LifecycleTransition Transfer = applyLifecycleOperation(
+            lifecycleFor(State, Returned), familyId(Returns->Family),
+            LifecycleOperation::RequireLive);
+        After = Transfer.After;
+        Events = Transfer.Events;
+        Permitted = Transfer.permitted();
+      } else {
+        std::optional<LifecycleFamilyMorphism> Permission =
+            implementationMorphism(C.getASTContext(), Returns->Family);
+        LifecycleFamilyMorphism Morphism = Permission.value_or(
+            LifecycleFamilyMorphism{ntlibc::algebra::NoLifecycleFamily,
+                                     ntlibc::algebra::NoLifecycleFamily});
+        LifecycleMorphismTransition Transfer = retagLifecycle(
+            lifecycleFor(State, Returned), familyId(Returns->Family),
+            Morphism);
+        After = Transfer.After;
+        Events = Transfer.Events;
+        Permitted = Transfer.permitted();
+      }
+      if (Permitted) {
+        State = forget(State, Returned);
+      } else {
+        State = setLifecycleFact(State, Returned, After,
+                                 Actual ? *Actual : Returns->Family);
+      }
+      reportLifecycleEvents(Events, Return, State, C);
     }
 
-    for (const auto &Entry : State->get<AllocationFamily>()) {
+    for (const auto &Entry : State->get<AllocationLifecycle>()) {
       SymbolRef Symbol = Entry.first;
       if (!belongsToFrame(State, Symbol, C.getStackFrame()) ||
           replacedOnThisPath(State, Symbol, C) ||
           !canBeNonNull(State, Symbol, C))
         continue;
+      auto Observation = observeLifecycleExit(lifecycleFor(State, Symbol));
+      if (Observation.Events == LifecycleEvent::None)
+        continue;
       const Stmt *const *Origin = State->get<AllocationOrigin>(Symbol);
       const bool *Freer = State->get<FreerObligation>(Symbol);
-      report(Freer && *Freer
-                 ? "consume function exits without releasing its argument"
-                 : "dynamic allocation is not freed before function exit",
-             Origin ? *Origin : (Return ? static_cast<const Stmt *>(Return)
-                                        : Function ? Function->getBody() : nullptr),
-             State, C);
+      const Stmt *Site = Origin ? *Origin
+                                : (Return ? static_cast<const Stmt *>(Return)
+                                   : Function ? Function->getBody()
+                                              : nullptr);
+      if (contains(Observation.Events, LifecycleEvent::StateUnproven))
+        report("allocation lifecycle state is not proven", Site, State, C);
+      else
+        report(Freer && *Freer
+                   ? "consume function exits without releasing its argument"
+                   : "dynamic allocation is not freed before function exit",
+               Site, State, C);
       return;
     }
   }

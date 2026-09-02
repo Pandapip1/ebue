@@ -355,6 +355,42 @@ static bool testMorphismTables() {
       ReversedDischarge.After == unknownLifecycle() &&
           contains(ReversedDischarge.Events, LifecycleEvent::MorphismMismatch),
       "discharge accepted a reversed morphism");
+
+  /* A contract graph may be A -> B -> C, but each boundary transition is
+   * still exactly one edge.  Sequential producer and consumer boundaries
+   * succeed; attempting to collapse A directly to C does not. */
+  constexpr LifecycleFamilyId Outer{4};
+  constexpr LifecycleFamilyId Middle{5};
+  constexpr LifecycleFamilyId Backend{6};
+  constexpr LifecycleFamilyMorphism OuterEdge{Outer, Middle};
+  constexpr LifecycleFamilyMorphism MiddleEdge{Middle, Backend};
+  LifecycleMorphismTransition ProduceMiddle =
+      retagLifecycle(liveLifecycle(Backend), Middle, MiddleEdge);
+  LifecycleMorphismTransition ProduceOuter =
+      retagLifecycle(ProduceMiddle.After, Outer, OuterEdge);
+  Passed &= test(ProduceMiddle.permitted() && ProduceOuter.permitted() &&
+                     ProduceOuter.After == liveLifecycle(Outer),
+                 "sequential producer edges did not compose at boundaries");
+  LifecycleMorphismTransition ReleaseOuter =
+      dischargeLifecycle(liveLifecycle(Outer), Middle, OuterEdge);
+  LifecycleMorphismTransition ReleaseMiddle =
+      dischargeLifecycle(liveLifecycle(Middle), Backend, MiddleEdge);
+  Passed &= test(ReleaseOuter.permitted() && ReleaseMiddle.permitted(),
+                 "sequential consumer edges did not discharge at boundaries");
+  LifecycleMorphismTransition CollapsedProducer =
+      retagLifecycle(liveLifecycle(Backend), Outer, OuterEdge);
+  LifecycleMorphismTransition CollapsedConsumer =
+      dischargeLifecycle(liveLifecycle(Outer), Backend, OuterEdge);
+  Passed &= test(!CollapsedProducer.permitted() &&
+                     CollapsedProducer.After == unknownLifecycle() &&
+                     contains(CollapsedProducer.Events,
+                              LifecycleEvent::MorphismMismatch),
+                 "producer crossed two implementation edges at once");
+  Passed &= test(!CollapsedConsumer.permitted() &&
+                     CollapsedConsumer.After == unknownLifecycle() &&
+                     contains(CollapsedConsumer.Events,
+                              LifecycleEvent::MorphismMismatch),
+                 "consumer crossed two implementation edges at once");
   return Passed;
 }
 

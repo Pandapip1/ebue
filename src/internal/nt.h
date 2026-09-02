@@ -21,12 +21,10 @@
 #define _NTLIBC_NT_H
 
 #include <features.h>
+#include <allocation_tokens.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
-
-tokdef rtl_heap_allocated
-	dynamic_storage;
 
 #ifdef __i386__
 #define NTAPI __attribute__((stdcall))

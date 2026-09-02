@@ -6,12 +6,25 @@
 typedef __SIZE_TYPE__ size_t;
 
 tokdef widget_allocated
-	dynamic_storage;
+	dynamic_storage
+	implemented_by(heap_allocated);
 tokdef heap_allocated
+	dynamic_storage
+	implemented_by(backend_allocated);
+tokdef backend_allocated
 	dynamic_storage;
 tokdef sentinel_allocated
 	dynamic_storage
+	implemented_by(heap_allocated)
 	sentinel_exclude(-1);
+tokdef foreign_terminal_allocated
+	dynamic_storage
+	sentinel_exclude(-1);
+tokdef missing_implementation_allocated
+	dynamic_storage;
+tokdef sentinel_implementation_allocated
+	dynamic_storage
+	implemented_by(foreign_terminal_allocated);
 
 /* Header-only declarations are explicit external assumptions.  If a .c
  * definition of free exists in the scanned tree, that definition must repeat
@@ -19,6 +32,9 @@ tokdef sentinel_allocated
 withtok(heap_allocated)
 void *malloc(size_t);
 void free(void *consume(heap_allocated));
+withtok(backend_allocated)
+void *backend_alloc(size_t);
+void backend_free(void *consume(backend_allocated));
 withtok(heap_allocated)
 void *realloc(void *consume_if_nonnull_return(heap_allocated), size_t);
 withtok(heap_allocated)

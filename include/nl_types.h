@@ -52,6 +52,7 @@ extern "C" {
 #endif
 
 #include <features.h>
+#include <allocation_tokens.h>
 #include <string_tokens.h>
 #include <ownership.h>
 
@@ -65,6 +66,7 @@ extern "C" {
 
 tokdef catalog_opened
 	dynamic_storage
+	implemented_by(heap_allocated)
 	sentinel_exclude(-1);
 
 int      catclose(nl_catd consume(catalog_opened));

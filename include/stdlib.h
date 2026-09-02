@@ -10,12 +10,10 @@
 #define _STDLIB_H
 
 #include <features.h>
+#include <allocation_tokens.h>
 #include <ownership.h>
 #include <memory_tokens.h>
 #include <string_tokens.h>
-
-tokdef heap_allocated
-	dynamic_storage;
 
 #ifdef __cplusplus
 extern "C" {

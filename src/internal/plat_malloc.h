@@ -30,11 +30,9 @@
 #define _NTLIBC_PLAT_MALLOC_H
 
 #include <features.h>
+#include <allocation_tokens.h>
 #include <ownership.h>
 #include <stddef.h>
-
-tokdef platform_heap_allocated
-	dynamic_storage;
 
 withtok(platform_heap_allocated)
 void *__plat_alloc(size_t n, int zero);
