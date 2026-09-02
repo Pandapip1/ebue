@@ -63,6 +63,11 @@
  * removed them and left this list behind, which is what this paragraph
  * used to be wrong about.
  */
+/* locale_t and newlocale()/LC_*_MASK are feature-test gated in
+ * include/locale.h; same define most other test/*.c already carry for
+ * the same reason (see test/posix-glob.c's comment on this exact
+ * define). */
+#define _GNU_SOURCE
 #include <locale.h>
 #include <errno.h>
 #include <limits.h>

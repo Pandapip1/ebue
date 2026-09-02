@@ -40,6 +40,12 @@
  * the FILE object survives) or with freopen(), the same way
  * test/posix-stdio.c's test_vprintf_vscanf() does.
  */
+/* strdup()/mkstemp()/renameat()/fileno() are feature-test gated in
+ * include/string.h, include/stdlib.h, include/stdio.h and
+ * include/unistd.h; same define most other test/*.c already carry for
+ * the same reason (see test/posix-glob.c's comment on this exact
+ * define). */
+#define _GNU_SOURCE
 #include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>

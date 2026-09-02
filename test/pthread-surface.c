@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+/* clock_gettime()/CLOCK_REALTIME are feature-test gated in
+ * include/time.h; same define most other test/*.c already carry for
+ * the same reason (see test/posix-glob.c's comment on this exact
+ * define). */
+#define _GNU_SOURCE
 #include <pthread.h>
 #include <errno.h>
 #include <semaphore.h>

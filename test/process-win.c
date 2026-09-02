@@ -9,6 +9,11 @@
  * selects a child role (see child_main) so that exec can be tested
  * without depending on any other program being present.
  */
+/* setenv()/wait3()/wait4() are feature-test gated in include/stdlib.h
+ * and include/sys/wait.h; same define most other test/*.c already
+ * carry for the same reason (see test/posix-glob.c's comment on this
+ * exact define). */
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

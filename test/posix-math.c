@@ -33,6 +33,10 @@
  * A fenced test still contains the real assertions the cited spec
  * clause requires, written as if it would run -- never a hand-wave.
  */
+/* M_PI and friends are feature-test gated in include/math.h; same
+ * define most other test/*.c already carry for the same reason (see
+ * test/posix-glob.c's comment on this exact define). */
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <math.h>
 #include <float.h>

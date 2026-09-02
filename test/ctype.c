@@ -1,5 +1,9 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+/* isascii()/toascii() are feature-test gated in include/ctype.h; same
+ * define most other test/*.c already carry for the same reason (see
+ * test/posix-glob.c's comment on this exact define). */
+#define _GNU_SOURCE
 #include <ctype.h>
 #include <unistd.h>
 

@@ -417,6 +417,10 @@
  * headers, per the count above -- carrying the assertions that would
  * run the day each is implemented.
  */
+/* newlocale()/LC_ALL_MASK are feature-test gated in include/locale.h;
+ * same define most other test/*.c already carry for the same reason
+ * (see test/posix-glob.c's comment on this exact define). */
+#define _GNU_SOURCE
 #include <locale.h>
 #include <time.h>
 #include <limits.h>
