@@ -14,6 +14,7 @@ extern "C" {
 #endif
 
 #include <features.h>
+#include <memory_tokens.h>
 
 #define __NEED_size_t
 #define __NEED_regoff_t
@@ -76,7 +77,9 @@ int regexec(const regex_t *__restrict, const char *__restrict, size_t, regmatch_
  * implementation to ignore it. errbuf is likewise not marked: it is
  * only dereferenced when errbuf_size != 0, POSIX's own documented
  * convention for "just tell me how big a buffer I would need". */
-size_t regerror(int, const regex_t *__restrict, char *__restrict, size_t);
+size_t regerror(int errcode, const regex_t *__restrict preg,
+	char *__restrict errbuf withtok(writable_span(errbuf_size)),
+	size_t errbuf_size);
 /* preg required: src/regex/regex.c's own body dereferences it
  * unconditionally (`struct rx *rx = preg->__opaque;`), with no
  * defensive check of preg itself (only of the rx it derives). */

@@ -41,8 +41,9 @@ char *inet_ntoa(struct in_addr);
  * success path, with no NULL check of either anywhere in its body.
  * Every real call site (test/posix-socket.c) passes a real address
  * object and a real output buffer, never NULL. */
-const char *inet_ntop(int, const void *__restrict, char *__restrict, socklen_t)
-    __attribute__((nonnull(2, 3)));
+const char *inet_ntop(int af, const void *__restrict src,
+	char *__restrict dst withtok(writable_span(size)), socklen_t size)
+	__attribute__((nonnull(2, 3)));
 int inet_pton(int, const char *__restrict, void *__restrict);
 
 #ifdef __cplusplus
