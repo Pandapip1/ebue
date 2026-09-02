@@ -239,6 +239,29 @@ jobs:
                   | awk '{print $1}' | sed 's/^fuzz_//' | sort -u | tr '\n' ' ' || true)
           echo "found=${found% }" >> "$GITHUB_OUTPUT"
 
+      - name: Package crash artifacts
+        if: always()
+        shell: bash
+        run: |
+          # AFL++ names crash files like
+          # `id:000000,sig:06,src:000123,time:12345,op:havoc,rep:4`, and
+          # actions/upload-artifact@v7 rejects any path containing a colon
+          # -- so uploading obj/aflcorpus/*/default/crashes directly makes
+          # the "Upload artifacts" step below silently drop every crashing
+          # input it finds (see #8: every reopen of that issue had no real
+          # reproducer recoverable from the run artifact). Tar each
+          # harness's crashes directory into one colon-free archive
+          # instead; tar keeps the original names -- and anything else AFL
+          # left alongside them, e.g. crashes/README.txt -- intact inside
+          # the archive, where upload-artifact never has to look at them.
+          mkdir -p obj/afl-crashes
+          shopt -s nullglob
+          for dir in obj/aflcorpus/*/default/crashes; do
+            harness=$(basename "$(dirname "$(dirname "$dir")")")
+            tar -czf "obj/afl-crashes/${harness}-crashes.tar.gz" -C "$dir" .
+          done
+          ls -la obj/afl-crashes 2>/dev/null || true
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -246,7 +269,7 @@ jobs:
           name: afl-fuzz-${{ github.run_id }}
           path: |
             afl-fuzz.log
-            obj/aflcorpus/*/default/crashes
+            obj/afl-crashes/*.tar.gz
           if-no-files-found: warn
 
       - name: Open or update finding issues
@@ -264,7 +287,9 @@ jobs:
             body=$(printf '%s\n' \
               "\`tools/afl-fuzz.sh\` reported a finding in \`fuzz_$harness\`." \
               "" "Run: $RUN_URL" "" \
-              "Download the run artifact and replay its crashing input with:" \
+              "Download the run artifact, extract \`obj/afl-crashes/$harness-crashes.tar.gz\`" \
+              "(crash filenames use AFL++'s own \`,\`-separated convention, e.g." \
+              "\`id:000000,sig:06,...\`), and replay a crashing input with:" \
               "\`tools/afl-fuzz.sh --repro <absolute-path-to-input> $harness\`" \
               "" "Keep a durable reproducer in the matching test/*.c file.")
             if [ -n "$existing" ]; then
