@@ -3502,6 +3502,96 @@ static void test_search_hsearch_table_full(void)
 	hdestroy();
 }
 
+/* GitHub issues #10 (fuzz/fuzz_search.c under tools/fuzz.sh, libFuzzer)
+ * and #9 (the same harness under tools/afl-fuzz.sh, AFL++) were filed,
+ * and re-filed nightly, against fuzz_search with no reproducer attached
+ * to either issue itself -- each comment only links a CI run whose
+ * artifact expires. This is the one from run 33508418747,
+ * crashes/crash-b4175009555daabbbbbf70f9dfa078794ca84166 (base64
+ * AAAALQDAALEAGwBRAAbAHgAAJQAN, 21 bytes): under
+ * -fsanitize=fuzzer,address,undefined it printed
+ *
+ *   src/search/hsearch.c:120:45: runtime error: unsigned integer
+ *   overflow: 0 - 1 cannot be represented in type 'size_t'
+ *
+ * Decoded through fuzz_search.c's own input format (bytes 0-1 the table
+ * size seed, then one length-prefixed key per record), this drives
+ * hcreate(0) -- an 8-slot table -- and nine distinct one- or two-byte
+ * keys through ENTER. The ninth ENTER, with the table already full and
+ * the key not among the eight already stored, walks every slot without
+ * a match: hsearch()'s linear-probe loop used to spell that "for (i =
+ * start, remaining = size; remaining-- > 0; ...)", and the postfix
+ * decrement on the exiting check -- remaining already 0, the
+ * comparison false, but the decrement runs anyway -- took an unsigned
+ * size_t from 0 to SIZE_MAX. That wrap is perfectly defined by C99
+ * 6.2.5p9 and was discarded the instant the loop exited, so this was
+ * never a memory-safety defect, but tools/asan-build.sh's INTSAN
+ * (-fsanitize=unsigned-integer-overflow, fatal for library code) exists
+ * precisely to flag an unmarked wrap like this one, and it did. See the
+ * comment above the fixed loop in hsearch() for the mechanism and the
+ * fix: the decrement moved to the loop's increment clause, where it
+ * only ever fires on a `remaining` already known to be >= 1.
+ *
+ * Issue #9 is almost certainly the same defect reached by a second
+ * engine: same harness, same fuzz_search binary, and every one of the
+ * five AFL++ crashes in that same run's own job log terminates via
+ * SIGABRT (sig:06) -- the signal -fno-sanitize-recover=undefined
+ * raises. No AFL crash artifact could be downloaded to compare
+ * byte-for-byte, because GitHub's artifact upload step fails for every
+ * AFL finding in this repository's CI (AFL++ names crash files with a
+ * literal ':', which artifact upload refuses outright -- an unrelated
+ * CI defect, not fixed here). A search of src/search/*.c for this same
+ * remaining--/size_t anti-pattern found exactly one hit -- this one;
+ * lsearch.c's lfind() already tests `remaining > 0` before
+ * decrementing, the form this fix brings hsearch() into line with --
+ * so there is no second unmarked wrap left in this module for a second
+ * engine to have found independently.
+ *
+ * The reproducer below does not replay the fuzzer's bytes -- the exact
+ * capacity hcreate() rounds a request up to is deliberately
+ * unspecified (see test_search_hsearch_table_full() above), so a
+ * byte-for-byte replay would be pinning that instead of the defect. It
+ * drives the same property directly: fill a table completely, then
+ * FIND (and separately ENTER) a key that was never inserted, forcing
+ * exactly the full, matchless scan that used to wrap on its way out. */
+static void test_search_hsearch_full_table_find_does_not_wrap(void)
+{
+	static char keys[64][8];
+	ENTRY e, *r;
+	int i, entered = 0;
+
+	CHECK(hcreate(0) != 0);
+	for (i = 0; i < 64; i++) {
+		sprintf(keys[i], "k%d", i);
+		e.key = keys[i];
+		e.data = keys[i];
+		r = hsearch(e, ENTER);
+		if (!r) break;
+		entered++;
+	}
+	CHECK(i < 64 && entered > 0);	/* the table filled, as above */
+
+	/* The table is now completely full -- no slot is empty -- and
+	 * "zzzzzzz" was never entered, so this walks every slot, finds no
+	 * match, and returns NULL regardless of hash distribution: the
+	 * exact path that used to decrement an already-zero size_t on the
+	 * way out.  Under tools/asan-build.sh's INTSAN this aborted before
+	 * the fix; reaching the CHECK at all is the point of the test. */
+	e.key = "zzzzzzz";
+	r = hsearch(e, FIND);
+	CHECK(r == NULL);
+
+	/* Same scan, reached through ENTER instead of FIND: the table is
+	 * still full, so this key finds no empty slot and no match either,
+	 * which is the other action that walks off the end of the probe
+	 * sequence into the same decrement. */
+	e.key = "zzzzzzz"; e.data = keys[0];
+	r = hsearch(e, ENTER);
+	CHECK(r == NULL);
+
+	hdestroy();
+}
+
 static void test_search_hcreate_overflow(void)
 {
 	CHECK(hcreate((size_t)(SIZE_MAX / 3) * 2 + 2) == 0);
@@ -3988,6 +4078,7 @@ int main(int argc, char **argv)
 	test_search_header_types();
 	test_search_hsearch_roundtrip();
 	test_search_hsearch_table_full();
+	test_search_hsearch_full_table_find_does_not_wrap();
 	test_search_tsearch_tfind();
 	test_search_hcreate_overflow();
 	test_search_null_rootp();

@@ -170,6 +170,27 @@ static void test_inet_pton_ntop(void)
 	CHECK(inet_ntop(AF_INET6, &a6, buf, sizeof buf) == buf);
 	CHECK(!strcmp(buf, "::1"));
 
+	/* fuzz: issue #5 (fuzz_inet, CI runs 33122015293 and 33126258867,
+	 * 2026-08-27), input byte 0x88.  At the commit those runs fuzzed
+	 * (8b2af2c), AF_INET6 was not yet implemented and fuzz_inet.c's own
+	 * harness still asserted inet_pton(AF_INET6, ...) must fail with
+	 * -1/EAFNOSUPPORT for every input; ntlibc's pre-IPv6 inet_pton()
+	 * did not, so the harness's own oracle called abort() (see
+	 * test/posix-inet.c's test_inet6_text_forms fence, "THE FORMER
+	 * FAILURE").  00d1af9/888a4d1/56f7fae/06e51e1 (later the same day)
+	 * implemented real AF_INET6 support, which is what test_inet6_text_
+	 * forms above documents and this file's own two lines just above
+	 * already exercise -- the assertion the crash tripped no longer
+	 * applies to a family this library actually supports.  0x88 is
+	 * simply not a hex digit, ':' or '.', so kept here unconditionally
+	 * as the regression this issue asked for: a single non-hex,
+	 * non-separator byte is refused like any other malformed text (0,
+	 * not a crash), and errno.html's "no function ... shall set errno
+	 * to 0" holds on the way past. */
+	errno = EDOM;
+	CHECK(inet_pton(AF_INET6, "\x88", &a6) == 0);
+	CHECK(errno == EDOM);
+
 	a.s_addr = htonl(0x01020304UL);
 	CHECK(inet_ntop(AF_INET, &a, buf, sizeof buf) == buf);
 	CHECK(!strcmp(buf, "1.2.3.4"));

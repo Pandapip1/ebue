@@ -639,6 +639,34 @@ static void test_inet6_text_forms(void)
 	CHECK(inet_pton(AF_INET6, "::0:", &a6) == 0);
 	CHECK(inet_pton(AF_INET6, "1.2.3.4", &a6) == 0);
 
+	/* fuzz: issue #5 (fuzz_inet, CI runs 33122015293 and 33126258867,
+	 * both 2026-08-27) reported a finding for the single input byte
+	 * 0x88.  At the commit those runs actually fuzzed (8b2af2c, which
+	 * predates AF_INET6 support -- see "THE FORMER FAILURE" in the
+	 * fence above), fuzz_inet.c's own harness still asserted that
+	 * inet_pton(AF_INET6, ...) must fail with -1/EAFNOSUPPORT for every
+	 * input, the same assertion test_inet_pton_strict_grammar now makes
+	 * about AF_UNIX/AF_UNSPEC below; ntlibc's pre-IPv6 inet_pton()
+	 * returned something other than -1 without setting errno to it, so
+	 * the harness's own oracle_mismatch_i() called abort()
+	 * (host_oracle.c).  That was not a memory-safety bug and left no
+	 * artefact to replay byte-for-byte: 00d1af9, 888a4d1, 56f7fae and
+	 * 06e51e1 (later the same day) implemented real AF_INET6 support,
+	 * which made the harness's blanket "AF_INET6 is unsupported"
+	 * assertion wrong rather than fixing what it checked, and the
+	 * harness was rewritten to assert EAFNOSUPPORT of AF_UNIX instead
+	 * (fuzz/fuzz_inet.c, current). 0x88 is simply not a hex digit, ':'
+	 * or '.', so it is unconditionally invalid IPv6 text with or
+	 * without EAFNOSUPPORT anywhere in the picture; kept here,
+	 * unconditional, as the regression this issue asked for: a single
+	 * non-hex, non-separator byte must be refused like any other
+	 * malformed text, not crash, and not touch errno on its way past
+	 * (errno.html: "No function in this volume of POSIX.1-2017 shall
+	 * set errno to 0", so EDOM here must survive unchanged). */
+	errno = EDOM;
+	CHECK(inet_pton(AF_INET6, "\x88", &a6) == 0);
+	CHECK(errno == EDOM);
+
 	/* and back, in the compressed form */
 	memcpy(a6.s6_addr, loopback, 16);
 	CHECK(inet_ntop(AF_INET6, &a6, buf, sizeof buf) == buf);

@@ -116,9 +116,19 @@ ENTRY *hsearch(ENTRY item, ACTION action)
 
 	h = hash_str(item.key);
 	start = h % size;
-	/* Linear probing visits each slot exactly once before the table is full. */
-	for (i = start, remaining = size; remaining-- > 0;
-	     i = (i + 1) % size) {
+	/* Linear probing visits each slot exactly once before the table is
+	 * full. The decrement lives in the loop's own increment clause, not
+	 * the condition (`remaining-- > 0` used to spell it, and wrapped
+	 * size_t 0 to SIZE_MAX on the exiting check -- defined by C99
+	 * 6.2.5p9 and discarded the instant the loop exited, so never a
+	 * memory-safety defect, but exactly what INTSAN
+	 * (-fsanitize=unsigned-integer-overflow, tools/asan-build.sh, fatal
+	 * for library code) exists to flag -- GitHub issues #9/#10, a
+	 * 9th ENTER into an already-full 8-slot table via
+	 * fuzz/fuzz_search.c). Spelled this way, the decrement only ever
+	 * runs on a `remaining` already known to be >= 1. */
+	for (i = start, remaining = size; remaining > 0;
+	     remaining--, i = (i + 1) % size) {
 		if (!table[i].used) {
 			if (action != ENTER) return NULL;
 			table[i].key = item.key;
