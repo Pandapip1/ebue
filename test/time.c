@@ -670,9 +670,29 @@ int main(void)
 		tzset();
 	}
 
-	/* getdate */
+	/* getdate.html DESCRIPTION: getdate() reads $DATEMSK's newline-
+	 * separated strptime templates and tries each in turn -- ERRORS
+	 * code 1 ("The DATEMSK environment variable is null or undefined")
+	 * means every one of the calls below needs a real template file
+	 * and $DATEMSK pointing at it first; src/time/getdate.c no longer
+	 * falls back to a built-in list (see that file's own banner for
+	 * why the fallback existed and why it is gone -- this block is the
+	 * "one thing keeping the deviation in place" its removal note
+	 * refers to). One line per form this block's calls below exercise. */
 	{
 		struct tm *p;
+		FILE *tf = fopen("t-datemsk.tmpl", "w");
+
+		CHECK(tf != NULL);
+		if (tf) {
+			fputs("%Y-%m-%d %H:%M:%S\n"
+			      "%m/%d/%Y\n"
+			      "%d %B %Y\n"
+			      "%B %d, %Y\n"
+			      "%H:%M\n", tf);
+			CHECK(fclose(tf) == 0);
+		}
+		CHECK(setenv("DATEMSK", "t-datemsk.tmpl", 1) == 0);
 
 		p = getdate("2000-02-29 13:05:09");
 		CHECK(p != NULL);
@@ -693,12 +713,19 @@ int main(void)
 		getdate_err = 0;
 		CHECK(getdate("not a date at all") == NULL);
 		CHECK(getdate_err == 7);
+
+		/* These two are unrelated to $DATEMSK -- s itself is null/empty,
+		 * checked before getdate() ever reads the environment -- so they
+		 * hold with $DATEMSK still set, same as before this block existed. */
 		getdate_err = 0;
 		CHECK(getdate("") == NULL);
 		CHECK(getdate_err == 1);
 		getdate_err = 0;
 		CHECK(getdate(NULL) == NULL);
 		CHECK(getdate_err == 1);
+
+		CHECK(unsetenv("DATEMSK") == 0);
+		unlink("t-datemsk.tmpl");
 	}
 
 	/* time / clock_gettime / timespec_get / clock */

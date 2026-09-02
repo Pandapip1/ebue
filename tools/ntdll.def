@@ -74,6 +74,7 @@ NtLockFile                              ; 3.51
 NtLockVirtualMemory                     ; 3.51
 NtMapViewOfSection                      ; 3.51
 NtOpenFile                              ; 3.51
+NtOpenKey                               ; 3.51
 NtOpenProcess                           ; 3.51
 NtOpenProcessToken                      ; 3.51
 NtOpenSemaphore                         ; 3.51
@@ -95,6 +96,7 @@ NtQueryPerformanceCounter               ; 3.51
 NtQuerySemaphore                        ; 3.51
 NtQuerySystemInformation                ; 3.51
 NtQuerySystemTime                       ; 3.51
+NtQueryValueKey                         ; 3.51
 NtQueryVirtualMemory                    ; 3.51
 NtQueryVolumeInformationFile            ; 3.51
 NtRaiseHardError                        ; 3.51
