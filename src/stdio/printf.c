@@ -579,7 +579,8 @@ static int strip_g(char *buf, int n, int has_exp) // NOLINT(bugprone-easily-swap
 		while (i > 0 && buf[i - 1] == '0') i--;
 		if (i > 0 && buf[i - 1] == '.') i--;
 	}
-	if (i != mant_end) memmove(buf + i, buf + mant_end, (size_t)(n - mant_end));
+	if (i != mant_end)
+		for (int j = mant_end; j < n; j++) buf[i + j - mant_end] = buf[j];
 	return n - (mant_end - i);
 }
 

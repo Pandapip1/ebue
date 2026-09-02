@@ -14,8 +14,9 @@ void *memmem(const void *h0, size_t k, const void *n0, size_t l)
 	if (l == 1) return memchr(h0, *n, k);
 	for (i = 0; i < k - l + 1; i++) {
 		if (h[i] == *n) {
-			__ownership_readable_span(h + i + 1, l - 1);
-			if (!memcmp(h + i + 1, n + 1, l - 1)) return (void *)(h + i);
+			size_t j;
+			for (j = 1; j < l && h[i + j] == n[j]; j++);
+			if (j == l) return (void *)(h + i);
 		}
 	}
 	return 0;

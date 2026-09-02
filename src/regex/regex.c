@@ -442,7 +442,7 @@ static void apply_repeat(struct parser *ps, int start, int had_atom) // NOLINT(b
 
 		saved = malloc((size_t)(len > 0 ? len : 1) * sizeof *saved);
 		if (!saved) { ps->err = REG_ESPACE; return; }
-		memcpy(saved, ps->rx->prog + start, (size_t)len * sizeof *saved);
+		for (int i = 0; i < len; i++) saved[i] = ps->rx->prog[start + i];
 		ps->rx->nprog = start;	/* rewind: rebuild the atom inside the repeat wrapper */
 
 		if (is_star || is_plus || is_quest) {
@@ -641,7 +641,7 @@ static void ere_alt(struct parser *ps)
 		int len1 = ps->rx->nprog - start, split, jmp;
 		struct inst *restrict saved = malloc((size_t)(len1 > 0 ? len1 : 1) * sizeof *saved);
 		if (!saved) { ps->err = REG_ESPACE; return; }
-		memcpy(saved, ps->rx->prog + start, (size_t)len1 * sizeof *saved);
+		for (int i = 0; i < len1; i++) saved[i] = ps->rx->prog[start + i];
 		ps->rx->nprog = start;
 
 		split = emit(ps, I_SPLIT, 0, 0, 0, 0);
@@ -1000,7 +1000,7 @@ static int run(struct mstate *ms, int pc, const char *sp)
 			continue;
 		case I_MATCH:
 			if (!found || ms->slot[1] > ms->best[1]) {
-				memcpy(ms->best, ms->slot, (size_t)ms->nslot * sizeof *ms->best);
+				for (int i = 0; i < ms->nslot; i++) ms->best[i] = ms->slot[i];
 				found = 1;
 			}
 			goto backtrack;
@@ -1016,8 +1016,7 @@ static int run(struct mstate *ms, int pc, const char *sp)
 			struct bt *e;
 			if (ms->nbt == 0) {
 				if (found)
-					memcpy(ms->slot, ms->best,
-					       (size_t)ms->nslot * sizeof *ms->slot);
+					for (int i = 0; i < ms->nslot; i++) ms->slot[i] = ms->best[i];
 				return found;
 			}
 			e = &ms->bt[--ms->nbt];
@@ -1146,7 +1145,7 @@ size_t regerror(int errcode, const regex_t *__restrict preg,
 
 	if (errbuf_size != 0) {
 		size_t n = msg->size < errbuf_size ? msg->size : errbuf_size;
-		memcpy(errbuf, msg->text, n - 1);
+		for (size_t i = 0; i + 1 < n; i++) errbuf[i] = msg->text[i];
 		errbuf[n - 1] = '\0';
 	}
 	return msg->size;

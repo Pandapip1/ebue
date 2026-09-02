@@ -38,8 +38,12 @@
 size_t wcsxfrm(wchar_t *__restrict dest, const wchar_t *__restrict src, size_t n)
 {
 	size_t l = wcslen(src);
-	if (n > l) wmemcpy(dest, src, l + 1);
-	else if (n) { wmemcpy(dest, src, n - 1); dest[n - 1] = 0; }
+	if (n > l) {
+		for (size_t i = 0; i <= l; i++) dest[i] = src[i];
+	} else if (n) {
+		for (size_t i = 0; i + 1 < n; i++) dest[i] = src[i];
+		dest[n - 1] = 0;
+	}
 	return l;
 }
 

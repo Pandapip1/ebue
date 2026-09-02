@@ -158,8 +158,7 @@ static int take_pending_signal_from(struct pending_state *state, int sig,
 		if (state->info[i].si_signo != sig) continue;
 		if (si) *si = state->info[i];
 		state->count--;
-		memmove(&state->info[i], &state->info[i + 1],
-		        (size_t)(state->count - i) * sizeof state->info[0]);
+		for (; i < state->count; i++) state->info[i] = state->info[i + 1];
 		for (i = 0; i < state->count; i++)
 			if (state->info[i].si_signo == sig) return 1;
 		sigdelset(&state->set, sig);

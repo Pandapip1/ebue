@@ -735,7 +735,8 @@ static int store_unit(int wide_in, int c, void *dst, int *nn, mbstate_t *mbs, //
 		/* r == 0 is a high surrogate held for its partner: nothing to
 		 * store yet, and mbsinit() will report the debt if the field
 		 * ends here. */
-		if (assign && r) memcpy((char *)dst + *nn, buf, r);
+		if (assign && r)
+			for (size_t i = 0; i < r; i++) ((char *)dst)[*nn + i] = buf[i];
 		*nn += (int)r;
 		return 0;
 	}
