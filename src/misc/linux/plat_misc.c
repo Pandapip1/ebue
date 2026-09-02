@@ -68,25 +68,49 @@
  * printing the SYS_* macros from <sys/syscall.h>, the same oracle
  * technique src/mman/linux/plat_mem.c's banner describes). */
 #if defined(__aarch64__)
-#define SYS_sched_yield       124
-#define SYS_kill              129
-#define SYS_setpriority       140
-#define SYS_getpriority       141
-#define SYS_getrusage         165
-#define SYS_lseek             62
-#define SYS_prlimit64         261
-#define SYS_pidfd_open        434
-#define SYS_pidfd_send_signal 424
+#define SYS_sched_yield             124
+#define SYS_kill                    129
+#define SYS_setpriority             140
+#define SYS_getpriority             141
+#define SYS_getrusage               165
+#define SYS_lseek                   62
+#define SYS_prlimit64               261
+#define SYS_pidfd_open              434
+#define SYS_pidfd_send_signal       424
+#define SYS_sched_setparam          118
+#define SYS_sched_setscheduler      119
+#define SYS_sched_getscheduler      120
+#define SYS_sched_getparam          121
+#define SYS_sched_rr_get_interval   127
 #elif defined(__x86_64__)
-#define SYS_sched_yield       24
-#define SYS_kill              62
-#define SYS_setpriority       141
-#define SYS_getpriority       140
-#define SYS_getrusage         98
-#define SYS_lseek             8
-#define SYS_prlimit64         302
-#define SYS_pidfd_open        434
-#define SYS_pidfd_send_signal 424
+#define SYS_sched_yield             24
+#define SYS_kill                    62
+#define SYS_setpriority             141
+#define SYS_getpriority             140
+#define SYS_getrusage               98
+#define SYS_lseek                   8
+#define SYS_prlimit64               302
+#define SYS_pidfd_open              434
+#define SYS_pidfd_send_signal       424
+/* This backend's Linux platform target is aarch64 only (tools/lint-
+ * undefined.sh's own platform_for(): i386/x86_64 build for NT, not
+ * Linux, via mingw); this __x86_64__ branch exists solely so this same
+ * file also compiles and runs as the native-ELF pilot/fuzz test harness
+ * (this file's own banner) on an x86_64 CI host. The five numbers below
+ * are taken from the well-established, stable x86_64 syscall table
+ * (arch/x86/entry/syscalls/syscall_64.tbl, unchanged for over a decade)
+ * rather than re-confirmed against a real x86_64 <sys/syscall.h> the way
+ * every aarch64 number in this file was (this sandbox is aarch64-only) --
+ * cross-checked instead against this same block's own already-verified
+ * neighbors (SYS_getpriority=140/SYS_setpriority=141 immediately above,
+ * both confirmed correct), which sit at the adjacent syscall numbers
+ * 140/141 with sched_setparam/getparam/setscheduler/getscheduler/
+ * rr_get_interval occupying 142-148 right after them in the same table. */
+#define SYS_sched_setparam          142
+#define SYS_sched_getparam          143
+#define SYS_sched_setscheduler      144
+#define SYS_sched_getscheduler      145
+#define SYS_sched_rr_get_interval   148
 #else
 #error "plat_misc.c: unsupported architecture"
 #endif
@@ -456,6 +480,70 @@ void __plat_job_apply_limits(rlim_t nproc_cur, rlim_t cpu_cur, rlim_t as_cur, rl
 	if (cpu_cur != RLIM_INFINITY) apply_one(RLIMIT_CPU_LX, cpu_cur);
 	if (as_cur != RLIM_INFINITY) apply_one(RLIMIT_AS_LX, as_cur);
 	if (data_cur != RLIM_INFINITY) apply_one(RLIMIT_DATA_LX, data_cur);
+}
+
+/* RLIMIT_STACK/CORE/RSS/MEMLOCK (3, 4, 5, 8 -- include/sys/resource.h)
+ * are, like RLIMIT_CPU/DATA/NPROC/AS above, already the real Linux
+ * kernel ABI's own numbering (confirmed against asm-generic/resource.h
+ * the same way those four were), so apply_one() above is reused
+ * directly with ntlibc's own public RLIMIT_* constants -- no second
+ * "_LX" alias needed the way this file's own banner explains those four
+ * did not need one either. See plat_misc.h's own comment on
+ * __plat_rlimit_apply_extra() for why RLIMIT_RSS is wired up as a real
+ * syscall despite the kernel itself not acting on the value once set. */
+void __plat_rlimit_apply_extra(rlim_t stack_cur, rlim_t core_cur, rlim_t rss_cur, rlim_t memlock_cur)
+{
+	if (stack_cur != RLIM_INFINITY) apply_one(RLIMIT_STACK, stack_cur);
+	if (core_cur != RLIM_INFINITY) apply_one(RLIMIT_CORE, core_cur);
+	if (rss_cur != RLIM_INFINITY) apply_one(RLIMIT_RSS, rss_cur);
+	if (memlock_cur != RLIM_INFINITY) apply_one(RLIMIT_MEMLOCK, memlock_cur);
+}
+
+/* ======================================================================
+ * sched.c: real sched_setscheduler(2)/sched_getscheduler(2)/
+ * sched_setparam(2)/sched_getparam(2)/sched_rr_get_interval(2) -- see
+ * plat_misc.h's own comment on these five for why `pid` needs no
+ * translation and `policy` is never SCHED_SPORADIC by the time it gets
+ * here. struct sched_param is a single `int sched_priority` on both
+ * ntlibc's own ABI (include/bits/alltypes.h) and the raw kernel one, so
+ * it is handed straight to/from the syscall with no translation struct,
+ * exactly like struct rusage already is above. struct timespec is the
+ * same raw two-`long`-fields shape __plat_time_now() already relies on.
+ * ====================================================================== */
+
+int __plat_sched_setscheduler(pid_t pid, int policy, const struct sched_param *param)
+{
+	long ret = syscall(SYS_sched_setscheduler, (long)pid, (long)policy, param);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
+int __plat_sched_getscheduler(pid_t pid)
+{
+	long ret = syscall(SYS_sched_getscheduler, (long)pid);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return (int)ret;
+}
+
+int __plat_sched_setparam(pid_t pid, const struct sched_param *param)
+{
+	long ret = syscall(SYS_sched_setparam, (long)pid, param);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
+int __plat_sched_getparam(pid_t pid, struct sched_param *param)
+{
+	long ret = syscall(SYS_sched_getparam, (long)pid, param);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
+int __plat_sched_rr_get_interval(pid_t pid, struct timespec *interval)
+{
+	long ret = syscall(SYS_sched_rr_get_interval, (long)pid, interval);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
 }
 
 // NOLINTEND(misc-include-cleaner)

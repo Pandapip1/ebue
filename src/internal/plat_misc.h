@@ -31,6 +31,10 @@
 
 #include <sys/types.h>
 #include <sys/resource.h>
+#if defined(__linux__)
+#include <sched.h>
+#include <time.h>
+#endif
 #include "plat_handle.h"
 
 /* sched_yield(): relinquish the processor.  No return value -- see
@@ -134,6 +138,54 @@ int __plat_write_start_offset(__plat_handle_t h, int append, long long *out)
  * RLIM_INFINITY in any argument means "no limit for that resource",
  * exactly like every other setrlimit() caller already sees it. */
 void __plat_job_apply_limits(rlim_t nproc_cur, rlim_t cpu_cur, rlim_t as_cur, rlim_t data_cur);
+
+#if defined(__linux__)
+/* Everything below this line exists ONLY on the Linux build: real kernel
+ * primitives that have no NT equivalent at all (not even a best-effort
+ * one), so there is nothing for src/misc/nt/plat_misc.c to implement and
+ * no reason to declare these where the NT build would see them. Each
+ * front-door call site is itself guarded the same way (`#if defined
+ * (__linux__)`), in src/misc/resource.c and src/misc/sched.c -- see
+ * those files' own banners for why the guard has to live in the shared
+ * front door and not just behind a seam, in each case.
+ *
+ * __plat_rlimit_apply_extra(): resource.c's setrlimit() reflects
+ * RLIMIT_STACK/CORE/RSS/MEMLOCK onto the kernel for real here via
+ * prlimit64(2), the same syscall __plat_job_apply_limits() above already
+ * uses for NPROC/CPU/AS/DATA -- unlike NT, which has no per-process
+ * mechanism that reaches any of these four after the process has
+ * started (see include/sys/resource.h and resource.c's own banners),
+ * Linux's setrlimit(2)/prlimit64(2) genuinely enforces all four (RSS is
+ * the one exception worth flagging honestly: the kernel has accepted
+ * and stored a RLIMIT_RSS value without ever acting on it since
+ * 2.4.30/2.6.9 -- man 2 getrlimit says so outright -- so this is a real
+ * syscall wired up faithfully, not a claim that RSS itself is
+ * enforced). RLIM_INFINITY in any argument means "no limit for that
+ * resource", exactly like __plat_job_apply_limits() above. */
+void __plat_rlimit_apply_extra(rlim_t stack_cur, rlim_t core_cur, rlim_t rss_cur, rlim_t memlock_cur);
+
+/* sched_setscheduler(2)/sched_getscheduler(2)/sched_setparam(2)/
+ * sched_getparam(2)/sched_rr_get_interval(2): real Linux syscalls giving
+ * genuine SCHED_FIFO/SCHED_RR enforcement, unlike NT, which (per
+ * include/sched.h and src/misc/sched.c's own banners) has priorities and
+ * a scheduler quantum but no process-visible POSIX FIFO/RR policy
+ * distinction to enforce at all. `pid` is passed straight through with
+ * no translation -- 0 already means "the calling process" on both the
+ * POSIX front door and the raw syscall, so sched.c's own self/foreign
+ * split collapses to nothing here. `policy` is never SCHED_SPORADIC
+ * (include/sched.h's value 3): the real Linux kernel numbering at that
+ * slot is SCHED_BATCH, an unrelated real policy (confirmed against this
+ * host's own <bits/sched.h>: OTHER=0, FIFO=1, RR=2, BATCH=3, IDLE=5,
+ * DEADLINE=6 -- no sporadic-server slot exists at all), so sched.c's own
+ * front door keeps SCHED_SPORADIC on its bookkeeping-only path on every
+ * platform and only ever calls these seams with OTHER/FIFO/RR. 0/-1
+ * (errno) via return, matching every raw syscall in this header. */
+int __plat_sched_setscheduler(pid_t pid, int policy, const struct sched_param *param);
+int __plat_sched_getscheduler(pid_t pid);
+int __plat_sched_setparam(pid_t pid, const struct sched_param *param);
+int __plat_sched_getparam(pid_t pid, struct sched_param *param);
+int __plat_sched_rr_get_interval(pid_t pid, struct timespec *interval);
+#endif
 
 #endif
 

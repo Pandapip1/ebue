@@ -59,7 +59,19 @@ int getrlimit (int, struct rlimit *);
  * than the fixed value it already reports (asking to raise, or to repeat,
  * the existing ceiling is a harmless no-op; asking to lower it would be
  * exactly the misrepresentation this comment used to warn about, so that
- * is rejected with EINVAL instead of silently accepted). */
+ * is rejected with EINVAL instead of silently accepted).
+ *
+ * THAT PARAGRAPH IS NT-ONLY, and stays because it is still true of, and
+ * only checked against, the NT build. Linux's real setrlimit(2)/
+ * prlimit64(2) genuinely enforces all four of RLIMIT_STACK/CORE/RSS/
+ * MEMLOCK (RLIMIT_RSS is the one worth flagging honestly even there --
+ * the kernel has accepted and stored a value for it without ever acting
+ * on it since 2.4.30/2.6.9, per its own man page -- but the syscall
+ * itself is real, and genuinely enforced for the other three), so
+ * src/misc/resource.c's setrlimit() accepts a real lowering for these
+ * four on Linux and reflects it onto the kernel via prlimit64(2)
+ * (src/misc/linux/plat_misc.c's __plat_rlimit_apply_extra()), the same
+ * way it already does for RLIMIT_NPROC/CPU/AS/DATA above. */
 int setrlimit (int, const struct rlimit *);
 int getrusage (int, struct rusage *);
 

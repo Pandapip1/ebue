@@ -12,10 +12,22 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <limits.h>
+#if defined(__linux__)
+#include <sched.h>
+#include <sys/mman.h>
+#endif
 #include "../src/internal/libc.h"
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
+
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+/* setitimer()/ualarm() real-repeat-delivery tests' own SIGALRM handler:
+ * a signal handler must be a real, file-scope function, so the counter
+ * it bumps lives here too rather than as a local in main(). */
+static volatile sig_atomic_t alarm_hit_count;
+static void alarm_hit(int sig) { (void)sig; alarm_hit_count++; }
+#endif
 
 struct known {
 	long long t;
@@ -870,6 +882,116 @@ int main(void)
 			CHECK(getrlimit(999, &rl) == -1 && errno == EINVAL);
 		}
 
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+		/* setrlimit()/getrlimit(): on Linux (unlike the NT build just
+		 * proved above, which stays fixed at RLIM_INFINITY), RLIMIT_
+		 * STACK/CORE/RSS/MEMLOCK are genuinely enforced by the kernel
+		 * via prlimit64(2) -- src/misc/resource.c's own banner and
+		 * src/misc/linux/plat_misc.c's __plat_rlimit_apply_extra().
+		 * Each check below proves a REAL kernel-side effect, not just
+		 * this library's own bookkeeping echoing itself back. */
+		{
+			struct rlimit rl, rl2;
+			FILE *f;
+			char line[256];
+
+			/* RLIMIT_STACK: lower it, generously (this test's own
+			 * stack usage is nowhere near 4 MiB, and the default is
+			 * commonly 8 MiB -- see this file's own earlier check),
+			 * then read the KERNEL's own record directly via /proc/
+			 * self/limits (populated from task_rlimit(), entirely
+			 * independent of anything this library stores) rather than
+			 * just asking getrlimit() again -- that would only prove
+			 * this library's own local variable round-trips, not that
+			 * prlimit64(2) actually reached the kernel. No thread is
+			 * ever made to run on the lowered limit, so there is no
+			 * risk of overflowing it. */
+			CHECK(getrlimit(RLIMIT_STACK, &rl) == 0);
+			if (rl.rlim_cur == RLIM_INFINITY || rl.rlim_cur > 4 * 1024 * 1024) {
+				rl.rlim_cur = 4 * 1024 * 1024;
+				CHECK(setrlimit(RLIMIT_STACK, &rl) == 0);
+				CHECK(getrlimit(RLIMIT_STACK, &rl2) == 0);
+				CHECK(rl2.rlim_cur == rl.rlim_cur);
+
+				f = fopen("/proc/self/limits", "r");
+				CHECK(f != NULL);
+				if (f) {
+					int found = 0;
+					unsigned long long soft = 0;
+					while (fgets(line, sizeof line, f)) {
+						if (strncmp(line, "Max stack size", sizeof("Max stack size") - 1) == 0 &&
+						    sscanf(line + sizeof("Max stack size") - 1, "%llu", &soft) == 1) {
+							found = 1;
+							break;
+						}
+					}
+					fclose(f);
+					CHECK(found);
+					CHECK(soft == (unsigned long long)rl.rlim_cur);
+				}
+			}
+
+			/* RLIMIT_CORE: 0 is always a safe value to request (this
+			 * process is not expected to dump core during this test
+			 * either way), and the readback must report exactly what
+			 * was set, not the old fixed RLIM_INFINITY. */
+			CHECK(getrlimit(RLIMIT_CORE, &rl) == 0);
+			rl.rlim_cur = 0;
+			CHECK(setrlimit(RLIMIT_CORE, &rl) == 0);
+			CHECK(getrlimit(RLIMIT_CORE, &rl2) == 0);
+			CHECK(rl2.rlim_cur == 0);
+
+			/* RLIMIT_MEMLOCK: prove a real downstream effect, not just
+			 * a readback -- mlock() one page while the limit is still
+			 * generous (proving this sandbox permits locking at all;
+			 * skip the rest if it does not, the same "key the skip on
+			 * the limit actually measured" idiom test/posix-mman.c's
+			 * own test_mlock_munlock() already uses), then lower the
+			 * limit to 0 and prove the SAME mlock() call now fails for
+			 * real. mlock(2)'s own ERRORS section gives two distinct
+			 * answers depending on the exact limit, measured here
+			 * rather than assumed: ENOMEM is "a nonzero RLIMIT_MEMLOCK
+			 * ... but tried to lock more than the limit permitted",
+			 * while EPERM is specifically "not privileged ... and its
+			 * RLIMIT_MEMLOCK ... is 0" -- the case this test actually
+			 * creates, confirmed against a real mlock(2) call on this
+			 * host before being relied on here. */
+			{
+				long pg = sysconf(_SC_PAGESIZE);
+				void *p = pg > 0 ? malloc((size_t)pg) : 0;
+				if (p && mlock(p, (size_t)pg) == 0) {
+					CHECK(munlock(p, (size_t)pg) == 0);
+					CHECK(getrlimit(RLIMIT_MEMLOCK, &rl) == 0);
+					{
+						rlim_t saved = rl.rlim_cur;
+						rl.rlim_cur = 0;
+						CHECK(setrlimit(RLIMIT_MEMLOCK, &rl) == 0);
+						CHECK(getrlimit(RLIMIT_MEMLOCK, &rl2) == 0);
+						CHECK(rl2.rlim_cur == 0);
+						errno = 0;
+						CHECK(mlock(p, (size_t)pg) == -1 && errno == EPERM);
+						/* Restore, so nothing later in this process
+						 * (or a child it forks) is surprised by a
+						 * zeroed mlock budget. */
+						rl.rlim_cur = saved;
+						CHECK(setrlimit(RLIMIT_MEMLOCK, &rl) == 0);
+					}
+				}
+				free(p);
+			}
+
+			/* RLIMIT_RSS: real syscall, honestly not enforced by the
+			 * kernel itself since 2.4.30/2.6.9 (see include/sys/
+			 * resource.h's own setrlimit() comment) -- only the round
+			 * trip is checked here, which is exactly what is true. */
+			CHECK(getrlimit(RLIMIT_RSS, &rl) == 0);
+			rl.rlim_cur = 1024 * 1024;
+			CHECK(setrlimit(RLIMIT_RSS, &rl) == 0);
+			CHECK(getrlimit(RLIMIT_RSS, &rl2) == 0);
+			CHECK(rl2.rlim_cur == 1024 * 1024);
+		}
+#endif
+
 		/* getrusage: RUSAGE_SELF reports nonzero-capable, monotonic
 		 * CPU time; RUSAGE_CHILDREN starts zeroed (waitpid() tests for
 		 * accumulation live in process-win.c, which actually spawns) */
@@ -884,6 +1006,239 @@ int main(void)
 			errno = 0;
 			CHECK(getrusage(999, &ru) == -1 && errno == EINVAL);
 		}
+
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+		/* sched_setscheduler()/sched_getscheduler()/sched_setparam()/
+		 * sched_getparam()/sched_rr_get_interval(): real Linux syscalls
+		 * (src/misc/sched.c, src/misc/linux/plat_misc.c) giving genuine
+		 * SCHED_FIFO/SCHED_RR enforcement, unlike the NT build's own
+		 * always-succeeds local bookkeeping. Realtime scheduling
+		 * changes normally need CAP_SYS_NICE, but an unprivileged
+		 * process may still set SCHED_FIFO/SCHED_RR on ITSELF up to its
+		 * own RLIMIT_RTPRIO (setrlimit.html's own rlimit -- nonzero by
+		 * default in many environments, this test's own sandbox
+		 * included), so BOTH outcomes are real and both are accepted:
+		 * either a genuine, kernel-confirmed policy switch, or a real,
+		 * specific EPERM -- never a silent always-succeeds no-op. */
+		{
+			struct sched_param param, param2;
+			struct timespec interval;
+			int prev_policy = sched_getscheduler(0);
+			int r;
+
+			CHECK(prev_policy >= 0);
+			CHECK(sched_getparam(0, &param) == 0);
+
+			param2.sched_priority = 1;
+			errno = 0;
+			r = sched_setscheduler(0, SCHED_FIFO, &param2);
+			if (r == 0) {
+				/* A real, kernel-confirmed switch: prove it with a
+				 * fresh sched_getscheduler()/sched_getparam() round
+				 * trip, which only a genuine kernel-side policy
+				 * change -- not local bookkeeping -- could produce. */
+				CHECK(sched_getscheduler(0) == SCHED_FIFO);
+				CHECK(sched_getparam(0, &param2) == 0);
+				CHECK(param2.sched_priority == 1);
+				/* Put this process back the way it was found, before
+				 * anything below (or any other test running on this
+				 * host) can be surprised by a realtime-scheduled
+				 * process. sched_setscheduler() returns 0 on success
+				 * in this library (src/misc/sched.c's set_state()),
+				 * not POSIX's own "former policy" -- an existing,
+				 * out-of-scope design choice this test matches rather
+				 * than second-guesses (test/posix-realtime.c's own
+				 * test_posix_realtime_sched_policy_priorities() checks
+				 * `== policy` instead, which only happens to agree
+				 * with 0 because it reuses SCHED_OTHER==0 there). */
+				CHECK(sched_setscheduler(0, prev_policy, &param) == 0);
+				CHECK(sched_getscheduler(0) == prev_policy);
+			} else {
+				CHECK(r == -1 && errno == EPERM);
+			}
+
+			/* SCHED_SPORADIC has no Linux kernel equivalent (real
+			 * policy 3 there is SCHED_BATCH, an unrelated real policy
+			 * -- see src/misc/sched.c's own banner), so it keeps this
+			 * library's own bookkeeping-only behaviour even here:
+			 * always succeeds, and reads back exactly what was set,
+			 * regardless of privilege. */
+			param2.sched_priority = 1;
+			CHECK(sched_setscheduler(0, SCHED_SPORADIC, &param2) == 0);
+			CHECK(sched_getscheduler(0) == SCHED_SPORADIC);
+			CHECK(sched_getparam(0, &param2) == 0);
+			CHECK(param2.sched_priority == 1);
+			CHECK(sched_setscheduler(0, prev_policy, &param) == 0);
+			CHECK(sched_getscheduler(0) == prev_policy);
+
+			/* sched_rr_get_interval(): real syscall regardless of the
+			 * pid's own policy (Linux answers this for SCHED_OTHER
+			 * too, its own per-policy default quantum). */
+			CHECK(sched_rr_get_interval(0, &interval) == 0);
+			CHECK(interval.tv_nsec >= 0 && interval.tv_nsec < 1000000000L);
+			errno = 0;
+			CHECK(sched_rr_get_interval(-12345, &interval) == -1);
+			CHECK(errno == ESRCH || errno == EINVAL);
+		}
+
+		/* setitimer()/getitimer(): real, and genuinely repeating on
+		 * Linux (src/time/linux/plat_itimer.c) -- the exact thing the
+		 * NT build's own APC-based SIGALRM delivery cannot do (see
+		 * that file's own banner: a computing thread's missed expiries
+		 * there coalesce into one delivery instead of a series). A
+		 * real SIGALRM handler that fires more than once is the whole
+		 * point, so this proves exactly that, not just a round trip. */
+		{
+			struct itimerval iv, old;
+			struct sigaction sa, old_sa;
+			struct timespec nap;
+			int i;
+
+			memset(&sa, 0, sizeof sa);
+			sa.sa_handler = alarm_hit;
+			CHECK(sigemptyset(&sa.sa_mask) == 0);
+			CHECK(sigaction(SIGALRM, &sa, &old_sa) == 0);
+
+			/* getitimer() before any setitimer(): "no timer armed" is
+			 * defined to read back as all-zero. */
+			memset(&old, 0xFF, sizeof old);
+			CHECK(getitimer(ITIMER_REAL, &old) == 0);
+			CHECK(old.it_value.tv_sec == 0 && old.it_value.tv_usec == 0);
+			CHECK(old.it_interval.tv_sec == 0 && old.it_interval.tv_usec == 0);
+
+			alarm_hit_count = 0;
+			iv.it_value.tv_sec = 0;    iv.it_value.tv_usec = 30000;   /* 30ms */
+			iv.it_interval.tv_sec = 0; iv.it_interval.tv_usec = 30000; /* every 30ms */
+			errno = 0;
+			if (setitimer(ITIMER_REAL, &iv, 0) == 0) {
+				/* Mid-flight getitimer(): it_interval must read back
+				 * exactly, it_value must be a real, shrinking countdown. */
+				CHECK(getitimer(ITIMER_REAL, &old) == 0);
+				CHECK(old.it_interval.tv_sec == 0 && old.it_interval.tv_usec == 30000);
+				CHECK(old.it_value.tv_sec == 0 && old.it_value.tv_usec <= 30000);
+
+				/* nanosleep() is one of this library's own signal-aware
+				 * wait points (__sig_drain_pending(), src/unistd/
+				 * sleep.c), exactly where a queued SIGALRM notification
+				 * actually gets delivered -- repeated short naps, not
+				 * one long sleep, are what let MULTIPLE expiries
+				 * actually run this handler rather than just the
+				 * first. Bounded at 2 real seconds so a genuine
+				 * delivery failure fails this CHECK instead of hanging
+				 * the whole suite. */
+				nap.tv_sec = 0; nap.tv_nsec = 10000000L; /* 10ms */
+				for (i = 0; i < 200 && alarm_hit_count < 3; i++)
+					nanosleep(&nap, 0);
+
+				/* Disarm before anything else runs. */
+				memset(&iv, 0, sizeof iv);
+				CHECK(setitimer(ITIMER_REAL, &iv, &old) == 0);
+
+				/* The actual point: real, REPEATED delivery. */
+				CHECK(alarm_hit_count >= 3);
+			} else {
+				/* This setitimer(ITIMER_REAL, ...) is built on this
+				 * library's own portable timer-manager machinery
+				 * (src/time/timer.c), which spawns one real background
+				 * thread the first time any timer is armed (src/time/
+				 * linux/plat_itimer.c's own banner). Some sandboxes --
+				 * this one included, confirmed independently by a bare
+				 * pthread_create() failing the identical way -- refuse
+				 * real thread creation outright (EAGAIN), which is an
+				 * environment limitation this test cannot work around,
+				 * not a bug in setitimer() itself: skip the delivery
+				 * proof rather than fail it, the same "key the skip on
+				 * what was actually measured" idiom test/posix-mman.c's
+				 * own test_mlock_munlock() already uses. */
+				CHECK(errno == EAGAIN);
+				printf("SKIP time: setitimer(ITIMER_REAL) real-repeat-delivery "
+				       "check: this environment does not permit real thread "
+				       "creation (errno %d arming the timer manager thread)\n",
+				       errno);
+			}
+			CHECK(sigaction(SIGALRM, &old_sa, 0) == 0);
+
+			errno = 0;
+			CHECK(setitimer(999, &iv, 0) == -1 && errno == EINVAL);
+			errno = 0;
+			CHECK(getitimer(999, &old) == -1 && errno == EINVAL);
+		}
+
+		/* ualarm(): built directly on setitimer(ITIMER_REAL, ...) --
+		 * src/unistd/linux/plat_ualarm.c -- so this proves both its own
+		 * microsecond unit conversion and, again, real repeating
+		 * delivery through the very same mechanism. */
+		{
+			struct sigaction sa, old_sa;
+			struct timespec nap;
+			unsigned prev;
+			int i;
+
+			memset(&sa, 0, sizeof sa);
+			sa.sa_handler = alarm_hit;
+			CHECK(sigemptyset(&sa.sa_mask) == 0);
+			CHECK(sigaction(SIGALRM, &sa, &old_sa) == 0);
+
+			alarm_hit_count = 0;
+			errno = 0;
+			prev = ualarm(30000, 30000); /* 30ms, repeating every 30ms */
+			CHECK(prev == 0); /* nothing scheduled before this call */
+
+			if (errno != EAGAIN) {
+				nap.tv_sec = 0; nap.tv_nsec = 10000000L;
+				for (i = 0; i < 200 && alarm_hit_count < 2; i++)
+					nanosleep(&nap, 0);
+
+				(void)ualarm(0, 0); /* cancel */
+				CHECK(alarm_hit_count >= 2);
+			} else {
+				/* Same environment limitation as setitimer(ITIMER_REAL)
+				 * just above -- see that block's own comment. ualarm()
+				 * itself has no [ERRORS] section to report this
+				 * through (ualarm.html), and this library's own
+				 * ualarm() deliberately folds a setitimer() failure
+				 * into "0 scheduled" rather than inventing one
+				 * (src/unistd/linux/plat_ualarm.c's own comment), so
+				 * errno -- left exactly as setitimer() set it -- is
+				 * the only way to tell this case apart from a genuine
+				 * "nothing was scheduled before" here. */
+				printf("SKIP time: ualarm() real-repeat-delivery check: "
+				       "this environment does not permit real thread "
+				       "creation (errno %d)\n", errno);
+			}
+			CHECK(sigaction(SIGALRM, &old_sa, 0) == 0);
+		}
+
+		/* adjtime(): real adjtimex(2)/ADJ_OFFSET_SINGLESHOT slewing
+		 * (src/time/linux/plat_adjtime.c), unlike the NT build's own
+		 * undefined-ok stub. The query form (delta == NULL) needs no
+		 * privilege and must always succeed; a genuine slew request
+		 * proves the syscall is REAL -- a specific, correct errno
+		 * (EPERM, CAP_SYS_TIME) when refused, exactly the "prove it is
+		 * real, not that privileged behavior works" shape
+		 * test_acct_linux() (test/posix-unistd.c) already uses -- never
+		 * a silent always-succeeds stub. */
+		{
+			struct timeval delta, old;
+			int r;
+
+			memset(&old, 0xFF, sizeof old);
+			CHECK(adjtime(0, &old) == 0);
+
+			delta.tv_sec = 0; delta.tv_usec = 1;
+			errno = 0;
+			r = adjtime(&delta, &old);
+			CHECK(r == 0 || (r == -1 && errno == EPERM));
+			if (r == 0) {
+				/* A real slew was genuinely armed -- withdraw it
+				 * immediately rather than let it run loose on this
+				 * host after this test exits. */
+				struct timeval undo;
+				undo.tv_sec = 0; undo.tv_usec = -1;
+				adjtime(&undo, 0);
+			}
+		}
+#endif
 	}
 
 	if (!fails) printf("time: all tests passed\n");

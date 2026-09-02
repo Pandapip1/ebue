@@ -46,8 +46,8 @@
  * does not -- the resource is bounded by this library's own code.
  *
  * For every other resource (RLIMIT_STACK, RLIMIT_CORE,
- * RLIMIT_RSS, RLIMIT_MEMLOCK) there is no mechanism that reaches the
- * thing being capped after this process has already started
+ * RLIMIT_RSS, RLIMIT_MEMLOCK), ON NT, there is no mechanism that reaches
+ * the thing being capped after this process has already started
  * (NT fixes stack reservation at NtCreateThreadEx() time; there is no per-process max-file-size,
  * core-dump-size, RSS, or mlock-budget primitive at all -- see
  * include/sys/resource.h for the fuller per-resource accounting).
@@ -58,6 +58,21 @@
  * than silently accepted and then not honored, which is exactly the
  * misrepresentation the header's previous undefined-ok comment warned
  * against.
+ *
+ * ON LINUX, all four of those are genuinely enforced by the kernel
+ * (prlimit64(2) -- confirmed real for RLIMIT_STACK/CORE/MEMLOCK;
+ * RLIMIT_RSS is accepted and stored but not acted on by the kernel
+ * itself since 2.4.30/2.6.9, an honest caveat, not a reason to skip
+ * wiring up the real syscall for it too -- see include/sys/resource.h's
+ * setrlimit() comment), so setrlimit() for these four gets the exact
+ * same soft/hard storage and "only privilege gates raising the hard
+ * limit" treatment as RLIMIT_NPROC/CPU/AS/DATA above on that build,
+ * reflected onto the kernel via src/misc/linux/plat_misc.c's
+ * __plat_rlimit_apply_extra(). The two platforms' setrlimit() bodies for
+ * these four therefore genuinely diverge (`#if defined(__linux__)`
+ * below), because the two claims -- "there is no mechanism" and "the
+ * kernel enforces this for real" -- cannot both be honoured by one code
+ * path without one of them lying.
  *
  * getrusage() reports what NtQueryInformationProcess(ProcessTimes) can
  * answer -- ru_utime/ru_stime -- and leaves every other struct rusage
@@ -105,6 +120,18 @@ static rlim_t data_cur = RLIM_INFINITY, data_max = RLIM_INFINITY;
  * ntlibc's own I/O -- there is no mmap in this library at all -- so the
  * enforcement point is our write paths, not the kernel's. */
 static rlim_t fsize_cur = RLIM_INFINITY, fsize_max = RLIM_INFINITY;
+#if defined(__linux__)
+/* RLIMIT_STACK/CORE/RSS/MEMLOCK: on Linux (unlike NT -- see this file's
+ * own banner and include/sys/resource.h's) these four are genuinely
+ * enforced by the kernel via prlimit64(2), so they get the exact same
+ * soft/hard storage treatment as RLIMIT_NPROC/CPU/AS/DATA above rather
+ * than the NT build's own EINVAL-on-lowering fallback (setrlimit()'s
+ * `default:` case below, kept unchanged for the NT build). */
+static rlim_t stack_cur = RLIM_INFINITY, stack_max = RLIM_INFINITY;
+static rlim_t core_cur = RLIM_INFINITY, core_max = RLIM_INFINITY;
+static rlim_t rss_cur = RLIM_INFINITY, rss_max = RLIM_INFINITY;
+static rlim_t memlock_cur = RLIM_INFINITY, memlock_max = RLIM_INFINITY;
+#endif
 /* RLIMIT_NOFILE's soft limit lives in __fd_limit (src/internal/fd.c), the
  * bound __fd_alloc() actually loops to, so that there is exactly one copy
  * of it and getrlimit() cannot drift from what is enforced.  Only the
@@ -276,10 +303,25 @@ int getrlimit(int resource, struct rlimit *rl)
 	case RLIMIT_FSIZE:
 		rl->rlim_cur = fsize_cur; rl->rlim_max = fsize_max;
 		break;
+#if defined(__linux__)
+	case RLIMIT_STACK:
+		rl->rlim_cur = stack_cur; rl->rlim_max = stack_max;
+		break;
+	case RLIMIT_CORE:
+		rl->rlim_cur = core_cur; rl->rlim_max = core_max;
+		break;
+	case RLIMIT_RSS:
+		rl->rlim_cur = rss_cur; rl->rlim_max = rss_max;
+		break;
+	case RLIMIT_MEMLOCK:
+		rl->rlim_cur = memlock_cur; rl->rlim_max = memlock_max;
+		break;
+#else
 	case RLIMIT_STACK: case RLIMIT_CORE: case RLIMIT_RSS:
 	case RLIMIT_MEMLOCK:
 		rl->rlim_cur = rl->rlim_max = RLIM_INFINITY;
 		break;
+#endif
 	default:
 		errno = EINVAL;
 		return -1;
@@ -363,6 +405,30 @@ int setrlimit(int resource, const struct rlimit *rl)
 		fsize_cur = rl->rlim_cur;
 		fsize_max = rl->rlim_max;
 		return 0;
+#if defined(__linux__)
+	case RLIMIT_STACK: case RLIMIT_CORE: case RLIMIT_RSS: case RLIMIT_MEMLOCK:
+		/* Real on Linux: prlimit64(2) genuinely enforces all four (see
+		 * this file's own banner and include/sys/resource.h's setrlimit()
+		 * comment for the honest RLIMIT_RSS caveat), so these get the
+		 * same treatment as RLIMIT_NPROC/CPU/AS/DATA above rather than
+		 * the NT build's "refuse rather than lie" no-op-or-EINVAL rule
+		 * just below, which stays for the NT build precisely because it
+		 * is NOT lying there -- there is really no mechanism to reflect
+		 * a lowered value onto. */
+		if (rl->rlim_max > cur.rlim_max) { errno = EPERM; return -1; }
+		switch (resource) { // NOLINT(bugprone-switch-missing-default-case) -- the enclosing switch admits exactly these four resource values
+		case RLIMIT_STACK:   stack_cur   = rl->rlim_cur; stack_max   = rl->rlim_max; break;
+		case RLIMIT_CORE:    core_cur    = rl->rlim_cur; core_max    = rl->rlim_max; break;
+		case RLIMIT_RSS:     rss_cur     = rl->rlim_cur; rss_max     = rl->rlim_max; break;
+		case RLIMIT_MEMLOCK: memlock_cur = rl->rlim_cur; memlock_max = rl->rlim_max; break;
+		}
+		__plat_rlimit_apply_extra(stack_cur, core_cur, rss_cur, memlock_cur);
+		return 0;
+	default:
+		errno = EINVAL;
+		return -1;
+	}
+#else
 	default:
 		/* RLIMIT_STACK/CORE/RSS/MEMLOCK: no NT mechanism can actually
 		 * move the fixed ceiling these already report (see the file
@@ -378,6 +444,7 @@ int setrlimit(int resource, const struct rlimit *rl)
 		}
 		return 0;
 	}
+#endif
 }
 
 int getrusage(int who, struct rusage *ru)
