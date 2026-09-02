@@ -434,12 +434,30 @@ int __plat_kill_terminate(__plat_handle_t h, int exitcode)
 	 * process's wait status is fundamentally shaped differently
 	 * (WIFSIGNALED/WTERMSIG, not an arbitrary exit code) --
 	 * src/process/wait.c's own Linux backend, not this file, is where
-	 * that shape lives. SIGKILL is the uncatchable, always-terminates
-	 * signal that matches NtTerminateProcess's own unconditional force.
+	 * that shape lives. What Linux DOES have, unlike NT, is a real
+	 * per-signal pidfd_send_signal(2): this function's one real caller
+	 * (signal.c's kill(), the last-resort arm after
+	 * __sig_try_deliver_remote() -- src/signal/linux/sigdelivery.c's
+	 * own stub, always reporting "no listener" on this platform today
+	 * -- has already declined) always passes __NT_SIGNAL_EXIT(sig), so
+	 * the originally-requested signal number survives inside exitcode
+	 * and is decoded back out below rather than discarded. Sending THAT
+	 * signal, not an unconditional SIGKILL, matters because a raw
+	 * kernel signal to a process with no handler installed still runs
+	 * the kernel's own default action for it -- Term for most signals
+	 * (so WTERMSIG() downstream matches what was actually asked for),
+	 * but Ignore for others (SIGCHLD, SIGWINCH, SIGURG): forcing
+	 * SIGKILL for those turned a delivery that should have been a
+	 * silent no-op into an unconditional kill. A pre-encoded exitcode
+	 * that ISN'T __NT_SIGNAL_EXIT()-shaped never reaches this function
+	 * today (this is its one call site), but SIGKILL is kept as the
+	 * defensive fallback for that case, matching the old unconditional
+	 * behaviour rather than sending signal 0.
+	 *
 	 * kill()'s tolerance for a target already exiting (NT's
 	 * STATUS_PROCESS_IS_TERMINATING special case, this header's own
 	 * comment) needs no equivalent special-casing here:
-	 * pidfd_send_signal(fd, SIGKILL, ...) to a zombie that has not been
+	 * pidfd_send_signal(fd, sig, ...) to a zombie that has not been
 	 * reaped yet still succeeds (the pidfd is still valid), and ESRCH
 	 * is returned only once the process is genuinely gone -- which is
 	 * already the correct, honest POSIX answer for "no such process to
@@ -452,9 +470,9 @@ int __plat_kill_terminate(__plat_handle_t h, int exitcode)
 	long pid = (long)(int)(long)h;
 	long fd = syscall(SYS_pidfd_open, pid, 0L);
 	long ret;
-	(void)exitcode;
+	int sig = __NT_IS_SIGNAL_EXIT(exitcode) ? (exitcode & 0x7f) : SIGKILL;
 	if (is_sys_error(fd)) { errno = (int)-fd; return -1; }
-	ret = syscall(SYS_pidfd_send_signal, fd, (long)SIGKILL, 0L, 0L);
+	ret = syscall(SYS_pidfd_send_signal, fd, (long)sig, 0L, 0L);
 	syscall(SYS_close, fd, 0L, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
