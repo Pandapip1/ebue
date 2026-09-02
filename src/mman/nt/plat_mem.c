@@ -21,6 +21,18 @@
 #define MMAP_PAGE 4096u
 static size_t pground(size_t n) { return (n + MMAP_PAGE - 1) & ~(size_t)(MMAP_PAGE - 1); }
 
+/* NtQueryVirtualMemory() describes page/region boundaries in the process's
+ * flat virtual address space.  A reported BaseAddress can precede the C
+ * allocation containing the query pointer, so these comparisons and
+ * distances are intentionally integer address operations rather than the
+ * same-array pointer operations C's relational and subtraction operators
+ * require.  This is the NT-backend counterpart of mman.c's identical
+ * registry-range helpers. */
+static int addr_lt(const void *a, const void *b) { return (uintptr_t)a < (uintptr_t)b; }
+static int addr_le(const void *a, const void *b) { return (uintptr_t)a <= (uintptr_t)b; }
+static int addr_gt(const void *a, const void *b) { return (uintptr_t)a > (uintptr_t)b; }
+static size_t addr_diff(const void *a, const void *b) { return (size_t)((uintptr_t)a - (uintptr_t)b); }
+
 /* mmap.html "Protection Options" -> NT page protection.  PROT_WRITE
  * without PROT_READ has no NT spelling (there is no write-only page
  * protection), so it widens to read/write; POSIX permits that outright:
@@ -160,7 +172,7 @@ int __plat_mem_protect(void *addr, size_t len, int prot) // NOLINT(bugprone-easi
 {
 	char *p = addr;
 	char *end = p + len;
-	while (p < end) {
+	while (addr_lt(p, end)) {
 		MEMORY_BASIC_INFORMATION mbi;
 		SIZE_T got = 0;
 		char *region_end;
@@ -173,9 +185,9 @@ int __plat_mem_protect(void *addr, size_t len, int prot) // NOLINT(bugprone-easi
 			return -1;
 		}
 		region_end = (char *)mbi.BaseAddress + mbi.RegionSize;
-		if (region_end > end) region_end = end;
-		if (region_end <= p) { errno = ENOMEM; return -1; }
-		z = (SIZE_T)(region_end - p);
+		if (addr_gt(region_end, end)) region_end = end;
+		if (addr_le(region_end, p)) { errno = ENOMEM; return -1; }
+		z = (SIZE_T)addr_diff(region_end, p);
 		q = p;
 		if (mbi.State == MEM_RESERVE) {
 			if (prot != PROT_NONE) {
@@ -210,7 +222,7 @@ static int lock_range_is_mapped(void *addr, size_t len)
 
 	if (len > (size_t)-1 - (size_t)p) { errno = ENOMEM; return 0; }
 	end = p + len;
-	while (p < end) {
+	while (addr_lt(p, end)) {
 		MEMORY_BASIC_INFORMATION mbi;
 		SIZE_T got = 0;
 		NTSTATUS st = NtQueryVirtualMemory(NtCurrentProcess(), p,
@@ -222,10 +234,10 @@ static int lock_range_is_mapped(void *addr, size_t len)
 			return 0;
 		}
 		next = (char *)mbi.BaseAddress + mbi.RegionSize;
-		if (next > end) next = end;
+		if (addr_gt(next, end)) next = end;
 		if (mbi.State == MEM_RESERVE) {
 			PVOID q = p;
-			SIZE_T z = (SIZE_T)(next - p);
+			SIZE_T z = (SIZE_T)addr_diff(next, p);
 			if (!__mman_range_is_live(p, z) ||
 			    !NT_SUCCESS(NtAllocateVirtualMemory(NtCurrentProcess(), &q,
 			        0, &z, MEM_COMMIT, PAGE_NOACCESS))) {
@@ -236,7 +248,7 @@ static int lock_range_is_mapped(void *addr, size_t len)
 			errno = ENOMEM;
 			return 0;
 		}
-		if (next <= p) { errno = ENOMEM; return 0; }
+		if (addr_le(next, p)) { errno = ENOMEM; return 0; }
 		p = next;
 	}
 	return 1;
