@@ -1,0 +1,233 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH SORT 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+sort \- sort, merge, or check lines of text
+.SH SYNOPSIS
+.B sort
+.RB [ \-bdfinru ]
+.RB [ \-k
+.IR keydef ]\ .\|.\|.
+.RB [ \-t
+.IR char ]
+.RB [ \-o
+.IR output ]
+.RI [ file ]\ .\|.\|.
+.br
+.B sort
+.RB [ \-bdfinru ]
+.RB [ \-k
+.IR keydef ]\ .\|.\|.
+.RB [ \-t
+.IR char ]
+.RB [ \-c | \-C ]
+.RI [ file ]
+.SH DESCRIPTION
+.B sort
+reads all of the given
+.I file
+operands (or standard input, if none are given) fully into memory,
+sorts the resulting lines, and writes them to standard output (or to
+the file named by
+.BR \-o ).
+The sort is stable: lines that compare equal keep their original
+relative order.
+.PP
+If no
+.B \-k
+option is given, the sort key for each line is the entire line.
+.PP
+Unless
+.B \-t
+is given, each line is split into fields on runs of one or more
+<blank> characters that follow a non-<blank> character; the leading
+run of <blank> characters on a line, if any, is included in the first
+field rather than stripped. This is not the same field-splitting rule
+.BR join (1)
+applies by default.
+.PP
+When two lines compare equal under the active key(s), the tie is
+broken by a whole-line, unfiltered byte comparison of the two lines
+(honoring
+.B \-r
+if given, but none of
+.BR \-d ,
+.BR \-f ,
+.BR \-i ,
+.BR \-n ,
+or any per-key modifier) \(em unless
+.B \-u
+is given, in which case such a pair is exactly the kind of duplicate
+.B \-u
+exists to collapse, and no tiebreak comparison is performed for it.
+.SH OPTIONS
+.TP
+.B \-b
+Ignore leading <blank> characters when determining the start (and
+end) of a comparison.
+.TP
+.B \-d
+Dictionary order: only <blank> and alphanumeric characters are
+significant in comparisons.
+.TP
+.B \-f
+Fold lowercase characters to uppercase for comparison purposes.
+.TP
+.B \-i
+Ignore non-printable characters in comparisons.
+.TP
+.B \-n
+Compare numerically: leading <blank> characters and an optional
+leading
+.B \-
+sign are skipped, then as many leading decimal digits as follow are
+read as the value to compare; anything after that in the key is not
+significant.
+.TP
+.B \-r
+Reverse the sense of comparisons.
+.TP
+.B \-u
+Suppress all but the first of a run of lines with equal keys (unique
+by key, not necessarily unique by full line content).
+.TP
+.BI \-k " keydef"
+Restrict comparison to the field range named by
+.IR keydef ,
+instead of the whole line. May be given more than once; when more
+than one
+.B \-k
+is given, keys are compared in the order given, and the first one
+that does not compare equal decides the result.
+.IP
+.I keydef
+has the grammar \fIfield_start\fR[\fItype\fR][,\fIfield_end\fR[\fItype\fR]],
+where each of
+.I field_start
+and
+.I field_end
+is \fIF\fR[.\fIC\fR] (\fIF\fR a 1-based field number,
+.I C
+an optional 1-based character position within that field), and
+.I type
+is zero or more of the letters
+.BR b ,
+.BR d ,
+.BR f ,
+.BR i ,
+.BR n ,
+.B r
+attached directly with no separator. Omitting
+.I C
+on
+.I field_start
+means the first character of the field; omitting it (or giving 0) on
+.I field_end
+means the last character of the field. If
+.I field_end
+is omitted entirely, the key runs from
+.I field_start
+to the end of the line, not just to the end of that field.
+.IP
+If any
+.I type
+letter is attached anywhere in a
+.IR keydef ,
+that key is compared using only its own attached letters, and none of
+the global
+.BR \-b / \-d / \-f / \-i / \-n / \-r
+options apply to it. A
+.B b
+letter attached to either
+.I field_start
+or
+.I field_end
+is applied to both ends of that key.
+.IP
+At most 64
+.B \-k
+options may be given.
+.TP
+.BI \-t " char"
+Use
+.I char
+as the field separator, instead of the default <blank>-run rule
+described above: every occurrence of
+.I char
+on a line is significant, so adjacent occurrences produce an empty
+field between them.
+.TP
+.BI \-o " output"
+Write the sorted result to
+.I output
+instead of standard output.
+.I output
+may safely be the same pathname as one of the input
+.I file
+operands, since every input line is read into memory before
+.I output
+is opened.
+.TP
+.B \-c
+Check that the single input
+.I file
+(standard input, if none is given) is already sorted according to the
+active options, instead of sorting and writing it. At most one
+.I file
+operand may be given with
+.BR \-c .
+If the input is out of order, a diagnostic naming the first
+out-of-order line is written to standard error. If
+.B \-u
+is also given, two adjacent lines with equal keys are likewise
+treated as a check failure.
+.TP
+.B \-C
+Same as
+.BR \-c ,
+but suppresses the diagnostic message; only the exit status reports
+the result.
+.SH OPERANDS
+.TP
+.I file
+A pathname of an input file, or
+.B \-
+for standard input. Up to 256 file operands may be given.
+.SH APPLICATION USAGE
+.B \-m
+(merge already-sorted inputs, without re-sorting) is a real
+.B sort
+option that is not implemented here; it is refused with a diagnostic
+rather than silently performing a full sort instead.
+.SH EXIT STATUS
+.TP
+.B 0
+The input was written successfully, or, under
+.B \-c
+or
+.BR \-C ,
+the input was already correctly ordered.
+.TP
+.B 1
+Under
+.B \-c
+or
+.BR \-C ,
+the input was not correctly ordered, or (with
+.B \-u
+also given) two lines with equal keys were found.
+.TP
+.B >1
+An error occurred: an invalid option or option argument, too many
+.B \-k
+options or file operands, more than one file operand with
+.B \-c
+or
+.BR \-C ,
+an unreadable input file, an unwritable output file, or an
+out-of-memory condition.
+.SH SEE ALSO
+.BR uniq (1),
+.BR comm (1),
+.BR join (1),
+.BR tsort (1)

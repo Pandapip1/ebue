@@ -1,0 +1,56 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH TSORT 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+tsort \- topological sort
+.SH SYNOPSIS
+.B tsort
+.RI [ file ]
+.SH DESCRIPTION
+.B tsort
+reads
+.I file
+(or standard input, if
+.I file
+is omitted or is
+.BR \- )
+and writes a totally ordered list of items, one per line, that is
+consistent with a partial ordering described by the input.
+.PP
+The input consists of pairs of items (non-empty, whitespace-separated
+tokens); the two items of a pair may be separated by any run of
+<blank> or <newline> characters. A pair of two different items
+indicates that the first must precede the second in the output; a
+pair of two identical items only records that item's presence, adding
+no ordering constraint. It is an error for the input to contain an
+odd number of tokens, since the pairs would not all close.
+.PP
+When more than one ordering is consistent with the input, ties are
+broken by the order in which items were first seen in the input.
+.PP
+If the input's ordering constraints contain a cycle, no valid total
+ordering exists.
+.B tsort
+detects this, writes to standard output whatever prefix of the
+ordering it was able to determine before the cycle blocked further
+progress, then reports every item still involved in the unresolved
+part of the graph on standard error, and exits with a non-zero
+status.
+.SH OPERANDS
+.TP
+.I file
+The pathname of the file to read. If omitted, or given as
+.BR \- ,
+standard input is used. At most one
+.I file
+operand may be given.
+.SH EXIT STATUS
+.TP
+.B 0
+A complete, cycle-free ordering was produced.
+.TP
+.B 1
+The input contained a cycle, an odd number of tokens, too many
+operands, an unreadable file, or an out-of-memory condition.
+.SH SEE ALSO
+.BR sort (1)
