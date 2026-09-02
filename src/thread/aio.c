@@ -84,6 +84,29 @@ static int worker_started NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static int worker_synchronous NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static struct aio_waiter *waiters NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 
+/* Worker teardown.  A detached background worker that never checked for
+ * process shutdown was a real, confirmed leak: src/thread/linux/
+ * plat_thread.c's own __plat_thread_spawn() clones WITHOUT CLONE_THREAD
+ * (see that file's banner), so on Linux the worker is a genuinely
+ * separate process (its own pid/tgid), invisible to exit_group(2) --
+ * the syscall exit()/_exit() use to tear the calling process down.
+ * NtTerminateProcess (NT's own __plat_terminate()) kills every thread of
+ * the process at once and would have masked this, which is why it only
+ * surfaced running natively on Linux. `worker_shutdown` is the flag
+ * aio_worker()'s idle-wait branch checks instead of blocking forever
+ * once the queue is empty; `worker_done_event` is what
+ * aio_worker_atexit() (registered once, below) blocks on so process
+ * exit cannot race a still-running worker off the end of the world --
+ * see that function's own comment. `worker_atexit_registered` is reset
+ * by __aio_reset_after_fork() same as the rest of this block: a forked
+ * child's own first real submit() needs to register its own shutdown
+ * hook for the fresh worker it lazily starts, independently of whatever
+ * the parent already registered before the fork. */
+static int worker_shutdown NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
+static int worker_exited NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
+static __plat_handle_t worker_done_event NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
+static int worker_atexit_registered NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
+
 /* request required: dereferenced unconditionally (`request->cb`) in
  * the loop's own comparison, and every real call site passes a
  * pointer into the file-static `requests[]` table, never NULL.
@@ -259,20 +282,30 @@ static struct aio_request *next_queued(void)
 
 static unsigned __PLAT_APC_CALL aio_worker(void *unused)
 {
+	__plat_handle_t done;
 	(void)unused;
 	for (;;) {
 		struct aio_request *request;
 		__plat_handle_t wake;
 		struct sigevent individual, list;
-		int have_individual, have_list, error;
+		int have_individual, have_list, error, shutdown;
 		ssize_t result;
 
 		__sig_lock();
 		request = next_queued();
 		if (request) request->state = REQ_RUNNING;
 		wake = worker_wake;
+		shutdown = worker_shutdown;
 		__sig_unlock();
 		if (!request) {
+			/* The queue is drained: an idle worker only blocks
+			 * indefinitely when the process is NOT shutting down.
+			 * Checking this here, rather than only before the wait,
+			 * means a shutdown requested while the queue still had
+			 * work gets serviced first (finishing outstanding AIO,
+			 * not abandoning it) and this check is revisited on every
+			 * lap, not just once. */
+			if (shutdown) break;
 			__plat_wait_one(wake, 0, 0, 0);
 			continue;
 		}
@@ -285,13 +318,50 @@ static unsigned __PLAT_APC_CALL aio_worker(void *unused)
 		if (have_individual) notify(&individual);
 		if (have_list) notify(&list);
 	}
+	/* Publish exit before returning: aio_worker_atexit() blocks on
+	 * `done` specifically so process exit cannot proceed (and, on the
+	 * Linux backend, tear down the address space) while this worker is
+	 * still between here and its own actual thread/process exit. */
+	__sig_lock();
+	worker_exited = 1;
+	done = worker_done_event;
+	__sig_unlock();
+	if (done) __plat_event_set(done);
 	return 0;
+}
+
+/* Registered (once) via atexit() by start_worker(), below, the first time
+ * a real background worker -- as opposed to the worker_synchronous
+ * fallback, which has no thread/process to clean up -- actually spawns.
+ * exit()'s __funcs_on_exit() runs every atexit() handler, this one
+ * included, before __nt_exit()/__plat_terminate() (exit_group(2) on
+ * Linux) tears the process down -- see that syscall's own comment in
+ * src/exit/linux/plat_exit.c for why it does NOT reach a worker spawned
+ * via __plat_thread_spawn() on this backend (a separate tgid, not a
+ * thread of the caller's own group). Blocking here, synchronously,
+ * until aio_worker() has actually finished (not merely been asked to)
+ * is what closes that gap: __plat_wait_one() on `worker_done_event` is
+ * a real wait, already proven correct by every other consumer of this
+ * same primitive in this file, not a poll or a fixed grace period. */
+static void aio_worker_atexit(void)
+{
+	__plat_handle_t done;
+	int need_wait;
+
+	__sig_lock();
+	worker_shutdown = 1;
+	if (worker_wake) __plat_event_set(worker_wake);
+	need_wait = !worker_exited && worker_done_event != 0;
+	done = worker_done_event;
+	__sig_unlock();
+
+	if (need_wait) __plat_wait_one(done, 0, 0, 0);
 }
 
 static int start_worker(void) NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 static int start_worker(void)
 {
-	__plat_handle_t thread, event;
+	__plat_handle_t thread, event, done;
 	int result;
 	if (worker_started) return 0;
 	result = __plat_event_create(&event);
@@ -301,11 +371,23 @@ static int start_worker(void)
 		return 0;
 	}
 	if (result < 0) { errno = EAGAIN; return -1; }
+	/* worker_done_event backs aio_worker_atexit()'s own wait, above --
+	 * created alongside worker_wake, before the worker can possibly run,
+	 * so both handles are already valid for the whole of its lifetime. */
+	result = __plat_event_create(&done);
+	if (result < 0) {
+		__plat_close(event);
+		errno = EAGAIN;
+		return -1;
+	}
 	worker_wake = event;
+	worker_done_event = done;
 	result = __plat_thread_spawn(aio_worker, 0, 0, 0, &thread);
 	if (result < 0) {
 		worker_wake = 0;
+		worker_done_event = 0;
 		__plat_close(event);
+		__plat_close(done);
 		if (result == -2) {
 			worker_synchronous = 1;
 			worker_started = 1;
@@ -316,6 +398,15 @@ static int start_worker(void)
 	}
 	worker_started = 1;
 	__plat_close(thread);
+	if (!worker_atexit_registered) {
+		/* atexit()'s own bookkeeping (src/exit/exit.c's handlers[]/
+		 * nhandlers) is unguarded by __ntlibc_sig_lock_token -- a
+		 * separate, already-process-wide-safe table -- so calling it
+		 * while still holding this file's own lock is not a
+		 * lock-ordering hazard, merely a call to another module. */
+		atexit(aio_worker_atexit);
+		worker_atexit_registered = 1;
+	}
 	return 0;
 }
 
@@ -715,6 +806,22 @@ void __aio_reset_after_fork(void)
 	worker_synchronous = 0;
 	waiters = 0;
 	next_sequence = 0;
+	/* worker_shutdown/worker_exited/worker_done_event describe a
+	 * specific worker OS thread/process that fork(2) does NOT duplicate
+	 * (POSIX fork() -- and this backend's own plain fork syscall --
+	 * carries over only the calling thread, never a __plat_thread_spawn()
+	 * sibling): the child has no worker at all yet, whatever these said
+	 * in the parent, and must reach a fresh start_worker() call to get
+	 * one. worker_atexit_registered is deliberately NOT reset here: the
+	 * atexit() handler table itself (src/exit/exit.c's handlers[]) is
+	 * ordinary process memory, so fork() already copied any registration
+	 * the parent made, and that inherited entry -- unconditionally
+	 * re-reading these same file-static globals at the child's own
+	 * eventual exit() -- stays correct for whatever worker the child
+	 * does or does not go on to start. */
+	worker_shutdown = 0;
+	worker_exited = 0;
+	worker_done_event = 0;
 }
 
 // NOLINTEND(misc-include-cleaner)

@@ -867,6 +867,61 @@ obj/test/dlfix_tls.so: $(srcdir)/test/dl-linux-fixtures/dlfix_tls.c | obj/test
 obj/test/posix-dl-linux.exe: obj/test/dlfix_dep.so obj/test/dlfix_needs.so obj/test/dlfix_ctor.so obj/test/dlfix_tls.so
 endif
 
+# test/posix-realtime-linux.c: regression coverage for the AIO
+# worker-process leak this file's own header comment documents in full
+# (src/thread/aio.c's worker never checked for shutdown, and
+# src/thread/linux/plat_thread.c's own __plat_thread_spawn() clones
+# without CLONE_THREAD, so exit_group(2) never swept it). Gated exactly
+# like test/posix-dl-linux.c just above -- fork()/waitpid()/a real
+# /proc scan only mean anything against this native Linux backend, not
+# an NT/Wine target with no /proc and no such worker-vs-thread split at
+# all (NtTerminateProcess already tears every thread down together
+# there, so there is nothing this test could observe leaking).
+TEST_SRCS := $(filter-out $(srcdir)/test/posix-realtime-linux.c,$(TEST_SRCS))
+ifeq ($(PLATFORM),linux)
+TEST_SRCS += $(srcdir)/test/posix-realtime-linux.c
+TEST_EXES := $(patsubst $(srcdir)/test/%.c,obj/test/%.exe,$(TEST_SRCS))
+
+# test/aio-leak-helper-src/aio-leak-helper.c: the standalone helper
+# process posix-realtime-linux.exe execve()s -- see that helper's own
+# header comment for why it is a separate program rather than AIO calls
+# made straight in a fork()'d child. Kept in its own subdirectory, out
+# of the flat test/*.c glob entirely, the same reason test/dl-linux-
+# fixtures/ is (a plain "does argv[1] exist" helper, not a self-
+# contained pass/fail test TEST_RUN could run on its own).
+#
+# Both this rule and posix-realtime-linux.exe's own override just below
+# add a bare `-lgcc` this pass's own testing surfaced as newly necessary:
+# fork()/wait()/exec() (src/process/{fork,wait,exec}.c) pull in this
+# object's own long-double math object files (src/math/{trig,exp,log,
+# pow,floor}.c -- confirmed by bisection, not guessed: a two-line probe
+# using only fork()+execv()+waitpid(), nothing math-related at all, hits
+# the identical undefined __eqtf2/__subtf3/__extendsftf2/... symbols),
+# whose 128-bit soft-float code these clang/binutils' own `-nostdlib`
+# link never supplies a definition for on its own. `make obj/sh/sh.exe`
+# -- this Makefile's own already-documented PLATFORM=linux claim (see
+# the ALL_LIBS comment above) -- was RE-CONFIRMED BROKEN by this same
+# probe before adding this: a real, pre-existing gap this pass's own
+# fork()+exec() regression test is the first thing in this tree to
+# actually trip on PLATFORM=linux, not something introduced here. Fixed
+# narrowly, for these two test binaries only (their own explicit
+# `-lgcc`), rather than added to TESTPROG_LIBS/PROG_LIBS project-wide:
+# that broader fix is real, disclosed follow-up work of its own (does
+# every PLATFORM=linux program that touches fork/exec need it? does
+# `-lgcc`'s own libgcc.a interact safely with sh.exe's or
+# ntlibc-tcc's other dependencies?), genuinely separate from and out of
+# scope for the AIO worker-leak fix this test exists to prove.
+obj/test/aio-leak-helper.exe: $(srcdir)/test/aio-leak-helper-src/aio-leak-helper.c $(ALL_LIBS) | obj/test
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ $(TESTPROG_CRT) $< -Llib $(TESTPROG_LIBS) -lgcc
+
+# Overrides the generic obj/test/%.exe pattern rule (a more specific,
+# explicit rule always wins over a pattern rule in GNU make) purely to
+# add the same `-lgcc` -- see aio-leak-helper.exe's own comment just
+# above for why. Otherwise byte-identical to that generic recipe.
+obj/test/posix-realtime-linux.exe: $(srcdir)/test/posix-realtime-linux.c $(ALL_LIBS) obj/test/aio-leak-helper.exe | obj/test
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) $(TEST_DEPFLAGS) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ $(TESTPROG_CRT) $< -Llib $(TESTPROG_LIBS) -lgcc
+endif
+
 obj/test:
 	mkdir -p $@
 
