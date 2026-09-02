@@ -269,6 +269,61 @@ static void test_adddup2_stderr(void)
 	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
 }
 
+/* Regression test for a genuine Linux-backend bug in
+ * src/process/linux/plat_process.c's __plat_process_spawn(): the raw
+ * Linux fd number backing this process's OWN fd 0/1/2 is a completely
+ * separate namespace from the small integer 0/1/2 a std[] slot is being
+ * moved TO, and nothing kept those apart. The do_action() __SPAWN_DUP2
+ * case (src/process/posix_spawn.c) creates the child's future fd 2 via
+ * a plain dup(2) on the pipe's write end -- a NEW raw fd the kernel
+ * hands back as the lowest currently free one. If the caller's own fd 0
+ * happens to be closed right before the spawn, that lowest-free slot is
+ * fd 0 itself, so the new descriptor backing (future) fd 2 could be raw
+ * fd 0. The (once-buggy) child-side loop then processed target index 0
+ * first -- std[0] is closed, so it issued a raw close(0) -- destroying
+ * the very raw fd that target index 2 still needed as ITS OWN source;
+ * dup3()'s return value was never checked, so that failure was silent:
+ * execve() ran anyway and the child's real fd 2 came up as whatever it
+ * already was (this test's own inherited stderr), not the pipe.
+ *
+ * This is exactly stderr redirection, closing fd 0 first is a common
+ * and unremarkable thing for a real caller to do (e.g. a daemon or a
+ * build tool feeding a child no stdin at all), and the resulting
+ * failure was completely silent -- posix_spawn() itself still returned
+ * 0. Confirmed against the unfixed backend with a standalone
+ * reproducer before this test was added; confirmed fixed after. */
+static void test_stderr_survives_closed_stdin(void)
+{
+	posix_spawn_file_actions_t fa;
+	char got[64];
+	int p[2], rc = -1, saved_stdin;
+
+	/* pipe() first, while fd 0 is still open, so p[0]/p[1] land above
+	 * it as usual; fd 0 is freed only right before the spawn, so it is
+	 * the lowest free raw fd exactly when the dup2 file action's own
+	 * internal dup(2) runs. */
+	CHECK(pipe(p) == 0);
+
+	saved_stdin = dup(0);
+	CHECK(saved_stdin >= 0);
+	if (saved_stdin < 0) { close(p[0]); close(p[1]); return; }
+
+	CHECK(close(0) == 0);
+
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, p[1], 2) == 0);
+	spawn_and_collect(&rc, &fa, 0, "w2", "onerr", 0, p[1], p[0], got, sizeof got);
+	CHECK(rc == 0);
+	CHECK(!strcmp(got, "onerr"));
+	close(p[0]);
+	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
+
+	/* Put the caller's own fd 0 back -- every test after this one in
+	 * the same process still expects a real stdin. */
+	CHECK(dup2(saved_stdin, 0) == 0);
+	close(saved_stdin);
+}
+
 /* Order, part 1: two actions with the *same target*.  Whichever ran last
  * wins, so a replay in the wrong order sends the output down the other
  * pipe -- a specific wrong answer, not a crash. */
@@ -1118,6 +1173,7 @@ int main(int argc, char **argv)
 	test_addopen_copies_path();
 	test_adddup2_stdout();
 	test_adddup2_stderr();
+	test_stderr_survives_closed_stdin();
 	test_order_two_targets();
 	test_order_chained();
 	test_addclose();
