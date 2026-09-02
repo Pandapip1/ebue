@@ -247,8 +247,29 @@ static void test_select(void)
 	__plat_wait_multiple(&ev, 1, 50000000LL /* 5s, should return immediately */, 0);
 	t1 = now_ms();
 	CHECK(t1 - t0 < 2000, "__plat_wait_multiple() returns promptly when the handle is already signalled, not after the full 5s budget");
-	CHECK(__plat_event_peek(ev) == 1, "the eventfd is still readable after __plat_wait_multiple() (poll() does not consume it)");
-	syscall(SYS_close, (long)((long)ev - 1));
+	/* __plat_event_peek() is NOT this check any more (src/signal/linux/
+	 * plat_signal.c's own banner on it): it was redesigned to take a
+	 * struct ntlibc_linux_sync* from the sync-object domain
+	 * (src/thread/linux/plat_thread.c's __plat_event_set()), not this
+	 * file's box()/unbox() eventfd domain `ev` is in here.
+	 * __plat_wait_ready() (src/select/linux/plat_select.c) is that
+	 * domain's own nonblocking, non-consuming poll() check -- the same
+	 * one this test already uses on pipes/sockets above. */
+	CHECK(__plat_wait_ready(ev) == 1, "the eventfd is still readable after __plat_wait_multiple() (poll() does not consume it)");
+	/* The real close() front door (src/unistd/close.c), not a raw
+	 * syscall: __plat_sigevent_create() registers this eventfd's real
+	 * kernel fd in the real __fds[] table via __fd_install() (see
+	 * main()'s own __fd_init() comment above), so a raw
+	 * syscall(SYS_close, ...) here would free the real descriptor but
+	 * leave that table slot marked occupied forever -- the next
+	 * __fd_alloc(0) would then skip it and hand back a HIGHER slot than
+	 * the kernel's own reused (now lower) fd number for the next
+	 * eventfd, breaking the same box()/unbox() "same number" invariant
+	 * all over again. Every other raw close() in this file targets a
+	 * fd that was never installed in the table to begin with (this
+	 * pilot's pipe/socketpair/openat setup is deliberately raw syscalls
+	 * only -- see this file's own banner), so those stay raw. */
+	close((int)((long)ev - 1));
 
 	t0 = now_ms();
 	__plat_delay(500000LL /* 50ms, 100ns ticks */, 0);
@@ -268,9 +289,22 @@ static void test_signal_events(void)
 
 	ev = __plat_sigevent_create(1);
 	CHECK(ev != __PLAT_HANDLE_NULL, "__plat_sigevent_create(1) (initially signalled)");
-	CHECK(__plat_event_peek(ev) == 1, "__plat_event_peek() sees the initial signal");
-	CHECK(__plat_event_peek(ev) == 0, "__plat_event_peek() is auto-reset: a second peek finds nothing");
-	syscall(SYS_close, (long)((long)ev - 1));
+	/* __plat_event_peek() no longer applies to this eventfd domain --
+	 * see the identical note above, test_select(). __plat_wait_ready()
+	 * (non-consuming) plus a real, direct consuming read(2) reproduces
+	 * the same "peek, then auto-reset" check this used to make through
+	 * __plat_event_peek(), using the EFD_SEMAPHORE counter's own real
+	 * semantics (one unit consumed per successful read(2), the same
+	 * primitive src/signal/linux/plat_signal.c's own __plat_signal_wait()
+	 * uses to consume this domain's handle). */
+	CHECK(__plat_wait_ready(ev) == 1, "the initial signal is visible before anything reads it");
+	{
+		unsigned long long val = 0;
+		long n = syscall(SYS_read, (long)((long)ev - 1), &val, 8L);
+		CHECK(n == 8 && val == 1, "a real read(2) consumes exactly the one initial signal");
+	}
+	CHECK(__plat_wait_ready(ev) == 0, "auto-reset: after that read, nothing is left to see");
+	close((int)((long)ev - 1)); /* real close() -- see test_select()'s own comment on why */
 
 	ev = __plat_sigevent_create(0);
 	CHECK(ev != __PLAT_HANDLE_NULL, "__plat_sigevent_create(0) (not initially signalled)");
@@ -289,7 +323,7 @@ static void test_signal_events(void)
 	t1 = now_ms();
 	CHECK(t1 - t0 < 2000, "__plat_signal_wait() wakes promptly once the event is signalled, not after the full 5s budget");
 
-	syscall(SYS_close, (long)((long)ev - 1));
+	close((int)((long)ev - 1)); /* real close() -- see test_select()'s own comment on why */
 
 	CHECK(__plat_segv_code((void *)&failures) == SEGV_ACCERR,
 	      "__plat_segv_code() on this process's own mapped .bss reports SEGV_ACCERR (mapped, real msync(2) probe)");
@@ -378,6 +412,33 @@ static void test_signal_process(pid_t target)
 
 int main(int argc, char **argv)
 {
+	/* __plat_sigevent_create() (src/signal/linux/plat_signal.c) now
+	 * registers its eventfd through the REAL src/internal/fd.c
+	 * __fd_install() (see that file's own commit message: "wake_event's
+	 * eventfd is now registered through __fd_install()"), and box()es
+	 * the SLOT __fd_install() hands back, not the raw kernel fd
+	 * eventfd2(2) returned -- every other plat_signal.c/plat_select.c
+	 * function that unbox()es an event handle then uses that number
+	 * directly in a real syscall, so the two must be the same number.
+	 * They only are if the __fds[] table's own "lowest free slot"
+	 * bookkeeping is in lockstep with the kernel's own lowest-free-fd
+	 * allocator, which requires __fd_init() to have already registered
+	 * whatever this process inherited (0/1/2) -- exactly what
+	 * crt/linux/crt1.c's real startup now does before __signal_init()
+	 * (same commit). This pilot has no crt1.c/_start of its own, so
+	 * nothing called __fd_init() until this line: without it, __fds[]
+	 * starts believing slot 0 is free, __fd_alloc(0) hands the eventfd
+	 * table slot 0 while the kernel's own eventfd2(2) returned a
+	 * different, already-in-use real fd, and every later raw syscall
+	 * this file or plat_signal.c makes against the wrong "same" number
+	 * hits some unrelated real descriptor instead -- reproduced
+	 * directly as a raw `write(0, ...)` landing on this process's own
+	 * stdin. Every temporary fd this test opens for its own setup
+	 * (below) is always closed before the next __plat_sigevent_create()
+	 * call, so the kernel's own reused low numbers keep matching the
+	 * table's after this. */
+	__fd_init();
+
 	if (argc >= 2 && streq(argv[1], "exit-test")) {
 		/* __plat_terminate() directly -- see this file's own banner for
 		 * why exit.c's front door is not used here. tools/

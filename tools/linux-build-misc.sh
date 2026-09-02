@@ -93,10 +93,73 @@ FILES="
 	src/select/linux/plat_select.c
 	src/signal/linux/plat_signal.c
 	src/unistd/linux/plat_fd.c
+	src/unistd/close.c
+	src/internal/fd.c
+	src/internal/linux/plat_fd_init.c
 	src/internal/errno.c
+	src/malloc/crt_alloc.c
+	src/malloc/linux/plat_malloc.c
+	src/thread/linux/plat_thread.c
 	fuzz/linux_pilot_harness_misc.c
 	fuzz/linux_pilot_test_misc.c
 "
+# src/unistd/close.c, src/internal/fd.c, src/internal/linux/
+# plat_fd_init.c, src/malloc/crt_alloc.c, src/malloc/linux/
+# plat_malloc.c and src/thread/linux/plat_thread.c were all missing
+# until commit 66367136 ("Install real rt_sigaction(2) hardware-fault
+# delivery on Linux/aarch64") made src/signal/linux/plat_signal.c's
+# __plat_sigevent_create() register its eventfd through the REAL
+# src/internal/fd.c __fd_install(), a call this script's FILES list
+# had never needed to satisfy before -- a real, previously-hidden gap
+# CI never reached because tools/linux-build-crt.sh and then
+# tools/linux-build-fs.sh always failed to link first. Traced by
+# reading each new file's own #includes/calls, one real gap at a time,
+# exactly like tools/linux-build-crt.sh's own history:
+#   - src/internal/fd.c: __fd_install() itself -- plat_signal.c's own
+#     call
+#   - src/internal/linux/plat_fd_init.c: __handle_type() -- fd.c's own
+#     __fd_install_at() calls it whenever a caller (as here) passes
+#     type=0
+#   - src/malloc/crt_alloc.c + src/malloc/linux/plat_malloc.c:
+#     __malloc()/__free() -- fd.c's own __fd_release_dynamic(), called
+#     unconditionally by __fd_install_at() (same gap tools/
+#     linux-build-fs.sh's own comment already documents)
+#   - src/thread/linux/plat_thread.c: __plat_thread_alertable_yield()
+#     -- the allocator's own lock (src/internal/plat_malloc_generic.h's
+#     ntlibc_malloc_lock(), reached for real by __malloc()/__free()
+#     above); __plat_thread_spawn() (this file's only OTHER function
+#     needing anything unresolved, __ntlibc_linux_clone() in
+#     src/thread/linux/clone_aarch64.S) is never called by anything in
+#     this FILES list, so --gc-sections drops it before the link ever
+#     needs that symbol -- confirmed by linking successfully without
+#     clone_aarch64.S at all
+#   - src/unistd/close.c: needed so this pilot's own eventfd close()s
+#     go through the SAME __fds[] table __fd_install() just registered
+#     them in, not a raw syscall that frees the real descriptor while
+#     leaving its table slot marked occupied forever (see fuzz/
+#     linux_pilot_test_misc.c's own comment on this, and its main()'s
+#     __fd_init() comment for the matching table-desync gap that surfaced
+#     first)
+#
+# fuzz/linux_pilot_harness_misc.c's own __fd_limit stub was removed as
+# part of the same fix: src/internal/fd.c now supplies the real one,
+# and a second definition would collide with it.
+#
+# fuzz/linux_pilot_test_misc.c itself needed two real fixes once it
+# could finally link and run for the first time since that commit:
+# __plat_event_peek()'s own contract moved to a different handle domain
+# in a later commit in the same chain (1e3d2165, "Fix genuine hang in
+# posix-signal-crossproc.c stop-signal job control") that this test's
+# eventfd-domain calls to it were never updated to match (replaced with
+# __plat_wait_ready()/a direct consuming read(2), the correct
+# counterparts for this domain); and main() now calls __fd_init() before
+# anything else, the same real fd-table bootstrap crt/linux/crt1.c's
+# own startup now performs before __signal_init() (also commit
+# 66367136) -- without it this pilot's own __fds[] table starts out of
+# sync with the kernel's real fd numbering, and __plat_sigevent_create()
+# box()es a table slot that stops matching the real kernel fd every
+# other plat_signal.c/plat_select.c function unbox()es directly into a
+# raw syscall.
 
 echo "$TAG: compiling ($CC, native ELF)..."
 objs=""

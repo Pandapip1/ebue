@@ -19,11 +19,6 @@
  * src/misc/resource.c front doors end to end rather than calling this
  * session's plat_misc.c backend functions in isolation.
  *
- *   __fd_limit          -- src/internal/fd.c's live descriptor ceiling;
- *                        resource.c's getrlimit(RLIMIT_NOFILE) reads it
- *                        and setrlimit(RLIMIT_NOFILE) writes it. A
- *                        plain global is enough: no real fd table is
- *                        exercised by this test.
  *   __child_find()       -- src/process/'s pid table (src/internal/
  *                        libc.h). sched.c's process_exists() and
  *                        resource.c's getpriority()/setpriority()
@@ -45,6 +40,15 @@
  *                        makes -- needed only so the linker has a body
  *                        for a call site the compiler cannot prove
  *                        dead.
+ *   __mq_fd_closed()     -- mqueue bookkeeping (src/internal/libc.h);
+ *                        referenced unconditionally by the REAL
+ *                        src/unistd/close.c this pilot now links (see
+ *                        tools/linux-build-misc.sh's own note on why
+ *                        close() joined the FILES list). This test
+ *                        never opens an mqd_t, so there is nothing for
+ *                        this hook to release -- the same no-op stand-
+ *                        in fuzz/linux_pilot_harness_fs.c already uses
+ *                        for the identical reason.
  */
 #include <sys/types.h>
 #include <sys/resource.h>
@@ -59,13 +63,13 @@
 
 extern long syscall(long number, ...);
 
-int __fd_limit = FD_MAX;
-
 struct __child *__child_find(int pid) { (void)pid; return 0; }
 
 void __rusage_children(struct rusage *ru) { if (ru) __builtin_memset(ru, 0, sizeof *ru); }
 
 int __raise_internal(int sig) { (void)sig; return 0; }
+
+void __mq_fd_closed(int fd) { (void)fd; }
 
 pid_t getpid(void) { return (pid_t)syscall(SYS_getpid); }
 pid_t getppid(void) { return (pid_t)syscall(SYS_getppid); }
