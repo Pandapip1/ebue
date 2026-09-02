@@ -1,39 +1,32 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Coverage fences for <netdb.h> -- UPDATE (this pass): ntlibc now HAS
- * a <netdb.h>, on Linux (include/netdb.h; src/netdb/linux/); see that
- * header's own banner for exact scope (getaddrinfo()/freeaddrinfo()/
- * gai_strerror() plus gethostbyname() as a disclosed legacy addition,
- * backed by a real /etc/hosts parser, a real minimal UDP DNS stub
- * resolver, and a real /etc/nsswitch.conf parser). The
- * posix_netdb_getaddrinfo_loopback and posix_netdb_gai_strerror_text
- * fences below are UNWRAPPED accordingly -- they now run for real,
- * every call site's original clause citations kept verbatim (nothing
- * about what they assert changed, only whether the code compiles). New,
- * non-POSIX-clause-audit coverage for this pass's own real backends --
- * the /etc/hosts and /etc/nsswitch.conf fixture behavior, and a real
- * UDP round trip against a hermetic fake DNS server this file spins up
- * itself -- is appended after the original POSIX audit content, not
- * mixed into it.
+ * <netdb.h> coverage. ntlibc now HAS a <netdb.h>, on Linux
+ * (include/netdb.h; src/netdb/linux/); see that header's own banner
+ * for exact scope (getaddrinfo()/freeaddrinfo()/
+ * gai_strerror(), getnameinfo(), all four enumerable databases --
+ * service/protocol/host/network -- plus gethostbyname() as a disclosed
+ * legacy addition, backed by a real /etc/hosts parser, a real minimal
+ * UDP DNS stub resolver, and a real /etc/nsswitch.conf parser). Every
+ * test below that used to be an UNIMPL fence is UNWRAPPED accordingly
+ * and runs for real, each call site's original clause citations kept
+ * verbatim (nothing about what they assert changed, only whether the
+ * code compiles). New, non-POSIX-clause-audit coverage for the real
+ * backends -- the /etc/hosts and /etc/nsswitch.conf fixture behavior,
+ * and a real UDP round trip against a hermetic fake DNS server this
+ * file spins up itself -- is appended after the original POSIX audit
+ * content, not mixed into it.
  *
- * UPDATE (this later pass): getnameinfo() and all four enumerable
- * databases (service/protocol/host/network) are real now too --
- * include/netdb.h's own banner has the full inventory. Every remaining
- * UNIMPL fence below (posix_netdb_getnameinfo_numeric,
- * posix_netdb_getservbyname_wellknown, posix_netdb_getprotobyname_tcp,
- * posix_netdb_hostent_sequential_access, posix_netdb_netent_lookup) is
- * UNWRAPPED accordingly, each call site's original clause citations
- * again kept verbatim. Two of the five needed a real, disclosed change
- * beyond just deleting the #if: posix_netdb_hostent_sequential_access
- * and posix_netdb_netent_lookup originally walked whatever this host's
+ * Two of the unwrapped tests, posix_netdb_hostent_sequential_access and
+ * posix_netdb_netent_lookup, needed a real, disclosed change beyond
+ * just deleting the #if: they originally walked whatever this host's
  * own real /etc/hosts / /etc/networks happened to contain, which is
  * unsound the moment that file is large (this environment's own real
- * /etc/hosts is an ad-block list with tens of thousands of entries,
- * measured directly while verifying this pass -- see each test's own
- * comment for the fix, the same NTLIBC_TEST_HOSTS_PATH-shaped fixture
- * override src/internal/nss_paths.h already provides and this file's
- * own test_netdb_hosts_fixture() already uses for the identical reason).
+ * /etc/hosts is an ad-block list with tens of thousands of entries) --
+ * see each test's own comment for the fix, the same
+ * NTLIBC_TEST_HOSTS_PATH-shaped fixture override src/internal/
+ * nss_paths.h already provides and this file's own
+ * test_netdb_hosts_fixture() already uses for the identical reason.
  *
 
  * POSIX.1-2017 (IEEE Std 1003.1-2017, The Open Group Base
@@ -83,12 +76,12 @@
  * array, and NT ships %SystemRoot%\system32\drivers\etc\services in
  * exactly the /etc/services format.
  *
- * ==================== how these fail today ===========================
+ * ==================== how these failed originally =====================
  *
- * include/ has no netdb.h, so every fence dies on its own #include and
- * that is the ABSENCE these assert -- UNIMPL, not BUG.
- * tools/test-policy.py --pedantic re-decides each one; this comment is
- * not the authority for it.
+ * Every one of the 22 started out UNIMPL: include/ had no netdb.h, so
+ * every fence died on its own #include, and that ABSENCE is what an
+ * UNIMPL fence (rather than BUG) asserts. All 22 are unwrapped now, per
+ * this file's opening paragraph.
  *
  * Not fenced here, with reasons -- see the report accompanying this
  * file: h_errno and the gethostbyname()/gethostbyaddr() pair.  Checked,
@@ -101,8 +94,8 @@
  * if_nametoindex family (a separate header, and a separate unit).
  */
 
-/* setenv()/unsetenv() (this pass's own new hermetic-fixture tests,
- * further down) are gated behind a feature-test macro in this
+/* setenv()/unsetenv() (used by this file's own new hermetic-fixture
+ * tests, further down) are gated behind a feature-test macro in this
  * project's own headers -- see test/posix-time.c/test/posix-unistd.c
  * for the same pattern already established across this test suite. */
 #define _GNU_SOURCE
@@ -425,9 +418,9 @@ static void test_posix_netdb_getprotobyname_tcp(void)
  * fire this test's own 64-entry guard before gethostent() ever
  * legitimately reaches end-of-database -- a fact about this particular
  * machine's own configuration, not about the interface (measured
- * directly against this environment's real /etc/hosts while verifying
- * this pass: tens of thousands of entries, not the handful the original
- * fence's own reasoning assumed). The fix is the same env-var fixture
+ * directly against this environment's real /etc/hosts: tens of
+ * thousands of entries, not the handful the original fence's own
+ * reasoning assumed). The fix is the same env-var fixture
  * override src/internal/nss_paths.h already provides and this file's own
  * test_netdb_hosts_fixture() (further down) already uses for the
  * identical reason: a small, controlled /etc/hosts this test fully
@@ -757,8 +750,8 @@ static long nd_raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5,
 /* fake_dns_server(): runs in the forked child. Binds a UDP socket to
  * 127.0.0.1:0 (kernel-assigned ephemeral port), writes that port to
  * `portfd` as plain decimal text so the parent can build a resolv.conf
- * fixture around it (this pass's own "nameserver ip:port" testability
- * extension -- see src/netdb/linux/resolv.c's parse_resolv_conf()),
+ * fixture around it (a "nameserver ip:port" testability extension --
+ * see src/netdb/linux/resolv.c's parse_resolv_conf()),
  * then answers exactly one query with a hand-built response: the
  * query's own ID, RCODE 0, one answer RR (A, TTL 60, RDATA
  * 203.0.113.55 -- an RFC 5737 TEST-NET-3 address, real network-address

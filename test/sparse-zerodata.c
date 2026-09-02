@@ -77,9 +77,9 @@
  * discriminating regimes are BELOW 4096.
  *
  * The banner that used to stand here said the opposite -- that the
- * UNMARKED case was the discriminating one -- and commit 323634e's
- * message asserted, as fact, that NT never deallocates and that the
- * granularity was a matter of *cluster* alignment.  Both are refuted.
+ * UNMARKED case was the discriminating one -- and asserted, as fact,
+ * that NT never deallocates and that the granularity was a matter of
+ * *cluster* alignment.  Both are refuted.
  * The discriminating case is the SPARSE one with a range that covers at
  * least one whole 64 KB unit; the unmarked case is the control.  Cluster
  * alignment is not the rule: a range can be perfectly cluster-aligned,
@@ -99,8 +99,8 @@
  *
  * Two independent oracles agreed on the wrong answer, because both
  * varied the *implementation* and neither varied the *stimulus*.  When
- * 323634e was written to chase the anomaly it added two new observations
- * -- the sparse attribute and the extent list -- and left FILE_SIZE,
+ * an earlier fix chasing the anomaly added two new observations -- the
+ * sparse attribute and the extent list -- it left FILE_SIZE,
  * ZERO_FROM and ZERO_TO exactly as they were.  Varying the observation
  * is not varying the input.
  *

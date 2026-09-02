@@ -1424,7 +1424,8 @@ nocmd_only:
  * genuinely differ and it would be easy to carry one over to the
  * other: for a *regular expression*, an unmatched '[' is an error
  * (REG_EBRACK, see test_regex_bracket_edges()); for a *pattern*, it is
- * a literal.  See the fence below for what ntlibc does. */
+ * a literal.  See test_fnmatch_unmatched_bracket_is_literal() below for
+ * what ntlibc does. */
 
 /* XCU 2.13.3, the leading-period rule, in the two forms the existing
  * test_fnmatch_period() does not reach: without FNM_PATHNAME, only the
@@ -1953,8 +1954,9 @@ static void test_glob_mark_trailing_slash_pattern(void)
 	 * pattern, and the generated pathname is the one that matched.
 	 * Checked against glibc, which returns "globmarkdir/" for both.
 	 * Without this assertion the two behaviours are indistinguishable
-	 * and a fix that made the slash conditional on GLOB_MARK -- which is
-	 * what this fence's wording suggests -- passes. */
+	 * and a fix that made the slash conditional on GLOB_MARK -- the
+	 * narrower framing this test's original, now-removed fence had --
+	 * passes. */
 	memset(&g, 0, sizeof g);
 	CHECK(glob("globmarkdir/", 0, NULL, &g) == 0);
 	CHECK(g.gl_pathc == 1);
@@ -2039,11 +2041,11 @@ static void test_glob_bracket_containing_slash(void)
 	rmdir("a");
 }
 
-/* wordexp.html DESCRIPTION, the three clauses the fence below this one
- * used to bury. All three are implemented and passing today; they were
- * fenced only because they sat in the same function as the command
- * substitution that genuinely does need a shell. Split out so the
- * coverage is real rather than notional:
+/* wordexp.html DESCRIPTION, three clauses that test_wordexp_cmdsub()
+ * above used to bury inside its own now-removed fence. All three are
+ * implemented and passing today; they were fenced only because they sat
+ * in the same function as the command substitution that genuinely did
+ * need a shell. Split out so the coverage is real rather than notional:
  *
  *   - field splitting of literal input whitespace,
  *   - WRDE_NOCMD, "Fail if command substitution is requested" ->

@@ -5,7 +5,7 @@
  * headers: limits.h, float.h, stdint.h, inttypes.h, plus the inttypes.h
  * functions strtoimax/strtoumax/imaxabs/imaxdiv (src/stdlib/strtol.c,
  * src/stdlib/abs.c, src/stdlib/div.c). None of these had a clause-cited
- * audit before this session. See test/posix-coverage/limits.md for the
+ * audit before. See test/posix-coverage/limits.md for the
  * full ledger. Each assertion cites the clause of
  * https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/<hdr>.html
  * (or .../functions/<name>.html) it checks.
@@ -168,7 +168,7 @@ static void test_limits_consistency(void)
 	 * `_Addr`, the pointer-width type -- see arch/{i386,x86_64}/bits/alltypes.h.in
 	 * -- not `long`, despite the historical `ssize_t`/`ssize` name).
 	 *
-	 * BUG found and fixed this session: include/limits.h used to say
+	 * BUG found and fixed: include/limits.h used to say
 	 * `#define SSIZE_MAX LONG_MAX`, which is only correct on i386
 	 * (where ssize_t is `int`, same 32-bit range as `long` here). On
 	 * x86_64 ssize_t is `long long` (64-bit) but LONG_MAX is still the
@@ -320,7 +320,7 @@ static void test_float_dbl(void)
  * src/math/ldbl_math.h's NTLIBC_LDBL_EXTENDED and this file's #if below,
  * which uses the identical __SIZEOF_LONG_DOUBLE__ test.
  *
- * BUG found and fixed this session: arch/i386/bits/float.h and
+ * BUG found and fixed: arch/i386/bits/float.h and
  * arch/x86_64/bits/float.h unconditionally defined LDBL_MANT_DIG==64,
  * LDBL_MAX==1.19e+4932L, etc (the 80-bit values) regardless of
  * compiler. Under this tcc that is simply wrong: an 8-byte `long
@@ -674,8 +674,8 @@ static void test_strtoimax_errors(void)
 	/* EINVAL: "the value of base is not supported" is a required
 	 * failure (ERRORS "shall fail"), not merely a RETURN VALUE note --
 	 * mirrors the pre-existing strtol coverage in test/posix-stdlib.c,
-	 * repeated here since strtoimax/strtoumax are this session's own
-	 * src/ area. */
+	 * repeated here since strtoimax/strtoumax are a separate src/ area
+	 * from strtol. */
 	{
 		const char *s = "123";
 		errno = 0; end = 0;

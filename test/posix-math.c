@@ -678,7 +678,7 @@ static void test_lround_lrint(void)
 	 * (include/math.h), so FE_INVALID must be raised for these cases
 	 * too, exactly as it already is for a NaN argument above.
 	 *
-	 * BUG found and fixed this session: src/math/round.c used to do
+	 * BUG found and fixed: src/math/round.c used to do
 	 * this via a raw `(long)roundl(x)` / `(long long)
 	 * __x87_rndint(x,-1)` cast -- undefined behaviour in C itself for
 	 * a NaN or out-of-range operand, and inconsistent in practice: it

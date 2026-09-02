@@ -679,8 +679,8 @@ static void test_getrusage(const char *self)
 	 * The child reaped here burns a fixed iteration count and has not
 	 * confirmed against its own times() that NT charged it anything, so
 	 * a floor here would be the same tick-quantisation flake
-	 * test/posix-grp.c hit in CI run 32796247127: NT samples CPU time
-	 * in 15.625ms quanta rather than accumulating it, so a short child
+	 * test/posix-grp.c hit: NT samples CPU time in 15.625ms quanta
+	 * rather than accumulating it, so a short child
 	 * is charged one quantum or zero depending on nothing this test
 	 * controls.  test/exec.c test_wait_rusage() is where that floor is
 	 * asserted, against a child built so that it holds. */
