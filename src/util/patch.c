@@ -553,14 +553,16 @@ static int parse_name_line(const struct pline *pl, const char *pfx, char **out)
 {
 	size_t plen = strlen(pfx), namelen, i;
 	const char *p;
+	char *restrict copy;
 	if (pl->len < plen || memcmp(pl->text, pfx, plen) != 0) return 0;
 	p = pl->text + plen;
 	namelen = pl->len - plen;
 	for (i = 0; i < namelen; i++) if (p[i] == '\t') { namelen = i; break; }
-	*out = malloc(namelen + 1);
-	if (!*out) return 0;
-	memcpy(*out, p, namelen);
-	(*out)[namelen] = 0;
+	copy = malloc(namelen + 1);
+	if (!copy) return 0;
+	memcpy(copy, p, namelen);
+	copy[namelen] = 0;
+	*out = copy;
 	return 1;
 }
 

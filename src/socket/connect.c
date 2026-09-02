@@ -23,6 +23,7 @@
 int connect(int fd, const struct sockaddr *addr, socklen_t len)
 {
 	struct __fd *f = __fd_get(fd);
+	const struct sockaddr *restrict peer = addr;
 
 	if (!f) return -1;
 	if (f->type != __FD_SOCKET) { errno = ENOTSOCK; return -1; }
@@ -47,7 +48,7 @@ int connect(int fd, const struct sockaddr *addr, socklen_t len)
 	if (__plat_socket_connect(f->h, addr, len) < 0) return -1;
 
 	f->pad |= __SOCK_ST_CONNECTED;
-	memcpy(f->peer, addr, sizeof(struct sockaddr_in));
+	memcpy(f->peer, peer, sizeof(struct sockaddr_in));
 	f->peer_len = sizeof(struct sockaddr_in);
 	return 0;
 }
