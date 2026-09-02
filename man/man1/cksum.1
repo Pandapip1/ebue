@@ -1,0 +1,66 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH CKSUM 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+cksum \- write a cyclic redundancy check checksum and byte count for a file
+.SH SYNOPSIS
+.B cksum
+.RI [ file .\|.\|.]
+.SH DESCRIPTION
+.B cksum
+computes and writes to standard output the checksum and byte count of
+each
+.I file
+operand, or of standard input if no
+.I file
+operand is given; a lone operand of
+.B \-
+also means standard input. Each operand is checksummed independently
+and produces its own output line; if reading one operand fails,
+.B cksum
+still goes on to checksum the rest.
+.PP
+The checksum is a 32\-bit cyclic redundancy check, computed over the
+concatenation of the file's own bytes followed by the file's length
+encoded one byte at a time, least-significant byte first (a
+zero-length file contributes no length bytes at all), and then
+complemented. This is the CRC used by the historical
+.B cksum
+utility; it is a different CRC-32 variant (different bit ordering and
+different initialization) from the CRC-32 used by gzip-style or ZIP
+archive checksums, and will not agree with them for the same input. A
+zero-length input always checksums to 4294967295.
+.PP
+For a named
+.I file
+operand, the output line has the form
+.RS
+.nf
+checksum length pathname
+.fi
+.RE
+For standard input (no operand given, or a lone
+.BR \- ),
+the pathname column is omitted:
+.RS
+.nf
+checksum length
+.fi
+.RE
+.SH OPERANDS
+.TP
+.I file
+The pathname of a file to checksum, or
+.B \-
+for standard input.
+.SH EXIT STATUS
+.TP
+.B 0
+Every operand was checksummed successfully.
+.TP
+.B 1
+At least one operand could not be opened or read; the remaining
+operands are still checksummed.
+.SH SEE ALSO
+.BR dd (1),
+.BR wc (1)

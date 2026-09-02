@@ -1,0 +1,70 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH UUENCODE 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+uuencode \- encode a binary file into printable text
+.SH SYNOPSIS
+.B uuencode
+.RB [ \-m ]
+.RI [ source_file ]
+.I decode_pathname
+.SH DESCRIPTION
+.B uuencode
+reads
+.I source_file
+(or, if it is omitted, standard input) and writes an encoded
+representation of it to standard output, using only printable ASCII
+characters. The encoded text begins with a header line naming
+.I decode_pathname
+and the file's permission mode, is followed by the encoded data itself
+in fixed-size chunks, and ends with a data-end marker followed by a
+line reading
+.BR end .
+.I decode_pathname
+is recorded in the header purely as the name
+.BR uudecode (1)
+should recreate the file under; it is not opened or read by
+.B uuencode
+itself.
+.PP
+The permission mode recorded in the header is, when
+.I source_file
+was given, that file's own real permission bits, written as three
+octal digits. When reading standard input instead (no
+.I source_file
+operand), there is no real file to derive a mode from, so a fixed mode
+of 0644 is recorded instead.
+.SH OPTIONS
+.TP
+.B \-m
+Requests Base64 encoding instead of the traditional uuencode algorithm
+described above. This is not implemented:
+.B \-m
+is refused with a diagnostic and a nonzero exit status, rather than
+silently falling back to the traditional encoding under a flag that
+promised something else.
+.SH OPERANDS
+.TP
+.I source_file
+The file to read and encode. If omitted, standard input is read
+instead, and the header's recorded permission mode falls back to 0644
+as described above.
+.TP
+.I decode_pathname
+Required. The pathname recorded in the header line for
+.BR uudecode (1)
+to recreate the file as.
+.SH EXIT STATUS
+.TP
+.B 0
+The file was encoded and written successfully.
+.TP
+.B 1
+.I source_file
+could not be opened, a read error occurred while encoding,
+.I decode_pathname
+was not given (or too many operands were given), or
+.B \-m
+was requested.
+.SH SEE ALSO
+.BR uudecode (1)

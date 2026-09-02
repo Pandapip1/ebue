@@ -1,0 +1,167 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH TIMEOUT 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+timeout \- run a command with a bounded running time
+.SH SYNOPSIS
+.B timeout
+.RB [ \-s
+.IR signal ]
+.RB [ \-k
+.IR duration ]
+.I duration utility
+.RI [ argument .\|.\|.]
+.SH DESCRIPTION
+.B timeout
+runs
+.I utility
+(with any given
+.I argument
+operands) as a separate process. If
+.I utility
+is still running after the first
+.I duration
+operand has elapsed,
+.B timeout
+sends it
+.I signal
+(SIGTERM, by default) as its first attempt to stop it. If
+.B \-k
+was given and
+.I utility
+is still running its own
+.I duration
+after that,
+.B timeout
+escalates to sending it SIGKILL.
+.PP
+A
+.I duration
+of zero, for either the main
+.I duration
+operand or
+.BR \-k 's,
+disables the associated timeout entirely: a main
+.I duration
+of zero means
+.I utility
+simply runs to completion with no deadline at all (equivalent to
+running it directly, with no time limit); a
+.B \-k
+.I duration
+of zero is equivalent to not giving
+.B \-k
+at all.
+.SH "DURATION SYNTAX"
+A
+.I duration
+is a (possibly fractional) decimal number, optionally followed by a
+single unit suffix:
+.B s
+for seconds (the default when no suffix is given),
+.B m
+for minutes,
+.B h
+for hours, or
+.B d
+for days.
+.SH OPTIONS
+.TP
+.BI \-s " signal"
+Send
+.I signal
+instead of the default SIGTERM when the main
+.I duration
+elapses.
+.I signal
+may be given as a name, matched case-insensitively and with or
+without a leading
+.BR SIG
+(e.g.
+.BR KILL ,
+.BR sigkill ,
+or
+.BR SigKill ),
+or as a plain decimal signal number.
+.TP
+.BI \-k " duration"
+If
+.I utility
+is still running
+.I duration
+after the first signal was sent, send it SIGKILL as well.
+.PP
+There is no long-option spelling for either
+.B \-s
+or
+.BR \-k ,
+and no equivalent of a
+.BR \-\-foreground ,
+.BR \-\-preserve\-status ,
+or
+.B \-\-verbose
+option found in some other implementations of
+.BR timeout ;
+none of that behavior is implemented, and the exit-status convention
+below is always used regardless of how
+.I utility
+was actually stopped.
+.SH OPERANDS
+.TP
+.I duration
+The main timeout, in the syntax described above.
+.TP
+.I utility
+The command to run.
+.TP
+.I argument
+Arguments to pass to
+.IR utility .
+.SH EXIT STATUS
+.TP
+.B 124
+.I utility
+was still running when
+.I duration
+elapsed and was signaled as a result (and was not, in the end, stopped
+by the KILL(9) signal itself \(em see 137 below).
+.TP
+.B 125
+.B timeout
+itself failed: an invalid option, a malformed
+.I duration
+or
+.IR signal ,
+or an internal failure while waiting for
+.IR utility .
+.TP
+.B 126
+.I utility
+was found but could not be executed.
+.TP
+.B 127
+.I utility
+could not be found.
+.TP
+.B 137
+.I utility
+(or
+.B timeout
+itself) was stopped by the KILL(9) signal, whether because
+.BR \-k 's
+escalation fired, or because
+.B \-s
+was given KILL (or an equivalent signal number) as the first signal
+and that is what actually stopped
+.IR utility .
+.TP
+.I otherwise
+.IR utility 's
+own exit status, if it exited on its own before any timeout applied
+(or
+.RI ( 128 + n )
+if it was terminated by a signal
+.I n
+on its own, unrelated to any timeout escalation).
+.SH SEE ALSO
+.BR time (1)

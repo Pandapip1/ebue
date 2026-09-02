@@ -1,0 +1,219 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH PRINTF 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+printf \- write formatted output
+.SH SYNOPSIS
+.B printf
+.I format
+.RI [ argument .\|.\|.]
+.SH DESCRIPTION
+.B printf
+writes
+.I format
+to standard output, substituting each of its
+.B %
+conversion directives with the corresponding
+.I argument
+operand in turn. This is the
+.B printf
+utility, not the C language's
+.B printf()
+function: every
+.I argument
+is plain text, and a numeric conversion parses its own argument's text
+itself (see
+.B "NUMERIC ARGUMENTS"
+below).
+.PP
+If
+.I argument
+operands remain after
+.I format
+has been used once,
+.I format
+is reused as many additional times as needed to consume them all. If a
+whole pass over
+.I format
+consumes no arguments at all (because it contains no conversion
+directive, or only
+.BR %% ),
+.I format
+is still processed exactly once even if
+.I argument
+operands remain, but is not reused a second time.
+.PP
+Once every
+.I argument
+operand has been consumed, an extra
+.B %c
+or
+.B %s
+conversion is evaluated as if given an empty string, and every other
+extra conversion is evaluated as if given zero; both are ordinary,
+non-error outcomes.
+.SH FORMAT ESCAPES
+Within
+.I format
+itself (not inside a
+.B %b
+argument \(em see below), a backslash introduces one of the escape
+sequences
+.BR \e\e ,
+.BR \ea ,
+.BR \eb ,
+.BR \ef ,
+.BR \en ,
+.BR \er ,
+.BR \et ,
+.B \ev
+or
+.RI \e ddd
+(one to three octal digits), each producing a single output byte. Any
+other backslash sequence is left in the output exactly as written,
+including the backslash itself, rather than being silently dropped.
+.SH CONVERSIONS
+The recognized conversions are
+.BR d ,
+.BR i ,
+.BR o ,
+.BR u ,
+.BR x ,
+.BR X ,
+.BR c ,
+.BR s ,
+.BR b ,
+.BR f ,
+.BR e ,
+.BR g ,
+and
+.BR % .
+Each (other than
+.BR %% )
+may be preceded by any combination of the flags
+.BR \- ,
+.BR 0 ,
+.BR + ,
+space, and
+.BR # ,
+a decimal field width, and a
+.B .
+precision, with the same meaning as in the C language's own
+.BR printf (3)
+conversions. There is no support for an argument-supplied
+.RI ( * )
+width or precision, and no length modifiers, since every
+.I argument
+is already plain text rather than a typed value.
+.PP
+.B %b
+is specific to this utility (distinct from
+.BR %s ):
+it expands backslash escapes within its own
+.I argument
+using the table described under
+.B "%b ESCAPES"
+below, rather than writing the argument out literally.
+.SH NUMERIC ARGUMENTS
+An
+.I argument
+given to a numeric conversion
+.RB ( d , " i" , " o" , " u" , " x" , " X" , " f" , " e" ,
+.BR g )
+is parsed the same way a C integer or floating-point constant would
+be, except that an
+.I argument
+beginning with a single or double quote is instead taken as the
+numeric value of the single character immediately following that
+quote. So, for the integer conversions, a leading
+.B 0
+means octal and a leading
+.B 0x
+means hexadecimal, exactly as in C source.
+.PP
+Unlike passing a negative value to an unsigned conversion function, a
+leading
+.B \-
+given to
+.BR %o ,
+.BR %u ,
+.BR %x ,
+or
+.B %X
+is a diagnosed error, not silently reinterpreted as a very large
+unsigned value.
+.PP
+An
+.I argument
+that fails to parse for the numeric conversion it was given to (and is
+not simply an exhausted argument, see above) is a diagnosed error: a
+message is written to standard error, the value zero is used in its
+place so the rest of the output still prints something coherent, and
+the exit status is forced nonzero \(em but the rest of
+.I format
+(and any further passes over it) still runs. An unrecognized
+conversion letter after
+.B %
+is a stronger error: it stops the entire invocation immediately,
+including any remaining passes over
+.IR format ,
+and also forces a nonzero exit status.
+.SH "%b ESCAPES"
+Within a
+.B %b
+argument, the recognized escapes are
+.BR \e\e ,
+.BR \ea ,
+.BR \eb ,
+.BR \ef ,
+.BR \en ,
+.BR \er ,
+.BR \et ,
+.BR \ev ,
+.B \ec
+and
+.RI \e0 ddd
+(zero to three octal digits after the
+.BR 0 ).
+This table is distinct from the format-string escapes above in two
+ways: plain
+.RI \e ddd
+(without a leading
+.BR 0 )
+is not recognized inside a
+.B %b
+argument, and
+.B \ec
+is: it stops the entire invocation immediately, discarding the rest of
+.I format
+and any remaining
+.I argument
+operands, exactly as an unrecognized conversion letter does.
+.SH OPERANDS
+.TP
+.I format
+A string containing ordinary text, escape sequences, and conversion
+directives, as described above.
+.TP
+.I argument
+A string consumed, in order, by each conversion directive in
+.I format
+as it is reused (see above).
+.SH EXIT STATUS
+.TP
+.B 0
+Every conversion in every pass over
+.I format
+succeeded, and every
+.I argument
+that was consumed by a numeric conversion parsed successfully.
+.TP
+.B 1
+.I format
+was not given at all, an
+.I argument
+failed to parse for the numeric conversion it was given to, an
+unrecognized conversion letter was used, or a write to standard output
+failed.
+.SH SEE ALSO
+.BR echo (1)

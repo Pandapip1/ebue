@@ -1,0 +1,210 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH DD 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+dd \- convert and copy a file
+.SH SYNOPSIS
+.B dd
+.RI [ operand = value ] .\|.\|.
+.SH DESCRIPTION
+.B dd
+copies the input named by
+.B if=
+(or standard input, if
+.B if=
+is not given) to the output named by
+.B of=
+(or standard output), reading and writing it in blocks.
+Unlike most utilities,
+.BR dd 's
+own arguments are not
+.B \-flag
+options: every argument must be an
+.IR operand = value
+pair, and any argument that is not (or whose operand name is not one of
+those listed below) is a diagnosed error.
+.PP
+At the end of copying, whether it finished normally or was interrupted
+(see
+.B EXIT STATUS
+below),
+.B dd
+writes a summary line pair to standard error in the form
+.RS
+.nf
+N+P records in
+N+P records out
+.fi
+.RE
+giving the number of full and partial blocks read and, separately, the
+number of full and partial blocks written.
+.SH OPERANDS
+.TP
+.BI if= file
+Read input from
+.I file
+instead of standard input.
+.TP
+.BI of= file
+Write output to
+.I file
+instead of standard output.
+.I file
+is truncated to zero length before writing begins, unless
+.B conv=notrunc
+is also given (see below).
+.TP
+.BI ibs= expr
+Set the input block size (default 512 bytes). See
+.B BLOCK SIZE EXPRESSIONS
+below.
+.TP
+.BI obs= expr
+Set the output block size (default 512 bytes).
+.TP
+.BI bs= expr
+Set both the input and the output block size to
+.IR expr ,
+and switch to a different copying strategy: each block actually read is
+written out immediately at whatever length was read, rather than being
+repacked into
+.BR obs=-sized
+output blocks the way
+.B ibs=
+/
+.B obs=
+copying does. Whichever of
+.BR bs= ,
+.BR ibs= ,
+and
+.B obs=
+is given last on the command line for a given size wins, in ordinary
+left-to-right order, but giving
+.B bs=
+at all selects the direct-write strategy just described regardless of
+where it appears.
+.TP
+.BI count= n
+Copy only
+.I n
+input blocks, then stop; a short final block still counts as one block
+toward
+.IR n .
+.TP
+.BI skip= n
+Skip
+.I n
+.BR ibs= -sized
+blocks at the start of the input before copying begins. If the input
+is not seekable, the skipped bytes are read and discarded instead;
+skipping past the actual end of the input is not an error.
+.TP
+.BI seek= n
+Skip
+.I n
+.BR obs= -sized
+blocks at the start of the output before copying begins (used to
+overwrite part of an existing file without disturbing the rest).
+Unlike
+.BR skip= ,
+if the output is not seekable this is a diagnosed error rather than
+falling back to any other behavior.
+.TP
+.BI conv= value [, value \fR.\|.\|.\fP]
+A comma-separated list of conversions to apply while copying. Only the
+following values are implemented; any other value is refused with a
+diagnostic and a nonzero exit status, never silently ignored.
+.RS
+.TP
+.B notrunc
+Do not truncate the output file before writing (see
+.B of=
+above): bytes in it beyond what this run writes are left intact.
+.TP
+.B sync
+Pad every short input block \(em whether from a final partial read, or
+(combined with
+.BR noerror )
+one cut short by a read error \(em out to the full input block size
+with trailing NUL bytes, instead of passing its actual short length
+through unchanged.
+.TP
+.B noerror
+Continue copying after a read error instead of stopping. The block
+that failed contributes no data of its own (or, combined with
+.BR sync ,
+a full block of NUL bytes).
+.RE
+.SH BLOCK SIZE EXPRESSIONS
+An
+.I expr
+given to
+.BR ibs= ,
+.BR obs= ,
+or
+.B bs=
+is an unsigned decimal integer, optionally followed by one of the
+suffixes
+.B b
+(multiply by 512),
+.B k
+(multiply by 1024), or
+.B w
+(multiply by the size in bytes of a C
+.B int
+on this platform, which is 4), and optionally followed by
+.B x
+and another such expression, meaning multiplication \(em so
+.B 2x3x4
+parses left to right as
+.RI ( 2 * 3 )* 4.
+A block size of zero, or an expression that does not parse in full, is
+a diagnosed error.
+.SH APPLICATION USAGE
+The
+.B conv=
+values
+.BR ucase ,
+.BR lcase ,
+.BR swab ,
+.BR ascii ,
+.BR ebcdic ,
+.BR block ,
+and
+.B unblock
+found in other implementations of
+.B dd
+are not implemented here; giving any of them is refused as an
+unrecognized
+.B conv=
+value rather than being silently ignored or partially applied.
+.SH EXIT STATUS
+.TP
+.B 0
+The copy completed with no error.
+.TP
+.B 1
+A read or write error occurred (and, for a read error,
+.B conv=noerror
+was not given), or a named
+.B if=
+or
+.B of=
+file could not be opened.
+.TP
+.B 2
+A malformed
+.IR operand = value
+argument, an unrecognized operand name, or an invalid
+.BR ibs= / obs= / bs= / count= / skip= / seek= / conv=
+value.
+.TP
+.B 130
+.B dd
+was interrupted by SIGINT before it finished copying; the summary
+described above is still written first.
+.SH SEE ALSO
+.BR cat (1),
+.BR cp (1),
+.BR cksum (1),
+.BR tee (1)

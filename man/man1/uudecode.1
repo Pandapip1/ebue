@@ -1,0 +1,91 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH UUDECODE 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+uudecode \- decode a uuencoded file
+.SH SYNOPSIS
+.B uudecode
+.RB [ \-o
+.IR outfile ]
+.RI [ file ]
+.SH DESCRIPTION
+.B uudecode
+reads
+.I file
+(or standard input, if it is omitted), which is expected to have been
+produced by
+.BR uuencode (1),
+and recreates the original file, including its permission mode.
+.PP
+Any lines before the
+.B "begin mode filename"
+header line are skipped without complaint (historical
+.B uudecode
+has always tolerated leading mail-transport headers this way); the
+first line that begins with
+.B "begin "
+is treated as the real header, and its absence anywhere in the input
+is a diagnosed error. The
+.I filename
+field of the header line may itself contain spaces, since only the
+.I mode
+field before it is whitespace-delimited.
+.PP
+Decoding stops at the encoded data's own zero-length terminator line,
+which must be immediately followed by a line containing exactly
+.BR end .
+Anything else there, including reaching the end of the input first, is
+a diagnosed, truncated-stream error rather than being treated as an
+implicit terminator. Likewise, every character read as encoded data is
+checked against the encoding's own alphabet before being decoded; an
+invalid character anywhere in the data is a diagnosed error as soon as
+it is seen.
+.PP
+The recreated file's pathname is the header line's
+.I filename
+field, unless overridden by
+.BR \-o .
+No sanitization is applied to that pathname, whether it came from the
+header or from
+.BR \-o :
+whatever names a creatable, writable path on this platform is used
+exactly as given.
+.PP
+The recreated file's permission mode is always set to the mode
+recorded in the header line (masked to the low 12 permission bits),
+even when
+.B \-o
+overrides the destination filename: only
+.I where
+the file is written changes, not what mode it is given.
+.SH OPTIONS
+.TP
+.BI \-o " outfile"
+Write the decoded data to
+.I outfile
+instead of the pathname recorded in the header line. The permission
+mode recorded in the header is still applied to
+.I outfile
+(see above).
+.SH OPERANDS
+.TP
+.I file
+The uuencoded input to read. If omitted, standard input is read
+instead.
+.SH EXIT STATUS
+.TP
+.B 0
+The file was decoded and recreated successfully, including its
+permission mode.
+.TP
+.B 1
+.I file
+could not be opened or contained no valid
+.B begin
+line, the encoded stream was truncated, malformed, or contained an
+invalid character, the output file could not be created or written,
+or (a separate failure that can occur even after the file's data was
+otherwise written successfully) its permission mode could not be
+changed.
+.SH SEE ALSO
+.BR uuencode (1)

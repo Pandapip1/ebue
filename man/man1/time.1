@@ -1,0 +1,104 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH TIME 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+time \- time a simple command
+.SH SYNOPSIS
+.B time
+.RB [ \-p ]
+.I utility
+.RI [ argument .\|.\|.]
+.SH DESCRIPTION
+.B time
+runs
+.I utility
+(with any given
+.I argument
+operands) as a separate process, waits for it to finish, and then
+writes a report of how long it took and how much processor time it
+used to standard error \(em never to standard output, which is left
+entirely to
+.IR utility .
+.PP
+The elapsed ("real") time reported covers only
+.IR utility 's
+own run: it is measured immediately around starting and reaping
+.IR utility ,
+not
+.BR time 's
+own argument parsing or the search for
+.I utility
+along the command search path. The user and system time figures are
+likewise specific to this one run of
+.IR utility ,
+isolated from any earlier command that may already have been run and
+reaped in the same process (relevant, for example, when
+.B time
+is used repeatedly in one long-lived interactive session).
+.PP
+The report is always written in the form
+.RS
+.nf
+real %f
+user %f
+sys %f
+.fi
+.RE
+that is, three lines, each giving one figure as a decimal number of
+seconds with at least one fractional digit (six is typical). This is
+the exact format that is otherwise only guaranteed when
+.B \-p
+is given; this implementation always uses it, whether or not
+.B \-p
+was given on the command line.
+.SH OPTIONS
+.TP
+.B \-p
+Accepted for compatibility with scripts that pass it; it has no effect
+on the output format, since this implementation already always
+produces the format described above.
+.PP
+A
+.B \-\-
+argument ends option parsing, so that a
+.I utility
+whose own name happens to begin with
+.B \-
+can still be named unambiguously.
+.SH OPERANDS
+.TP
+.I utility
+The command to run and time.
+.TP
+.I argument
+Arguments to pass to
+.IR utility .
+.SH EXIT STATUS
+If
+.I utility
+was found and ran, its own exit status is
+.BR time 's
+exit status, except that a
+.I utility
+terminated by a signal
+.I n
+is reported as
+.RI ( 128 + n ).
+Otherwise:
+.TP
+.B 1
+No
+.I utility
+operand was given, an invalid option was given, or an internal failure
+occurred while waiting for
+.IR utility .
+.TP
+.B 126
+.I utility
+was found but could not be executed.
+.TP
+.B 127
+.I utility
+could not be found.
+.SH SEE ALSO
+.BR timeout (1)

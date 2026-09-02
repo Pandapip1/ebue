@@ -1,0 +1,295 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH TEST 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+test, [ \- evaluate a conditional expression
+.SH SYNOPSIS
+.B test
+.RI [ expression ]
+.br
+.B [
+.RI [ expression ]
+.B ]
+.SH DESCRIPTION
+.B test
+evaluates
+.I expression
+and sets its own exit status according to the result (see
+.B "EXIT STATUS"
+below); it writes nothing to standard output.
+.PP
+When invoked as
+.BR [ ,
+the last argument must be a literal
+.BR ] ,
+which is not itself counted as part of
+.IR expression ;
+its absence is a diagnosed error. In this implementation the
+.B [
+spelling is available only as a shell built-in \(em there is no
+standalone
+.B [
+executable installed alongside
+.BR test .
+.PP
+Exactly how the arguments making up
+.I expression
+are interpreted depends on how many of them there are: an
+argument-count-specific rule applies for zero, one, two, three, and
+four arguments, and only expressions of five or more arguments are
+evaluated by the general grammar described under
+.B "COMPOUND EXPRESSIONS"
+below.
+.TP
+.B "Zero arguments"
+False.
+.TP
+.B "One argument"
+True if the argument is not the empty string, false if it is.
+.TP
+.B "Two arguments"
+If the first argument is
+.BR ! ,
+true if the second argument is the empty string, false otherwise
+(this is a direct test of whether the second argument's own text is
+empty, not a negation of some other test applied to it). Otherwise,
+the first argument must be one of the unary primaries listed under
+.B "UNARY PRIMARIES"
+below, applied to the second argument; any other first argument is a
+diagnosed error.
+.TP
+.B "Three arguments"
+If the second argument is one of the binary primaries listed under
+.B "BINARY PRIMARIES"
+below, the binary test of the first and third arguments (this is
+checked before anything else, which is why, for example,
+.RB ` "test \(dq(\(dq = \(dq)\(dq" '
+is a string comparison, not an attempt to parse a parenthesized
+group). Otherwise, if the first argument is
+.BR ! ,
+the negation of the two-argument test of the remaining two arguments.
+Otherwise, if the first and third arguments are
+.B (
+and
+.BR ) ,
+the one-argument test of the second. Any other combination is a
+diagnosed error.
+.TP
+.B "Four arguments"
+If the first argument is
+.BR ! ,
+the negation of the three-argument test of the remaining three
+arguments. Otherwise, if the first and last arguments are
+.B (
+and
+.BR ) ,
+the two-argument test of the middle two arguments. Otherwise, the
+expression is evaluated by the general grammar described below.
+.TP
+.B "Five or more arguments"
+Evaluated by the general grammar described under
+.B "COMPOUND EXPRESSIONS"
+below.
+.SH "UNARY PRIMARIES"
+Each of these is written as the primary followed by one argument
+(e.g.
+.RB ` "\-f file" ').
+.TP
+.BI \-b " file"
+True if
+.I file
+exists and is a block special file.
+.TP
+.BI \-c " file"
+True if
+.I file
+exists and is a character special file.
+.TP
+.BI \-d " file"
+True if
+.I file
+exists and is a directory.
+.TP
+.BI \-e " file"
+True if
+.I file
+exists, regardless of its type.
+.TP
+.BI \-f " file"
+True if
+.I file
+exists and is a regular file.
+.TP
+.BI \-g " file"
+True if
+.I file
+exists and its set-group-ID bit is set.
+.TP
+.BI \-h " file"
+.TP
+.BI \-L " file"
+True if
+.I file
+exists and is itself a symbolic link (its own status is used, without
+following the link); equivalent to each other.
+.TP
+.BI \-n " string"
+True if the length of
+.I string
+is nonzero.
+.TP
+.BI \-p " file"
+True if
+.I file
+exists and is a FIFO.
+.TP
+.BI \-r " file"
+True if
+.I file
+exists and read permission is granted for it.
+.TP
+.BI \-S " file"
+True if
+.I file
+exists and is a socket.
+.TP
+.BI \-s " file"
+True if
+.I file
+exists and has a size greater than zero.
+.TP
+.BI \-t " fd"
+True if
+.I fd
+is a syntactically valid, non-negative file descriptor number that is
+currently open and associated with a terminal. Unlike most of the
+other unary primaries above, an invalid or closed
+.I fd
+(including one that is not a valid non-negative decimal integer at
+all) makes this false, not a diagnosed error.
+.TP
+.BI \-u " file"
+True if
+.I file
+exists and its set-user-ID bit is set.
+.TP
+.BI \-w " file"
+True if
+.I file
+exists and write permission is granted for it.
+.TP
+.BI \-x " file"
+True if
+.I file
+exists and execute (or, for a directory, search) permission is granted
+for it.
+.TP
+.BI \-z " string"
+True if the length of
+.I string
+is zero.
+.PP
+.B \-a
+as a
+.I unary
+primary (a synonym for
+.B \-e
+some other implementations provide) is deliberately not implemented,
+to avoid ambiguity with the
+.I binary
+.B \-a
+operator described below.
+.SH "BINARY PRIMARIES"
+Each of these is written between two arguments (e.g.
+.RB ` "string1 = string2" ').
+.TP
+.I s1 " = " s2
+True if the strings
+.I s1
+and
+.I s2
+are identical.
+.TP
+.I s1 " != " s2
+True if the strings
+.I s1
+and
+.I s2
+are not identical.
+.TP
+.I n1 " \-eq " n2
+.TP
+.I n1 " \-ne " n2
+.TP
+.I n1 " \-lt " n2
+.TP
+.I n1 " \-le " n2
+.TP
+.I n1 " \-gt " n2
+.TP
+.I n1 " \-ge " n2
+Numeric comparisons (equal, not equal, less than, less than or equal,
+greater than, greater than or equal).
+.I n1
+and
+.I n2
+must each parse, in full, as a decimal integer (leading and trailing
+blanks are tolerated); an operand that does not is a diagnosed error,
+never treated as a false comparison.
+.SH "COMPOUND EXPRESSIONS"
+When the general grammar applies (five or more arguments, or the
+four-argument fallback case above), primaries may be combined with
+.B !
+(negation, written before the primary it negates),
+.B \-a
+(logical AND), and
+.B \-o
+(logical OR), and grouped with
+.BR "( expression )" .
+Both
+.B \-a
+and
+.B \-o
+are left-associative, and
+.B \-a
+binds more tightly than
+.BR \-o .
+Both operands of
+.B \-a
+and of
+.B \-o
+are always evaluated, even when the left operand alone already
+determines the result, so a malformed right operand is still a
+diagnosed error rather than being silently skipped.
+.PP
+The
+.B =
+and
+.B !=
+binary primaries take precedence over any unary primary: a token
+immediately followed by
+.B =
+or
+.B !=
+is always treated as the left operand of that comparison, never as a
+unary primary's own operator.
+.SH EXIT STATUS
+.TP
+.B 0
+.I expression
+evaluated to true.
+.TP
+.B 1
+.I expression
+evaluated to false, or no expression was given at all.
+.TP
+.B >1
+.I expression
+was malformed (an unknown primary or operator, a missing argument, a
+non-numeric operand to a numeric comparison, or, when invoked as
+.BR [ ,
+a missing closing
+.BR ] ).
+.SH SEE ALSO
+.BR true (1),
+.BR false (1)

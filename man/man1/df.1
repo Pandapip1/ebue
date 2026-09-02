@@ -1,0 +1,111 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH DF 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+df \- report free disk space
+.SH SYNOPSIS
+.B df
+.RB [ \-k ]
+.RI [ file .\|.\|.]
+.SH DESCRIPTION
+For each
+.I file
+operand,
+.B df
+writes one line describing the amount of space available on the
+filesystem containing
+.IR file .
+.I file
+may name a file, a directory, or anything else that resolves to a
+location on a filesystem; the filesystem
+.I file
+resides on is what is reported, not
+.IR file 's
+own size.
+.PP
+If no
+.I file
+operand is given,
+.B df
+reports on the filesystem containing the current working directory
+only, as if
+.B .
+had been given as the sole operand. There is no support for
+enumerating or reporting on every filesystem mounted on the system; a
+filesystem is reported only when named (directly, or via its
+containing directory) by an operand, or implied by the current
+directory when no operand is given.
+.PP
+The report has six columns:
+.BR Filesystem ,
+the block count column (labeled
+.B 512\-blocks
+or
+.BR 1024\-blks ,
+depending on
+.BR \-k ),
+.BR Used ,
+.BR Available ,
+.BR Capacity ,
+and
+.BR "Mounted on" .
+Because this platform has no device-pathname namespace and no separate
+notion of "the device a filesystem lives on" versus "where it is
+mounted", both the
+.B Filesystem
+and
+.B "Mounted on"
+columns show the same thing: the (resolved)
+.I file
+operand itself \(em an honest report of what was queried, not an
+invented device name.
+.PP
+.B Used
+is the total block count minus the free block count (not minus the
+available block count): space that an unprivileged process cannot use
+is still not counted as
+.IR used .
+.B Capacity
+is
+.RI ( Used / ( Used + Available )),
+rounded up to the next whole percent; because
+.B Used
+and
+.B Available
+do not always sum to the filesystem's total block count (space
+reserved for a privileged user counts toward neither
+.B Available
+nor the difference that produces
+.BR Used ),
+.B Capacity
+can exceed 100%.
+.SH OPTIONS
+.TP
+.B \-k
+Report the block count, used, and available columns in units of
+1024\-byte blocks instead of the default 512\-byte blocks.
+.PP
+A
+.B \-\-
+argument ends option parsing, so that a
+.I file
+operand beginning with
+.B \-
+can still be given unambiguously.
+.SH OPERANDS
+.TP
+.I file
+The pathname of a file or directory whose containing filesystem should
+be reported on.
+.SH EXIT STATUS
+.TP
+.B 0
+Every operand (or, with no operands, the current directory's own
+filesystem) was queried successfully.
+.TP
+.B 1
+An invalid option was given, or querying the filesystem for at least
+one operand failed (e.g., the operand named a nonexistent path);
+processing continues across the remaining operands regardless.
+.SH SEE ALSO
+.BR du (1)

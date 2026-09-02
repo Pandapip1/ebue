@@ -1,0 +1,97 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH DU 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+du \- estimate file space usage
+.SH SYNOPSIS
+.B du
+.RB [ \-a ]
+.RB [ \-s ]
+.RB [ \-k ]
+.RB [ \-r ]
+.RI [ file .\|.\|.]
+.SH DESCRIPTION
+For each
+.I file
+operand,
+.B du
+writes the space allocated to it, and (by default) to every directory
+contained within it, to standard output, one line per entry reported.
+With no operand,
+.B du
+operates on the current directory.
+.PP
+Reported space is each entry's actual on-disk allocation, not its
+logical size: a sparse file, or one rounded up to a filesystem
+allocation unit, reports the larger, real allocated figure.
+.PP
+Directories are walked so that each directory's own reported total
+already includes everything found beneath it (descendants are always
+reported, or at least folded into their parent's total, before the
+directory containing them is). A symbolic link is never followed \(em
+only its own small allocation is counted \(em so a link target is
+never double-counted through more than one path to it, and a symlink
+cycle cannot cause an infinite walk.
+.PP
+Each output line is the size, in the selected block unit, followed by
+a tab character and the corresponding pathname.
+.SH OPTIONS
+.TP
+.B \-a
+Write a line for every file encountered, not just for directories (and
+for a
+.I file
+operand that directly names a plain file, which is always reported
+regardless of this option).
+.TP
+.B \-s
+Write only the grand total for each
+.I file
+operand, instead of one line per directory (and, with
+.BR \-a ,
+per file). If both
+.B \-a
+and
+.B \-s
+are given together,
+.BR \-s 's
+suppression wins: only the grand total for each operand is written.
+.TP
+.B \-k
+Report sizes in units of 1024 bytes instead of the default 512-byte
+units.
+.TP
+.B \-r
+Write a diagnostic to standard error for each entry that could not be
+accessed or read, instead of silently skipping it with no message.
+Either way, such an entry still counts toward a nonzero exit status;
+.B \-r
+only controls whether a message is printed, not whether the entry is
+skipped.
+.PP
+A
+.B \-\-
+argument ends option parsing, so that a
+.I file
+operand beginning with
+.B \-
+can still be given unambiguously.
+.SH OPERANDS
+.TP
+.I file
+The pathname of a file or directory to measure. Defaults to the
+current directory if no operand is given.
+.SH EXIT STATUS
+.TP
+.B 0
+Every operand, and every entry found while walking it, was measured
+successfully.
+.TP
+.B >0
+At least one operand could not be opened, or at least one entry
+beneath an operand could not be accessed or read while walking it
+(see
+.B \-r
+above for whether that produces a diagnostic).
+.SH SEE ALSO
+.BR df (1)
