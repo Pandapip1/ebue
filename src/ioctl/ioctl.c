@@ -21,16 +21,25 @@
  *     directory, a character device, a socket) has no meaningful
  *     "bytes immediately available" concept in this library today and
  *     gets EINVAL, not a fabricated 0.
- *   - TIOCGWINSZ: terminal size, from kernel32's
+ *   - TIOCGWINSZ: terminal size. Platform-split, like termios.c's own
+ *     ISIG/ICANON/ECHO: on NT, from kernel32's
  *     GetConsoleScreenBufferInfo() (srWindow's extent -- the visible
  *     window, which is what a real terminal's "size" means to a
- *     program, not the scrollback buffer's dwSize). NTLIBC_USE_KERNEL32
- *     only, same reason as termios.c's ISIG/ICANON/ECHO: no ntdll path
- *     to console screen-buffer info exists (CONTRIBUTING.md). Without
- *     it, or on any non-console fd, ENOTTY -- the BSD-equivalent
- *     answer for "this isn't a terminal" (Linux's ioctl_tty(2) family
- *     uses ENOTTY the same way for a request that only makes sense on
- *     a tty, issued against something that is not one).
+ *     program, not the scrollback buffer's dwSize), NTLIBC_USE_KERNEL32
+ *     only -- no ntdll path to console screen-buffer info exists
+ *     (CONTRIBUTING.md). Without it, or on any non-console fd, ENOTTY.
+ *     On Linux there is no kernel32-equivalent escape hatch to gate
+ *     behind at all: it is a standard, unconditional real ioctl(2)
+ *     (src/ioctl/linux/plat_ioctl.c's __plat_tiocgwinsz(), via
+ *     src/internal/plat_ioctl.h) against whatever fd is given, real on
+ *     any genuine tty/pty and ENOTTY -- the BSD-equivalent answer for
+ *     "this isn't a terminal" -- on anything else, sourced from the
+ *     kernel's own ioctl_tty(2) dispatch rather than a pre-check of fd
+ *     metadata here (see that file's own comment on why: Linux folds
+ *     every character device, tty and non-tty alike, into one
+ *     __FD_CHAR bucket, so this file has no fd-type test that could
+ *     tell a real terminal from /dev/null the way __FD_CONSOLE alone
+ *     already does on NT).
  *   - FIONBIO: toggles O_NONBLOCK on the descriptor, the same flag
  *     fcntl(F_SETFL) already flips (src/fcntl/fcntl.c). Documented
  *     honestly, not oversold: O_NONBLOCK today only changes what
@@ -114,6 +123,16 @@ int ioctl(int fd, unsigned long req, ...) // NOLINT(bugprone-easily-swappable-pa
 		return 0;
 	}
 	case TIOCGWINSZ: {
+#ifdef __linux__
+		/* No fd-type pre-check here -- see this file's own banner:
+		 * __plat_tiocgwinsz() issues a real ioctl(2), and the kernel's
+		 * own ioctl_tty(2) dispatch already answers ENOTTY for any fd
+		 * that is not a genuine terminal, which is the real, load-
+		 * bearing check (a __FD_CHAR pre-filter here could only ever
+		 * be a coarse approximation of that, since __FD_CHAR also
+		 * covers /dev/null and friends). */
+		return __plat_tiocgwinsz(f->h, (struct winsize *)arg);
+#else
 		if (f->type != __FD_CONSOLE) { errno = ENOTTY; return -1; }
 #ifdef NTLIBC_USE_KERNEL32
 		{
@@ -141,6 +160,7 @@ int ioctl(int fd, unsigned long req, ...) // NOLINT(bugprone-easily-swappable-pa
 		 * (CONTRIBUTING.md); NTLIBC_USE_KERNEL32 is required. */
 		errno = ENOTTY;
 		return -1;
+#endif
 #endif
 	}
 	case FIONBIO: {

@@ -8,10 +8,13 @@
  *
  * termios(3), general terminal interface:
  * https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/termios.h.html
- * and the tc*()/cf*() function pages linked from there.  Implemented in
- * src/termios/termios.c, against the one kind of "terminal" this
- * platform has: an NT console (__FD_CONSOLE, see src/internal/libc.h
- * and src/unistd/isatty.c, which already gates on it).
+ * and the tc*()/cf*() function pages linked from there.  Two backends,
+ * one per platform (never both in the same build -- see src/termios/
+ * termios.c's own banner): src/termios/termios.c, against the one kind
+ * of "terminal" NT has: an NT console (__FD_CONSOLE, see
+ * src/internal/libc.h and src/unistd/isatty.c, which already gates on
+ * it); and src/termios/linux/plat_termios.c, real on Linux via
+ * ioctl(2) against any genuine tty/pty fd.
  *
  * The mapping onto NT is genuinely partial, not a blanket yes or no --
  * see src/termios/termios.c's file banner for the clause-by-clause
@@ -23,7 +26,10 @@
  * ENABLE_ECHO_INPUT); everything serial-line-shaped (c_cflag's baud/
  * parity/stop-bit/flow-control bits, cfgetispeed()/cfsetospeed(), the
  * output side of tcflush()/tcdrain(), tcsendbreak()) is not, and is
- * honestly N/A rather than faked.
+ * honestly N/A rather than faked.  On Linux none of that is N/A: a real
+ * tty/pty has a genuine line discipline and (for a pty) genuine baud/
+ * control-mode storage, so src/termios/linux/plat_termios.c's own
+ * banner documents real ioctl(2) coverage for every clause instead.
  */
 #ifndef _TERMIOS_H
 #define _TERMIOS_H

@@ -1,13 +1,24 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * termios(3) against an NT console (the only "terminal" this platform
+ * termios(3) against an NT console (the only "terminal" the NT backend
  * has -- __FD_CONSOLE, see src/internal/libc.h and src/unistd/isatty.c,
  * which already gates every one of these the same way a real
  * tcgetattr() would: termios.html ERRORS "[ENOTTY] The file associated
- * with fildes is not a terminal.").
+ * with fildes is not a terminal."). NT-only: this whole file's body is
+ * wrapped in `#ifndef __linux__` below, compiling to nothing on Linux.
+ * Linux has a genuine tty/pty layer instead, where every one of these
+ * eleven functions is real (real ioctl(2) against the underlying fd,
+ * no console-shadow, no NTLIBC_USE_KERNEL32 gate) -- see
+ * src/termios/linux/plat_termios.c, which implements the identical
+ * public symbols this file does. The two never coexist in one build
+ * (the Makefile's own PLATFORM axis selects exactly one of NT or
+ * Linux -- see its own banner comment), so the guard below exists
+ * purely to keep this TU's definitions out of the way on the platform
+ * where the OTHER file supplies them for real, not to select between
+ * two simultaneously valid implementations.
  *
- * What is real, clause by clause:
+ * What is real on NT, clause by clause:
  *
  *   - c_lflag's ISIG/ICANON/ECHO: real, direct console-mode bits.
  *     ENABLE_PROCESSED_INPUT (ISIG: does Ctrl-C/Ctrl-Break generate a
@@ -100,6 +111,12 @@
 #ifdef NTLIBC_USE_KERNEL32
 #include "kernel32.h"
 #endif
+
+#ifndef __linux__
+/* Everything below is the NT backend proper -- see this file's own
+ * banner above for why the Linux build never reaches this point at
+ * all (src/termios/linux/plat_termios.c supplies these same eleven
+ * symbols there instead). */
 
 /* ---- the shadow: c_iflag/c_oflag/c_cflag/c_cc[]/speeds, plus (only
  * when NTLIBC_USE_KERNEL32 is not defined) c_lflag in full, since
@@ -347,3 +364,5 @@ pid_t tcgetsid(int fd)
 	 * for the process-group equivalent. */
 	return getsid(0);
 }
+
+#endif /* !__linux__ */
