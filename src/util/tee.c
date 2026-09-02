@@ -52,7 +52,6 @@
 #include <signal.h>
 #include <unistd.h>
 #include "util.h"
-#include "ownership_stubs.h"
 
 int __util_tee_main(int argc, char **argv)
 {
@@ -113,7 +112,6 @@ int __util_tee_main(int argc, char **argv)
 
 	while ((n = read(STDIN_FILENO, buf, sizeof buf)) > 0) {
 		if ((size_t)n > sizeof buf) { errno = EIO; had_error = 1; break; }
-		__ownership_readable_span(buf, (size_t)n);
 		int j;
 		size_t off = 0;
 

@@ -1435,6 +1435,20 @@ public:
     return Reference ? dyn_cast<ParmVarDecl>(Reference->getDecl()) : nullptr;
   }
 
+  /* Array-to-pointer decay represents the array's base as an ElementRegion
+   * at index zero.  Store a span granted to that exact base on the array
+   * region itself, so later bounded suffixes (`base + offset`) can consume
+   * the remaining extent.  An interior-pointer grant deliberately stays on
+   * its ElementRegion: promoting that would incorrectly prove bytes before
+   * the pointer. */
+  static const MemRegion *spanProofRegion(const MemRegion *Region,
+                                          ProgramStateRef State) {
+    const auto *Element = dyn_cast_or_null<ElementRegion>(Region);
+    if (Element && State->isNull(Element->getIndex()).isConstrainedTrue())
+      return Element->getSuperRegion();
+    return Region;
+  }
+
   static ProgramStateRef applyGrants(
       ProgramStateRef State, const CallEvent &Call,
       ArrayRef<SpanContract> Spans, ArrayRef<DisjointContract> Disjoint,
@@ -1451,6 +1465,7 @@ public:
                                      Builder);
       std::optional<DefinedOrUnknownSVal> Extent =
           Length.getAs<DefinedOrUnknownSVal>();
+      Region = spanProofRegion(Region, State);
       if (Region && Extent)
         State = State->set<AssumedSpanExtent>(Region, *Extent);
     }
@@ -1577,6 +1592,7 @@ public:
       const MemRegion *Region = PointerValue.getAsRegion();
       std::optional<DefinedOrUnknownSVal> DefinedLength =
           LengthValue.getAs<DefinedOrUnknownSVal>();
+      Region = spanProofRegion(Region, State);
       if (Region && DefinedLength) {
         State = State->set<AssumedSpanExtent>(Region, *DefinedLength);
         /* A contract on a base pointer is also a conservative dynamic extent
@@ -1694,6 +1710,7 @@ public:
                                      C.getState(), C.getSValBuilder());
       std::optional<DefinedOrUnknownSVal> DefinedLength =
           Length.getAs<DefinedOrUnknownSVal>();
+      Region = spanProofRegion(Region, ContractState);
       if (Region && DefinedLength)
         ContractState =
             ContractState->set<AssumedSpanExtent>(Region, *DefinedLength);

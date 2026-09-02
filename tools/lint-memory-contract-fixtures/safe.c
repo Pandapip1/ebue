@@ -118,6 +118,16 @@ void retain_necessary_alias_proofs(char *destination, const char *source,
 	__ownership_disjoint_span(destination, source, length);
 }
 
+void granted_array_base_suffix(size_t length, size_t offset)
+{
+	char storage[32];
+	char *base = storage;
+	if (length > sizeof storage || offset > length)
+		return;
+	establish_readable(base, length);
+	consume_bytes(base + offset, length - offset);
+}
+
 void contracted_copy(char *out withtok(fixture_writable_span(length)),
 	const char *in withtok(fixture_readable_span(length)), size_t length)
 {
