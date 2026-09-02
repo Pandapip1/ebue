@@ -169,6 +169,13 @@
  * still absent; they are simply no longer true of the three that got
  * closed.
  */
+/* Needed for setenv()/unsetenv() (wordexp arith tests) and
+ * clock_gettime()/CLOCK_MONOTONIC (regex interval-expansion timing
+ * test): include/stdlib.h and include/time.h hide those declarations
+ * behind _POSIX_SOURCE/_XOPEN_SOURCE/_GNU_SOURCE/_BSD_SOURCE, same as
+ * test/posix-tail.c and most other test/posix-*.c files already define
+ * for the same reason. */
+#define _GNU_SOURCE
 #include "test-policy.h"
 #include <stdio.h>
 #include <string.h>
@@ -181,6 +188,13 @@
 #include <time.h>
 
 static int fails;
+/* Counts assertion groups this run declined to exercise because the
+ * environment could not provide the fixture -- as opposed to `fails`,
+ * which counts assertions that ran and got the wrong answer.  Same
+ * convention as test/posix-tail.c and test/posix-socket.c: main()'s
+ * tail returns 77 when this is nonzero, so tools/run-tests.py reports
+ * it in its own bucket instead of counting it as a pass. */
+static int unverified;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
 
 /* ===================================================================
@@ -462,74 +476,31 @@ static void test_glob_mark(void)
 	rmdir("subdir");
 }
 
-/* N/A: glob.html GLOB_ERR + errfunc -- "glob() shall call
- * (*errfunc)(), if errfunc is not a null pointer, when it encounters a
- * directory that it cannot open or read. ... If errfunc returns
- * non-zero, or if the GLOB_ERR flag is set, glob() shall stop the scan
- * and return GLOB_ABORTED after setting gl_pathc and gl_pathv to
- * reflect the paths already scanned." errfunc's two arguments: epath
- * (the failing pathname) and eerrno (the errno set by opendir(),
- * readdir(), or stat()).
+/* glob.html GLOB_ERR + errfunc -- "glob() shall call (*errfunc)(), if
+ * errfunc is not a null pointer, when it encounters a directory that it
+ * cannot open or read. ... If errfunc returns non-zero, or if the
+ * GLOB_ERR flag is set, glob() shall stop the scan and return
+ * GLOB_ABORTED after setting gl_pathc and gl_pathv to reflect the paths
+ * already scanned." errfunc's two arguments: epath (the failing
+ * pathname) and eerrno (the errno set by opendir(), readdir(), or
+ * stat()).
  *
- * RETAGGED UNIMPL -> N/A, and this fence is the anchor for the group
- * of three (GLOB_NOESCAPE below, nftw()'s FTW_PHYS at the end of this
- * file) that share the reasoning.  UNIMPL means "absent, but
- * implementable; the fence names the mechanism", and NEITHER half of
- * that is true here.  src/glob/glob.c's errfunc/GLOB_ERR plumbing IS
- * implemented -- opendir()/readdir() failures are routed to errfunc
- * and abort the scan exactly as below -- so there is no absent code to
- * point at and no NT mechanism left to name.  What cannot be built is
- * the FIXTURE.  Verified directly (mkdir + chmod(dir, 0), then
- * opendir()): chmod() to mode 0 succeeds but does not actually revoke
- * this process's own access -- opendir() on that directory still
- * succeeds (errno stays 0), because the process token that created the
- * directory retains access regardless of the mode bits chmod() writes
- * (there is no NT ACL layer here refusing the owner, the way a real
- * EACCES fixture needs).  Nothing this implementation can do makes
- * opendir() fail on a directory the OS is still willing to open for
- * it, which is POSIX-COVERAGE.md's N/A case verbatim: "the clause
- * cannot be triggered/observed under Wine".
- *
- * Two things in the tree already said so and the fence did not.
- * POSIX-COVERAGE.md's row for this exact clause has read "N/A
- * (pre-existing fence)" all along, so the fence was the odd one out
- * rather than the ledger; and test/verification-coverage-accounting.md
- * section 5 classes it, with its two siblings, as **F**: "mis-tagged:
- * they describe the environment, which is what rc=77 is for, not the
- * implementation."  That section proposed either a fifth tag or better
- * fence text; the third option it did not consider is that N/A is
- * already the right tag, because "cannot be observed here" is what N/A
- * has always meant in this tree.
- *
- * EXPIRY CONDITION, in the style test/posix-stdio.c's flockfile group
- * uses: this N/A is conditional, not permanent.  It expires the day a
- * directory this process cannot open can be created -- either ntlibc's
- * chmod() gaining real DACL storage (the deny ACE argued for in
- * test/posix-unistd.c's chmod group), or a run on real Windows where
- * such a directory can be made by other means.  The body below is
- * written to run unmodified when that holds.  Whoever gets there
- * should also assert the false-GLOB_ABORTED defect POSIX-COVERAGE.md
- * records against this same fixture under "Observed behaviour where
- * POSIX permits latitude": src/glob/glob.c clears errno around its
- * readdir() loop but every continue skips the clear.
- *
- * HOW THE "cannot" IS HELD, and what is still owed here.  The chmod-0
- * observation above was made by hand, and a hand-made impossibility
- * claim in a comment is a decaying measurement: it is true when
- * written and nothing re-checks it.  The tree already has the pattern
- * that fixes that -- test/posix-tail.c's test_nftw_symlinks() ATTEMPTS
- * its fixture on every run, prints a SKIP line naming the mechanism
- * and errno when it cannot be built, and counts the group unverified
- * (exit 77) instead of silently passing; the FTW_PHYS fence at the end
- * of this file is covered by exactly that probe.  This clause and
- * GLOB_NOESCAPE below have no such probe, and this file has no
- * unverified/77 machinery at all.  Converting these two to run-time
- * probes on that model is the natural follow-on and is deliberately
- * not done in the same change as the retag: the assertions below would
- * then be live, and the false-GLOB_ABORTED defect named in the
- * previous paragraph is a known way for them to fail the day the
- * fixture becomes buildable. */
-#if NTLIBC_TEST(NA, posix_glob_glob_err_callback) /* N/A: glob.html GLOB_ERR/errfunc, fixture not constructible under this permission model, see above */
+ * src/glob/glob.c's errfunc/GLOB_ERR plumbing is fully implemented --
+ * do_glob()'s "dp = opendir(dirpath); if (!dp) ..." branch routes an
+ * opendir() failure straight to errfunc/GLOB_ABORTED exactly as
+ * asserted below.  What this test needs is a directory this process
+ * cannot open, and whether chmod(dir, 0) actually produces one depends
+ * on the permission model in effect: on NT/Wine the process token that
+ * created the directory retains access regardless of the mode bits
+ * chmod() writes, so opendir() still succeeds; under a real POSIX
+ * permission model (e.g. native Linux, not running as root) it does
+ * not.  That is a fact about the environment a given run happens to be
+ * in, not something to assert once in a comment and never recheck --
+ * so, same pattern as test/posix-tail.c's test_nftw_symlinks(): attempt
+ * the fixture on every run, and when this environment will not build
+ * it, print a SKIP line naming the mechanism and count the group
+ * unverified (exit 77) rather than silently skipping or asserting a
+ * claim nothing here rechecks. */
 static int glob_err_seen;
 static char glob_err_path[260];
 static int glob_err_errno;
@@ -543,14 +514,33 @@ static int glob_errfunc(const char *epath, int eerrno)
 static void test_glob_err_callback(void)
 {
 	glob_t g;
+	int r;
 
-	/* "noperm/" fixture: a directory this process cannot open,
-	 * via chmod(dir, 0) beforehand */
+	/* "noperm/" fixture: a directory this process cannot open, via
+	 * chmod(dir, 0) beforehand.  Probe it with the very call under
+	 * test, the same as test_nftw_symlinks() probes with symlink():
+	 * if this environment's permission model does not actually revoke
+	 * this process's own opendir() access, glob() returns something
+	 * other than GLOB_ABORTED and there is no EACCES fixture here to
+	 * exercise the rest of the clause against. */
 	CHECK(mkdir("noperm", 0755) == 0);
 	CHECK(chmod("noperm", 0) == 0);
 
 	glob_err_seen = 0;
-	CHECK(glob("noperm/*", 0, glob_errfunc, &g) == GLOB_ABORTED);
+	r = glob("noperm/*", 0, glob_errfunc, &g);
+	if (r != GLOB_ABORTED) {
+		printf("SKIP posix-glob GLOB_ERR/errfunc tests "
+		       "(glob(\"noperm/*\") on a chmod(0) directory returned "
+		       "%d, not GLOB_ABORTED; this permission model does not "
+		       "revoke the owning process's own opendir() access) -- "
+		       "the EACCES-triggered GLOB_ABORTED/errfunc clauses were "
+		       "not exercised\n", r);
+		unverified++;
+		if (r == 0) globfree(&g);
+		chmod("noperm", 0755);
+		rmdir("noperm");
+		return;
+	}
 	CHECK(glob_err_seen == 1);
 	CHECK(strstr(glob_err_path, "noperm") != NULL);
 	CHECK(glob_err_errno == EACCES);
@@ -561,49 +551,47 @@ static void test_glob_err_callback(void)
 	chmod("noperm", 0755);
 	rmdir("noperm");
 }
-#endif
 
-/* N/A: glob.html GLOB_NOESCAPE -- "backslash escaping is disabled."
- * Without it, backslash in pattern escapes the next character to a
- * literal, same as fnmatch()'s default (glob() "implements the rules
- * defined in XCU Pattern Matching Notation").
+/* glob.html GLOB_NOESCAPE -- "backslash escaping is disabled."  Without
+ * it, backslash in pattern escapes the next character to a literal,
+ * same as fnmatch()'s default (glob() "implements the rules defined in
+ * XCU Pattern Matching Notation").
  *
- * RETAGGED UNIMPL -> N/A, second of the group; see the GLOB_ERR fence
- * above for the shared reasoning.  This is the least arguable of the
- * three, and the only one that is PERMANENT rather than conditional.
- * The behaviour is implemented -- src/glob/glob.c routes GLOB_NOESCAPE
- * to fnmatch()'s FNM_NOESCAPE, which src/fnmatch/fnmatch.c provides
- * and test_fnmatch_escape covers, unfenced -- and the fixture this
- * test needs, a file literally named "a*b", cannot exist on this
- * platform at all.  NTFS reserves '*' as a wildcard character in the
- * filesystem itself and refuses to create a file whose name contains
- * one (verified: creat("a*b", ...) fails ENOENT/EINVAL here, not a
- * glob()/fnmatch() problem).  Unlike its two siblings that is a fact
- * about the filesystem, not about Wine or about ntlibc's chmod(), so
- * there is no expiry condition short of running this library over a
- * filesystem that is not NTFS -- which is outside what this port
- * targets.
- *
- * What is NOT claimed: that glob()'s escape handling goes untested.
- * It is tested, through fnmatch(), where the same pattern grammar
- * lives and needs no file to exist (src/glob/glob.c:239 hands
+ * What is NOT tested here: that glob()'s escape handling goes untested
+ * in general.  It is tested, through fnmatch(), where the same pattern
+ * grammar lives and needs no file to exist (src/glob/glob.c:239 hands
  * GLOB_NOESCAPE straight to fnmatch()'s FNM_NOESCAPE, and
- * src/fnmatch/fnmatch.c:170 is where it is honoured).  What is
- * unreachable is only glob()'s own end-to-end path from an escaped
- * pattern to a matching directory ENTRY, because the entry cannot be
- * made to exist.
- *
- * Same caveat as the GLOB_ERR fence above about how the "cannot" is
- * held: the creat("a*b") observation was made by hand and nothing
- * re-checks it on each run.  It is the sturdiest of the three -- a
- * filesystem-level reservation rather than a permission model or a
- * Wine version -- but sturdiest is not self-verifying, and the
- * run-time-probe conversion that fence describes would cover this one
- * on the same terms. */
-#if NTLIBC_TEST(NA, posix_glob_glob_noescape) /* N/A: glob.html GLOB_NOESCAPE, fixture filename unrepresentable on NTFS, see above */
+ * src/fnmatch/fnmatch.c:170 is where it is honoured, exercised unfenced
+ * by test_fnmatch_escape).  What THIS test adds is glob()'s own
+ * end-to-end path from an escaped pattern to a matching directory
+ * ENTRY, which needs a file literally named "a*b" to exist -- and
+ * whether that fixture can be built is a fact about the filesystem
+ * under test, not about this implementation.  NTFS reserves '*' as a
+ * wildcard character in the filesystem itself and refuses to create a
+ * file whose name contains one; other filesystems (e.g. native Linux's
+ * ext4) impose no such reservation.  Same pattern as the GLOB_ERR
+ * fence above and test/posix-tail.c's test_nftw_symlinks(): probe the
+ * fixture live on every run instead of asserting the filesystem's
+ * behaviour once in a comment, and count the group unverified
+ * (exit 77) when it cannot be built here. */
 static void test_glob_noescape(void)
 {
 	glob_t g;
+	int fd;
+
+	unlink("a*b");
+	fd = creat("a*b", 0644);
+	if (fd < 0) {
+		printf("SKIP posix-glob GLOB_NOESCAPE tests "
+		       "(creat(\"a*b\") failed here, errno=%d; this filesystem "
+		       "reserves '*' and refuses to hold the literal-filename "
+		       "fixture GLOB_NOESCAPE's end-to-end path needs) -- the "
+		       "escaped-pattern-matches-literal-file clauses were not "
+		       "exercised\n", errno);
+		unverified++;
+		return;
+	}
+	close(fd);
 
 	/* a literal file named "a*b" exists; matching it requires escaping
 	 * the '*' by default */
@@ -615,8 +603,9 @@ static void test_glob_noescape(void)
 	 * matches the literal "a*b" file and instead is a two-char literal
 	 * pattern "a\*b" (no such file) */
 	CHECK(glob("a\\*b", GLOB_NOESCAPE, NULL, &g) == GLOB_NOMATCH);
+
+	unlink("a*b");
 }
-#endif
 
 /* glob.html DESCRIPTION: glob() matches "using the rules defined in XCU
  * Pattern Matching Notation" (XCU 2.13), in which '~' is an ordinary
@@ -4034,8 +4023,11 @@ static void test_nftw_depth_flag(void)
  * as FTW_SLN rather than FTW_NS, and a symlink to a directory is
  * followed and descended into rather than reported once as FTW_SL.
  *
- * RETAGGED UNIMPL -> N/A, third of the group; see the GLOB_ERR fence
- * earlier in this file for the shared reasoning.  The type dispatch
+ * RETAGGED UNIMPL -> N/A, third of the group; see test_glob_err_callback()
+ * earlier in this file for the shared reasoning (converted to a live
+ * probe rather than a fence since this was written; unlike this clause,
+ * its and test_glob_noescape()'s fixtures do not need symlink()).  The
+ * type dispatch
  * this needs (S_ISLNK() on lstat() vs. following with stat(),
  * producing FTW_SL/FTW_SLN/FTW_NS accordingly) is implemented in
  * src/ftw/ftw.c's walk() -- see its "if (ws->flags & FTW_PHYS)"
@@ -4073,9 +4065,11 @@ static void test_nftw_depth_flag(void)
  * dates stock Wine's STATUS_NOT_SUPPORTED answer to below 10.19).
  * The body below is written to run unmodified the day that holds.
  *
- * Unlike the two glob fences above, this condition is MEASURED on
- * every run rather than asserted in a comment:
- * test/posix-tail.c's test_nftw_symlinks() attempts the symlink,
+ * Like the two glob tests above (now converted the same way, not fenced
+ * any more), this condition is MEASURED on every run rather than
+ * asserted in a comment -- but here by a probe that lives in a
+ * different file: test/posix-tail.c's test_nftw_symlinks() attempts
+ * the symlink,
  * prints a SKIP line naming the mechanism and the observed errno when
  * it fails, counts the group unverified (exit 77), and runs the real
  * FTW_SL/FTW_SLN/link-following assertions when it succeeds.  So this
@@ -4174,6 +4168,8 @@ int main(int argc, char **argv)
 	test_glob_doffs();
 	test_glob_mark();
 	test_glob_nospace_and_free();
+	test_glob_err_callback();
+	test_glob_noescape();
 
 	test_wordexp_tilde_and_param();
 	test_wordexp_glob_and_quotes();
@@ -4255,6 +4251,17 @@ int main(int argc, char **argv)
 
 	if (chdir("..") == 0) rmdir(run_dir);
 	if (fails) { printf("posix-glob: failures: %d\n", fails); return 1; }
+	if (unverified) {
+		/* Everything that ran passed, but that is not the same claim
+		 * as "all ok" -- see the SKIP line(s) above for which
+		 * assertion groups never ran.  Exit 77 so tools/run-tests.py
+		 * reports this in its own bucket instead of counting it as a
+		 * pass.  Same convention as test/posix-tail.c. */
+		printf("posix-glob: %d assertion group(s) unverified in this "
+		       "environment (see SKIP lines above); no failures in what "
+		       "did run\n", unverified);
+		return 77;
+	}
 	printf("posix-glob: all ok (fnmatch/glob/wordexp/search/ftw/regex implemented; remaining fences are documented N/A or environment gaps)\n");
 	return 0;
 }

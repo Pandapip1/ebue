@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * tail(1p): `tail [-c number|-n number] [file...]`
+ * tail(1p): `tail [-f] [-c number|-n number] [file...]`
  *
  * DESCRIPTION: "The tail utility shall copy its input file to standard
  * output beginning at a designated place."  "number" (for either -c or
@@ -32,14 +32,29 @@
  * optimization this file does not attempt.
  *
  * -f ("do not terminate after the last line ... read the appended data")
- * is real tail(1p) behavior with no natural exit and needs a polling or
- * event loop -- there is no existing long-running poll loop anywhere in
- * this utility tier to build on (contrast rm/cp/mv/head's all-bounded
- * work), and a single-shot approximation of "follow" would silently lie
- * about what it did.  Refused loudly with a diagnostic and a nonzero
- * exit, per this project's "refuse rather than fake" rule (see touch's
- * -d, tee's -i vs. rm's -i in their own files for the same choice made
- * both ways depending on whether a real implementation exists to call).
+ * is real tail(1p) behaviour with no natural exit, so after the initial
+ * tail is written it hands off to tail_follow() below, which polls
+ * rather than blocking a single read() forever: this platform has
+ * nothing like Linux's inotify wired into ntlibc (see src/select/,
+ * src/thread/ -- no filesystem-change-notification primitive exists on
+ * either NT or the Linux port), and no other utility in this tier had a
+ * long-running poll loop to reuse, so this file grows the first one,
+ * modelled on src/util/timeout.c's wait_bounded() (same shape: a
+ * bounded condition check, nanosleep() for POLL_INTERVAL_NS, repeat).
+ * fstat()'s st_size never blocks, which is what makes size-polling safe
+ * to round-robin across several regular-file operands at once (see
+ * tail_follow()); a single non-regular operand (a pipe/FIFO, or "-"/
+ * no-operand stdin fed from one) instead gets a plain blocking read()
+ * loop, since blocking IS the right primitive there -- it returns the
+ * moment data arrives, and a true EOF (writer closed) really is the end,
+ * unlike a regular file which can always grow again later.  Interrupting
+ * with SIGINT (Ctrl-C at a terminal) ends the loop the same way every
+ * other long-running utility in this tree relies on: SIGINT's default
+ * disposition is process termination, so nothing here needs to install a
+ * handler -- see src/unistd/sleep.c's own header for why an
+ * EINTR-returning nanosleep()/read() need no special-casing beyond
+ * retrying (a *caught* signal is the only thing that would produce
+ * EINTR without also ending the process, and nothing here catches one).
  *
  * The multi-operand `==> file <==` banner is the same GNU/BSD-convention
  * choice documented in src/util/head.c's header, extended past XCU's own
@@ -60,7 +75,18 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <time.h>
 #include "util.h"
+
+/* -f's poll interval.  200ms: frequent enough that an interactive
+ * `tail -f` reads as "instant" the way GNU tail's 1s default does not,
+ * cheap enough (five fstat()s a second per followed file) not to matter
+ * against any real workload.  Same shape as src/util/timeout.c's own
+ * POLL_INTERVAL_NS, a different value because the two loops are bounding
+ * different things (a child process's exit vs. a human watching output
+ * scroll). */
+#define TAIL_FOLLOW_POLL_NS 200000000L
 
 enum tail_mode { TAIL_LINES, TAIL_BYTES };
 
@@ -191,6 +217,123 @@ static int tail_one(int fd, enum tail_mode mode, int from_end, long long number,
 	return rc;
 }
 
+/* One -f target: an already-open, already-tailed descriptor.  `pos` is
+ * only meaningful for a regular file (`is_regular`); it starts out
+ * wherever read_all() left the file position -- exactly end-of-file at
+ * the moment the initial tail was read -- and only ever advances. */
+struct tail_follow_target {
+	int fd;
+	const char *label;
+	int is_regular;
+	off_t pos;
+};
+
+/* Drains whatever of `t`'s regular file lies between t->pos and
+ * `new_size` (a size already observed to be greater), writing it to
+ * stdout and advancing t->pos to match.  Returns 0, or -1 on a read/
+ * write failure (diagnostic already printed). read() on a regular file
+ * never blocks waiting for more bytes than are already there, so this
+ * cannot stall a round-robin poll across several targets the way a
+ * blocking read() on a pipe could. */
+static int tail_follow_drain(struct tail_follow_target *t, off_t new_size)
+{
+	char buf[65536];
+
+	while (t->pos < new_size) {
+		off_t want = new_size - t->pos;
+		size_t chunk = want > (off_t)sizeof buf ? sizeof buf : (size_t)want;
+		ssize_t r = read(t->fd, buf, chunk);
+
+		if (r < 0) {
+			if (errno == EINTR) continue;
+			__util_diagf("tail: %s: %s\n", t->label, strerror(errno));
+			return -1;
+		}
+		if (r == 0) break;   /* raced with a truncation; next poll catches up */
+		if (write_all(buf, (size_t)r) < 0) {
+			__util_diagf("tail: %s: %s\n", t->label, strerror(errno));
+			return -1;
+		}
+		t->pos += r;
+	}
+	return 0;
+}
+
+/* -f's main loop, entered once every operand has printed its initial
+ * tail.  Runs until a read/write failure (diagnostic already printed,
+ * -1 returned) or -- the common case -- until SIGINT/Ctrl-C kills the
+ * process outright (see this file's header comment); there is no other
+ * exit for a regular-file target, since a regular file can always grow
+ * again no matter how long it has sat still. */
+static int tail_follow(struct tail_follow_target *targets, int ntargets)
+{
+	/* Not 0: the caller's own initial-dump loop over the operands (in
+	 * argv order, same order targets[] was built in) always finishes on
+	 * the last one, so that is the last banner a multi-operand run has
+	 * actually shown -- starting this loop's own idea of "last shown"
+	 * from scratch would reprint that same file's banner the moment it
+	 * is also the first one to grow, even though nothing has switched
+	 * files from the reader's point of view yet. */
+	const char *last_label = ntargets > 1 ? targets[ntargets - 1].label : 0;
+
+	/* Exactly one target, and it is not a regular file: a pipe/FIFO (or
+	 * character-device stdin) has no "size" to poll, and read() already
+	 * blocks until either more data arrives or the writer closes --
+	 * which, unlike a regular file, really is the end, since nothing
+	 * will ever make a closed pipe grow again.  This is also what lets
+	 * an automated test (or any other non-interactive consumer feeding
+	 * tail -f from a pipe) end the loop just by closing its end,
+	 * without needing SIGINT. */
+	if (ntargets == 1 && !targets[0].is_regular) {
+		char buf[65536];
+		for (;;) {
+			ssize_t r = read(targets[0].fd, buf, sizeof buf);
+			if (r < 0) {
+				if (errno == EINTR) continue;
+				__util_diagf("tail: %s: %s\n", targets[0].label, strerror(errno));
+				return -1;
+			}
+			if (r == 0) return 0;   /* writer closed: input exhausted */
+			if (write_all(buf, (size_t)r) < 0) {
+				__util_diagf("tail: %s: %s\n", targets[0].label, strerror(errno));
+				return -1;
+			}
+		}
+	}
+
+	/* One or more regular-file targets (a lone non-regular target took
+	 * the branch above; a non-regular target mixed in among several
+	 * operands is skipped below -- fstat()'s st_size means nothing for
+	 * a pipe, and blocking read() on one would stall every other
+	 * target's polling, so it only ever gets its initial tail). */
+	for (;;) {
+		int i;
+
+		for (i = 0; i < ntargets; i++) {
+			struct stat st;
+
+			if (!targets[i].is_regular) continue;
+			if (fstat(targets[i].fd, &st) < 0) continue;   /* transient; retry next tick */
+			if (st.st_size < targets[i].pos) targets[i].pos = st.st_size; /* truncated */
+			if (st.st_size <= targets[i].pos) continue;
+
+			if (ntargets > 1 && last_label != targets[i].label) {
+				printf("\n==> %s <==\n", targets[i].label);
+				last_label = targets[i].label;
+				if (fflush(stdout) < 0) {
+					__util_diagf("tail: %s: %s\n", targets[i].label, strerror(errno));
+					return -1;
+				}
+			}
+			if (tail_follow_drain(&targets[i], st.st_size) < 0) return -1;
+		}
+		{
+			struct timespec nap = { 0, TAIL_FOLLOW_POLL_NS };
+			(void)nanosleep(&nap, 0);
+		}
+	}
+}
+
 /* Parses "[+|-]number" per tail(1p)'s -c/-n option-argument grammar.
  * *from_end is 1 for '-' or no sign, 0 for '+'.  Returns 0 on success,
  * -1 on anything that is not that grammar (including "+0", which the
@@ -222,15 +365,13 @@ int __util_tail_main(int argc, char **argv)
 	int mode_given = 0;
 	int had_error = 0;
 	int first_banner = 1;
+	int follow = 0;
 
 	for (i = 1; i < argc; i++) {
 		char *a = argv[i];
 
 		if (!strcmp(a, "--")) { i++; break; }
-		if (!strcmp(a, "-f")) {
-			__util_diagf("tail: -f: not implemented -- see src/util/tail.c\n");
-			return 1;
-		}
+		if (!strcmp(a, "-f")) { follow = 1; continue; }
 		if (!strcmp(a, "-c") || !strcmp(a, "-n")) {
 			enum tail_mode m = (a[1] == 'c') ? TAIL_BYTES : TAIL_LINES;
 			int fe;
@@ -255,15 +396,45 @@ int __util_tail_main(int argc, char **argv)
 	}
 	(void)mode_given;
 
-	if (i >= argc)
-		return tail_one(STDIN_FILENO, mode, from_end, number, "standard input") < 0 ? 1 : 0;
+	if (i >= argc) {
+		int rc = tail_one(STDIN_FILENO, mode, from_end, number, "standard input");
+
+		if (rc < 0) return 1;
+		if (follow) {
+			struct tail_follow_target t;
+			struct stat st;
+
+			t.fd = STDIN_FILENO;
+			t.label = "standard input";
+			t.is_regular = fstat(STDIN_FILENO, &st) == 0 && S_ISREG(st.st_mode);
+			t.pos = 0;
+			if (t.is_regular) {
+				off_t p = lseek(STDIN_FILENO, 0, SEEK_CUR);
+				t.pos = (p < 0) ? st.st_size : p;
+			}
+			return tail_follow(&t, 1) < 0 ? 1 : 0;
+		}
+		return 0;
+	}
 
 	{
 		int noperands = argc - i;
+		struct tail_follow_target *targets = 0;
+		int ntargets = 0;
+
+		if (follow) {
+			targets = malloc((size_t)noperands * sizeof *targets);
+			if (!targets) {
+				__util_diagf("tail: %s\n", strerror(ENOMEM));
+				return 1;
+			}
+		}
 
 		for (; i < argc; i++) {
 			const char *path = argv[i];
+			int is_stdin = !strcmp(path, "-");
 			int fd;
+			int rc;
 
 			if (noperands > 1) {
 				printf("%s==> %s <==\n", first_banner ? "" : "\n", path);
@@ -271,20 +442,40 @@ int __util_tail_main(int argc, char **argv)
 				if (fflush(stdout) < 0) had_error = 1;
 			}
 
-			if (!strcmp(path, "-")) {
-				if (tail_one(STDIN_FILENO, mode, from_end, number, "-") < 0) had_error = 1;
-				continue;
-			}
-
-			fd = open(path, O_RDONLY);
+			fd = is_stdin ? STDIN_FILENO : open(path, O_RDONLY);
 			if (fd < 0) {
 				__util_diagf("tail: %s: %s\n", path, strerror(errno));
 				had_error = 1;
 				continue;
 			}
-			if (tail_one(fd, mode, from_end, number, path) < 0) had_error = 1;
-			(void)close(fd);
+
+			rc = tail_one(fd, mode, from_end, number, path);
+			if (rc < 0) had_error = 1;
+
+			/* A target that followed successfully stays open across
+			 * the follow loop below (and past it, until the process
+			 * exits) -- only a failed or non-followed operand's fd
+			 * gets closed here. */
+			if (follow && rc == 0) {
+				struct tail_follow_target *t = &targets[ntargets++];
+				struct stat st;
+
+				t->fd = fd;
+				t->label = path;
+				t->is_regular = fstat(fd, &st) == 0 && S_ISREG(st.st_mode);
+				t->pos = 0;
+				if (t->is_regular) {
+					off_t p = lseek(fd, 0, SEEK_CUR);
+					t->pos = (p < 0) ? st.st_size : p;
+				}
+			} else if (!is_stdin) {
+				(void)close(fd);
+			}
 		}
+
+		if (follow && ntargets > 0 && tail_follow(targets, ntargets) < 0)
+			had_error = 1;
+		free(targets);
 	}
 
 	return had_error ? 1 : 0;

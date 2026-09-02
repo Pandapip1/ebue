@@ -30,6 +30,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 
@@ -164,6 +165,41 @@ static int run_sh_c(const char *cmd, const char *infile)
 	return run(sh_path, argv, infile);
 }
 
+/* Spawns `path` the same way run() does (stdout/stderr captured to
+ * outfile/errfile), but does not wait for it -- for `tail -f`, which
+ * has no natural exit, the caller polls its captured output, applies
+ * whatever end condition it means to test (kill() a still-running
+ * follow of a regular file, or close a pipe's write end to test the
+ * documented "input exhausted" exit -- see src/util/tail.c's header),
+ * then reaps it itself. `stdin_fd`, if >= 0, is an already-open
+ * descriptor (e.g. a pipe's read end) to hand the child as fd 0 rather
+ * than a file path -- __spawn() only ever looks at this process's own
+ * fd 0/1/2 (src/process/spawn.c), so nothing else this process has
+ * open (the pipe's write end included) leaks into the child. */
+static int spawn_capturing(const char *path, char *const *args, int stdin_fd)
+{
+	int out, err;
+	int s0 = -1, s1, s2, pid;
+
+	out = open(outfile, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	err = open(errfile, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (out < 0 || err < 0) { if (out >= 0) close(out); if (err >= 0) close(err); return -1; }
+
+	s1 = dup(1); s2 = dup(2);
+	if (stdin_fd >= 0) { s0 = dup(0); dup2(stdin_fd, 0); }
+	dup2(out, 1);
+	dup2(err, 2);
+	close(out); close(err);
+
+	pid = __spawn(path, args, environ);
+
+	if (s0 >= 0) { dup2(s0, 0); close(s0); }
+	dup2(s1, 1); close(s1);
+	dup2(s2, 2); close(s2);
+
+	return pid;
+}
+
 static int slurp_into(const char *path, char *buf, size_t buflen)
 {
 	FILE *f = fopen(path, "rb");
@@ -196,10 +232,35 @@ static int err_contains(const char *needle)
 	return strstr(buf, needle) != 0;
 }
 
+/* Bounded poll for `needle` to show up in a still-running child's
+ * captured stdout -- real synchronization on `tail -f`'s own observable
+ * effect (same technique, and the same rationale, as
+ * test/util-atcron.c's wait_for_file()), never a fixed sleep racing a
+ * poll loop whose own interval (src/util/tail.c's TAIL_FOLLOW_POLL_NS)
+ * this test has no business assuming. Polls every 50ms up to max_ms. */
+static int wait_for_out_contains(const char *needle, long max_ms)
+{
+	long waited = 0;
+	while (waited < max_ms) {
+		if (out_contains(needle)) return 1;
+		usleep(50000);
+		waited += 50;
+	}
+	return out_contains(needle);
+}
+
 static void write_file(const char *path, const char *text)
 {
 	FILE *f = fopen(path, "wb");
 	if (!f) { fails++; printf("FAIL: cannot write %s\n", path); return; }
+	fputs(text, f);
+	fclose(f);
+}
+
+static void append_file(const char *path, const char *text)
+{
+	FILE *f = fopen(path, "ab");
+	if (!f) { fails++; printf("FAIL: cannot append %s\n", path); return; }
 	fputs(text, f);
 	fclose(f);
 }
@@ -626,16 +687,67 @@ static void test_tail_dash_c(void)
 	CHECK(out_is("def"));
 }
 
-static void test_tail_dash_f_is_refused(void)
+/* -f on a regular file: never terminates on its own (the file can
+ * always grow again), so this drives it the way test/util-atcron.c
+ * drives atd/crond -- spawn, poll the observable effect, kill(),
+ * reap -- rather than the blocking run() every other test in this file
+ * uses. Exercises the size-polling half of src/util/tail.c's
+ * tail_follow(): the appended line must show up without the file
+ * having been closed and reopened, and SIGTERM must actually end the
+ * process rather than leaving it stuck in the poll loop. */
+static void test_tail_dash_f_follows_appended_data(void)
 {
 	char *argv[4];
+	int pid, status;
 
 	mkpath(p1, "tail-f.txt");
-	write_file(p1, "x\n");
+	write_file(p1, "line1\n");
 
 	argv[0] = (char *)"tail"; argv[1] = (char *)"-f"; argv[2] = p1; argv[3] = 0;
-	CHECK(run(tail_path, argv, 0) != 0);
-	CHECK(err_contains("-f"));
+	pid = spawn_capturing(tail_path, argv, -1);
+	CHECK(pid >= 0);
+	if (pid < 0) return;
+
+	CHECK(wait_for_out_contains("line1\n", 3000));
+
+	append_file(p1, "line2\n");
+	CHECK(wait_for_out_contains("line1\nline2\n", 3000));
+
+	kill(pid, SIGTERM);
+	CHECK(waitpid(pid, &status, 0) == pid);
+	CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM);
+
+	CHECK(out_is("line1\nline2\n"));
+}
+
+/* -f with no file operand (stdin) reading from a pipe: unlike a
+ * regular file, a pipe's write end closing really is the end -- no
+ * kill() needed, tail_follow()'s single-non-regular-target branch
+ * (src/util/tail.c) reads it in a plain blocking loop and returns the
+ * moment read() reports EOF.  This is the "or the input is exhausted
+ * in a non-blocking context" exit this file's header describes,
+ * exercised end to end: a real child process, a real pipe, a real
+ * clean exit(0) with no signal involved. */
+static void test_tail_dash_f_pipe_exits_at_eof(void)
+{
+	char *argv[3];
+	int fds[2];
+	int pid, status;
+
+	CHECK(pipe(fds) == 0);
+
+	argv[0] = (char *)"tail"; argv[1] = (char *)"-f"; argv[2] = 0;
+	pid = spawn_capturing(tail_path, argv, fds[0]);
+	CHECK(pid >= 0);
+	close(fds[0]);
+	if (pid < 0) { close(fds[1]); return; }
+
+	CHECK(write(fds[1], "a\nb\n", 4) == 4);
+	close(fds[1]);   /* EOF: tail -f on a pipe must now exit on its own */
+
+	CHECK(waitpid(pid, &status, 0) == pid);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	CHECK(out_is("a\nb\n"));
 }
 
 static void test_tail_multiple_files_banner(void)
@@ -768,7 +880,8 @@ int main(int argc, char **argv)
 	test_tail_fewer_lines_than_n();
 	test_tail_plus_n_from_beginning();
 	test_tail_dash_c();
-	test_tail_dash_f_is_refused();
+	test_tail_dash_f_follows_appended_data();
+	test_tail_dash_f_pipe_exits_at_eof();
 	test_tail_multiple_files_banner();
 
 	test_builtins_match_standalone();
