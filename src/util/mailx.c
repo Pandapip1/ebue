@@ -196,25 +196,25 @@
 #include <time.h>
 #include <unistd.h>
 #include "util.h"
+#include "ownership_stubs.h"
 
 /* ==================== small shared helpers ==================== */
 
 /* A write() that makes no progress at all (0, an error, or, defensively,
  * an impossible over-long count) is a real error, never retried forever. */
-static int write_all(int fd, const char *buf, size_t len, const char *label)
+static int write_all(int fd, const char *buf withtok(readable_span(len)),
+	size_t len, const char *label)
 {
-	size_t left = len;
-	const char *p = buf;
+	size_t off = 0;
 
-	while (left > 0) {
-		ssize_t w = write(fd, p, left);
-		if (w <= 0 || (size_t)w > left) {
+	while (off < len) {
+		ssize_t w = write(fd, buf + off, len - off);
+		if (w <= 0 || (size_t)w > len - off) {
 			if (w >= 0) errno = EIO;
 			__util_diagf("mailx: %s: %s\n", label, strerror(errno));
 			return -1;
 		}
-		p += (size_t)w;
-		left -= (size_t)w;
+		off += (size_t)w;
 	}
 	return 0;
 }
@@ -239,6 +239,7 @@ static int slurp_fd(int fd, char **outbuf, size_t *outlen)
 			buf = nb;
 			cap = ncap;
 		}
+		__ownership_writable_span(buf + len, cap - len - 1);
 		n = read(fd, buf + len, cap - len - 1);
 		if (n < 0) { free(buf); return -1; }
 		if (n == 0) break;
@@ -340,7 +341,11 @@ static int append_escaped_body(char **out, size_t *outlen, size_t *outcap,
 			*outcap = ncap;
 		}
 		if (escape) (*out)[(*outlen)++] = '>';
-		memcpy(*out + *outlen, body + linestart, linelen);
+		{
+			size_t k;
+			for (k = 0; k < linelen; k++)
+				(*out)[*outlen + k] = body[linestart + k];
+		}
 		*outlen += linelen;
 		(*out)[(*outlen)++] = '\n';
 		i = (j < bodylen) ? j + 1 : j;
@@ -412,7 +417,10 @@ static int deliver_message(const char *path, const char *login, const char *to_h
 	msgcap = (size_t)hn + bodylen + 64;
 	msg = malloc(msgcap);
 	if (!msg) { __util_diagf("mailx: out of memory\n"); return -1; }
-	memcpy(msg, hdrs, (size_t)hn);
+	{
+		size_t i;
+		for (i = 0; i < (size_t)hn; i++) msg[i] = hdrs[i];
+	}
 	msglen = (size_t)hn;
 
 	if (append_escaped_body(&msg, &msglen, &msgcap, body, bodylen) < 0) {
@@ -442,6 +450,7 @@ static int deliver_message(const char *path, const char *login, const char *to_h
 		return -1;
 	}
 
+	__ownership_readable_span(msg, msglen);
 	if (ensure_blank_terminated(fd, path) == 0 && write_all(fd, msg, msglen, path) == 0)
 		rc = 0;
 
