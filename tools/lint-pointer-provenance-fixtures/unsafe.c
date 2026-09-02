@@ -22,3 +22,28 @@ long different_haystack_difference(const char *s, const char *other) {
   const char *dot = strchr(s, '.');
   return dot ? dot - other : -1; /* pointer-provenance-expect */
 }
+
+
+/* A strto* end pointer shares provenance only with that call's own input. */
+#include <stdlib.h>
+long conversion_end_from_different_input(const char *s, const char *other) {
+  char *end;
+  (void)strtol(s, &end, 10);
+  return end - other; /* pointer-provenance-expect */
+}
+
+/* Reassigning end after conversion must discard the conversion contract. */
+long overwritten_conversion_end(const char *s, const char *other) {
+  char *end;
+  (void)strtol(s, &end, 10);
+  end = (char *)other;
+  return end - s; /* pointer-provenance-expect */
+}
+
+/* An arbitrary output-pointer function has no strto* provenance contract. */
+void parse_number(const char *, char **);
+long untrusted_end_output(const char *s) {
+  char *end;
+  parse_number(s, &end);
+  return end - s; /* pointer-provenance-expect */
+}

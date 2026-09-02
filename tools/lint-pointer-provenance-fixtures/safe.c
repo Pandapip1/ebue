@@ -39,3 +39,13 @@ long needle_in_haystack(const char *s) {
   const char *dot = strchr(s, '.');
   return dot ? dot - s : -1;
 }
+
+/* strto*'s endptr output is either the input pointer or a later pointer in
+ * the same array by contract, even though the opaque call gives the stored
+ * value a fresh analyzer symbol. */
+#include <stdlib.h>
+long conversion_end_in_input(const char *s) {
+  char *end;
+  (void)strtol(s, &end, 10);
+  return end - s;
+}
