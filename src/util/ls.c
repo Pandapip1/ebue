@@ -213,7 +213,7 @@ static void group_name(gid_t gid, char *out, size_t outlen)
 static char type_indicator(const struct ls_opts *o, const struct entry *e)
 {
 	if (!e->stat_ok) return 0;
-	if (S_ISDIR(e->st.st_mode)) return '/';
+	if (S_ISDIR(e->st.st_mode)) return (o->F || o->p) ? '/' : 0;
 	if (o->p) return 0; /* -p only ever marks directories */
 	if (S_ISLNK(e->st.st_mode)) return o->F ? '@' : 0;
 	if (S_ISFIFO(e->st.st_mode)) return o->F ? '|' : 0;
