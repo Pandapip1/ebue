@@ -28,6 +28,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 
 extern char **environ;
@@ -202,6 +203,184 @@ static void test_bracket_form(void)
 	CHECK(err_contains("missing"));
 }
 
+/* ---- -eq/-ne/-lt/-le/-gt/-ge (src/util/test.c's do_binary()) --------- */
+
+static void test_test_integer_comparisons(void)
+{
+	char *eq_t[] = { (char *)"test", (char *)"3", (char *)"-eq", (char *)"3", 0 };
+	char *eq_f[] = { (char *)"test", (char *)"3", (char *)"-eq", (char *)"4", 0 };
+	char *ne_t[] = { (char *)"test", (char *)"3", (char *)"-ne", (char *)"4", 0 };
+	char *ne_f[] = { (char *)"test", (char *)"3", (char *)"-ne", (char *)"3", 0 };
+	char *lt_t[] = { (char *)"test", (char *)"3", (char *)"-lt", (char *)"4", 0 };
+	char *lt_f[] = { (char *)"test", (char *)"4", (char *)"-lt", (char *)"3", 0 };
+	char *gt_t[] = { (char *)"test", (char *)"4", (char *)"-gt", (char *)"3", 0 };
+	char *gt_f[] = { (char *)"test", (char *)"3", (char *)"-gt", (char *)"4", 0 };
+	char *le_t[] = { (char *)"test", (char *)"3", (char *)"-le", (char *)"3", 0 };
+	char *le_f[] = { (char *)"test", (char *)"4", (char *)"-le", (char *)"3", 0 };
+	char *ge_t[] = { (char *)"test", (char *)"3", (char *)"-ge", (char *)"3", 0 };
+	char *ge_f[] = { (char *)"test", (char *)"3", (char *)"-ge", (char *)"4", 0 };
+
+	CHECK(run(test_path, eq_t) == 0);
+	CHECK(run(test_path, eq_f) == 1);
+	CHECK(run(test_path, ne_t) == 0);
+	CHECK(run(test_path, ne_f) == 1);
+	CHECK(run(test_path, lt_t) == 0);
+	CHECK(run(test_path, lt_f) == 1);
+	CHECK(run(test_path, gt_t) == 0);
+	CHECK(run(test_path, gt_f) == 1);
+	CHECK(run(test_path, le_t) == 0);
+	CHECK(run(test_path, le_f) == 1);
+	CHECK(run(test_path, ge_t) == 0);
+	CHECK(run(test_path, ge_f) == 1);
+}
+
+static void test_test_integer_nonnumeric_is_error(void)
+{
+	/* to_int(): "anything strtol() does not consume in full is an
+	 * error (status >1), not a silently-zero comparison." */
+	char *argv[] = { (char *)"test", (char *)"abc", (char *)"-eq", (char *)"3", 0 };
+	CHECK(run(test_path, argv) == 2);
+	CHECK(err_contains("integer expression expected"));
+}
+
+/* ---- -z (src/util/test.c's do_unary()) -------------------------------- */
+
+static void test_test_dash_z(void)
+{
+	char *zt[] = { (char *)"test", (char *)"-z", (char *)"", 0 };
+	char *zf[] = { (char *)"test", (char *)"-z", (char *)"x", 0 };
+	CHECK(run(test_path, zt) == 0);
+	CHECK(run(test_path, zf) == 1);
+}
+
+/* ---- 4-argument -a/-o combining forms (t_aexpr()/t_oexpr()) ---------- */
+
+static void test_test_and_or_combinators(void)
+{
+	char *and_tt[] = { (char *)"test", (char *)"-n", (char *)"x", (char *)"-a", (char *)"y", 0 };
+	char *and_ft[] = { (char *)"test", (char *)"-n", (char *)"", (char *)"-a", (char *)"y", 0 };
+	char *or_ft[]  = { (char *)"test", (char *)"-n", (char *)"", (char *)"-o", (char *)"y", 0 };
+	char *or_ff[]  = { (char *)"test", (char *)"-n", (char *)"", (char *)"-o", (char *)"", 0 };
+
+	/* -a/-o's right operand is evaluated unconditionally -- t_aexpr()'s
+	 * own comment: "Evaluated, not short-circuited" -- so and_ft's
+	 * right side ("-n y", true) is genuinely evaluated and only then
+	 * discarded by the false left side; the combined result still
+	 * comes out false. */
+	CHECK(run(test_path, and_tt) == 0);
+	CHECK(run(test_path, and_ft) == 1);
+	CHECK(run(test_path, or_ft) == 0);
+	CHECK(run(test_path, or_ff) == 1);
+}
+
+/* ---- precedence: XSI's "-a ... bind[s] tighter than -o" -------------- */
+
+static void test_test_and_binds_tighter_than_or(void)
+{
+	/* `x -o x -a ""` parses as `x -o (x -a "")` = x OR (x AND "") =
+	 * true.  A naive left-to-right reading with no precedence would
+	 * compute `(x -o x) -a ""` = true AND false = false instead, so
+	 * this genuinely distinguishes the two. */
+	char *argv[] = { (char *)"test", (char *)"x", (char *)"-o", (char *)"x", (char *)"-a", (char *)"", 0 };
+	CHECK(run(test_path, argv) == 0);
+}
+
+/* ---- file-test operators (do_unary()'s stat()/lstat()/access() cases) */
+
+#define SCRATCH_DIR   "scratch"
+#define SCRATCH_FILE  "scratch/tf_file"
+#define SCRATCH_EMPTY "scratch/tf_empty"
+#define SCRATCH_SUBDIR "scratch/tf_dir"
+#define SCRATCH_LINK  "scratch/tf_link"
+#define SCRATCH_MISSING "scratch/tf_missing"
+
+static void make_file(const char *path, const char *contents)
+{
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd < 0) return;
+	if (contents && *contents) write(fd, contents, strlen(contents));
+	close(fd);
+}
+
+static void test_test_file_operators(void)
+{
+	char *f_reg_t[] = { (char *)"test", (char *)"-f", (char *)SCRATCH_FILE, 0 };
+	char *f_dir_f[] = { (char *)"test", (char *)"-f", (char *)SCRATCH_SUBDIR, 0 };
+	char *d_dir_t[] = { (char *)"test", (char *)"-d", (char *)SCRATCH_SUBDIR, 0 };
+	char *d_reg_f[] = { (char *)"test", (char *)"-d", (char *)SCRATCH_FILE, 0 };
+	char *e_t[]     = { (char *)"test", (char *)"-e", (char *)SCRATCH_FILE, 0 };
+	char *e_f[]     = { (char *)"test", (char *)"-e", (char *)SCRATCH_MISSING, 0 };
+	char *s_t[]     = { (char *)"test", (char *)"-s", (char *)SCRATCH_FILE, 0 };
+	char *s_f[]     = { (char *)"test", (char *)"-s", (char *)SCRATCH_EMPTY, 0 };
+	char *r_t[]     = { (char *)"test", (char *)"-r", (char *)SCRATCH_FILE, 0 };
+	char *w_t[]     = { (char *)"test", (char *)"-w", (char *)SCRATCH_FILE, 0 };
+	char *x_dir_t[] = { (char *)"test", (char *)"-x", (char *)SCRATCH_SUBDIR, 0 };
+	char *x_reg_f[] = { (char *)"test", (char *)"-x", (char *)SCRATCH_FILE, 0 };
+	char *x_reg_t[] = { (char *)"test", (char *)"-x", (char *)SCRATCH_FILE, 0 };
+	char *w_ro_f[]  = { (char *)"test", (char *)"-w", (char *)SCRATCH_FILE, 0 };
+	char *r_ro_t[]  = { (char *)"test", (char *)"-r", (char *)SCRATCH_FILE, 0 };
+
+	mkdir(SCRATCH_SUBDIR, 0755);
+	make_file(SCRATCH_FILE, "hello");
+	make_file(SCRATCH_EMPTY, "");
+
+	CHECK(run(test_path, f_reg_t) == 0);
+	CHECK(run(test_path, f_dir_f) == 1);
+	CHECK(run(test_path, d_dir_t) == 0);
+	CHECK(run(test_path, d_reg_f) == 1);
+	CHECK(run(test_path, e_t) == 0);
+	CHECK(run(test_path, e_f) == 1);
+	CHECK(run(test_path, s_t) == 0);
+	CHECK(run(test_path, s_f) == 1);
+	CHECK(run(test_path, r_t) == 0);
+	CHECK(run(test_path, w_t) == 0);
+	/* This project's own access()-backed -r/-w/-x hold to the meaning
+	 * test/unistd.c's own access(2)/chmod(2) tests already establish
+	 * as reliable here: a directory is X_OK by default, a freshly
+	 * created 0644 regular file is not, and chmod actually flips both
+	 * outcomes -- so -x is asserted both false and true instead of
+	 * being skipped as unreliable. */
+	CHECK(run(test_path, x_dir_t) == 0);
+	CHECK(run(test_path, x_reg_f) == 1);
+
+	chmod(SCRATCH_FILE, 0755);
+	CHECK(run(test_path, x_reg_t) == 0);
+
+	chmod(SCRATCH_FILE, 0444);
+	CHECK(run(test_path, w_ro_f) == 1);
+	CHECK(run(test_path, r_ro_t) == 0);
+	chmod(SCRATCH_FILE, 0644);
+}
+
+static void test_test_dash_L(void)
+{
+	char *link_t[] = { (char *)"test", (char *)"-L", (char *)SCRATCH_LINK, 0 };
+	char *reg_f[]  = { (char *)"test", (char *)"-L", (char *)SCRATCH_FILE, 0 };
+
+	unlink(SCRATCH_LINK);
+	if (symlink("tf_file", SCRATCH_LINK) != 0) {
+		/* Symlink support is environment-dependent (real NT and
+		 * native Linux have it, this session's Wine sandbox does
+		 * not) -- test/util-archive.c's test_file_symlink() skips
+		 * the same way rather than asserting anything about a
+		 * primitive the runner does not provide. */
+		printf("note: skipping -L: symlink() unsupported here\n");
+		return;
+	}
+	CHECK(run(test_path, link_t) == 0);
+	CHECK(run(test_path, reg_f) == 1);
+	unlink(SCRATCH_LINK);
+}
+
+static void cleanup_file_operator_scratch(void)
+{
+	unlink(SCRATCH_LINK);
+	unlink(SCRATCH_FILE);
+	unlink(SCRATCH_EMPTY);
+	rmdir(SCRATCH_SUBDIR);
+	rmdir(SCRATCH_DIR);
+}
+
 /* ---- the shell built-ins agree with the standalone executables ------- */
 
 static int run_sh_c(const char *cmd)
@@ -217,6 +396,14 @@ static void test_builtins_match_standalone(void)
 	CHECK(run_sh_c("test 1 = 1") == 0);
 	CHECK(run_sh_c("test 1 = 2") == 1);
 	CHECK(run_sh_c("[ -n x ]") == 0);
+	/* Touch the newly-covered operator families through the builtin
+	 * path too, confirming bi_test() (src/sh/builtin.c) and
+	 * __util_test_main() (src/util/test.c) agree on more than just
+	 * string comparison and -n. */
+	CHECK(run_sh_c("test 3 -eq 3") == 0);
+	CHECK(run_sh_c("test 3 -eq 4") == 1);
+	CHECK(run_sh_c("[ -z '' ]") == 0);
+	CHECK(run_sh_c("test -n x -a y") == 0);
 }
 
 static void cleanup_artifacts(void)
@@ -252,6 +439,17 @@ int main(int argc, char **argv)
 	test_test_argc_cases();
 	test_test_malformed_is_diagnosed();
 	test_bracket_form();
+
+	test_test_integer_comparisons();
+	test_test_integer_nonnumeric_is_error();
+	test_test_dash_z();
+	test_test_and_or_combinators();
+	test_test_and_binds_tighter_than_or();
+
+	mkdir(SCRATCH_DIR, 0755);
+	test_test_file_operators();
+	test_test_dash_L();
+	cleanup_file_operator_scratch();
 
 	test_builtins_match_standalone();
 
