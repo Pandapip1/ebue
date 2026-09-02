@@ -49,22 +49,23 @@ static char obj_root[1024];
 static int find_obj_root(const char *argv0)
 {
 	size_t n;
-	char *p;
+	size_t i;
 
 	if (!argv0 || !*argv0) return -1;
 	n = strlen(argv0);
 	if (n >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-diffcmp.exe" */
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/util-diffcmp.exe" */
 
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	n = strlen(obj_root);
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/test" */
 
 	return 0;
 }
@@ -72,12 +73,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -156,6 +159,21 @@ static int run_sh_c(const char *cmd)
 	return run(sh_path, argv);
 }
 
+/* Many cases below run one diff/cmp invocation and check both its exit
+ * status and its stdout against an exact expected string -- folded into
+ * these two helpers since that shape repeats across both utilities. */
+static void check_out(const char *path, char *const *argv, int want_status, const char *expect)
+{
+	CHECK(run(path, argv) == want_status);
+	CHECK(out_equals(expect));
+}
+
+static void check_sh_out(const char *cmd, int want_status, const char *expect)
+{
+	CHECK(run_sh_c(cmd) == want_status);
+	CHECK(out_equals(expect));
+}
+
 /* ==== diff(1p) ============================================================ */
 
 /* Exercises a change, an append and a delete all in the same default-
@@ -166,8 +184,7 @@ static void test_diff_default_format(void)
 	char *argv[] = { (char *)"diff", (char *)"scratch/d1", (char *)"scratch/d2", 0 };
 	make_file("scratch/d1", "a\nb\nc\nd\ne\n");
 	make_file("scratch/d2", "a\nB\nc\nd\ne\nf\n");
-	CHECK(run(diff_path, argv) == 1);
-	CHECK(out_equals("2c2\n< b\n---\n> B\n5a6\n> f\n"));
+	check_out(diff_path, argv, 1, "2c2\n< b\n---\n> B\n5a6\n> f\n");
 }
 
 static void test_diff_pure_append_and_delete(void)
@@ -176,17 +193,14 @@ static void test_diff_pure_append_and_delete(void)
 	char *delete_argv[] = { (char *)"diff", (char *)"scratch/g2", (char *)"scratch/g1", 0 };
 	make_file("scratch/g1", "a\nb\nc\n");
 	make_file("scratch/g2", "a\nb\nX\nY\nc\n");
-	CHECK(run(diff_path, append_argv) == 1);
-	CHECK(out_equals("2a3,4\n> X\n> Y\n"));
-	CHECK(run(diff_path, delete_argv) == 1);
-	CHECK(out_equals("3,4d2\n< X\n< Y\n"));
+	check_out(diff_path, append_argv, 1, "2a3,4\n> X\n> Y\n");
+	check_out(diff_path, delete_argv, 1, "3,4d2\n< X\n< Y\n");
 }
 
 static void test_diff_identical_is_silent_and_zero(void)
 {
 	char *argv[] = { (char *)"diff", (char *)"scratch/d1", (char *)"scratch/d1", 0 };
-	CHECK(run(diff_path, argv) == 0);
-	CHECK(out_equals(""));
+	check_out(diff_path, argv, 0, "");
 }
 
 /* -c: real context-format markers ("***"/"---"/"!" for the changed
@@ -216,8 +230,7 @@ static void test_diff_dash_u(void)
 static void test_diff_dash_e(void)
 {
 	char *argv[] = { (char *)"diff", (char *)"-e", (char *)"scratch/g1", (char *)"scratch/g2", 0 };
-	CHECK(run(diff_path, argv) == 1);
-	CHECK(out_equals("2a\nX\nY\n.\n"));
+	check_out(diff_path, argv, 1, "2a\nX\nY\n.\n");
 }
 
 /* Exit status: 0 identical, 1 differences found, >1 a real error --
@@ -257,15 +270,13 @@ static void test_cmp_default_differ(void)
 	char *argv[] = { (char *)"cmp", (char *)"scratch/c1", (char *)"scratch/c2", 0 };
 	make_file("scratch/c1", "hello world\n");
 	make_file("scratch/c2", "hello World\n");
-	CHECK(run(cmp_path, argv) == 1);
-	CHECK(out_equals("scratch/c1 scratch/c2 differ: char 7, line 1\n"));
+	check_out(cmp_path, argv, 1, "scratch/c1 scratch/c2 differ: char 7, line 1\n");
 }
 
 static void test_cmp_identical(void)
 {
 	char *argv[] = { (char *)"cmp", (char *)"scratch/c1", (char *)"scratch/c1", 0 };
-	CHECK(run(cmp_path, argv) == 0);
-	CHECK(out_equals(""));
+	check_out(cmp_path, argv, 0, "");
 }
 
 /* -l: exact byte number (decimal) and both differing bytes (octal),
@@ -274,8 +285,7 @@ static void test_cmp_identical(void)
 static void test_cmp_dash_l(void)
 {
 	char *argv[] = { (char *)"cmp", (char *)"-l", (char *)"scratch/c1", (char *)"scratch/c2", 0 };
-	CHECK(run(cmp_path, argv) == 1);
-	CHECK(out_equals("7 167 127\n"));
+	check_out(cmp_path, argv, 1, "7 167 127\n");
 }
 
 static void test_cmp_dash_s(void)
@@ -320,17 +330,10 @@ static void test_cmp_dash_l_dash_s_mutually_exclusive(void)
 
 static void test_builtins_match_standalone(void)
 {
-	CHECK(run_sh_c("diff scratch/d1 scratch/d2") == 1);
-	CHECK(out_equals("2c2\n< b\n---\n> B\n5a6\n> f\n"));
-
-	CHECK(run_sh_c("diff scratch/d1 scratch/d1") == 0);
-	CHECK(out_equals(""));
-
-	CHECK(run_sh_c("cmp scratch/c1 scratch/c2") == 1);
-	CHECK(out_equals("scratch/c1 scratch/c2 differ: char 7, line 1\n"));
-
-	CHECK(run_sh_c("cmp scratch/c1 scratch/c1") == 0);
-	CHECK(out_equals(""));
+	check_sh_out("diff scratch/d1 scratch/d2", 1, "2c2\n< b\n---\n> B\n5a6\n> f\n");
+	check_sh_out("diff scratch/d1 scratch/d1", 0, "");
+	check_sh_out("cmp scratch/c1 scratch/c2", 1, "scratch/c1 scratch/c2 differ: char 7, line 1\n");
+	check_sh_out("cmp scratch/c1 scratch/c1", 0, "");
 }
 
 /* ==== scratch directory setup/teardown =================================== */
