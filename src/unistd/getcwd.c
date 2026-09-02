@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <errno.h>
 #include "libc.h"
 
@@ -57,7 +58,10 @@ char *getcwd(char *buf withtok(heap_allocated), size_t size)
 	} else if (len + 1 > size) {
 		errno = ERANGE; return 0;
 	}
-	memcpy(buf, tmp, len + 1);
+	if (snprintf(buf, size, "%s", tmp) != (int)len) {
+		errno = ERANGE;
+		return 0;
+	}
 	return buf;
 }
 

@@ -30,6 +30,7 @@
 #include <limits.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdio.h>
 #include <errno.h>
 #include "libc.h"
 #include "ownership_stubs.h"
@@ -57,7 +58,7 @@ char *realpath(const char *__restrict path,
 			resolved = malloc(len + 1);
 			if (!resolved) return 0;
 		}
-		memcpy(resolved, name, len + 1);
+		(void)snprintf(resolved, len + 1, "%s", name);
 		return resolved;
 	}
 	fd = open(path, O_RDONLY);

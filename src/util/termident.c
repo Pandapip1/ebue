@@ -17,8 +17,8 @@ static void set_shortname(struct term_ident *out, const char *s)
 	if (strncmp(base, "/dev/", 5) == 0) base += 5;
 	n = strlen(base);
 	if (n >= sizeof out->shortname) n = sizeof out->shortname - 1;
-	memmove(out->shortname, base, n);
-	out->shortname[n] = 0;
+	(void)snprintf(out->shortname, sizeof out->shortname, "%.*s", (int)n,
+	    base);
 }
 
 /* Describes fd, if it is a terminal at all.  Returns 1 (out filled) or

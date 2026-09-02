@@ -125,9 +125,11 @@ int __spool_job_header(const char *path, time_t *run_at, char *queue, size_t que
 			have = 1;
 		} else if (!strncmp(line, "#queue ", 7)) {
 			size_t l = strcspn(line + 7, "\n");
-			if (l >= queue_sz) l = queue_sz - 1;
-			memcpy(queue, line + 7, l);
-			queue[l] = 0;
+			if (queue_sz) {
+				if (l >= queue_sz) l = queue_sz - 1;
+				(void)snprintf(queue, queue_sz, "%.*s", (int)l,
+				    line + 7);
+			}
 		} else if (line[0] != '#') {
 			break;
 		}
