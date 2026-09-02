@@ -1074,7 +1074,7 @@ NTSTATUS __afd_ioctl(HANDLE h, ULONG code, void *in, ULONG inlen, void *out, ULO
  * and load-bearing, not decoration -- it is what makes addr genuinely
  * optional at every one of ITS OWN callers' contracts (bind()/
  * connect()'s shared validation shape) too. */
-int __afd_addr_from_sockaddr(const struct sockaddr *addr, unsigned len, TRANSPORT_ADDRESS *out)
+int __afd_addr_from_sockaddr(const struct sockaddr *restrict addr, unsigned len, TRANSPORT_ADDRESS *restrict out)
     __attribute__((nonnull(3)));
 /* TA_ADDRESS (as embedded in a TRANSPORT_ADDRESS) -> sockaddr_in,
  * truncating into *addr and *len the way accept()/recvfrom() are specified

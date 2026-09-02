@@ -138,9 +138,9 @@ static int putc_n(struct out *o, char c, size_t n)
  * guard, and f/t both flow into memcpy() unconditionally, same
  * doctrine as put() above. Every real call site passes field (a
  * stack array) and &fl (a stack local). */
-static int fappend(char *f, size_t *fl, const char *t, size_t l)
+static int fappend(char *restrict f, size_t *fl, const char *restrict t, size_t l)
     __attribute__((nonnull(1, 2, 3)));
-static int fappend(char *f, size_t *fl, const char *t, size_t l)
+static int fappend(char *restrict f, size_t *fl, const char *restrict t, size_t l)
 {
 	if (l > FIELD_MAX - *fl) return -1;
 	memcpy(f + *fl, t, l);

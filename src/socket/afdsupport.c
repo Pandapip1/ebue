@@ -185,7 +185,7 @@ void __afd_build_open_ea(void *buf)
  * would put it; see the TDI banner in afd.h.  ReactOS's WSPBind
  * (dll/win32/msafd/misc/dllmain.c) writes the same 14 bytes as a plain
  * RtlCopyMemory of sockaddr.sa_data, which is the identical image. */
-int __afd_addr_from_sockaddr(const struct sockaddr *addr, socklen_t len, TRANSPORT_ADDRESS *out)
+int __afd_addr_from_sockaddr(const struct sockaddr *restrict addr, socklen_t len, TRANSPORT_ADDRESS *restrict out)
 {
 	const struct sockaddr_in *sin;
 	unsigned char *a;
