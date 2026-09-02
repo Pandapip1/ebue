@@ -29,10 +29,12 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include "netdb_internal.h"
+#include "nss_paths.h"
 
 int h_errno;
 
@@ -121,4 +123,80 @@ struct hostent *gethostbyname(const char *name)
 	if (r != 1) return NULL;
 	h_errno = 0;
 	return &g_he;
+}
+
+/* sethostent()/gethostent()/endhostent(): endhostent.html's sequential
+ * host-database walk, one struct hostent per line of the same /etc/hosts
+ * this file's gethostbyname() and hosts.c's __hosts_lookup() already
+ * read -- via __hosts_read_entry() (hosts.c), which shares that file's
+ * own line-shape rules rather than re-deriving them. One address per
+ * entry (a hosts(5) line names exactly one address), h_addrtype/h_length
+ * always AF_INET/4 -- this implementation never parses an IPv6 line
+ * (see hosts.c's own banner) -- and up to GHE_MAX_ALIASES trailing name
+ * tokens as h_aliases, the real per-line alias list this database
+ * actually has (unlike gethostbyname()'s own g_he_aliases, always {NULL}
+ * -- see this file's top banner -- gethostent() walks one line at a
+ * time and so has real aliases available for free).
+ *
+ * Non-reentrant static storage, same house style as fill_he()/g_he
+ * above: a single shared static entry struct is exactly what
+ * endhostent.html's own "read the next entry" contract describes,
+ * global connection state included. */
+#define GHE_MAX_ALIASES 16
+#define GHE_ALIASBUF_SZ 512
+
+static FILE *g_hostf;
+
+static struct hostent g_ghe;
+static char g_ghe_name[256];
+static char g_ghe_aliasbuf[GHE_ALIASBUF_SZ];
+static char *g_ghe_aliases[GHE_MAX_ALIASES + 1];
+static struct in_addr g_ghe_addr;
+static char *g_ghe_addrlist[2];
+
+void sethostent(int stayopen)
+{
+	(void)stayopen; /* this implementation always keeps the connection
+	                  * open across calls (endhostent() is the only
+	                  * thing that closes it) -- stayopen only relaxes
+	                  * that in the other direction, so honoring it is
+	                  * a no-op here, not a gap. */
+	if (g_hostf) rewind(g_hostf);
+	else g_hostf = fopen(__NSS_HOSTS_PATH(), "r");
+}
+
+struct hostent *gethostent(void)
+{
+	int naliases;
+
+	if (!g_hostf) {
+		g_hostf = fopen(__NSS_HOSTS_PATH(), "r");
+		if (!g_hostf) return NULL; /* no database: a clean, immediate
+		                             * end-of-database, same as the
+		                             * file existing but being empty */
+	}
+
+	if (!__hosts_read_entry(g_hostf, &g_ghe_addr, g_ghe_name, sizeof g_ghe_name,
+	                         g_ghe_aliasbuf, sizeof g_ghe_aliasbuf,
+	                         g_ghe_aliases, GHE_MAX_ALIASES, &naliases))
+		return NULL;
+
+	/* g_ghe_aliases[0..naliases-1] already point into g_ghe_aliasbuf,
+	 * filled in by __hosts_read_entry() itself. */
+	g_ghe_aliases[naliases] = NULL;
+
+	g_ghe_addrlist[0] = (char *)&g_ghe_addr;
+	g_ghe_addrlist[1] = NULL;
+
+	g_ghe.h_name = g_ghe_name;
+	g_ghe.h_aliases = g_ghe_aliases;
+	g_ghe.h_addrtype = AF_INET;
+	g_ghe.h_length = 4;
+	g_ghe.h_addr_list = g_ghe_addrlist;
+	return &g_ghe;
+}
+
+void endhostent(void)
+{
+	if (g_hostf) { fclose(g_hostf); g_hostf = NULL; }
 }

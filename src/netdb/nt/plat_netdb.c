@@ -25,9 +25,36 @@
  * NT-side-missing functions in this tree (see include/unistd.h's own
  * NA-marked entries) are handled -- fail loud and documented, never
  * silent.
+ *
+ * UPDATE (this pass): include/netdb.h grew getnameinfo() and the four
+ * enumerable database families (host/network/protocol/service), all
+ * backed by real flat-file parsers on Linux (src/netdb/linux/). NT has
+ * no equivalent of any of those files by default, and -- unlike
+ * getaddrinfo()/gethostbyname() just above, which have a genuine
+ * network-side alternative this pass simply didn't build (DnsQuery_) --
+ * there is no real per-machine database to reach for here at all short
+ * of parsing %SystemRoot%\system32\drivers\etc\services (etc.), a real
+ * file NT does ship, but reading it needs NT path/registry plumbing
+ * (SystemRoot resolution, drive-letter paths) nothing in this tree's NT
+ * backend has built yet for ANY database, checked directly: no nt/
+ * subdirectory anywhere under src/ calls fopen() against a real system
+ * path.
+ * Rather than invent a new "reach into %SystemRoot%" convention on the
+ * spot for exactly one file family, or a static built-in table
+ * convention this codebase has never used anywhere else, every one of
+ * these new functions follows the identical honest-stand-in shape
+ * getaddrinfo()/gethostbyname() above already established: a real,
+ * specified failure/empty-database result, never a fabricated one.
+ * getnameinfo() is the one partial exception, and only because its
+ * numeric case needs no database at all (see its own comment below).
  */
 #include <netdb.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
 #include <stddef.h>
+#include <string.h>
+#include <stdio.h>
 
 int h_errno;
 
@@ -52,4 +79,75 @@ struct hostent *gethostbyname(const char *name)
 	             * gethostbyname() implementation uses for the same
 	             * condition, not a value this tree invented. */;
 	return NULL;
+}
+
+void sethostent(int stayopen) { (void)stayopen; }
+struct hostent *gethostent(void) { return NULL; }
+void endhostent(void) {}
+
+void setnetent(int stayopen) { (void)stayopen; }
+struct netent *getnetent(void) { return NULL; }
+void endnetent(void) {}
+struct netent *getnetbyname(const char *name) { (void)name; return NULL; }
+struct netent *getnetbyaddr(uint32_t net, int type) { (void)net; (void)type; return NULL; }
+
+void setprotoent(int stayopen) { (void)stayopen; }
+struct protoent *getprotoent(void) { return NULL; }
+void endprotoent(void) {}
+struct protoent *getprotobyname(const char *name) { (void)name; return NULL; }
+struct protoent *getprotobynumber(int proto) { (void)proto; return NULL; }
+
+void setservent(int stayopen) { (void)stayopen; }
+struct servent *getservent(void) { return NULL; }
+void endservent(void) {}
+struct servent *getservbyname(const char *name, const char *proto)
+{
+	(void)name; (void)proto;
+	return NULL;
+}
+struct servent *getservbyport(int port, const char *proto)
+{
+	(void)port; (void)proto;
+	return NULL;
+}
+
+/* getnameinfo(): unlike every other entry point in this file, the
+ * NI_NUMERICHOST | NI_NUMERICSERV case needs no database this platform
+ * lacks -- it is pure number formatting (inet_ntop(), already real and
+ * platform-shared, see src/socket/inet.c) -- so it is answered for
+ * real rather than joining the honest-failure list above. Once either
+ * flag is absent, this backend has no reverse-hosts database and no
+ * services database to consult (see this file's own banner), so the
+ * node/serv side falls back to its numeric form -- exactly what
+ * DESCRIPTION already specifies for "the node's name cannot be located"
+ * -- unless NI_NAMEREQD says that fallback itself is unacceptable, in
+ * which case this honestly reports EAI_NONAME instead of a name it does
+ * not have. */
+int getnameinfo(const struct sockaddr *sa, socklen_t salen,
+                 char *node, socklen_t nodelen,
+                 char *serv, socklen_t servlen, int flags)
+{
+	const struct sockaddr_in *sin;
+	char buf[32];
+
+	if (sa->sa_family != AF_INET) return EAI_FAMILY;
+	if (salen < (socklen_t)sizeof(struct sockaddr_in)) return EAI_FAMILY;
+	sin = (const struct sockaddr_in *)(const void *)sa;
+
+	if (node && nodelen > 0) {
+		if (!(flags & NI_NUMERICHOST) && (flags & NI_NAMEREQD))
+			return EAI_NONAME;
+		if (!inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof buf))
+			return EAI_OVERFLOW;
+		if (strlen(buf) >= nodelen) return EAI_OVERFLOW;
+		strcpy(node, buf);
+	}
+
+	if (serv && servlen > 0) {
+		snprintf(buf, sizeof buf, "%u", (unsigned)ntohs(sin->sin_port));
+		if (strlen(buf) >= servlen) return EAI_OVERFLOW;
+		strcpy(serv, buf);
+	}
+
+	return 0;
 }

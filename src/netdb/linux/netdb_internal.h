@@ -10,6 +10,7 @@
 #ifndef _NTLIBC_NETDB_INTERNAL_H
 #define _NTLIBC_NETDB_INTERNAL_H
 
+#include <stdio.h>
 #include <netinet/in.h>
 
 /* __hosts_lookup(): /etc/hosts (or its test-fixture override, see
@@ -31,6 +32,36 @@
 int __hosts_lookup(const char *name, struct in_addr *addrs, int maxaddrs,
                     char *canon, size_t canonsz)
     __attribute__((nonnull(1)));
+
+/* __hosts_lookup_reverse(): the reverse half of __hosts_lookup() above,
+ * added this pass for getnameinfo() (src/netdb/linux/getnameinfo.c) --
+ * exactly the "small addition on top of the forward scan" hosts.c's own
+ * banner already anticipated when the forward lookup was first built.
+ * Same file, same IPv4-only/'#'-comment/case-insensitive rules. Writes
+ * the FIRST matching line's own canonical name (the first name token
+ * after the address, same as __hosts_lookup()'s own `canon` semantics)
+ * into name (truncated to namesz, always NUL-terminated when namesz >
+ * 0). Returns 1 on a match, 0 on a clean miss (including the file being
+ * absent, same as __hosts_lookup()). */
+int __hosts_lookup_reverse(const struct in_addr *addr, char *name, size_t namesz)
+    __attribute__((nonnull(1, 2)));
+
+/* __hosts_open_entry()/__hosts_read_entry(): the sequential half of
+ * hosts.c's own parser, used by gethostent() (src/netdb/linux/
+ * hostent.c) rather than duplicating hosts.c's line-shape rules (IPv6
+ * literal skip, '#' comments, canonical name + alias tokenization) a
+ * second time. __hosts_read_entry() reads the next valid IPv4 line from
+ * `f` (skipping comments/blanks/IPv6 lines exactly like __hosts_lookup()
+ * does), writing its address into *addr, its canonical name into name
+ * (truncated to namesz) and up to maxaliases of its remaining name
+ * tokens into aliases (aliasbuf/aliasbufsz backs their storage; *naliases
+ * receives the count actually written). Returns 1 on a line successfully
+ * parsed, 0 at EOF. */
+int __hosts_read_entry(FILE *f, struct in_addr *addr,
+                        char *name, size_t namesz,
+                        char *aliasbuf, size_t aliasbufsz,
+                        char **aliases, int maxaliases, int *naliases)
+    __attribute__((nonnull(1, 2, 3, 5, 7, 9)));
 
 /* __resolv_query_a(): a real minimal UDP DNS A-record stub resolver --
  * see src/netdb/linux/resolv.c's own banner for the exact wire-format

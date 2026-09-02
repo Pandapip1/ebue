@@ -34,7 +34,17 @@
  * HOSTALIASES overriding /etc/hosts for gethostbyname() are both real,
  * long-standing precedents for "an env var is the sanctioned way to
  * redirect a libc database lookup" -- this is the same shape, scoped
- * to ntlibc's own test harness rather than end-user configuration. */
+ * to ntlibc's own test harness rather than end-user configuration.
+ *
+ * UPDATE (this pass): three more real flat-file databases join the
+ * same seam -- /etc/services, /etc/protocols, /etc/networks, backing
+ * src/netdb/linux/services.c, protocols.c, networks.c respectively.
+ * /etc/networks in particular is routinely just absent on a real
+ * machine (most distros ship no networks at all); that is this
+ * database's own normal empty state, not a fixture-only concern, but
+ * the same override still lets a test assert real parsing behavior
+ * against a controlled fixture rather than whatever this host happens
+ * to have (or not have) at /etc/networks today. */
 #ifndef _NTLIBC_NSS_PATHS_H
 #define _NTLIBC_NSS_PATHS_H
 
@@ -59,6 +69,9 @@ static inline const char *__nss_path(const char *var, const char *dflt)
 #define __NSS_GROUP_PATH()     __nss_path("NTLIBC_TEST_GROUP_PATH",     "/etc/group")
 #define __NSS_RESOLV_PATH()    __nss_path("NTLIBC_TEST_RESOLV_PATH",    "/etc/resolv.conf")
 #define __NSS_NSSWITCH_PATH()  __nss_path("NTLIBC_TEST_NSSWITCH_PATH",  "/etc/nsswitch.conf")
+#define __NSS_SERVICES_PATH()  __nss_path("NTLIBC_TEST_SERVICES_PATH",  "/etc/services")
+#define __NSS_PROTOCOLS_PATH() __nss_path("NTLIBC_TEST_PROTOCOLS_PATH", "/etc/protocols")
+#define __NSS_NETWORKS_PATH()  __nss_path("NTLIBC_TEST_NETWORKS_PATH",  "/etc/networks")
 
 #endif
 
