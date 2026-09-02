@@ -77,8 +77,16 @@ static int fails;
  * given, and that the other shape's bytes are right too, is
  * test/posix-socket-shape.c's job. */
 #define SHAPE_NT6 1 /* AFD_SHAPE_NT6, src/internal/afd.h */
+/* <sys/socket.h>'s own SOCK_STREAM value (1), re-spelled locally for
+ * the same reason every other constant in this file is: this test does
+ * not include ntlibc's headers.  __afd_build_open_ea_for() gained this
+ * parameter for SOCK_DGRAM (2026-09-01, src/internal/afd.h); this file
+ * still asserts only the SOCK_STREAM/"\Device\Tcp" shape it always has
+ * -- the transport-name and AddressFamily/SocketType/Protocol checks
+ * below are unchanged. */
+#define SOCKTYPE_STREAM 1
 unsigned long __afd_open_ea_size_for(int shape);
-void __afd_build_open_ea_for(int shape, void *buf);
+void __afd_build_open_ea_for(int shape, int socktype, void *buf);
 
 /* --- constants, from the references named in the banner --- */
 
@@ -152,7 +160,7 @@ int main(void)
 	if (!alloc) { printf("FAIL %s: out of memory\n", __FILE__); return 1; }
 	memset(alloc, GUARD_BYTE, size + GUARD);
 	buf = alloc;
-	__afd_build_open_ea_for(SHAPE_NT6, buf);
+	__afd_build_open_ea_for(SHAPE_NT6, SOCKTYPE_STREAM, buf);
 
 	/* --- 1. entry alignment -------------------------------------- *
 	 * NtCreateFile probes the EA buffer at ULONG alignment and every
@@ -250,7 +258,7 @@ int main(void)
 		unsigned char *again = malloc(size);
 		if (!again) { printf("FAIL %s: out of memory\n", __FILE__); free(alloc); return 1; }
 		memset(again, 0x5A, size);
-		__afd_build_open_ea_for(SHAPE_NT6, again);
+		__afd_build_open_ea_for(SHAPE_NT6, SOCKTYPE_STREAM, again);
 		CHECK(memcmp(again, buf, size) == 0);
 		free(again);
 	}

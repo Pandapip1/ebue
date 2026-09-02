@@ -33,19 +33,23 @@
  *
  * Both pages describe a strict superset of send()/recv() -- the address
  * argument is what a connectionless (SOCK_DGRAM) transport needs to pick
- * a destination or report a source, and this project has exactly one
- * socket type, SOCK_STREAM, which is connection-mode by construction
- * (<sys/socket.h>'s scope banner; SOCK_DGRAM remains unimplemented
- * there).  sendto.html is explicit for the case that leaves: "If the
- * socket is connected, the dest_addr argument shall be ignored" -- so on
- * every socket this project can create, sendto() reduces to send() and
- * recvfrom() reduces to recv() plus reporting the one peer address a
- * connected stream socket ever has (already cached in struct __fd's
- * peer/peer_len by connect()/accept(), see those two files).  What
- * sendto()/recvfrom() do NOT reduce to is skipped, not faked: a socket
- * that reaches here unconnected is not a datagram socket waiting for a
- * destination address (that type does not exist yet) -- it is a stream
- * socket that was never connect()'d, and gets exactly the ENOTCONN
+ * a destination or report a source.  SOCK_DGRAM exists now (<sys/
+ * socket.h>'s scope banner, 2026-09-01), but every SOCK_DGRAM socket
+ * this project can produce is used connected: socketpair(AF_UNIX,
+ * SOCK_DGRAM, ...) hands back an already-connected pair, and nothing
+ * calls sendto()/recvfrom() with a real per-datagram destination on an
+ * unconnected one (the Open POSIX Test Suite fixture this scope exists
+ * for, third_party/ltp's aio_test.h, does not).  sendto.html is
+ * explicit for that case: "If the socket is connected, the dest_addr
+ * argument shall be ignored" -- so on every connected socket this
+ * project can create, stream or datagram, sendto() reduces to send()
+ * and recvfrom() reduces to recv() plus reporting the one peer address
+ * connect()/accept()/socketpair() already cached (struct __fd's
+ * peer/peer_len, see those files).  What sendto()/recvfrom() do NOT
+ * reduce to is skipped, not faked: a socket that reaches here
+ * unconnected is not a datagram socket waiting for a per-call
+ * destination address (that path is not implemented) -- whatever type
+ * it is, it was never connect()'d, and gets exactly the ENOTCONN
  * send()/recv() already give it, dest_addr/src_addr notwithstanding.
  */
 #include <sys/socket.h>

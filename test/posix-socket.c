@@ -211,13 +211,54 @@ static void test_socket_domain_errors(void)
 	CHECK(socket(AF_INET6, SOCK_STREAM, 0) == -1);
 	CHECK(errno == EAFNOSUPPORT);
 
+	/* SOCK_RAW/SOCK_SEQPACKET remain wholly unimplemented (<sys/socket.h>'s
+	 * banner) -- SOCK_DGRAM itself moved off this list (2026-09-01),
+	 * see test_socket_dgram()/test_socketpair_dgram() below for its
+	 * positive-path coverage. */
 	errno = 0;
-	CHECK(socket(AF_INET, SOCK_DGRAM, 0) == -1);
+	CHECK(socket(AF_INET, SOCK_RAW, 0) == -1);
 	CHECK(errno == EPROTOTYPE);
 
 	errno = 0;
 	CHECK(socket(AF_INET, SOCK_STREAM, IPPROTO_UDP) == -1);
 	CHECK(errno == EPROTONOSUPPORT);
+
+	/* AF_UNIX/SOCK_STREAM: the family is real (SOCK_DGRAM on it is,
+	 * see below) and the type is real (AF_INET has it too), but this
+	 * exact pair is not one this project's socket() front door creates
+	 * -- only socketpair()'s own internal loopback-TCP construction
+	 * uses it, never reached through socket() itself (src/socket/
+	 * socket.c's banner). */
+	errno = 0;
+	CHECK(socket(AF_UNIX, SOCK_STREAM, 0) == -1);
+	CHECK(errno == EPROTONOSUPPORT);
+
+	errno = 0;
+	CHECK(socket(AF_UNIX, SOCK_DGRAM, 47) == -1);
+	CHECK(errno == EPROTONOSUPPORT);
+}
+
+/* SOCK_DGRAM positive path (2026-09-01): AF_INET/SOCK_DGRAM (UDP) and
+ * anonymous AF_UNIX/SOCK_DGRAM both create a real, usable descriptor --
+ * see <sys/socket.h>'s banner and src/socket/socket.c for why the
+ * AF_UNIX one is, underneath, the exact same kind of endpoint. */
+static void test_socket_dgram(void)
+{
+	int fd;
+
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	CHECK(fd >= 0);
+	if (fd >= 0) {
+		int v = -1;
+		socklen_t vlen = sizeof v;
+		CHECK(getsockopt(fd, SOL_SOCKET, SO_TYPE, &v, &vlen) == 0);
+		CHECK(v == SOCK_DGRAM);
+		(void)close(fd);
+	}
+
+	fd = socket(AF_UNIX, SOCK_DGRAM, 0);
+	CHECK(fd >= 0);
+	if (fd >= 0) (void)close(fd);
 }
 
 /* setsockopt.html/<sys/socket.h>: SO_REUSEADDR/SO_TYPE/SO_ERROR are the
@@ -604,6 +645,46 @@ static void test_socketpair_stream(void)
 	CHECK(close(pair[1]) == 0);
 }
 
+/* SOCK_DGRAM (2026-09-01): a connected datagram pair round-trips
+ * send()/recv() and read()/write() (the latter via src/unistd/read.c's
+ * and write.c's own __FD_SOCKET dispatch to recv()/send(), the same
+ * path test_socketpair_stream() above already exercises) exactly like
+ * a stream pair does, plus listen()/accept() correctly refusing to
+ * apply to one -- src/socket/listen.c's EOPNOTSUPP and
+ * src/socket/accept.c's EINVAL (never having been marked listening),
+ * both against a real, connected datagram socket rather than only the
+ * domain/type checks test_socket_domain_errors() covers. */
+static void test_socketpair_dgram(void)
+{
+	int pair[2];
+	int result;
+	char buffer[8];
+
+	result = socketpair(AF_UNIX, SOCK_DGRAM, 0, pair);
+	CHECK(result == 0);
+	if (result < 0) return;
+
+	errno = 0;
+	CHECK(listen(pair[0], 1) == -1);
+	CHECK(errno == EOPNOTSUPP);
+	errno = 0;
+	CHECK(accept(pair[0], 0, 0) == -1);
+	CHECK(errno == EINVAL);
+
+	CHECK(send(pair[0], "dgram", 5, 0) == 5);
+	memset(buffer, 0, sizeof buffer);
+	CHECK(recv(pair[1], buffer, sizeof buffer, 0) == 5);
+	CHECK(!memcmp(buffer, "dgram", 5));
+
+	CHECK(write(pair[1], "back", 4) == 4);
+	memset(buffer, 0, sizeof buffer);
+	CHECK(read(pair[0], buffer, sizeof buffer) == 4);
+	CHECK(!memcmp(buffer, "back", 4));
+
+	CHECK(close(pair[0]) == 0);
+	CHECK(close(pair[1]) == 0);
+}
+
 /* accept.html: EINVAL for a socket that was never listen()'d;
  * bind.html: EINVAL for a second bind() on an already-bound socket;
  * ENOTSOCK for every socket call given a non-socket fd -- all pure
@@ -650,24 +731,33 @@ int main(void)
 		close(listener);
 	}
 
-	/* UDP proper (SOCK_DGRAM's actual use, and the per-datagram
-	 * addressing sendmsg()/recvmsg()'s ancillary data depend on),
-	 * general pathname AF_UNIX (struct sockaddr_un) and sockatmark()
-	 * remain staged for later work, per test/networking-audit.md sec 6
-	 * (stages 4-6) -- not merely untested, genuinely not implemented,
-	 * and (per this project's own standing rule, test/posix-sysmisc.c's
-	 * file banner) not even declared in <sys/socket.h> (see that
-	 * header's own banner), so none of that can even be written outside
-	 * an #if 0 fence.  sendto()/recvfrom() and struct sockaddr_in6 came
-	 * off that list -- see the two cases below for why each one did. */
-#if NTLIBC_TEST(PASS, posix_socket_send_recv_and_socketpair_interfaces) /* sys_socket.h.html's sendto()/recvfrom(): on the one socket
-	type this project has, SOCK_STREAM, both reduce to send()/recv()
-	plus the fixed peer address a connected stream already carries
-	(sendto.html: "If the socket is connected, the dest_addr
+	/* SOCK_DGRAM (2026-09-01): AF_INET/SOCK_DGRAM (UDP) and anonymous
+	 * AF_UNIX/SOCK_DGRAM are both implemented now -- see <sys/socket.h>'s
+	 * banner, src/socket/socket.c and src/socket/socketpair.c.
+	 * test_socket_dgram() above needs no network probe (socket()
+	 * creation alone, like test_socket_domain_errors()); the
+	 * socketpair()/send()/recv() round trip below does the same real
+	 * work test_socketpair_stream() does for SOCK_STREAM, so it is
+	 * gated behind the same network_probe() this file already uses for
+	 * every other test that opens a real endpoint.  sendmsg()/
+	 * recvmsg()'s ancillary data, general pathname AF_UNIX (struct
+	 * sockaddr_un) and sockatmark() remain staged for later work, per
+	 * test/networking-audit.md sec 6 -- not merely untested, genuinely
+	 * not implemented, and (per this project's own standing rule,
+	 * test/posix-sysmisc.c's file banner) not even declared in
+	 * <sys/socket.h> (see that header's own banner), so none of that can
+	 * even be written outside an #if 0 fence. */
+	test_socket_dgram();
+	if (listener >= 0) test_socketpair_dgram();
+
+#if NTLIBC_TEST(PASS, posix_socket_send_recv_and_socketpair_interfaces) /* sys_socket.h.html's sendto()/recvfrom(): on a connected
+	socket -- stream or, since 2026-09-01, datagram -- both reduce to
+	send()/recv() plus the fixed peer address the connection already
+	carries (sendto.html: "If the socket is connected, the dest_addr
 	argument shall be ignored"; recvfrom.html's address is that same
-	peer coming back the other way) -- src/socket/sendrecv.c now
-	implements exactly that reduction, with no SOCK_DGRAM machinery
-	involved.  sendmsg()/recvmsg() (ancillary data) and UDP proper
+	peer coming back the other way) -- src/socket/sendrecv.c
+	implements exactly that reduction.  sendmsg()/recvmsg() (ancillary
+	data) and a real per-datagram destination on an unconnected socket
 	remain out of scope -- see the comment above this case. */
 	{
 		int sv[2];

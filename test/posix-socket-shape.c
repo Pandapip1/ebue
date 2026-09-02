@@ -190,8 +190,13 @@ static int finish(int code)
 /* ---- what the library exposes (src/internal/afd.h, src/internal/libc.h) */
 #define SHAPE_NT4 0
 #define SHAPE_NT6 1
+/* <sys/socket.h>'s own SOCK_STREAM value (1) -- __afd_build_open_ea_for()
+ * gained this parameter for SOCK_DGRAM (2026-09-01, src/internal/afd.h);
+ * this file only checks the packet *shape* (NT4 vs NT6), so it keeps
+ * asserting SOCK_STREAM/"\Device\Tcp" for both, unchanged. */
+#define SOCKTYPE_STREAM 1
 unsigned long __afd_open_ea_size_for(int shape);
-void __afd_build_open_ea_for(int shape, void *buf);
+void __afd_build_open_ea_for(int shape, int socktype, void *buf);
 unsigned long __afd_open_ea_size(void);
 void __afd_build_open_ea(void *buf);
 int __afd_open_shape(void);
@@ -278,8 +283,8 @@ int main(void)
 	if (!nt4 || !nt6) { printf("FAIL %s: out of memory\n", __FILE__); return 1; }
 	memset(nt4, 0x5A, nt4_size);
 	memset(nt6, 0x5A, nt6_size);
-	__afd_build_open_ea_for(SHAPE_NT4, nt4);
-	__afd_build_open_ea_for(SHAPE_NT6, nt6);
+	__afd_build_open_ea_for(SHAPE_NT4, SOCKTYPE_STREAM, nt4);
+	__afd_build_open_ea_for(SHAPE_NT6, SOCKTYPE_STREAM, nt6);
 
 	/* --- 01-05: the selection itself ------------------------------ *
 	 * The gate has to be checked against the version it claims to

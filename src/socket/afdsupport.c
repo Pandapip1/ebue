@@ -19,16 +19,34 @@
 #include "afd.h"
 #include "ownership_stubs.h"
 
-/* The "\Device\Tcp" transport name this project's one supported socket
- * kind (AF_INET/SOCK_STREAM) names in its open packet, and its length
- * in *bytes* -- AFD_OPEN_PACKET.TransportDeviceNameLength is a byte
- * count, not a character count (phnt ntafd.h annotates it
- * _Field_size_bytes_opt_; ReactOS passes UNICODE_STRING.Length, which
- * is also bytes).  Getting this wrong by a factor of two is the classic
- * UTF-16 length bug, so it is computed once, here. */
-static const WCHAR afd_transport[] = AFD_TRANSPORT_TCP;
-#define AFD_TRANSPORT_WCHARS ((sizeof(afd_transport) / sizeof(WCHAR)) - 1) /* excludes the NUL */
+/* The "\Device\Tcp"/"\Device\Udp" transport names this project's two
+ * socket kinds (AF_INET/SOCK_STREAM, AF_INET/SOCK_DGRAM) name in their
+ * open packet, and the shared length in *bytes* -- both names are 11
+ * characters, so one length serves either (see afd.h's
+ * __afd_open_ea_size_for() comment).  AFD_OPEN_PACKET.
+ * TransportDeviceNameLength is a byte count, not a character count
+ * (phnt ntafd.h annotates it _Field_size_bytes_opt_; ReactOS passes
+ * UNICODE_STRING.Length, which is also bytes).  Getting this wrong by a
+ * factor of two is the classic UTF-16 length bug, so it is computed
+ * once, here. */
+static const WCHAR afd_transport_tcp[] = AFD_TRANSPORT_TCP;
+static const WCHAR afd_transport_udp[] = AFD_TRANSPORT_UDP;
+#define AFD_TRANSPORT_WCHARS ((sizeof(afd_transport_tcp) / sizeof(WCHAR)) - 1) /* excludes the NUL */
 #define AFD_TRANSPORT_BYTES (AFD_TRANSPORT_WCHARS * sizeof(WCHAR))
+
+/* Which name/length pair a given socktype selects.  A build-time
+ * assertion, not a runtime one: if a third transport ever needed a
+ * differently-sized name, AFD_TRANSPORT_BYTES above (computed from the
+ * TCP name alone) would silently understate or overstate the UDP name's
+ * real length -- this keeps that failure mode from being possible
+ * rather than catching it after the fact. */
+typedef char __afd_transport_lengths_match[
+	(sizeof(afd_transport_udp) == sizeof(afd_transport_tcp)) ? 1 : -1];
+
+static const WCHAR *afd_transport_for(int socktype)
+{
+	return socktype == SOCK_DGRAM ? afd_transport_udp : afd_transport_tcp;
+}
 
 /* The value is the open packet: the shape's header (NOT
  * sizeof(AFD_OPEN_PACKET), which is 28, nor sizeof(AFD_CREATE_PACKET),
@@ -98,10 +116,11 @@ unsigned long __afd_open_ea_size(void)
  * middle, which is precisely the kind of difference that disappears
  * when it is expressed as arithmetic; each block below can be read
  * against its reference declaration one field at a time. */
-void __afd_build_open_ea_for(int shape, void *buf)
+void __afd_build_open_ea_for(int shape, int socktype, void *buf)
 {
 	FILE_FULL_EA_INFORMATION *ea = (FILE_FULL_EA_INFORMATION *)buf;
 	unsigned long hdr = afd_shape_header(shape);
+	const WCHAR *transport = afd_transport_for(socktype);
 	void *value;
 
 	__ownership_writable_span(buf, __afd_open_ea_size_for(shape));
@@ -136,7 +155,7 @@ void __afd_build_open_ea_for(int shape, void *buf)
 		pkt->SizeOfTransportName = (uint32_t)AFD_TRANSPORT_BYTES;
 		__ownership_writable_span(pkt->TransportName,
 		                          AFD_TRANSPORT_BYTES + sizeof(WCHAR));
-		memcpy(pkt->TransportName, afd_transport, AFD_TRANSPORT_BYTES + sizeof(WCHAR));
+		memcpy(pkt->TransportName, transport, AFD_TRANSPORT_BYTES + sizeof(WCHAR));
 	} else {
 		/* phnt ntafd.h's AFD_OPEN_PACKET. */
 		AFD_OPEN_PACKET *pkt = (AFD_OPEN_PACKET *)value;
@@ -145,20 +164,24 @@ void __afd_build_open_ea_for(int shape, void *buf)
 		/* The three fields ReactOS's 12-byte AFD_CREATE_PACKET does
 		 * not have, and whose absence is what made real Windows read
 		 * the device name as a length -- see afd.h's socket-creation
-		 * banner. */
+		 * banner.  socktype selects both the SocketType/Protocol pair
+		 * and (via afd_transport_for() above) the matching device
+		 * name -- the three must agree, or afd.sys opens an endpoint
+		 * whose driver-side transport does not match what its own
+		 * fields claim. */
 		pkt->AddressFamily = AF_INET;
-		pkt->SocketType = SOCK_STREAM;
-		pkt->Protocol = IPPROTO_TCP;
+		pkt->SocketType = socktype;
+		pkt->Protocol = socktype == SOCK_DGRAM ? IPPROTO_UDP : IPPROTO_TCP;
 		pkt->TransportDeviceNameLength = (uint32_t)AFD_TRANSPORT_BYTES;
 		__ownership_writable_span(pkt->TransportDeviceName,
 		                          AFD_TRANSPORT_BYTES + sizeof(WCHAR));
-		memcpy(pkt->TransportDeviceName, afd_transport, AFD_TRANSPORT_BYTES + sizeof(WCHAR));
+		memcpy(pkt->TransportDeviceName, transport, AFD_TRANSPORT_BYTES + sizeof(WCHAR));
 	}
 }
 
 void __afd_build_open_ea(void *buf)
 {
-	__afd_build_open_ea_for(__afd_open_shape(), buf);
+	__afd_build_open_ea_for(__afd_open_shape(), SOCK_STREAM, buf);
 }
 
 /* __afd_open() and __afd_ioctl() -- declared in src/internal/afd.h,
@@ -177,6 +200,13 @@ void __afd_build_open_ea(void *buf)
 /* sockaddr_in -> TRANSPORT_ADDRESS.  bind.html/connect.html both take
  * (address, address_len); AF_INET/SOCK_STREAM is this project's only
  * supported pair, so anything else is EAFNOSUPPORT.
+ *
+ * AF_INET/SOCK_STREAM is this project's only supported *pair* wearing
+ * that literal spelling; AF_INET/SOCK_DGRAM is supported too and uses
+ * this exact same address marshaling unchanged -- the TDI wire address
+ * for a UDP endpoint is the same TDI_ADDRESS_IP shape as a TCP one, only
+ * the transport device differs (see afd.h's socket-creation banner), so
+ * there is nothing socktype-specific for this function to do.
  *
  * The 14 address bytes are written through src/internal/afd.h's
  * TDI_IP_OFF_* offsets rather than through a TDI_ADDRESS_IP struct.

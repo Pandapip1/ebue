@@ -28,6 +28,13 @@
  * with it, now lives.  This project skips the conditional-accept path
  * (lpfnCondition et al in ReactOS's version): out of POSIX's accept()
  * scope entirely, it is a WSAAccept()-only Winsock extension.
+ *
+ * SOCK_DGRAM (2026-09-01): needs no explicit check here.  A datagram
+ * socket's __SOCK_ST_LISTENING bit can never be set -- listen.c refuses
+ * it with EOPNOTSUPP before that bit is ever touched -- so the
+ * `!(f->pad & __SOCK_ST_LISTENING)` check just below already reports
+ * EINVAL for one, the same as any other stream socket nobody called
+ * listen() on yet.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
