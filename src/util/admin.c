@@ -6,14 +6,12 @@
  *
  * ---- why this exists at all --------------------------------------------
  *
- * This project's own POSIX-utilities plan (luminous-orbiting-biscuit.md)
- * called admin "functionally obsolescent... low priority regardless" and
- * deprioritized it, rather than ruling it out entirely -- SCCS has been
- * displaced by every later version-control system for decades, and no
- * real workflow this project's own bootstrap use case needs touches it.
- * The user has since explicitly decided to implement it anyway, as a
- * well-specified, bounded XCU page worth having.  Implemented here:
- * real SCCS delta-encoding text format (term(5)-equivalent: sccsfile(5)),
+ * admin(1p) is functionally obsolescent -- SCCS has been displaced by
+ * every later version-control system for decades, and no real workflow
+ * this project's own bootstrap use case needs touches it -- but is
+ * implemented here anyway, as a well-specified, bounded XCU page worth
+ * having.  Implemented here: real SCCS delta-encoding text format
+ * (term(5)-equivalent: sccsfile(5)),
  * not a fake placeholder -- an `s.file` this writes is byte-for-byte the
  * same shape a real historical SCCS `admin`/`get` would produce for the
  * same input, modulo the deliberate feature narrowing documented below.

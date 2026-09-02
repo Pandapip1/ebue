@@ -85,8 +85,7 @@ struct outspec { int file; int field; }; /* file: 0, 1 or 2 */
  * NULL without freeing the original block, so assigning straight back
  * into `out` would both lose the data already collected *and* leak that
  * original block -- the classic realloc mistake clang-tidy's bugprone-
- * suspicious-realloc-usage and cppcheck's memleakOnRealloc both flag
- * (and did, against an earlier version of this file). */
+ * suspicious-realloc-usage and cppcheck's memleakOnRealloc both flag. */
 withtok(heap_allocated)
 static struct field *fields_grow(
 	struct field *out consume_if_nonnull_return(heap_allocated), size_t *cap)

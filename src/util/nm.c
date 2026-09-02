@@ -13,11 +13,11 @@
  * ---- scope: ELF64 (aarch64/x86_64), not PE/COFF object files -----------
  *
  * This build's own native-Linux target produces real ELF64 little-
- * endian object files (confirmed by this session's own dlfcn/ELF-loader
- * work, src/dlfcn/linux/plat_dlfcn.c) -- that is the format this file
- * reads. PE is NOT attempted here: the PE-parsing this project already
- * has (src/internal/pe.c/pe.h) walks a *mapped executable image's*
- * export directory (IMAGE_EXPORT_DIRECTORY), which is an entirely
+ * endian object files (see src/dlfcn/linux/plat_dlfcn.c's own ELF
+ * loader) -- that is the format this file reads. PE is NOT attempted
+ * here: the PE-parsing this project already has (src/internal/pe.c/
+ * pe.h) walks a *mapped executable image's* export directory
+ * (IMAGE_EXPORT_DIRECTORY), which is an entirely
  * different on-disk structure from a COFF *object file*'s own symbol
  * table (IMAGE_FILE_HEADER's PointerToSymbolTable/NumberOfSymbols, a
  * flat array of 18-byte IMAGE_SYMBOL entries plus a separate string
