@@ -423,13 +423,66 @@ static int nice_from_sched_priority(int sched_priority)
 	return sched_priority;
 }
 
+/* Every __SPAWN_DUP2 target above 2, as the parent's own table stands
+ * once every action has replayed -- the list Linux's own
+ * __plat_process_spawn() (src/process/linux/plat_process.c) needs, to
+ * move each one onto the right real descriptor NUMBER in the CHILD
+ * rather than wherever do_action()'s own __plat_dup() happened to put
+ * it in the parent; see struct __spawn_dup2_target's own comment
+ * (libc.h) for why NT needs none of this and this file's own banner for
+ * why do_action() cannot simply force the real number to match `newfd`
+ * itself. `out` must have room for at least fa->__len entries: at most
+ * fa->__len actions exist at all, so at most that many distinct DUP2
+ * targets above 2 can appear, even before the dedup below shrinks that
+ * further.
+ *
+ * Consulting the FINAL state of __fds[target] here -- not the handle
+ * do_action() installed there at the moment its own action ran -- is
+ * what makes a target touched more than once (a second adddup2() to
+ * the same fd, or an addclose() undoing an earlier adddup2() to it)
+ * come out right with no bookkeeping of its own: do_action()'s own
+ * take_slot() has already collapsed any such chain down to one slot, so
+ * a walk of the finished table sees exactly what the child is meant to
+ * end up with -- including "nothing", for a target later closed, which
+ * is correctly left out of the list rather than staged and then
+ * pointlessly closed again. Returns the count written to `out`.
+ *
+ * fa is required: dereferenced unconditionally (`fa->__len` in the loop
+ * bound) and the one real call site only ever reaches this function
+ * inside its own `if (fa && fa->__len)`, never with a NULL fa. out is
+ * left unmarked, the same asymmetry take_slot()'s own sv/nsv carry
+ * (this file, above): it is only ever dereferenced once a matching
+ * action is actually found, and the one real call site always sizes it
+ * to fa->__len regardless. */
+static int build_dup2_targets(const posix_spawn_file_actions_t *fa, struct __spawn_dup2_target *out)
+    __attribute__((nonnull(1)));
+static int build_dup2_targets(const posix_spawn_file_actions_t *fa, struct __spawn_dup2_target *out)
+{
+	int i, n = 0;
+	for (i = 0; i < fa->__len; i++) {
+		const struct __spawn_action *a = &fa->__actions[i];
+		struct __fd *f;
+		int j, dup = 0;
+		if (a->kind != __SPAWN_DUP2 || a->newfd <= 2) continue;
+		for (j = 0; j < n; j++) if (out[j].fd == a->newfd) { dup = 1; break; }
+		if (dup) continue;
+		f = __fd_get(a->newfd);
+		if (!f) continue; /* final state: closed -- nothing to re-home */
+		out[n].fd = a->newfd;
+		out[n].h = f->h;
+		n++;
+	}
+	return n;
+}
+
 static int spawn_common(pid_t *pid, const char *path,
                         const posix_spawn_file_actions_t *fa,
                         const posix_spawnattr_t *at,
                         char *const argv[], char *const envp[], int use_path)
 {
 	struct saved_slot *sv = 0;
-	int nsv = 0, cap = 0;
+	struct __spawn_dup2_target *extra = 0;
+	int nsv = 0, cap = 0, nextra = 0;
 	int i, rc, child = -1, saved_errno = errno;
 	char *full = 0;
 
@@ -461,32 +514,42 @@ static int spawn_common(pid_t *pid, const char *path,
 	if (fa && fa->__len) {
 		cap = fa->__len;
 		sv = malloc((size_t)cap * sizeof *sv);
-		if (!sv) { rc = ENOMEM; goto out; }
+		/* At most one distinct __SPAWN_DUP2 target above 2 per action,
+		 * so `cap` is as much room as build_dup2_targets() below could
+		 * ever need -- see that function's own comment. */
+		extra = malloc((size_t)cap * sizeof *extra);
+		if (!sv || !extra) { rc = ENOMEM; goto out; }
 		for (i = 0; i < fa->__len; i++) {
 			rc = do_action(&fa->__actions[i], sv, &nsv, cap);
 			if (rc) goto out;
 		}
+		nextra = build_dup2_targets(fa, extra);
 	}
 
 	/* Set immediately before __spawn() and cleared immediately after,
 	 * success or failure either way, so neither ever leaks onto a
 	 * later, unrelated spawn -- see __spawn_set_pending_sigmask()'s own
 	 * comment (libc.h) for why this is the only channel either
-	 * attribute has left to ride. */
+	 * attribute has left to ride. build_dup2_targets()'s own list rides
+	 * the identical channel, for the identical reason -- see struct
+	 * __spawn_dup2_target's own comment (libc.h). */
 	if (at && (at->__flags & POSIX_SPAWN_SETSIGMASK) && !sigisemptyset(&at->__sigmask))
 		__spawn_set_pending_sigmask(&at->__sigmask);
 	if (at && (at->__flags & (POSIX_SPAWN_SETSCHEDPARAM | POSIX_SPAWN_SETSCHEDULER)))
 		__spawn_set_pending_priority(nice_from_sched_priority(at->__param.sched_priority));
+	if (nextra) __spawn_set_pending_dup2s(extra, nextra);
 
 	child = __spawn(full, argv, envp);
 	if (child < 0) rc = errno;
 
 	__spawn_clear_pending_sigmask();
 	__spawn_clear_pending_priority();
+	__spawn_clear_pending_dup2s();
 
 out:
 	restore_slots(sv, nsv);
 	free(sv);
+	free(extra);
 	free(full);
 	if (!rc && pid) *pid = child;
 	errno = saved_errno;

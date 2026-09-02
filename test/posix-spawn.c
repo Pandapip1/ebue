@@ -102,6 +102,28 @@ static int child_main(int argc, char **argv)
 		wr(1, fcntl(fd, F_GETFD) >= 0 ? "open" : "closed");
 		return 0;
 	}
+	if (!strcmp(cmd, "wfd")) {
+		/* Writes through argv[2]'s OWN fd number, not through 1 or 2 --
+		 * unlike "probe" (open/closed only), this is the only child
+		 * command that proves a specific requested descriptor NUMBER is
+		 * genuinely wired to the right open file description, not just
+		 * present in the table -- see test_adddup2_above_two_real_fd(). */
+		int fd = atoi(argv[2]);
+		wr(fd, argv[3]);
+		return 0;
+	}
+	if (!strcmp(cmd, "wfd2")) {
+		/* Same idea as "wfd", but two independent above-2 targets in
+		 * the same child -- see test_adddup2_two_above_two(), the case
+		 * that actually exercises the generalized staging's own
+		 * collision-avoidance pass (src/process/linux/plat_process.c's
+		 * __plat_process_spawn()), which a single target can never
+		 * reach. */
+		int fda = atoi(argv[2]), fdb = atoi(argv[4]);
+		wr(fda, argv[3]);
+		wr(fdb, argv[5]);
+		return 0;
+	}
 	if (!strcmp(cmd, "cat")) {
 		char b[256];
 		ssize_t n;
@@ -657,6 +679,105 @@ static void test_parent_table_restored(void)
 	if (n == 5) { got[5] = 0; CHECK(!strcmp(got, "DEFGH")); }
 	close(keep);
 	unlink("spawn-keep.txt");
+}
+
+/* adddup2() to a target well above 2: not just "some fd is open" (every
+ * other test above only ever checks fd 0/1/2, or -- test_parent_table_
+ * restored()'s own "keep" -- that the PARENT's table survives, never
+ * that the CHILD actually got the requested number) but genuinely wired
+ * to the right open file description at EXACTLY the requested number.
+ * This is the specific gap src/internal/linux/plat_fd_init.c's own
+ * banner used to document by name: on Linux, a child inherits real
+ * kernel descriptor NUMBERS, and do_action()'s own __plat_dup()
+ * (posix_spawn.c) makes its duplicate at an arbitrary one, not
+ * necessarily `newfd` -- so a test that only asked "is fd 5 open"
+ * could pass by accident, on whatever real descriptor happened to
+ * already occupy that number, without the redirect having reached the
+ * child at all. Writing through it and reading the specific bytes back
+ * on the parent's own pipe end is what rules that out. */
+static void test_adddup2_above_two_real_fd(void)
+{
+	posix_spawn_file_actions_t fa;
+	pid_t pid = (pid_t)-999;
+	char *argv[5];
+	int p[2], status = -1;
+	char got[32];
+	ssize_t n;
+
+	CHECK(pipe(p) == 0);
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, p[1], 5) == 0);
+
+	argv[0] = (char *)self; argv[1] = (char *)"wfd";
+	argv[2] = (char *)"5"; argv[3] = (char *)"hello-fd5"; argv[4] = 0;
+	CHECK(posix_spawn(&pid, self, &fa, 0, argv, environ) == 0);
+	close(p[1]);
+
+	n = read(p[0], got, sizeof got - 1);
+	CHECK(n > 0);
+	if (n > 0) { got[n] = 0; CHECK(!strcmp(got, "hello-fd5")); }
+
+	CHECK(waitpid(pid, &status, 0) == pid);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+	close(p[0]);
+	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
+}
+
+/* Two independent above-2 targets in the SAME spawn -- a single target
+ * can never exercise the generalized staging's own collision-avoidance
+ * pass (src/process/linux/plat_process.c's __plat_process_spawn():
+ * every live source at or below the highest target is staged out of
+ * the target zone before any target is touched), since there is only
+ * ever one source and one target to collide with each other.  Two
+ * targets, each a fresh pipe, make a source/target collision at least
+ * possible for the platform code to get wrong even if this particular
+ * run does not happen to land on one -- what this test actually proves
+ * either way is that both requested numbers work, independently and
+ * simultaneously. */
+static void test_adddup2_two_above_two(void)
+{
+	posix_spawn_file_actions_t fa;
+	pid_t pid = (pid_t)-999;
+	char *argv[7];
+	int p[2], q[2], status = -1;
+	char gp[32], gq[32];
+	ssize_t n;
+
+	/* Targets picked well clear of anything pipe() itself could have
+	 * just handed back for p/q: a target that coincided with q[1]'s OWN
+	 * real number would make the SECOND adddup2() below resolve its
+	 * source against whatever the FIRST adddup2() had already
+	 * overwritten that same table slot with -- correct per-action
+	 * replay-order semantics (this file's own banner), not the
+	 * collision this test means to exercise. */
+	CHECK(pipe(p) == 0);
+	CHECK(pipe(q) == 0);
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, p[1], 20) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, q[1], 30) == 0);
+
+	argv[0] = (char *)self; argv[1] = (char *)"wfd2";
+	argv[2] = (char *)"20"; argv[3] = (char *)"six";
+	argv[4] = (char *)"30"; argv[5] = (char *)"nine";
+	argv[6] = 0;
+	CHECK(posix_spawn(&pid, self, &fa, 0, argv, environ) == 0);
+	close(p[1]);
+	close(q[1]);
+
+	n = read(p[0], gp, sizeof gp - 1);
+	CHECK(n > 0);
+	if (n > 0) { gp[n] = 0; CHECK(!strcmp(gp, "six")); }
+	n = read(q[0], gq, sizeof gq - 1);
+	CHECK(n > 0);
+	if (n > 0) { gq[n] = 0; CHECK(!strcmp(gq, "nine")); }
+
+	CHECK(waitpid(pid, &status, 0) == pid);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+	close(p[0]);
+	close(q[0]);
+	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
 }
 
 /* ---------------------------------------------------------------- */
@@ -1291,6 +1412,8 @@ int main(int argc, char **argv)
 	test_adddup2_self();
 	test_adddup2_badfd();
 	test_parent_table_restored();
+	test_adddup2_above_two_real_fd();
+	test_adddup2_two_above_two();
 	test_attr_roundtrip();
 	test_attr_flags_acted_on();
 	test_spawnp_path_search();

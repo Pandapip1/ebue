@@ -65,6 +65,12 @@
  * so hosted include ownership and unused-include advice do not apply. */
 // NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
+#include <stdlib.h>     /* malloc()/free() -- __plat_process_spawn()'s own
+                         * comment on `struct fd_move` below explains the
+                         * one call site that needs them, deep in the
+                         * cloned child, and why that is safe: no threads,
+                         * and no CLONE_VM to make the child's heap share
+                         * live state with the parent's. */
 #include <sys/wait.h>   /* WIFEXITED/WEXITSTATUS/WIFSIGNALED/WTERMSIG -- see
                          * __plat_process_wait()'s own comment below for why
                          * these apply directly to a raw Linux wait4(2)
@@ -456,6 +462,25 @@ int __plat_process_resume(__plat_handle_t h)
 
 /* ---- spawn.c: fork + dup the standard descriptors + execve ----------- */
 
+/* One entry in __plat_process_spawn()'s child-side descriptor staging --
+ * see that function's own comment for the full algorithm. `target` is
+ * the descriptor number the entry must end up AT (0, 1 or 2 for a
+ * standard descriptor; posix_spawn_file_actions_adddup2()'s own
+ * `newfd`, always > 2, for one of struct __spawn_dup2_target's own
+ * entries). `orig` is the real fd number the content started at, before
+ * this function touched anything; `mv` is the CURRENT best-known real fd
+ * number for that same content, initially a copy of `orig` and
+ * overwritten with a scratch descriptor if that original number needed
+ * staging out of the target zone first. `mv < 0` means "this target
+ * should end up closed" -- only possible for a std[0..2] entry, since
+ * struct __spawn_dup2_target never records one for a target that
+ * ultimately closed (posix_spawn.c's build_dup2_targets() own comment). */
+struct fd_move {
+	int target;
+	int mv;
+	int orig;
+};
+
 int __plat_process_spawn(const char *path, char *const argv[], char *const envp[],
                          const __plat_handle_t std[3], __plat_handle_t *out_process,
                          __plat_handle_t *out_job)
@@ -505,74 +530,149 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 		 * src/process/nt/plat_process.c's own file banner for why NT
 		 * needs one and Linux does not: a closed Linux fd number is
 		 * simply absent, and nothing refills it from outside). */
-		int i;
-		int mv[3];   /* std[i]'s source fd, staged out of the 0..2 target
-		             * zone first -- see the paragraph below this loop
-		             * for why that staging pass exists. */
+		int i, ntotal, extra_n = 0;
+		struct fd_move *fm;
+		const struct __spawn_dup2_target *extra;
+		int max_target;
 		raw_syscall(SYS_close, (long)pipefd[0], 0L, 0L, 0L, 0L, 0L);
 
-		/* srcfd (a raw Linux fd number this process's OWN table
-		 * currently backs ntlibc fd 0/1/2 with -- see unbox_fd()'s own
-		 * comment) is a completely different namespace from the index i
-		 * it is being moved TO, and nothing keeps the two apart: srcfd
-		 * can itself be 0, 1 or 2, i.e. it can name ANOTHER of this very
-		 * loop's three targets. Mutating target i in place -- close(i),
-		 * or dup3(srcfd, i), which closes whatever was at i first --
-		 * silently destroys that raw fd if a later target j still needs
-		 * it as ITS OWN source (dup3()'s return value is not checked
-		 * below, so that failure was never reported: the redirect for
-		 * slot j just silently never happened, execve() ran anyway, and
-		 * fd j came up as whatever the process already had there, not
-		 * what the caller asked to redirect it to). Confirmed live:
-		 * closing fd 0 in the parent, then adding a dup2-onto-fd-2 file
-		 * action whose own __plat_dup() (posix_spawn.c do_action) reused
-		 * that just-freed fd 0 for its new descriptor, reproduced
-		 * exactly this -- the child's stderr redirect silently failed
-		 * to reach the target pipe.
+		/* posix_spawn_file_actions_adddup2() targets above 2 -- see
+		 * struct __spawn_dup2_target's own comment (libc.h) and
+		 * src/process/posix_spawn.c's build_dup2_targets(). Folded into
+		 * the SAME staging pass as std[0..2] below, not a separate one
+		 * run before or after it: a source this loop would otherwise
+		 * treat as "safe" because it sits outside 0..2 could still
+		 * collide with one of THESE targets, or one of these targets'
+		 * own source could collide with 0, 1 or 2 -- the hazard the rest
+		 * of this comment describes is exactly as real across the two
+		 * groups as within either one alone, so both need the same
+		 * target-zone floor to stage against. */
+		extra = __spawn_pending_dup2s(&extra_n);
+		ntotal = 3 + extra_n;
+
+		/* One malloc rather than three: `target`/`mv`/`orig` (the
+		 * per-entry destination, current-best-known source, and
+		 * pre-staging source this file's own history already needed
+		 * for fd 0/1/2 alone, ->target/->mv/->orig below) only ever
+		 * travel together, so a single struct keeps the ownership
+		 * story this project's own allocator-token checker follows
+		 * (see tools/lint.sh) to exactly one alloc/free pair instead of
+		 * three. Sized ntotal, never less than 3, so this covers fd
+		 * 0/1/2 even when extra_n is 0 -- the common case, and the
+		 * reason a heap allocation here (where the unfixed code used a
+		 * fixed `int mv[3]`) is an acceptable cost: posix_spawn()
+		 * already fails with ENOMEM well before reaching this point
+		 * for other reasons (src/process/posix_spawn.c's own sv/extra
+		 * allocations), so this is one more of those, not a new class
+		 * of failure. */
+		fm = malloc((size_t)ntotal * sizeof *fm);
+		if (!fm) {
+			int e = ENOMEM;
+			raw_syscall(SYS_write, (long)pipefd[1], (long)&e, (long)sizeof e, 0L, 0L, 0L);
+			raw_syscall(SYS_close, (long)pipefd[1], 0L, 0L, 0L, 0L, 0L);
+			raw_syscall(SYS_exit_group, 127L, 0L, 0L, 0L, 0L, 0L);
+			/* unreachable */
+			return -1;
+		}
+
+		max_target = 2;
+		for (i = 0; i < 3; i++) {
+			fm[i].target = i;
+			fm[i].orig = std[i] ? unbox_fd(std[i]) : -1;
+		}
+		for (i = 0; i < extra_n; i++) {
+			fm[3 + i].target = extra[i].fd;
+			fm[3 + i].orig = unbox_fd(extra[i].h);
+			if (extra[i].fd > max_target) max_target = extra[i].fd;
+		}
+
+		/* srcfd (a raw Linux fd number) is a completely different
+		 * namespace from the target it is being moved TO, and nothing
+		 * keeps the two apart: srcfd can itself equal ANY target in
+		 * this combined list. Mutating a target in place -- close(), or
+		 * dup3(), which closes whatever was there first -- would
+		 * silently destroy that raw fd if a later target still needs it
+		 * as ITS OWN source (dup3()'s return value is not checked
+		 * below, so that failure was never reported: the redirect just
+		 * silently never happens, execve() runs anyway, and the target
+		 * fd comes up as whatever the process already had there, not
+		 * what the caller asked to redirect it to). Confirmed live for
+		 * the fd-0/1/2-only case this generalizes: closing fd 0 in the
+		 * parent, then adding a dup2-onto-fd-2 file action whose own
+		 * __plat_dup() (posix_spawn.c do_action) reused that
+		 * just-freed fd 0 for its new descriptor, reproduced exactly
+		 * this -- the child's stderr redirect silently failed to reach
+		 * the target pipe.
 		 *
-		 * Fixed the general way, not just for that one collision: every
-		 * live source is first duplicated (F_DUPFD, minimum fd 3) to a
-		 * scratch descriptor guaranteed to sit OUTSIDE 0..2, before
-		 * target 0/1/2 is touched at all. Once staged, no target's
-		 * dup3()/close() can reach a scratch fd (they are never 0, 1 or
-		 * 2 by construction), so the placement pass below is safe
-		 * regardless of which raw fd numbers std[0..2] originally
-		 * named -- including a full swap. */
-		for (i = 0; i < 3; i++) {
-			if (!std[i]) { mv[i] = -1; continue; }
+		 * Fixed the general way, not just for the three standard
+		 * descriptors: every live source at or below the highest
+		 * target in the WHOLE list is first duplicated (F_DUPFD) to a
+		 * scratch descriptor guaranteed to sit above every target,
+		 * before any target is touched at all. Once staged, no
+		 * target's dup3()/close() can reach a scratch fd (none of them
+		 * sit within the target zone by construction), so the
+		 * placement pass below is safe regardless of which raw fd
+		 * numbers std[0..2] or the extra targets originally named --
+		 * including a full swap among any of them. A source already
+		 * above every target needs no such staging: nothing this loop
+		 * does can ever reach it. */
+		for (i = 0; i < ntotal; i++) {
+			fm[i].mv = fm[i].orig;
+			if (fm[i].mv < 0 || fm[i].mv > max_target) continue;
 			{
-				int srcfd = unbox_fd(std[i]);
-				if (srcfd > 2) {
-					mv[i] = srcfd;   /* already outside the target zone */
-				} else {
-					long t = raw_syscall(SYS_fcntl, (long)srcfd,
-					                      (long)F_DUPFD_LX, 3L, 0L, 0L, 0L);
-					/* F_DUPFD failing here (fd-table exhaustion) is the
-					 * only way mv[i] can still land in 0..2 -- fall
-					 * back to the original, unstaged srcfd rather than
-					 * lose the redirect outright; this is no worse
-					 * than the unfixed code was for every case, and
-					 * better for most of them. */
-					mv[i] = is_sys_error(t) ? srcfd : (int)t;
-				}
+				long t = raw_syscall(SYS_fcntl, (long)fm[i].mv,
+				                      (long)F_DUPFD_LX, (long)(max_target + 1), 0L, 0L, 0L);
+				/* F_DUPFD failing here (fd-table exhaustion) is the
+				 * only way fm[i].mv can still land inside the target
+				 * zone -- fall back to the original, unstaged source
+				 * rather than lose the redirect outright; this is no
+				 * worse than the unfixed code was for every case, and
+				 * better for most of them. */
+				if (!is_sys_error(t)) fm[i].mv = (int)t;
 			}
 		}
-		for (i = 0; i < 3; i++) {
-			if (std[i]) {
-				if (mv[i] != i) raw_syscall(SYS_dup3, (long)mv[i], (long)i, 0L, 0L, 0L, 0L);
-			} else {
-				raw_syscall(SYS_close, (long)i, 0L, 0L, 0L, 0L, 0L);
+		for (i = 0; i < ntotal; i++) {
+			if (fm[i].mv < 0) {
+				raw_syscall(SYS_close, (long)fm[i].target, 0L, 0L, 0L, 0L, 0L);
+			} else if (fm[i].mv != fm[i].target) {
+				raw_syscall(SYS_dup3, (long)fm[i].mv, (long)fm[i].target, 0L, 0L, 0L, 0L);
 			}
 		}
-		/* Close the scratch copies -- skip index i if F_DUPFD fell back
-		 * to the unstaged srcfd (nothing separate was opened) or if
-		 * mv[i] == i (dup3() above just installed that exact fd as
-		 * target i itself; closing it again would close the thing just
-		 * placed there, not a spare copy of it). */
-		for (i = 0; i < 3; i++) {
-			if (std[i] && mv[i] > 2 && mv[i] != i && mv[i] != unbox_fd(std[i]))
-				raw_syscall(SYS_close, (long)mv[i], 0L, 0L, 0L, 0L, 0L);
+		/* Close the scratch copies -- two different rules for the two
+		 * groups sharing this array, both already true of the fd-0/1/2
+		 * code this generalizes:
+		 *
+		 * A std[0..2] entry (i < 3) preserves an unstaged source
+		 * (fm[i].mv == fm[i].orig) rather than closing it: that source
+		 * is the CALLER's own real descriptor (src/process/spawn.c's
+		 * own f0/f1/f2 lookup, forwarded through unchanged), which just
+		 * happens to also be a standard descriptor's source -- closing
+		 * it here would take away a descriptor the caller never asked
+		 * to lose, on top of placing the redirect. It survives into
+		 * the child (or not) exactly as an ordinary non-close-on-exec
+		 * descriptor already would.
+		 *
+		 * An extra target (i >= 3) has no such caller-visible original
+		 * to preserve: build_dup2_targets() (posix_spawn.c) only ever
+		 * records a handle do_action()'s own __plat_dup() minted
+		 * purely to feed THIS spawn, at whatever arbitrary real number
+		 * dup(2) happened to hand back -- nothing else in the process
+		 * ever refers to that number by design (see posix_spawn.c's
+		 * own banner on why a plain, arbitrary duplicate is made at
+		 * all rather than forcing the real number to match the
+		 * target). Leaving it open here would leak a second,
+		 * unrequested descriptor into the child pointing at the exact
+		 * same object as the one correctly placed at the target, so it
+		 * is always closed once placed -- whether or not F_DUPFD
+		 * staging ever ran for it (fm[i].mv == fm[i].orig only means
+		 * "unstaged" here, not "keep": for this group a throwaway
+		 * duplicate is a throwaway duplicate either way). */
+		for (i = 0; i < ntotal; i++) {
+			if (fm[i].mv < 0 || fm[i].mv == fm[i].target) continue;
+			if (i < 3 && fm[i].mv == fm[i].orig) continue;
+			raw_syscall(SYS_close, (long)fm[i].mv, 0L, 0L, 0L, 0L, 0L);
 		}
+		free(fm);
 		{
 			long ret = raw_syscall(SYS_execve, (long)path, (long)argv, (long)envp, 0L, 0L, 0L);
 			int e = is_sys_error(ret) ? (int)-ret : EINVAL;

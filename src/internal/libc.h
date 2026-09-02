@@ -1002,6 +1002,55 @@ void __spawn_clear_pending_priority(void);
  * passes the address of its own local, never NULL, and this always
  * writes through it before returning 1. */
 int __spawn_pending_priority(int *out) __attribute__((nonnull(1)));
+
+/* One posix_spawn_file_actions_adddup2() target above 2, as it stood
+ * after every recorded file action had replayed on the parent's own
+ * __fds[] table (src/process/posix_spawn.c's spawn_common()) -- `fd` is
+ * the target descriptor number the caller asked for, `h` is the
+ * parent's own handle currently filed under it (__fd_get(fd)->h at that
+ * moment).
+ *
+ * Exists only for Linux's own __plat_process_spawn()
+ * (src/process/linux/plat_process.c) to consume, the same "set by
+ * spawn_common(), read back by exactly one backend's own spawn call"
+ * shape __spawn_pending_priority()/__spawn_set_pending_sigmask() above
+ * already use -- except mirrored: those two are NT-only concerns Linux
+ * never reads back, and this one is a Linux-only concern NT never reads
+ * back (its own __fd_runtime_data(), src/internal/nt/plat_fd_init.c,
+ * already serialises the parent's ENTIRE __fds[] table by logical
+ * index, so a target above 2 is already correct there with nothing
+ * extra to tell it).
+ *
+ * Why Linux needs telling at all, when NT does not: a Linux child
+ * inherits real kernel descriptor NUMBERS across clone()+execve(), not
+ * table indices (src/process/linux/plat_process.c's own banner) -- and
+ * do_action()'s __SPAWN_DUP2 case (posix_spawn.c) makes its duplicate
+ * with a plain, arbitrary-numbered __plat_dup(), because forcing the
+ * real number to match `fd` would mean mutating the PARENT's own real
+ * descriptor table just to satisfy something that should only affect
+ * the CHILD (see posix_spawn.c's own banner and
+ * src/internal/linux/plat_fd_init.c's known-gap note). The arbitrary
+ * real number this list carries is exactly what still needs moving onto
+ * `fd`, but only in the child, after clone(2) and before execve(2) --
+ * see __plat_process_spawn()'s own comment for where that happens,
+ * generalizing the mv[]/dup3 staging it already does for fd 0/1/2. */
+struct __spawn_dup2_target {
+	int fd;
+	__plat_handle_t h;
+};
+/* `list` is not copied: it must stay valid (spawn_common()'s own `extra`
+ * array, a local) for as long as it takes __spawn() to return, exactly
+ * like __spawn_set_pending_sigmask()'s own `mask` argument. */
+void __spawn_set_pending_dup2s(const struct __spawn_dup2_target *list, int n)
+    __attribute__((nonnull(1)));
+void __spawn_clear_pending_dup2s(void);
+/* *out_n set to the pending count (0 if none pending) and the list
+ * pointer returned; NULL iff *out_n is 0. out_n required: the one real
+ * call site (src/process/linux/plat_process.c) always passes the
+ * address of its own local, never NULL. */
+const struct __spawn_dup2_target *__spawn_pending_dup2s(int *out_n)
+    __attribute__((nonnull(1)));
+
 int __raise_thread_internal(int) NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 /* Nonzero if SIGCHLD's installed sa_flags has SA_NOCLDWAIT set -- see the
  * comment on __sigchld_nocldwait() in src/signal/signal.c. */
