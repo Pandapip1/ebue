@@ -650,8 +650,11 @@ static int pax_write_data_from_fd(FILE *out, int fd, unsigned long size, enum pa
 		size_t want = remain < sizeof buf ? remain : sizeof buf;
 		ssize_t got = read(fd, buf, want);
 		if (got <= 0) { if (got < 0) return -1; break; }
-		__ownership_readable_span(buf, (size_t)got);
-		if (fwrite(buf, 1, (size_t)got, out) != (size_t)got) return -1;
+		{
+			ssize_t i;
+			for (i = 0; i < got; i++)
+				if (fputc((unsigned char)buf[i], out) == EOF) return -1;
+		}
 		remain -= (unsigned long)got;
 	}
 	if (remain) return -1; /* file shrank under us mid-archive */

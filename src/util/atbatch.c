@@ -85,8 +85,11 @@ int __atbatch_submit(const char *queue, time_t run_at, const char *srcfile,
 	for (;;) {
 		nrd = fread(buf, 1, sizeof buf, srcfile ? src : stdin);
 		if (nrd == 0) break;
-		__ownership_readable_span(buf, nrd);
-		if (fwrite(buf, 1, nrd, f) != nrd) goto fail;
+		{
+			size_t i;
+			for (i = 0; i < nrd; i++)
+				if (fputc((unsigned char)buf[i], f) == EOF) goto fail;
+		}
 	}
 	if (ferror(srcfile ? src : stdin)) goto fail;
 
