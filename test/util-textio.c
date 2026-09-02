@@ -24,6 +24,12 @@
  *   utilities/cat.html utilities/echo.html utilities/tee.html
  *   utilities/wc.html utilities/head.html utilities/tail.html
  */
+/* usleep()/kill() below are gated behind _POSIX_SOURCE/_POSIX_C_SOURCE/
+ * _XOPEN_SOURCE/_GNU_SOURCE/_BSD_SOURCE in ntlibc's own include/
+ * unistd.h and include/signal.h, none of which a plain -std=c99 build
+ * defines on its own. Same fix, same reasoning, as test/posix-stdlib.c's
+ * own top-of-file _GNU_SOURCE define. */
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
