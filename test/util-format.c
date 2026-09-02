@@ -36,22 +36,23 @@ static char obj_root[1024];
 static int find_obj_root(const char *argv0)
 {
 	size_t n;
-	char *p;
+	size_t i;
 
 	if (!argv0 || !*argv0) return -1;
 	n = strlen(argv0);
 	if (n >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-format.exe" */
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/util-format.exe" */
 
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	n = strlen(obj_root);
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/test" */
 
 	return 0;
 }
@@ -59,12 +60,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -127,6 +130,31 @@ static int out_is(const char *expect)
 	return strcmp(buf, expect) == 0;
 }
 
+/* Checks a run succeeded (exit 0) with stdout exactly `expect` -- the
+ * shape shared by most printf/pr tests below. */
+static void check_ok_out_is(int status, const char *expect)
+{
+	CHECK(status == 0);
+	CHECK(out_is(expect));
+}
+
+/* Checks a run succeeded (exit 0) with stdout containing `expect` -- the
+ * shape shared by most od/tabs tests below. */
+static void check_ok_out_contains(int status, const char *expect)
+{
+	CHECK(status == 0);
+	CHECK(out_contains(expect));
+}
+
+/* Checks a run was refused outright: nonzero exit, with a diagnostic
+ * containing `expect` -- the shape shared by most "not implemented"/
+ * "not supported"/invalid-argument tests below. */
+static void check_refused(int status, const char *expect)
+{
+	CHECK(status != 0);
+	CHECK(err_contains(expect));
+}
+
 /* How many times `needle` occurs in OUTFILE -- used by the od elision
  * test to confirm a repeated row was collapsed to one line, not three. */
 static int out_count(const char *needle)
@@ -163,8 +191,7 @@ static int run_sh_c(const char *cmd)
 static void test_printf_basic_conversions(void)
 {
 	char *argv[] = { (char *)"printf", (char *)"%s-%d\n", (char *)"hello", (char *)"42", 0 };
-	CHECK(run(printf_path, argv) == 0);
-	CHECK(out_is("hello-42\n"));
+	check_ok_out_is(run(printf_path, argv), "hello-42\n");
 }
 
 /* printf(1p): "The format operand shall be reused as often as
@@ -172,8 +199,7 @@ static void test_printf_basic_conversions(void)
 static void test_printf_argument_cycling(void)
 {
 	char *argv[] = { (char *)"printf", (char *)"%s\n", (char *)"a", (char *)"b", (char *)"c", 0 };
-	CHECK(run(printf_path, argv) == 0);
-	CHECK(out_is("a\nb\nc\n"));
+	check_ok_out_is(run(printf_path, argv), "a\nb\nc\n");
 }
 
 /* Width and precision are deliberately capped at 1000.  In particular,
@@ -198,8 +224,7 @@ static void test_printf_large_width_and_precision_are_clamped(void)
 static void test_printf_percent_b_expands_escapes(void)
 {
 	char *argv[] = { (char *)"printf", (char *)"%b\n", (char *)"a\\tb", 0 };
-	CHECK(run(printf_path, argv) == 0);
-	CHECK(out_is("a\tb\n"));
+	check_ok_out_is(run(printf_path, argv), "a\tb\n");
 }
 
 /* printf(1p) ARGUMENTS: an argument that does not parse as a numeric
@@ -218,14 +243,12 @@ static void test_printf_invalid_numeric_argument_is_an_error(void)
 static void test_printf_missing_operand(void)
 {
 	char *argv[] = { (char *)"printf", 0 };
-	CHECK(run(printf_path, argv) != 0);
-	CHECK(err_contains("missing operand"));
+	check_refused(run(printf_path, argv), "missing operand");
 }
 
 static void test_printf_builtin_agrees(void)
 {
-	CHECK(run_sh_c("printf '%s+%s\\n' foo bar") == 0);
-	CHECK(out_is("foo+bar\n"));
+	check_ok_out_is(run_sh_c("printf '%s+%s\\n' foo bar"), "foo+bar\n");
 }
 
 /* ==== od(1p) ============================================================= */
@@ -235,8 +258,7 @@ static void test_od_default_hex_bytes(void)
 	char *argv[] = { (char *)"od", (char *)"-A", (char *)"n", (char *)"-t", (char *)"x1",
 	                  (char *)"scratch/od_in1", 0 };
 	make_file("scratch/od_in1", "AB", 2);
-	CHECK(run(od_path, argv) == 0);
-	CHECK(out_contains(" 41 42"));
+	check_ok_out_contains(run(od_path, argv), " 41 42");
 }
 
 static void test_od_dash_t_c_escape_table(void)
@@ -244,9 +266,8 @@ static void test_od_dash_t_c_escape_table(void)
 	char *argv[] = { (char *)"od", (char *)"-A", (char *)"n", (char *)"-t", (char *)"c",
 	                  (char *)"scratch/od_in2", 0 };
 	make_file("scratch/od_in2", "A\n", 2);
-	CHECK(run(od_path, argv) == 0);
 	/* 'A' -> "   A" (4-wide field); '\n' -> "\n" mnemonic, "  \n" (4-wide). */
-	CHECK(out_contains("   A  \\n"));
+	check_ok_out_contains(run(od_path, argv), "   A  \\n");
 }
 
 /* od(1p): "any number of groups of output lines, which would be
@@ -271,21 +292,18 @@ static void test_od_j_skip_and_N_count(void)
 	                  (char *)"-j", (char *)"2", (char *)"-N", (char *)"3",
 	                  (char *)"scratch/od_in4", 0 };
 	make_file("scratch/od_in4", "0123456789", 10);
-	CHECK(run(od_path, argv) == 0);
-	CHECK(out_contains(" 32 33 34")); /* skips "01", reads "234" */
+	check_ok_out_contains(run(od_path, argv), " 32 33 34"); /* skips "01", reads "234" */
 }
 
 static void test_od_invalid_type_is_an_error(void)
 {
 	char *argv[] = { (char *)"od", (char *)"-t", (char *)"q9", (char *)"scratch/od_in1", 0 };
-	CHECK(run(od_path, argv) != 0);
-	CHECK(err_contains("od:"));
+	check_refused(run(od_path, argv), "od:");
 }
 
 static void test_od_builtin_agrees(void)
 {
-	CHECK(run_sh_c("od -A n -t x1 scratch/od_in1") == 0);
-	CHECK(out_contains(" 41 42"));
+	check_ok_out_contains(run_sh_c("od -A n -t x1 scratch/od_in1"), " 41 42");
 }
 
 /* ==== pr(1p) ============================================================= */
@@ -298,8 +316,7 @@ static void test_pr_dash_t_pads_short_page(void)
 {
 	char *argv[] = { (char *)"pr", (char *)"-t", (char *)"-l", (char *)"5", (char *)"scratch/pr_in1", 0 };
 	make_file("scratch/pr_in1", "l1\nl2\nl3\n", 9);
-	CHECK(run(pr_path, argv) == 0);
-	CHECK(out_is("l1\nl2\nl3\n\n\n"));
+	check_ok_out_is(run(pr_path, argv), "l1\nl2\nl3\n\n\n");
 }
 
 static void test_pr_header_contains_name_and_page(void)
@@ -315,21 +332,18 @@ static void test_pr_header_contains_name_and_page(void)
 static void test_pr_refuses_column_mode(void)
 {
 	char *argv[] = { (char *)"pr", (char *)"-3", (char *)"scratch/pr_in1", 0 };
-	CHECK(run(pr_path, argv) != 0);
-	CHECK(err_contains("not implemented"));
+	check_refused(run(pr_path, argv), "not implemented");
 }
 
 static void test_pr_refuses_merge(void)
 {
 	char *argv[] = { (char *)"pr", (char *)"-m", (char *)"scratch/pr_in1", (char *)"scratch/pr_in2", 0 };
-	CHECK(run(pr_path, argv) != 0);
-	CHECK(err_contains("not implemented"));
+	check_refused(run(pr_path, argv), "not implemented");
 }
 
 static void test_pr_builtin_agrees(void)
 {
-	CHECK(run_sh_c("pr -t -l 5 scratch/pr_in1") == 0);
-	CHECK(out_is("l1\nl2\nl3\n\n\n"));
+	check_ok_out_is(run_sh_c("pr -t -l 5 scratch/pr_in1"), "l1\nl2\nl3\n\n\n");
 }
 
 /* ==== tabs(1p) ============================================================ */
@@ -347,21 +361,18 @@ static void test_tabs_default_is_dash_8(void)
 static void test_tabs_dash_n_interval(void)
 {
 	char *argv[] = { (char *)"tabs", (char *)"-4", 0 };
-	CHECK(run(tabs_path, argv) == 0);
-	CHECK(out_contains("\033[3g\r    \033H")); /* first stop at column 4 */
+	check_ok_out_contains(run(tabs_path, argv), "\033[3g\r    \033H"); /* first stop at column 4 */
 }
 
 static void test_tabs_refuses_dash_T(void)
 {
 	char *argv[] = { (char *)"tabs", (char *)"-T", (char *)"vt100", 0 };
-	CHECK(run(tabs_path, argv) != 0);
-	CHECK(err_contains("not supported"));
+	check_refused(run(tabs_path, argv), "not supported");
 }
 
 static void test_tabs_builtin_agrees(void)
 {
-	CHECK(run_sh_c("tabs -4") == 0);
-	CHECK(out_contains("\033[3g\r    \033H"));
+	check_ok_out_contains(run_sh_c("tabs -4"), "\033[3g\r    \033H");
 }
 
 /* ==== split(1p) =========================================================== */
@@ -394,8 +405,7 @@ static void test_split_mutually_exclusive_l_and_b(void)
 {
 	char *argv[] = { (char *)"split", (char *)"-l", (char *)"2", (char *)"-b", (char *)"3",
 	                  (char *)"scratch/split_in1", 0 };
-	CHECK(run(split_path, argv) != 0);
-	CHECK(err_contains("mutually exclusive"));
+	check_refused(run(split_path, argv), "mutually exclusive");
 }
 
 static void test_split_builtin_agrees(void)
@@ -461,8 +471,7 @@ static void test_csplit_repeat_operand_refused(void)
 {
 	char *argv[] = { (char *)"csplit", (char *)"-f", (char *)"scratch/cx_",
 	                  (char *)"scratch/csplit_in2", (char *)"/foo/", (char *)"{2}", 0 };
-	CHECK(run(csplit_path, argv) != 0);
-	CHECK(err_contains("not implemented"));
+	check_refused(run(csplit_path, argv), "not implemented");
 }
 
 static void test_csplit_builtin_agrees(void)

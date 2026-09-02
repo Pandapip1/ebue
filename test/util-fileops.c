@@ -48,22 +48,23 @@ static char obj_root[1024];
 static int find_obj_root(const char *argv0)
 {
 	size_t n;
-	char *p;
+	size_t i;
 
 	if (!argv0 || !*argv0) return -1;
 	n = strlen(argv0);
 	if (n >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0;                       /* strip "/util-fileops.exe" */
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0;                       /* strip "/util-fileops.exe" */
 
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0;                       /* strip "/test" */
+	n = strlen(obj_root);
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0;                       /* strip "/test" */
 
 	return 0;
 }
@@ -71,12 +72,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -190,6 +193,23 @@ static int is_dir(const char *path)
 	return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+/* Checks that a run was refused outright: nonzero exit, a diagnostic
+ * naming the utility, and the operation's own target never created. */
+static void check_refused(int status, const char *err_prefix, const char *must_not_exist)
+{
+	CHECK(status != 0);
+	CHECK(err_contains(err_prefix));
+	CHECK(!exists(must_not_exist));
+}
+
+/* Checks the -i "always ask" refusal shared by rm/cp/mv below: exit
+ * status 2, with a diagnostic naming the unsupported option. */
+static void check_dash_i_refused(int status)
+{
+	CHECK(status == 2);
+	CHECK(err_contains("-i"));
+}
+
 /* ==== cp: single-file form ============================================== */
 
 static void test_cp_single_file(void)
@@ -218,9 +238,7 @@ static void test_cp_nonexistent_source(void)
 	mkpath(p2, "cp-never-created.txt");
 
 	argv[0] = (char *)"cp"; argv[1] = p1; argv[2] = p2; argv[3] = 0;
-	CHECK(run(cp_path, argv) != 0);
-	CHECK(err_contains("cp:"));
-	CHECK(!exists(p2));
+	check_refused(run(cp_path, argv), "cp:", p2);
 }
 
 static void test_cp_directory_target_form(void)
@@ -296,9 +314,7 @@ static void test_cp_recursive_tree(void)
 	 * skipped-but-successful. */
 	mkpath(p3, "cpr-dst2");
 	argv[0] = (char *)"cp"; argv[1] = p1; argv[2] = p3; argv[3] = 0;
-	CHECK(run(cp_path, argv) != 0);
-	CHECK(err_contains("cp:"));
-	CHECK(!exists(p3));
+	check_refused(run(cp_path, argv), "cp:", p3);
 }
 
 /* Copying a directory into its own subtree must be refused, not run:
@@ -317,9 +333,7 @@ static void test_cp_refuses_into_own_subtree(void)
 	snprintf(dst, sizeof dst, "%s/nested", p1);
 
 	argv5[0] = (char *)"cp"; argv5[1] = (char *)"-R"; argv5[2] = p1; argv5[3] = dst; argv5[4] = 0;
-	CHECK(run(cp_path, argv5) != 0);
-	CHECK(err_contains("cp:"));
-	CHECK(!exists(dst));
+	check_refused(run(cp_path, argv5), "cp:", dst);
 
 	/* the exact same path, not just a subdirectory of it */
 	argv5[3] = p1;
@@ -447,9 +461,7 @@ static void test_mv_nonexistent_source(void)
 	mkpath(p2, "mv-never-created.txt");
 
 	argv[0] = (char *)"mv"; argv[1] = p1; argv[2] = p2; argv[3] = 0;
-	CHECK(run(mv_path, argv) != 0);
-	CHECK(err_contains("mv:"));
-	CHECK(!exists(p2));
+	check_refused(run(mv_path, argv), "mv:", p2);
 }
 
 /* mv(1p)'s cross-filesystem (EXDEV) fallback: rename() first, a copy-
@@ -517,18 +529,15 @@ static void test_dash_i_is_refused(void)
 	mkpath(p2, "dash-i-target2.txt");
 
 	argv3[0] = (char *)"rm"; argv3[1] = (char *)"-i"; argv3[2] = p1; argv3[3] = 0;
-	CHECK(run(rm_path, argv3) == 2);
-	CHECK(err_contains("-i"));
+	check_dash_i_refused(run(rm_path, argv3));
 	CHECK(exists(p1));   /* refused before doing anything */
 
 	argv4[0] = (char *)"cp"; argv4[1] = (char *)"-i"; argv4[2] = p1; argv4[3] = p2; argv4[4] = 0;
-	CHECK(run(cp_path, argv4) == 2);
-	CHECK(err_contains("-i"));
+	check_dash_i_refused(run(cp_path, argv4));
 	CHECK(!exists(p2));
 
 	argv4[0] = (char *)"mv";
-	CHECK(run(mv_path, argv4) == 2);
-	CHECK(err_contains("-i"));
+	check_dash_i_refused(run(mv_path, argv4));
 	CHECK(exists(p1));   /* not moved */
 	CHECK(!exists(p2));
 }

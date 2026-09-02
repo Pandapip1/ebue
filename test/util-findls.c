@@ -60,22 +60,23 @@ static char obj_root[1024];
 static int find_obj_root(const char *argv0)
 {
 	size_t n;
-	char *p;
+	size_t i;
 
 	if (!argv0 || !*argv0) return -1;
 	n = strlen(argv0);
 	if (n >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-findls.exe" */
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/util-findls.exe" */
 
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	n = strlen(obj_root);
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/test" */
 
 	return 0;
 }
@@ -83,12 +84,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -191,6 +194,15 @@ static int out_equals(const char *expect)
 	return strcmp(buf, expect) == 0;
 }
 
+/* Checks a run's exit status against `want_status` and its stdout against
+ * `want_out` exactly -- the shape shared by nearly every expr/ls -d/xargs
+ * test below. */
+static void check_status_out_equals(int status, int want_status, const char *want_out)
+{
+	CHECK(status == want_status);
+	CHECK(out_equals(want_out));
+}
+
 static char find_path[1024], xargs_path[1024], expr_path[1024], ls_path[1024];
 static char echo_path[1024], false_path[1024], sh_path[1024];
 
@@ -205,8 +217,7 @@ static int run_sh_c(const char *cmd)
 static void test_expr_arith(void)
 {
 	char *a[] = { (char *)"expr", (char *)"3", (char *)"+", (char *)"4", 0 };
-	CHECK(run(expr_path, a) == 0);
-	CHECK(out_equals("7\n"));
+	check_status_out_equals(run(expr_path, a), 0, "7\n");
 }
 
 /* '*' binds tighter than '+': a naive left-to-right evaluator without
@@ -214,15 +225,13 @@ static void test_expr_arith(void)
 static void test_expr_precedence(void)
 {
 	char *a[] = { (char *)"expr", (char *)"2", (char *)"+", (char *)"3", (char *)"*", (char *)"4", 0 };
-	CHECK(run(expr_path, a) == 0);
-	CHECK(out_equals("14\n"));
+	check_status_out_equals(run(expr_path, a), 0, "14\n");
 }
 
 static void test_expr_zero_is_exit_1(void)
 {
 	char *a[] = { (char *)"expr", (char *)"0", 0 };
-	CHECK(run(expr_path, a) == 1);
-	CHECK(out_equals("0\n"));
+	check_status_out_equals(run(expr_path, a), 1, "0\n");
 }
 
 static void test_expr_zero_spellings(void)
@@ -230,22 +239,17 @@ static void test_expr_zero_spellings(void)
 	char *negative[] = { (char *)"expr", (char *)"-000", 0 };
 	char *leading[] = { (char *)"expr", (char *)"000000000000000000000", 0 };
 	char *large[] = { (char *)"expr", (char *)"999999999999999999999", 0 };
-	CHECK(run(expr_path, negative) == 1);
-	CHECK(out_equals("-000\n"));
-	CHECK(run(expr_path, leading) == 1);
-	CHECK(out_equals("000000000000000000000\n"));
-	CHECK(run(expr_path, large) == 0);
-	CHECK(out_equals("999999999999999999999\n"));
+	check_status_out_equals(run(expr_path, negative), 1, "-000\n");
+	check_status_out_equals(run(expr_path, leading), 1, "000000000000000000000\n");
+	check_status_out_equals(run(expr_path, large), 0, "999999999999999999999\n");
 }
 
 static void test_expr_string_compare(void)
 {
 	char *eq[] = { (char *)"expr", (char *)"foo", (char *)"=", (char *)"foo", 0 };
 	char *ne[] = { (char *)"expr", (char *)"foo", (char *)"=", (char *)"bar", 0 };
-	CHECK(run(expr_path, eq) == 0);
-	CHECK(out_equals("1\n"));
-	CHECK(run(expr_path, ne) == 1);
-	CHECK(out_equals("0\n"));
+	check_status_out_equals(run(expr_path, eq), 0, "1\n");
+	check_status_out_equals(run(expr_path, ne), 1, "0\n");
 }
 
 /* Lexicographic "10" < "9" as strings, but expr must treat both as
@@ -253,32 +257,27 @@ static void test_expr_string_compare(void)
 static void test_expr_numeric_vs_lexicographic(void)
 {
 	char *a[] = { (char *)"expr", (char *)"10", (char *)">", (char *)"9", 0 };
-	CHECK(run(expr_path, a) == 0);
-	CHECK(out_equals("1\n"));
+	check_status_out_equals(run(expr_path, a), 0, "1\n");
 }
 
 static void test_expr_match_length(void)
 {
 	char *a[] = { (char *)"expr", (char *)"abc123", (char *)":", (char *)"[a-z]*", 0 };
-	CHECK(run(expr_path, a) == 0);
-	CHECK(out_equals("3\n"));
+	check_status_out_equals(run(expr_path, a), 0, "3\n");
 }
 
 static void test_expr_match_capture(void)
 {
 	char *a[] = { (char *)"expr", (char *)"abc123", (char *)":", (char *)"\\(a.c\\)", 0 };
-	CHECK(run(expr_path, a) == 0);
-	CHECK(out_equals("abc\n"));
+	check_status_out_equals(run(expr_path, a), 0, "abc\n");
 }
 
 static void test_expr_or_and(void)
 {
 	char *or1[] = { (char *)"expr", (char *)"", (char *)"|", (char *)"fallback", 0 };
 	char *and0[] = { (char *)"expr", (char *)"0", (char *)"&", (char *)"5", 0 };
-	CHECK(run(expr_path, or1) == 0);
-	CHECK(out_equals("fallback\n"));
-	CHECK(run(expr_path, and0) == 1);
-	CHECK(out_equals("0\n"));
+	check_status_out_equals(run(expr_path, or1), 0, "fallback\n");
+	check_status_out_equals(run(expr_path, and0), 1, "0\n");
 }
 
 static void test_expr_invalid_is_exit_2(void)
@@ -405,8 +404,7 @@ static void test_find_exec_builtin_matches_standalone(void)
 static void test_xargs_basic(void)
 {
 	char *a[] = { (char *)"xargs", echo_path, 0 };
-	CHECK(run_io(xargs_path, a, "a b c\n") == 0);
-	CHECK(out_equals("a b c\n"));
+	check_status_out_equals(run_io(xargs_path, a, "a b c\n"), 0, "a b c\n");
 }
 
 /* Quoting per the Guideline grammar: "a b" is one token, distinct from
@@ -414,23 +412,20 @@ static void test_xargs_basic(void)
 static void test_xargs_quoting(void)
 {
 	char *a[] = { (char *)"xargs", echo_path, 0 };
-	CHECK(run_io(xargs_path, a, "\"a b\" c\n") == 0);
-	CHECK(out_equals("a b c\n"));
+	check_status_out_equals(run_io(xargs_path, a, "\"a b\" c\n"), 0, "a b c\n");
 }
 
 static void test_xargs_dash_n(void)
 {
 	char *a[] = { (char *)"xargs", (char *)"-n", (char *)"1", echo_path, 0 };
-	CHECK(run_io(xargs_path, a, "a b c\n") == 0);
-	CHECK(out_equals("a\nb\nc\n"));
+	check_status_out_equals(run_io(xargs_path, a, "a b c\n"), 0, "a\nb\nc\n");
 }
 
 /* -I: one invocation per input line, substituting into the template. */
 static void test_xargs_dash_I(void)
 {
 	char *a[] = { (char *)"xargs", (char *)"-I", (char *)"{}", echo_path, (char *)"pre-{}-post", 0 };
-	CHECK(run_io(xargs_path, a, "X\nY\n") == 0);
-	CHECK(out_equals("pre-X-post\npre-Y-post\n"));
+	check_status_out_equals(run_io(xargs_path, a, "X\nY\n"), 0, "pre-X-post\npre-Y-post\n");
 }
 
 static void test_xargs_nonzero_utility_exit(void)
@@ -442,8 +437,7 @@ static void test_xargs_nonzero_utility_exit(void)
 static void test_xargs_empty_input_is_a_no_op(void)
 {
 	char *a[] = { (char *)"xargs", echo_path, 0 };
-	CHECK(run_io(xargs_path, a, "") == 0);
-	CHECK(out_equals(""));
+	check_status_out_equals(run_io(xargs_path, a, ""), 0, "");
 }
 
 /* Exercises xargs's real child-spawning path as both the standalone
@@ -515,8 +509,7 @@ static void test_ls_dash_R(void)
 static void test_ls_dash_d(void)
 {
 	char *a[] = { (char *)"ls", (char *)"-d", (char *)"scratch/t", 0 };
-	CHECK(run(ls_path, a) == 0);
-	CHECK(out_equals("scratch/t\n"));
+	check_status_out_equals(run(ls_path, a), 0, "scratch/t\n");
 }
 
 static void test_ls_nonexistent_is_error(void)
@@ -531,14 +524,12 @@ static void test_ls_nonexistent_is_error(void)
 
 static void test_builtins_match_standalone(void)
 {
-	CHECK(run_sh_c("expr 6 \\* 7") == 0);
-	CHECK(out_equals("42\n"));
+	check_status_out_equals(run_sh_c("expr 6 \\* 7"), 0, "42\n");
 
 	CHECK(run_sh_c("find scratch/t -name a.txt") == 0);
 	CHECK(out_contains("a.txt"));
 
-	CHECK(run_sh_c("ls -d scratch/t") == 0);
-	CHECK(out_equals("scratch/t\n"));
+	check_status_out_equals(run_sh_c("ls -d scratch/t"), 0, "scratch/t\n");
 }
 
 /* ==== scratch directory setup/teardown ===================================== */
