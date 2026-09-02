@@ -91,6 +91,26 @@ void insufficient_contracted_suffix(
 		memset(out + offset, 0, length); /* memory-contract-expect */
 }
 
+struct counted_buffer {
+	const char *data withtok(fixture_readable_span(length));
+	size_t length;
+};
+
+void overread_counted_buffer(const struct counted_buffer *buffer)
+{
+	consume_bytes(buffer->data, buffer->length + 1); /* memory-contract-expect */
+}
+
+struct counted_elements {
+	const unsigned *data withtok(fixture_readable_elements(count));
+	size_t count;
+};
+
+void overread_counted_elements(const struct counted_elements *buffer)
+{
+	consume_elements(buffer->data, buffer->count + 1); /* memory-contract-expect */
+}
+
 void copy_unrestricted_parameters(
 	char *destination withtok(fixture_writable_span(length)),
 	const char *source withtok(fixture_readable_span(length)), size_t length)

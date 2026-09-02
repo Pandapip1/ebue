@@ -209,6 +209,214 @@ static SVal scaledSpanLength(const SpanContract &Contract, SVal Count,
       Builder.getContext().getSizeType());
 }
 
+struct FieldSpanContract {
+  const MemberExpr *Pointer;
+  const FieldDecl *Length;
+  uint64_t Scale;
+};
+
+static const MemberExpr *pointerMember(const Expr *Expression) {
+  if (!Expression)
+    return nullptr;
+  Expression = Expression->IgnoreParenCasts();
+  if (const auto *Member = dyn_cast<MemberExpr>(Expression))
+    return Member;
+  if (const auto *Binary = dyn_cast<BinaryOperator>(Expression))
+    if (Binary->getOpcode() == BO_Add || Binary->getOpcode() == BO_Sub)
+      return pointerMember(Binary->getLHS());
+  if (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(Expression))
+    return pointerMember(Subscript->getBase());
+  return nullptr;
+}
+
+static std::optional<FieldSpanContract>
+fieldSpanContract(const Expr *Expression, ASTContext &Context) {
+  const MemberExpr *Member = pointerMember(Expression);
+  const auto *Pointer =
+      Member ? dyn_cast<FieldDecl>(Member->getMemberDecl()) : nullptr;
+  if (!Pointer || !Pointer->getType()->isPointerType())
+    return std::nullopt;
+  const RecordDecl *Record = Pointer->getParent();
+  for (const AnnotateAttr *Attribute : Pointer->specific_attrs<AnnotateAttr>()) {
+    StringRef Annotation = Attribute->getAnnotation();
+    if (!Annotation.consume_front("withtok:") || !Annotation.ends_with(")"))
+      continue;
+    size_t Open = Annotation.find('(');
+    if (Open == StringRef::npos)
+      continue;
+    StringRef Family = Annotation.take_front(Open).trim();
+    const TypedefNameDecl *Token = dialectToken(Context, Family);
+    bool ByteExtent = hasDialectQualifier(Token, "qual:extent_at_least");
+    bool ElementExtent = hasDialectQualifier(Token, "qual:element_extent");
+    if (!ByteExtent && !ElementExtent)
+      continue;
+    StringRef LengthName =
+        Annotation.slice(Open + 1, Annotation.size() - 1).trim();
+    const FieldDecl *Length = nullptr;
+    for (const FieldDecl *Candidate : Record->fields())
+      if (Candidate->getName() == LengthName) {
+        Length = Candidate;
+        break;
+      }
+    if (!Length)
+      continue;
+    uint64_t Scale = 1;
+    if (ElementExtent) {
+      QualType Pointee = Pointer->getType()->getPointeeType();
+      if (Pointee->isIncompleteType())
+        continue;
+      Scale = Context.getTypeSizeInChars(Pointee).getQuantity();
+    }
+    return FieldSpanContract{Member, Length, Scale};
+  }
+  return std::nullopt;
+}
+
+static const MemRegion *carrierRegion(const Expr *Expression,
+                                      CheckerContext &C) {
+  if (!Expression)
+    return nullptr;
+  const Expr *Core = Expression->IgnoreParenImpCasts();
+  if (const auto *Reference = dyn_cast<DeclRefExpr>(Core))
+    if (const auto *Variable = dyn_cast<VarDecl>(Reference->getDecl()))
+      return C.getState()
+          ->getLValue(Variable, C.getLocationContext())
+          .getAsRegion();
+  if (const auto *Member = dyn_cast<MemberExpr>(Core)) {
+    const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl());
+    if (!Field)
+      return nullptr;
+    SVal Base = C.getSVal(Member->getBase());
+    if (!Member->isArrow()) {
+      const MemRegion *BaseRegion = carrierRegion(Member->getBase(), C);
+      if (!BaseRegion)
+        return nullptr;
+      Base = loc::MemRegionVal(BaseRegion);
+    }
+    return C.getState()->getLValue(Field, Base).getAsRegion();
+  }
+  return nullptr;
+}
+
+static const MemberExpr *memberForField(const Expr *Expression,
+                                        const FieldDecl *Field) {
+  if (!Expression)
+    return nullptr;
+  Expression = Expression->IgnoreParenCasts();
+  if (const auto *Member = dyn_cast<MemberExpr>(Expression))
+    return Member->getMemberDecl() == Field ? Member : nullptr;
+  if (const auto *Binary = dyn_cast<BinaryOperator>(Expression)) {
+    if (const MemberExpr *Left = memberForField(Binary->getLHS(), Field))
+      return Left;
+    return memberForField(Binary->getRHS(), Field);
+  }
+  if (const auto *Unary = dyn_cast<UnaryOperator>(Expression))
+    return memberForField(Unary->getSubExpr(), Field);
+  return nullptr;
+}
+
+static std::optional<SVal>
+fieldExtentFromLength(const Expr *Expression, const FieldDecl *Field,
+                      SVal Value, SValBuilder &Builder) {
+  if (!Expression)
+    return std::nullopt;
+  Expression = Expression->IgnoreParenCasts();
+  if (const auto *Member = dyn_cast<MemberExpr>(Expression))
+    return Member->getMemberDecl() == Field && !Value.isUnknownOrUndef()
+               ? std::optional<SVal>(Value)
+               : std::nullopt;
+  const auto *Binary = dyn_cast<BinaryOperator>(Expression);
+  if (!Binary)
+    return std::nullopt;
+  bool InLeft = memberForField(Binary->getLHS(), Field);
+  bool InRight = memberForField(Binary->getRHS(), Field);
+  if (InLeft == InRight)
+    return std::nullopt;
+  SymbolRef Symbol = Value.getAsSymbol();
+  while (const auto *Cast = dyn_cast_or_null<SymbolCast>(Symbol))
+    Symbol = Cast->getOperand();
+  if (!Symbol)
+    return std::nullopt;
+  SymbolRef Operand;
+  if (const auto *Expression = dyn_cast<SymIntExpr>(Symbol)) {
+    if (!InLeft)
+      return std::nullopt;
+    Operand = Expression->getLHS();
+  } else if (const auto *Expression = dyn_cast<IntSymExpr>(Symbol)) {
+    if (!InRight)
+      return std::nullopt;
+    Operand = Expression->getRHS();
+  } else if (const auto *Expression = dyn_cast<SymSymExpr>(Symbol)) {
+    Operand = InLeft ? Expression->getLHS() : Expression->getRHS();
+  } else {
+    return std::nullopt;
+  }
+  return fieldExtentFromLength(InLeft ? Binary->getLHS() : Binary->getRHS(),
+                               Field, Builder.makeSymbolVal(Operand), Builder);
+}
+
+static bool sameMemberBase(const MemberExpr *Left, const MemberExpr *Right,
+                           CheckerContext &C) {
+  if (Left->isArrow() != Right->isArrow())
+    return false;
+  if (Left->isArrow())
+    return C.getSVal(Left->getBase()) == C.getSVal(Right->getBase());
+  return carrierRegion(Left->getBase(), C) ==
+         carrierRegion(Right->getBase(), C);
+}
+
+static ProgramStateRef assumeFieldSpan(const Expr *Expression,
+                                       const Expr *LengthExpression,
+                                       SVal PointerValue,
+                                       SVal RequiredLength,
+                                       ProgramStateRef State,
+                                       CheckerContext &C) {
+  std::optional<FieldSpanContract> Contract =
+      fieldSpanContract(Expression, C.getASTContext());
+  if (!Contract)
+    return State;
+  std::optional<DefinedOrUnknownSVal> Length;
+  if (const MemberExpr *Mention =
+          memberForField(LengthExpression, Contract->Length))
+    if (sameMemberBase(Contract->Pointer, Mention, C))
+      if (std::optional<SVal> Extent = fieldExtentFromLength(
+              LengthExpression, Contract->Length, RequiredLength,
+              C.getSValBuilder()))
+        Length = Extent->getAs<DefinedOrUnknownSVal>();
+  if (!Length) {
+    SVal Base = C.getSVal(Contract->Pointer->getBase());
+    if (!Contract->Pointer->isArrow()) {
+      const MemRegion *BaseRegion =
+          carrierRegion(Contract->Pointer->getBase(), C);
+      if (!BaseRegion)
+        return State;
+      Base = loc::MemRegionVal(BaseRegion);
+    }
+    SVal LengthLocation = State->getLValue(Contract->Length, Base);
+    std::optional<Loc> LengthLoc = LengthLocation.getAs<Loc>();
+    if (!LengthLoc)
+      return State;
+    Length = State->getSVal(*LengthLoc).getAs<DefinedOrUnknownSVal>();
+  }
+  const MemRegion *Pointer = PointerValue.getAsRegion();
+  while (const auto *Element = dyn_cast_or_null<ElementRegion>(Pointer))
+    Pointer = Element->getSuperRegion();
+  if (!Length || !Pointer)
+    return State;
+  SVal Extent = *Length;
+  if (Contract->Scale != 1)
+    Extent = C.getSValBuilder().evalBinOp(
+        State, BO_Mul, Extent,
+        C.getSValBuilder().makeIntVal(Contract->Scale,
+                                      C.getASTContext().getSizeType()),
+        C.getASTContext().getSizeType());
+  std::optional<DefinedOrUnknownSVal> DefinedExtent =
+      Extent.getAs<DefinedOrUnknownSVal>();
+  return DefinedExtent
+             ? State->set<AssumedSpanExtent>(Pointer, *DefinedExtent)
+             : State;
+}
+
 class MemoryContractChecker
     : public Checker<check::PreCall, check::PostCall, check::BeginFunction,
                      check::EndFunction, check::Bind,
@@ -1483,13 +1691,18 @@ public:
       SVal Length = scaledSpanLength(Contract,
                                      Call.getArgSVal(Contract.Length),
                                      C.getState(), C.getSValBuilder());
+      ProgramStateRef ProofState = assumeFieldSpan(
+          Call.getArgExpr(Contract.Pointer),
+          Call.getArgExpr(Contract.Length),
+          Call.getArgSVal(Contract.Pointer),
+          Call.getArgSVal(Contract.Length), C.getState(), C);
       if (!spanProven(Call.getArgSVal(Contract.Pointer), Length,
-                      C.getState(), C) &&
+                      ProofState, C) &&
           !typedObjectSpanProven(Call.getArgExpr(Contract.Pointer),
                                  Call.getArgExpr(Contract.Length),
-                                 Length, C.getState(), C) &&
+                                 Length, ProofState, C) &&
           !derivedContractSpanProven(Call.getArgSVal(Contract.Pointer),
-                                     Length, C.getState(), C)) {
+                                     Length, ProofState, C)) {
         BugType *Type = SpanBT.get();
         report("memory operation span is not proven valid", Type, Call,
                ContractState, C);
