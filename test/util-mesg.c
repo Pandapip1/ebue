@@ -50,28 +50,31 @@ static int fails;
 
 static char obj_root[1024];
 
+/* Strips the trailing "/last-component" (or "\...") off `path` in
+ * place. Returns 0 on success, -1 if `path` has no separator left to
+ * strip at. */
+static int strip_last_component(char *path)
+{
+	size_t i;
+
+	for (i = strlen(path); i > 0; i--)
+		if (path[i - 1] == '/' || path[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	path[i - 1] = 0;
+	return 0;
+}
+
 /* Same walk-up-from-argv[0] technique as test/util-timeutil.c's
  * find_obj_root(), copied rather than shared for the same reason that
  * file gives. */
 static int find_obj_root(const char *argv0)
 {
-	size_t n;
-	char *p;
-
 	if (!argv0 || !*argv0) return -1;
-	n = strlen(argv0);
-	if (n >= sizeof obj_root) return -1;
+	if (strlen(argv0) >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-mesg.exe" */
-
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/util-mesg.exe" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/test" */
 
 	return 0;
 }
@@ -79,12 +82,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -141,6 +146,16 @@ static int run_sh_c(const char *cmd)
 	return run(sh_path, argv);
 }
 
+/* Checks an already-run process's exit code and stderr against what a
+ * failing case below expects -- the shape every test in this file
+ * shares, since none of them can drive a real success path (see this
+ * file's own header comment on why). */
+static void check_fails(int rc, int expect_rc, const char *expect_err)
+{
+	CHECK(rc == expect_rc);
+	CHECK(err_contains(expect_err));
+}
+
 /* Some real login name -- content does not matter for these tests
  * (every case below is reached before or without needing a real
  * terminal), only that it is non-empty. Falls back to a fixed literal
@@ -164,22 +179,19 @@ static const char *current_user(void)
 static void test_mesg_no_terminal(void)
 {
 	char *argv[] = { (char *)"mesg", 0 };
-	CHECK(run(mesg_path, argv) == 2);
-	CHECK(err_contains("not a terminal"));
+	check_fails(run(mesg_path, argv), 2, "not a terminal");
 }
 
 static void test_mesg_invalid_argument(void)
 {
 	char *argv[] = { (char *)"mesg", (char *)"x", 0 };
-	CHECK(run(mesg_path, argv) == 2);
-	CHECK(err_contains("usage"));
+	check_fails(run(mesg_path, argv), 2, "usage");
 }
 
 static void test_mesg_too_many_arguments(void)
 {
 	char *argv[] = { (char *)"mesg", (char *)"y", (char *)"n", 0 };
-	CHECK(run(mesg_path, argv) == 2);
-	CHECK(err_contains("usage"));
+	check_fails(run(mesg_path, argv), 2, "usage");
 }
 
 /* No terminal at all still short-circuits before argument validation
@@ -188,15 +200,13 @@ static void test_mesg_too_many_arguments(void)
 static void test_mesg_y_no_terminal(void)
 {
 	char *argv[] = { (char *)"mesg", (char *)"y", 0 };
-	CHECK(run(mesg_path, argv) == 2);
-	CHECK(err_contains("not a terminal"));
+	check_fails(run(mesg_path, argv), 2, "not a terminal");
 }
 
 static void test_mesg_n_no_terminal(void)
 {
 	char *argv[] = { (char *)"mesg", (char *)"n", 0 };
-	CHECK(run(mesg_path, argv) == 2);
-	CHECK(err_contains("not a terminal"));
+	check_fails(run(mesg_path, argv), 2, "not a terminal");
 }
 
 /* ==== write(1p) ============================================================ */
@@ -204,15 +214,13 @@ static void test_mesg_n_no_terminal(void)
 static void test_write_missing_operand(void)
 {
 	char *argv[] = { (char *)"write", 0 };
-	CHECK(run(write_path, argv) == 1);
-	CHECK(err_contains("usage"));
+	check_fails(run(write_path, argv), 1, "usage");
 }
 
 static void test_write_too_many_operands(void)
 {
 	char *argv[] = { (char *)"write", (char *)"a", (char *)"b", (char *)"c", 0 };
-	CHECK(run(write_path, argv) == 1);
-	CHECK(err_contains("usage"));
+	check_fails(run(write_path, argv), 1, "usage");
 }
 
 /* No such real account: ntlibc has exactly one (src/misc/pwd.c) --
@@ -220,8 +228,7 @@ static void test_write_too_many_operands(void)
 static void test_write_unknown_user(void)
 {
 	char *argv[] = { (char *)"write", (char *)"no-such-user-xyz-12345", 0 };
-	CHECK(run(write_path, argv) == 1);
-	CHECK(err_contains("is not logged in"));
+	check_fails(run(write_path, argv), 1, "is not logged in");
 }
 
 /* The one real account, but (per this file's header comment) no real
@@ -230,26 +237,21 @@ static void test_write_unknown_user(void)
 static void test_write_self_no_terminal(void)
 {
 	char *argv[] = { (char *)"write", (char *)current_user(), 0 };
-	CHECK(run(write_path, argv) == 1);
-	CHECK(err_contains("is not logged in"));
+	check_fails(run(write_path, argv), 1, "is not logged in");
 }
 
 static void test_write_unknown_user_with_tty(void)
 {
 	char *argv[] = { (char *)"write", (char *)"no-such-user-xyz-12345", (char *)"pts/9", 0 };
-	CHECK(run(write_path, argv) == 1);
-	CHECK(err_contains("is not logged in"));
+	check_fails(run(write_path, argv), 1, "is not logged in");
 }
 
 /* ==== the shell built-ins agree with the standalone executables ========== */
 
 static void test_builtins_match_standalone(void)
 {
-	CHECK(run_sh_c("mesg") == 2);
-	CHECK(err_contains("not a terminal"));
-
-	CHECK(run_sh_c("write no-such-user-xyz-12345") == 1);
-	CHECK(err_contains("is not logged in"));
+	check_fails(run_sh_c("mesg"), 2, "not a terminal");
+	check_fails(run_sh_c("write no-such-user-xyz-12345"), 1, "is not logged in");
 }
 
 /* ==== scratch cleanup ====================================================== */

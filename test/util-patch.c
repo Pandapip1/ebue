@@ -37,25 +37,28 @@ static int fails;
 
 static char obj_root[1024];
 
+/* Strips the trailing "/last-component" (or "\...") off `path` in
+ * place. Returns 0 on success, -1 if `path` has no separator left to
+ * strip at. */
+static int strip_last_component(char *path)
+{
+	size_t i;
+
+	for (i = strlen(path); i > 0; i--)
+		if (path[i - 1] == '/' || path[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	path[i - 1] = 0;
+	return 0;
+}
+
 static int find_obj_root(const char *argv0)
 {
-	size_t n;
-	char *p;
-
 	if (!argv0 || !*argv0) return -1;
-	n = strlen(argv0);
-	if (n >= sizeof obj_root) return -1;
+	if (strlen(argv0) >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-patch.exe" */
-
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/util-patch.exe" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/test" */
 
 	return 0;
 }
@@ -63,12 +66,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -143,6 +148,25 @@ static int run_sh_c(const char *cmd)
 	return run(sh_path, argv);
 }
 
+/* Runs patch_path with argv, checking it applied cleanly (exit 0) and
+ * left `path` holding exactly `expect` -- the shape most of the
+ * per-format tests below share. */
+static void check_applied(char *const *argv, const char *path, const char *expect)
+{
+	CHECK(run(patch_path, argv) == 0);
+	CHECK(file_equals(path, expect));
+}
+
+/* Runs patch_path with argv, checking it was rejected (exit 1), left
+ * `path` holding exactly `expect`, and wrote a non-empty scratch/
+ * orig.rej. */
+static void check_rejected(char *const *argv, const char *path, const char *expect)
+{
+	CHECK(run(patch_path, argv) == 1);
+	CHECK(file_equals(path, expect));
+	CHECK(file_exists_nonempty("scratch/orig.rej"));
+}
+
 /* ==== shared fixtures ====================================================== */
 
 #define ORIG_CONTENT "line1\nline2\nline3\nline4\nline5\n"
@@ -199,8 +223,7 @@ static void test_unified_basic(void)
 	char *argv[] = { (char *)"patch", (char *)"-i", (char *)"scratch/u.diff", (char *)"scratch/orig", 0 };
 	make_file("scratch/orig", ORIG_CONTENT);
 	make_file("scratch/u.diff", UNIFIED_DIFF);
-	CHECK(run(patch_path, argv) == 0);
-	CHECK(file_equals("scratch/orig", CHANGED_CONTENT));
+	check_applied(argv, "scratch/orig", CHANGED_CONTENT);
 }
 
 static void test_context_basic(void)
@@ -208,8 +231,7 @@ static void test_context_basic(void)
 	char *argv[] = { (char *)"patch", (char *)"-i", (char *)"scratch/c.diff", (char *)"scratch/orig", 0 };
 	make_file("scratch/orig", ORIG_CONTENT);
 	make_file("scratch/c.diff", CONTEXT_DIFF);
-	CHECK(run(patch_path, argv) == 0);
-	CHECK(file_equals("scratch/orig", "line1\nline2\nline3\nline4\n"));
+	check_applied(argv, "scratch/orig", "line1\nline2\nline3\nline4\n");
 }
 
 /* Normal diff format carries no filename of its own -- the file operand
@@ -228,8 +250,7 @@ static void test_normal_basic(void)
 	char *argv[] = { (char *)"patch", (char *)"-i", (char *)"scratch/n.diff", (char *)"scratch/orig", 0 };
 	make_file("scratch/orig", ORIG_CONTENT);
 	make_file("scratch/n.diff", NORMAL_DIFF);
-	CHECK(run(patch_path, argv) == 0);
-	CHECK(file_equals("scratch/orig", "line1\nline2\nNEWLINE\nline3\nline4\nline5\n"));
+	check_applied(argv, "scratch/orig", "line1\nline2\nNEWLINE\nline3\nline4\nline5\n");
 }
 
 static void test_ed_basic(void)
@@ -237,8 +258,7 @@ static void test_ed_basic(void)
 	char *argv[] = { (char *)"patch", (char *)"-e", (char *)"-i", (char *)"scratch/e.diff", (char *)"scratch/orig", 0 };
 	make_file("scratch/orig", ORIG_CONTENT);
 	make_file("scratch/e.diff", ED_DIFF);
-	CHECK(run(patch_path, argv) == 0);
-	CHECK(file_equals("scratch/orig", "line2\nline3\nline4\nline5\n"));
+	check_applied(argv, "scratch/orig", "line2\nline3\nline4\nline5\n");
 }
 
 /* -e cannot be combined with -R (the format's own restriction -- see
@@ -257,8 +277,7 @@ static void test_reverse(void)
 {
 	char *argv[] = { (char *)"patch", (char *)"-R", (char *)"-i", (char *)"scratch/u.diff", (char *)"scratch/orig", 0 };
 	make_file("scratch/orig", CHANGED_CONTENT);
-	CHECK(run(patch_path, argv) == 0);
-	CHECK(file_equals("scratch/orig", ORIG_CONTENT));
+	check_applied(argv, "scratch/orig", ORIG_CONTENT);
 }
 
 /* ==== -p strips leading pathname components, and with no file operand
@@ -269,8 +288,7 @@ static void test_p_strip_no_operand(void)
 	char *argv[] = { (char *)"patch", (char *)"-p", (char *)"1", (char *)"-i", (char *)"scratch/p.diff", 0 };
 	make_file("scratch/pfile", "alpha\nbeta\ngamma\n");
 	make_file("scratch/p.diff", PSTRIP_DIFF);
-	CHECK(run(patch_path, argv) == 0);
-	CHECK(file_equals("scratch/pfile", "alpha\nBETA\ngamma\n"));
+	check_applied(argv, "scratch/pfile", "alpha\nBETA\ngamma\n");
 }
 
 /* ==== a hunk whose context matches nowhere is rejected, not applied,
@@ -282,9 +300,7 @@ static void test_reject_creates_rejfile(void)
 	unlink("scratch/orig.rej");
 	make_file("scratch/orig", ORIG_CONTENT);
 	make_file("scratch/r.diff", REJECT_DIFF);
-	CHECK(run(patch_path, argv) == 1);
-	CHECK(file_equals("scratch/orig", ORIG_CONTENT));
-	CHECK(file_exists_nonempty("scratch/orig.rej"));
+	check_rejected(argv, "scratch/orig", ORIG_CONTENT);
 }
 
 /* ==== -N: an already-applied hunk is a reject by default, and a silent
@@ -295,17 +311,14 @@ static void test_already_applied_default_rejects(void)
 	char *argv[] = { (char *)"patch", (char *)"-i", (char *)"scratch/u.diff", (char *)"scratch/orig", 0 };
 	unlink("scratch/orig.rej");
 	make_file("scratch/orig", CHANGED_CONTENT);
-	CHECK(run(patch_path, argv) == 1);
-	CHECK(file_equals("scratch/orig", CHANGED_CONTENT));
-	CHECK(file_exists_nonempty("scratch/orig.rej"));
+	check_rejected(argv, "scratch/orig", CHANGED_CONTENT);
 }
 
 static void test_already_applied_dash_N_is_silent(void)
 {
 	char *argv[] = { (char *)"patch", (char *)"-N", (char *)"-i", (char *)"scratch/u.diff", (char *)"scratch/orig", 0 };
 	make_file("scratch/orig", CHANGED_CONTENT);
-	CHECK(run(patch_path, argv) == 0);
-	CHECK(file_equals("scratch/orig", CHANGED_CONTENT));
+	check_applied(argv, "scratch/orig", CHANGED_CONTENT);
 }
 
 /* ==== -o writes the patched result elsewhere, leaving the target file
