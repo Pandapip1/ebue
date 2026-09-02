@@ -349,4 +349,62 @@ ssize_t __plat_sock_send(__plat_handle_t h, const void *buf, size_t len, int fla
 	return (ssize_t)io.Information;
 }
 
+/* getsockname(): issue IOCTL_AFD_GET_SOCK_NAME and convert the reply.
+ * Relocated verbatim from src/socket/getname.c's pre-refactor
+ * getsockname() body -- the unbound-socket wildcard-address
+ * short-circuit and the __SOCK_ST_BOUND check both stay in the front
+ * door (see plat_socket.h's banner); this is only the ioctl step. */
+int __plat_socket_getsockname(__plat_handle_t h, struct sockaddr *addr, socklen_t *len)
+{
+	/* Spelled as uint32_t[] to get 4-byte alignment without an
+	 * alignment attribute, same as bind()'s reply buffer -- which is
+	 * the same TDI_ADDRESS_INFO, from the same transport. */
+	uint32_t reply[(AFD_SOCKNAME_RSP_SIZE + 3) / 4];
+	NTSTATUS st;
+
+	/* __afd_sockname_reply_size(), not sizeof(reply): the array is
+	 * rounded up to a whole number of uint32_t for alignment, and
+	 * declaring those spare bytes to a METHOD_NEITHER driver would
+	 * describe two bytes the reply does not. */
+	memset(reply, 0, sizeof reply);
+	st = __afd_ioctl(h, IOCTL_AFD_GET_SOCK_NAME, 0, 0, reply,
+	                 (ULONG)__afd_sockname_reply_size(), 0);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+
+	/* A success that carried no address.  Over the zeroed buffer above
+	 * this is what a driver that wrote less than the whole TDI address
+	 * looks like; a well-formed reply always passes, so this is a guard
+	 * rather than a path.  EINVAL for the same reason getname.c's
+	 * NULL-argument case uses it: it is the only code on that page that
+	 * fits, and the caller's buffer is left untouched either way. */
+	if (__afd_sockname_reply_addr(reply, addr, len) < 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	return 0;
+}
+
+/* shutdown(): build the AFD_DISCONNECT_INFO request and issue
+ * IOCTL_AFD_DISCONNECT.  Relocated verbatim from src/socket/shutdown.c's
+ * pre-refactor body; the `how` -> SHUT_RD/SHUT_WR/SHUT_RDWR validation
+ * and the __SOCK_ST_CONNECTED check both stay in the front door -- `how`
+ * arrives here already known to be one of the three valid values. */
+int __plat_socket_shutdown(__plat_handle_t h, int how)
+{
+	AFD_DISCONNECT_INFO di;
+	NTSTATUS st;
+
+	switch (how) {
+	case SHUT_RD:   di.DisconnectType = AFD_DISCONNECT_RECV; break;
+	case SHUT_WR:   di.DisconnectType = AFD_DISCONNECT_SEND; break;
+	case SHUT_RDWR: di.DisconnectType = AFD_DISCONNECT_RECV | AFD_DISCONNECT_SEND; break;
+	default: errno = EINVAL; return -1;
+	}
+	di.Timeout = 0; /* LARGE_INTEGER is a plain LONGLONG here (src/internal/nt.h) */
+
+	st = __afd_ioctl(h, IOCTL_AFD_DISCONNECT, &di, sizeof(di), 0, 0, 0);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	return 0;
+}
+
 // NOLINTEND(misc-include-cleaner)

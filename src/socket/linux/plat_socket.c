@@ -68,25 +68,46 @@
  * throwaway host-gcc oracle program; aarch64 (like every "generic modern
  * ABI" Linux port) has no separate SYS_recv/SYS_send at all -- glibc's
  * own recv()/send() are thin wrappers over these same two syscalls with
- * a NULL address argument, which is exactly what this file does too. */
+ * a NULL address argument, which is exactly what this file does too.
+ *
+ * SYS_getsockname/SYS_shutdown (added for __plat_socket_getsockname()/
+ * __plat_socket_shutdown() below) were confirmed the same way, and slot
+ * exactly where every other socket-family syscall above and below them
+ * already does in both tables: aarch64's generic syscall table runs
+ * socket=198, socketpair=199, bind=200, listen=201, accept=202,
+ * connect=203, getsockname=204, getpeername=205, sendto=206,
+ * recvfrom=207, setsockopt=208, getsockopt=209, shutdown=210 back to
+ * back -- this file's own already-verified SYS_socket/SYS_bind/
+ * SYS_listen/SYS_connect/SYS_sendto/SYS_recvfrom/SYS_setsockopt values
+ * are exactly that run with getsockname/shutdown left out, so the two
+ * new numbers are read off the same table rather than guessed.  x86_64's
+ * unistd_64.h table is the same story: socket=41, connect=42, accept=43,
+ * sendto=44, recvfrom=45, sendmsg=46, recvmsg=47, shutdown=48, bind=49,
+ * listen=50, getsockname=51, getpeername=52, socketpair=53,
+ * setsockopt=54, getsockopt=55 -- again contiguous with, and confirming,
+ * this file's existing x86_64 numbers below. */
 #if defined(__aarch64__)
-#define SYS_recvfrom   207
-#define SYS_sendto     206
-#define SYS_socket     198
-#define SYS_bind       200
-#define SYS_listen     201
-#define SYS_connect    203
-#define SYS_setsockopt 208
-#define SYS_accept4    242
+#define SYS_recvfrom     207
+#define SYS_sendto       206
+#define SYS_socket       198
+#define SYS_bind         200
+#define SYS_listen       201
+#define SYS_connect      203
+#define SYS_getsockname  204
+#define SYS_setsockopt   208
+#define SYS_shutdown     210
+#define SYS_accept4      242
 #elif defined(__x86_64__)
-#define SYS_recvfrom   45
-#define SYS_sendto     44
-#define SYS_socket     41
-#define SYS_bind       49
-#define SYS_listen     50
-#define SYS_connect    42
-#define SYS_setsockopt 54
-#define SYS_accept4    288
+#define SYS_recvfrom     45
+#define SYS_sendto       44
+#define SYS_socket       41
+#define SYS_shutdown     48
+#define SYS_bind         49
+#define SYS_listen       50
+#define SYS_connect      42
+#define SYS_getsockname  51
+#define SYS_setsockopt   54
+#define SYS_accept4      288
 #else
 #error "plat_socket.c: unsupported architecture"
 #endif
@@ -320,6 +341,35 @@ int __plat_socket_accept(__plat_handle_t h, struct sockaddr *addr, socklen_t *le
 	long fd = raw_syscall(SYS_accept4, (long)unbox(h), (long)addr, (long)len, 0L, 0L, 0L);
 	if (is_sys_error(fd)) { errno = (int)-fd; return -1; }
 	*out = box((int)fd);
+	return 0;
+}
+
+/* getsockname(): a real getsockname(2).  addr/len are passed straight
+ * through -- a real getsockname(2) already implements the truncate-if-
+ * too-small contract this project's own front door needs
+ * (getsockname.html's clause, identical to accept.html's), and ntlibc's
+ * struct sockaddr_in is already byte-identical to the kernel's (see this
+ * file's banner), so there is no marshaling step the way AFD's
+ * TDI_ADDRESS_INFO reply needs on the NT backend. The front door's own
+ * unbound-socket wildcard-address short-circuit (getsockname.c) means
+ * this is only ever reached for an already-bound socket, so there is no
+ * "unbound" case here to special-case either. */
+int __plat_socket_getsockname(__plat_handle_t h, struct sockaddr *addr, socklen_t *len)
+{
+	long ret = raw_syscall(SYS_getsockname, (long)unbox(h), (long)addr, (long)len, 0L, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
+/* shutdown(): a real shutdown(2).  `how` is passed straight through --
+ * Linux's SHUT_RD/SHUT_WR/SHUT_RDWR are the same POSIX-standard values
+ * (0/1/2) ntlibc's own <sys/socket.h> already uses, unlike the NT
+ * backend's AFD_DISCONNECT_RECV/SEND bitmask translation, so there is no
+ * mapping step here at all. */
+int __plat_socket_shutdown(__plat_handle_t h, int how)
+{
+	long ret = raw_syscall(SYS_shutdown, (long)unbox(h), (long)how, 0L, 0L, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
 

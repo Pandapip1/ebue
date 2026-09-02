@@ -4,11 +4,15 @@
  * shutdown(): https://pubs.opengroup.org/onlinepubs/9699919799/
  * functions/shutdown.html.  SHUT_RD "disables further receive
  * operations", SHUT_WR "disables further send operations", SHUT_RDWR
- * both -- mapped directly onto AFD_DISCONNECT_RECV/SEND
- * (src/internal/afd.h, IOCTL_AFD_DISCONNECT; shared.h's
- * AFD_DISCONNECT_INFO).  Timeout is zeroed: this is a graceful
- * shutdown (no AFD_DISCONNECT_ABORT), not a wait for queued data to
- * drain.
+ * both.  `how` is validated here (EINVAL for anything else) and, once
+ * connection state is confirmed, handed straight to
+ * __plat_socket_shutdown() (src/internal/plat_socket.h) -- on NT that
+ * still means mapping onto AFD_DISCONNECT_RECV/SEND
+ * (src/internal/afd.h, IOCTL_AFD_DISCONNECT) with a zeroed Timeout (a
+ * graceful shutdown, no AFD_DISCONNECT_ABORT, not a wait for queued
+ * data to drain); on Linux, SHUT_RD/SHUT_WR/SHUT_RDWR already are the
+ * kernel's own shutdown(2) values, so nothing is translated at all.
+ * See src/socket/{nt,linux}/plat_socket.c.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -18,29 +22,17 @@
 #include <sys/socket.h>
 #include <errno.h>
 #include "libc.h"
-#include "afd.h"
+#include "plat_socket.h"
 
 int shutdown(int fd, int how) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = __fd_get(fd);
-	AFD_DISCONNECT_INFO di;
-	NTSTATUS st;
 
 	if (!f) return -1;
 	if (f->type != __FD_SOCKET) { errno = ENOTSOCK; return -1; }
-	if (!(f->pad & AFD_ST_CONNECTED)) { errno = ENOTCONN; return -1; }
+	if (!(f->pad & __SOCK_ST_CONNECTED)) { errno = ENOTCONN; return -1; }
 
-	switch (how) {
-	case SHUT_RD:   di.DisconnectType = AFD_DISCONNECT_RECV; break;
-	case SHUT_WR:   di.DisconnectType = AFD_DISCONNECT_SEND; break;
-	case SHUT_RDWR: di.DisconnectType = AFD_DISCONNECT_RECV | AFD_DISCONNECT_SEND; break;
-	default: errno = EINVAL; return -1;
-	}
-	di.Timeout = 0; /* LARGE_INTEGER is a plain LONGLONG here (src/internal/nt.h) */
-
-	st = __afd_ioctl(f->h, IOCTL_AFD_DISCONNECT, &di, sizeof(di), 0, 0, 0);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	return 0;
+	return __plat_socket_shutdown(f->h, how);
 }
 
 // NOLINTEND(misc-include-cleaner)

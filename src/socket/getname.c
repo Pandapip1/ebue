@@ -8,22 +8,27 @@
  * specified socket".
  *
  * One file because both calls share descriptor, argument and state
- * validation, even though only getsockname() needs an AFD query.
+ * validation, even though only getsockname() needs a platform query
+ * (__plat_socket_getsockname(), src/internal/plat_socket.h) to answer.
  *
  * Both pages carry the identical address-truncation clause accept.html
  * does: "If the actual length of the address is greater than the length
  * of the supplied sockaddr structure, the stored address shall be
  * truncated" -- and, critically, *address_len still receives the
  * untruncated length, not the number of bytes stored.  getsockname()
- * goes through __afd_transport_addr_out() (src/socket/afdsupport.c);
+ * gets that from __plat_socket_getsockname() itself (each backend's own
+ * getsockname(2)/TDI_ADDRESS_INFO reply already truncates the same way);
  * getpeername() applies the same rule to the sockaddr cached when
  * connect()/accept() established the connection.
  *
- * get-sock-name answers with a TDI_ADDRESS_INFO (a ULONG ActivityCount,
- * then the TRANSPORT_ADDRESS).  The peer address is immutable for a
- * connected stream socket, so retaining the address supplied by connect()
- * or returned to accept() avoids depending on AFD_GET_PEER_NAME, an
- * undocumented ioctl that is not stable across Windows versions.
+ * On NT, get-sock-name answers with a TDI_ADDRESS_INFO (a ULONG
+ * ActivityCount, then the TRANSPORT_ADDRESS).  The peer address is
+ * immutable for a connected stream socket, so retaining the address
+ * supplied by connect() or returned to accept() avoids depending on
+ * AFD_GET_PEER_NAME, an undocumented ioctl that is not stable across
+ * Windows versions -- and lets getpeername() stay one plain struct __fd
+ * field access on every backend, with nothing platform-specific to call
+ * at all.
  *
  * ERRORS, and the two judgement calls in them:
  *
@@ -47,16 +52,16 @@
  *     asking.  ReactOS's WSPGetPeerName does the same, checking
  *     SocketConnected before the ioctl.
  *
- * getsockname() on a socket that has never been bound does NOT go to
- * AFD at all.  getsockname.html: "If the socket has not been bound to a
- * local name, the value stored in the object pointed to by address is
- * unspecified" -- an unspecified value, not an error.  afd.sys would
- * make it one (AfdGetSockName() fails an endpoint with neither an
- * address file nor a connection with STATUS_INVALID_PARAMETER), so
- * asking it would turn a conforming success into a nonconforming
- * failure.  The wildcard AF_INET address is returned instead, which is
- * both a legal "unspecified" value and the one every BSD-derived
- * implementation actually produces.
+ * getsockname() on a socket that has never been bound does NOT call
+ * __plat_socket_getsockname() at all.  getsockname.html: "If the socket
+ * has not been bound to a local name, the value stored in the object
+ * pointed to by address is unspecified" -- an unspecified value, not an
+ * error.  On NT, asking AFD anyway would turn a conforming success into
+ * a nonconforming failure (AfdGetSockName() fails an endpoint with
+ * neither an address file nor a connection with
+ * STATUS_INVALID_PARAMETER).  The wildcard AF_INET address is returned
+ * instead, which is both a legal "unspecified" value and the one every
+ * BSD-derived implementation actually produces.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -68,7 +73,7 @@
 #include <errno.h>
 #include <string.h>
 #include "libc.h"
-#include "afd.h"
+#include "plat_socket.h"
 #include "ownership_stubs.h"
 
 /* The shared preamble: the three checks both calls make, in the order
@@ -87,45 +92,29 @@ static struct __fd *getname_fd(int fd, struct sockaddr *addr, socklen_t *len)
 int getsockname(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict len)
 {
 	struct __fd *f = getname_fd(fd, addr, len);
-	/* Spelled as uint32_t[] to get 4-byte alignment without an
-	 * alignment attribute, same as bind()'s reply buffer -- which is
-	 * the same TDI_ADDRESS_INFO, from the same transport. */
-	uint32_t reply[(AFD_SOCKNAME_RSP_SIZE + 3) / 4];
-	NTSTATUS st;
 
 	if (!f) return -1;
 
-	if (!(f->pad & AFD_ST_BOUND)) {
+	if (!(f->pad & __SOCK_ST_BOUND)) {
 		/* See the banner: unbound is "unspecified", not an error.
-		 * An all-zero TA_ADDRESS is the wildcard -- INADDR_ANY,
-		 * port 0 -- and goes through the same converter so that the
-		 * truncation contract holds on this path too. */
-		TA_ADDRESS wild;
-		memset(&wild, 0, sizeof wild);
-		__afd_addr_to_sockaddr(&wild, addr, len);
+		 * An all-zero AF_INET sockaddr_in is the wildcard --
+		 * INADDR_ANY, port 0 -- truncate-copied into the caller's
+		 * buffer the same way a bound socket's real address is
+		 * below, so the truncation contract holds on this path
+		 * too. */
+		struct sockaddr_in wild;
+		socklen_t n;
+
+		memset(&wild, 0, sizeof(wild));
+		wild.sin_family = AF_INET;
+		n = *len < (socklen_t)sizeof(wild) ? *len : (socklen_t)sizeof(wild);
+		__ownership_writable_span(addr, n);
+		memcpy(addr, &wild, n);
+		*len = sizeof(wild);
 		return 0;
 	}
 
-	/* __afd_sockname_reply_size(), not sizeof(reply): the array is
-	 * rounded up to a whole number of uint32_t for alignment, and
-	 * declaring those spare bytes to a METHOD_NEITHER driver would
-	 * describe two bytes the reply does not. */
-	memset(reply, 0, sizeof reply);
-	st = __afd_ioctl(f->h, IOCTL_AFD_GET_SOCK_NAME, 0, 0, reply,
-	                 (ULONG)__afd_sockname_reply_size(), 0);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-
-	/* A success that carried no address.  Over the zeroed buffer above
-	 * this is what a driver that wrote less than the whole TDI address
-	 * looks like; a well-formed reply always passes, so this is a guard
-	 * rather than a path.  EINVAL for the same reason the NULL-argument
-	 * case uses it: it is the only code on this page that fits, and the
-	 * caller's buffer is left untouched either way. */
-	if (__afd_sockname_reply_addr(reply, addr, len) < 0) {
-		errno = EINVAL;
-		return -1;
-	}
-	return 0;
+	return __plat_socket_getsockname(f->h, addr, len);
 }
 
 int getpeername(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict len)
@@ -134,7 +123,11 @@ int getpeername(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict 
 	socklen_t n;
 
 	if (!f) return -1;
-	if (!(f->pad & AFD_ST_CONNECTED)) { errno = ENOTCONN; return -1; }
+	/* __SOCK_ST_CONNECTED, not afd.h's own AFD_ST_CONNECTED: this file
+	 * no longer includes afd.h (getsockname() has been ported off it),
+	 * and the two names are numerically identical bits of the same
+	 * struct __fd byte -- see plat_socket.h's banner. */
+	if (!(f->pad & __SOCK_ST_CONNECTED)) { errno = ENOTCONN; return -1; }
 	if (!f->peer_len) { errno = ENOTCONN; return -1; }
 	n = *len < f->peer_len ? *len : f->peer_len;
 	__ownership_writable_span(addr, n);
