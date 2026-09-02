@@ -435,7 +435,7 @@ static void apply_repeat(struct parser *ps, int start, int had_atom) // NOLINT(b
 		int is_quest = c == '?';
 		int is_brace = (ps->ere && c == '{') || (!ps->ere && c == '\\' && ps->p[1] == '{');
 		int len = ps->rx->nprog - start;
-		struct inst *saved;
+		struct inst *restrict saved;
 
 		if (!is_star && !is_plus && !is_quest && !is_brace) return;
 		if (!had_atom) { ps->err = REG_BADRPT; return; }
@@ -637,7 +637,7 @@ static void ere_alt(struct parser *ps)
 	if (ps->err) return;
 	if (*ps->p == '|') {
 		int len1 = ps->rx->nprog - start, split, jmp;
-		struct inst *saved = malloc((size_t)(len1 > 0 ? len1 : 1) * sizeof *saved);
+		struct inst *restrict saved = malloc((size_t)(len1 > 0 ? len1 : 1) * sizeof *saved);
 		if (!saved) { ps->err = REG_ESPACE; return; }
 		memcpy(saved, ps->rx->prog + start, (size_t)len1 * sizeof *saved);
 		ps->rx->nprog = start;

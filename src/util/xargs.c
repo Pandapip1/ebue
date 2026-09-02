@@ -121,7 +121,7 @@ static int emit_token(struct tok **arrp, size_t *np, size_t *capp, struct buf *c
 static int emit_token(struct tok **arrp, size_t *np, size_t *capp, struct buf *cur, size_t tokline)
 {
 	size_t ncap;
-	char *text;
+	char *restrict text;
 	if (!__util_array_capacity(*capp, *np, 1, 16, sizeof(struct tok), &ncap)) return -1;
 	if (ncap != *capp) {
 		struct tok *grown = __util_reallocarray(*arrp, ncap, sizeof(struct tok));
@@ -233,7 +233,7 @@ static char *subst(const char *tmpl, const char *replstr, const char *value)
 {
 	size_t rlen = strlen(replstr), vlen = strlen(value), tlen = strlen(tmpl), occ = 0;
 	const char *p;
-	char *out, *o;
+	char *restrict out, *restrict o;
 
 	if (rlen == 0) {
 		char *r = malloc(tlen + 1);

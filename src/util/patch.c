@@ -218,7 +218,7 @@ struct linebuf { struct pline *v; size_t n, cap; };
 
 static int lb_push(struct linebuf *lb, const char *text, size_t len, int has_nl)
 {
-	char *copy;
+	char *restrict copy;
 	size_t bytes;
 	struct pline *g;
 
@@ -323,7 +323,7 @@ static int linebuf_insert_block(struct linebuf *lb, size_t at, const struct line
 	}
 	memmove(&lb->v[at + need], &lb->v[at], (lb->n - at) * sizeof *lb->v);
 	for (i = 0; i < need; i++) {
-		char *copy;
+		char *restrict copy;
 		size_t bytes;
 		if (!__util_size_add(block->v[i].len, 1, &bytes)) return 0;
 		copy = malloc(bytes);
@@ -351,7 +351,7 @@ struct hunk {
 
 static int hunk_push(struct hunk *h, enum hop_kind kind, const char *text, size_t len, int has_nl)
 {
-	char *copy;
+	char *restrict copy;
 	size_t bytes;
 	struct hop *g;
 
