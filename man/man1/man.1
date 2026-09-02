@@ -1,0 +1,90 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH MAN 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+man \- find and display a manual page
+.SH SYNOPSIS
+.B man
+.RB [ \-k ]
+.I name
+.RI [ name ]\ .\|.\|.
+.br
+.B man
+.RI [ section ]
+.I name
+.RI [ name ]\ .\|.\|.
+.SH DESCRIPTION
+.B man
+writes information about each
+.I name
+operand: for a standard utility, its synopsis, options, and operands
+at minimum.
+.PP
+This is a real parser and formatter for the
+.B man
+troff macro package subset (not full troff/groff) \(em see this
+project's own
+.B src/util/man.c
+for the exact, cited boundary of what is and is not implemented.
+.SH OPTIONS
+.TP
+.B \-k
+Interpret
+.I name
+operands as keywords: search every page's NAME line under
+.B $MANPATH
+and print each match as
+.IR name (section)
+\- description.
+.SH OPERANDS
+.TP
+.I section
+A manual section, restricting the search (e.g.
+.B man 3 printf
+looks only in section 3). A common, near-universal extension; not
+part of the base POSIX synopsis, which is only
+.BR "man [\-k] name..." .
+.TP
+.I name
+A keyword (with
+.BR \-k )
+or standard utility name.
+.SH ENVIRONMENT
+.TP
+.B MANPATH
+Colon-separated list of directories to search, each containing
+.BR man1 / ,
+.BR man2 / ,
+and so on. Two special cases are worth calling out:
+.RS
+.IP \(bu 2
+If unset or empty, the fallback is
+.BR /usr/share/man:/usr/local/share/man .
+.IP \(bu 2
+Harmless on a platform with no such convention (this project's own
+NT target): the search simply finds nothing there, the same clean
+"no manual entry" a fresh, unconfigured Linux machine would also
+give.
+.RE
+.TP
+.B MANSECT
+Colon-separated default section search order, used when no
+.I section
+operand is given. Default:
+.BR 1:2:3:4:5:6:7:8:9 .
+.TP
+.B PAGER
+The pager program to page output through, when standard output is a
+terminal. If unset, a minimal built-in
+.B \-\-More\-\-
+pager is used instead.
+.SH EXIT STATUS
+.TP
+.B 0
+Successful completion.
+.TP
+.B >0
+An error occurred (no such page, or \-k found nothing).
+.SH SEE ALSO
+.BR true (1),
+.BR sh (1)

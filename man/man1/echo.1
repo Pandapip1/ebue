@@ -1,0 +1,53 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH ECHO 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+echo \- write arguments to standard output
+.SH SYNOPSIS
+.B echo
+.RB [ \-n ]
+.RI [ string ]\ .\|.\|.
+.SH DESCRIPTION
+.B echo
+writes its arguments to standard output, followed by a
+.RB < newline >.
+If there are no arguments, only the
+.RB < newline >
+is written.
+.SH OPTIONS
+.TP
+.B \-n
+Suppress the trailing
+.RB < newline >.
+Implemented despite XCU's own "implementation-defined" wording for a
+leading
+.B \-n
+because it is not actually contested in practice: every shell this
+project's own bootstrap chain interoperates with treats a sole
+leading
+.B \-n
+the same way.
+.SH OPERANDS
+.TP
+.I string
+A string to be written to standard output, verbatim.
+.SH APPLICATION USAGE
+Backslash sequences
+.RI ( \e n ,
+.IR \e t ,
+and so on) are
+.B never
+interpreted by this implementation, in any mode \(em a literal
+.RI \(dq \e n \(dq
+in an argument prints as the two characters backslash-n, never a
+newline. A script wanting byte-for-byte portable escape handling
+should use
+.BR printf (1)
+instead.
+.SH EXIT STATUS
+.TP
+.B 0
+Always, on successful completion of the write.
+.SH SEE ALSO
+.BR printf (1),
+.BR cat (1)

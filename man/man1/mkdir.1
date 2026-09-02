@@ -1,0 +1,56 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH MKDIR 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+mkdir \- make directories
+.SH SYNOPSIS
+.B mkdir
+.RB [ \-p ]
+.RB [ \-m
+.IR mode ]
+.I dir
+.RI [ dir ]\ .\|.\|.
+.SH DESCRIPTION
+.B mkdir
+creates the directories named by the
+.I dir
+operands, in the order given.
+.SH OPTIONS
+.TP
+.BI \-m " mode"
+Set the file permission bits of each newly-created directory to
+.IR mode ,
+using the same
+.I mode
+grammar as
+.BR chmod (1).
+In symbolic-mode strings, the
+.B +
+and
+.B \-
+operators are interpreted relative to an assumed initial mode of
+.BR a=rwx .
+.TP
+.B \-p
+Create any missing intermediate pathname components. It is not an
+error for a named directory to already exist when
+.B \-p
+is given.
+.SH OPERANDS
+.TP
+.I dir
+A pathname of a directory to be created.
+.SH EXIT STATUS
+.TP
+.B 0
+All the specified directories were created successfully (or,
+with
+.BR \-p ,
+already existed).
+.TP
+.B >0
+An error occurred; processing continues with the next operand.
+.SH SEE ALSO
+.BR chmod (1),
+.BR rmdir (1),
+.BR rm (1)

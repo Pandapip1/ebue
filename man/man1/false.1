@@ -1,0 +1,34 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH FALSE 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+false \- do nothing, unsuccessfully
+.SH SYNOPSIS
+.B false
+.RI [ operand ] .\|.\|.
+.SH DESCRIPTION
+.B false
+exits with a return status that indicates unsuccessful completion. It
+can be invoked with any combination of options and operands; all are
+ignored.
+.PP
+Shares its implementation with the
+.I sh
+built-in of the same name; see
+.BR true (1)
+for the exact split between
+.BR src/util/false.c 's
+.B __util_false_main()
+and
+.BR src/sh/builtin.c 's
+.B bi_false() .
+.SH OPTIONS
+None.
+.SH OPERANDS
+None; any operands given are ignored without error.
+.SH EXIT STATUS
+.TP
+.B >0
+Always; this implementation always exits 1.
+.SH SEE ALSO
+.BR true (1)
