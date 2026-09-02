@@ -283,7 +283,47 @@ INTSAN="-fsanitize=unsigned-integer-overflow,unsigned-shift-base \
 # for every *other* test too.  They used to infer it from AddressSanitizer
 # being active; see the long comment in src/internal/rpath.c for why that
 # proxy had to go.
-CFLAGS="$SAN $CONVSAN $INTSAN $LTOFLAGS -g -O1 -std=c99 -nostdinc -fno-builtin -fvisibility=hidden \
+#
+# -U__linux__ is not cosmetic either, and belongs on the same line as
+# _NTLIBC_NATIVE_BUILD above because it exists to make that macro's own
+# promise true. This build compiles real 64-bit ELF object code on a real
+# Linux host, so clang's *driver* cannot help predefining __linux__ for
+# its own default target triple (`clang -dM -E -x c /dev/null` shows it,
+# with no source-level -D anywhere) -- but this build's whole model, laid
+# out in the big comment at the top of this file and in the `linux)` case
+# of the file-selection loop below, is "cover the NT backend, answered by
+# fuzz/ntstubs.c in-process": every src/*/linux/* source is unconditionally
+# excluded, on purpose, well before this point. src/internal/nt.h's own
+# NT_LAYOUT_SIZE/NT_LAYOUT_OFFSET section states the invariant this line
+# restores in so many words: "__linux__ is never defined for any of
+# [i386-win32/x86_64-win32/native-ASan builds]" -- a promise that line was
+# relying on, not one this build was actually keeping, until now.
+#
+# Left unfixed, shared (non-nt/non-linux-directory) source compiled here
+# sees __linux__ true and takes the real-Linux-backend branch of its own
+# `#if defined(__linux__)` -- calling into a src/*/linux/*.c symbol this
+# build's own file-selection loop just excluded. That is not
+# hypothetical: src/ioctl/ioctl.c's TIOCGWINSZ case calls
+# __plat_tiocgwinsz() (only defined in the excluded
+# src/ioctl/linux/plat_ioctl.c) this way, src/termios/termios.c's entire
+# body is `#ifndef __linux__`-gated and compiles to zero symbols this way
+# (silently resolving tcgetattr()/tcsetattr() to the *host's* real libc at
+# link time instead, since this build's final link is not -nostdlib --
+# the same hazard class fuzz/fuzz_sort.c's STATRENAME/__real_stat()
+# already documents for stat()), and src/process/exec.c calls
+# __plat_process_exec() (only defined in the excluded
+# src/process/linux/plat_process.c) the same way -- three independent
+# undefined-reference sites from one wrong preprocessor bit, not three
+# unrelated bugs. Undefining it here, in the one compiler invocation that
+# actually has the wrong state, fixes all of them (and every future one
+# of the same shape) at the root instead of patching each call site with
+# its own `&& !defined(_NTLIBC_NATIVE_BUILD)`, and touches nothing else:
+# the real NT build (`$(CC) ... $(CFLAGS_ALL)` in the top-level Makefile)
+# never defines __linux__ in the first place, and the real PLATFORM=linux
+# build needs and still gets the true predefine, since that build's own
+# CFLAGS_ALL (Makefile) is entirely separate from this script's and is
+# not touched here.
+CFLAGS="$SAN $CONVSAN $INTSAN $LTOFLAGS -g -O1 -std=c99 -nostdinc -fno-builtin -fvisibility=hidden -U__linux__ \
         -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL -D_NTLIBC_NATIVE_BUILD $INC $EXTRA"
 
 if [ ! -f "$srcdir/obj/include/bits/alltypes.h" ]; then
