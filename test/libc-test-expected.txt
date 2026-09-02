@@ -145,7 +145,36 @@
 # accurately-stated reason instead of a stale build error. COUNTS
 # updated: UNIMPL 21 -> 19, NA 14 -> 16.
 #
-# COUNTS PASS=107 BUG=3 UNIMPL=19 NA=16 FLAKY=1
+# 2026-09-02: tls_align moved UNIMPL -> PASS. Its "unresolved reference
+# to 't'" looked, going in, like it could be a genuine tcc/ntlibc
+# TLS-handling defect (a bare one-letter symbol), the same way dlopen's
+# "unresolved reference to '__rpath'" first looked like a libc gap
+# before turning out to be a documented calling-program responsibility
+# (include/ntlibc/rpath.h). It is not that either: `t` is not TLS at
+# all (tls_align.c only `extern`-declares a plain descriptor array,
+# never `__thread` on it) and its real definition lives in a second
+# corpus source, tls_align_dso.c, which tls_align.mk links in at BUILD
+# time (LDLIBS), never via dlopen() -- unlike this corpus's other
+# *_dlopen/*_dso pairs (dlopen, tls_align_dlopen, tls_init_dlopen,
+# tls_get_new-dtv), which do hit the real, separate __rpath gap.
+# tools/libc-test.sh's build_one() links every corpus source as one
+# self-contained translation unit and had never heard of this one .mk
+# file, so `t` really was unresolved: reproduced by hand (x86_64-win32-tcc,
+# lib/crt1.o + tls_align.c alone + the harness helpers + lib/libc.a +
+# lib/libntdll.a) gives the exact "unresolved reference to 't'" this row
+# used to cite, and linking tls_align_dso.c in alongside it resolves
+# clean with no errors. Fixed with the smallest change that captures
+# it: build_one() now consults a one-entry table (extra_srcs_for()) and
+# links tls_align_dso.c in for this one case; tls_align_dso keeps its
+# own separate UNIMPL row unchanged (it is a library-only source with
+# no main(), not a standalone test, per tls_align_dso.mk's `BINS:=`).
+# COUNTS updated: PASS 107 -> 108, UNIMPL 19 -> 18. See tls_align's own
+# row for the full evidence and the reasoning on why this test's
+# maximum requested alignment (8 bytes, all four __thread variables
+# naturally aligned) does not exercise the separate, confirmed
+# pinned-tcc TLS-alignment defect tls_local_exec's row documents.
+#
+# COUNTS PASS=108 BUG=3 UNIMPL=18 NA=16 FLAKY=1
 # (whole-corpus totals once the wildcard default below is applied to
 # every real case tools/libc-test.sh discovers -- not a count of rows in
 # this file, which lists only the 45 explicit exceptions plus the
@@ -181,7 +210,7 @@ spawn                             runtime=wine,target_arch=x86_64,kernel32=no  N
 sscanf_long                       runtime=wine,target_arch=x86_64,kernel32=no  NA  NOT-YET-TRIAGED -- unverifiable in this environment (t_setrlim stubbed; the test needs an enforced RLIMIT_STACK), so it never reaches adjudication here.
 syscall-sign-extend               runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  syscall-sign-extend.c:7: error: include file 'sys/syscall.h' not found
 tgmath                            runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tgmath.h now exists and this case gets past its own #include; now fails later, at tgmath.c:28: error: 'I' undeclared -- I is not defined under this tcc (include/complex.h's own __STDC_NO_COMPLEX__ branch: tcc has no _Complex at all) and line 28 uses `0.5+0*I`. tgmath.h's real-only dispatch (sin/cos/pow/... over float/double/long double, no complex) does work under this tcc; only the complex half of this one case does not.
-tls_align                         runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to 't'
+tls_align                         runtime=wine,target_arch=x86_64,kernel32=no  PASS  was UNIMPL for "tcc: error: unresolved reference to 't'"; not a TLS or tcc defect at all -- tls_align.c only `extern`-declares the `t[4]` descriptor array (no `__thread` on it, so it is not TLS), and its real definition lives in a second corpus source, tls_align_dso.c, which tls_align.mk links in at build time (LDLIBS := .../tls_align_dso.so, or .o for the "-static" variant), never via dlopen() -- unlike this corpus's *_dlopen/*_dso pairs below (tls_align_dlopen, tls_init_dlopen, tls_get_new-dtv, and dlopen itself), which do hit this project's real, separate __rpath gap. tools/libc-test.sh's build_one() linked every corpus source as its own single, self-contained translation unit and never looked at this test's .mk file, so `t` really was unresolved: reproduced by hand here (x86_64-win32-tcc, lib/crt1.o + tls_align.c alone + this script's own harness helpers + lib/libc.a + lib/libntdll.a) reproduces the exact error this row used to cite, verbatim; linking tls_align_dso.c in alongside it resolves clean, no errors (only benign 32-vs-64-bit pointer/integer cast warnings from that file's own `entry()` macro, at tls_align_dso.c:25-28). Fixed by teaching build_one() a one-entry table (extra_srcs_for()) that links this specific known companion object in for this one case; tls_align_dso itself keeps its own separate UNIMPL row unchanged (library-only source, no main(), per tls_align_dso.mk's `BINS:=`; this fix does not make it a standalone test). Confirmed here: the corpus source now compiles and links clean under x86_64-win32-tcc -- not run under Wine in this environment (none installed here), so behaviour past the link is inspection, not an observed exit code. The largest alignment this test demands is 8 bytes (__alignof__(long long), the DSO's four __thread variables all naturally aligned, none over-aligned beyond that), well within ordinary TLS-section alignment, so unlike tls_local_exec (whose own row documents a confirmed, separate pinned-tcc defect: IMAGE_TLS_DIRECTORY.Characteristics=0 loses an over-alignment requirement past what natural section alignment provides), this case is not expected to exercise that bug
 tls_align_dlopen                  runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to '__rpath'
 tls_align_dso                     runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to 'main'
 tls_get_new-dtv                   runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread.h no longer blocks this (include/pthread.h now exists); it now fails at link for the same reason as dlopen/tls_align_dlopen/tls_init_dlopen: tcc: error: unresolved reference to '__rpath'
