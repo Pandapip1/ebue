@@ -218,7 +218,7 @@ static enum pax_type ustar_flag_to_pax_type(char f)
  * place) is reported to the caller as -1, which write_ustar_header()
  * turns into the loud, documented refusal this file's header
  * describes rather than an extended-header fallback. */
-static int ustar_split_name(const char *path, char *prefix, char *name)
+static int ustar_split_name(const char *restrict path, char *restrict prefix, char *restrict name)
 {
 	size_t len = strlen(path);
 	size_t i;
