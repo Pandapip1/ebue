@@ -76,6 +76,7 @@
 #endif
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 #include <stdlib.h>
 #include "libc.h"
 #include "ntlibc/rpath.h"
@@ -108,11 +109,9 @@ static char *image_dir(void)
 	 * that separator is the one after a bare drive letter ("C:\"),
 	 * which has to stay to still name the root directory. */
 	if (i > 1 && !(i == 3 && progname[1] == ':')) i--;
+	if (i > INT_MAX) return 0;
 	dir = __malloc(i + 1);
-	if (dir) {
-		memcpy(dir, progname, i);
-		dir[i] = 0;
-	}
+	if (dir) snprintf(dir, i + 1, "%.*s", (int)i, progname);
 	return dir;
 }
 
