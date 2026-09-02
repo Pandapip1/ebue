@@ -602,13 +602,13 @@ nospace:
 enum comp_kind { CK_LIT, CK_WILD, CK_DOT, CK_DOTDOT };
 
 struct comp {
-	const char *start;
+	const char *start withtok(readable_span(len));
 	size_t len;
 	enum comp_kind kind;
 };
 
 struct comp_list {
-	struct comp *v;
+	struct comp *v withtok(readable_elements(n)) withtok(writable_elements(cap));
 	size_t n, cap;
 	int trailing_slash;
 };
@@ -619,15 +619,19 @@ static int comp_push(struct comp_list *cl, const char *start, size_t len,
                       enum comp_kind kind)
 {
 	if (cl->n == cl->cap) {
-		size_t nc;
+		size_t nc, bytes, oldbytes;
 		struct comp *nv;
 		if (!__array_next_capacity(cl->cap, cl->n, 1, 16, sizeof *cl->v, &nc)) {
 			errno = ENOMEM;
 			return -1;
 		}
-		nv = (struct comp *)__malloc(nc * sizeof *nv);
+		bytes = nc * sizeof *nv;
+		oldbytes = cl->n * sizeof *nv;
+		if (oldbytes > bytes) { errno = ENOMEM; return -1; }
+		nv = (struct comp *)__malloc(bytes);
 		if (!nv) return -1;
-		if (cl->v) memcpy((void *)nv, (const void *)cl->v, cl->n * sizeof *nv);
+		if (cl->v) memcpy((void *)nv, (const void *)cl->v,
+		    cl->n * sizeof *cl->v);
 		__free((void *)cl->v);
 		cl->v = nv;
 		cl->cap = nc;
@@ -720,17 +724,24 @@ static int split_components(const char *pat, int flags, struct comp_list *cl)
  * willing to perform, or the stat() itself failed), or -1 on allocation
  * failure. */
 static int literal_prefix_exists(const struct comp_list *stk, int flags,
-                                  const char *base_prefix, size_t base_preflen)
+                                  const char *base_prefix
+                                      withtok(readable_span(base_preflen)),
+                                  size_t base_preflen)
     __attribute__((nonnull(1, 3)));
 static int literal_prefix_exists(const struct comp_list *stk, int flags,
-                                  const char *base_prefix, size_t base_preflen)
+                                  const char *base_prefix
+                                      withtok(readable_span(base_preflen)),
+                                  size_t base_preflen)
 {
 	char path[PATH_MAX];
 	size_t len, i;
 	struct stat st;
 
 	if (base_preflen >= sizeof path) return 0;
-	memcpy(path, base_prefix, base_preflen);
+	if (base_preflen > INT_MAX ||
+	    snprintf(path, sizeof path, "%.*s", (int)base_preflen,
+	    base_prefix) != (int)base_preflen)
+		return 0;
 	len = base_preflen;
 
 	for (i = 0; i < stk->n; i++) {
@@ -743,7 +754,8 @@ static int literal_prefix_exists(const struct comp_list *stk, int flags,
 		if (!name) return -1;
 		namelen = strlen(name);
 		if (namelen >= sizeof path - len) { __free(name); return 0; }
-		memcpy(path + len, name, namelen);
+		if (snprintf(path + len, sizeof path - len, "%s", name) !=
+		    (int)namelen) { __free(name); return 0; }
 		len += namelen;
 		__free(name);
 		if (len >= sizeof path - 1) return 0;
@@ -828,7 +840,13 @@ static char *collapse_dotdot(const char *pat, int flags,
 	out = __malloc(total);
 	if (!out) { __free((void *)stk.v); return 0; }
 	for (i = 0, pos = 0; i < stk.n; i++) {
-		memcpy(out + pos, stk.v[i].start, stk.v[i].len);
+		if (stk.v[i].len > INT_MAX ||
+		    snprintf(out + pos, total - pos, "%.*s", (int)stk.v[i].len,
+		    stk.v[i].start) != (int)stk.v[i].len) {
+			__free(out);
+			__free((void *)stk.v);
+			return 0;
+		}
 		pos += stk.v[i].len;
 		if (i + 1 < stk.n) out[pos++] = '/';
 	}
