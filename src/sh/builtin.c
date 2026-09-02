@@ -1172,6 +1172,23 @@ static int bi_man(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== Tier 7 (Software Development option tier): strip(1p) ==============
+ *
+ * Same reasoning as every other batch in this file for staying
+ * registered here even though it also exists as a real standalone
+ * obj/bin/strip.exe (src/util/strip.c, declared in src/internal/util.h)
+ * -- a builtin runs in this process, unconditionally, without depending
+ * on __find_program()/__spawn() succeeding. No effect on the shell
+ * execution environment itself (2.12's list) -- it only rewrites the
+ * file named by its own operand -- so `env_effect` is 0, and it is not
+ * a 2.14 special built-in either. */
+static int bi_strip(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_strip(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_strip_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* ==== the dispatcher ==================================================== */
 
 /* `special` is XCU 2.14's distinction, recorded because 2.8.1 hangs
@@ -1277,6 +1294,7 @@ static const struct sh_builtin builtins[] = {
 	{ "crontab", 0, 0, bi_crontab },
 	{ "mailx",   0, 0, bi_mailx },
 	{ "man",     0, 0, bi_man },
+	{ "strip",   0, 0, bi_strip },
 	{ 0, 0, 0, 0 }
 };
 
