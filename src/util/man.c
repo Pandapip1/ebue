@@ -90,13 +90,11 @@
  * consume any following text lines as part of itself (troff requests
  * only ever "eat" following lines when the request specifically says
  * so, which is exactly why .de/.ig above are the one deliberate
- * exception). The alternative this file's own task brief explicitly
- * named -- passing the raw troff request line through as if it were
- * text -- was rejected on purpose: a stray ".ie \n(.g \{\" line
- * printed verbatim into the middle of a paragraph is *more* confusing
- * than a silently absent no-op, not less, and it is exactly the kind
- * of "garbage on screen" this project's own dd.c/sed.c/awk.c precedent
- * of "diagnose or degrade cleanly, never corrupt" argues against.
+ * exception). Passing the raw troff request line through as text was
+ * rejected on purpose: a stray ".ie \n(.g \{\" line printed verbatim
+ * into the middle of a paragraph is *more* confusing than a silently
+ * absent no-op, matching this project's own dd.c/sed.c/awk.c precedent
+ * of "diagnose or degrade cleanly, never corrupt."
  *
  * ============================================================
  * ESCAPE SEQUENCES IMPLEMENTED
@@ -179,7 +177,7 @@
  *
  * If stdout is not a terminal: no paging at all, the formatted text
  * goes straight to stdout -- matching how `less`/`more` themselves
- * degrade when piped, per this project's own task brief.
+ * degrade when piped.
  * If stdout IS a terminal: $PAGER (split on whitespace only -- no
  * shell-quoting support, a deliberate, small, documented limit) is
  * spawned via this project's own __find_program()/__spawn() with the
@@ -213,9 +211,8 @@
  * "1:2:3:4:5:6:7:8:9" when no explicit section operand is given.
  * POSIX's own man(1p) SYNOPSIS is only `man [-k] name...` -- no
  * section operand at all -- but every real `man` in practice also
- * accepts a leading bare section (`man 3 printf`), and this project's
- * own task brief explicitly asks for that; implemented as: if two or
- * more operands are given and the first looks like a section (matches
+ * accepts a leading bare section (`man 3 printf`), implemented here as:
+ * if two or more operands are given and the first looks like a section (matches
  * ^[0-9][A-Za-z0-9]*$), it restricts every name operand that follows,
  * exactly like every real `man`.
  *

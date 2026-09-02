@@ -104,11 +104,10 @@
  *    awk(1p) citation at all.
  *  - `fflush()` as a callable built-in is likewise not implemented:
  *    it is a gawk/BWK extension, not one of XCU awk(1p)'s own mandatory
- *    functions (the task brief's own built-in list marks it "if
- *    present" for exactly this reason). Every stream this
- *    implementation itself opens is still flushed at the right
- *    moments internally (before system()/a `| getline` pipe command
- *    runs, and at normal program exit) without a user-callable hook.
+ *    functions. Every stream this implementation itself opens is still
+ *    flushed at the right moments internally (before system()/a
+ *    `| getline` pipe command runs, and at normal program exit) without
+ *    a user-callable hook.
  *  - printf/sprintf's conversions carry no C length modifiers (h/hh/l/
  *    ll/L) -- meaningless here since every awk value is already a
  *    double or a string, never a typed vararg the way C's own printf()

@@ -266,27 +266,23 @@
  * pushed back onto the input-frame stack, and the top-level scan()
  * loop reads it right back off and does the same thing again. This is
  * NOT a defect in the sense src/regex/regex.c's own bounded-matching
- * fix (see fuzz/fuzz_regex.c's header comment) was one: that bug was a
- * genuine implementation defect -- unbounded C recursion that could
- * exhaust the stack and crash, for input a correctly-implemented
- * engine is expected to always handle in bounded time. A macro
- * processor that can express its own non-termination is not a
- * defective one; real m4 implementations hang on this input too, by
- * design, the same way `:(){ :|:& };:` or `while true; do :; done`
- * "hangs" a shell on purpose. Nothing here changes that expansion
- * really can run forever for a hostile or merely careless script.
+ * fix was one: that bug was unbounded C recursion that could exhaust
+ * the stack and crash, for input a correctly-implemented engine is
+ * expected to always handle in bounded time. A macro processor that can
+ * express its own non-termination is not defective; real m4
+ * implementations hang on this input too, by design, the same way a
+ * shell fork bomb or `while true; do :; done` "hangs" on purpose.
+ * Nothing here changes that expansion really can run forever for a
+ * hostile or merely careless script.
  *
- * What IS worth bounding, independent of any fuzzer, is how long that
- * can go on for CODE THAT RUNS IN-PROCESS AS A SHELL BUILTIN, with no
- * separate process to kill and -- unlike ed.c's SIGINT/SIGHUP polling
- * discipline -- no signal-check anywhere in scan()/collect_args() to
- * poll for interruption. Today, a shell that runs a self-referential
- * macro's expansion through the `m4` builtin has no way to recover
- * short of killing the whole shell process from outside, and neither
- * does a fuzz harness driving __util_m4_main() in-process with no
- * per-input timeout of its own (see fuzz/fuzz_m4.c's header comment
- * for why libFuzzer's is unavailable here). Two independent caps
- * address this, one per dimension a run can fail to terminate in:
+ * What IS bounded is how long that can go on for CODE THAT RUNS
+ * IN-PROCESS AS A SHELL BUILTIN, with no separate process to kill and --
+ * unlike ed.c's SIGINT/SIGHUP polling discipline -- no signal-check
+ * anywhere in scan()/collect_args() to poll for interruption; a shell
+ * running a self-referential macro's expansion through the `m4` builtin
+ * has no way to recover short of being killed from outside. Two
+ * independent caps address this, one per dimension a run can fail to
+ * terminate in:
  *
  *   M4_MAX_EXPANSIONS bounds total macro invocations (the `define(a,a)a`
  *   shape above -- a long FLAT chain, no extra C-stack depth per call,
