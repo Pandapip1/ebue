@@ -269,7 +269,10 @@ static int od_run(struct instream *is, const struct od_opts *o)
 		if (got == 0) break;
 		if (remaining >= 0) remaining -= (long long)got;
 
-		if (!o->verbose && prev_valid && prev_full && got == ROWBYTES && memcmp(buf, prev, ROWBYTES) == 0) {
+		int same = got == ROWBYTES;
+		for (size_t j = 0; same && j < ROWBYTES; j++)
+			if (buf[j] != prev[j]) same = 0;
+		if (!o->verbose && prev_valid && prev_full && same) {
 			if (!in_run) { printf("*\n"); in_run = 1; }
 		} else {
 			print_offset(o, off);
@@ -277,7 +280,7 @@ static int od_run(struct instream *is, const struct od_opts *o)
 			print_row(o, buf, got);
 			in_run = 0;
 		}
-		memcpy(prev, buf, got);
+		for (size_t j = 0; j < got; j++) prev[j] = buf[j];
 		prev_valid = 1;
 		prev_full = (got == ROWBYTES);
 		off += got;

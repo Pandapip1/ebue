@@ -116,7 +116,12 @@ int __util_comm_main(int argc, char **argv)
 		int cmp;
 		if (have1 && have2) {
 			size_t n = n1 < n2 ? n1 : n2;
-			cmp = n ? memcmp(l1, l2, n) : 0;
+			cmp = 0;
+			for (size_t j = 0; j < n; j++) {
+				if (l1[j] == l2[j]) continue;
+				cmp = (unsigned char)l1[j] < (unsigned char)l2[j] ? -1 : 1;
+				break;
+			}
 			if (!cmp) cmp = n1 < n2 ? -1 : (n1 > n2 ? 1 : 0);
 		} else if (have1) {
 			cmp = -1;

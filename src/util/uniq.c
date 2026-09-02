@@ -62,7 +62,9 @@ static int lines_equal(const char *a, size_t alen, const char *b, size_t blen, l
 	size_t ar = alen - aoff, br = blen - boff;
 
 	if (ar != br) return 0;
-	return ar == 0 || memcmp(a + aoff, b + boff, ar) == 0;
+	for (size_t i = 0; i < ar; i++)
+		if (a[aoff + i] != b[boff + i]) return 0;
+	return 1;
 }
 
 int __util_uniq_main(int argc, char **argv)
