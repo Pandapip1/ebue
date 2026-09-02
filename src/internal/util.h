@@ -314,6 +314,18 @@ int __util_find_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_ls_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_xargs_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* Tier 4 continued: awk(1p) -- the biggest of the tier, and the whole
+ * reason the tier is called "bigger engines": a real pattern-action
+ * language with its own lexer, recursive-descent parser and
+ * tree-walking interpreter (src/util/awk_lex.c, awk_parse.c,
+ * awk_run.c, with shared types in src/util/awk_priv.h).  See
+ * src/util/awk.c's own header for the full XCU awk(1p) citations and
+ * every deliberate scope narrowing, spelled out the same honest way
+ * src/util/dd.c documents its conv= coverage.  Not __pure__: awk
+ * reads real files/stdin, writes real output, and can run arbitrary
+ * commands via system()/getline/print redirection. */
+int __util_awk_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 /* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
  * src/util/rm.c -----------------------------------------------------
  *
