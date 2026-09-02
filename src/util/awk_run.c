@@ -137,7 +137,7 @@ static char *xstrdup(const char *s)
 	size_t n = strlen(s) + 1;
 	char *r = malloc(n);
 	if (!r) oom();
-	memcpy(r, s, n);
+	for (size_t i = 0; i < n; i++) r[i] = s[i];
 	return r;
 }
 
@@ -152,9 +152,7 @@ static char *dupn_local(const char *s, size_t n)
 {
 	char *r = malloc(n + 1);
 	if (!r) oom();
-	__ownership_writable_span(r, n);
-	__ownership_readable_span(s, n);
-	memcpy(r, s, n);
+	for (size_t i = 0; i < n; i++) r[i] = s[i];
 	r[n] = 0;
 	return r;
 }
@@ -451,14 +449,10 @@ static char *build_subsep_key(struct awk_interp *ip, struct awk_node **subs, int
 		size_t addlen = slen + (i ? subsep_len : 0);
 		key = xrealloc(key, len + addlen + 1);
 		if (i) {
-			__ownership_writable_span(key + len, subsep_len);
-			__ownership_readable_span(subsep, subsep_len);
-			memcpy(key + len, subsep, subsep_len);
+			for (size_t j = 0; j < subsep_len; j++) key[len + j] = subsep[j];
 			len += subsep_len;
 		}
-		__ownership_writable_span(key + len, slen);
-		__ownership_readable_span(s, slen);
-		memcpy(key + len, s, slen);
+		for (size_t j = 0; j < slen; j++) key[len + j] = s[j];
 		len += slen;
 		v_free(&v);
 	}
@@ -618,15 +612,11 @@ static void rebuild_record(struct awk_interp *ip)
 		size_t flen;
 		const char *field = ip->flds[i];
 		if (i) {
-			__ownership_writable_span(rec + len, ofslen);
-			__ownership_readable_span(ofs, ofslen);
-			memcpy(rec + len, ofs, ofslen);
+			for (size_t j = 0; j < ofslen; j++) rec[len + j] = ofs[j];
 			len += ofslen;
 		}
 		flen = strlen(field);
-		__ownership_writable_span(rec + len, flen);
-		__ownership_readable_span(field, flen);
-		memcpy(rec + len, field, flen);
+		for (size_t j = 0; j < flen; j++) rec[len + j] = field[j];
 		len += flen;
 	}
 	rec[len] = 0;
@@ -819,9 +809,7 @@ static char *read_paragraph_record(FILE *f, int *got)
 		}
 		rec = xrealloc(rec, reclen + (have_any ? 1 : 0) + linelen + 1);
 		if (have_any) rec[reclen++] = '\n';
-		__ownership_writable_span(rec + reclen, linelen);
-		__ownership_readable_span(buf, linelen);
-		memcpy(rec + reclen, buf, linelen);
+		for (size_t j = 0; j < linelen; j++) rec[reclen + j] = buf[j];
 		reclen += linelen;
 		rec[reclen] = 0;
 		have_any = 1;
@@ -977,7 +965,7 @@ static void buf_append(char **buf, size_t *len, size_t *cap, const char *s, size
 	}
 	{
 		char *dst = *buf + *len;
-		memcpy(dst, s, n);
+		for (size_t i = 0; i < n; i++) dst[i] = s[i];
 	}
 	*len += n;
 	(*buf)[*len] = 0;
@@ -1411,12 +1399,8 @@ static struct awk_value eval(struct awk_interp *ip, struct awk_node *n)
 		size_t la = strlen(sa), lb = strlen(sb);
 		char *s = malloc(la + lb + 1);
 		if (!s) oom();
-		__ownership_writable_span(s, la);
-		__ownership_readable_span(sa, la);
-		memcpy(s, sa, la);
-		__ownership_writable_span(s + la, lb);
-		__ownership_readable_span(sb, lb);
-		memcpy(s + la, sb, lb);
+		for (size_t i = 0; i < la; i++) s[i] = sa[i];
+		for (size_t i = 0; i < lb; i++) s[la + i] = sb[i];
 		s[la + lb] = 0;
 		v_free(&a); v_free(&b);
 		v_str_init(&v, s, VK_STR);

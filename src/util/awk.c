@@ -204,7 +204,7 @@ static void buf_grow_append(char **buf, size_t *len, size_t *cap, const char *s,
 		if (!*buf) { __util_diagf("awk: out of memory\n"); awk_unwind_fatal(); }
 		*cap = newcap;
 	}
-	memcpy(*buf + *len, s, n);
+	for (size_t i = 0; i < n; i++) (*buf)[*len + i] = s[i];
 	*len += n;
 	(*buf)[*len] = 0;
 }
