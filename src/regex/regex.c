@@ -567,7 +567,9 @@ static void ere_atom(struct parser *ps)
 	int c = (unsigned char)*ps->p;
 
 	if (c == '(') {
-		int g = ps->ngroup++;
+		int g = ps->ngroup;
+		if (g < 0 || g >= MAX_PROG / 2) { ps->err = REG_ESPACE; return; }
+		ps->ngroup = g + 1;
 		ps->p++;
 		emit(ps, I_SAVE, 0, 0, 2 * g, 0);
 		ere_alt(ps);
@@ -666,7 +668,9 @@ static void bre_atom(struct parser *ps, int at_start)
 	int c = (unsigned char)*ps->p;
 
 	if (c == '\\' && ps->p[1] == '(') {
-		int g = ps->ngroup++;
+		int g = ps->ngroup;
+		if (g < 0 || g >= MAX_PROG / 2) { ps->err = REG_ESPACE; return; }
+		ps->ngroup = g + 1;
 		ps->p += 2;
 		emit(ps, I_SAVE, 0, 0, 2 * g, 0);
 		bre_branch(ps);
