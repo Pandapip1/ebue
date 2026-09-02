@@ -1,34 +1,26 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * pax(1p): the portable archive interchange utility, four modes
- * selected by -r/-w:
+ * pax(1p): the portable archive interchange utility, four modes selected
+ * by -r/-w:
  *   (neither)   list mode:  `pax [-cv] [-f archive] [pattern...]`
  *   -r          read mode:  `pax -r [-cdkuv] [-f archive] [pattern...]`
  *   -w          write mode: `pax -w [-dv] [-f archive] [-x format] [file...]`
  *   -r -w       copy mode:  `pax -r -w [-dkuv] [file...] directory`
  *
- * ---- ARCHIVE FORMATS, verified against the real pax(1p) text -----------
+ * ---- ARCHIVE FORMATS -------------------------------------------------------
  *
- * The real spec ("The pax utility shall support the following formats:
- * cpio ... pax ... ustar") requires all three of cpio, ustar and pax
- * (extended-header) format support.  This build implements the first
- * two -- a real, from-scratch ustar reader/writer and a real,
- * from-scratch "octet-oriented" (ASCII/odc) cpio reader/writer, picked
- * because pax(1p)'s own EXTENDED DESCRIPTION states "[t]he supported
- * cpio variant is the ... octet-oriented cpio format" -- and does NOT
- * implement the third, pax's own extended-header format (typeflag 'x'/
- * 'g' records ustar-physical-layout archives use to carry keyword=value
- * metadata for names/sizes/times too large for ustar's plain fields).
- * That is a real, deliberate scope narrowing, not an oversight:
- * extended headers exist specifically to lift ustar's per-field limits
- * (100+155-byte names, ~8GB sizes, whole-second mtimes), and this
- * build instead diagnoses and refuses (never silently truncates) any
- * member that would need one -- seen at ustar_split_name() below and
- * at the fits_octal() size/time/uid/gid checks throughout.  `-x pax`
- * is refused the same way any other unimplemented option is (below).
- * Default output format (write mode with no `-x`) is ustar: POSIX
- * itself leaves this "implementation-defined".
+ * The spec requires cpio, ustar, and pax (extended-header) format
+ * support. This build implements ustar and the "octet-oriented"
+ * (ASCII/odc) cpio variant pax(1p) itself names as the supported one,
+ * but not pax's own extended-header format (typeflag 'x'/'g' records
+ * that carry keyword=value metadata for names/sizes/times too large for
+ * ustar's plain fields). That is a deliberate narrowing: this build
+ * diagnoses and refuses -- never silently truncates -- any member that
+ * would need one (see ustar_split_name() and the fits_octal() checks).
+ * `-x pax` is refused the same as any other unimplemented option.
+ * Default write-mode output format is ustar; POSIX leaves this
+ * implementation-defined.
  *
  * ---- OPTIONS implemented -------------------------------------------------
  *  -r / -w        select read / write / (both) copy mode, as above
@@ -37,103 +29,77 @@
  *  -x format      write-mode output format: "ustar" (default) or "cpio"
  *  -v             verbose: file-by-file names to stderr in read/write/
  *                 copy mode, or a long ls -l-style listing in list mode
- *  -d             "match only the file itself" for a directory named on
- *                 the command line, both as a write/copy-mode source
- *                 operand (its contents are not recursed into) and,
- *                 read/list-mode, has no archive-side meaning (there is
- *                 no hierarchy to not-recurse-into on read) so is
- *                 accepted but only meaningful for -w/-r -w here
- *  -k             "prevent the overwriting of existing files" (read/
- *                 copy mode)
- *  -u             "ignore files that are older ... than a pre-existing
- *                 file ... with the same name" (read/copy mode: skip
- *                 restoring a member whose mtime is <= the existing
- *                 file's mtime)
- *  -c             "match all ... except those specified by pattern
- *                 operands" (list/read mode pattern inversion)
+ *  -d             match only the file itself for a directory named on
+ *                 the command line (not recursed into); no archive-side
+ *                 meaning in read/list mode, so accepted but only
+ *                 meaningful for -w/-r -w
+ *  -k             prevent overwriting existing files (read/copy mode)
+ *  -u             skip restoring a member whose mtime is <= the
+ *                 existing file's mtime (read/copy mode)
+ *  -c             match all files except those matching pattern
+ *                 operands (list/read mode)
  *
  * ---- NOT IMPLEMENTED, refused loudly (this project's standing
- * convention for an unimplemented option -- see e.g. src/util/cp.c's
- * -p/-i/-H/-L/-P refusals) rather than silently ignored -----------------
+ * convention for an unimplemented option, e.g. src/util/cp.c's own
+ * -p/-i/-H/-L/-P refusals) -----------------------------------------------
  *  -a, -b, -B     append to an existing archive; block/byte-count
- *                 limiting -- no in-place archive append is
- *                 implemented (write mode always creates/truncates)
- *  -i, -n         interactive rename; first-match-only pattern
- *                 selection
+ *                 limiting -- write mode always creates/truncates
+ *  -i, -n         interactive rename; first-match-only pattern selection
  *  -l             hard-link (rather than copy) in copy mode
- *  -H, -L         command-line/always symlink-following control --
- *                 this build always behaves like neither is given
- *                 (symlinks are archived/copied as themselves, never
- *                 followed), which is a real, valid pax(1p) behaviour
- *                 (the "neither -H nor -L" case), just not adjustable
- *  -o, -G, -U     pax-format keyword options, group/user restore --
- *                 -o's whole reason to exist is tied to formats (pax
- *                 extended headers, or format-specific write knobs)
- *                 this build does not implement
- *  -p string      file-characteristic (privilege) preservation control
- *                 -- see MATERIALIZATION below for this build's one
- *                 fixed, undocumented-by-flag policy instead
- *  -s replstr     ed(1)-style name substitution -- a real regex/
- *                 substitution engine this batch does not add
+ *  -H, -L         symlink-following control -- this build always
+ *                 behaves as if neither is given (symlinks archived/
+ *                 copied as themselves), a valid but not adjustable
+ *                 pax(1p) mode
+ *  -o, -G, -U     pax-format keyword options, group/user restore -- tied
+ *                 to formats/knobs this build does not implement
+ *  -p string      file-characteristic preservation control -- see
+ *                 MATERIALIZATION below for this build's fixed policy
+ *  -s replstr     ed(1)-style name substitution
  *  -t             restore each read file's access time after reading
- *                 it -- not implemented (this build does not save/
- *                 restore atime around a read at all)
  *  -T, -Y, -Z     time-window/ctime-window member selection
  *  -X             stay-on-one-filesystem tree traversal restriction
  *
- * ---- MATERIALIZATION (read/copy mode), i.e. this build's fixed
- * unconditional policy standing in for -p's sub-options -------------------
+ * ---- MATERIALIZATION (read/copy mode): this build's fixed policy
+ * standing in for -p's sub-options -------------------------------------
  *
- * Every extracted/copied file's mode bits are passed through exactly
- * as archived to open()/mkdir()/mkfifo()/mknod() (the umask applies
- * the normal way any of those calls apply it -- the default, non-"-p
- * p" pax behaviour).  Modification time IS restored via utime() after
- * writing a regular file's data (the default, non-"-p m" behaviour).
- * Ownership (uid/gid) is never touched -- this library has no real
- * multi-user ownership model to restore into (every stat() on this
- * platform reports a fixed uid/gid; see e.g. src/util/cp.c's own "-p
- * not implemented" reasoning for files/dirs it creates), so there is
- * nothing meaningful "-p o" could preserve here even if implemented.
+ * Mode bits are passed through exactly as archived to open()/mkdir()/
+ * mkfifo()/mknod() (umask applies normally -- the default, non-"-p p"
+ * behaviour). Modification time IS restored via utime() after writing a
+ * regular file's data (the default, non-"-p m" behaviour). Ownership
+ * (uid/gid) is never touched: this platform has no real multi-user
+ * ownership model (every stat() reports a fixed uid/gid; see
+ * src/util/cp.c), so there is nothing "-p o" could preserve.
  *
- * ---- A safety addition beyond POSIX's literal text -----------------------
+ * ---- A safety addition beyond POSIX's literal text ------------------------
  *
- * On extract (read/copy mode), a member pathname is refused (loud
- * diagnostic, member skipped, nonzero exit, extraction of the *other*
- * members continues) if it is absolute (starts with '/') or contains a
- * ".." path component.  POSIX's pax(1p) text does not require this,
- * but silently honoring either would let a hostile or merely corrupt
- * archive write outside the extraction directory -- exactly the kind
- * of "never guess when an operation's real effect is ambiguous or
- * dangerous" refusal this project's utilities already make elsewhere
- * (cp.c's symlink-in-tree refusal, rm.c's own guards).
+ * On extract, a member pathname is refused (diagnostic, member skipped,
+ * nonzero exit, other members continue) if it is absolute or contains a
+ * ".." component. POSIX does not require this, but silently honoring
+ * either would let a hostile or corrupt archive write outside the
+ * extraction directory -- the same class of refusal cp.c's symlink-in-
+ * tree guard and rm.c's own guards already make.
  *
- * ---- Hard links --------------------------------------------------------
+ * ---- Hard links ------------------------------------------------------------
  *
- * This build never *detects* that two source files are the same inode
- * while walking file operands for -w/-r -w (no dev/ino tracking), so
- * every archived/copied file is written as an independent full copy of
- * its own bytes, regardless of its real st_nlink -- a real, deliberate
- * scope narrowing.  On the read side, however, an already-hard-link-
- * encoded ustar member (typeflag '1', with a linkname) is honored: it
- * is recreated with link() against its (already-extracted) linkname.
- * cpio's own hard-link convention -- a repeated member sharing an
- * earlier entry's device/inode, carrying zero bytes of data itself --
- * is a distinct mechanism this build does not implement either
- * direction for; a cpio archive with such entries round-trips as
- * independent copies instead, which is a legal (if link-count-losing)
- * reading of the same bytes.
+ * This build never detects that two source files share an inode while
+ * walking -w/-r -w operands (no dev/ino tracking), so every archived/
+ * copied file is written as an independent full copy, regardless of its
+ * real st_nlink. On the read side, an already-hard-link-encoded ustar
+ * member (typeflag '1', with a linkname) is honored via link() against
+ * its already-extracted linkname. cpio's own hard-link convention (a
+ * repeated member sharing an earlier entry's device/inode, with zero
+ * bytes of its own data) is not implemented either direction; such a
+ * cpio archive round-trips as independent copies instead -- legal, if
+ * link-count-losing.
  *
- * ---- FIFOs and device special files -------------------------------------
+ * ---- FIFOs and device special files ----------------------------------------
  *
- * This tree's own mkfifo()/mknod() (src/stat/chmod.c) are real ENOSYS/
- * EPERM stubs -- see src/util/mkfifo.c's own header for why NT has no
- * real backing for either -- so extracting a fifo/char/block member
- * here calls the same real library functions every other utility does
- * and reports the same real failure; no special-casing was added to
- * pretend otherwise.  On the write/copy-mode source-walking side, a
- * FIFO/char/block/socket file found while walking a tree is refused
- * with a diagnostic and skipped (the same policy src/util/cp.c's own
- * header documents for the identical situation in -R).
+ * This tree's mkfifo()/mknod() (src/stat/chmod.c) are real ENOSYS/EPERM
+ * stubs (NT has no backing for either; see src/util/mkfifo.c), so
+ * extracting a fifo/char/block member reports the same real failure
+ * every other utility does. On the write/copy-mode source-walking side,
+ * a FIFO/char/block/socket file found while walking a tree is refused
+ * with a diagnostic and skipped, matching src/util/cp.c's own -R policy.
  */
 #include <stdio.h>
 #include <stdlib.h>

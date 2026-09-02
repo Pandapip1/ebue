@@ -3,63 +3,34 @@
  *
  * nm(1p): `nm [-g] [-p] [-u] [-v] [file...]`
  *
- * A Software Development (SD) option-group utility (POSIX.1-2017's own
- * XCU nm(1p) page is listed under that option, not the base standard) --
- * this project's own POSIX-utilities plan (the "Software Development
- * option tier" at the plan's end) called out `nm`/`strip` specifically
- * as needing "this project's own object/archive format knowledge",
- * distinct from the earlier tiers' line/field-oriented text tools.
- *
  * ---- scope: ELF64 (aarch64/x86_64), not PE/COFF object files -----------
  *
- * This build's own native-Linux target produces real ELF64 little-
- * endian object files (see src/dlfcn/linux/plat_dlfcn.c's own ELF
- * loader) -- that is the format this file reads. PE is NOT attempted
- * here: the PE-parsing this project already has (src/internal/pe.c/
- * pe.h) walks a *mapped executable image's* export directory
- * (IMAGE_EXPORT_DIRECTORY), which is an entirely
- * different on-disk structure from a COFF *object file*'s own symbol
- * table (IMAGE_FILE_HEADER's PointerToSymbolTable/NumberOfSymbols, a
- * flat array of 18-byte IMAGE_SYMBOL entries plus a separate string
- * table for names over 8 bytes) -- nothing in this tree parses that
- * today, and building a correct from-scratch reader for it is a
- * second, comparably-sized project of its own. Refused loudly rather
- * than silently misparsed: a file whose first four bytes are not
- * "\x7fELF" is reported as an unrecognized format (see
- * read_elf_object() below), not guessed at as PE. ELF64 only, not
- * ELF32/i386: the same EM_AARCH64/EM_X86_64-only boundary
- * src/dlfcn/linux/plat_dlfcn.c's own banner already draws for this
- * platform, for the same reason (ELF32's field widths/DT_REL-vs-DT_RELA
- * shape do not carry over by just widening a few types).
+ * This build's native-Linux target produces ELF64 little-endian object
+ * files (see src/dlfcn/linux/plat_dlfcn.c) -- that is the format this
+ * file reads. PE is not attempted: this project's existing PE parsing
+ * (src/internal/pe.c/pe.h) walks a *mapped executable image's* export
+ * directory, a different on-disk structure from a COFF *object file's*
+ * symbol table, and a correct from-scratch reader for the latter is a
+ * comparably-sized project of its own. A file not starting "\x7fELF" is
+ * reported as an unrecognized format (see read_elf_object() below),
+ * never guessed at as PE. ELF32/i386 is out of scope for the same reason
+ * plat_dlfcn.c draws the EM_AARCH64/EM_X86_64-only boundary.
  *
  * ---- from-scratch ELF64 structures, not a shared <elf.h> ---------------
  *
- * This project ships no <elf.h> (src/dlfcn/linux/plat_dlfcn.c's own
- * header comment on its local Elf64_Ehdr/Shdr/Sym: "This project ships
- * no <elf.h> yet ... crt1.c's own local struct elf64_phdr already lives
- * with [this], for the same reason ... this file keeps its own,
- * deliberately NOT shared with crt1.c's"). This file follows that same
- * established per-file convention rather than refactoring plat_dlfcn.c's
- * private structures out into a new shared header for one more caller:
- * a fresh, minimal local copy below, cross-checked field-for-field
- * against plat_dlfcn.c's own (which was itself cross-checked against
- * the real ELF64 spec), covering only what a symbol-table reader needs
- * (Ehdr, Shdr, Sym -- no Phdr/Dyn/Rela, this file does no loading or
- * relocation).
+ * This project ships no <elf.h>; this file keeps its own local Ehdr/Shdr/
+ * Sym copy, cross-checked field-for-field against plat_dlfcn.c's, per
+ * this tree's per-file struct-definition convention. No Phdr/Dyn/Rela --
+ * this file does no loading or relocation.
  *
  * ---- archives ------------------------------------------------------------
  *
- * POSIX nm(1p) DESCRIPTION: "if the file is an archive, ... each object
- * file in the archive shall be processed". This build's own real,
- * from-scratch ar(1p) (src/util/ar.c) uses the classic common
- * "!<arch>\n"-magic member format; walking it here to run this file's
- * ELF reader over each member would be a straightforward extension, but
- * is deliberately deferred out of this first, correctness-focused pass
- * (a real from-scratch object-format reader is already the bulk of this
- * file's scope, per this project's own plan's "budget accordingly, this
- * tier is not 'small'" note) -- refused loudly (a real diagnostic,
- * nonzero exit) rather than silently misread as a malformed ELF file:
- * see the "!<arch>\n" magic check in __util_nm_main() below.
+ * POSIX requires processing each object file inside an archive operand.
+ * This build's ar(1p) (src/util/ar.c) uses the "!<arch>\n" member
+ * format; walking it to run this file's ELF reader over each member is
+ * deferred out of this first pass -- an archive operand is refused
+ * loudly (see the "!<arch>\n" magic check in __util_nm_main()) rather
+ * than misread as a malformed ELF file.
  *
  * ---- OPTIONS implemented -------------------------------------------------
  *  -g  Display only external (global/weak) symbols, i.e. bind != LOCAL.
@@ -69,76 +40,42 @@
  *  -v  Sort output by symbol value (address) instead of alphabetically
  *      by symbol name (ties broken by name either way).
  *
- * ---- NOT IMPLEMENTED, refused loudly rather than silently ignored -------
- *  -A/-o    Prefix every line with the file's own pathname (useful only
- *           once archive-member iteration exists above -- refused for
- *           the same reason).
- *  -f       "Produce full output" -- this file's only output format
- *           already is the full one POSIX describes as -f's effect, so
- *           there is nothing for a separate -f flag to additionally do;
- *           refused (not silently accepted as a no-op) since accepting
- *           it without a real -A/-P alternate-format story to pair
- *           against would misrepresent -f as having chosen among
- *           formats this file does not offer.
- *  -P       The alternate portable output format
- *           (`"%s %s %s %s\n"`, name/type/value/size) -- a real second
- *           format this file does not implement; refused rather than
- *           silently falling back to the default one under a flag that
- *           claims something different.
- *  -C, -r   Reverse sort order (-r) and demangled-name output (-C, not
- *           even in the POSIX synopsis this file targets -- GNU-only) --
- *           neither changes correctness of the symbol data itself, both
- *           are cosmetic extensions this first pass does not attempt.
+ * ---- NOT IMPLEMENTED, refused loudly -------------------------------------
+ *  -A/-o    Prefix every line with the file's pathname (only useful once
+ *           archive-member iteration exists above).
+ *  -f       "Produce full output" -- this file's only format already is
+ *           the full one, so there is nothing for a separate -f to do.
+ *  -P       The alternate portable output format (name/type/value/size).
+ *  -C, -r   Reverse sort (-r) and demangled-name output (-C, GNU-only,
+ *           not in the POSIX synopsis) -- cosmetic, not attempted here.
  *
- * DESCRIPTION/STDOUT: "the symbol table information" is written one
- * symbol per line as `<value> <type> <name>`: <value> is 16 lowercase
- * hex digits (ELF64's own natural width), zero-filled, or 16 spaces for
- * an undefined symbol (POSIX: "the fields for value ... shall be blank"
- * for a symbol "not defined in any of the files being examined");
- * <type> is a single letter, uppercase for a global/weak symbol,
- * lowercase for local, following the common convention every real nm
- * this project needs to interoperate with agrees on -- 'A' absolute,
- * 'B'/'b' bss, 'C' common, 'D'/'d' initialized data, 'N' non-loaded
- * (e.g. debug) section, 'R'/'r' read-only data, 'T'/'t' text, 'U'
- * undefined (always uppercase -- POSIX: undefined symbols are external
- * by definition), 'W'/'w' weak (uppercase defined, lowercase
- * undefined), 'I'/'i' GNU indirect function (STT_GNU_IFUNC, an
- * architecture ABI extension aarch64/x86_64 toolchains both emit for
- * ifuncs -- not in the base ELF spec, but real object files this
- * platform's own compiler produces use it, so classifying it distinctly
- * rather than folding it into 'T'/'t' matches what a real nm reports).
+ * DESCRIPTION/STDOUT: one symbol per line as `<value> <type> <name>`.
+ * <value> is 16 lowercase hex digits, zero-filled, or 16 spaces for an
+ * undefined symbol. <type> is a single letter, uppercase for global/weak,
+ * lowercase for local: 'A' absolute, 'B'/'b' bss, 'C' common, 'D'/'d'
+ * initialized data, 'N' non-loaded (e.g. debug) section, 'R'/'r' read-only
+ * data, 'T'/'t' text, 'U' undefined (always uppercase), 'W'/'w' weak,
+ * 'I'/'i' GNU indirect function (STT_GNU_IFUNC -- an ABI extension both
+ * aarch64/x86_64 toolchains emit, classified distinctly rather than
+ * folded into 'T'/'t' to match what a real nm reports).
  *
- * A symbol with no name (index 0's reserved null entry, or an anonymous
- * STT_SECTION entry), STT_FILE entries (compilation-unit filename
- * markers), and AArch64/ARM "mapping symbols" ($x/$d/$a/$t, see
- * is_mapping_symbol() below) are omitted by default -- POSIX's own
- * EXTENDED DESCRIPTION lists none of these as part of "the symbol
- * table information" a plain `nm` reports, and every real nm this
- * project needs to interoperate with hides them the same way (a
- * -a/--debug-syms style flag to show them is not implemented here,
- * matching the "OPTIONS implemented" list above).
+ * A symbol with no name, STT_FILE entries, and AArch64/ARM mapping
+ * symbols ($x/$d/$a/$t, see is_mapping_symbol() below) are omitted by
+ * default, matching every real nm this project interoperates with.
  *
- * The default alphabetical sort is a plain byte-wise strcmp() on the
- * raw UTF-8 name, not a locale-collated one -- checked against a real
- * `nm` (nix's binutils) on this build's own object files: under
- * LC_ALL=C the two agree byte-for-byte, but under this host's actual
- * en_US.UTF-8 default locale, GNU nm's strcoll()-based sort treats '_'
- * as a weak/ignorable collation element (so e.g. "real_page_size"
- * sorts before "realloc" there, never before it here). This project's
- * own established position (src/util/wc.c's own header: "UTF-8 is the
- * only encoding this library has ever supported ... no locale switch
- * changes that") makes plain byte order the right, consistent choice
- * here too, not a real gap -- a from-scratch glibc-collation-table
- * reader is a whole separate project this file does not attempt.
+ * The default alphabetical sort is a plain byte-wise strcmp() on the raw
+ * UTF-8 name, not locale-collated -- consistent with this project's own
+ * "UTF-8 is the only encoding this library has ever supported" position
+ * (src/util/wc.c). This differs from GNU nm's strcoll()-based sort under
+ * a non-C locale (e.g. it treats '_' as collation-ignorable), which is
+ * accepted as the right tradeoff rather than building a from-scratch
+ * glibc collation-table reader.
  *
- * OPERANDS: "If no file operand is specified ... the default is a file
- * named a.out" (checked against the real XCU text, not assumed).
+ * OPERANDS: no file operand defaults to a file named `a.out`.
  *
- * EXIT STATUS: "0 All files were processed successfully." ">0 An error
- * occurred" -- diagnose-and-continue across multiple file operands, the
- * same shape as this project's other utilities (e.g. src/util/wc.c's
- * own header): one unreadable/malformed operand does not stop the rest
- * from being processed, and the final exit status is still nonzero.
+ * EXIT STATUS: diagnose-and-continue across multiple file operands, same
+ * as this project's other utilities (e.g. src/util/wc.c) -- one bad
+ * operand does not stop the rest, and the final exit status is nonzero.
  *
  * Spec consulted: https://pubs.opengroup.org/onlinepubs/9699919799/utilities/nm.html
  */
