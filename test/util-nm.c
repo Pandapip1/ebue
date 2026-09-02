@@ -47,25 +47,28 @@ static int fails;
 
 static char obj_root[1024];
 
+/* Strips the trailing "/last-component" (or "\...") off `path` in
+ * place. Returns 0 on success, -1 if `path` has no separator left to
+ * strip at. */
+static int strip_last_component(char *path)
+{
+	size_t i;
+
+	for (i = strlen(path); i > 0; i--)
+		if (path[i - 1] == '/' || path[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	path[i - 1] = 0;
+	return 0;
+}
+
 static int find_obj_root(const char *argv0)
 {
-	size_t n;
-	char *p;
-
 	if (!argv0 || !*argv0) return -1;
-	n = strlen(argv0);
-	if (n >= sizeof obj_root) return -1;
+	if (strlen(argv0) >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-nm.exe" */
-
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/util-nm.exe" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/test" */
 
 	return 0;
 }
@@ -73,12 +76,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -151,13 +156,21 @@ static int run_sh_c(const char *cmd)
 	return run(sh_path, argv);
 }
 
+/* Runs nm and captures its stdout/stderr for the CHECK()s that follow
+ * -- every test below needs both, immediately after spawning. */
+static int run_capture(const char *path, char *const *args)
+{
+	int rc = run(path, args);
+	capture();
+	return rc;
+}
+
 /* ==== nm(1p) =============================================================== */
 
 static void test_nm_missing_file(void)
 {
 	char *argv[] = { (char *)"nm", (char *)"util-nm-missing-xyz.o", 0 };
-	int rc = run(nm_path, argv);
-	capture();
+	int rc = run_capture(nm_path, argv);
 	CHECK(rc != 0);
 	CHECK(err_contains("nm:"));
 }
@@ -165,8 +178,7 @@ static void test_nm_missing_file(void)
 static void test_nm_invalid_option(void)
 {
 	char *argv[] = { (char *)"nm", (char *)"--bogus", 0 };
-	int rc = run(nm_path, argv);
-	capture();
+	int rc = run_capture(nm_path, argv);
 	CHECK(rc == 2);
 	CHECK(err_contains("invalid option"));
 }
@@ -183,8 +195,7 @@ static void test_nm_non_elf_graceful(void)
 	fd = open("scratch_nm/not_an_object.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (fd >= 0) { write(fd, "hello world\n", 12); close(fd); }
 
-	CHECK(run(nm_path, argv) != 0);
-	capture();
+	CHECK(run_capture(nm_path, argv) != 0);
 	CHECK(err_contains("nm:"));
 }
 
@@ -199,8 +210,7 @@ static long pos_of(const char *needle)
 static void test_nm_fixture_default(void)
 {
 	char *argv[] = { (char *)"nm", fixture_path, 0 };
-	int rc = run(nm_path, argv);
-	capture();
+	int rc = run_capture(nm_path, argv);
 
 	if (!is_elf64le(fixture_path)) {
 		/* NT/tcc cross build: nmfix.o is a real COFF object, which
@@ -246,8 +256,7 @@ static void test_nm_undefined_only(void)
 	int rc;
 	if (!is_elf64le(fixture_path)) return;
 
-	rc = run(nm_path, argv);
-	capture();
+	rc = run_capture(nm_path, argv);
 	CHECK(rc == 0);
 	CHECK(out_contains("U nmfix_external_undefined"));
 	CHECK(!out_contains("nmfix_global_func"));
@@ -262,8 +271,7 @@ static void test_nm_external_only(void)
 	int rc;
 	if (!is_elf64le(fixture_path)) return;
 
-	rc = run(nm_path, argv);
-	capture();
+	rc = run_capture(nm_path, argv);
 	CHECK(rc == 0);
 	CHECK(out_contains("nmfix_global_func"));
 	CHECK(out_contains("nmfix_global_data"));
@@ -279,13 +287,11 @@ static void test_nm_no_sort_and_value_sort_smoke(void)
 	char *argv_v[] = { (char *)"nm", (char *)"-v", fixture_path, 0 };
 	if (!is_elf64le(fixture_path)) return;
 
-	CHECK(run(nm_path, argv_p) == 0);
-	capture();
+	CHECK(run_capture(nm_path, argv_p) == 0);
 	CHECK(out_contains("nmfix_global_func"));
 	CHECK(out_contains("nmfix_local_func"));
 
-	CHECK(run(nm_path, argv_v) == 0);
-	capture();
+	CHECK(run_capture(nm_path, argv_v) == 0);
 	CHECK(out_contains("nmfix_global_data"));
 	CHECK(out_contains("nmfix_global_bss"));
 }

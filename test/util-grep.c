@@ -42,25 +42,28 @@ static int fails;
 
 static char obj_root[1024];
 
+/* Strips the trailing "/last-component" (or "\...") off `path` in
+ * place. Returns 0 on success, -1 if `path` has no separator left to
+ * strip at. */
+static int strip_last_component(char *path)
+{
+	size_t i;
+
+	for (i = strlen(path); i > 0; i--)
+		if (path[i - 1] == '/' || path[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	path[i - 1] = 0;
+	return 0;
+}
+
 static int find_obj_root(const char *argv0)
 {
-	size_t n;
-	char *p;
-
 	if (!argv0 || !*argv0) return -1;
-	n = strlen(argv0);
-	if (n >= sizeof obj_root) return -1;
+	if (strlen(argv0) >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-grep.exe" */
-
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/util-grep.exe" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/test" */
 
 	return 0;
 }
@@ -68,12 +71,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -152,6 +157,14 @@ static int run_sh_c(const char *cmd)
 	return run(sh_path, argv);
 }
 
+/* Runs grep_path with argv, checking it exited 0 with stdout exactly
+ * equal to expect_out -- the shape most tests below share. */
+static void check_ok(char *const *argv, const char *expect_out)
+{
+	CHECK(run(grep_path, argv) == 0);
+	CHECK(out_equals(expect_out));
+}
+
 /* ==== grep(1p) ============================================================= */
 
 static void test_grep_bre_basic(void)
@@ -161,32 +174,28 @@ static void test_grep_bre_basic(void)
 	 * by character. */
 	char *argv[] = { (char *)"grep", (char *)"a+b", (char *)"scratch/g1", 0 };
 	make_file("scratch/g1", "xa+by\nnope\nzz\n");
-	CHECK(run(grep_path, argv) == 0);
-	CHECK(out_equals("xa+by\n"));
+	check_ok(argv, "xa+by\n");
 }
 
 static void test_grep_dash_v(void)
 {
 	char *argv[] = { (char *)"grep", (char *)"-v", (char *)"foo", (char *)"scratch/g2", 0 };
 	make_file("scratch/g2", "foo\nbar\nfoobar\nbaz\n");
-	CHECK(run(grep_path, argv) == 0);
-	CHECK(out_equals("bar\nbaz\n"));
+	check_ok(argv, "bar\nbaz\n");
 }
 
 static void test_grep_dash_i(void)
 {
 	char *argv[] = { (char *)"grep", (char *)"-i", (char *)"HELLO", (char *)"scratch/g3", 0 };
 	make_file("scratch/g3", "hello world\nHELLO THERE\nnope\n");
-	CHECK(run(grep_path, argv) == 0);
-	CHECK(out_equals("hello world\nHELLO THERE\n"));
+	check_ok(argv, "hello world\nHELLO THERE\n");
 }
 
 static void test_grep_dash_c(void)
 {
 	char *argv[] = { (char *)"grep", (char *)"-c", (char *)"a", (char *)"scratch/g4", 0 };
 	make_file("scratch/g4", "a\nb\na\na\nb\n");
-	CHECK(run(grep_path, argv) == 0);
-	CHECK(out_equals("3\n"));
+	check_ok(argv, "3\n");
 }
 
 static void test_grep_dash_l(void)
@@ -203,8 +212,7 @@ static void test_grep_dash_n(void)
 {
 	char *argv[] = { (char *)"grep", (char *)"-n", (char *)"b", (char *)"scratch/g6", 0 };
 	make_file("scratch/g6", "a\nb\nc\nb\n");
-	CHECK(run(grep_path, argv) == 0);
-	CHECK(out_equals("2:b\n4:b\n"));
+	check_ok(argv, "2:b\n4:b\n");
 }
 
 /* ERE-only: `a+` (one-or-more) has no meaning in a BRE, where '+' is a
@@ -214,8 +222,7 @@ static void test_grep_dash_E(void)
 {
 	char *argv[] = { (char *)"grep", (char *)"-E", (char *)"a+b", (char *)"scratch/g7", 0 };
 	make_file("scratch/g7", "aaab\nab\nb\nxab\n");
-	CHECK(run(grep_path, argv) == 0);
-	CHECK(out_equals("aaab\nab\nxab\n"));
+	check_ok(argv, "aaab\nab\nxab\n");
 }
 
 /* -F: the pattern contains a literal '.' that would, as a regex,
@@ -225,8 +232,7 @@ static void test_grep_dash_F(void)
 {
 	char *argv[] = { (char *)"grep", (char *)"-F", (char *)"a.b", (char *)"scratch/g8", 0 };
 	make_file("scratch/g8", "xa.by\naxb\n");
-	CHECK(run(grep_path, argv) == 0);
-	CHECK(out_equals("xa.by\n"));
+	check_ok(argv, "xa.by\n");
 }
 
 /* Multiple -e: patterns really OR together -- a line matching only
@@ -235,16 +241,14 @@ static void test_grep_multiple_e(void)
 {
 	char *argv[] = { (char *)"grep", (char *)"-e", (char *)"cat", (char *)"-e", (char *)"dog", (char *)"scratch/g9", 0 };
 	make_file("scratch/g9", "cat\nfish\ndog\nbird\n");
-	CHECK(run(grep_path, argv) == 0);
-	CHECK(out_equals("cat\ndog\n"));
+	check_ok(argv, "cat\ndog\n");
 }
 
 static void test_grep_dash_x(void)
 {
 	char *argv[] = { (char *)"grep", (char *)"-x", (char *)"ab", (char *)"scratch/g10", 0 };
 	make_file("scratch/g10", "ab\nxab\nabx\nab\n");
-	CHECK(run(grep_path, argv) == 0);
-	CHECK(out_equals("ab\nab\n"));
+	check_ok(argv, "ab\nab\n");
 }
 
 /* -w: "cat" must select a line where it occurs as a whole word, and
@@ -256,8 +260,7 @@ static void test_grep_dash_w(void)
 {
 	char *argv[] = { (char *)"grep", (char *)"-w", (char *)"cat", (char *)"scratch/g12", 0 };
 	make_file("scratch/g12", "a cat sat\nconcatenate\ncats\nscatter\ncat\n");
-	CHECK(run(grep_path, argv) == 0);
-	CHECK(out_equals("a cat sat\ncat\n"));
+	check_ok(argv, "a cat sat\ncat\n");
 }
 
 /* -w with -F: the same whole-word requirement applies to a literal
@@ -266,8 +269,7 @@ static void test_grep_dash_w_fixed(void)
 {
 	char *argv[] = { (char *)"grep", (char *)"-w", (char *)"-F", (char *)"cat", (char *)"scratch/g13", 0 };
 	make_file("scratch/g13", "concatenate\na cat sat\n");
-	CHECK(run(grep_path, argv) == 0);
-	CHECK(out_equals("a cat sat\n"));
+	check_ok(argv, "a cat sat\n");
 }
 
 /* -w must not reject a whole-word match that merely sits next to
@@ -276,8 +278,7 @@ static void test_grep_dash_w_punctuation_boundary(void)
 {
 	char *argv[] = { (char *)"grep", (char *)"-w", (char *)"cat", (char *)"scratch/g14", 0 };
 	make_file("scratch/g14", "(cat)\nconcatenate\n");
-	CHECK(run(grep_path, argv) == 0);
-	CHECK(out_equals("(cat)\n"));
+	check_ok(argv, "(cat)\n");
 }
 
 /* Exit status: 0 (matched), 1 (no match), >1 (a real error -- here, a
