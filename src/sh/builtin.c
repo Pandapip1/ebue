@@ -1026,6 +1026,47 @@ static int bi_timeout(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== Tier 8: tput(1p) ===================================================
+ *
+ * Same reasoning as every other batch in this file for staying
+ * registered here even though it also exists as a real standalone
+ * obj/bin/tput.exe (src/util/tput.c, declared in src/internal/util.h)
+ * -- a builtin runs in this process, unconditionally, without depending
+ * on __find_program()/__spawn() succeeding.  No effect on the shell
+ * execution environment itself (2.12's list) -- it only reads $TERM and
+ * writes to stdout -- so `env_effect` is 0, and it is not a 2.14
+ * special built-in either. */
+static int bi_tput(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_tput(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_tput_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+/* ==== Tier 9: SCCS tooling -- admin(1p), get(1p) =========================
+ *
+ * Same reasoning as every other batch in this file for staying
+ * registered here even though each also exists as a real standalone
+ * obj/bin/<name>.exe (src/util/admin.c, src/util/get.c, declared in
+ * src/internal/util.h) -- a builtin runs in this process,
+ * unconditionally, without depending on __find_program()/__spawn()
+ * succeeding.  Neither changes anything XCU 2.12 lists as part of the
+ * shell execution environment (both only do their own file I/O), so
+ * `env_effect` is 0 for both, and neither is a 2.14 special built-in. */
+static int bi_admin(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_admin(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_admin_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_get(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_get(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_get_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* ==== the dispatcher ==================================================== */
 
 /* `special` is XCU 2.14's distinction, recorded because 2.8.1 hangs
@@ -1119,6 +1160,9 @@ static const struct sh_builtin builtins[] = {
 	{ "cmp",   0, 0, bi_cmp },
 	{ "time",    0, 0, bi_time },
 	{ "timeout", 0, 0, bi_timeout },
+	{ "tput",    0, 0, bi_tput },
+	{ "admin",   0, 0, bi_admin },
+	{ "get",     0, 0, bi_get },
 	{ 0, 0, 0, 0 }
 };
 
