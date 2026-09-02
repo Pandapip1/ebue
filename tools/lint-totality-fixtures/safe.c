@@ -994,6 +994,29 @@ const char *guarded_unsigned_pointer_step(const char *p, unsigned step,
 	return p;
 }
 
+unsigned forward_goto_countdown(unsigned n, int fail)
+{
+	while (n > 0) {
+		if (fail) goto out;
+		n--;
+	}
+out:
+	return n;
+}
+
+unsigned multiple_forward_goto_countdown(unsigned n, int first, int second)
+{
+	while (n > 0) {
+		if (first) goto first_exit;
+		if (second) goto second_exit;
+		n--;
+	}
+first_exit:
+	return n;
+second_exit:
+	return n;
+}
+
 const char *switch_pointer_progress(const char *p, int arm)
 {
 	while (*p) {

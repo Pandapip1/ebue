@@ -433,6 +433,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   const ReadonlyFunctionFacts &ReadonlyFunctions;
   const PositiveParameterFacts &PositiveParameters;
   const FunctionDecl *Current = nullptr;
+  mutable const Stmt *ActiveLoop = nullptr;
 
   enum class ProgressKind { Up, Down };
 
@@ -1090,8 +1091,37 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return Literal && Literal->getLength() == 0;
   }
 
-  static Flow flow(const Stmt *Statement, const Progress &Expected,
-                   const Expr *LoopCondition = nullptr) {
+  /* A direct goto to a lexically later label outside the active loop is an
+   * exit edge, just like break or return.  Requiring every goto in the
+   * function to target after this loop closes the route by which code at
+   * the exit label could jump back and re-enter it; computed gotos remain
+   * opaque.  Source-manager ordering also rejects labels hidden in the
+   * loop body and macro/file ambiguities conservatively. */
+  bool allGotosExitActiveLoop(const Stmt *Statement) const {
+    if (!Statement || !ActiveLoop)
+      return Statement != nullptr;
+    if (isa<IndirectGotoStmt>(Statement))
+      return false;
+    if (const auto *Jump = dyn_cast<GotoStmt>(Statement)) {
+      const LabelStmt *Target = Jump->getLabel()->getStmt();
+      if (!Target)
+        return false;
+      SourceLocation LoopEnd = SM.getExpansionLoc(ActiveLoop->getEndLoc());
+      SourceLocation TargetBegin =
+          SM.getExpansionLoc(Target->getBeginLoc());
+      if (LoopEnd.isInvalid() || TargetBegin.isInvalid() ||
+          SM.getFileID(LoopEnd) != SM.getFileID(TargetBegin) ||
+          !SM.isBeforeInTranslationUnit(LoopEnd, TargetBegin))
+        return false;
+    }
+    for (const Stmt *Child : Statement->children())
+      if (!allGotosExitActiveLoop(Child))
+        return false;
+    return true;
+  }
+
+  Flow flow(const Stmt *Statement, const Progress &Expected,
+            const Expr *LoopCondition = nullptr) const {
     if (!Statement)
       return {FallWithoutProgress, false};
     if (const auto *Expression = dyn_cast<Expr>(Statement)) {
@@ -1161,6 +1191,11 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
                  : Flow{0, true};
     }
     if (isa<GotoStmt>(Statement))
+      return ActiveLoop && Current &&
+                     allGotosExitActiveLoop(Current->getBody())
+                 ? Flow{ExitsLoop, false}
+                 : Flow{0, true};
+    if (isa<IndirectGotoStmt>(Statement))
       return {0, true};
     if (const auto *Switch = dyn_cast<SwitchStmt>(Statement)) {
       const auto *Body = dyn_cast_or_null<CompoundStmt>(Switch->getBody());
@@ -1247,10 +1282,13 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     llvm_unreachable("all mutations handled");
   }
 
-  static bool bodyGuaranteesProgress(const Stmt *Body,
-                                     const Progress &Expected,
-                                     const Expr *LoopCondition = nullptr) {
+  bool bodyGuaranteesProgress(const Stmt *Body, const Progress &Expected,
+                              const Expr *LoopCondition = nullptr,
+                              const Stmt *Loop = nullptr) const {
+    const Stmt *SavedLoop = ActiveLoop;
+    ActiveLoop = Loop;
     Flow Result = flow(Body, Expected, LoopCondition);
+    ActiveLoop = SavedLoop;
     return !Result.Invalid && Result.Outcomes != 0 &&
            (!(Expected.Variable->getType()->isUnsignedIntegerType() &&
               Expected.Kind == ProgressKind::Up) ||
@@ -4286,7 +4324,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
           bodyHasGuardedDynamicPointerProgress(Body, Change);
       if ((!admissibleProgress(Change) && !GuardedPointerProgress) ||
           !validRankVariable(Change, Body, Increment) ||
-          !bodyGuaranteesProgress(Body, Change, Condition))
+          !bodyGuaranteesProgress(Body, Change, Condition, Loop))
         continue;
       if (strictComparison(Condition, Change, Body, Increment))
         return "strict-scalar-rank";
@@ -4305,7 +4343,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
           Change.Variable->getType()->isIntegerType()) {
         Progress UnitChange = Change;
         UnitChange.UnitOnly = true;
-        if (bodyGuaranteesProgress(Body, UnitChange, Condition) &&
+        if (bodyGuaranteesProgress(Body, UnitChange, Condition, Loop) &&
             bodyHasDominatingNonzeroGuard(Body, UnitChange))
           return "strict-scalar-rank";
       }
