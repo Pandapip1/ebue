@@ -43,12 +43,30 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <pwd.h>
 
 extern char **environ;
 int __spawn(const char *path, char *const argv[], char *const envp[]);
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
+
+/* ---- the one local user mailx will ever deliver to ---------------------
+ * src/util/mailx.c's current_user() is getpwuid(getuid()), and every send
+ * below has to name that same user as its recipient or it is refused as
+ * "user unknown" (mailx.c's addr_is_current_user()). The two <pwd.h>
+ * backends disagree on what that resolves to (src/misc/nt/pwd.c vs.
+ * src/misc/linux/pwd.c, same split test/pwd.c already audits): NT
+ * synthesizes pw_name from %USERNAME%/%USER%, so this file can pick any
+ * name it likes and export it; Linux reads the real /etc/passwd via
+ * getuid() and ignores USERNAME entirely, so the only name that will ever
+ * work there is whatever getpwuid(getuid())->pw_name already is on this
+ * host. test_user is set up once in main() accordingly. */
+#ifdef __linux__
+static char test_user[256];
+#else
+static const char *test_user = "mtestuser";
+#endif
 
 /* ---- locating obj/bin/mailx.exe and obj/sh/sh.exe ---------------------
  * Same walk-up-from-argv[0] technique as test/util-fileops.c's
@@ -219,6 +237,26 @@ static int count_boundaries(const char *buf, size_t len)
 	return n;
 }
 
+/* Counts non-overlapping occurrences of `needle` in buf[0,len). Used by
+ * concurrent_append_test() below to check each child's marker appears the
+ * exact number of times its own body actually wrote it -- not once: each
+ * marker leads all NLINES_PER_CHILD lines a child writes (see that loop),
+ * so it legitimately recurs within one child's own message, and only a
+ * count above or below that expected total points at real cross-writer
+ * corruption. */
+static int count_occurrences(const char *buf, size_t len, const char *needle)
+{
+	size_t needlelen = strlen(needle);
+	size_t i = 0;
+	int n = 0;
+	if (needlelen == 0 || needlelen > len) return 0;
+	while (i + needlelen <= len) {
+		if (memcmp(buf + i, needle, needlelen) == 0) { n++; i += needlelen; }
+		else i++;
+	}
+	return n;
+}
+
 /* ---- single-shot send/receive round-trip test -------------------------- */
 
 static void roundtrip_test(void)
@@ -234,14 +272,16 @@ static void roundtrip_test(void)
 	mkpath(err, sizeof err, "rt-err.txt");
 
 	setenv("MAIL", mbox, 1);
+#ifndef __linux__
 	setenv("USERNAME", "mtestuser", 1);
+#endif
 
 	/* A body containing a literal "From " line, to exercise the
 	 * mboxo-style escaping this file's own header comment documents. */
 	write_file(bodyfile, "Hello there\nFrom the deep past\nGoodbye\n");
 
 	args[0] = mailx_path; args[1] = (char *)"-s"; args[2] = (char *)"Round Trip";
-	args[3] = (char *)"mtestuser"; args[4] = 0;
+	args[3] = (char *)test_user; args[4] = 0;
 	rc = run_prog(mailx_path, args, bodyfile, out, err);
 	CHECK(rc == 0);
 
@@ -251,12 +291,15 @@ static void roundtrip_test(void)
 	{
 		size_t rawlen = 0;
 		char *raw = slurp_alloc(mbox, &rawlen);
+		char hdrbuf[300];
 		CHECK(raw != 0);
 		if (raw) {
 			CHECK(strstr(raw, "\n>From the deep past\n") != 0);
 			CHECK(strstr(raw, "Subject: Round Trip\n") != 0);
-			CHECK(strstr(raw, "To: mtestuser\n") != 0);
-			CHECK(strstr(raw, "From: mtestuser\n") != 0);
+			snprintf(hdrbuf, sizeof hdrbuf, "To: %s\n", test_user);
+			CHECK(strstr(raw, hdrbuf) != 0);
+			snprintf(hdrbuf, sizeof hdrbuf, "From: %s\n", test_user);
+			CHECK(strstr(raw, hdrbuf) != 0);
 			free(raw);
 		}
 	}
@@ -309,7 +352,7 @@ static void roundtrip_test(void)
 		char *args2[5];
 		write_file(bodyfile, "msg one\n");
 		args2[0] = mailx_path; args2[1] = (char *)"-s"; args2[2] = (char *)"One";
-		args2[3] = (char *)"mtestuser"; args2[4] = 0;
+		args2[3] = (char *)test_user; args2[4] = 0;
 		CHECK(run_prog(mailx_path, args2, bodyfile, out, err) == 0);
 
 		write_file(bodyfile, "msg two\n");
@@ -363,10 +406,12 @@ static void builtin_agreement_test(void)
 	mkpath(mbox, sizeof mbox, "bi-mbox");
 	mkpath(bodyfile, sizeof bodyfile, "bi-body.txt");
 	setenv("MAIL", mbox, 1);
+#ifndef __linux__
 	setenv("USERNAME", "mtestuser", 1);
+#endif
 
 	write_file(bodyfile, "builtin body\n");
-	snprintf(cmd, sizeof cmd, "mailx -s BuiltinSubj mtestuser < %s", bodyfile);
+	snprintf(cmd, sizeof cmd, "mailx -s BuiltinSubj %s < %s", test_user, bodyfile);
 	args[0] = sh_path; args[1] = (char *)"-c"; args[2] = cmd; args[3] = 0;
 	mkpath(out, sizeof out, "bi-out.txt");
 	mkpath(err, sizeof err, "bi-err.txt");
@@ -388,6 +433,7 @@ static void builtin_agreement_test(void)
 /* ---- concurrent-append lock-safety test -------------------------------- */
 
 #define NCHILD 6
+#define NLINES_PER_CHILD 20
 
 static void concurrent_append_test(void)
 {
@@ -401,7 +447,9 @@ static void concurrent_append_test(void)
 
 	mkpath(mbox, sizeof mbox, "conc-mbox");
 	setenv("MAIL", mbox, 1);
+#ifndef __linux__
 	setenv("USERNAME", "mtestuser", 1);
+#endif
 
 	for (i = 0; i < NCHILD; i++) {
 		char rel[64];
@@ -423,7 +471,7 @@ static void concurrent_append_test(void)
 		mkpath(errfiles[i], sizeof errfiles[i], rel);
 
 		body[0] = 0;
-		for (line = 0; line < 20; line++) {
+		for (line = 0; line < NLINES_PER_CHILD; line++) {
 			char oneline[80];
 			snprintf(oneline, sizeof oneline, "%s line %02d filler filler filler\n", markers[i], line);
 			strcat(body, oneline);
@@ -446,7 +494,7 @@ static void concurrent_append_test(void)
 
 		snprintf(subj, sizeof subj, "Conc%d", i);
 		args[0] = mailx_path; args[1] = (char *)"-s"; args[2] = subj;
-		args[3] = (char *)"mtestuser"; args[4] = 0;
+		args[3] = (char *)test_user; args[4] = 0;
 
 		in = open(bodyfiles[i], O_RDONLY);
 		out = open(outfiles[i], O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -481,11 +529,14 @@ static void concurrent_append_test(void)
 			for (i = 0; i < NCHILD; i++) {
 				const char *p = strstr(raw, markers[i]);
 				CHECK(p != 0);
-				/* Exactly one occurrence per marker in the whole
-				 * file: if two writers had interleaved, a marker
-				 * could show up twice (split across, or duplicated
-				 * into, another message) or not at all (clobbered). */
-				if (p) CHECK(strstr(p + strlen(markers[i]), markers[i]) == 0);
+				/* Exactly NLINES_PER_CHILD occurrences of this child's
+				 * marker in the whole file -- one per line its own body
+				 * wrote (see the body-generation loop above), never
+				 * more or fewer: if two writers had interleaved, a
+				 * marker's lines could show up duplicated (split into,
+				 * or replayed into, another message) or missing
+				 * (clobbered). */
+				CHECK(count_occurrences(raw, len, markers[i]) == NLINES_PER_CHILD);
 			}
 			free(raw);
 		}
@@ -500,6 +551,19 @@ int main(int argc, char **argv)
 	}
 	path_for(mailx_path, sizeof mailx_path, "bin/mailx.exe");
 	path_for(sh_path, sizeof sh_path, "sh/sh.exe");
+
+#ifdef __linux__
+	{
+		struct passwd *pw = getpwuid(getuid());
+		if (!pw) {
+			printf("FAIL: getpwuid(getuid()) found no entry for this host's real user -- "
+				"mailx has no other user it could ever deliver to (see src/misc/linux/pwd.c)\n");
+			return 1;
+		}
+		strncpy(test_user, pw->pw_name, sizeof test_user - 1);
+		test_user[sizeof test_user - 1] = 0;
+	}
+#endif
 
 	snprintf(scratch, sizeof scratch, "mailx-scratch-%d", (int)getpid());
 	mkdir(scratch, 0700);
