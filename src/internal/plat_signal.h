@@ -246,6 +246,38 @@ int __plat_segv_code(void *addr);
  * itself -- see src/signal/nt/plat_signal.c's own definition). */
 void __plat_sig_sync_kernel(int sig, int ignore);
 
+/* End THIS process exactly as if by sig's real default action -- the
+ * meaning every __NT_SIGNAL_EXIT(sig)-encoded code passed to __nt_exit()
+ * (src/exit/exit.c, libc.h) carries: kill()/raise()'s own default-
+ * terminate path in src/signal/signal.c, abort()'s guaranteed-
+ * termination fallback (which reaches here even with sig blocked,
+ * ignored, or caught by a handler that returned -- abort.html requires
+ * overriding all three), the exec() stand-in re-raising a child's own
+ * termination signal, the vectored exception handler.
+ *
+ * __nt_exit() calls this FIRST for such a code, before falling back to
+ * its own NT-shaped simulation of one (an ordinary process exit whose
+ * status ENCODES the signal number, decoded back out by
+ * src/process/wait.c's __wait_encode_status()). That simulation is the
+ * only option NT has, and is exactly right there -- see this header's
+ * own __plat_sig_sync_kernel comment: every signal reaching this point
+ * on NT was already synthesized by this library. Linux is different: it
+ * has a real per-signal kernel default action of its own, and
+ * src/process/linux/plat_process.c's own __plat_process_wait() already
+ * expects to read back a REAL WIFSIGNALED wait4(2) status for a child
+ * that died this way, not an encoded exit code -- simulating one there
+ * is not merely unnecessary, it is wrong: a plain exit_group(2) is
+ * reported WIFEXITED to this process's own parent, not WIFSIGNALED.
+ *
+ * Returns, instead of ending the process, when raising sig for real did
+ * not end it -- __nt_exit() falls back to its own simulated termination
+ * in that case, same as if this function had never been called. Always
+ * simply returns on NT, which has no kernel signal of its own to raise
+ * (this header's own __plat_sig_sync_kernel comment, same paragraph), so
+ * __nt_exit()'s fallback is what actually ends the process there, same
+ * as before this function existed. */
+void __plat_sig_default_terminate(int sig);
+
 #endif
 
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

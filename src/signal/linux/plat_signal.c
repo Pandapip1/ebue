@@ -501,6 +501,43 @@ void __plat_sig_sync_kernel(int sig, int ignore)
 	syscall(SYS_rt_sigaction, (long)sig, &act, 0L, (long)sizeof(unsigned long));
 }
 
+void __plat_sig_default_terminate(int sig)
+{
+	/* Force the kernel-level disposition to SIG_DFL right here, rather
+	 * than trust it to already be synced there by __plat_sig_sync_kernel()
+	 * above: that IS the case for signal.c's own default-terminate path
+	 * (handlers[sig] is already SIG_DFL, both levels, whenever that path
+	 * is reached), but abort()'s own override of a blocked/ignored/
+	 * caught-and-returned SIGABRT (see this function's plat_signal.h
+	 * comment) reaches here with the kernel possibly still set to
+	 * SIG_IGN or nothing at all done to it -- and abort.html requires
+	 * termination regardless. Same rt_sigaction(2) shape as
+	 * __plat_sig_sync_kernel() just above.
+	 *
+	 * kill(2) to this process's own pid, not tgkill(2) to a specific
+	 * thread: a fatal signal's default action ends the WHOLE process
+	 * regardless of which thread raised it, so there is nothing
+	 * tgkill(2)'s extra tid buys here, and this file has never otherwise
+	 * needed a gettid(2) syscall. Same self-signal shape
+	 * __plat_process_suspend_self() above already uses for SIGSTOP.
+	 *
+	 * Neither syscall's result is checked: there is nothing left to do
+	 * with a failure of either but return and let __nt_exit()'s own
+	 * fallback run, which is exactly what happens when this function
+	 * simply falls off its own end. */
+	struct kernel_sigaction act;
+	long pid;
+
+	act.k_handler = SIG_DFL;
+	act.k_flags = 0;
+	act.k_restorer = 0;
+	act.k_mask = 0;
+	syscall(SYS_rt_sigaction, (long)sig, &act, 0L, (long)sizeof(unsigned long));
+
+	pid = syscall(SYS_getpid);
+	syscall(SYS_kill, pid, (long)sig);
+}
+
 /* ---- named stop-events, keyed by the filesystem namespace ----------------
  * See this file's own banner. `name`'s wide chars are ASCII by
  * construction (signal.c's own stop_event_name() builds them from a
