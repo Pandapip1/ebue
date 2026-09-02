@@ -5,129 +5,75 @@
  *
  * ---- what POSIX actually mandates ----------------------------------------
  *
- * The real XCU tput.html OPERANDS section is narrow -- verified against
- * the live spec text (Austin Group base, IEEE Std 1003.1-2017) before
- * writing this file, not assumed from general Unix `tput` folklore:
+ * The XCU OPERANDS section is narrow: only `clear`, `init`, and `reset`
+ * are required operands (each may be a no-op if the terminal doesn't
+ * support it -- not an error). DESCRIPTION: with -T absent and TERM
+ * unset or null, "an unspecified default terminal type shall be used";
+ * this implementation's choice is "dumb" (TERM_DEFAULT below), a real
+ * named type with no capabilities, rather than one that pretends to
+ * know more than nothing was specified. -T takes precedence over TERM
+ * when both are given.
  *
- *   "The following strings shall be supported as operands by the
- *   implementation in the POSIX locale:
+ * EXIT STATUS mapping onto the spec's five buckets: 0 success; 1 a
+ * *recognised* capname the selected terminal type's entry doesn't
+ * define (POSIX leaves "1" implementation-defined, and this is the same
+ * "lacks this capability" use real tput makes of it); 2 a missing
+ * operand, a `-T` with no argument, or a parameterized capname given
+ * the wrong number of parameters; 3 `-T`/`$TERM` names a type outside
+ * this file's built-in table; 4 the operand is neither
+ * `clear`/`init`/`reset` nor a name in TERM_CAPNAMES below.
  *
- *    clear   Display the clear-screen sequence.
- *    init    Display the sequence that initializes the user's terminal
- *            in an implementation-defined manner.
- *    reset   Display the sequence that resets the user's terminal in an
- *            implementation-defined manner.
+ * ---- the capname extension beyond strict POSIX ----------------------------
  *
- *   If a terminal does not support any of the operations described by
- *   these operands, this shall not be considered an error condition."
+ * Every real-world `tput` additionally accepts a terminfo/termcap
+ * capability name as the operand (`tput cols`, `tput bold`, `tput cup 5
+ * 10`, ...); POSIX doesn't mandate this, but it's universal practice
+ * and what this project's own task direction asked for by name.
+ * Implemented as a fixed ten-name table (cols, lines, bold, smso, rmso,
+ * smul, rmul, rev, sgr0, cup) rather than a general capname-lookup
+ * mechanism. `clear` is shared between the POSIX operand and the
+ * capname table -- same escape sequence, one field. Long (terminfo)
+ * names only; two-letter termcap aliases are not added, to keep one
+ * name per capability.
  *
- * DESCRIPTION, on terminal-type selection: "If this option [-T] is not
- * supplied and the TERM variable is unset or null, an unspecified
- * default terminal type shall be used. The setting of type shall take
- * precedence over the value in TERM."  This implementation's own
- * "unspecified default" choice is "dumb" (documented at TERM_DEFAULT
- * below) -- a real, named terminal type with no capabilities at all,
- * rather than silently picking something that pretends to know more
- * than nothing was actually specified.
+ * ---- why a built-in table, not a real terminfo database reader -----------
  *
- * EXIT STATUS (quoted, then this file's own concrete mapping onto it):
- *   0     "The requested string was written successfully."
- *   1     "Unspecified."
- *   2     "Usage error."
- *   3     "No information is available about the specified terminal type."
- *   4     "The specified operand is invalid."
- *   >4    "An error occurred."
- * This implementation's mapping: 0 success; 1 a *recognised* capname
- * that the selected terminal type's entry simply does not define (the
- * "unspecified" bucket, used the same way real tput uses it for "the
- * terminal lacks this capability" -- POSIX leaves the exact meaning of
- * 1 up to the implementation); 2 a missing operand, a `-T` with no
- * argument, or a parameterized capname (`cup`) given the wrong number
- * of parameters; 3 `-T`/`$TERM` names a terminal type outside this
- * file's built-in table; 4 the operand is not `clear`/`init`/`reset`
- * and not a name in TERM_CAPNAMES below.
+ * This dev host has a real terminfo database (NixOS's
+ * /run/current-system/sw/share/terminfo), but that's an artifact of
+ * this machine, not something a shipped binary could rely on: Windows
+ * NT has no terminal database at all, and this project's native-Linux
+ * target is a from-scratch bootstrap environment (boot/kaem/*.kaem)
+ * that cannot assume ncurses-data/terminfo is installed either. So the
+ * table is fixed: five terminal types (xterm, xterm-256color, vt100,
+ * ansi, dumb) with capability strings hand-copied from `infocmp`
+ * against the real system database, minus `$<N>` padding/delay
+ * notations (e.g. vt100's `bold=\E[1m$<2>`) -- that syntax exists for
+ * hardware terminals with real transmission timing constraints neither
+ * an NT console nor a modern pty has, so every modern terminfo/termcap
+ * library treats it as a no-op too. An unrecognised `-T`/`$TERM` fails
+ * cleanly (exit 3) rather than fabricating capabilities.
  *
- * ---- the capname extension beyond strict POSIX -----------------------
+ * `cols`/`lines` try one real, live answer first -- ioctl(1, TIOCGWINSZ)
+ * (src/ioctl/ioctl.c) -- before falling back to the table's static
+ * value. No COLUMNS/LINES env override is implemented: that's a
+ * separate layer real implementations add on top, not a substitute, and
+ * this project's bootstrap use case doesn't need it yet.
  *
- * Every real-world `tput` -- System V's, ncurses', BSD's -- additionally
- * accepts an arbitrary terminfo/termcap capability name as the operand
- * (`tput cols`, `tput bold`, `tput cup 5 10`, ...) and looks it up in a
- * terminal capability database.  POSIX's own OPERANDS section above does
- * not mandate this at all, but it is universal practice and exactly what
- * this project's own POSIX-utilities task direction asked for by name
- * (`tput cols`, `tput lines`, `tput bold`, `tput sgr0`).  Implemented
- * here as a deliberate, clearly-labeled extension: this file's table's
- * ten names (cols, lines, bold, smso, rmso, smul, rmul, rev, sgr0, cup)
- * -- the bounded set this project's task direction named -- rather than
- * a general capname-lookup mechanism accepting anything a real terminfo
- * file might define. `clear` is shared between the two: the POSIX
- * operand and the capname both mean the same escape sequence, so there
- * is only one table field for it.  Long (terminfo) names only -- the
- * two-letter termcap short-name aliases (co/li/md/so/se/us/ue/mr/me/cl/
- * cm/is2/rs1) are a real, additional tput/termcap compatibility feature
- * this file does not add, to keep the lookup table one name per
- * capability.
+ * `cup`'s row/col parameters are taken 0-based (curses' own
+ * convention), then written out incremented by one, matching the real
+ * `%i%p1%d;%p2%dH` terminfo string every terminal in this table has
+ * (`%i` increments both parameters; ANSI CUP is 1-based). No general
+ * terminfo parameter-string interpreter is implemented -- cup is the
+ * only parameterized capability this table carries and all entries
+ * share the identical CSI-row;col-H shape, so it's hand-written once
+ * (print_cup() below).
  *
- * ---- why a built-in table, not a real terminfo database reader -------
- *
- * A compiled terminfo binary (term(5)) is a real, well-specified,
- * parseable format, and this host's own dev environment happens to have
- * one (NixOS's `/run/current-system/sw/share/terminfo`, findable with
- * `infocmp`) -- but that path is an artifact of *this developer's*
- * machine, not something any binary this project actually ships could
- * rely on: Windows NT, ntlibc's other target, has no terminal database
- * of any kind, ever, and this project's native-Linux target is a
- * from-scratch bootstrap environment (see boot/kaem/*.kaem's own header
- * comment) that cannot assume ncurses-data/terminfo is installed either.
- * Reading the Nix-store copy would make this file work by accident on
- * one sandbox, not more honestly for a single real ntlibc user -- so
- * this table is deliberately what shipped instead: five terminal types
- * (xterm, xterm-256color, vt100, ansi, dumb) this project's own users
- * will realistically hit, with capability strings drawn from `infocmp`
- * against the real system database above (so they are the *real*
- * escape sequences those terminal types actually use, just hand-copied
- * into source rather than read from a binary file at run time) minus
- * one real, documented narrowing: `$<N>` padding/delay notations
- * (vt100's `bold=\E[1m$<2>` and friends) are stripped -- that syntax
- * exists for hardware terminals with real transmission-speed timing
- * constraints, which neither an NT console nor a modern pty has, so
- * every historical terminfo/termcap library on a modern OS treats
- * padding as a no-op too. An unrecognised `-T`/`$TERM` fails cleanly
- * (exit 3) rather than fabricating capabilities for a terminal type
- * this file knows nothing about, per this project's own task direction.
- *
- * `cols`/`lines` still try one real, live answer first -- ioctl(1,
- * TIOCGWINSZ) (src/ioctl/ioctl.c) -- before falling back to the table's
- * static value, the same "ask the real terminal if one is actually
- * attached, else fall back to the database" order every real tput/
- * ncurses uses (COLUMNS/LINES env, then ioctl, then terminfo). Only
- * the ioctl step is implemented here (no COLUMNS/LINES env override) --
- * a deliberate narrowing, not an oversight: env-var override is a
- * separate, additional layer real implementations add on top of the
- * ioctl/database answer, not a substitute for it, and this project's
- * own bootstrap use case has no need for it yet.
- *
- * `cup`'s row/col parameters are taken 0-based (curses' own convention
- * for cursor position, and what a program driving `tput cup` through a
- * shell is normally computing), then written out incremented by one --
- * matching the real `%i%p1%d;%p2%dH` terminfo string every terminal in
- * this table actually has (`%i` is terminfo's own "increment both
- * parameters" operator; ANSI CUP is 1-based). No general terminfo
- * parameter-string interpreter (`%p`, `%d`, `%?`, arithmetic, ...) is
- * implemented -- cup is the only parameterized capability this table
- * carries, and all covered entries share the identical CSI-row;col-H
- * shape, so it is hand-written once (print_cup() below) rather than
- * building a general tparm() for a single caller.
- *
- * `init`/`reset` are real POSIX operands (quoted above) but this
- * table defines no is1/is2/is3/rs1/rs2/rs3-equivalent sequence for any
- * covered terminal (matching the real terminfo entries themselves,
- * where xterm/vt100/ansi mostly leave these capabilities empty too) --
- * so both operands succeed (exit 0) and write nothing, per the spec's
- * own "shall not be considered an error condition" sentence quoted
- * above.  `longname` is not implemented: it is real historical `tput`
- * practice, not a POSIX operand, and this table has no long-description
- * field to back it with.
+ * `init`/`reset` succeed (exit 0) and write nothing for every covered
+ * terminal -- this table defines no is1/is2/is3/rs1/rs2/rs3-equivalent
+ * sequence, matching the real terminfo entries, and the spec allows
+ * this. `longname` is not implemented: real historical tput practice,
+ * not a POSIX operand, and this table has no long-description field
+ * for it.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc

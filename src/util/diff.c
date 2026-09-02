@@ -1,141 +1,80 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * diff(1p): `diff [-c|-e|-f|-u|-C n|-U n] [-br] file1 file2`.  Checked
- * against the real XCU diff(1p) page
- * (pubs.opengroup.org/onlinepubs/9699919799/utilities/diff.html), not
- * reconstructed from memory.
+ * diff(1p): `diff [-c|-e|-f|-u|-C n|-U n] [-br] file1 file2`. Checked
+ * against the real XCU diff(1p) page.
  *
- * OPTIONS ACTUALLY MANDATED: the page's OPTIONS section literally reads
- * "The following options shall be supported:" followed by exactly
- * -b, -c, -C n, -e, -f, -r, -u, -U n -- eight entries, none tagged as
- * an XSI extension.  -i/-l/-n/-s/-w (all real flags on many diff(1)
- * implementations) are simply not in that list, so none of them is
- * implemented here; an unrecognized flag is a loud usage error (exit
- * 2), not a silent no-op, the same "don't pretend to support what
- * isn't there" rule this project applies elsewhere (sort(1p)'s -m,
- * src/util/sort.c).  -u/-U are genuinely mandatory too, not the common
- * "GNU-only extension" folklore -- verified directly against the page's
- * OPTIONS list rather than assumed, since that folklore is wrong for
- * POSIX's actual diff(1p) (it may be true of some historical/BSD
- * diff(1)s, but this project targets the XCU text). -C's n "shall be
- * interpreted as a positive decimal integer" (>=1); -U's n "shall be
- * interpreted as a non-negative decimal integer" (>=0) -- a real,
- * asymmetric requirement between the two, both enforced below.
- * -c/-e/-f/-u/-C/-U are mutually exclusive (the SYNOPSIS groups them
- * with '|'); giving more than one is refused rather than silently
- * picking the last one.
+ * OPTIONS MANDATED: exactly -b, -c, -C n, -e, -f, -r, -u, -U n -- all
+ * eight, none XSI-tagged. -i/-l/-n/-s/-w are not in that list and are
+ * not implemented; an unrecognized flag is a usage error (exit 2), not
+ * a no-op. -u/-U are genuinely mandatory, not a GNU-only extension --
+ * verified against the page's OPTIONS list, since that folklore may
+ * hold for some historical/BSD diff(1)s but not POSIX's own text. -C's
+ * n must be a positive integer (>=1); -U's n a non-negative integer
+ * (>=0), an asymmetry both enforced below. -c/-e/-f/-u/-C/-U are
+ * mutually exclusive (the SYNOPSIS groups them with '|'); more than one
+ * is refused.
  *
- * DIRECTORY OPERANDS ARE ALSO MANDATORY, NOT XSI: the OPERANDS section
- * unconditionally describes what happens "If both file1 and file2 are
- * directories" and "If only one of file1 and file2 is a directory" --
- * this is not gated on -r at all, so a plain `diff dir1 dir2` (no -r)
- * is real, mandatory, in-scope behavior, not just -r's recursion.  -r
- * only controls whether a common subdirectory is *recursed into*
- * (without -r it is merely reported, not descended into); the
- * top-level pairing/comparison of two directory operands happens
- * either way.  This was checked, not assumed, because the tempting
- * (and wrong) shortcut here would have been "no -r means no directory
- * support at all".
+ * DIRECTORY OPERANDS ARE ALSO MANDATORY, NOT XSI: a plain `diff dir1
+ * dir2` (no -r) has real, defined behavior in the OPERANDS section, not
+ * gated on -r. -r only controls whether a common subdirectory is
+ * *recursed into*; top-level pairing/comparison of two directory
+ * operands happens either way.
  *
- * DEFAULT (ed-script-like) FORMAT (STDOUT section): each hunk is a
- * header line -- "%da%d"/"%dd%d"/"%dc%d" (or the two-number
- * "%d,%da%d"/... variants for a multi-line range on either side) --
+ * DEFAULT (ed-script-like) FORMAT: each hunk is a header line --
+ * "%da%d"/"%dd%d"/"%dc%d" (or "%d,%da%d"/... for a multi-line range) --
  * followed by file1's affected lines each prefixed "< ", a "---\n"
- * separator if both sides have lines (a change, not a pure
- * append/delete), then file2's affected lines each prefixed "> ".
+ * separator if both sides have lines, then file2's lines prefixed "> ".
  *
- * -c/-C n (context format) and -u/-U n (unified format): both need a
- * real algorithmic feature the prose alone does not spell out
- * precisely -- adjacent hunks whose paddings (n lines of context on
- * each side) would overlap or touch must be merged into one printed
- * group sharing one contiguous context block, not printed as two
- * separate blocks with duplicated context lines.  The exact
- * empty-range and multi-hunk-grouping conventions below (what number
- * is printed for a zero-length range, when a context block's "file1
- * side" or "file2 side" is omitted entirely because it would be pure
- * context with nothing added) were confirmed empirically against a
- * real, known-conformant implementation (GNU diffutils 3.12, already
- * present on this development host) rather than guessed, because the
- * XCU prose describes the format in general terms but does not spell
- * out these specific edge cases; the *substantive* format (headers,
- * "***"/"---"/"+++"/"@@" lines, "!"/"+"/"-"/" " prefixes, three vs. n
- * lines of context) is exactly the STDOUT section's own text.
+ * -c/-C n and -u/-U n need one real algorithmic feature the prose
+ * doesn't spell out: adjacent hunks whose padding (n lines of context)
+ * would overlap or touch must be merged into one printed group sharing
+ * a contiguous context block, not printed as two blocks with duplicated
+ * context. The exact empty-range and multi-hunk-grouping conventions
+ * below were confirmed against GNU diffutils 3.12 rather than guessed,
+ * since XCU describes the format only in general terms; the substantive
+ * format (headers, "***"/"---"/"+++"/"@@" lines, "!"/"+"/"-"/" "
+ * prefixes, context width) is the STDOUT section's own text.
  *
  * TIMESTAMPS in -c/-u headers: real file mtimes via stat(), formatted
- * per the STDOUT section's own strftime-style descriptions ("%a %b %e
- * %T %Y" for -c, an ISO-style "%Y-%m-%d %H:%M:%S %z" for -u).  Neither
- * format's fractional-second field is implemented -- the spec calls it
- * optional for -u ("timestamp, fractional seconds") and says nothing
- * requiring it for -c -- so both are omitted, a deliberate narrowing
- * for a field the spec itself does not require.  A "-" operand (stdin)
- * has no real mtime; this implementation uses the current time for it,
- * documented rather than left to whatever time(2) happens to return
- * unremarked.
+ * per the STDOUT section's strftime-style descriptions. Fractional
+ * seconds are not implemented for either format (the spec calls it
+ * optional for -u, silent for -c). A "-" operand (stdin) uses the
+ * current time, since it has no real mtime.
  *
- * -e (ed script) and -f ("alternative form" of -e): the STDOUT section
- * gives -e's shape (only ed's a/c/d commands, text lines verbatim,
- * "." terminates a text block, hunks ordered from the end of the file
- * to the beginning so line numbers already emitted stay valid) but
- * does not spell out every punctuation detail of the command line
- * itself; the RATIONALE section states -f is exactly -e with three
- * changes ("expressed in reverse sequence"; the command letter moves
- * before the line number/range instead of after, e.g. -e's "10c"
- * becomes -f's "c10"; ranges are <space>-separated instead of
- * <comma>-separated) -- both were additionally cross-checked against
- * real diffutils output on deliberately-chosen append/delete/change
- * cases (see the two RATIONALE-derived rules above in action: -e emits
- * "3,5c"/newtext/"." while -f emits "c3 5"/newtext/".", and -e visits
- * a later hunk before an earlier one while -f visits them in file
- * order) to confirm the derivation was right, not just plausible. A
- * "no newline at end of file" condition has no defined handling for
- * -e/-f in the STDOUT section at all (unlike -c/-u/default, which get
- * an explicit inline "\ No newline at end of file" marker below,
- * mirroring the one real, observable convention for that case); this
- * implementation instead reports it as a stderr diagnostic once per
- * affected operand (an ed script has no clean way to represent "this
- * embedded text line had no trailing newline in the source" inline),
- * matching the one only-empirically-checkable behavior available.  That
- * diagnostic also promotes the exit status from 1 to 2 for this case
- * specifically (confirmed against real diffutils, which does the same):
- * the script just printed cannot faithfully reproduce the missing-
- * final-newline file, which is a real error, not merely "differences
- * were found".
+ * -e (ed script) and -f (its "alternative form"): the STDOUT section
+ * gives -e's shape (a/c/d commands, "." terminates text, hunks ordered
+ * end-to-beginning so already-emitted line numbers stay valid) but not
+ * every punctuation detail; the RATIONALE section's three -f
+ * differences (reverse hunk order, command letter before the range,
+ * space- instead of comma-separated ranges) were additionally
+ * cross-checked against real diffutils output. A missing trailing
+ * newline has no defined -e/-f handling in XCU (unlike -c/-u/default's
+ * "\ No newline at end of file" marker); this implementation reports it
+ * as a stderr diagnostic once per affected operand and promotes the
+ * exit status from 1 to 2 for that case, matching real diffutils: the
+ * script printed cannot faithfully reproduce the missing-newline file.
  *
- * -b: "any amount of white space at the end of a line ... ignored" and
- * "other strings of white-space characters, not including <newline>
- * characters, [compare] equal" -- implemented as: strip each line's
- * trailing spaces/tabs before comparing, and treat any nonempty run of
- * spaces/tabs at the same logical position in both lines as one unit
- * regardless of how many characters make it up on either side (see
- * lines_equal_b() below). Lines that are -b-equal but not byte-identical
- * still display using file1's own exact text wherever this
- * implementation needs to print a "shared" context line (context/
- * unified formats) -- a real, minor, documented choice, since nothing
- * in XCU says whose copy of an only--b-equal line to show.
+ * -b: trailing whitespace is stripped from each line before comparing,
+ * and any nonempty run of spaces/tabs at the same logical position in
+ * both lines compares equal regardless of length (lines_equal_b()
+ * below). A displayed "shared" context line always uses file1's exact
+ * text, since XCU does not say whose copy of a -b-equal-but-not-
+ * identical line to show.
  *
- * ALGORITHM: a real minimal edit-script computation -- the classic
- * Myers O(ND) algorithm (see myers_build_ops() below), the "standard
- * choice" this project's own POSIX-utilities plan calls for, not a
- * hand-waved line-by-line scan.  This is the textbook trace-storing
- * variant (O(ND) time *and* O(ND) space, D = the edit distance), not
- * the linear-space divide-and-conquer variant of the same paper -- a
- * real, documented tradeoff: for two files that are nearly identical
- * (the common case this utility exists for) D is small and this is
- * both fast and light; for two files that are almost entirely
- * different, D approaches N+M and the trace can cost O((N+M)^2)
- * memory.  Good enough for the file sizes a POSIX shell utility is
- * realistically run against; not claimed to be safe against
- * adversarially-dissimilar multi-gigabyte inputs.
+ * ALGORITHM: the classic Myers O(ND) trace-storing algorithm
+ * (myers_build_ops() below) -- O(ND) time *and* space, not the
+ * linear-space divide-and-conquer variant of the same paper. Good
+ * enough for realistic shell-utility file sizes; not safe against
+ * adversarially-dissimilar multi-gigabyte inputs (D approaching N+M
+ * costs O((N+M)^2) memory).
  *
- * Both files are read fully into memory (one buffer each, plus one
- * {offset,length} pair per line) before any comparison starts --
- * unlike cmp(1p) (src/util/cmp.c), which streams, diff fundamentally
- * needs random access to both files' lines to compute an edit script
- * at all.
+ * Both files are read fully into memory before any comparison starts --
+ * unlike cmp(1p) (src/util/cmp.c), diff needs random access to both
+ * files' lines to compute an edit script at all.
  *
- * EXIT STATUS: "0 No differences were found. 1 Differences were found.
- * >1 An error occurred."
+ * EXIT STATUS: 0 no differences; 1 differences found; >1 an error
+ * occurred.
  */
 #include <stdio.h>
 #include <stdlib.h>

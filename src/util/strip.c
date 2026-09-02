@@ -1,158 +1,85 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * strip(1p): `strip [-o strip_file] file`
+ * strip(1p): `strip [-o strip_file] file`. Removes symbol table,
+ * debugging, and relocation information from the executable file; -o
+ * writes to a separate output instead of editing in place. That is the
+ * entire base standard -- no XSI options to refuse.
  *
- * "The strip utility shall remove any symbol table, debugging, or
- * relocation information from the executable file named by the file
- * operand. If -o is not specified, editing is done in place." -- the
- * whole of the real XCU strip(1p) OPTIONS/OPERANDS text this build
- * implements against; there is no XSI/extension option to refuse the
- * way ar(1p) has several (see src/util/ar.c's own header for that
- * pattern) -- strip(1p)'s base standard is already this narrow.
+ * ---- WHY THIS FILE IS CONSERVATIVE ---------------------------------------
  *
- * ---- WHY THIS FILE IS CONSERVATIVE ON PURPOSE ---------------------------
+ * A wrong strip corrupts an executable rather than just misbehaving, and
+ * the input is often a real ELF PIE or this project's own working binary.
+ * The invariant enforced by every check below: never rewrite a byte this
+ * file cannot prove is safe to move, and when that proof fails, leave the
+ * input byte-for-byte unchanged and still exit 0 (POSIX's DESCRIPTION
+ * never promises removal *happens*, only that removal, if it happens, is
+ * correct).
  *
- * Every other utility in src/util/ that gets something wrong produces a
- * wrong *answer*. This one, if it gets something wrong, produces a
- * *corrupted, unrunnable binary* -- for a file operand that, unlike
- * `ar`'s archives, is frequently this project's own already-working
- * obj/bin/ executables or a real ELF PIE this project just spent real, cited
- * effort fixing (the IRELATIVE-relocation gap -- see src/dlfcn/linux/
- * plat_dlfcn.c's own R_AARCH64_IRELATIVE/R_X86_64_IRELATIVE comments).
- * So this file's whole design is organized around ONE invariant, stated
- * once here and enforced by every check below: never rewrite a byte
- * this file cannot prove is safe to move, and when that proof fails for
- * any reason, leave the file byte-for-byte unchanged (still `strip`
- * ending in exit status 0 -- POSIX's DESCRIPTION never promises removal
- * *happens*, only that if information is removed, it is removed
- * correctly) rather than guess.
+ * ---- ELF64 STRATEGY --------------------------------------------------------
  *
- * ---- ELF64 STRATEGY -------------------------------------------------------
+ * ELFCLASS64/ELFDATA2LSB, ET_EXEC or ET_DYN only -- not ET_REL, whose
+ * .symtab a later link step may still need; refused with a diagnostic.
+ * Struct layouts below are a fresh local copy, deliberately not shared
+ * with src/dlfcn/linux/plat_dlfcn.c or crt/linux/crt1.c, per this tree's
+ * per-translation-unit struct-definition convention.
  *
- * Only ELFCLASS64/ELFDATA2LSB, ET_EXEC or ET_DYN (a final linked
- * executable or shared/PIE object -- not ET_REL: a relocatable .o's own
- * .symtab is frequently still needed by a later link step, a genuinely
- * different job than this file's "the file already runs, keep it
- * running" scope, so ET_REL is refused with a clear diagnostic rather
- * than silently mishandled). Struct field layouts below are a fresh
- * local copy of ELF64's shapes, deliberately NOT shared with
- * src/dlfcn/linux/plat_dlfcn.c's own identical-in-spirit copy or
- * crt/linux/crt1.c's minimal Phdr-only one -- this tree's own established
- * "own struct definitions per translation unit" discipline (plat_dlfcn.c's
- * own header comment states the identical reasoning for not sharing with
- * crt1.c: the coupling costs more than the few duplicated struct
- * definitions save).
+ * Removal set: `.symtab`, `.strtab`, `.symtab_shndx`, `.comment`,
+ * `.gnu_debuglink`, `.gnu_debugdata`, `.debug_*`. Never `.dynsym`/
+ * `.dynstr` or anything else PT_DYNAMIC or a PT_LOAD depends on.
  *
- * The removal set: `.symtab`, `.strtab`, `.symtab_shndx`, `.comment`,
- * `.gnu_debuglink`, `.gnu_debugdata`, and anything named `.debug_*` --
- * the standard, conservative "symbol table and debugging information"
- * set this utility's own DESCRIPTION names. Never `.dynsym`/`.dynstr`
- * (different names, never matched) or anything else PT_DYNAMIC or a
- * PT_LOAD depends on -- see the safety gate below for how that is
- * actually enforced, not just asserted by the name list alone.
+ * Byte-for-byte, the approach:
  *
- * Byte-for-byte, the approach is:
+ *   1. Compute `load_limit`, the highest (p_offset + p_filesz) over every
+ *      program header of any type. Nothing below that offset is ever
+ *      relocated. No program headers at all -> refused (unchanged output).
+ *   2. A section is a removal CANDIDATE only if its name is in the set
+ *      above, it has no SHF_ALLOC bit, and its whole file range is at or
+ *      beyond load_limit. Any section failing one of those checks stays,
+ *      silently -- "kept" is always the safe outcome.
+ *   3. Global safety gate, checked once for the whole file: if any
+ *      section has SHF_ALLOC set AND sits at or beyond load_limit, the
+ *      "everything loadable lives below load_limit" assumption is false
+ *      for this binary and the whole strip is aborted -- output is the
+ *      unmodified input, never a partial rewrite.
+ *   4. A fixpoint pass protects against dangling references: for every
+ *      KEPT section, if its sh_link (a section index when nonzero) or its
+ *      sh_info (a section index only when SHF_INFO_LINK is set) names a
+ *      section still marked for removal, that section is un-marked
+ *      instead, and the pass repeats until nothing changes.
+ *   5. Bytes below load_limit are copied verbatim and unmoved, including
+ *      every PT_LOAD's phdrs and the ELF header's e_phoff/e_phnum/
+ *      e_entry. Bytes at or above load_limit belonging to a KEPT section
+ *      are copied, in original order, into a fresh compacted run with no
+ *      gaps, each recording its new sh_offset (aligned to sh_addralign);
+ *      REMOVED-section bytes are simply never copied. A fresh, shrunk
+ *      section header table (sh_link/sh_info remapped) is appended after,
+ *      and only e_shoff/e_shnum/e_shstrndx in the ELF header are patched.
  *
- *   1. Compute `load_limit`, the highest (p_offset + p_filesz) over
- *      EVERY program header, of ANY type -- not just PT_LOAD. Every
- *      byte at a file offset below this line is left in its original
- *      position for the rest of this pass, full stop; nothing that
- *      might be a p_offset/p_vaddr-linked byte a running process
- *      actually maps is ever relocated within the file. If there are no
- *      program headers at all, this file is not something a real loader
- *      maps by phdr in the first place -- refused (unchanged output)
- *      rather than guessed at.
- *   2. A section is a removal CANDIDATE only if its name matches the
- *      list above, it has no SHF_ALLOC bit (an allocated section is, by
- *      the ELF model itself, always backed by some PT_LOAD -- something
- *      this file's own safety gate double-checks, see step 3), and its
- *      whole file range (sh_offset, sh_offset+sh_size) is at or beyond
- *      load_limit. Anything that fails any one of those three checks
- *      individually stays -- it is simply not touched, no diagnostic
- *      needed, since "kept" is always the safe outcome.
- *   3. Global safety gate, checked once for the WHOLE file before any
- *      byte is moved: if ANY section (not just a removal candidate) both
- *      has SHF_ALLOC set AND sits at or beyond load_limit, this file's
- *      own "everything loadable lives below load_limit" assumption is
- *      false for this particular binary, and the entire strip is
- *      aborted -- output is the unmodified input, verbatim, not a
- *      partial or best-effort strip. This is the one deliberate
- *      all-or-nothing choice in this file: a single unusual section
- *      layout loses the ability to strip anything at all from that file,
- *      traded for never having to reason about a partial rewrite whose
- *      safety this file could not actually prove.
- *   4. A fixpoint pass protects against a dangling reference: for every
- *      KEPT section, if its sh_link (always a section-index field when
- *      nonzero) or its sh_info (a section index only when SHF_INFO_LINK
- *      is set -- the correct sh_type-independent ELF test, not a
- *      per-sh_type table) names a section still marked for removal,
- *      that referenced section is un-marked (kept) instead, and the
- *      pass repeats until nothing changes. A real linked EXEC/DYN's
- *      only sh_link users pointing at a symbol table are, by
- *      construction, the SHT_SYMTAB/.strtab pair this file removes
- *      together, so this rarely fires in practice -- it exists for the
- *      case it does, rather than trusting the name list alone.
- *   5. Bytes below load_limit are copied verbatim, unmoved, including
- *      every PT_LOAD's own program headers pointing at them and the ELF
- *      header's own e_phoff/e_phnum/e_entry (none of which this file
- *      ever edits). Bytes at or above load_limit belonging to a KEPT
- *      section are copied, in original relative order, into a fresh
- *      compacted run with no gaps for the removed sections' data,
- *      recording each one's new sh_offset (aligned to its own
- *      sh_addralign) as it goes; bytes belonging to a REMOVED section
- *      are simply never copied. A fresh, shrunk section header table
- *      (sh_link/sh_info remapped to the new, denser index space) is
- *      appended after that, and only e_shoff/e_shnum/e_shstrndx in the
- *      ELF header are patched to point at it -- e_phoff/e_phnum/e_entry/
- *      every PT_* phdr are byte-identical to the input, since none of
- *      that describes anything this pass ever moved.
+ * ---- PE STRATEGY (bonus scope; see __util_strip_main) --------------------
  *
- * ---- PE STRATEGY (bonus scope; see this file's own __util_strip_main
- * for why this half is deliberately narrower) -----------------------------
- *
- * This project cannot run a stripped PE binary in this sandbox (Wine is
- * broken here -- confirmed, not assumed) to prove one still works the
- * way test/util-strip.c proves for ELF, so the PE half of this file
- * stays inside a much smaller, more mechanically obviously-safe scope
- * than the ELF half above, verified only by static structure checks:
+ * Wine is unavailable in this sandbox, so a stripped PE binary cannot be
+ * proven to still run the way test/util-strip.c proves for ELF. The PE
+ * half therefore stays inside a much smaller, statically-verifiable scope:
  *
  *   - The legacy COFF symbol table (IMAGE_FILE_HEADER.PointerToSymbolTable/
- *     NumberOfSymbols) is removed ONLY when its own byte range --
- *     symbol records (18 bytes each) immediately followed by the string
- *     table (whose own first 4 bytes are its total size, itself
- *     included) -- reaches EXACTLY the end of the file, the ordinary
- *     shape for a linked image (tcc's own PE output has never been
- *     observed to carry one at all, since it embeds no separate object-
- *     file-style symbol table in a final -o linked .exe/.dll, but a
- *     foreign linker's output might). If that byte range does not
- *     reach EOF exactly, this file assumes something else follows it
- *     that it does not understand and leaves the symbol table alone
- *     entirely, same "prove it or don't touch it" discipline as the ELF
- *     half.
- *   - The Debug Data Directory entry (IMAGE_DIRECTORY_ENTRY_DEBUG,
- *     index 6) is zeroed if present -- this only clears a (VirtualAddress,
- *     Size) pointer pair inside the already-loaded header/optional-header
- *     region, never removes or moves any section or byte a real loader's
- *     RVA-based section mapping depends on, so it cannot desync
- *     SizeOfImage, section RVAs, or the import/export/relocation tables
- *     the way moving actual section bytes could.
- *   - Nothing else is touched: no .pdata/.xdata (exception unwind data
- *     real 64-bit Windows code needs even without a symbol table), no
- *     .reloc (base relocations a non-preferred-load-address process
- *     genuinely needs), no section table entries, no RVAs. Real
- *     debug-info *sections* (a `.debug$` COFF section, if a linker ever
- *     emits one merged into an image section) are NOT stripped here --
- *     removing an actual PE section safely needs re-deriving every
- *     RVA that follows it in the section table, a materially larger
- *     and, given no way to execute the result here, unverifiable-by-
- *     this-build piece of work correctly left for a later pass rather
- *     than attempted blind.
- *   - PE's checksum field (OptionalHeader.CheckSum) is left stale
- *     after either change above, disclosed rather than silently wrong:
- *     ordinary user-mode .exe/.dll loading does not validate it (only
- *     certain kernel-mode/driver-signing paths do), so this is a real,
- *     but scoped and disclosed, limitation -- not a hidden one.
+ *     NumberOfSymbols) is removed ONLY when its byte range -- 18-byte
+ *     symbol records followed by a string table whose own first 4 bytes
+ *     are its total size -- reaches EXACTLY the end of the file. If not,
+ *     the symbol table is left alone entirely.
+ *   - The Debug Data Directory entry (IMAGE_DIRECTORY_ENTRY_DEBUG, index
+ *     6) is zeroed if present -- this only clears a pointer pair inside
+ *     the already-loaded header region, never moves a section byte, so it
+ *     cannot desync SizeOfImage, section RVAs, or the import/export/
+ *     relocation tables.
+ *   - Nothing else is touched: no .pdata/.xdata, no .reloc, no section
+ *     table entries, no RVAs. An actual `.debug$` COFF section (if a
+ *     linker emits one) is NOT stripped -- removing a PE section needs
+ *     re-deriving every RVA that follows it, which is unverifiable
+ *     without a way to execute the result here and is left for later.
+ *   - PE's checksum field (OptionalHeader.CheckSum) is left stale after
+ *     either change, disclosed rather than silently wrong: ordinary
+ *     user-mode loading does not validate it.
  */
 #include <stdio.h>
 #include <stdlib.h>

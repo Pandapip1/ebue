@@ -2,143 +2,88 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * find(1p): walk one or more file hierarchies evaluating a predicate
- * expression against every entry.  Checked against
+ * expression against every entry. Checked against
  * https://pubs.opengroup.org/onlinepubs/9699919799/utilities/find.html.
  *
- * SYNOPSIS split: "find [-H|-L] path... [operand_expression...]".  This
- * file implements neither -H nor -L (see below) and finds the
- * path/expression boundary the way every historical find does: operands
- * before the first token that looks like the start of an expression
- * ("(", "!", or anything beginning with '-') are path operands; "no
- * path operand" defaults to ".", matching the page's own wording.
+ * SYNOPSIS split: "find [-H|-L] path... [operand_expression...]". Path
+ * operands are everything before the first token that looks like the
+ * start of an expression ("(", "!", or anything starting with '-'); no
+ * path operand defaults to ".".
  *
- * ---- SCOPE NARROWING, stated up front ----------------------------------
+ * ---- SCOPE NARROWING ------------------------------------------------------
  *
- *  - -H / -L (and therefore any following-of-command-line-or-all
- *    symlinks) are not implemented; this file always walks physically
- *    (nftw()'s FTW_PHYS, src/ftw/ftw.c), which is exactly the default
- *    behavior when neither flag is given ("characteristics of the
- *    symbolic link itself shall be used" -- DESCRIPTION).  So the
- *    common, default case is exact; only the two explicit
- *    symlink-following flags are missing, refused with a diagnostic and
- *    exit 2 rather than silently ignored.
- *  - -perm accepts only an octal mode operand ("[-]onum"), not chmod's
- *    full `[who...](op[perm...])+` symbolic clause grammar ("[-]mode").
- *    chmod's grammar (src/util/modeparse.c) is a *relative
- *    modification* of a base mode, which is the wrong shape for "does
- *    this file's mode satisfy X" testing; -perm would need its own
- *    from-scratch symbolic-to-bitmask translator to accept it, which
- *    this batch's scope does not include.  Octal remains a complete way
- *    to name any exact permission bit combination.
- *  - -xdev, -nouser, -nogroup, -depth are not implemented (refused, not
- *    silently ignored) -- none of them add expressive power this
- *    project's own bootstrap/test scripts are expected to need, and
- *    each would need its own real semantics (device-boundary tracking,
- *    a "no passwd/group entry" test against a platform whose user/group
- *    database is a single synthesized entry -- src/misc/pwd.c,
- *    src/misc/grp.c -- where "no entry" is nearly always true and would
- *    be a near-universal, not a useful, match).
- *  - -atime/-ctime/-mtime/-newer/-links/-size/-perm/-user/-group are all
- *    genuinely mandatory in the base standard (this page shows no XSI
- *    shading on any primary in its OPERANDS table), so none of them are
- *    narrowed away -- they are the primaries this file spends most of
- *    its code on.
+ *  - -H/-L are not implemented; this file always walks physically
+ *    (nftw()'s FTW_PHYS, src/ftw/ftw.c), which is the default behavior
+ *    when neither flag is given, so the common case is exact; only the
+ *    two explicit flags are missing, refused with exit 2.
+ *  - -perm accepts only an octal mode operand, not chmod's full symbolic
+ *    clause grammar (src/util/modeparse.c) -- that grammar expresses a
+ *    *relative modification* of a base mode, the wrong shape for "does
+ *    this file's mode satisfy X" testing. Octal names any exact
+ *    permission combination.
+ *  - -xdev, -nouser, -nogroup, -depth are refused, not silently ignored:
+ *    -nouser/-nogroup would be a near-universal match against this
+ *    platform's single synthesized passwd/group entry (src/misc/pwd.c,
+ *    src/misc/grp.c), not a useful one, and none add power this
+ *    project's bootstrap/test scripts need.
+ *  - Every other primary (-atime/-ctime/-mtime/-newer/-links/-size/
+ *    -perm/-user/-group) is mandatory in the base standard and fully
+ *    implemented.
  *
  * ---- PRECEDENCE ---------------------------------------------------------
  *
- * "The '!' operator ... shall have higher precedence than -a. The -a
- * operator ... shall have higher precedence than -o. Adjacent primaries
- * without an explicit -a or -o operator between them shall behave as if
- * they were separated by the -a operator." -- implemented exactly as
- * test(1p)'s recursive-descent shape already does for its own smaller
- * `!`/`-a`/`-o` grammar (src/util/test.c's t_oexpr()/t_aexpr()/
- * t_nexpr()): parse_or() -> parse_and() -> parse_not() ->
- * parse_primary(), with parse_and() consuming an explicit "-a" if
- * present or simply not requiring one (the implicit-AND rule) before
- * parsing the next primary.  Unlike expr(1p) (this batch's other
- * recursive-descent parser), an expression here is parsed into a real
- * AST once and evaluated once per visited file, since the whole point
- * of find(1p) is evaluating the same expression repeatedly.
+ * `!` binds tighter than `-a`, which binds tighter than `-o`; adjacent
+ * primaries with no explicit operator behave as `-a`. Implemented as the
+ * same recursive-descent shape as test(1p) (src/util/test.c's
+ * t_oexpr()/t_aexpr()/t_nexpr()): parse_or() -> parse_and() ->
+ * parse_not() -> parse_primary(). Unlike expr(1p)'s parser, the
+ * expression here is parsed into an AST once and evaluated once per
+ * visited file, since find(1p) evaluates the same expression repeatedly.
  *
- * DEFAULT ACTION: "If no expression is present, -print shall be used...
- * If the given expression does not contain any of ... -exec, -ok, or
- * -print, the given expression shall be effectively replaced by ( given
- * expression ) -print." -- has_action() below walks the parsed tree
- * looking for -print/-exec/-ok anywhere in it, and __util_find_main()
- * wraps the whole tree in a top-level AND with a synthesized -print
- * node when none is found; an entirely absent expression skips parsing
- * altogether and becomes a bare -print node.
+ * DEFAULT ACTION: an expression containing no -exec/-ok/-print (checked
+ * by has_action() below) is wrapped in a top-level AND with a
+ * synthesized -print node; a wholly absent expression skips parsing and
+ * becomes a bare -print node.
  *
- * ---- -prune, AND WHY IT IS NOT A DIRECT nftw() RETURN -------------------
+ * ---- -prune, and why it is not a direct nftw() return --------------------
  *
- * "the primary shall always evaluate as true; if [it applies to] a
- * directory, [the] find utility shall not continue to descend into"
- * it.  POSIX's ftw()/nftw() (src/ftw/ftw.c, this project's own
- * implementation included) offer exactly one way for the callback to
- * affect the walk: return non-zero, which "stops the walk" *entirely*
- * and becomes nftw()'s own return value (nftw.html: "the tree walk
- * ends and nftw() shall return -1... [or] the value returned by the
- * last call to fn"). There is no fts()-style FTS_SKIP that skips just
- * one subtree and continues the rest of the walk. Faithfully
- * *preventing descent* into one pruned directory while continuing to
- * walk its siblings is therefore not expressible as an nftw() return
- * code at all -- this is a real, structural gap between POSIX's older
- * ftw()/nftw() family and what -prune needs, which is exactly why
- * POSIX later added fts() with its own FTS_SKIP.
+ * POSIX's ftw()/nftw() give the callback exactly one way to affect the
+ * walk: return non-zero, which stops the ENTIRE walk. There is no
+ * fts()-style FTS_SKIP that skips just one subtree. So preventing
+ * descent into one pruned directory while continuing to walk its
+ * siblings isn't expressible as an nftw() return code at all.
  *
- * The fix used here, rather than hand-rolling a second directory walker
- * beside ftw()/nftw() (which the task's own guidance is to build on,
- * not duplicate): every entry nftw() reports is checked against a
- * "pruned prefixes" list (g_find.pruned) *before* the expression is
- * evaluated against it at all; a directory added to that list by a live
- * -prune evaluation causes every subsequent report of one of its
- * descendants to be skipped outright -- no primitive, no -exec, no
- * -print ever runs against a pruned descendant, which is the
- * observable contract -prune promises. The one real difference from a
- * true skip-the-subtree walker: nftw() has already physically
- * opendir()'d/readdir()'d into the pruned directory by the time its own
- * -prune evaluation fires (report() happens before descent, but the
- * descent itself cannot be cancelled), so this implementation pays the
- * directory-read cost of a pruned subtree that a true FTS_SKIP would
- * have avoided. Documented here rather than silently accepted: it is a
- * real cost (wasted I/O on a large pruned subtree) but not a
- * correctness gap (no action ever fires on anything under the prefix).
+ * The fix: every entry nftw() reports is checked against a "pruned
+ * prefixes" list (g_find.pruned) *before* the expression is evaluated
+ * against it; a directory added to that list by a live -prune causes
+ * every subsequent report of its descendants to be skipped outright.
+ * The one real cost versus a true skip-the-subtree walker: nftw() has
+ * already opendir()'d/readdir()'d into the pruned directory by the time
+ * -prune fires (report() happens before descent, and the descent itself
+ * can't be cancelled), so a pruned subtree's directory-read I/O is not
+ * saved -- but no action ever fires on anything under the prefix, so
+ * this is a cost, not a correctness gap.
  *
- * ---- -exec/-ok "{} +" BATCHING ------------------------------------------
+ * ---- -exec/-ok "{} +" batching --------------------------------------------
  *
  * The "+" form's pathnames are accumulated per -exec/-ok node
- * (node->acc) across the *entire* walk (every path operand) and flushed
- * once at the very end, in size-bounded batches (flush_plus() below),
- * rather than flushed as soon as one directory's worth of names is
- * ready the way some historical find(1) implementations do. Both are
- * conforming -- the page only requires "as many pathnames as will fit"
- * per invocation and that the utility run at least once if any file
- * matched -- and deferring to the end is simpler to get right against
- * this project's single-pass nftw() driver. Documented as a real,
- * deliberate simplification: it means "+"-batched utility invocations
- * do not begin running until the whole tree walk (all path operands)
- * has finished, unlike the "as you go" streaming a real interactive
- * `find / -exec ... {} +` session might visibly show.
+ * (node->acc) across the entire walk and flushed once at the end, in
+ * size-bounded batches (flush_plus() below), rather than per-directory.
+ * Both are conforming; deferring to the end is simpler against this
+ * project's single-pass nftw() driver. One observable consequence:
+ * "+"-batched invocations do not begin running until the whole walk has
+ * finished, unlike an "as you go" streaming find.
  *
  * -ok's confirmation is read from standard input with getchar(), not
- * specifically from /dev/tty the way some historical implementations
- * insist on (so that a non-interactive stdin, e.g. from a pipe, cannot
- * accidentally answer "yes"). Documented rather than silently assumed:
- * a caller piping input into a `find ... -ok ...` invocation gets that
- * piped data consulted for the confirmation, which is the simpler and
- * more surprising-in-scripts behavior; POSIX's own wording ("read a
- * response from standard input") is silent on /dev/tty and this file
- * follows it literally.
+ * specifically /dev/tty, so a piped stdin is consulted for the answer --
+ * POSIX's wording ("read a response from standard input") is silent on
+ * /dev/tty and this file follows it literally.
  *
- * EXIT STATUS: "0: All path operands were traversed successfully. >0:
- * An error occurred." -- g_find.exit_status starts 0 and is set to 1 by
- * any per-entry error (unreadable directory, unstatable entry, a path
- * operand find() itself could not open, an -exec utility that could not
- * be found/spawned); a malformed expression is a distinct, immediate
- * exit 2 before any walk begins, matching every other utility in this
- * project's own "invalid invocation is 2, a runtime error found while
- * working is something else" convention (see e.g. src/util/test.c's
- * header comment).
+ * EXIT STATUS: 0 all path operands traversed successfully; >0 an error
+ * occurred. g_find.exit_status starts 0 and is set to 1 by any
+ * per-entry error; a malformed expression is a distinct, immediate exit
+ * 2 before any walk begins, matching this project's "invalid invocation
+ * is 2, a runtime error is something else" convention (src/util/test.c).
  */
 #include <stdio.h>
 #include <stdlib.h>
