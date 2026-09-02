@@ -224,6 +224,21 @@ int wcscoll_l (const wchar_t *, const wchar_t *, locale_t) __attribute__((__pure
 size_t wcsxfrm (wchar_t *__restrict, const wchar_t *__restrict, size_t);
 size_t wcsxfrm_l (wchar_t *__restrict, const wchar_t *__restrict, size_t, locale_t);
 
+/* wcwidth()/wcswidth() (src/string/wcwidth.c, src/string/wcswidth.c):
+ * real terminal column widths over real Unicode data (East Asian Width
+ * plus combining-mark classification -- see src/internal/unicode_tables.c
+ * and tools/gen-unicode-tables.py). wcwidth.html RETURN VALUE: "0 ... if
+ * wc is a null wide-character code", "-1 ... does not correspond to a
+ * printable wide-character code", otherwise "the number of column
+ * positions". wcswidth() is the same, summed over pwcs[0..n), stopping
+ * at n or the first null wide-character code, and returning -1 as soon
+ * as any non-printable code point is found -- pwcs is marked nonnull the
+ * same way wcsncmp() above is despite its own n == 0 short circuit
+ * (matching glibc's real wcswidth, not a genuine "may be invalid"
+ * reading). */
+int wcwidth (wchar_t) __attribute__((__pure__));
+int wcswidth (const wchar_t *, size_t) __attribute__((nonnull(1), __pure__));
+
 double wcstod (const wchar_t *__restrict, wchar_t **__restrict);
 float wcstof (const wchar_t *__restrict, wchar_t **__restrict);
 long double wcstold (const wchar_t *__restrict, wchar_t **__restrict);

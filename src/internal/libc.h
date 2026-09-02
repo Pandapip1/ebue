@@ -115,6 +115,48 @@ int __utf16_to_utf8_buf(const WCHAR *, size_t n, char *, size_t);
  * unconditionally with no NUL/NULL special case. */
 size_t wcslen_(const WCHAR *) __attribute__((nonnull(1)));
 
+/* ---- Unicode Character Database classification / case mapping ---------- */
+/* Real Unicode-driven backing for isw*()/tow*()/wcwidth() (src/ctype/isw*.c,
+ * src/ctype/tow*.c, src/string/wcwidth.c, src/string/wcswidth.c), over the
+ * generated range tables in src/internal/unicode_tables.c (produced by
+ * tools/gen-unicode-tables.py -- see that script's own docstring for which
+ * Unicode property backs each one and why). Implemented in
+ * src/internal/unicode_data.c. Every function here takes/returns a plain
+ * code point (as an unsigned int); every table it consults only ever holds
+ * entries at or below 0xffff (ntlibc's wchar_t is one UTF-16 code unit --
+ * wctype.h), so a cp above that, WEOF included, simply misses every table
+ * and gets that table's "not a member" answer with no separate bounds
+ * check needed anywhere except __unicode_is_print() (documented on its own
+ * declaration below: it is the one predicate defined as a complement, so
+ * out-of-table does NOT mean "false" for it alone). All are total,
+ * deterministic, side-effect-free functions of their one argument. */
+int __unicode_is_alpha(unsigned cp) __attribute__((__pure__));
+int __unicode_is_upper(unsigned cp) __attribute__((__pure__));
+int __unicode_is_lower(unsigned cp) __attribute__((__pure__));
+int __unicode_is_digit(unsigned cp) __attribute__((__pure__));
+int __unicode_is_space(unsigned cp) __attribute__((__pure__));
+int __unicode_is_cntrl(unsigned cp) __attribute__((__pure__));
+int __unicode_is_xdigit(unsigned cp) __attribute__((__pure__));
+int __unicode_is_blank(unsigned cp) __attribute__((__pure__));
+/* The complement of Cc+Cf+Cs+Co+Cn(unassigned)+Zl+Zp -- unlike every
+ * other predicate above, "not found in a table" means true here, so this
+ * one function does its own cp > 0xffff bounds check rather than relying
+ * on a table miss. */
+int __unicode_is_print(unsigned cp) __attribute__((__pure__));
+/* Mn+Me: the zero-width "combining mark" set wcwidth() reports column
+ * width 0 for. */
+int __unicode_is_combining(unsigned cp) __attribute__((__pure__));
+/* East_Asian_Width Wide or Fullwidth: the set wcwidth() reports column
+ * width 2 for. */
+int __unicode_is_wide(unsigned cp) __attribute__((__pure__));
+/* Simple (1:1, locale-blind) case mapping. Returns cp unchanged when no
+ * mapping exists -- including when cp has no simple mapping at all (e.g.
+ * towupper of sharp s 'ß') and when cp is out of every table's domain
+ * (WEOF, a lone surrogate, ...), exactly the "not in this mapping's
+ * domain" answer towupper()/towlower() are specified to give. */
+unsigned __unicode_to_upper(unsigned cp) __attribute__((__pure__));
+unsigned __unicode_to_lower(unsigned cp) __attribute__((__pure__));
+
 /* ---- UNICODE_STRING ---------------------------------------------------- */
 /* The longest string a UNICODE_STRING can describe: Length counts bytes
  * in a USHORT, and MaximumLength has to hold Length plus a terminating
