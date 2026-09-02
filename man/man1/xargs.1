@@ -1,0 +1,189 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH XARGS 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+xargs \- build and run command lines from standard input
+.SH SYNOPSIS
+.B xargs
+.RB [ \-p ]
+.RB [ \-t ]
+.RB [ \-x ]
+.RI [ \-E " eofstr" ]
+.RI [ \-I " replstr" ]
+.RI [ \-L " number" ]
+.RI [ \-n " number" ]
+.RI [ \-s " size" ]
+.RI [ utility " [" argument\ .\|.\|. ]]
+.SH DESCRIPTION
+.B xargs
+reads whitespace/quote-delimited arguments (see INPUT GRAMMAR below)
+from standard input, and invokes
+.I utility
+.RB ( echo ,
+if none is given) one or more times, each invocation's argument list
+built from
+.I utility
+and any
+.I argument
+operands given, followed by as many of the input-derived arguments as
+fit within the active batching rule and a real command-line length
+limit, until standard input is exhausted.
+.PP
+Each invocation's own exit status is tracked, but invocations continue
+regardless of any individual one's failure, with one exception: under
+.B \-I
+(see OPTIONS below), no further invocation is attempted once a
+previous one could not be found or could not be spawned at all; the
+default and
+.B \-L
+batching forms do not apply that same cutoff, and keep issuing
+invocations regardless of any previous invocation's exit status.
+.SS Input grammar
+Arguments are delimited from one another by any run of unquoted
+<blank> or <newline> characters. A run of zero or more bytes that are
+neither a double-quote character nor a newline can be quoted by
+enclosing it in a pair of double-quote characters; a run of zero or
+more bytes that are not a single-quote character can similarly be
+quoted by enclosing it in a pair of single-quote characters. Outside
+of either kind of quoting, any single character (including a
+<blank>, a newline, or a quote character) can be made literal by
+preceding it with a backslash. A backslash has no special meaning
+.I inside
+either kind of quoting \(em quoting and backslash-escaping are two
+independent mechanisms here, never nested the way shell quoting is.
+.SS Batching
+Exactly one of
+.BR \-I ", " \-L ,
+or the default token/\-n/\-s-driven batching described under OPTIONS
+is in effect for the whole run;
+.B \-I
+implies
+.B "\-L 1"
+and
+.BR \-x .
+.PP
+Every invocation's combined argument and environment size is kept
+under a byte ceiling: the value given to
+.BR \-s ,
+if any (otherwise a compiled-in default), but never more than a
+ceiling derived from the system's own real argument-list-size limit
+minus the current environment's size \(em so
+.B \-s
+can request a stricter limit than that derived ceiling, but never a
+looser one. If a single argument alone would already exceed the
+ceiling, an error is reported and no further invocations are
+attempted.
+.SH OPTIONS
+.TP
+.B \-p
+Before each invocation (after tracing it, as
+.B \-t
+would), ask whether to run it; a response read from standard input
+that begins, after any leading blanks, with
+.B y
+or
+.B Y
+runs it, anything else skips it. Implies the same tracing
+.B \-t
+causes.
+.TP
+.B \-t
+Write each invocation's argument list, space-separated, to standard
+error just before running it.
+.TP
+.B \-x
+If a batch built under
+.B \-n
+could not include all
+.I number
+arguments
+.B \-n
+asked for without exceeding the byte ceiling, stop with an error
+instead of running a shorter batch. Implied by
+.BR \-I .
+.TP
+.BI \-E " eofstr"
+Treat
+.I eofstr
+as a logical end-of-input marker: parsing of standard input stops at
+(and discards) the first token exactly equal to
+.IR eofstr ,
+as if standard input had ended there. Without
+.BR \-E ,
+no token is ever treated as an end-of-input marker, regardless of its
+value.
+.TP
+.BI \-I " replstr"
+Run
+.I utility
+once per input line (a run of input that the input grammar above
+would otherwise have split into several arguments, up to the next
+unquoted newline, is instead rejoined, space-separated, into one
+value for this purpose), with every occurrence of
+.I replstr
+in
+.I utility
+and every
+.I argument
+operand replaced by that line's value. Implies
+.B "\-L 1"
+and
+.BR \-x .
+Mutually exclusive with
+.BR \-L .
+.TP
+.BI \-L " number"
+Batch input by whole lines: each invocation gets as many complete
+input lines' worth of arguments as fit within the byte ceiling, up to
+.I number
+lines. Mutually exclusive with
+.BR \-I .
+.TP
+.BI \-n " number"
+Put at most
+.I number
+input-derived arguments in each invocation (still bounded by the byte
+ceiling).
+.TP
+.BI \-s " size"
+Use
+.I size
+bytes, instead of a compiled-in default, as the requested
+per-invocation byte ceiling described under Batching above.
+.SH OPERANDS
+.TP
+.I utility
+The command to run.
+.B echo
+is used if none is given.
+.TP
+.I argument
+A fixed leading argument to include in every invocation, before the
+input-derived ones; under
+.BR \-I ,
+instead, a template argument that
+.I replstr
+is substituted into.
+.SH APPLICATION USAGE
+.BR \-0 " and " \-d ,
+which would read NUL-delimited or custom-delimited input instead of
+the grammar described above, are not implemented; either is refused
+with a diagnostic and exit status 2.
+.SH EXIT STATUS
+.TP
+.B 0
+Every invocation exited 0.
+.TP
+1\(en125
+At least one invocation exited nonzero (the largest such exit status
+actually seen, if it stayed below 126), or an internal error prevented
+an invocation from being assembled or attempted.
+.TP
+.B 126
+A utility was found but could not be invoked.
+.TP
+.B 127
+A utility could not be found at all.
+.SH SEE ALSO
+.BR find (1),
+.BR grep (1)

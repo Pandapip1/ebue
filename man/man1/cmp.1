@@ -1,0 +1,85 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH CMP 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+cmp \- compare two files byte by byte
+.SH SYNOPSIS
+.B cmp
+.RB [ \-l | \-s ]
+.I file1 file2
+.SH DESCRIPTION
+.B cmp
+compares
+.I file1
+and
+.IR file2 ,
+byte by byte from the beginning, until they differ or one or both end.
+.PP
+By default, at the first byte where the two files differ,
+.B cmp
+writes "file1 file2 differ: char N, line L" (both 1-based) to standard
+output and exits 1. If the files are identical over the entire length
+of the shorter one but one file is longer than the other,
+.B cmp
+instead writes "cmp: EOF on shorter after byte N, in line L" to
+standard error and exits 1. If the files are wholly identical,
+.B cmp
+prints nothing and exits 0.
+.PP
+Once a difference has been found, the line number reported for any
+further byte position is always counted from
+.IR file1 's
+own newline bytes, even though
+.I file1
+and
+.I file2
+may from that point on disagree about where their own lines end;
+POSIX leaves this case unspecified, and this is a deliberate choice.
+.SH OPTIONS
+.TP
+.B \-l
+Instead of stopping at the first difference, compare the entire
+length of the shorter file and report every differing byte: one line
+each, giving its 1-based byte position (decimal) and the two files'
+byte values there (each in octal). Mutually exclusive with
+.BR \-s .
+.TP
+.B \-s
+Write nothing to standard output. Differences (and the EOF-on-shorter
+condition) are reported through the exit status alone. Does not
+suppress the diagnostic written when a file cannot be opened or read
+at all, since that is a different condition from the files differing.
+Mutually exclusive with
+.BR \-l .
+.SH OPERANDS
+.TP
+.IR file1 ", " file2
+The two files to compare. Either operand, but not usefully both, may
+be
+.B \-
+for standard input.
+.SH APPLICATION USAGE
+If both
+.I file1
+and
+.I file2
+are given as
+.BR \- ,
+both refer to the same standard input stream, read sequentially (not
+the same bytes for both), which is unlikely to be a useful comparison.
+.SH EXIT STATUS
+.TP
+.B 0
+The files are identical.
+.TP
+.B 1
+The files differ, including the case where one file is identical to
+the first part of the other but shorter.
+.TP
+.B >1
+An error occurred: invalid usage, a
+.I file
+that could not be opened, or a read error partway through the
+comparison.
+.SH SEE ALSO
+.BR diff (1)
