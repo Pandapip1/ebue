@@ -288,7 +288,8 @@ STATRENAME = stat=__real_stat
 HARNESSES = strtod printf scanf utf path strptime strtol strftime \
             fnmatch regex glob wordexp \
             shparse inet string search getopt env time pathname getdate \
-            iconv strfmon catgets m4 sed ed awk grep expr
+            iconv strfmon catgets m4 sed ed awk grep expr \
+            resolv nsswitch
 EXES = $(HARNESSES:%=$(OUT)/fuzz_%)
 SHIM_OBJ = $(SHIM_SRC:%.c=$(OUT)/%.o)
 COVSHIM_OBJ = $(SHIM_SRC:%.c=$(COVOUT)/%.o)
@@ -423,6 +424,31 @@ $(OUT)/ntstubs.o: ntstubs.c statshim.h $(LIBHDR) $(LIBDIR)/.built | $(OUT)
 $(OUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(OUT)/host_oracle.o $(SHIM_OBJ) $(AFLSHIM_OBJ) $(OUT)/ntstubs.o $(LIBDIR)/.built | $(OUT) $(AFLRT_DEP)
 	$(CC) $(CFLAGS_HARNESS) $(SAN_LINK) $(RPATH) \
 	  $(SAN_SO) $< $(OUT)/ntstubs.o $(OUT)/host_oracle.o $(SHIM_OBJ) $(AFLSHIM_OBJ) \
+	  $(LIBDIR)/obj/*.o $(FUZZER_LIB) -ldl -lm -o $@
+
+# fuzz_nsswitch: src/netdb/linux/ is not part of $(LIBDIR) -- every file
+# under any src/*/linux/ directory is deliberately skipped by
+# ../tools/asan-build.sh (see the comment above its `linux)` case: this
+# native harness exercises the NT backend through ntstubs.c, and that
+# directory has no nt/ counterpart standing in for it the way every
+# other platform-split module does). __nsswitch_order() itself has no
+# NT dependency at all -- fopen/fgets/fclose/strchr/strncmp/tolower,
+# every one of them already in $(LIBDIR) -- so rather than widen that
+# script's file selection for every harness, the real nsswitch.c is
+# compiled here, once, straight from the source tree, and linked into
+# this harness alone. Nothing in nsswitch.c changes: __nsswitch_order()
+# was already non-static and already declared in src/internal/
+# nsswitch.h, so this is a build-graph addition, not a source change.
+# See fuzz/fuzz_nsswitch.c's own banner for the fuller reasoning, and
+# fuzz/fuzz_resolv.c's for why resolv.c takes a different route
+# (#include, not a linked object) to reach a `static` function this
+# approach cannot expose.
+$(OUT)/nsswitch.o: $(srcdir)/src/netdb/linux/nsswitch.c $(LIBHDR) | $(OUT)
+	$(CC) $(CFLAGS_HARNESS) -c $< -o $@
+
+$(OUT)/fuzz_nsswitch: fuzz_nsswitch.c $(LIBHDR) $(OUT)/host_oracle.o $(SHIM_OBJ) $(AFLSHIM_OBJ) $(OUT)/ntstubs.o $(OUT)/nsswitch.o $(LIBDIR)/.built | $(OUT) $(AFLRT_DEP)
+	$(CC) $(CFLAGS_HARNESS) $(SAN_LINK) $(RPATH) \
+	  $(SAN_SO) $< $(OUT)/ntstubs.o $(OUT)/host_oracle.o $(SHIM_OBJ) $(AFLSHIM_OBJ) $(OUT)/nsswitch.o \
 	  $(LIBDIR)/obj/*.o $(FUZZER_LIB) -ldl -lm -o $@
 
 # Leak detection on; see tools/asan-build.sh for why it can be trusted here.
@@ -578,6 +604,22 @@ $(COVOUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(COVOUT)/host_oracle.o $(COVSHIM_OBJ) $(CO
 	  -fprofile-instr-generate=$(abspath $(COVDATA))/$*/fuzz_$*.profraw \
 	  $(SAN_LINK) $(RPATH) \
 	  $(SAN_SO) $< $(COVOUT)/ntstubs.o $(COVOUT)/host_oracle.o $(COVSHIM_OBJ) \
+	  $(COVLIB)/obj/*.o $(FUZZER_LIB) -ldl -lm -o $@
+
+# fuzz_nsswitch's coverage-tree twin of the $(OUT)/nsswitch.o rule above:
+# same reason (src/netdb/linux/ is not part of $(COVLIB) either, for the
+# identical asan-build.sh skip), same fix, just instrumented with $(PROF)
+# like every other file under $(COVOUT) so `make -C fuzz coverage` can
+# report this harness's per-file coverage the same way it does for
+# everything else in $(HARNESSES).
+$(COVOUT)/nsswitch.o: $(srcdir)/src/netdb/linux/nsswitch.c $(LIBHDR) | $(COVOUT)
+	$(CC) $(CFLAGS_HARNESS) $(PROF) -c $< -o $@
+
+$(COVOUT)/fuzz_nsswitch: fuzz_nsswitch.c $(LIBHDR) $(COVOUT)/host_oracle.o $(COVSHIM_OBJ) $(COVOUT)/ntstubs.o $(COVOUT)/nsswitch.o $(COVLIB)/.built | $(COVOUT)
+	$(CC) $(CFLAGS_HARNESS) $(PROF) \
+	  -fprofile-instr-generate=$(abspath $(COVDATA))/nsswitch/fuzz_nsswitch.profraw \
+	  $(SAN_LINK) $(RPATH) \
+	  $(SAN_SO) $< $(COVOUT)/ntstubs.o $(COVOUT)/host_oracle.o $(COVSHIM_OBJ) $(COVOUT)/nsswitch.o \
 	  $(COVLIB)/obj/*.o $(FUZZER_LIB) -ldl -lm -o $@
 
 coverage: $(COVEXES)
