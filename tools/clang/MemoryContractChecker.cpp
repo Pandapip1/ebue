@@ -982,6 +982,8 @@ public:
         return rootParameter(Binary->getLHS());
     if (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(Expression))
       return rootParameter(Subscript->getBase());
+    if (const auto *Member = dyn_cast<MemberExpr>(Expression))
+      return rootParameter(Member->getBase());
     if (const auto *Address = dyn_cast<UnaryOperator>(Expression))
       if (Address->getOpcode() == UO_AddrOf)
         return rootParameter(Address->getSubExpr());

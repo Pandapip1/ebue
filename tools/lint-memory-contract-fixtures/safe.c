@@ -182,6 +182,17 @@ void copy_one_restrict_parameter(
 	memcpy(destination, source, length);
 }
 
+struct fixture_member_buffer {
+	char bytes[16];
+};
+
+void copy_restrict_members(
+	struct fixture_member_buffer *restrict destination,
+	const struct fixture_member_buffer *restrict source)
+{
+	memcpy(destination->bytes, source->bytes, sizeof destination->bytes);
+}
+
 void copy_to_fresh_unknown_allocation(
 	const char *source withtok(fixture_readable_span(length)), size_t length)
 {
