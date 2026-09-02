@@ -43,13 +43,12 @@
 # compile/link evidence (and, where noted, a native aarch64-linux run of
 # the unmodified upstream source), not an observed Wine run.
 #
-# COUNTS PASS=113 BUG=2 UNIMPL=9 NA=21 FLAKY=1
+# COUNTS PASS=114 BUG=2 UNIMPL=8 NA=21 FLAKY=1
 clocale_mbfuncs	runtime=wine,target_arch=x86_64,kernel32=no	NA	Design difference: this library's only encoding is UTF-8 (MB_CUR_MAX=4), but the test opens setlocale(LC_CTYPE, "C") and requires the single-byte-C-locale invariant MB_CUR_MAX==1.
 crypt	runtime=wine,target_arch=x86_64,kernel32=no	NA	Design difference: this library implements only POSIX-mandatory DES crypt(3); every test case uses a glibc/BSD extension hash format ($1$/$2a$/$2x$/$2y$/$5$/$6$), which correctly fails with EINVAL.
 daemon-failure	runtime=wine,target_arch=x86_64,kernel32=no	NA	The test needs the shim's t_fdfill() to exhaust the fd table so daemon()'s open("/dev/null") fails with EMFILE, but t_fdfill() is stubbed (no enforced RLIMIT_NOFILE), so daemon() succeeds instead.
 dlopen	runtime=wine,target_arch=x86_64,kernel32=no	NA	dlopen() correctly reports the missing module, but this harness only builds each corpus source as its own standalone executable, so dlopen_dso.so is never produced for this test to open (see dlopen_dso's own row).
 dlopen_dso	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	tcc: error: unresolved reference to 'main'
-env	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	tcc: error: unresolved reference to 'clearenv' (dropped as an unused non-POSIX extension in 49b8099)
 execle-env	runtime=wine,target_arch=x86_64,kernel32=no	NA	no /bin/sh on the target; execle("/bin/sh",...) cannot succeed
 fcntl	runtime=wine,target_arch=x86_64,kernel32=no	BUG	F_SETLK across fork(): the child inherits the same NT file object, so its byte-range-lock request does not conflict with the parent's as POSIX requires for a distinct process.
 malloc-brk-fail	runtime=wine,target_arch=x86_64,kernel32=no	NA	Design difference: malloc() uses the pre-existing NT process heap (src/malloc/nt/plat_malloc.c), whose already-reserved arena can still satisfy allocation after address-space exhaustion, unlike the musl/brk-specific premise this test assumes.
