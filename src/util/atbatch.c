@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include "spool.h"
 #include "atbatch.h"
+#include "ownership_stubs.h"
 
 /* Identical escaping rule to src/sh/builtin.c's own write_quoted()
  * (bi_set's `set` output) -- see this header's own comment on why the
@@ -70,6 +71,7 @@ int __atbatch_submit(const char *queue, time_t run_at, const char *srcfile,
 		size_t namelen = strcspn(*e, "=");
 		if (!(*e)[namelen]) continue; /* malformed entry, no '=' -- nothing to export */
 		if (fputs("export ", f) == EOF) goto fail;
+		__ownership_readable_span(*e, namelen);
 		if (fwrite(*e, 1, namelen, f) != namelen) goto fail;
 		if (fputc('=', f) == EOF) goto fail;
 		if (write_quoted(f, *e + namelen + 1) < 0) goto fail;

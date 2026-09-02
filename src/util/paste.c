@@ -44,6 +44,7 @@
 #include <string.h>
 #include <errno.h>
 #include "util.h"
+#include "ownership_stubs.h"
 
 static int parse_delim_list(const char *spec, char **out, size_t *out_n)
 {
@@ -121,6 +122,7 @@ static void concat_serial(FILE *f, const char *delims, size_t ndelim)
 	while ((len = getline(&line, &cap, f)) >= 0) {
 		if (len > 0 && line[len - 1] == '\n') line[--len] = 0;
 		if (any) fputc(delims[k++ % ndelim], stdout);
+		__ownership_readable_span(line, (size_t)len);
 		fwrite(line, 1, (size_t)len, stdout);
 		any = 1;
 	}

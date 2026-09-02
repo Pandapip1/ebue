@@ -59,6 +59,7 @@
 #include <errno.h>
 #include <wchar.h>
 #include "util.h"
+#include "ownership_stubs.h"
 
 /* See this file's header: identical to src/util/cut.c's char_len(). */
 static size_t char_len(const unsigned char *p, size_t avail)
@@ -132,6 +133,7 @@ static void fold_line(const char *line, size_t len, int had_nl, long width, int 
 		i += clen;
 	}
 
+	__ownership_readable_span(line + seg_start, len - seg_start);
 	fwrite(line + seg_start, 1, len - seg_start, stdout);
 	if (had_nl) fputc('\n', stdout);
 }

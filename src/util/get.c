@@ -69,6 +69,7 @@
 #include <errno.h>
 #include <libgen.h>
 #include "util.h"
+#include "ownership_stubs.h"
 
 struct sfile {
 	char *buf;   /* whole file, NUL-terminated */
@@ -101,6 +102,7 @@ static int read_whole_file(const char *path, struct sfile *out)
 			if (!g) { free(buf); fclose(f); return -1; }
 			buf = g; cap = newcap;
 		}
+		__ownership_writable_span(buf + len, cap - len - 1);
 		got = fread(buf + len, 1, cap - len - 1, f);
 		len += got;
 		if (got == 0) break;
@@ -227,6 +229,7 @@ static int write_body(FILE *out, struct line_ref *lines, size_t n)
 {
 	size_t i;
 	for (i = 0; i < n; i++) {
+		__ownership_readable_span(lines[i].p, lines[i].len);
 		if (fwrite(lines[i].p, 1, lines[i].len, out) != lines[i].len) return -1;
 		if (fputc('\n', out) == EOF) return -1;
 	}

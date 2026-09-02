@@ -34,6 +34,7 @@
 #include <errno.h>
 #include <limits.h>
 #include "util.h"
+#include "ownership_stubs.h"
 
 /* index 0 -> suffix_length copies of 'a', counting up like an odometer
  * with 26 positions per digit; returns -1 once index has run past the
@@ -115,6 +116,7 @@ static int split_by_lines(FILE *in, const char *prefix, int suflen, long lcount)
 			inpiece = 0;
 			had_output = 1;
 		}
+		__ownership_readable_span(line, (size_t)n);
 		if (fwrite(line, 1, (size_t)n, out) != (size_t)n) {
 			/* The write failure is primary; close only releases the piece. */
 			(void)fclose(out);

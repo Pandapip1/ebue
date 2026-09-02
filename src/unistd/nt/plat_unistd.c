@@ -291,12 +291,12 @@ int __plat_unlink(int dirfd, const char *path, int isdir)
 void __plat_hostname(char *buf, size_t bufsz)
 {
 	const char *h = getenv("COMPUTERNAME");
-	size_t n;
+	size_t n, i;
 	if (!h) h = "localhost";
 	n = strlen(h);
 	if (!bufsz) return;
 	if (n >= bufsz) n = bufsz - 1;
-	memcpy(buf, h, n);
+	for (i = 0; i < n; i++) buf[i] = h[i];
 	buf[n] = '\0';
 }
 

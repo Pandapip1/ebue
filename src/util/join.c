@@ -68,6 +68,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include "util.h"
+#include "ownership_stubs.h"
 
 struct field { size_t start, end; };
 
@@ -159,6 +160,7 @@ static void join_putc(int ch)
 
 static void join_write(const char *p, size_t len)
 {
+	__ownership_readable_span(p, len);
 	if (!join_output_failed && fwrite(p, 1, len, stdout) != len)
 		join_output_failed = 1;
 }

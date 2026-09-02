@@ -54,6 +54,7 @@
 #include <errno.h>
 #include "util.h"
 #include "tablist.h"
+#include "ownership_stubs.h"
 
 static int is_blank(char c) { return c == ' ' || c == '\t'; }
 
@@ -126,6 +127,7 @@ static void unexpand_stream(FILE *f, const struct tablist *tl, int effective_a)
 				}
 			}
 		} else {
+			__ownership_readable_span(line + i, n - i);
 			fwrite(line + i, 1, n - i, stdout);
 		}
 		if (had_nl) fputc('\n', stdout);

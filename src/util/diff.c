@@ -146,6 +146,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include "util.h"
+#include "ownership_stubs.h"
 
 /* ==== line storage ======================================================== */
 
@@ -166,6 +167,7 @@ static int read_whole_stream(FILE *f, char **out, size_t *outlen)
 			if (!g) { free(buf); return 0; }
 			buf = g; cap = newcap;
 		}
+		__ownership_writable_span(buf + len, cap - len);
 		got = fread(buf + len, 1, cap - len, f);
 		len += got;
 		if (got == 0) break;

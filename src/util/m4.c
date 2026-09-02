@@ -320,6 +320,7 @@
 #include <stdint.h>
 #include <sys/wait.h>
 #include "util.h"
+#include "ownership_stubs.h"
 
 /* ==== builtin identity table ================================================ */
 
@@ -1850,6 +1851,7 @@ int __util_m4_main(int argc, char **argv)
 	 * performed regardless of how this run ended -- see header comment. */
 	for (i = 1; i <= 9; i++) {
 		if (st.div[i].len) {
+			__ownership_readable_span(st.div[i].data, st.div[i].len);
 			if (fwrite(st.div[i].data, 1, st.div[i].len, stdout) != st.div[i].len) st.had_error = 1;
 			st.div[i].len = 0;
 		}

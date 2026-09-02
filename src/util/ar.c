@@ -106,6 +106,7 @@
 #include <time.h>
 #include <sys/stat.h>
 #include "util.h"
+#include "ownership_stubs.h"
 
 #define AR_MAGIC "!<arch>\n"
 #define AR_MAGIC_LEN 8
@@ -418,6 +419,7 @@ static int copy_bytes(FILE *src, FILE *dst, long off, long len)
 		size_t want = len < (long)sizeof buf ? (size_t)len : sizeof buf;
 		size_t got = fread(buf, 1, want, src);
 		if (got == 0) return -1;
+		__ownership_readable_span(buf, got);
 		if (fwrite(buf, 1, got, dst) != got) return -1;
 		len -= (long)got;
 	}

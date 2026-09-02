@@ -67,6 +67,7 @@
 #include "libc.h"
 #include "sh.h"
 #include "util.h"
+#include "ownership_stubs.h"
 
 
 /* Every bi_*() below is reached only through builtins[].fn, always with
@@ -796,6 +797,7 @@ static int set_list_variables(void)
 			if (fputs(*e, stdout) < 0 || fputc('\n', stdout) == EOF) return -1;
 			continue;
 		}
+		__ownership_readable_span(*e, name_length);
 		if (fwrite(*e, 1, name_length, stdout) != name_length ||
 		    fputc('=', stdout) == EOF || write_quoted(*e + name_length + 1) < 0 ||
 		    fputc('\n', stdout) == EOF) return -1;

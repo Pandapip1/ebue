@@ -251,7 +251,10 @@ static void ustar_put_oct(unsigned char *field, int width, unsigned long value)
 	snprintf(tmp, sizeof tmp, "%0*lo", width - 1, value);
 	__ownership_writable_span(field, (size_t)(width - 1));
 	__ownership_readable_span(tmp, (size_t)(width - 1));
-	memcpy(field, tmp, width - 1);
+	{
+		size_t i;
+		for (i = 0; i < width - 1; i++) field[i] = tmp[i];
+	}
 	field[width - 1] = 0;
 }
 
@@ -547,6 +550,7 @@ static int pax_reader_open(struct pax_reader *r, const char *path)
 	}
 	memcpy(r->first_block, magic, got);
 	if (got < USTAR_BLOCK) {
+		__ownership_writable_span(r->first_block + got, USTAR_BLOCK - got);
 		size_t more = fread(r->first_block + got, 1, USTAR_BLOCK - got, r->f);
 		got += more;
 	}
@@ -672,8 +676,11 @@ static int pax_write_member(FILE *out, enum pax_format fmt, const struct pax_mem
 	} else {
 		unsigned long datasize;
 		if (write_cpio_header(out, m, &datasize) < 0) return -1;
-		if (m->type == PAX_SYMLINK)
-			return fwrite(m->linkname, 1, datasize, out) == datasize ? 0 : -1;
+		if (m->type == PAX_SYMLINK) {
+			const char *linkname = m->linkname;
+			__ownership_readable_span(linkname, datasize);
+			return fwrite(linkname, 1, datasize, out) == datasize ? 0 : -1;
+		}
 		if (m->type == PAX_REG && datasize)
 			return pax_write_data_from_fd(out, srcfd, datasize, fmt);
 		return 0;

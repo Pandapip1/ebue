@@ -56,6 +56,7 @@
 #include <errno.h>
 #include <wchar.h>
 #include "util.h"
+#include "ownership_stubs.h"
 
 #define RANGE_OPEN (-1L)
 
@@ -188,6 +189,7 @@ static void process_field_mode(FILE *f, const struct range *ranges, size_t nr, c
 
 		if (!memchr(line, delim, ulen)) {
 			if (!suppress) {
+				__ownership_readable_span(line, ulen);
 				fwrite(line, 1, ulen, stdout);
 				if (had_nl) fputc('\n', stdout);
 			}

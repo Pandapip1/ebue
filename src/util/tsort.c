@@ -45,6 +45,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include "util.h"
+#include "ownership_stubs.h"
 
 struct node {
 	char *name;
@@ -126,6 +127,7 @@ static char *slurp(FILE *f, size_t *outlen)
 				cap = newcap;
 			}
 		}
+		__ownership_writable_span(buf + len, cap - len);
 		got = fread(buf + len, 1, cap - len, f);
 		len += got;
 		if (got == 0) break;
