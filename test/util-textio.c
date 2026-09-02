@@ -740,7 +740,29 @@ static void test_tail_dash_f_pipe_exits_at_eof(void)
 	int fds[2];
 	int pid, status;
 
-	CHECK(pipe(fds) == 0);
+	/* O_CLOEXEC on both ends: __spawn() (src/process/spawn.c) inherits
+	 * any descriptor this process has open and not close-on-exec into
+	 * every child it starts -- real fork+exec semantics, not something
+	 * special to fd 0/1/2 (confirmed against both backends: Linux's
+	 * clone()+execve() only drops a real FD_CLOEXEC-flagged fd, and NT's
+	 * __fd_runtime_data(), src/internal/nt/plat_fd_init.c, explicitly
+	 * passes "everything open and not close-on-exec"). A plain pipe(2)
+	 * here would leave fds[1] (this write end) inheritable, so *every*
+	 * child spawn_capturing() below starts -- tail itself included --
+	 * would come up holding its own extra, unintentional copy of the
+	 * write end open on fd 0's underlying pipe. That copy keeps the
+	 * pipe's read side from ever seeing EOF once this test closes its
+	 * own fds[1], because the kernel still sees a live writer: the tail
+	 * child's own leaked descriptor. tail_follow()'s pipe branch
+	 * (src/util/tail.c) would then block in read() forever, and the
+	 * waitpid() below would hang right along with it -- reproduced
+	 * live: obj/test/util-textio.exe genuinely never returns without
+	 * this fix. Marking the pipe close-on-exec keeps both ends out of
+	 * any child's table except the one descriptor spawn_capturing()
+	 * explicitly re-homes onto fd 0 (dup2() -- src/unistd/dup.c's
+	 * dup_to() -- always clears O_CLOEXEC on its target regardless of
+	 * the source, so tail still gets a normal, inheritable stdin). */
+	CHECK(pipe2(fds, O_CLOEXEC) == 0);
 
 	argv[0] = (char *)"tail"; argv[1] = (char *)"-f"; argv[2] = 0;
 	pid = spawn_capturing(tail_path, argv, fds[0]);
