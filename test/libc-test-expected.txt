@@ -43,7 +43,7 @@
 # compile/link evidence (and, where noted, a native aarch64-linux run of
 # the unmodified upstream source), not an observed Wine run.
 #
-# COUNTS PASS=114 BUG=2 UNIMPL=8 NA=21 FLAKY=1
+# COUNTS PASS=115 BUG=2 UNIMPL=7 NA=21 FLAKY=1
 clocale_mbfuncs	runtime=wine,target_arch=x86_64,kernel32=no	NA	Design difference: this library's only encoding is UTF-8 (MB_CUR_MAX=4), but the test opens setlocale(LC_CTYPE, "C") and requires the single-byte-C-locale invariant MB_CUR_MAX==1.
 crypt	runtime=wine,target_arch=x86_64,kernel32=no	NA	Design difference: this library implements only POSIX-mandatory DES crypt(3); every test case uses a glibc/BSD extension hash format ($1$/$2a$/$2x$/$2y$/$5$/$6$), which correctly fails with EINVAL.
 daemon-failure	runtime=wine,target_arch=x86_64,kernel32=no	NA	The test needs the shim's t_fdfill() to exhaust the fd table so daemon()'s open("/dev/null") fails with EMFILE, but t_fdfill() is stubbed (no enforced RLIMIT_NOFILE), so daemon() succeeds instead.
@@ -66,7 +66,6 @@ spawn	runtime=wine,target_arch=x86_64,kernel32=no	NA	posix_spawnp() spawns "echo
 sscanf_long	runtime=wine,target_arch=x86_64,kernel32=no	NA	Unverifiable in this environment: the test needs an enforced RLIMIT_STACK, but t_setrlim is stubbed.
 syscall-sign-extend	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	syscall-sign-extend.c:7: error: include file 'sys/syscall.h' not found
 tgmath	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	tgmath.c:28 uses `0.5+0*I`, but I is undefined under this tcc (no _Complex support); tgmath's real-only float/double/long-double dispatch works, only the complex half of this case fails.
-tls_align	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	tcc: error: unresolved reference to 't'
 tls_align_dlopen	runtime=wine,target_arch=x86_64,kernel32=no	NA	dlopen() correctly reports the nonexistent path, but this harness only builds each corpus source as its own standalone executable, so tls_align_dso.so is never produced for this test to open (see tls_align_dso's own row).
 tls_align_dso	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	tcc: error: unresolved reference to 'main'
 tls_get_new-dtv	runtime=wine,target_arch=x86_64,kernel32=no	NA	dlopen() correctly reports the exhausted search, but this harness only builds each corpus source as its own standalone executable, so tls_get_new-dtv_dso.so is never produced for this test to open (see tls_get_new-dtv_dso's own row).

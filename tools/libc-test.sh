@@ -439,6 +439,30 @@ if [ -z "$corpus" ]; then
 	exit 1
 fi
 
+# Every test source here is built and linked as its own single-file
+# program: $f plus the shared harness helpers ($hobjs) is the whole
+# link line, because that is what upstream's own Makefile does for the
+# overwhelming majority of this corpus. tls_align.c is the sole
+# exception (grep LDLIBS over every functional/*.mk and regression/*.mk
+# to confirm): tls_align.mk links it against a second translation unit,
+# tls_align_dso.c, which defines the `t[]` descriptor array tls_align.c
+# only declares `extern` -- upstream's own harness builds that second
+# file as a DSO (or, for its "-static" variant, a plain .o) and links it
+# in at build time, never via dlopen(). That is a fundamentally
+# different need from this corpus's *_dlopen/*_dso.mk tests (dlopen,
+# tls_align_dlopen, tls_init_dlopen, tls_get_new-dtv), which load their
+# companion .so at runtime and so hit this project's real, separate
+# __rpath gap (see include/ntlibc/rpath.h and those tests' ledger rows);
+# tls_align needs nothing dlopen-related at all, just one more file on
+# the link line. This table is the minimal fix for that one case,
+# without teaching this script to parse .mk files in general for a
+# corpus where it is otherwise unneeded.
+extra_srcs_for() {
+	case "$1" in
+	tls_align) echo "$SUITE/src/functional/tls_align_dso.c" ;;
+	esac
+}
+
 build_one() {
 	f=$1; n=$(basename "$f" .c)
 	want=$(ledger_status "$n")
@@ -460,9 +484,10 @@ build_one() {
 	# companion object built above whenever the source references it.
 	rpath_obj=""
 	grep -q 'dlopen(' "$f" && rpath_obj="obj/libc-test/rpath-stub.o"
+	extra=$(extra_srcs_for "$n")
 	# shellcheck disable=SC2086
 	if $CC $CFLAGS_C99FSE $CFLAGS_AUTO -D_GNU_SOURCE $INC -nostdlib \
-	    -o "obj/libc-test/$n.exe" "$srcdir/lib/crt1.o" "$f" $hobjs $rpath_obj \
+	    -o "obj/libc-test/$n.exe" "$srcdir/lib/crt1.o" "$f" $extra $hobjs $rpath_obj \
 	    -L"$srcdir/lib" -lc -lntdll > "$W/out/$n.build" 2>&1; then
 		echo built > "$W/out/$n.state"
 	else
