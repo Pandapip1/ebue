@@ -962,3 +962,83 @@ const char *local_pointer_without_sentinel(const char *p, int keep_running)
 		p++;
 	return p;
 }
+
+const char *switch_pointer_progress(const char *p, int arm)
+{
+	while (*p) {
+		switch (arm) {
+		case 0:
+			p++;
+			break;
+		case 1:
+		case 2:
+			p += 2;
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_pointer_fallthrough(const char *p, int arm)
+{
+	while (*p) {
+		switch (arm) {
+		case 0:
+			arm = 1;
+			/* fall through */
+		case 1:
+			p++;
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_pointer_continue(const char *p, int arm)
+{
+	while (*p) {
+		switch (arm) {
+		case 0:
+			p++;
+			continue;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_empty_sentinel_exit(const char *p, int arm)
+{
+	while (*p) {
+		switch (arm) {
+		case 0:
+			p++;
+			break;
+		case 1:
+			p = (const char *)"";
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+unsigned switch_scalar_progress(unsigned i, unsigned limit, int arm)
+{
+	while (i < limit) {
+		switch (arm) {
+		case 0:
+			i++;
+			break;
+		default:
+			return i;
+		}
+	}
+	return i;
+}

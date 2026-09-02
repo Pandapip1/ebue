@@ -2698,3 +2698,138 @@ const char *local_pointer_condition_reset(const char *p, const char *start,
 	}
 	return p;
 }
+
+const char *switch_case_without_progress(const char *p, int arm)
+{
+	while (*p) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			p++;
+			break;
+		case 1:
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_continue_without_progress(const char *p, int arm)
+{
+	while (*p) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			p++;
+			break;
+		case 1:
+			continue;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_fallthrough_bypasses_progress(const char *p, int arm)
+{
+	while (*p) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			p++;
+		case 1:
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_empty_sentinel_then_reset(const char *p,
+	const char *start, int arm)
+{
+	while (*p) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			p++;
+			break;
+		case 1:
+			p = (const char *)"";
+			p = start;
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_empty_not_terminating_or(const char *p, int keep,
+	int arm)
+{
+	while (*p || keep) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			p++;
+			break;
+		case 1:
+			p = (const char *)"";
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_empty_wrong_polarity(const char *p, int arm)
+{
+	while (!*p) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			p++;
+			break;
+		case 1:
+			p = (const char *)"";
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_nested_case_bypass(const char *p, int arm, int guard)
+{
+	while (*p) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			if (guard) {
+				p++;
+		case 1:
+				break;
+			}
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+unsigned switch_repeated_unsigned_progress(unsigned i, unsigned limit,
+	int arm)
+{
+	while (i < limit) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			i++;
+			i++;
+			break;
+		default:
+			return i;
+		}
+	}
+	return i;
+}
