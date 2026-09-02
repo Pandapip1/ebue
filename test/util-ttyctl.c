@@ -188,25 +188,33 @@ static void test_tty_invalid_option(void)
 /* ==== stty(1p): argument-parsing/validation (see this file's own
  * header comment for why this is what's checkable here) ================= */
 
+/* stty's own ENOTTY failure (this file's header comment): every
+ * argument-parsing case below that parses cleanly must reach this same
+ * exit-1 "standard input" diagnostic rather than some parse error, so
+ * it's checked through one helper instead of being repeated at each
+ * call site. */
+static void check_reaches_tty_check(char *const *argv)
+{
+	CHECK(run(stty_path, argv) == 1);
+	CHECK(err_contains("standard input"));
+}
+
 static void test_stty_bare_not_a_tty(void)
 {
 	char *argv[] = { (char *)"stty", 0 };
-	CHECK(run(stty_path, argv) == 1);
-	CHECK(err_contains("standard input"));
+	check_reaches_tty_check(argv);
 }
 
 static void test_stty_dash_a_not_a_tty(void)
 {
 	char *argv[] = { (char *)"stty", (char *)"-a", 0 };
-	CHECK(run(stty_path, argv) == 1);
-	CHECK(err_contains("standard input"));
+	check_reaches_tty_check(argv);
 }
 
 static void test_stty_dash_g_not_a_tty(void)
 {
 	char *argv[] = { (char *)"stty", (char *)"-g", 0 };
-	CHECK(run(stty_path, argv) == 1);
-	CHECK(err_contains("standard input"));
+	check_reaches_tty_check(argv);
 }
 
 static void test_stty_dash_a_combined_is_usage_error(void)
@@ -228,8 +236,7 @@ static void test_stty_valid_operand_reaches_tty_check(void)
 	 * recognized rather than every case falling through to the same
 	 * generic error. */
 	char *argv[] = { (char *)"stty", (char *)"echo", 0 };
-	CHECK(run(stty_path, argv) == 1);
-	CHECK(err_contains("standard input"));
+	check_reaches_tty_check(argv);
 }
 
 static void test_stty_unknown_operand(void)
@@ -283,8 +290,7 @@ static void test_stty_erase_invalid_value(void)
 static void test_stty_erase_valid_reaches_tty_check(void)
 {
 	char *argv[] = { (char *)"stty", (char *)"erase", (char *)"^H", 0 };
-	CHECK(run(stty_path, argv) == 1);
-	CHECK(err_contains("standard input"));
+	check_reaches_tty_check(argv);
 }
 
 static void test_stty_min_out_of_range(void)
@@ -298,8 +304,7 @@ static void test_stty_min_out_of_range(void)
 static void test_stty_bare_baud_reaches_tty_check(void)
 {
 	char *argv[] = { (char *)"stty", (char *)"9600", 0 };
-	CHECK(run(stty_path, argv) == 1);
-	CHECK(err_contains("standard input"));
+	check_reaches_tty_check(argv);
 }
 
 static void test_stty_combination_modes_parse(void)
@@ -315,9 +320,7 @@ static void test_stty_combination_modes_parse(void)
 	size_t i;
 	for (i = 0; i < sizeof words / sizeof *words; i++) {
 		char *argv[] = { (char *)"stty", (char *)words[i], 0 };
-		int rc = run(stty_path, argv);
-		CHECK(rc == 1);
-		CHECK(err_contains("standard input"));
+		check_reaches_tty_check(argv);
 	}
 }
 
@@ -340,8 +343,7 @@ static void test_stty_wellformed_saved_settings_reaches_tty_check(void)
 {
 	char *argv[] = { (char *)"stty",
 		(char *)"4b00:5:cd6:8a3b:3:1c:7f:15:4:0:1:0:11:13:1a:0:12:f:17:16:0:0", 0 };
-	CHECK(run(stty_path, argv) == 1);
-	CHECK(err_contains("standard input"));
+	check_reaches_tty_check(argv);
 	CHECK(!err_contains("invalid argument"));
 }
 

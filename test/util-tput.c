@@ -142,6 +142,18 @@ static int run_sh_c(const char *cmd)
 	return run(sh_path, argv);
 }
 
+/* The "unspecified" bucket (this file's header comment / tput.html's own
+ * "shall not be considered an error condition"): exit 1 and nothing
+ * written to stdout. Every case below that lands here -- a terminal
+ * missing one particular capability, or $TERM defaulting/blank -- checks
+ * exactly this same pair, so it is folded into one helper rather than
+ * repeated at each call site. */
+static void check_unsupported(char *const *argv)
+{
+	CHECK(run(tput_path, argv) == 1);
+	CHECK(out_equals(""));
+}
+
 /* ==== POSIX-mandated operands (clear/init/reset) ========================== */
 
 static void test_clear_xterm(void)
@@ -167,8 +179,7 @@ static void test_clear_vt100(void)
 static void test_clear_dumb_unsupported(void)
 {
 	char *argv[] = { (char *)"tput", (char *)"-T", (char *)"dumb", (char *)"clear", 0 };
-	CHECK(run(tput_path, argv) == 1);
-	CHECK(out_equals(""));
+	check_unsupported(argv);
 }
 
 static void test_init_reset_always_succeed(void)
@@ -202,8 +213,7 @@ static void test_cols_lines_dumb(void)
 	char *argv2[] = { (char *)"tput", (char *)"-T", (char *)"dumb", (char *)"lines", 0 };
 	CHECK(run(tput_path, argv1) == 0);
 	CHECK(out_equals("80"));
-	CHECK(run(tput_path, argv2) == 1);
-	CHECK(out_equals(""));
+	check_unsupported(argv2);
 }
 
 /* ==== capname extension: string caps ======================================= */
@@ -241,8 +251,7 @@ static void test_sgr0_differs_by_terminal(void)
 static void test_string_caps_dumb_unsupported(void)
 {
 	char *argv[] = { (char *)"tput", (char *)"-T", (char *)"dumb", (char *)"bold", 0 };
-	CHECK(run(tput_path, argv) == 1);
-	CHECK(out_equals(""));
+	check_unsupported(argv);
 }
 
 /* ==== capname extension: cup (cursor movement) ============================= */
@@ -262,8 +271,7 @@ static void test_cup_xterm(void)
 static void test_cup_dumb_unsupported(void)
 {
 	char *argv[] = { (char *)"tput", (char *)"-T", (char *)"dumb", (char *)"cup", (char *)"0", (char *)"0", 0 };
-	CHECK(run(tput_path, argv) == 1);
-	CHECK(out_equals(""));
+	check_unsupported(argv);
 }
 
 static void test_cup_missing_operands(void)
@@ -338,16 +346,14 @@ static void test_term_default_when_unset(void)
 {
 	char *argv[] = { (char *)"tput", (char *)"clear", 0 };
 	unsetenv("TERM");
-	CHECK(run(tput_path, argv) == 1);
-	CHECK(out_equals(""));
+	check_unsupported(argv);
 }
 
 static void test_term_default_when_empty(void)
 {
 	char *argv[] = { (char *)"tput", (char *)"clear", 0 };
 	setenv("TERM", "", 1);
-	CHECK(run(tput_path, argv) == 1);
-	CHECK(out_equals(""));
+	check_unsupported(argv);
 	unsetenv("TERM");
 }
 
