@@ -561,6 +561,19 @@ void __plat_sig_default_terminate(int sig)
 	syscall(SYS_kill, pid, (long)sig);
 }
 
+/* Linux has a real per-signal kernel default action and a real
+ * pidfd_send_signal(2): kill()'s own last-resort arm (src/signal/
+ * signal.c) reaches __plat_kill_terminate() above, which decodes the
+ * real signal back out of the __NT_SIGNAL_EXIT() encoding and delivers
+ * it for real, applying whatever the TARGET process itself last synced
+ * as its own real kernel-level disposition -- SIG_IGN is a genuine
+ * no-op, SIG_DFL runs the kernel's own default action.  See this
+ * function's plat_signal.h comment. */
+int __plat_sig_deliverable_to_other_process(void)
+{
+	return 1;
+}
+
 /* ---- named stop-events, keyed by the filesystem namespace ----------------
  * See this file's own banner. `name`'s wide chars are ASCII by
  * construction (signal.c's own stop_event_name() builds them from a
