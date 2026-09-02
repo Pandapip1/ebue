@@ -215,6 +215,32 @@
 # linux split -- see those two rows below for the full evidence).
 # Both move UNIMPL -> PASS, independent of the two notes just above
 # (no row overlap): COUNTS PASS=113 BUG=3 UNIMPL=9 NA=20 FLAKY=1
+#
+# 2026-09-02 (pthread_robust): reclassified BUG -> NA. Re-read
+# src/thread/pthread_mutex.c's pthread_mutex_destroy(): it returns EBUSY
+# whenever data->owner or data->waiters is set, unconditionally for
+# every mutex kind (robust or not) -- one check guarding against closing
+# the underlying semaphore handle while another thread still references
+# it, not something added for robust mutexes specifically. The corpus's
+# one failing case (pthread_robust.c:60-61) destroys a robust mutex the
+# calling thread itself currently holds, immediately after an
+# EOWNERDEAD -> pthread_mutex_consistent() -> re-lock recovery. POSIX's
+# pthread_mutex_destroy() DESCRIPTION makes destroying a locked mutex
+# undefined behavior with no robust-mutex exception, and its ERRORS
+# section separately names EBUSY as a standard may-fail outcome for
+# exactly an attempt to destroy a mutex while it is locked -- ntlibc's
+# behavior is a POSIX-sanctioned answer to genuinely undefined input,
+# not a defect. The test's success expectation here is musl's own
+# choice for this UB corner, not a POSIX requirement:
+# third_party/libc-test/README says the suite "is developed as part of
+# the musl project" and its functional tests are "derived from the
+# libc-testsuit of Rich Felker". Verified live: built the unmodified
+# upstream pthread_robust.c against this project's aarch64-linux
+# backend (native, outside tools/libc-test.sh's own Wine/x86_64
+# harness) and confirmed pthread_mutex_destroy() returns EBUSY at
+# exactly that destroy-while-self-locked call. Independent of the three
+# notes above (no row overlap): COUNTS PASS=113 BUG=2 UNIMPL=9 NA=21
+# FLAKY=1
 # (whole-corpus totals once the wildcard default below is applied to
 # every real case tools/libc-test.sh discovers -- not a count of rows in
 # this file, which lists only the 45 explicit exceptions plus the
@@ -242,7 +268,7 @@ pthread_exit-dtor                 runtime=wine,target_arch=x86_64,kernel32=no  F
 pthread_mutex                     runtime=wine,target_arch=x86_64,kernel32=no  PASS  was UNIMPL for the same missing-CLOCK_REALTIME gap as pthread_cancel-points above (the test includes only pthread.h/semaphore.h/stdio.h/errno.h/string.h, no time.h), now fixed the same way (pthread.h includes <time.h>). Rebuilt with x86_64-win32-tcc: compiles and links completely clean, no errors or warnings -- not run under Wine in this environment (none installed)
 pthread_mutex_pi                  runtime=wine,target_arch=x86_64,kernel32=no  PASS  was UNIMPL for the same missing-CLOCK_REALTIME gap as pthread_mutex, now fixed the same way (pthread.h includes <time.h>). Rebuilt with x86_64-win32-tcc: compiles and links completely clean, no errors or warnings -- not run under Wine in this environment (none installed)
 pthread_once-deadlock              runtime=wine,target_arch=x86_64,kernel32=no  PASS  was UNIMPL for the same missing-CLOCK_REALTIME gap as pthread_mutex (this one is in src/regression/, not src/functional/), now fixed the same way (pthread.h includes <time.h>). Rebuilt with x86_64-win32-tcc: compiles and links completely clean, no errors or warnings -- not run under Wine in this environment (none installed)
-pthread_robust                    runtime=wine,target_arch=x86_64,kernel32=no  BUG     owner death, EOWNERDEAD recovery, consistency, and ENOTRECOVERABLE pass; the remaining case destroys a mutex while still locked, for which ntlibc deliberately returns EBUSY
+pthread_robust                    runtime=wine,target_arch=x86_64,kernel32=no  NA  design difference, not a defect: pthread_mutex_destroy() (src/thread/pthread_mutex.c) returns EBUSY whenever data->owner or data->waiters is set, unconditionally for every mutex kind, robust or not -- guarding against closing the underlying semaphore handle while another thread still references it. The corpus's one failing case (pthread_robust.c:60-61) destroys a robust mutex the calling thread itself currently holds, right after an EOWNERDEAD -> pthread_mutex_consistent() -> re-lock recovery. POSIX's pthread_mutex_destroy() DESCRIPTION makes destroying a locked mutex undefined behavior with no robust-mutex exception, and its ERRORS section separately names EBUSY as a standard may-fail outcome for exactly an attempt to destroy a mutex while it is locked, so this is a POSIX-sanctioned answer to undefined input, not a defect. The test's success expectation instead is musl's own choice for this UB corner: third_party/libc-test/README says the suite "is developed as part of the musl project", its functional tests "derived from the libc-testsuit of Rich Felker" -- not a POSIX requirement. Verified live: built the unmodified upstream source natively against this project's aarch64-linux backend and confirmed pthread_mutex_destroy() returns EBUSY at exactly that destroy-while-self-locked call. Owner death, EOWNERDEAD recovery, consistency, and ENOTRECOVERABLE all still pass, as before
 setenv-oom                        runtime=wine,target_arch=x86_64,kernel32=no  NA  upstream t_memfill reaches real virtual-address exhaustion, then declines because t_setrlim(RLIMIT_DATA, 0) is not enforced; the NT process heap can retain already-reserved space, so setenv() succeeding would not be an OOM defect without that missing premise
 sigprocmask-internal              runtime=wine,target_arch=x86_64,kernel32=no  NA  design difference, not a defect: __libc_current_sigrtmin() is 35 here, so signals 32-34 are not reserved and are blockable
 socket                             runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  SOCK_CLOEXEC is now declared (<sys/socket.h>) and honored by socket()/socketpair() (src/socket/socket.c, src/socket/socketpair.c), fixing the socket.c:38 compile error this row used to cite. The corpus test does not clear that line: socket.c:46 next needs SOCK_NONBLOCK, which this fix did not add (out of scope -- ntlibc's fds have no nonblocking-I/O mode for socket() to turn on) and which is a compile error like the one before it, so this case is still UNIMPL, just one line further into the file: socket.c:46: error: 'SOCK_NONBLOCK' undeclared
