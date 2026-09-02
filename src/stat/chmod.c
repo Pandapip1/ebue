@@ -51,8 +51,18 @@ int fchmodat(int dirfd, const char *path, mode_t mode, int flags)
 
 int chmod(const char *path, mode_t mode) { return fchmodat(AT_FDCWD, path, mode, 0); }
 
+/* umask_value is pushed out to the real OS-level mask (where one
+ * exists) via __plat_umask_apply() on every call, not just tracked in
+ * userspace -- see that function's own comment (plat_stat.h) for why
+ * that matters on Linux and why it is a deliberate no-op on NT. */
 static mode_t umask_value = 022;
-mode_t umask(mode_t m) { mode_t o = umask_value; umask_value = m & 0777; return o; }
+mode_t umask(mode_t m)
+{
+	mode_t o = umask_value;
+	umask_value = m & 0777;
+	__plat_umask_apply(umask_value);
+	return o;
+}
 unsigned __umask_get(void) { return umask_value; }
 
 /* mkfifo()/mknod() and their *at() siblings all reduce to one call:

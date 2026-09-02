@@ -153,6 +153,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <errno.h>
 #include "libc.h"
 #include "ownership_stubs.h"
@@ -1327,13 +1328,15 @@ static int exec_simple(const struct sh_command *cmd, int *status)
  * shell environment. ... commands that are grouped with parentheses ...
  * shall be executed in a subshell environment." Of the objects 2.12
  * lists as part of that environment, this implementation's shell
- * language can actually change exactly three: shell parameters (set by
+ * language can actually change exactly four: shell parameters (set by
  * assignment, all of which -- see exec_assignment_only() above -- are
  * this process's real environ, there being no separate unexported-
  * variable table), the working directory (only via the `cd` builtin
- * just above), and open files. Traps, umask, ulimit and aliases are not
- * implemented at all yet (sh.h's banner), so there is nothing to
- * isolate there.
+ * just above), open files, and the file creation mask (only via the
+ * `umask` builtin, src/sh/builtin.c's bi_umask()) -- saved and restored
+ * around a subshell exactly like the working directory is, just below.
+ * Traps, ulimit and aliases are not implemented at all yet (sh.h's
+ * banner), so there is nothing to isolate there.
  *
  * ---- Standalone: save-and-restore, not fork() ---------------------------
  *
@@ -1388,6 +1391,11 @@ static int exec_simple(const struct sh_command *cmd, int *status)
  *     did to `environ` before ever reaching __sh_exec_list().
  *   - Working directory: getcwd()/chdir(), the only way it can change
  *     within this language (the `cd` builtin above).
+ *   - File creation mask: __umask_get()/umask(), the only way it can
+ *     change within this language (the `umask` builtin, src/sh/
+ *     builtin.c's bi_umask()) -- a plain unsigned read-and-restore,
+ *     with no allocation and no failure mode, unlike the cwd case just
+ *     above.
  *   - Open files: exactly what apply_redirs()/restore_fds() already
  *     give every simple command for its own cmd->redirs -- bracketing
  *     the subshell's redirections (attached to the compound command
@@ -1910,6 +1918,7 @@ static int exec_group(const struct sh_command *cmd, int *status)
 	struct sh_params ps;
 	struct sh_funcs fs;
 	char *oldcwd = 0;
+	unsigned oldumask = 0;
 	int is_subshell = cmd->kind == SH_CMD_SUBSHELL;
 
 	rs.saves = 0; rs.n = rs.cap = 0;
@@ -1918,6 +1927,7 @@ static int exec_group(const struct sh_command *cmd, int *status)
 
 	if (is_subshell) {
 		oldcwd = getcwd(0, 0);
+		oldumask = __umask_get();
 		if (env_snapshot_take(&es)) { free(oldcwd); restore_fds(&rs); return -1; }
 		if (params_subshell_enter(&ps, &fs)) {
 			env_snapshot_restore(&es);
@@ -1944,6 +1954,7 @@ static int exec_group(const struct sh_command *cmd, int *status)
 		env_snapshot_restore(&es);
 		free_env_snapshot(&es);
 		if (oldcwd) { chdir(oldcwd); free(oldcwd); }
+		umask((mode_t)oldumask);
 	}
 	restore_fds(&rs);
 	return rc;
@@ -2069,6 +2080,7 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	struct sh_params ps;
 	struct sh_funcs fs;
 	char *oldcwd;
+	unsigned oldumask;
 	char *buf;
 	int saved_last;
 	FILE *tf;
@@ -2102,6 +2114,7 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	}
 
 	oldcwd = getcwd(0, 0);
+	oldumask = __umask_get();
 	if (env_snapshot_take(&es)) {
 		free(oldcwd);
 		restore_fds(&rs);
@@ -2141,6 +2154,7 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	env_snapshot_restore(&es);
 	free_env_snapshot(&es);
 	if (oldcwd) { chdir(oldcwd); free(oldcwd); }
+	umask((mode_t)oldumask);
 	if (fflush(stdout)) rc = -1; /* while fd 1 is still the capture */
 	restore_fds(&rs);
 	__sh_list_free(list);
@@ -2218,6 +2232,7 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 	struct sh_params ps;
 	struct sh_funcs fs;
 	char *oldcwd;
+	unsigned oldumask;
 	int rc;
 
 	rs.saves = 0; rs.n = rs.cap = 0;
@@ -2225,6 +2240,7 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 	if (failed) { restore_fds(&rs); *status = 1; return 0; }
 
 	oldcwd = getcwd(0, 0);
+	oldumask = __umask_get();
 	if (env_snapshot_take(&es)) { free(oldcwd); restore_fds(&rs); return -1; }
 	if (params_subshell_enter(&ps, &fs)) {
 		env_snapshot_restore(&es);
@@ -2246,6 +2262,7 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 	env_snapshot_restore(&es);
 	free_env_snapshot(&es);
 	if (oldcwd) { chdir(oldcwd); free(oldcwd); }
+	umask((mode_t)oldumask);
 	restore_fds(&rs);
 	return rc;
 }

@@ -58,25 +58,18 @@
  * mkdirat(2) UNMASKED, exactly mirroring __plat_open()'s own Linux
  * implementation, which passes O_CREAT's mode straight to openat(2)
  * unmasked too. Neither backend calls ntlibc's own __umask_get() at
- * all -- deliberately, not an oversight: ntlibc's umask() (src/stat/
- * chmod.c) is a pure userspace variable with no real umask(2) syscall
- * counterpart on Linux (grep confirms __umask_get() is called only from
- * NT-side code and src/mman/shm.c's own private namespace sidecar), so
- * masking `mode` by it here would apply ntlibc's OWN tracked value on
- * top of whatever the REAL process's OS-level umask then also applies
- * inside the kernel -- double-masking, not the single POSIX-specified
- * mask. Relying on the real kernel umask instead (this file's actual
- * choice, and __plat_open()'s Linux implementation's choice before it)
- * means a caller that changes ntlibc's own umask() without there being
- * any real syscall to back it will not see that change reflected in a
- * newly created file or directory's mode on this backend -- a real,
- * pre-existing gap, not introduced here, and too large to fix cleanly
- * here (it would mean either wiring ntlibc's
- * umask() to a real umask(2) syscall everywhere, changing this
- * backend's process-wide state as a side effect of a single call, or
- * auditing every mode-bearing Linux syscall site to mask by hand); left
- * exactly as consistent with __plat_open() as it was found, not
- * "fixed" unilaterally in one of the two places it appears.
+ * all -- deliberately, not an oversight: masking `mode` by it here
+ * would apply ntlibc's OWN tracked value on top of whatever the REAL
+ * process's OS-level umask then also applies inside the kernel --
+ * double-masking, not the single POSIX-specified mask.  Relying on the
+ * real kernel umask instead (this file's actual choice, and
+ * __plat_open()'s Linux implementation's choice before it) is exactly
+ * right *because* ntlibc's umask() (src/stat/chmod.c) now pushes every
+ * value it tracks out to the real kernel-level mask too, via
+ * __plat_umask_apply() below -- so "whatever the REAL process's
+ * OS-level umask then also applies inside the kernel" already IS the
+ * caller's most recent umask() value by the time any of these syscalls
+ * run, with no second, userspace-side masking needed or wanted here.
  *
  * __plat_chmodat()'s AT_SYMLINK_NOFOLLOW deserves its own note: the raw
  * fchmodat(2) syscall (nr 53, confirmed against this host's own
@@ -182,6 +175,7 @@
 #define SYS_statfs    43
 #define SYS_fstatfs   44
 #define SYS_utimensat 88
+#define SYS_umask     166
 
 #define AT_EMPTY_PATH_LX     0x1000
 #define STATX_BASIC_STATS_LX 0x7ff
@@ -341,6 +335,20 @@ int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode) // NOLIN
 	ret = raw_syscall(SYS_fchmodat, (long)rd, (long)path, (long)(mode & 07777), 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
+}
+
+/* umask(2) (nr 166, confirmed against this host's own <sys/syscall.h>)
+ * cannot fail -- it always sets the mask and returns the old one, the
+ * same "no error return" shape src/stat/chmod.c's own umask() already
+ * has -- so there is nothing for this to check or report; the caller
+ * (chmod.c's umask()) already has the old value from its own
+ * umask_value, and this call's only job is making that new value real
+ * at the kernel level too. See plat_stat.h's own comment on this
+ * function for why Linux (unlike NT) needs a real implementation here
+ * at all. */
+void __plat_umask_apply(mode_t m)
+{
+	raw_syscall(SYS_umask, (long)(m & 07777), 0L, 0L, 0L, 0L, 0L);
 }
 
 /* `mode` arrives RAW (not umask-applied) and is passed straight to

@@ -46,7 +46,8 @@
  * standalone form and never could: they are 2.14 special built-ins
  * whose entire effect is on the shell's own execution environment (a
  * subprocess `exit.exe` could never end its parent's execution), the
- * same reason `cd`, `set`, `shift` and `return` below stay builtin-only.
+ * same reason `cd`, `set`, `shift`, `return` and `umask` below stay
+ * builtin-only.
  *
  * Counted across 100887 lines of five real autoconf `configure` scripts
  * (keywords at statement position), `test` is used 5488 times -- 229x
@@ -61,6 +62,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "libc.h"
 #include "sh.h"
 #include "util.h"
@@ -764,6 +766,95 @@ static int bi_cd(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* XCU umask(1p), and XCU 2.12: "The file creation mask ... as set by
+ * umask" is part of the shell execution environment, so -- like `cd`
+ * just above -- this can only ever usefully run in the shell's own
+ * process: a standalone umask.exe would fork, set only ITS OWN mask,
+ * and exit, with nothing left to observe the change. So unlike test/
+ * true/false there is no src/util/umask.c and no bin/umask.exe (see
+ * src/internal/util.h's own header comment for the two-caller pattern
+ * this deliberately does not follow here, and this file's own header
+ * comment on why `cd`, `set`, `shift` and `return` are the same way).
+ *
+ * This is also the fix for a real, confirmed bug: every at/batch job
+ * body src/util/atbatch.c generates captures the submitting shell's
+ * umask and re-emits it as a plain `umask NNNN` line at the top, per
+ * at(1p)/batch(1p)'s own requirement to preserve and restore the
+ * caller's umask in the job's execution environment -- so a shell with
+ * no `umask` builtin at all refused every single at/batch job on its
+ * very first line (src/sh/script.c's unimplemented_builtins preflight).
+ *
+ * SYNOPSIS: "umask [-S] [mask]".  Only an octal mask operand is
+ * implemented -- a symbolic one (`umask u+rwx`) is refused with a
+ * diagnostic rather than silently misparsed as an octal number; a
+ * real, tracked gap, not an oversight (nothing this project generates,
+ * including atbatch.c's own output, ever needs it).  -S prints the
+ * resulting (or, with no mask operand, the current) mask in symbolic
+ * form; without it, only an omitted mask operand prints anything at
+ * all -- setting the mask is silent, matching every other shell's own
+ * umask(1p). */
+static void print_umask_symbolic(unsigned mask)
+{
+	static const char classes[3] = { 'u', 'g', 'o' };
+	int i;
+
+	for (i = 0; i < 3; i++) {
+		unsigned bits = (~mask >> ((2 - i) * 3)) & 07u;
+		if (i) putchar(',');
+		putchar(classes[i]);
+		putchar('=');
+		if (bits & 4u) putchar('r');
+		if (bits & 2u) putchar('w');
+		if (bits & 1u) putchar('x');
+	}
+	putchar('\n');
+}
+
+static int bi_umask(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_umask(struct sh_builtin_ctx *ctx)
+{
+	int argi = 1;
+	int symbolic = 0;
+	const char *s;
+	char *end;
+	unsigned long v = 0;
+	int bad;
+
+	if (ctx->argc > 1 && !strcmp(ctx->argv[1], "-S")) {
+		symbolic = 1;
+		argi = 2;
+	}
+
+	if (argi >= ctx->argc) {
+		if (symbolic) print_umask_symbolic(__umask_get());
+		else printf("%04o\n", __umask_get());
+		ctx->status = 0;
+		return 0;
+	}
+	if (ctx->argc > argi + 1) {
+		(void)fprintf(stderr, "umask: too many operands\n");
+		ctx->status = 1;
+		return 0;
+	}
+
+	s = ctx->argv[argi];
+	bad = !*s || *s < '0' || *s > '7';
+	if (!bad) {
+		v = strtoul(s, &end, 8);
+		bad = *end != 0 || v > 07777;
+	}
+	if (bad) {
+		(void)fprintf(stderr,
+			"umask: %s: not an octal mode -- symbolic mode operands are not implemented\n", s);
+		ctx->status = 1;
+		return 0;
+	}
+	umask((mode_t)v);
+	if (symbolic) print_umask_symbolic(__umask_get());
+	ctx->status = 0;
+	return 0;
+}
+
 /* ==== set / shift: the positional parameters (XCU 2.5.1) =============== */
 
 /* set(1p) with no options and no arguments: "set shall write the names
@@ -1229,6 +1320,11 @@ static const struct sh_builtin builtins[] = {
 	 * itself to decide whether to start an unwind. */
 	{ "return", 1, 0, bi_return },
 	{ "cd",    0, 1, bi_cd },
+	/* env_effect 1, same as `cd` just above: umask is XCU 2.12's file
+	 * creation mask, so a pipeline stage's own invocation must not
+	 * actually change it -- see exec.c's header comment on this
+	 * column. */
+	{ "umask", 0, 1, bi_umask },
 	{ "test",  0, 0, bi_test },
 	{ "[",     0, 0, bi_test },
 	{ "true",  0, 0, bi_true },
