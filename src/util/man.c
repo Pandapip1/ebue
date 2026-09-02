@@ -299,7 +299,8 @@
 
 struct man_buf { char *data; size_t len, cap; };
 
-static int mbuf_append(struct man_buf *b, const char *data, size_t n)
+static int mbuf_append(struct man_buf *restrict b,
+	const char *restrict data, size_t n)
 {
 	if (!n) {
 		if (!b->data) {
