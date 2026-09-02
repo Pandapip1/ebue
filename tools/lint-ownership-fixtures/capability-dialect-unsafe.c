@@ -23,6 +23,52 @@ void use_string_after_invalidation(void)
 	dialect_use_string(text); /* ownership-expect: dialect-string-dropped */
 }
 
+extern const char *runtime_string;
+
+void mutable_string_literal_table_is_not_evidence(unsigned i)
+{
+	static const char *table[] = { "first", "second" };
+
+	if (i < sizeof table / sizeof table[0])
+		dialect_use_string(table[i]); /* ownership-expect: dialect-mutable-string-table */
+}
+
+void mixed_string_literal_table_is_not_evidence(unsigned i)
+{
+	const char *const table[] = { "literal", runtime_string };
+
+	if (i < sizeof table / sizeof table[0])
+		dialect_use_string(table[i]); /* ownership-expect: dialect-mixed-string-table */
+}
+
+void partial_string_literal_table_is_not_evidence(unsigned i)
+{
+	static const char *const table[2] = { "literal" };
+
+	if (i < sizeof table / sizeof table[0])
+		dialect_use_string(table[i]); /* ownership-expect: dialect-partial-string-table */
+}
+
+void mutable_string_literal_member_table_is_not_evidence(unsigned i)
+{
+	struct entry { const char *name; int value; };
+	static struct entry table[] = { { "first", 1 }, { "second", 2 } };
+
+	if (i < sizeof table / sizeof table[0])
+		dialect_use_string(table[i].name); /* ownership-expect: dialect-mutable-string-member-table */
+}
+
+void mixed_string_literal_member_table_is_not_evidence(unsigned i)
+{
+	struct entry { const char *name; int value; };
+	const struct entry table[] = {
+		{ "literal", 1 }, { runtime_string, 2 }
+	};
+
+	if (i < sizeof table / sizeof table[0])
+		dialect_use_string(table[i].name); /* ownership-expect: dialect-mixed-string-member-table */
+}
+
 void terminated_suffix_does_not_prove_prefix(void)
 {
 	char text[8];

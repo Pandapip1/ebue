@@ -28,6 +28,34 @@ void string_literal_creates_evidence(void)
 	dialect_use_string(initialized);
 }
 
+void immutable_string_literal_table_creates_evidence(unsigned i)
+{
+	static const char *const table[] = { "first", "second" };
+
+	if (i < sizeof table / sizeof table[0])
+		dialect_use_string(table[i]);
+}
+
+extern const char *runtime_string;
+
+void literal_at_constant_index_creates_evidence(void)
+{
+	const char *const table[] = { "literal", runtime_string };
+
+	dialect_use_string(table[0]);
+}
+
+void immutable_string_literal_member_table_creates_evidence(unsigned i)
+{
+	struct entry { const char *name; int value; };
+	static const struct entry table[] = {
+		{ "first", 1 }, { "second", 2 }
+	};
+
+	if (i < sizeof table / sizeof table[0])
+		dialect_use_string(table[i].name);
+}
+
 void dialect_clear_string(char *text drop(dialect_terminated))
 {
 	dialect_invalidate_string(text);

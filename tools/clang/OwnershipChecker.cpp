@@ -177,6 +177,80 @@ static bool initializedByStringLiteral(const ValueDecl *Declaration) {
   return false;
 }
 
+static bool initializedByStringLiteralTable(const ArraySubscriptExpr *Access,
+                                            ASTContext &Context) {
+  if (!Access || !Access->getType()->isPointerType())
+    return false;
+  const Expr *Base = Access->getBase()->IgnoreParenImpCasts();
+  const auto *Reference = dyn_cast<DeclRefExpr>(Base);
+  const auto *Variable =
+      Reference ? dyn_cast<VarDecl>(Reference->getDecl()) : nullptr;
+  if (!Variable || !Variable->hasInit())
+    return false;
+
+  const auto *Array = Context.getAsConstantArrayType(Variable->getType());
+  if (!Array || !Array->getElementType().isConstQualified())
+    return false;
+  const auto *List = dyn_cast<InitListExpr>(
+      Variable->getInit()->IgnoreParenImpCasts());
+  if (!List)
+    return false;
+  auto IsLiteral = [](const Expr *Initializer) {
+    return isa<StringLiteral>(Initializer->IgnoreParenImpCasts());
+  };
+  if (std::optional<llvm::APSInt> Index =
+          Access->getIdx()->getIntegerConstantExpr(Context)) {
+    if (!Index->isNegative() && Index->getActiveBits() <= 64 &&
+        Index->getZExtValue() < List->getNumInits() &&
+        IsLiteral(List->getInit(Index->getZExtValue())))
+      return true;
+  }
+  if (Array->getSize() == List->getNumInits() && !List->getArrayFiller() &&
+      llvm::all_of(List->inits(), IsLiteral))
+    return true;
+
+  return false;
+}
+
+static bool initializedByStringLiteralMemberTable(const MemberExpr *Member,
+                                                  ASTContext &Context) {
+  if (!Member || Member->isArrow() || !Member->getType()->isPointerType())
+    return false;
+  const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl());
+  const auto *Access = dyn_cast<ArraySubscriptExpr>(
+      Member->getBase()->IgnoreParenImpCasts());
+  if (!Field || !Access)
+    return false;
+  const Expr *Base = Access->getBase()->IgnoreParenImpCasts();
+  const auto *Reference = dyn_cast<DeclRefExpr>(Base);
+  const auto *Variable =
+      Reference ? dyn_cast<VarDecl>(Reference->getDecl()) : nullptr;
+  if (!Variable || !Variable->hasInit())
+    return false;
+  const auto *Array = Context.getAsConstantArrayType(Variable->getType());
+  if (!Array || !Array->getElementType().isConstQualified())
+    return false;
+  const auto *Table = dyn_cast<InitListExpr>(
+      Variable->getInit()->IgnoreParenImpCasts());
+  if (!Table || Array->getSize() != Table->getNumInits() ||
+      Table->getArrayFiller())
+    return false;
+
+  unsigned FieldIndex = 0;
+  for (const FieldDecl *Candidate : Field->getParent()->fields()) {
+    if (Candidate == Field)
+      break;
+    ++FieldIndex;
+  }
+  return llvm::all_of(Table->inits(), [&](const Expr *Row) {
+    const auto *Fields =
+        dyn_cast<InitListExpr>(Row->IgnoreParenImpCasts());
+    return Fields && FieldIndex < Fields->getNumInits() &&
+           isa<StringLiteral>(
+               Fields->getInit(FieldIndex)->IgnoreParenImpCasts());
+  });
+}
+
 static bool expressionProvidesStringLiteralToken(
     const Expr *Expression, const IdentifierInfo *Family, ASTContext &Context) {
   if (!Expression || !Family)
@@ -190,6 +264,10 @@ static bool expressionProvidesStringLiteralToken(
     return true;
   if (const auto *Reference = dyn_cast<DeclRefExpr>(Core))
     return initializedByStringLiteral(Reference->getDecl());
+  if (const auto *Access = dyn_cast<ArraySubscriptExpr>(Core))
+    return initializedByStringLiteralTable(Access, Context);
+  if (const auto *Member = dyn_cast<MemberExpr>(Core))
+    return initializedByStringLiteralMemberTable(Member, Context);
   return false;
 }
 
