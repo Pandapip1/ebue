@@ -21,6 +21,137 @@ static bool require(bool Condition, const char *Message) {
   return Condition;
 }
 
+struct ExpectedTransition {
+  TokenState After;
+  TokenEvent Events;
+};
+
+static bool testTransitionTable() {
+  constexpr TokenState States[] = {
+      TokenState::Unknown, TokenState::Absent, TokenState::Linear,
+      TokenState::Duplicable};
+  constexpr TokenOperation Operations[] = {
+      TokenOperation::Require,         TokenOperation::RequireAbsent,
+      TokenOperation::Consume,         TokenOperation::ConsumeIfPresent,
+      TokenOperation::Drop,            TokenOperation::GrantLinear,
+      TokenOperation::GrantDuplicable,
+  };
+  constexpr ExpectedTransition Expected[][4] = {
+      {{TokenState::Unknown, TokenEvent::StateUnproven},
+       {TokenState::Unknown, TokenEvent::MissingRequired},
+       {TokenState::Linear, TokenEvent::None},
+       {TokenState::Duplicable, TokenEvent::None}},
+      {{TokenState::Unknown, TokenEvent::StateUnproven},
+       {TokenState::Absent, TokenEvent::None},
+       {TokenState::Unknown, TokenEvent::PresentWhenAbsentRequired},
+       {TokenState::Unknown, TokenEvent::PresentWhenAbsentRequired}},
+      {{TokenState::Unknown, TokenEvent::StateUnproven},
+       {TokenState::Unknown, TokenEvent::MissingRequired},
+       {TokenState::Absent, TokenEvent::None},
+       {TokenState::Absent, TokenEvent::None}},
+      {{TokenState::Absent, TokenEvent::None},
+       {TokenState::Absent, TokenEvent::None},
+       {TokenState::Absent, TokenEvent::None},
+       {TokenState::Absent, TokenEvent::None}},
+      {{TokenState::Absent, TokenEvent::None},
+       {TokenState::Absent, TokenEvent::None},
+       {TokenState::Absent, TokenEvent::None},
+       {TokenState::Absent, TokenEvent::None}},
+      {{TokenState::Unknown, TokenEvent::StateUnproven},
+       {TokenState::Linear, TokenEvent::None},
+       {TokenState::Unknown, TokenEvent::LinearDuplication},
+       {TokenState::Unknown, TokenEvent::LinearDuplication}},
+      {{TokenState::Unknown, TokenEvent::StateUnproven},
+       {TokenState::Duplicable, TokenEvent::None},
+       {TokenState::Unknown, TokenEvent::DuplicationClassMismatch},
+       {TokenState::Duplicable, TokenEvent::None}},
+  };
+  bool Passed = true;
+  for (unsigned Operation = 0; Operation < 7; ++Operation)
+    for (unsigned State = 0; State < 4; ++State) {
+      TokenTransition Result =
+          applyTokenOperation(States[State], Operations[Operation]);
+      bool Cell = Result.Before == States[State] &&
+                  Result.After == Expected[Operation][State].After &&
+                  Result.Events == Expected[Operation][State].Events &&
+                  Result.Effects == TokenEffect::None &&
+                  Result.permitted() ==
+                      (Expected[Operation][State].Events == TokenEvent::None);
+      if (!Cell)
+        std::fprintf(stderr,
+                     "token-algebra-test: transition cell op=%u state=%u\n",
+                     Operation, State);
+      Passed &= Cell;
+    }
+  return Passed;
+}
+
+struct ExpectedTransfer {
+  TokenState SourceAfter;
+  TokenState DestinationAfter;
+  TokenEvent Events;
+};
+
+static bool testTransferTable() {
+  constexpr TokenState States[] = {
+      TokenState::Unknown, TokenState::Absent, TokenState::Linear,
+      TokenState::Duplicable};
+  constexpr TokenEvent MissingOccupied =
+      TokenEvent::MissingRequired | TokenEvent::DestinationOccupied;
+  constexpr TokenEvent OccupiedMismatch =
+      TokenEvent::DestinationOccupied |
+      TokenEvent::DuplicationClassMismatch;
+  constexpr ExpectedTransfer Expected[4][4] = {
+      {{TokenState::Unknown, TokenState::Unknown, TokenEvent::StateUnproven},
+       {TokenState::Unknown, TokenState::Unknown, TokenEvent::StateUnproven},
+       {TokenState::Unknown, TokenState::Unknown, TokenEvent::StateUnproven},
+       {TokenState::Unknown, TokenState::Unknown, TokenEvent::StateUnproven}},
+      {{TokenState::Unknown, TokenState::Unknown, TokenEvent::StateUnproven},
+       {TokenState::Unknown, TokenState::Unknown,
+        TokenEvent::MissingRequired},
+       {TokenState::Unknown, TokenState::Unknown, MissingOccupied},
+       {TokenState::Unknown, TokenState::Unknown, MissingOccupied}},
+      {{TokenState::Unknown, TokenState::Unknown, TokenEvent::StateUnproven},
+       {TokenState::Absent, TokenState::Linear, TokenEvent::None},
+       {TokenState::Unknown, TokenState::Unknown,
+        TokenEvent::DestinationOccupied},
+       {TokenState::Unknown, TokenState::Unknown, OccupiedMismatch}},
+      {{TokenState::Unknown, TokenState::Unknown, TokenEvent::StateUnproven},
+       {TokenState::Duplicable, TokenState::Duplicable, TokenEvent::None},
+       {TokenState::Unknown, TokenState::Unknown, OccupiedMismatch},
+       {TokenState::Unknown, TokenState::Unknown,
+        TokenEvent::DestinationOccupied}},
+  };
+  constexpr LinearLoanClass Loans[] = {LinearLoanClass::Permissive,
+                                       LinearLoanClass::Strict};
+  bool Passed = true;
+  for (unsigned Loan = 0; Loan < 2; ++Loan)
+    for (unsigned Source = 0; Source < 4; ++Source)
+      for (unsigned Destination = 0; Destination < 4; ++Destination) {
+        TokenTransfer Result = transferToken(
+            States[Source], States[Destination], Loans[Loan]);
+        TokenEffect Effect = Loan == 1 && Source == 2 && Destination == 1
+                                 ? TokenEffect::InvalidateStrictLoans
+                                 : TokenEffect::None;
+        const ExpectedTransfer &Cell = Expected[Source][Destination];
+        bool Matches = Result.SourceBefore == States[Source] &&
+                       Result.DestinationBefore == States[Destination] &&
+                       Result.SourceAfter == Cell.SourceAfter &&
+                       Result.DestinationAfter == Cell.DestinationAfter &&
+                       Result.Events == Cell.Events &&
+                       Result.Effects == Effect &&
+                       Result.permitted() ==
+                           (Cell.Events == TokenEvent::None);
+        if (!Matches)
+          std::fprintf(stderr,
+                       "token-algebra-test: transfer cell loan=%u source=%u "
+                       "destination=%u\n",
+                       Loan, Source, Destination);
+        Passed &= Matches;
+      }
+  return Passed;
+}
+
 int main() {
   constexpr const char *Source = R"(
 typedef struct { char byte; } dynamic_token
@@ -47,7 +178,7 @@ typedef struct { char byte; } maximum_sentinel
     return 1;
   clang::ASTContext &Context = AST->getASTContext();
   const TokenSort *Dynamic = findTokenSort(Context, "dynamic_token");
-  bool Passed = true;
+  bool Passed = testTransitionTable() && testTransferTable();
   Passed &= require(Dynamic != nullptr, "nominal token typedef not found");
   Passed &= require(hasQualifier(Dynamic, "qual:dynamic_storage"),
                     "exact qualifier not found");
