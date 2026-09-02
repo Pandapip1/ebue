@@ -7,9 +7,8 @@
 // GCC/Clang's `pure` is a much stronger, riskier claim than most of the
 // annotations the other checkers in this directory verify: it licenses the
 // compiler to eliminate, reorder, or coalesce calls the program actually
-// depends on if the claim is wrong. A checklist for it (see the commit this
-// checker's fixtures and design were reviewed against) rules a function in
-// only if, across its own body and its whole reachable call graph:
+// depends on if the claim is wrong. A function is ruled in only if, across
+// its own body and its whole reachable call graph:
 //   - it never reads or writes errno,
 //   - it never writes through any pointer argument or global/static pointer,
 //   - it performs no I/O (syscalls, Nt*/Zw* calls, file/console/network),
@@ -61,12 +60,10 @@
 //     pointer to a global, but at fnm_match()'s one and only call site
 //     `probe` is always a local variable never visible outside fnm_match()
 //     itself, so the write never actually escapes fnmatch()'s own
-//     observable behavior. Verified sound by hand (this is exactly the
-//     kind of case 08449f1's own commit message means by "individually
-//     verified pure... but left unmarked" for a file-static helper) --
-//     deliberately left as a known false-claim finding rather than adding
-//     the substantially larger per-call-site parameter-write tracking a
-//     sound general fix would need, matching this checker's own
+//     observable behavior. Verified sound by hand -- deliberately left as
+//     a known false-claim finding rather than adding the substantially
+//     larger per-call-site parameter-write tracking a sound general fix
+//     would need, matching this checker's own
 //     conservative-by-design posture: local-write recognition here is
 //     scoped to isLocalOnlyWriteBuiltin()'s fixed builtin list and
 //     isLocalArrayWrite()'s direct local-array-object case, not extended

@@ -981,17 +981,22 @@ class ArithmeticZ3Proof {
       case BO_GT:
       case BO_GE: {
         bool Unsigned = isUnsigned(OperandType);
-        z3::expr Predicate =
-            Opcode == BO_EQ ? Left == Right
-            : Opcode == BO_NE ? Left != Right
-            : Opcode == BO_LT ? (Unsigned ? z3::ult(Left, Right)
-                                        : Left < Right)
-            : Opcode == BO_LE ? (Unsigned ? z3::ule(Left, Right)
-                                        : Left <= Right)
-            : Opcode == BO_GT ? (Unsigned ? z3::ugt(Left, Right)
-                                        : Left > Right)
-                              : (Unsigned ? z3::uge(Left, Right)
-                                          : Left >= Right);
+        z3::expr Predicate = [&]() -> z3::expr {
+          switch (Opcode) {
+          case BO_EQ:
+            return Left == Right;
+          case BO_NE:
+            return Left != Right;
+          case BO_LT:
+            return Unsigned ? z3::ult(Left, Right) : Left < Right;
+          case BO_LE:
+            return Unsigned ? z3::ule(Left, Right) : Left <= Right;
+          case BO_GT:
+            return Unsigned ? z3::ugt(Left, Right) : Left > Right;
+          default: // BO_GE: the only remaining opcode this case can reach.
+            return Unsigned ? z3::uge(Left, Right) : Left >= Right;
+          }
+        }();
         // Clang symbolic comparisons have the C result type (normally int),
         // not Boolean type.  Preserve that representation for RangeSet {0}
         // and {1} constraints.

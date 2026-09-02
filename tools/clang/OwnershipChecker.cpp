@@ -739,14 +739,12 @@ class OwnershipChecker
   // UCS-4 convention), while the i386/x86_64 legs' `--target=*-w64-
   // mingw32` happens to make clang's OWN builtin wchar_t 2 bytes too, by
   // coincidence of that target's own ABI matching this tree's typedef.
-  // Using getWCharType() worked on i386/x86_64 by that coincidence and
-  // silently produced the WRONG byte multiplier on aarch64 (4 instead of
-  // 2) -- confirmed by a real regression during development:
-  // src/string/wcstok.c's `s += wcsspn(s, sep); if (!*s) ...` (this
-  // fix's own wide-scanner target, the wcsspn() twin of strtok_r.c's
-  // narrow one) proved fine on i386/x86_64 and stayed reported on
-  // aarch64 until this fix switched to the argument's own pointee type.
-  // Reading the actual pointee type off the argument is also strictly
+  // Using getWCharType() would work on i386/x86_64 by that coincidence but
+  // silently produce the WRONG byte multiplier on aarch64 (4 instead of
+  // 2): src/string/wcstok.c's `s += wcsspn(s, sep); if (!*s) ...` (the
+  // wcsspn() twin of strtok_r.c's narrow scanner) would prove fine on
+  // i386/x86_64 while staying reported on aarch64. Reading the actual
+  // pointee type off the argument sidesteps this entirely, and is also strictly
   // more general: it needs no separate "is this call one of the wide
   // names" check at all, and does the right thing even if some entirely
   // different fixed-width scanner were ever added to
@@ -3163,8 +3161,8 @@ class ValidPointerChecker
   // argument expression's own root symbol: `buf[n]`, the single most
   // common "allocate len+1, write the terminator at len" idiom
   // throughout this tree (strndup.c's `d = malloc(l+1); ...; d[l] = 0;`
-  // is the concrete case this was developed against, and clears
-  // completely with this fix). The generic byte-extent machinery below
+  // is the motivating case, and is proven fully in-bounds by this
+  // function). The generic byte-extent machinery below
   // computes this exact same relationship -- extent_of_buf (itself
   // `n + 1`, already a compound expression) MINUS the access offset
   // (`n`) -- but clang's range-based constraint solver does not fold
@@ -3172,9 +3170,8 @@ class ValidPointerChecker
   // compound expressions that merely happen to share a root symbol; it
   // proves a single symbol's own affine range well (arrayIndexProvenInBounds
   // above already exploits exactly that), but not this kind of
-  // cross-expression cancellation. Confirmed empirically while
-  // developing this fix: SValBuilder::evalBinOp leaves the subtraction
-  // unsimplified (still a compound SymSymExpr), and even an explicit
+  // cross-expression cancellation: SValBuilder::evalBinOp leaves the
+  // subtraction unsimplified (still a compound SymSymExpr), and even an explicit
   // follow-up assume() on the resulting comparison cannot refute the
   // "too small" case -- the solver is not merely missing an
   // optimization here, it structurally cannot correlate two affine
@@ -3432,17 +3429,16 @@ public:
     // *)(void *)p`), is still caught, both by this checker (the fix
     // only changes what EvalExpr designates, not whether isNonNull is
     // asked about it) and independently by clang's own core.NullDereference.
-    // Deliberately narrow: only CK_BitCast/CK_NoOp are looked through
-    // (never CK_LValueToRValue -- an earlier version of this fix walked
-    // into that too and started treating every unconstrained raw
-    // parameter as nonnull, because it ended up evaluating the SVal of
-    // the pointer VARIABLE's own storage location instead of the
-    // pointer VALUE stored there, which is trivially "nonnull" as any
-    // local's address always is; the fixture suite below (the same
-    // pointer-safe.c/pointer-unsafe.c fixtures every other lemma here is
-    // checked against) is what caught that), and only when the
-    // sub-expression is itself of pointer type, so a cast that changes
-    // value category or turns an integer into a pointer is left alone.
+    // Deliberately narrow: only CK_BitCast/CK_NoOp are looked through --
+    // never CK_LValueToRValue, because looking through that would evaluate
+    // the SVal of the pointer VARIABLE's own storage location instead of
+    // the pointer VALUE stored there, which is trivially "nonnull" as any
+    // local's address always is, so every unconstrained raw parameter
+    // would wrongly appear proven nonnull (the pointer-safe.c/pointer-
+    // unsafe.c fixture suite every other lemma here is checked against
+    // would catch that) -- and only when the sub-expression is itself of
+    // pointer type, so a cast that changes value category or turns an
+    // integer into a pointer is left alone.
     const Expr *EvalExpr = Pointer;
     for (;;) {
       const auto *Cast = dyn_cast<CastExpr>(EvalExpr->IgnoreParens());
@@ -3638,13 +3634,13 @@ public:
       // malloc family. That is the ordinary, expected shape of a borrowed
       // pointer: a function parameter, a global, or any value this
       // checker did not itself allocate. Reporting "not proven live" here
-      // used to fire for essentially every dereference of a plain pointer
+      // would fire for essentially every dereference of a plain pointer
       // parameter in the tree (the single most common pointer shape in a
       // C library), because per-function analysis can never produce
       // positive liveness evidence for a value whose provenance crosses a
       // call boundary -- no amount of code on the callee side can ever
-      // satisfy that obligation, so it was not a proof requirement, it
-      // was unconditional noise. Nonnull-ness is still separately
+      // satisfy that obligation, so this is not a proof requirement; it
+      // would be unconditional noise. Nonnull-ness is still separately
       // required (see checkPointerExpression/above); this only stops
       // treating "unknown provenance" as if it were "known freed". See
       // tools/lint-ownership-fixtures/pointer-safe.c's opaque_borrow for
@@ -3746,23 +3742,20 @@ public:
       // matching-symbol case above -- but a plain fixed field offset
       // essentially never matches that narrow pattern, so before this
       // adjustment, giving __malloc-family allocations real extents
-      // regressed every fixed-offset access into one from "trusted by
+      // would turn every fixed-offset access into one from "trusted by
       // type" (no real extent existed to contradict it) to "unprovable,
       // so reported" (a real, compound extent now exists, but the
-      // solver can't relate it to the fixed offset) -- confirmed
-      // empirically while developing this fix: src/internal/nt/path.c's
-      // `*p`/`b[0..6]`-style fixed-offset accesses into `__malloc`'d
-      // buffers newly regressed from proven to reported the moment
-      // real extent tracking was added, with no code change of their
-      // own. The fix is asymmetric on purpose, matching 0402bed's own
-      // reasoning for the placeholder case: only report a fixed-offset
-      // access when the real tracked extent makes sufficiency PROVABLY
-      // IMPOSSIBLE (`assume(Enough, true)` itself refuted) -- not merely
-      // when sufficiency isn't provable -- so a genuinely too-small
-      // allocation reached through a fixed field offset (0402bed's own
-      // "malloc(4) accessed through an 8-byte field" shape, where the
+      // solver can't relate it to the fixed offset): src/internal/nt/
+      // path.c's `*p`/`b[0..6]`-style fixed-offset accesses into
+      // `__malloc`'d buffers are exactly this shape. The fix is
+      // asymmetric on purpose: only report a fixed-offset access when
+      // the real tracked extent makes sufficiency PROVABLY IMPOSSIBLE
+      // (`assume(Enough, true)` itself refuted) -- not merely when
+      // sufficiency isn't provable -- so a genuinely too-small
+      // allocation reached through a fixed field offset (e.g.
+      // `malloc(4)` accessed through an 8-byte field, where the
       // extent's real value is concrete or otherwise fully resolvable)
-      // is still caught, exactly as before.
+      // is still caught.
       RegionOffset Offset = Region->getAsOffset();
       bool FixedOffset = Offset.isValid() && !Offset.hasSymbolicOffset();
       if (!Condition) {
@@ -3838,10 +3831,11 @@ class ResourceLifecycleChecker
   // write the handle through an out-pointer argument instead --
   // NtCreateFile(&h, ...), NtDuplicateObject(..., &h, ...), and so on.
   // acquiredFamily()/checkPostCall's `Call.getReturnValue()` can only ever
-  // see the NTSTATUS for these, so every Handle this codebase's NT
-  // backend acquires was previously invisible to ResourceMap -- and every
-  // later NtClose() on it was therefore unprovable by construction, not
-  // because of any real lifecycle problem. This table is every NT handle-
+  // see the NTSTATUS for these, so without the out-pointer tracking this
+  // table drives, every Handle this codebase's NT backend acquires would
+  // be invisible to ResourceMap -- and every later NtClose() on it would
+  // therefore be unprovable by construction, not because of any real
+  // lifecycle problem. This table is every NT handle-
   // acquiring syscall this codebase actually calls before an NtClose
   // (found by tracing each NtClose call site back to its handle's
   // origin); the argument index is almost always the first (NT's own
