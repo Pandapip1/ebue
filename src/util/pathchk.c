@@ -143,9 +143,10 @@ static int check_one(const char *path)
 		}
 
 		if (plen + clen < sizeof prefix) {
-			memcpy(prefix + plen, start, clen);
+			if (snprintf(prefix + plen, sizeof prefix - plen, "%.*s",
+			    (int)clen, start) != (int)clen)
+				return 1;
 			plen += clen;
-			prefix[plen] = 0;
 		}
 		start = p;
 	}

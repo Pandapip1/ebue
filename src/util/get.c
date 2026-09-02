@@ -64,6 +64,7 @@
 // NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <libgen.h>
@@ -154,9 +155,11 @@ static int find_sid(const char *rest, size_t restlen, char *sidbuf, size_t sidbu
 				if (field == 1) {
 					const char *sidstart = q;
 					while (q < p + linelen && *q != ' ') q++;
-					if ((size_t)(q - sidstart) >= sidbuflen) return -1;
-					memcpy(sidbuf, sidstart, (size_t)(q - sidstart));
-					sidbuf[q - sidstart] = 0;
+					size_t sidlen = (size_t)(q - sidstart);
+					if (sidlen >= sidbuflen || sidlen > INT_MAX) return -1;
+					if (snprintf(sidbuf, sidbuflen, "%.*s",
+					    (int)sidlen, sidstart) != (int)sidlen)
+						return -1;
 					return 0;
 				}
 				while (q < p + linelen && *q != ' ') q++;

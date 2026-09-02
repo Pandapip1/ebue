@@ -61,6 +61,7 @@
  * has today.
  */
 #include <stdio.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -94,9 +95,8 @@ static int split_field(const char **pp, char *out, size_t outsz)
 	size_t n;
 	while (*p == ' ' || *p == '\t') p++;
 	n = strcspn(p, " \t\n");
-	if (n == 0 || n >= outsz) return -1;
-	memcpy(out, p, n);
-	out[n] = 0;
+	if (n == 0 || n >= outsz || n > INT_MAX) return -1;
+	if (snprintf(out, outsz, "%.*s", (int)n, p) != (int)n) return -1;
 	*pp = p + n;
 	return 0;
 }
