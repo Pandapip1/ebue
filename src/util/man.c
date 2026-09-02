@@ -319,7 +319,7 @@ static int mbuf_append(struct man_buf *restrict b,
 		if (!g) return 0;
 		b->data = g; b->cap = newcap;
 	}
-	memcpy(b->data + b->len, data, n);
+	for (size_t i = 0; i < n; i++) b->data[b->len + i] = data[i];
 	b->len += n;
 	b->data[b->len] = 0;
 	return 1;
@@ -527,7 +527,7 @@ static int man_argv_push(struct man_argv *a, const char *tok, size_t len)
 	}
 	dup = malloc(len + 1);
 	if (!dup) return 0;
-	memcpy(dup, tok, len);
+	for (size_t i = 0; i < len; i++) dup[i] = tok[i];
 	dup[len] = 0;
 	a->v[a->n++] = dup;
 	return 1;
@@ -1154,7 +1154,7 @@ static int man_format(const char *text, size_t len, int width, struct man_buf *o
 
 	copy = malloc(len + 1);
 	if (!copy) { man_ctx_free(&c); return 0; }
-	memcpy(copy, text, len);
+	for (size_t i = 0; i < len; i++) copy[i] = text[i];
 	copy[len] = 0;
 
 	line = copy;
@@ -1513,7 +1513,8 @@ static int man_apropos(char **manpath, char **keywords, size_t nkeywords)
 									char base[256];
 									size_t bn = nl - 2;
 									if (bn >= sizeof base) bn = sizeof base - 1;
-									memcpy(base, de->d_name, bn);
+									for (size_t bi = 0; bi < bn; bi++)
+										base[bi] = de->d_name[bi];
 									base[bn] = 0;
 									printf("%s(%d) - %.*s\n", base, sec, (int)qlen, q);
 									any = 1;

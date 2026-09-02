@@ -278,8 +278,9 @@ static int compare_range(const char *a, size_t as, size_t ae, const char *b, siz
 static int compare_raw(const struct line *a, const struct line *b)
 {
 	size_t n = a->len < b->len ? a->len : b->len;
-	int c = n ? memcmp(a->text, b->text, n) : 0;
-	if (c) return c < 0 ? -1 : 1;
+	for (size_t i = 0; i < n; i++)
+		if (a->text[i] != b->text[i])
+			return (unsigned char)a->text[i] < (unsigned char)b->text[i] ? -1 : 1;
 	if (a->len < b->len) return -1;
 	if (a->len > b->len) return 1;
 	return 0;
@@ -371,7 +372,7 @@ static void merge_sort(struct line *lines, size_t n, const struct sort_opts *o)
 			while (b < hi) tmp[k++] = lines[b++];
 			i = hi;
 		}
-		memcpy(lines, tmp, n * sizeof *tmp);
+		for (size_t j = 0; j < n; j++) lines[j] = tmp[j];
 		if (width > n / 2) break;
 		width *= 2;
 	}
@@ -465,7 +466,7 @@ static int read_all_lines(FILE *f, struct line **out, size_t *nout, size_t *cap)
 			text = malloc(bytes);
 		}
 		if (!text) { free(buf); return -1; }
-		memcpy(text, buf, len);
+	for (size_t i = 0; i < len; i++) text[i] = buf[i];
 		text[len] = 0;
 		if (*nout >= *cap) {
 			size_t newcap;

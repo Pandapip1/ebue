@@ -205,7 +205,7 @@ static int read_all(const char *path, struct jline **out, size_t *nout, int have
 			free(buf);
 			return read_all_failure(f, saved ? saved : ENOMEM);
 		}
-		memcpy(text, buf, len);
+	for (size_t i = 0; i < len; i++) text[i] = buf[i];
 		text[len] = 0;
 		if (*nout >= cap) {
 			size_t newcap;
@@ -249,7 +249,8 @@ static int keys_equal(const struct jline *a, int fa, const struct jline *b, int 
 	const char *pa = field_ptr(a, fa, &la);
 	const char *pb = field_ptr(b, fb, &lb);
 	if (la != lb) return 0;
-	return la == 0 || memcmp(pa, pb, la) == 0;
+	for (size_t i = 0; i < la; i++) if (pa[i] != pb[i]) return 0;
+	return 1;
 }
 
 static int keys_cmp(const struct jline *a, int fa, const struct jline *b, int fb)
@@ -257,10 +258,10 @@ static int keys_cmp(const struct jline *a, int fa, const struct jline *b, int fb
 	size_t la, lb, n;
 	const char *pa = field_ptr(a, fa, &la);
 	const char *pb = field_ptr(b, fb, &lb);
-	int c;
 	n = la < lb ? la : lb;
-	c = n ? memcmp(pa, pb, n) : 0;
-	if (c) return c < 0 ? -1 : 1;
+	for (size_t i = 0; i < n; i++)
+		if (pa[i] != pb[i])
+			return (unsigned char)pa[i] < (unsigned char)pb[i] ? -1 : 1;
 	if (la < lb) return -1;
 	if (la > lb) return 1;
 	return 0;

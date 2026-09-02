@@ -225,7 +225,7 @@ static int lb_push(struct linebuf *lb, const char *text, size_t len, int has_nl)
 	if (!__util_size_add(len, 1, &bytes)) return 0;
 	copy = malloc(bytes);
 	if (!copy) return 0;
-	memcpy(copy, text, len);
+	for (size_t i = 0; i < len; i++) copy[i] = text[i];
 	copy[len] = 0;
 
 	if (lb->n >= lb->cap) {
@@ -305,7 +305,7 @@ static void linebuf_remove_range(struct linebuf *lb, size_t lo, size_t hi)
 	size_t i;
 	if (hi <= lo) return;
 	for (i = lo; i < hi; i++) free(lb->v[i].text);
-	memmove(&lb->v[lo], &lb->v[hi], (lb->n - hi) * sizeof *lb->v);
+	for (i = lo; hi + i - lo < lb->n; i++) lb->v[i] = lb->v[hi + i - lo];
 	lb->n -= (hi - lo);
 }
 
@@ -321,14 +321,15 @@ static int linebuf_insert_block(struct linebuf *lb, size_t at, const struct line
 		if (!g) return 0;
 		lb->v = g; lb->cap = newcap;
 	}
-	memmove(&lb->v[at + need], &lb->v[at], (lb->n - at) * sizeof *lb->v);
+	for (i = lb->n; i > at; i--) lb->v[i + need - 1] = lb->v[i - 1];
 	for (i = 0; i < need; i++) {
 		char *restrict copy;
 		size_t bytes;
 		if (!__util_size_add(block->v[i].len, 1, &bytes)) return 0;
 		copy = malloc(bytes);
 		if (!copy) return 0;
-		memcpy(copy, block->v[i].text, block->v[i].len);
+		for (size_t j = 0; j < block->v[i].len; j++)
+			copy[j] = block->v[i].text[j];
 		copy[block->v[i].len] = 0;
 		lb->v[at + i].text = copy;
 		lb->v[at + i].len = block->v[i].len;
@@ -358,7 +359,7 @@ static int hunk_push(struct hunk *h, enum hop_kind kind, const char *text, size_
 	if (!__util_size_add(len, 1, &bytes)) return 0;
 	copy = malloc(bytes);
 	if (!copy) return 0;
-	memcpy(copy, text, len);
+	for (size_t i = 0; i < len; i++) copy[i] = text[i];
 	copy[len] = 0;
 
 	if (h->n >= h->cap) {
@@ -454,10 +455,16 @@ static void free_patchfile(struct patchfile *pf)
 
 /* ==== small text-matching helpers ========================================= */
 
+static int bytes_equal(const char *a, const char *b, size_t n)
+{
+	for (size_t i = 0; i < n; i++) if (a[i] != b[i]) return 0;
+	return 1;
+}
+
 static int starts_with(const struct pline *pl, const char *prefix)
 {
 	size_t plen = strlen(prefix);
-	return pl->len >= plen && memcmp(pl->text, prefix, plen) == 0;
+	return pl->len >= plen && bytes_equal(pl->text, prefix, plen);
 }
 
 static int is_all_stars(const struct pline *pl)
@@ -541,8 +548,8 @@ static int parse_ctx_range(const struct pline *pl, const char *pfx, const char *
 	size_t plen = strlen(pfx), slen = strlen(sfx);
 	const char *s;
 	if (pl->len < plen + slen) return 0;
-	if (memcmp(pl->text, pfx, plen) != 0) return 0;
-	if (memcmp(pl->text + pl->len - slen, sfx, slen) != 0) return 0;
+	if (!bytes_equal(pl->text, pfx, plen)) return 0;
+	if (!bytes_equal(pl->text + pl->len - slen, sfx, slen)) return 0;
 	s = pl->text + plen;
 	s = parse_uint(s, lo); if (!s) return 0;
 	if (*s == ',') { s++; s = parse_uint(s, hi); if (!s) return 0; } else *hi = *lo;
@@ -554,13 +561,13 @@ static int parse_name_line(const struct pline *pl, const char *pfx, char **out)
 	size_t plen = strlen(pfx), namelen, i;
 	const char *p;
 	char *restrict copy;
-	if (pl->len < plen || memcmp(pl->text, pfx, plen) != 0) return 0;
+	if (pl->len < plen || !bytes_equal(pl->text, pfx, plen)) return 0;
 	p = pl->text + plen;
 	namelen = pl->len - plen;
 	for (i = 0; i < namelen; i++) if (p[i] == '\t') { namelen = i; break; }
 	copy = malloc(namelen + 1);
 	if (!copy) return 0;
-	memcpy(copy, p, namelen);
+	for (i = 0; i < namelen; i++) copy[i] = p[i];
 	copy[namelen] = 0;
 	*out = copy;
 	return 1;
@@ -604,7 +611,8 @@ static int parse_normal_hunk(struct linebuf *L, size_t *ip, struct hunk *h)
 		}
 	}
 	if (cmd == 'c') {
-		if (*ip >= L->n || L->v[*ip].len != 3 || memcmp(L->v[*ip].text, "---", 3) != 0) return 0;
+		if (*ip >= L->n || L->v[*ip].len != 3 ||
+		    !bytes_equal(L->v[*ip].text, "---", 3)) return 0;
 		(*ip)++;
 	}
 	if (cmd == 'a' || cmd == 'c') {
@@ -943,7 +951,9 @@ static int side_matches(const struct hunk *h, int want_old, const struct linebuf
 		if (want_old ? (k == HOP_ADD) : (k == HOP_DEL)) continue;
 		if (t >= target->n) return 0;
 		if (loose) { if (!ws_loose_equal(h->v[i].p.text, target->v[t].text)) return 0; }
-		else { if (h->v[i].p.len != target->v[t].len || memcmp(h->v[i].p.text, target->v[t].text, h->v[i].p.len) != 0) return 0; }
+		else { if (h->v[i].p.len != target->v[t].len ||
+		    !bytes_equal(h->v[i].p.text, target->v[t].text,
+		    h->v[i].p.len)) return 0; }
 		t++;
 	}
 	return 1;

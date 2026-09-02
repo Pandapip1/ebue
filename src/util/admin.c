@@ -149,7 +149,7 @@ static int read_lines(FILE *f, struct line_array *out)
 		if (buf[len - 1] == '\n') len--;
 		copy = malloc(len + 1);
 		if (!copy) { free(buf); line_array_free(out); return 0; }
-		memcpy(copy, buf, len);
+		for (size_t i = 0; i < len; i++) copy[i] = buf[i];
 		copy[len] = 0;
 		if (!line_array_push(out, copy)) { free(copy); free(buf); line_array_free(out); return 0; }
 	}

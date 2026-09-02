@@ -334,7 +334,7 @@ static int buf_reserve(struct buf *b, size_t extra)
 static int buf_append(struct buf *b, const char *s, size_t n)
 {
 	if (buf_reserve(b, n) < 0) return -1;
-	memcpy(b->data + b->len, s, n);
+	for (size_t i = 0; i < n; i++) b->data[b->len + i] = s[i];
 	b->len += n;
 	b->data[b->len] = 0;
 	return 0;
@@ -508,7 +508,8 @@ static int parse_replacement(struct parser *ps, char delim, struct repl_seg **ou
 			segs[n].kind = REPL_LITERAL; \
 			segs[n].lit = malloc(lit.len + 1); \
 			if (!segs[n].lit) goto fail; \
-			memcpy(segs[n].lit, lit.data, lit.len); \
+			for (size_t _j = 0; _j < lit.len; _j++) \
+				segs[n].lit[_j] = lit.data[_j]; \
 			segs[n].lit[lit.len] = 0; \
 			segs[n].litlen = lit.len; \
 			n++; \
@@ -622,7 +623,7 @@ static char *dup_rest_of_line(struct parser *ps)
 	while (n && (start[n - 1] == ' ' || start[n - 1] == '\t')) n--;
 	out = malloc(n + 1);
 	if (!out) return 0;
-	memcpy(out, start, n);
+	for (size_t i = 0; i < n; i++) out[i] = start[i];
 	out[n] = 0;
 	return out;
 }
@@ -638,7 +639,7 @@ static char *dup_label(struct parser *ps)
 	ps->p += n;
 	out = malloc(n + 1);
 	if (!out) return 0;
-	memcpy(out, start, n);
+	for (size_t i = 0; i < n; i++) out[i] = start[i];
 	out[n] = 0;
 	return out;
 }
@@ -1019,7 +1020,7 @@ static int input_push(struct input_set *in, const char *text, size_t len)
 	}
 	copy = malloc(len + 1);
 	if (!copy) return -1;
-	memcpy(copy, text, len);
+	for (size_t i = 0; i < len; i++) copy[i] = text[i];
 	copy[len] = 0;
 	in->lines[in->n].text = copy;
 	in->lines[in->n].len = len;
@@ -1295,7 +1296,8 @@ static int run_program(struct sed_state *st, struct program *pr, int opt_n)
 						if (!nl) { delete_flag = 1; pc = (long)pr->n; }
 						else {
 							size_t off = (size_t)(nl - st->pattern.data) + 1;
-							memmove(st->pattern.data, st->pattern.data + off, st->pattern.len - off);
+							for (size_t i = 0; i < st->pattern.len - off; i++)
+								st->pattern.data[i] = st->pattern.data[off + i];
 							st->pattern.len -= off;
 							st->pattern.data[st->pattern.len] = 0;
 							restart = 1;
