@@ -340,12 +340,12 @@ static void test_compound_commands_run(void)
 
 static void test_refuses_unimplemented_builtins(void)
 {
-	/* The dangerous one: `readonly` as an external command would fail
-	 * with 127 while the variable silently stayed writable. */
-	CHECK(run_c("readonly X=1", 0) == 2);
-	CHECK(err_contains("readonly"));
+	/* The dangerous one: `unset` as an external command would fail
+	 * with 127 while the variable silently stayed set. */
+	CHECK(run_c("unset X", 0) == 2);
+	CHECK(err_contains("unset"));
 
-	/* `readonly` is still on the list; `set` and `shift` came off it in
+	/* `unset` is still on the list; `set` and `shift` came off it in
 	 * stage 7 and must now *work* rather than merely stop being
 	 * refused -- the difference between "the list shrank" and "the
 	 * list shrank and the utility works". */
@@ -379,6 +379,10 @@ static void test_refuses_unimplemented_builtins(void)
 	 * real end-to-end proof it works, not just that it stopped
 	 * erroring. */
 	CHECK(run_c("export X=1", 0) == 0);
+	/* `readonly` came off this list too -- test_readonly() below is the
+	 * real end-to-end proof it works, not just that it stopped
+	 * erroring. */
+	CHECK(run_c("readonly SHT_RO_UNIMPL=1", 0) == 0);
 	CHECK(run_c("exit 3", 0) == 3);
 	CHECK(run_c(":", 0) == 0);
 	CHECK(run_c("true", 0) == 0);
@@ -445,9 +449,9 @@ static void test_functions_through_the_binary(void)
 	 * refused at the definition, before anything runs -- the property
 	 * sh/main.c's header calls refuse-before-running-anything. */
 	unlink("preflight2.txt");
-	sprintf(cmd, "'%s' --produce ran > preflight2.txt; f() { readonly X=1; }", self);
+	sprintf(cmd, "'%s' --produce ran > preflight2.txt; f() { unset X; }", self);
 	CHECK(run_c(cmd, 0) == 2);
-	CHECK(err_contains("readonly"));
+	CHECK(err_contains("unset"));
 	CHECK(slurp_into("preflight2.txt", buf, sizeof buf) != 0);
 }
 
@@ -535,7 +539,7 @@ static void test_refuses_before_running_anything(void)
 	char cmd[1600], buf[64];
 
 	unlink("preflight.txt");
-	sprintf(cmd, "'%s' --produce ran > preflight.txt; readonly X=1", self);
+	sprintf(cmd, "'%s' --produce ran > preflight.txt; unset X", self);
 	CHECK(run_c(cmd, 0) == 2);
 	CHECK(slurp_into("preflight.txt", buf, sizeof buf) != 0);
 }
@@ -760,6 +764,96 @@ static void test_export(void)
 	            "test \"$SHT_EXPORT_F\" = ''", 0) == 0);
 }
 
+/* readonly(1p): "It shall be an error for [a name given the read-only
+ * attribute] to appear as a name in a subsequent readonly command, or
+ * to appear as one of the names in a variable assignment." Unlike
+ * export, this one is real enforcement, not a semantic no-op --
+ * bi_readonly()'s own header comment (src/sh/builtin.c) explains where
+ * that enforcement lives (exec_assignment_only(), src/sh/execute.c) and
+ * why it is only that one enforcement point. What only *this* test can
+ * prove is the end-to-end path: that a later plain assignment to a
+ * read-only name is actually rejected -- with a real diagnostic and a
+ * nonzero status, not silently -- and that the value it tried and
+ * failed to set never took, checked the same way test_export() checks
+ * a value actually reached a child ('%s' --print-env, its own getenv(),
+ * not anything this shell reports about itself). */
+static void test_readonly(void)
+{
+	char cmd[1600], buf[64];
+
+	/* `readonly NAME=value`: sets it and marks it immutable in one
+	 * step. A later plain assignment is rejected -- diagnosed, and the
+	 * value stays exactly what readonly set it to. */
+	CHECK(run_c("readonly SHT_RO_A=bar; SHT_RO_A=baz", 0) != 0);
+	CHECK(err_contains("SHT_RO_A"));
+	/* The overall script's exit status is --print-env's own (2.9.1: a
+	 * `;`-joined command runs regardless of the one before it), so what
+	 * proves the rejected assignment never took is the byte it printed,
+	 * not the status. */
+	sprintf(cmd, "readonly SHT_RO_A=bar; SHT_RO_A=baz; '%s' --print-env SHT_RO_A", self);
+	CHECK(run_c(cmd, 0) == 0);
+	slurp_into(OUTFILE, buf, sizeof buf);
+	CHECK(strcmp(buf, "bar") == 0);
+
+	/* `readonly NAME` on an already-set variable marks it immutable
+	 * without touching its value -- and a later assignment is rejected
+	 * exactly as if the value had been given to `readonly` itself. */
+	sprintf(cmd, "SHT_RO_B=baz; readonly SHT_RO_B; SHT_RO_B=qux; "
+	             "'%s' --print-env SHT_RO_B", self);
+	CHECK(run_c(cmd, 0) == 0);
+	slurp_into(OUTFILE, buf, sizeof buf);
+	CHECK(strcmp(buf, "baz") == 0);
+
+	/* Re-declaring an already read-only name through `readonly` itself
+	 * is exactly the "appear as a name in a subsequent readonly
+	 * command" case readonly(1p) names: also rejected, also diagnosed,
+	 * even though the values happen to match. A bare re-mark with no
+	 * '=' is not an assignment at all, so it stays the genuine no-op
+	 * export(1p)'s own bare-NAME form is. */
+	CHECK(run_c("readonly SHT_RO_C=x; readonly SHT_RO_C=x", 0) != 0);
+	CHECK(err_contains("SHT_RO_C"));
+	CHECK(run_c("readonly SHT_RO_C=x; readonly SHT_RO_C", 0) == 0);
+
+	/* The bare listing form, and -p: readonly(1p)'s own "readonly
+	 * name=value" format, checked with out_contains() for the same
+	 * reason test_export()'s listing checks need it -- whatever else is
+	 * marked read-only in this freshly spawned process is allowed to be
+	 * there too. */
+	CHECK(run_c("readonly SHT_RO_D='has space'; readonly", 0) == 0);
+	CHECK(out_contains("readonly SHT_RO_D='has space'\n"));
+	CHECK(run_c("readonly SHT_RO_E='has space'; readonly -p", 0) == 0);
+	CHECK(out_contains("readonly SHT_RO_E='has space'\n"));
+
+	/* A name marked read-only with no value ever assigned lists with no
+	 * '=' at all -- readonly(1p)'s "name[=word]" OPERANDS shape, echoed
+	 * back on the way out. */
+	CHECK(run_c("readonly SHT_RO_F; readonly -p", 0) == 0);
+	CHECK(out_contains("readonly SHT_RO_F\n"));
+
+	/* -p takes no further operands, matching export -p's own SYNOPSIS
+	 * shape (bi_export()'s own check, mirrored here). */
+	CHECK(run_c("readonly -p SHT_RO_A", 0) != 0);
+	CHECK(err_contains("readonly"));
+
+	/* An invalid identifier is a real, diagnosed error, and an operand
+	 * that follows a bad one is still processed rather than the whole
+	 * command being abandoned -- bi_export()'s own per-operand recovery,
+	 * mirrored here. */
+	CHECK(run_c("readonly 1BAD=x", 0) != 0);
+	CHECK(err_contains("readonly"));
+	sprintf(cmd, "readonly 1BAD=x SHT_RO_G=ok; '%s' --print-env SHT_RO_G", self);
+	CHECK(run_c(cmd, 0) == 0);
+	slurp_into(OUTFILE, buf, sizeof buf);
+	CHECK(strcmp(buf, "ok") == 0);
+
+	/* A pipeline stage is a subshell environment (XCU 2.12): a
+	 * `readonly` there must not leave the name marked once that stage's
+	 * subshell environment is discarded -- the same rule test_export()
+	 * already checks for `export`, applied here to bi_readonly(). */
+	CHECK(run_c("readonly SHT_RO_H=x | true; SHT_RO_H=y; "
+	            "test \"$SHT_RO_H\" = y", 0) == 0);
+}
+
 /* Every fixture and capture file this suite creates, removed on the way
  * out.  tools/run-tests.py gives each test its own mktemp -d working
  * directory, so leaving them behind costs that path nothing -- but a
@@ -843,6 +937,7 @@ int main(int argc, char **argv)
 	test_refuses_unimplemented_builtins();
 	test_umask();
 	test_export();
+	test_readonly();
 	test_refuses_special_parameters();
 	test_positional_parameters_from_argv();
 	test_functions_through_the_binary();
