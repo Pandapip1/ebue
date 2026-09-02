@@ -635,7 +635,14 @@ static char *dup_label(struct parser *ps)
 	size_t n;
 	skip_blank(ps);
 	start = ps->p;
-	n = strcspn(ps->p, "\n; \t");
+	/* '}' stops a label/branch-target name too, same as ';'/<newline>/
+	 * blank: a b/t/: with no address argument of its own is exactly as
+	 * likely to be the last command inside a { ... } block as p, d, s///,
+	 * etc. are, and unlike CMD_SUBST and friends this command's "rest of
+	 * the argument" is consumed right here rather than by the shared
+	 * terminator check further down parse_script() -- so that check
+	 * accepting '}' does nothing for b/t/: unless this scan does too. */
+	n = strcspn(ps->p, "\n;} \t");
 	ps->p += n;
 	out = malloc(n + 1);
 	if (!out) return 0;
@@ -901,10 +908,17 @@ static int parse_script(struct parser *ps, struct program *pr)
 		/* Commands other than {, a, b, c, i, r, t, w, :, # may be
 		 * followed by ';'; those instead run to end-of-line (already
 		 * consumed by dup_rest_of_line()/parse_text_arg()/dup_label()
-		 * for the ones that take an argument at all). */
+		 * for the ones that take an argument at all).  A command may
+		 * also be immediately followed by '}' with no ';' or <newline>
+		 * of its own -- XCU's own N{cmd1;cmd2} grammar lets a block's
+		 * *last* command's terminator be the closing brace itself, so
+		 * '}' ends a command exactly like ';'/<newline>/EOF do, and is
+		 * deliberately left unconsumed here: the top of this loop's own
+		 * `if (*ps->p == '}')` check is what actually recognizes it as
+		 * CMD_BLOCK_END on the next iteration. */
 		if (cmd->kind != CMD_BLOCK_START) {
 			skip_blank(ps);
-			if (*ps->p && *ps->p != '\n' && *ps->p != ';' && *ps->p != '#') {
+			if (*ps->p && *ps->p != '\n' && *ps->p != ';' && *ps->p != '#' && *ps->p != '}') {
 				switch (cmd->kind) {
 				case CMD_APPEND: case CMD_INSERT: case CMD_CHANGE:
 				case CMD_READ: case CMD_WRITE: case CMD_BRANCH:
