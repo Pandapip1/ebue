@@ -749,8 +749,9 @@ obj/test/util-archive.exe: obj/bin/pax.exe obj/bin/file.exe obj/bin/ar.exe $(SH_
 # test/util-findls.c is the same idea, one tier up again: find(1p)/
 # xargs(1p)/expr(1p)/ls(1p), each spawned as obj/bin/<name>.exe and
 # exercised as a shell built-in via obj/sh/sh.exe -c, so all four .exes
-# plus the shell need to exist first.
-obj/test/util-findls.exe: obj/bin/find.exe obj/bin/xargs.exe obj/bin/expr.exe obj/bin/ls.exe $(SH_EXE)
+# plus the shell need to exist first. It also spawns obj/bin/echo.exe
+# and obj/bin/false.exe directly as xargs(1p) targets.
+obj/test/util-findls.exe: obj/bin/find.exe obj/bin/xargs.exe obj/bin/expr.exe obj/bin/ls.exe obj/bin/echo.exe obj/bin/false.exe $(SH_EXE)
 
 # test/util-awk.c is the same idea, one tier up again: awk(1p), spawned
 # as obj/bin/awk.exe and exercised as a shell built-in via obj/sh/sh.exe
@@ -772,8 +773,10 @@ obj/test/util-diffcmp.exe: obj/bin/diff.exe obj/bin/cmp.exe $(SH_EXE)
 # test/util-timeutil.c is the same idea, one tier up again: the first
 # Tier-5 "process/environment" utilities, time(1p) and timeout, each
 # spawned as obj/bin/<name>.exe and exercised as a shell built-in via
-# obj/sh/sh.exe -c, so both .exes plus the shell need to exist first.
-obj/test/util-timeutil.exe: obj/bin/time.exe obj/bin/timeout.exe $(SH_EXE)
+# obj/sh/sh.exe -c, so both .exes plus the shell need to exist first. It
+# also spawns obj/bin/true.exe and obj/bin/false.exe directly as the
+# child commands under test.
+obj/test/util-timeutil.exe: obj/bin/time.exe obj/bin/timeout.exe obj/bin/true.exe obj/bin/false.exe $(SH_EXE)
 
 # test/util-ttyctl.c is the same idea, one tier up again: the
 # terminal-control utilities stty(1p)/tty(1p), each spawned as
