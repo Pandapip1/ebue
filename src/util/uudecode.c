@@ -63,6 +63,17 @@ static size_t chomp(char *s, size_t n)
 	return n;
 }
 
+/* A diagnostic for the failure that selected this path has already been
+ * written by the caller; this only owns the "close whatever is still open,
+ * then report failure" half every early-exit site below shares. `in` is
+ * closed only when it came from a real path (not stdin); always returns 1
+ * so a call site can end with `return uudecode_fail_in(in_path, in);`. */
+static int uudecode_fail_in(const char *in_path, FILE *in)
+{
+	if (in_path) (void)fclose(in);
+	return 1;
+}
+
 /* Decodes one data line (`have` bytes, already chomped) into `out`, up to
  * `n` real bytes (uuencode.c's own length prefix, parsed by the caller).
  * Returns 0 on success, -1 (diagnostic already written) on a malformed
@@ -142,35 +153,27 @@ int __util_uudecode_main(
 	}
 	if (!found_begin) {
 		__util_diagf("uudecode: %s: no valid \"begin\" line found\n", in_path ? in_path : "stdin");
-		/* Parse failure is primary; these closes are cleanup only. */
-		if (in_path) (void)fclose(in);
-		return 1;
+		return uudecode_fail_in(in_path, in);
 	}
 
 	p = line + 6;
 	mode_val = strtoul(p, &end, 8);
 	if (end == p || *end != ' ') {
 		__util_diagf("uudecode: %s: malformed begin line\n", in_path ? in_path : "stdin");
-		/* The malformed header is primary; close only releases the input. */
-		if (in_path) (void)fclose(in);
-		return 1;
+		return uudecode_fail_in(in_path, in);
 	}
 	while (*end == ' ') end++;
 	filename = end;
 	if (!*filename) {
 		__util_diagf("uudecode: %s: begin line has no filename\n", in_path ? in_path : "stdin");
-		/* The missing filename is primary; close only releases the input. */
-		if (in_path) (void)fclose(in);
-		return 1;
+		return uudecode_fail_in(in_path, in);
 	}
 	outname = out_override ? out_override : filename;
 
 	out = fopen(outname, "wb");
 	if (!out) {
 		__util_diagf("uudecode: %s: %s\n", outname, strerror(errno));
-		/* Output-open failure is primary; input close is cleanup only. */
-		if (in_path) (void)fclose(in);
-		return 1;
+		return uudecode_fail_in(in_path, in);
 	}
 
 	while (fgets(line, sizeof line, in)) {
@@ -208,9 +211,7 @@ int __util_uudecode_main(
 
 	if (fclose(out) < 0) {
 		__util_diagf("uudecode: %s: %s\n", outname, strerror(errno));
-		/* Output-close failure is primary; input close is cleanup only. */
-		if (in_path) (void)fclose(in);
-		return 1;
+		return uudecode_fail_in(in_path, in);
 	}
 	if (in_path && fclose(in) < 0) {
 		__util_diagf("uudecode: %s: %s\n", in_path, strerror(errno));

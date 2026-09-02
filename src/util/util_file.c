@@ -176,15 +176,15 @@ static const char *classify_stat(const char *path, const struct stat *st, const 
 	if (S_ISBLK(st->st_mode)) return "block special";
 	if (S_ISCHR(st->st_mode)) return "character special";
 	if (S_ISREG(st->st_mode)) {
-		int fd;
+		int fd, r;
 		const char *type;
 		if (o->i) return "regular file";
 		if (st->st_size == 0) return "empty";
 		fd = open(path, O_RDONLY);
 		if (fd < 0) return "cannot open";
-		if (classify_fd(fd, &type) < 0) { (void)close(fd); return "cannot open"; }
+		r = classify_fd(fd, &type);
 		(void)close(fd);
-		return type;
+		return r < 0 ? "cannot open" : type;
 	}
 	/* No other S_IS* case exists in include/sys/stat.h; this is
 	 * unreachable for a file that stat() actually returned, but a

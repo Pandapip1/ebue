@@ -252,23 +252,23 @@ static int get_one(const char *path, int pflag, const char *rflag)
 	}
 	if (verify_checksum(&s, &rest, &restlen) != 0) {
 		__util_diagf("get: %s: not a valid SCCS file (checksum mismatch)\n", path);
-		free(s.buf);
-		return 1;
+		rc = 1;
+		goto out;
 	}
 	if (find_sid(rest, restlen, sid, sizeof sid) != 0) {
 		__util_diagf("get: %s: no delta-table entry found\n", path);
-		free(s.buf);
-		return 1;
+		rc = 1;
+		goto out;
 	}
 	if (rflag && strcmp(rflag, sid) != 0) {
 		__util_diagf("get: %s: no such delta: %s\n", path, rflag);
-		free(s.buf);
-		return 1;
+		rc = 1;
+		goto out;
 	}
 	if (find_body(rest, restlen, &lines, &nlines) != 0) {
 		__util_diagf("get: %s: could not locate delta 1.1's body\n", path);
-		free(s.buf);
-		return 1;
+		rc = 1;
+		goto out;
 	}
 
 	if (pflag) {
@@ -280,7 +280,7 @@ static int get_one(const char *path, int pflag, const char *rflag)
 		const char *dir, *base;
 		FILE *g;
 
-		if (!dircopy || !basecopy) { free(dircopy); free(basecopy); free(lines); free(s.buf); return 1; }
+		if (!dircopy || !basecopy) { free(dircopy); free(basecopy); rc = 1; goto out; }
 		dir = dirname(dircopy);
 		base = basename(basecopy);
 		/* has_sfile_name()'s counterpart in admin.c already enforces
@@ -288,15 +288,16 @@ static int get_one(const char *path, int pflag, const char *rflag)
 		 * is not one this project's own admin.c could have produced. */
 		if (base[0] != 's' || base[1] != '.' || base[2] == 0) {
 			__util_diagf("get: %s: not an SCCS file name (must be \"s.*\")\n", path);
-			free(dircopy); free(basecopy); free(lines); free(s.buf);
-			return 1;
+			free(dircopy); free(basecopy);
+			rc = 1;
+			goto out;
 		}
 		if (strcmp(dir, ".") == 0) snprintf(gpath, sizeof gpath, "%s", base + 2);
 		else snprintf(gpath, sizeof gpath, "%s/%s", dir, base + 2);
 		free(dircopy); free(basecopy);
 
 		g = fopen(gpath, "wb");
-		if (!g) { __util_diagf("get: %s: %s\n", gpath, strerror(errno)); free(lines); free(s.buf); return 1; }
+		if (!g) { __util_diagf("get: %s: %s\n", gpath, strerror(errno)); rc = 1; goto out; }
 		if (write_body(g, lines, nlines) != 0 || fclose(g) != 0) {
 			__util_diagf("get: %s: %s\n", gpath, strerror(errno));
 			rc = 1;
@@ -304,6 +305,12 @@ static int get_one(const char *path, int pflag, const char *rflag)
 		printf("%s\n%zu lines\n", sid, nlines);
 	}
 
+out:
+	/* `lines` is still 0 (its initializer) for every early-exit above
+	 * that never reached find_body(), so freeing it here unconditionally
+	 * is always safe -- one exit path for every route through this
+	 * function instead of a free(lines)/free(s.buf) pair repeated at
+	 * each one. */
 	free(lines);
 	free(s.buf);
 	return rc;
