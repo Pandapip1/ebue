@@ -64,6 +64,19 @@ long double __extenddftf2(double);
 double __trunctfdf2(long double);
 float __trunctfsf2(long double);
 
+/* ---- double complex division helper (src/complex/complex_rtlib.c) ----- */
+/* Emitted for every `double complex a, b; a / b;` under clang/gcc (the
+ * Itanium C++ ABI / libgcc convention) -- confirmed empirically, see
+ * that file's own banner. Absent entirely (not merely undeclared) under
+ * __TINYC__: tcc does not implement _Complex at all
+ * (include/complex.h's own banner), so `double complex` cannot appear
+ * in this header's own text there either, and nothing under __TINYC__
+ * could ever emit a call to this symbol in the first place. */
+#ifndef __TINYC__
+#include <complex.h>
+double complex __divdc3(double, double, double, double);
+#endif
+
 /* ---- program entry (crt/crt1.c) ---------------------------------------- */
 /* tcc's PE linker picks _start up as the image entry point by name.
  * Neither of these is ever called from C.
