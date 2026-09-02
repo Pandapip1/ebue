@@ -207,31 +207,25 @@ static void test_bracket_form(void)
 
 static void test_test_integer_comparisons(void)
 {
-	char *eq_t[] = { (char *)"test", (char *)"3", (char *)"-eq", (char *)"3", 0 };
-	char *eq_f[] = { (char *)"test", (char *)"3", (char *)"-eq", (char *)"4", 0 };
-	char *ne_t[] = { (char *)"test", (char *)"3", (char *)"-ne", (char *)"4", 0 };
-	char *ne_f[] = { (char *)"test", (char *)"3", (char *)"-ne", (char *)"3", 0 };
-	char *lt_t[] = { (char *)"test", (char *)"3", (char *)"-lt", (char *)"4", 0 };
-	char *lt_f[] = { (char *)"test", (char *)"4", (char *)"-lt", (char *)"3", 0 };
-	char *gt_t[] = { (char *)"test", (char *)"4", (char *)"-gt", (char *)"3", 0 };
-	char *gt_f[] = { (char *)"test", (char *)"3", (char *)"-gt", (char *)"4", 0 };
-	char *le_t[] = { (char *)"test", (char *)"3", (char *)"-le", (char *)"3", 0 };
-	char *le_f[] = { (char *)"test", (char *)"4", (char *)"-le", (char *)"3", 0 };
-	char *ge_t[] = { (char *)"test", (char *)"3", (char *)"-ge", (char *)"3", 0 };
-	char *ge_f[] = { (char *)"test", (char *)"3", (char *)"-ge", (char *)"4", 0 };
+	/* Same shape test_string_caps_xterm() uses in test/util-tput.c: one
+	 * table of operand triples paired with the exit status each must
+	 * produce, run through a single loop, rather than a named argv array
+	 * and a CHECK per comparison. */
+	static const struct { const char *lhs, *op, *rhs; int want_status; } cases[] = {
+		{ "3", "-eq", "3", 0 }, { "3", "-eq", "4", 1 },
+		{ "3", "-ne", "4", 0 }, { "3", "-ne", "3", 1 },
+		{ "3", "-lt", "4", 0 }, { "4", "-lt", "3", 1 },
+		{ "4", "-gt", "3", 0 }, { "3", "-gt", "4", 1 },
+		{ "3", "-le", "3", 0 }, { "4", "-le", "3", 1 },
+		{ "3", "-ge", "3", 0 }, { "3", "-ge", "4", 1 },
+	};
+	size_t i;
 
-	CHECK(run(test_path, eq_t) == 0);
-	CHECK(run(test_path, eq_f) == 1);
-	CHECK(run(test_path, ne_t) == 0);
-	CHECK(run(test_path, ne_f) == 1);
-	CHECK(run(test_path, lt_t) == 0);
-	CHECK(run(test_path, lt_f) == 1);
-	CHECK(run(test_path, gt_t) == 0);
-	CHECK(run(test_path, gt_f) == 1);
-	CHECK(run(test_path, le_t) == 0);
-	CHECK(run(test_path, le_f) == 1);
-	CHECK(run(test_path, ge_t) == 0);
-	CHECK(run(test_path, ge_f) == 1);
+	for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+		char *argv[] = { (char *)"test", (char *)cases[i].lhs,
+			(char *)cases[i].op, (char *)cases[i].rhs, 0 };
+		CHECK(run(test_path, argv) == cases[i].want_status);
+	}
 }
 
 static void test_test_integer_nonnumeric_is_error(void)
