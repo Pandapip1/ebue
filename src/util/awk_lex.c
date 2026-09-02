@@ -141,6 +141,20 @@ static int growbuf(char **buf, size_t *cap, size_t n)
 	return 1;
 }
 
+/* Appends one byte to *buf (growing it via growbuf() as needed),
+ * setting a lexer error on allocation failure. Returns 1 on success, 0
+ * on failure -- the caller's own job on failure is just to free(*buf)
+ * and return 0, since growbuf() leaves *buf usable but un-grown rather
+ * than freeing it itself. Folds the "grow, then on success write one
+ * byte" pairing that scan_string()/scan_ere() below would otherwise
+ * repeat at every one of their own append sites. */
+static int scan_putc(struct awk_lexer *lx, char **buf, size_t *cap, size_t *n, char c)
+{
+	if (!growbuf(buf, cap, *n + 1)) { lex_err(lx, "awk: out of memory"); return 0; }
+	(*buf)[(*n)++] = c;
+	return 1;
+}
+
 static int scan_number(struct awk_lexer *lx, struct awk_token *out)
 {
 	size_t start = lx->pos;
@@ -210,19 +224,15 @@ static int scan_string(struct awk_lexer *lx, struct awk_token *out)
 			}
 			if (val < 0) {
 				/* Unrecognized \X: leave both characters, literally. */
-				if (!growbuf(&buf, &cap, n + 1)) { lex_err(lx, "awk: out of memory"); free(buf); return 0; }
-				buf[n++] = '\\';
+				if (!scan_putc(lx, &buf, &cap, &n, '\\')) { free(buf); return 0; }
 				if (e == -1) { lex_err(lx, "awk: unterminated string literal"); free(buf); return 0; }
-				if (!growbuf(&buf, &cap, n + 1)) { lex_err(lx, "awk: out of memory"); free(buf); return 0; }
-				buf[n++] = (char)e;
+				if (!scan_putc(lx, &buf, &cap, &n, (char)e)) { free(buf); return 0; }
 				continue;
 			}
-			if (!growbuf(&buf, &cap, n + 1)) { lex_err(lx, "awk: out of memory"); free(buf); return 0; }
-			buf[n++] = (char)val;
+			if (!scan_putc(lx, &buf, &cap, &n, (char)val)) { free(buf); return 0; }
 			continue;
 		}
-		if (!growbuf(&buf, &cap, n + 1)) { lex_err(lx, "awk: out of memory"); free(buf); return 0; }
-		buf[n++] = (char)c;
+		if (!scan_putc(lx, &buf, &cap, &n, (char)c)) { free(buf); return 0; }
 	}
 	if (!growbuf(&buf, &cap, n)) { lex_err(lx, "awk: out of memory"); free(buf); return 0; }
 	buf[n] = 0;
@@ -246,26 +256,22 @@ static int scan_ere(struct awk_lexer *lx, struct awk_token *out)
 			int e = getc_(lx);
 			if (e == -1) { lex_err(lx, "awk: unterminated regular expression"); free(buf); return 0; }
 			if (e == '/') {
-				if (!growbuf(&buf, &cap, n + 1)) { lex_err(lx, "awk: out of memory"); free(buf); return 0; }
-				buf[n++] = '/';
+				if (!scan_putc(lx, &buf, &cap, &n, '/')) { free(buf); return 0; }
 			} else {
-				if (!growbuf(&buf, &cap, n + 2)) { lex_err(lx, "awk: out of memory"); free(buf); return 0; }
-				buf[n++] = '\\';
-				buf[n++] = (char)e;
+				if (!scan_putc(lx, &buf, &cap, &n, '\\')) { free(buf); return 0; }
+				if (!scan_putc(lx, &buf, &cap, &n, (char)e)) { free(buf); return 0; }
 			}
 			continue;
 		}
 		if (!in_bracket && c == '[') {
 			in_bracket = 1;
-			if (!growbuf(&buf, &cap, n + 1)) { lex_err(lx, "awk: out of memory"); free(buf); return 0; }
-			buf[n++] = (char)c;
-			if (peekc(lx) == '^') { if (!growbuf(&buf, &cap, n + 1)) { lex_err(lx, "awk: out of memory"); free(buf); return 0; } buf[n++] = (char)getc_(lx); }
-			if (peekc(lx) == ']') { if (!growbuf(&buf, &cap, n + 1)) { lex_err(lx, "awk: out of memory"); free(buf); return 0; } buf[n++] = (char)getc_(lx); }
+			if (!scan_putc(lx, &buf, &cap, &n, (char)c)) { free(buf); return 0; }
+			if (peekc(lx) == '^') { if (!scan_putc(lx, &buf, &cap, &n, (char)getc_(lx))) { free(buf); return 0; } }
+			if (peekc(lx) == ']') { if (!scan_putc(lx, &buf, &cap, &n, (char)getc_(lx))) { free(buf); return 0; } }
 			continue;
 		}
 		if (in_bracket && c == ']') { in_bracket = 0; }
-		if (!growbuf(&buf, &cap, n + 1)) { lex_err(lx, "awk: out of memory"); free(buf); return 0; }
-		buf[n++] = (char)c;
+		if (!scan_putc(lx, &buf, &cap, &n, (char)c)) { free(buf); return 0; }
 	}
 	if (!growbuf(&buf, &cap, n)) { lex_err(lx, "awk: out of memory"); free(buf); return 0; }
 	buf[n] = 0;

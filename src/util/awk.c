@@ -250,6 +250,25 @@ static int split_assignment(char *s, char **name_out, char **val_out)
 	return 1;
 }
 
+/* -F/-v/-f all share the standard getopt(3)-style rule that an option's
+ * argument is either attached (`-Fx`) or, when nothing is attached, the
+ * next argv element (`-F x`). Returns that argument text, advancing
+ * *argi past it in the "next argv element" case; on the missing-
+ * argument case prints the diagnostic itself and returns NULL, which
+ * the caller must treat as "return 2" (this function cannot do that
+ * unwind itself: it runs before __util_awk_main()'s own setjmp() is
+ * armed, so a plain return here is already exactly what every other
+ * error in this same option loop does). */
+static const char *opt_value(char **argv, int argc, int *argi, char opt, const char *arg)
+{
+	if (arg[2]) return arg + 2;
+	if (++*argi >= argc) {
+		__util_diagf("awk: -%c: option requires an argument\n", opt);
+		return NULL;
+	}
+	return argv[*argi];
+}
+
 int __util_awk_main(int argc, char **argv)
 {
 	const char *fsarg = NULL;
@@ -273,15 +292,15 @@ int __util_awk_main(int argc, char **argv)
 
 		switch (arg[1]) {
 		case 'F':
-			if (arg[2]) { val = arg + 2; }
-			else { if (++i >= argc) { __util_diagf("awk: -F: option requires an argument\n"); return 2; } val = argv[i]; }
+			val = opt_value(argv, argc, &i, 'F', arg);
+			if (!val) return 2;
 			fsarg = val;
 			break;
 		case 'v': {
 			char *name, *v2;
 			char *dup;
-			if (arg[2]) { val = arg + 2; }
-			else { if (++i >= argc) { __util_diagf("awk: -v: option requires an argument\n"); return 2; } val = argv[i]; }
+			val = opt_value(argv, argc, &i, 'v', arg);
+			if (!val) return 2;
 			dup = strdup(val);
 			if (!dup) { __util_diagf("awk: out of memory\n"); return 2; }
 			if (!split_assignment(dup, &name, &v2)) {
@@ -300,8 +319,8 @@ int __util_awk_main(int argc, char **argv)
 			break;
 		}
 		case 'f':
-			if (arg[2]) { val = arg + 2; }
-			else { if (++i >= argc) { __util_diagf("awk: -f: option requires an argument\n"); return 2; } val = argv[i]; }
+			val = opt_value(argv, argc, &i, 'f', arg);
+			if (!val) return 2;
 			{
 				char **g = realloc(progfiles, (size_t)(nprogfiles + 1) * sizeof *g);
 				if (!g) { __util_diagf("awk: out of memory\n"); return 2; }
