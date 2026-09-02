@@ -41,8 +41,7 @@
  *    file, a distinct, open-ended parsing project (a real grammar:
  *    offset/type/value/message lines, position-sensitive and
  *    conditional '>' tests, printf-style messages) that this batch
- *    does not attempt.  This matches the task brief's explicit
- *    instruction not to reimplement libmagic's signature database.
+ *    does not attempt.
  *
  *  - The STDOUT section's format is always `"%s: %s\n", file, type`
  *    (symbolic links: `"%s: %s %s\n", file, type, link-contents`), and
@@ -74,7 +73,7 @@
  *    "fortran program text" context-sensitive strings -- distinguishing
  *    a C or FORTRAN source file from any other readable text needs a
  *    real keyword/token scan, exactly the kind of open-ended
- *    content-sensitive test the task brief says to avoid; such files
+ *    content-sensitive test this file avoids by design; such files
  *    are reported as "ASCII text" here instead, which is a legitimate
  *    (if less specific) answer since POSIX's own required-string list
  *    only binds "when applicable" and does not mandate language

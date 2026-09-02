@@ -5,39 +5,23 @@
  *
  * ---- from-scratch vs. wrapping tcc's own `-ar` mode ---------------------
  *
- * This project's own build already produces and reads real archives:
- * `AR = $(CC) -ar` (Makefile), `lib/libc.a: $(AOBJS); $(AR) rcs $@
- * $(AOBJS)`, and tools/linkcheck.sh lists members with `$CC -ar t
- * lib/libc.a` to catch basename collisions.  That was read before
- * writing this file (and lib/libc.a's own bytes were inspected with
- * `od -c`) specifically to answer the from-scratch-vs-wrap question
- * deliberately rather than by default: wrapping tcc's `-ar` would make
- * this utility a thin shell around a compiler this library's own
- * deployed programs never link against or ship with -- a real system
- * running ar.exe standalone has no tcc anywhere on it, so that would
- * not be a "genuine standalone utility" at all, just a tcc frontend
- * with an ar-shaped name.  POSIX itself does not mandate a specific
- * on-disk archive format ("[a]rchives are files with unspecified
- * formats" -- ar(1p) EXTENDED DESCRIPTION is literally "None."; the
- * 4.4BSD `!<arch>\n` layout is given only as rationale, non-normative),
- * so this file is free to pick one, and picks the classic common
- * format below -- a real, from-scratch reader/writer, not a wrapper.
- *
- * That inspection also settled the concrete header layout: `od -c` on
- * this build's own lib/libc.a shows the "!<arch>\n" 8-byte magic
- * tcc's archiver writes, immediately followed by a member header whose
- * name field is "/" -- the well-known GNU-convention symbol-table
- * member. This file's own writer never emits a symbol table (see
- * "NOT IMPLEMENTED" below), but the per-member header layout it reads
- * and writes -- name[16] mtime[12] uid[6] gid[6] mode[8] size[10]
- * fmag[2]="`\n", 60 bytes total, data padded to an even length with a
- * trailing '\n' -- is exactly the classic common ar_hdr layout every
- * System V/GNU/BSD ar agrees on, the same one tcc's own archiver uses
- * for every ordinary (non-symtab) member.  Member names here follow
- * the GNU convention of a trailing '/' terminator inside the 16-byte
- * field (so a name may be at most 15 bytes), which is what makes
- * archives this utility writes readable by real ar implementations
- * too, not just by itself.
+ * A real system running ar.exe standalone has no tcc anywhere on it, so
+ * wrapping tcc's `-ar` would not be a genuine standalone utility, just a
+ * tcc frontend with an ar-shaped name -- this file is a real,
+ * from-scratch reader/writer instead.  POSIX itself does not mandate a
+ * specific on-disk archive format ("[a]rchives are files with
+ * unspecified formats" -- ar(1p) EXTENDED DESCRIPTION is literally
+ * "None."), so this file is free to pick one, and picks the classic
+ * common format: the "!<arch>\n" 8-byte magic and 60-byte member header
+ * (name[16] mtime[12] uid[6] gid[6] mode[8] size[10] fmag[2]="`\n",
+ * data padded to an even length with a trailing '\n') every System V/
+ * GNU/BSD ar agrees on -- the same layout tcc's own archiver writes for
+ * lib/libc.a, verified directly against its own bytes.  This file's own
+ * writer never emits a symbol table (see "NOT IMPLEMENTED" below).
+ * Member names follow the GNU convention of a trailing '/' terminator
+ * inside the 16-byte field (so a name may be at most 15 bytes), which
+ * is what makes archives this utility writes readable by real ar
+ * implementations too, not just by itself.
  *
  * ---- OPTIONS implemented -------------------------------------------------
  *  -d [-v]       delete

@@ -16,52 +16,35 @@
  * ---- Reading the whole input before writing anything ------------------
  *
  * "Relative to the end of the file" cannot be answered without knowing
- * where the end is, and unlike head(1p) (which only ever needs to stop
- * early) there is no way to stream this and still support the from-end
- * form for input that is not seekable -- a real pathname operand could
- * still be a pipe or a FIFO on this platform.  Rather than special-case
- * seekable-vs-not (lseek() to find the size for a regular file, buffer
- * everything for anything else), read_all() below always reads the
- * whole input into one growable buffer first, then both -c and -n (and
- * both signs of each) are answered as an index into that one buffer --
- * see split_lines() and the byte-offset arithmetic in
- * __util_tail_main() below.  The cost is memory proportional to the
- * whole input rather than to `number`; for the sizes this utility tier
- * is ever asked to handle in this project (see test/util-textio.c) that
- * trade is the simpler-and-correct choice over a seek-and-scan-backward
- * optimization this file does not attempt.
+ * where the end is, and unlike head(1p) there is no way to stream this
+ * and still support the from-end form for input that is not seekable --
+ * a real pathname operand could still be a pipe or a FIFO on this
+ * platform.  Rather than special-case seekable-vs-not, read_all() below
+ * always reads the whole input into one growable buffer first, then
+ * both -c and -n (and both signs of each) are answered as an index into
+ * that buffer -- see the byte-offset arithmetic in __util_tail_main()
+ * below.  The cost is memory proportional to the whole input rather
+ * than to `number`; for the sizes this project handles that trade is
+ * simpler and correct, over a seek-and-scan-backward optimization this
+ * file does not attempt.
  *
  * -f ("do not terminate after the last line ... read the appended data")
- * is real tail(1p) behaviour with no natural exit, so after the initial
- * tail is written it hands off to tail_follow() below, which polls
- * rather than blocking a single read() forever: this platform has
- * nothing like Linux's inotify wired into ntlibc (see src/select/,
- * src/thread/ -- no filesystem-change-notification primitive exists on
- * either NT or the Linux port), and no other utility in this tier had a
- * long-running poll loop to reuse, so this file grows the first one,
- * modelled on src/util/timeout.c's wait_bounded() (same shape: a
- * bounded condition check, nanosleep() for POLL_INTERVAL_NS, repeat).
- * fstat()'s st_size never blocks, which is what makes size-polling safe
- * to round-robin across several regular-file operands at once (see
+ * has no natural exit, so after the initial tail is written it hands
+ * off to tail_follow() below, which polls fstat()'s st_size rather than
+ * blocking a single read() forever: this platform has no filesystem-
+ * change-notification primitive (no inotify equivalent; see src/select/,
+ * src/thread/).  fstat() never blocks, which is what makes size-polling
+ * safe to round-robin across several regular-file operands at once (see
  * tail_follow()); a single non-regular operand (a pipe/FIFO, or "-"/
  * no-operand stdin fed from one) instead gets a plain blocking read()
- * loop, since blocking IS the right primitive there -- it returns the
- * moment data arrives, and a true EOF (writer closed) really is the end,
- * unlike a regular file which can always grow again later.  Interrupting
- * with SIGINT (Ctrl-C at a terminal) ends the loop the same way every
- * other long-running utility in this tree relies on: SIGINT's default
- * disposition is process termination, so nothing here needs to install a
- * handler -- see src/unistd/sleep.c's own header for why an
- * EINTR-returning nanosleep()/read() need no special-casing beyond
- * retrying (a *caught* signal is the only thing that would produce
- * EINTR without also ending the process, and nothing here catches one).
+ * loop, since a true EOF there (writer closed) really is the end, unlike
+ * a regular file which can always grow again.  SIGINT (Ctrl-C) ends the
+ * loop the normal way -- its default disposition is process termination,
+ * so nothing here installs a handler.
  *
- * The multi-operand `==> file <==` banner is the same GNU/BSD-convention
- * choice documented in src/util/head.c's header, extended past XCU's own
- * single-`[file]` SYNOPSIS the same way multiple operands are: XCU says
- * nothing about more than one, this project supports it anyway for
- * symmetry with every other utility in this tier, and documents the
- * extension here rather than silently diverging from the page cited.
+ * The multi-operand `==> file <==` banner extends past XCU's own
+ * single-`[file]` SYNOPSIS the same way multiple operands are, for
+ * symmetry with every other utility in this tier.
  *
  * EXIT STATUS: "0 Successful completion." ">0 An error occurred." --
  * diagnose-and-continue across operands.
@@ -83,10 +66,7 @@
 /* -f's poll interval.  200ms: frequent enough that an interactive
  * `tail -f` reads as "instant" the way GNU tail's 1s default does not,
  * cheap enough (five fstat()s a second per followed file) not to matter
- * against any real workload.  Same shape as src/util/timeout.c's own
- * POLL_INTERVAL_NS, a different value because the two loops are bounding
- * different things (a child process's exit vs. a human watching output
- * scroll). */
+ * against any real workload. */
 #define TAIL_FOLLOW_POLL_NS 200000000L
 
 enum tail_mode { TAIL_LINES, TAIL_BYTES };
@@ -284,10 +264,7 @@ static int tail_follow(struct tail_follow_target *targets, int ntargets)
 	 * character-device stdin) has no "size" to poll, and read() already
 	 * blocks until either more data arrives or the writer closes --
 	 * which, unlike a regular file, really is the end, since nothing
-	 * will ever make a closed pipe grow again.  This is also what lets
-	 * an automated test (or any other non-interactive consumer feeding
-	 * tail -f from a pipe) end the loop just by closing its end,
-	 * without needing SIGINT. */
+	 * will ever make a closed pipe grow again. */
 	if (ntargets == 1 && !targets[0].is_regular) {
 		char buf[65536];
 		for (;;) {

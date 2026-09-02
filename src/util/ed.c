@@ -19,10 +19,10 @@
  *  - SIGHUP: real ed(1p) says "the editor shall write the buffer ... to
  *    a file named 'ed.hup' ... and exit" on SIGHUP.  Because
  *    __util_ed_main() can run in-process as a shell built-in with no
- *    fork/exec (src/sh/builtin.c's bi_ed(), added by this project's own
- *    coordinator afterward), a literal exit() would tear down the whole
- *    calling shell, not just this one command -- exactly the mistake
- *    src/util/dd.c's own header comment documents avoiding for SIGINT.
+ *    fork/exec (src/sh/builtin.c's bi_ed()), a literal exit() would
+ *    tear down the whole calling shell, not just this one command --
+ *    exactly the mistake src/util/dd.c's own header comment documents
+ *    avoiding for SIGINT.
  *    So SIGHUP here is adapted, not literal: a flag-poll (the same
  *    shape as SIGINT below) noticed between top-level command lines
  *    triggers a best-effort write of the whole buffer to ./ed.hup (if
