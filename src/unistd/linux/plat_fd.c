@@ -48,6 +48,7 @@
 #define SYS_pread64  67
 #define SYS_pwrite64 68
 #define SYS_dup    23
+#define SYS_dup3   24
 #define SYS_fcntl  25
 #elif defined(__x86_64__)
 #define SYS_close  3
@@ -57,6 +58,7 @@
 #define SYS_pread64  17
 #define SYS_pwrite64 18
 #define SYS_dup    32
+#define SYS_dup3   292
 #define SYS_fcntl  72
 #elif defined(__i386__)
 #define SYS_close  6
@@ -76,13 +78,22 @@
 #define SYS_pread64  180
 #define SYS_pwrite64 181
 #define SYS_dup    41
+#define SYS_dup3   330
 #define SYS_fcntl  55
 #else
 #error "plat_fd.c: unsupported architecture"
 #endif
 
+/* aarch64=24/x86_64=292/i386=330 above, confirmed against this system's
+ * own vendored kernel UAPI headers the same way this file's own banner
+ * already confirms SYS_dup/SYS_fcntl -- asm-generic/unistd.h's
+ * __NR_dup3 for aarch64, asm/unistd_64.h's/unistd_32.h's __NR_dup3 for
+ * the other two, none of which this host's own <sys/syscall.h> covers
+ * since this host is aarch64-only. */
+
 #define F_SETFD_LX   2
 #define FD_CLOEXEC_LX 1
+#define O_CLOEXEC_LX  0x80000
 
 /* A minimal 6-argument raw syscall, one body per arch's own calling
  * convention -- no host libc in the call path at all. NOT `extern long
@@ -296,6 +307,64 @@ int __plat_dup(__plat_handle_t h, int inheritable, __plat_handle_t *out)
 	}
 	*out = (__plat_handle_t)(newfd + 1);
 	return 0;
+}
+
+int __plat_dup_to(__plat_handle_t h, int newfd, __plat_handle_t old, int inheritable, __plat_handle_t *out)
+{
+	int oldfd = unbox(h);
+	long ret;
+
+	/* `old` needs no handling of its own here on purpose: dup3(2)
+	 * below (or the fixup path just below, when newfd already names
+	 * oldfd) already replaces whatever real descriptor NUMBER newfd
+	 * previously held, atomically, as an unavoidable part of what
+	 * dup3(2) IS -- see plat_fd.h's own comment on this parameter for
+	 * why a separate close here would, after dup3(2) has returned,
+	 * actually close the brand new duplicate this call just made
+	 * (`old`'s own boxed value already names that same real number). */
+	(void)old;
+
+	if (oldfd == newfd) {
+		/* dup3(2) refuses this outright (EINVAL) where dup(2) simply
+		 * would not apply -- unlike plain dup2(oldfd, oldfd), which
+		 * the real syscall short-circuits to a true no-op, a caller
+		 * reaching this exact case wants
+		 * posix_spawn_file_actions_adddup2(fd, fd)'s meaning (src/
+		 * process/posix_spawn.c's do_action() comment; not currently
+		 * reachable through this function, see plat_fd.h's own note,
+		 * but handled correctly regardless): "keep this descriptor
+		 * across the child's exec" -- i.e. clear close-on-exec on the
+		 * SAME real fd, not duplicate it onto itself. */
+		long fc = raw_syscall(SYS_fcntl, (long)oldfd, (long)F_SETFD_LX,
+		                      inheritable ? 0L : (long)FD_CLOEXEC_LX, 0L, 0L, 0L);
+		if (is_sys_error(fc)) { errno = (int)-fc; return -1; }
+		*out = h;
+		return 0;
+	}
+
+	/* dup3(2), unlike the dup(2) __plat_dup() above uses, forces the
+	 * new descriptor to be exactly `newfd` -- closing whatever was
+	 * already there first, atomically -- which is the entire reason
+	 * this function exists separately (see plat_fd.h's own comment). */
+	ret = raw_syscall(SYS_dup3, (long)oldfd, (long)newfd,
+	                  inheritable ? 0L : (long)O_CLOEXEC_LX, 0L, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	*out = (__plat_handle_t)(ret + 1);
+	return 0;
+}
+
+void __plat_set_cloexec(__plat_handle_t h, int cloexec)
+{
+	/* A plain in-place fcntl(F_SETFD): unlike __plat_dup()'s own
+	 * `!inheritable` path, this never creates a new descriptor or
+	 * changes which real fd number `h` names -- see plat_fd.h's own
+	 * comment on why that distinction is the entire point here.
+	 * Failure is not reported (the header's own contract): F_SETFD on
+	 * a fd this process still has open does not fail in practice, and
+	 * there is no better fallback available to a caller here than
+	 * leaving the bit as it was. */
+	raw_syscall(SYS_fcntl, (long)unbox(h), (long)F_SETFD_LX,
+	           cloexec ? (long)FD_CLOEXEC_LX : 0L, 0L, 0L, 0L);
 }
 
 // NOLINTEND(misc-include-cleaner)

@@ -239,6 +239,24 @@ struct saved_slot {
  * own read of that pipe never sees EOF.  test_order_two_targets() in
  * test/posix-spawn.c is the case that shows it.)
  *
+ * The first-visit path also marks the vacated slot's real descriptor
+ * close-on-exec, via __plat_set_cloexec(), for as long as it stays
+ * vacated: removing it from __fds[] alone is enough on a backend whose
+ * inheritance is entirely table-driven (NT), but not on one whose
+ * inheritance is kernel-fd-driven (Linux) -- there, a still-open
+ * descriptor this library's own table has simply stopped mentioning
+ * is, as far as the KERNEL is concerned, exactly as inheritable as it
+ * was a moment ago, and __spawn() below still performs one real
+ * fork()+execve() while this window is open. Without this,
+ * posix_spawn_file_actions_addclose() would remove the descriptor from
+ * THIS process's bookkeeping without ever making the child unable to
+ * see it -- a real bug this file's own restore-then-undo design had
+ * never needed to consider before a Linux backend with kernel-driven
+ * inheritance existed. See plat_fd.h's own comment on
+ * __plat_set_cloexec() for why an in-place fcntl(F_SETFD), not a
+ * duplicate, is what belongs here: the slot may still need to hand
+ * back the EXACT original object afterward.
+ *
  * Returns 0, or -1 if the save array is full, which cannot happen -- it
  * is sized at one entry per action and each action vacates at most one
  * slot -- but is checked rather than assumed. */
@@ -265,6 +283,7 @@ static int take_slot(struct saved_slot *sv, int *nsv, int cap, int fd) // NOLINT
 	sv[*nsv].fd = fd;
 	sv[*nsv].slot = __fds[fd];
 	(*nsv)++;
+	if (__fds[fd].h) __plat_set_cloexec(__fds[fd].h, 1);
 	memset(&__fds[fd], 0, sizeof __fds[fd]);
 	return 0;
 }
@@ -279,6 +298,11 @@ static void restore_slots(struct saved_slot *sv, int nsv)
 		int fd = sv[i].fd;
 		if (__fds[fd].h) __plat_close(__fds[fd].h);
 		__fds[fd] = sv[i].slot;
+		/* Undo take_slot()'s own close-on-exec marking -- back to
+		 * whatever the saved slot's own flags actually say, almost
+		 * always clear, but not assumed to be (see take_slot()'s own
+		 * comment). */
+		if (__fds[fd].h) __plat_set_cloexec(__fds[fd].h, (__fds[fd].flags & O_CLOEXEC) != 0);
 	}
 }
 
