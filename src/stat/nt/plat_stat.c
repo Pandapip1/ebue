@@ -427,6 +427,19 @@ static int read_at(HANDLE h, void *buffer, unsigned length, long long offset) //
 	return NT_SUCCESS(status) && io.Information == length;
 }
 
+/* Offsets/values from the on-disk PE/COFF format (Microsoft, "PE Format"):
+ * IMAGE_DOS_HEADER::e_lfanew, then IMAGE_FILE_HEADER::{SizeOfOptional
+ * Header,Characteristics} and IMAGE_OPTIONAL_HEADER{32,64}::Magic
+ * immediately following the "PE\0\0" signature. */
+#define PE_DOS_E_LFANEW 0x3c
+#define PE_COFF_SIZE_OF_OPTIONAL_HEADER 20
+#define PE_COFF_CHARACTERISTICS 22
+#define PE_OPTIONAL_MAGIC 24
+#define PE_MAGIC_PE32 0x10b
+#define PE_MAGIC_PE32PLUS 0x20b
+#define IMAGE_FILE_EXECUTABLE_IMAGE 0x0002
+#define IMAGE_FILE_DLL 0x2000
+
 /* Validate enough of the on-disk PE header to distinguish an executable
  * image from a DOS file, DLL, text file with an executable-looking suffix,
  * or an arbitrary file beginning with MZ.  Both PE32 and PE32+ are Windows
@@ -444,17 +457,18 @@ static int pe_executable(HANDLE h, long long size)
 		return 0;
 	if (!read_at(h, dos, sizeof dos, 0) || dos[0] != 'M' || dos[1] != 'Z')
 		goto done;
-	peoff = getle32(dos + 0x3c);
+	peoff = getle32(dos + PE_DOS_E_LFANEW);
 	if ((long long)peoff > size - (long long)sizeof nt ||
 	    !read_at(h, nt, sizeof nt, peoff))
 		goto done;
 	if (nt[0] != 'P' || nt[1] != 'E' || nt[2] || nt[3]) goto done;
-	optional_size = getle16(nt + 20);
-	characteristics = getle16(nt + 22);
-	optional_magic = getle16(nt + 24);
+	optional_size = getle16(nt + PE_COFF_SIZE_OF_OPTIONAL_HEADER);
+	characteristics = getle16(nt + PE_COFF_CHARACTERISTICS);
+	optional_magic = getle16(nt + PE_OPTIONAL_MAGIC);
 	if (optional_size >= 2 &&
-	    (optional_magic == 0x10b || optional_magic == 0x20b) &&
-	    (characteristics & 0x0002) && !(characteristics & 0x2000))
+	    (optional_magic == PE_MAGIC_PE32 || optional_magic == PE_MAGIC_PE32PLUS) &&
+	    (characteristics & IMAGE_FILE_EXECUTABLE_IMAGE) &&
+	    !(characteristics & IMAGE_FILE_DLL))
 		result = 1;
 done:
 	__fd_pos_restore(h, saved);

@@ -258,11 +258,10 @@ void __sig_relock_after_handler(int depth) NTLIBC_NO_THREAD_SAFETY_ANALYSIS
 static void sig_pipe_name(pid_t pid, WCHAR *name, UNICODE_STRING *us)
 {
 	static const char pfx[] = "\\Device\\NamedPipe\\ntlibc-sig.";
-	unsigned upid = (unsigned)pid;
-	int i = 0, n;
+	int i = 0;
 
 	for (; pfx[i]; i++) name[i] = (unsigned char)pfx[i];
-	for (n = 8; n > 0;) { n--; name[i++] = (unsigned char)"0123456789abcdef"[(upid >> (n * 4)) & 15]; }
+	i = __nt_append_hex32(name, i, (unsigned)pid);
 	name[i] = 0;
 	us->Buffer = name;
 	if ((size_t)i > __US_MAX_WCHARS) {
@@ -280,14 +279,10 @@ static void sig_pipe_name(pid_t pid, WCHAR *name, UNICODE_STRING *us)
 static void sig_send_lock_name(pid_t pid, WCHAR *name, UNICODE_STRING *us)
 {
 	static const char pfx[] = "\\BaseNamedObjects\\ntlibc-sig-send.";
-	unsigned upid = (unsigned)pid;
-	int i = 0, n;
+	int i = 0;
 
 	for (; pfx[i]; i++) name[i] = (unsigned char)pfx[i];
-	for (n = 8; n > 0;) {
-		n--;
-		name[i++] = (unsigned char)"0123456789abcdef"[(upid >> (n * 4)) & 15];
-	}
+	i = __nt_append_hex32(name, i, (unsigned)pid);
 	name[i] = 0;
 	us->Buffer = name;
 	if ((size_t)i > __US_MAX_WCHARS) {

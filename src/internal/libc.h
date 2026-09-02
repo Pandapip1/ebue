@@ -774,6 +774,27 @@ static inline int __utf16_to_utf8_capacity(size_t units, size_t *capacity)
 	return __size_add_checked(bytes, 1, capacity);
 }
 
+/* True if c is an ASCII letter, 'A'-'Z' or 'a'-'z' -- the drive-letter
+ * check a DOS-ish path's "X:..." prefix and an NT "\??\C:\" prefix both
+ * need, folded to one case with the standard bit-5 lowercase trick. */
+static inline int __nt_is_drive_letter(int c)
+{
+	return (c | 0x20) >= 'a' && (c | 0x20) <= 'z';
+}
+
+/* Appends the 8 lowercase hex digits of val, most significant first, to
+ * name starting at index i, and returns the index just past them.  Used
+ * to build the fixed-width hex-pid/serial suffix of named NT kernel
+ * objects (pipes, mutants, events) from several unrelated call sites. */
+static inline int __nt_append_hex32(WCHAR *name, int i, unsigned val)
+{
+	static const char digits[] = "0123456789abcdef";
+	int shift;
+	for (shift = 28; shift >= 0; shift -= 4)
+		name[i++] = (unsigned char)digits[(val >> shift) & 15];
+	return i;
+}
+
 /* Choose a geometrically grown array capacity without letting either the
  * requested element count or its byte size wrap.  Growth is bounded by the
  * machine word width: when another doubling would exceed the representable

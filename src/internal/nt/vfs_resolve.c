@@ -83,8 +83,7 @@ int __vfs_resolve_at(int dirfd, const char *path)
 	pathlen = strlen(path);
 	trailing = pathlen > 1 && issep(path[pathlen - 1]);
 	/* A drive prefix is always native, even when its tail uses '/'. */
-	if ((((unsigned char)path[0] | 0x20) >= 'a' &&
-	     ((unsigned char)path[0] | 0x20) <= 'z') && path[1] == ':')
+	if (__nt_is_drive_letter((unsigned char)path[0]) && path[1] == ':')
 		return __VFS_NONE;
 
 	p = path;
