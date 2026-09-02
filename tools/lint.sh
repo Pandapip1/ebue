@@ -966,6 +966,15 @@ stage_totality() {
 	require_tool clang-18 || return $missing
 	require_tool clang++-18 || return $missing
 	require_tool llvm-config-18 || return $missing
+	require_tool pkg-config || return $missing
+	if ! pkg-config --exists z3; then
+		report_missing "Z3 development headers and library are not installed, so scalar loop transitions cannot be proved."
+		return $missing
+	fi
+	if ! z3_flags=$(pkg-config --cflags --libs z3); then
+		report_missing "pkg-config could not resolve Z3 compiler and linker flags."
+		return $missing
+	fi
 	libdir=$(llvm-config-18 --libdir)
 	clang_cpp=$(find "$libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' \
 		-print 2>/dev/null | sort | head -n 1)
@@ -975,11 +984,12 @@ stage_totality() {
 	fi
 
 	plugin=$builddir/ntlibc-totality-checker.so
-	# llvm-config deliberately returns shell words, not one argument.
-	# shellcheck disable=SC2046
-	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
+	# llvm-config and pkg-config deliberately return shell words, not one
+	# argument.
+	# shellcheck disable=SC2046,SC2086
+	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) -fexceptions \
 		tools/clang/TotalityChecker.cpp -o "$plugin" "$clang_cpp" \
-		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
+		$(llvm-config-18 --ldflags --libs --system-libs) $z3_flags || return 1
 
 	fixture_log=$builddir/totality-fixtures.log
 	fixture_err=$builddir/totality-fixtures.err

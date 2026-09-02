@@ -5,11 +5,13 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ParentMapContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/Analysis/CFG.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendPluginRegistry.h"
 #include "clang/Lex/Lexer.h"
 #include "llvm/Support/raw_ostream.h"
+#include <z3++.h>
 
 #include <cctype>
 #include <map>
@@ -433,6 +435,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   const ReadonlyFunctionFacts &ReadonlyFunctions;
   const PositiveParameterFacts &PositiveParameters;
   const FunctionDecl *Current = nullptr;
+  std::unique_ptr<CFG> CurrentCFG;
   mutable const Stmt *ActiveLoop = nullptr;
 
   enum class ProgressKind { Up, Down };
@@ -4196,6 +4199,586 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return std::nullopt;
   }
 
+  struct SMTPathStep {
+    const Stmt *Statement = nullptr;
+    const Expr *Condition = nullptr;
+    bool Truth = false;
+  };
+
+  using SMTPath = std::vector<SMTPathStep>;
+
+  class ScalarSMTQuery {
+    ASTContext &AST;
+    z3::context Z;
+    z3::solver Solver;
+    std::map<const ValueDecl *, z3::expr> Values;
+    std::map<const ValueDecl *, z3::expr> InitialValues;
+    std::vector<z3::expr> Definedness;
+    unsigned Fresh = 0;
+    bool Valid = true;
+
+    static std::string decimal(const llvm::APInt &Value, bool Signed) {
+      llvm::SmallString<64> Buffer;
+      Value.toString(Buffer, 10, Signed);
+      return std::string(Buffer);
+    }
+
+    z3::expr integer(const llvm::APInt &Value, bool Signed = false) {
+      return Z.int_val(decimal(Value, Signed).c_str());
+    }
+
+    z3::expr powerOfTwo(unsigned Width) {
+      llvm::APInt Value(Width + 1, 1);
+      Value <<= Width;
+      return integer(Value);
+    }
+
+    bool addAssertion(const z3::expr &Assertion) {
+      /* Every assertion reaches Z3 through this choke point.  A malformed
+       * translation is loss of proof, never a solver assertion or an
+       * accidentally strengthened formula. */
+      if (!Assertion.is_bool()) {
+        Valid = false;
+        return false;
+      }
+      Solver.add(Assertion);
+      return true;
+    }
+
+    bool integerType(QualType Type) const {
+      return !Type.isNull() &&
+             (Type->isIntegerType() || Type->isEnumeralType());
+    }
+
+    bool signedType(QualType Type) const {
+      return Type->isSignedIntegerOrEnumerationType();
+    }
+
+    bool addTypeBounds(const z3::expr &Value, QualType Type) {
+      if (!integerType(Type) || !Value.is_int()) {
+        Valid = false;
+        return false;
+      }
+      unsigned Width = AST.getIntWidth(Type);
+      z3::expr Limit = powerOfTwo(Width);
+      if (signedType(Type)) {
+        z3::expr Half = powerOfTwo(Width - 1);
+        return addAssertion(Value >= -Half && Value < Half);
+      }
+      return addAssertion(Value >= 0 && Value < Limit);
+    }
+
+    std::optional<z3::expr> convert(z3::expr Value, QualType Type,
+                                    bool SignedArithmetic = false) {
+      if (!integerType(Type) || !Value.is_int()) {
+        Valid = false;
+        return std::nullopt;
+      }
+      unsigned Width = AST.getIntWidth(Type);
+      z3::expr Limit = powerOfTwo(Width);
+      if (!signedType(Type))
+        return z3::mod(Value, Limit);
+      z3::expr Half = powerOfTwo(Width - 1);
+      if (SignedArithmetic) {
+        z3::expr Obligation = Value >= -Half && Value < Half;
+        if (!Obligation.is_bool()) {
+          Valid = false;
+          return std::nullopt;
+        }
+        Definedness.push_back(Obligation);
+        return Value;
+      }
+      z3::expr Bits = z3::mod(Value, Limit);
+      return z3::ite(Bits >= Half, Bits - Limit, Bits);
+    }
+
+    std::string symbolName(StringRef Prefix, const void *Identity) {
+      std::string Result;
+      llvm::raw_string_ostream Out(Result);
+      Out << Prefix << '_' << reinterpret_cast<uintptr_t>(Identity);
+      return Out.str();
+    }
+
+    std::optional<z3::expr> scalar(const ValueDecl *Declaration) {
+      if (!Declaration || !integerType(Declaration->getType())) {
+        Valid = false;
+        return std::nullopt;
+      }
+      auto Found = Values.find(Declaration);
+      if (Found != Values.end())
+        return Found->second;
+      z3::expr Symbol =
+          Z.int_const(symbolName("v", Declaration).c_str());
+      if (!addTypeBounds(Symbol, Declaration->getType()))
+        return std::nullopt;
+      Values.emplace(Declaration, Symbol);
+      InitialValues.emplace(Declaration, Symbol);
+      return Symbol;
+    }
+
+    std::optional<z3::expr> freshValue(QualType Type, StringRef Prefix) {
+      std::string Name = (Prefix + llvm::Twine('_') +
+                          llvm::Twine(Fresh++)).str();
+      z3::expr Symbol = Z.int_const(Name.c_str());
+      if (!addTypeBounds(Symbol, Type))
+        return std::nullopt;
+      return Symbol;
+    }
+
+    std::optional<z3::expr> call(const CallExpr *Call) {
+      if (!integerType(Call->getType())) {
+        Valid = false;
+        return std::nullopt;
+      }
+      std::optional<z3::expr> Result = freshValue(Call->getType(), "call");
+      return Result;
+    }
+
+  public:
+    explicit ScalarSMTQuery(ASTContext &AST)
+        : AST(AST), Solver(Z) {
+      z3::params Parameters(Z);
+      Parameters.set("timeout", 100u);
+      Solver.set(Parameters);
+    }
+
+    std::optional<z3::expr> expression(const Expr *Expression) {
+      if (!Expression) {
+        Valid = false;
+        return std::nullopt;
+      }
+      Expression = Expression->IgnoreParens();
+      Expr::EvalResult Constant;
+      if (Expression->EvaluateAsInt(Constant, AST))
+        return integer(Constant.Val.getInt(),
+                       !Constant.Val.getInt().isUnsigned());
+      if (const auto *Cast = dyn_cast<CastExpr>(Expression)) {
+        std::optional<z3::expr> Inner = expression(Cast->getSubExpr());
+        if (!Inner)
+          return std::nullopt;
+        if (Cast->getCastKind() == CK_LValueToRValue ||
+            Cast->getCastKind() == CK_NoOp)
+          return Inner;
+        if (!integerType(Cast->getType())) {
+          Valid = false;
+          return std::nullopt;
+        }
+        return convert(*Inner, Cast->getType());
+      }
+      if (const auto *Reference = dyn_cast<DeclRefExpr>(Expression))
+        return scalar(dyn_cast<ValueDecl>(Reference->getDecl()));
+      if (const auto *Literal = dyn_cast<IntegerLiteral>(Expression))
+        return integer(Literal->getValue());
+      if (const auto *Character = dyn_cast<CharacterLiteral>(Expression))
+        return Z.int_val(Character->getValue());
+      if (const auto *Call = dyn_cast<CallExpr>(Expression))
+        return call(Call);
+      if (const auto *Unary = dyn_cast<UnaryOperator>(Expression)) {
+        std::optional<z3::expr> Operand = expression(Unary->getSubExpr());
+        if (!Operand)
+          return std::nullopt;
+        if (Unary->getOpcode() == UO_Plus)
+          return Operand;
+        if (Unary->getOpcode() == UO_Minus)
+          return convert(-*Operand, Unary->getType(),
+                         signedType(Unary->getType()));
+        if (Unary->getOpcode() == UO_LNot) {
+          z3::expr Result = z3::ite(*Operand == 0, Z.int_val(1),
+                                    Z.int_val(0));
+          return Result;
+        }
+        Valid = false;
+        return std::nullopt;
+      }
+      const auto *Binary = dyn_cast<BinaryOperator>(Expression);
+      if (!Binary || Binary->isAssignmentOp()) {
+        Valid = false;
+        return std::nullopt;
+      }
+      if (Binary->getOpcode() == BO_LAnd ||
+          Binary->getOpcode() == BO_LOr ||
+          Binary->isComparisonOp()) {
+        std::optional<z3::expr> Boolean = condition(Binary);
+        if (!Boolean)
+          return std::nullopt;
+        return z3::ite(*Boolean, Z.int_val(1), Z.int_val(0));
+      }
+      std::optional<z3::expr> Left = expression(Binary->getLHS());
+      std::optional<z3::expr> Right = expression(Binary->getRHS());
+      if (!Left || !Right)
+        return std::nullopt;
+      z3::expr Raw = *Left + *Right;
+      switch (Binary->getOpcode()) {
+      case BO_Add: Raw = *Left + *Right; break;
+      case BO_Sub: Raw = *Left - *Right; break;
+      case BO_Mul: Raw = *Left * *Right; break;
+      default:
+        Valid = false;
+        return std::nullopt;
+      }
+      return convert(Raw, Binary->getType(),
+                     signedType(Binary->getType()));
+    }
+
+    std::optional<z3::expr> condition(const Expr *Condition) {
+      if (!Condition) {
+        Valid = false;
+        return std::nullopt;
+      }
+      Condition = Condition->IgnoreParenImpCasts();
+      if (const auto *Unary = dyn_cast<UnaryOperator>(Condition)) {
+        if (Unary->getOpcode() == UO_LNot) {
+          std::optional<z3::expr> Inner = condition(Unary->getSubExpr());
+          if (!Inner)
+            return std::nullopt;
+          return !*Inner;
+        }
+      }
+      if (const auto *Binary = dyn_cast<BinaryOperator>(Condition)) {
+        if (Binary->getOpcode() == BO_LAnd ||
+            Binary->getOpcode() == BO_LOr) {
+          std::optional<z3::expr> Left = condition(Binary->getLHS());
+          std::optional<z3::expr> Right = condition(Binary->getRHS());
+          if (!Left || !Right)
+            return std::nullopt;
+          return Binary->getOpcode() == BO_LAnd ? *Left && *Right
+                                                : *Left || *Right;
+        }
+        if (Binary->isComparisonOp()) {
+          std::optional<z3::expr> Left = expression(Binary->getLHS());
+          std::optional<z3::expr> Right = expression(Binary->getRHS());
+          if (!Left || !Right)
+            return std::nullopt;
+          switch (Binary->getOpcode()) {
+          case BO_EQ: return *Left == *Right;
+          case BO_NE: return *Left != *Right;
+          case BO_LT: return *Left < *Right;
+          case BO_LE: return *Left <= *Right;
+          case BO_GT: return *Left > *Right;
+          case BO_GE: return *Left >= *Right;
+          default: break;
+          }
+        }
+      }
+      std::optional<z3::expr> Value = expression(Condition);
+      if (!Value || !Value->is_int()) {
+        Valid = false;
+        return std::nullopt;
+      }
+      return *Value != 0;
+    }
+
+    bool assertCondition(const Expr *Condition, bool Truth) {
+      std::optional<z3::expr> Formula = condition(Condition);
+      return Formula && addAssertion(Truth ? *Formula : !*Formula);
+    }
+
+    bool apply(const Stmt *Statement) {
+      if (!Statement)
+        return true;
+      if (const auto *Declaration = dyn_cast<DeclStmt>(Statement)) {
+        for (const Decl *Item : Declaration->decls()) {
+          const auto *Variable = dyn_cast<VarDecl>(Item);
+          if (!Variable || !integerType(Variable->getType()))
+            continue;
+          if (!Variable->getInit()) {
+            if (!scalar(Variable))
+              return false;
+            continue;
+          }
+          std::optional<z3::expr> Initializer =
+              expression(Variable->getInit());
+          std::optional<z3::expr> Converted;
+          if (Initializer)
+            Converted = convert(*Initializer, Variable->getType());
+          if (!Converted) {
+            /* Havocing an unsupported initializer enlarges the transition
+             * relation.  It may lose a proof, but cannot manufacture one. */
+            Valid = true;
+            Converted = freshValue(Variable->getType(), "havoc");
+          }
+          if (!Converted)
+            return false;
+          if (!InitialValues.count(Variable)) {
+            z3::expr Initial =
+                Z.int_const(symbolName("v", Variable).c_str());
+            if (!addTypeBounds(Initial, Variable->getType()))
+              return false;
+            InitialValues.emplace(Variable, Initial);
+          }
+          Values.insert_or_assign(Variable, *Converted);
+        }
+        return Valid;
+      }
+      const auto *Expression = dyn_cast<Expr>(Statement);
+      Expression = Expression ? Expression->IgnoreParenImpCasts() : nullptr;
+      if (const auto *Unary = dyn_cast_or_null<UnaryOperator>(Expression)) {
+        if (!Unary->isIncrementDecrementOp())
+          return true;
+        const ValueDecl *Variable = TotalityVisitor::value(Unary->getSubExpr());
+        std::optional<z3::expr> Old = scalar(Variable);
+        if (!Old)
+          return false;
+        z3::expr Raw = Unary->isIncrementOp() ? *Old + 1 : *Old - 1;
+        QualType ComputationType = Variable->getType();
+        if (AST.getIntWidth(ComputationType) <
+            AST.getIntWidth(AST.IntTy))
+          ComputationType = AST.getPromotedIntegerType(ComputationType);
+        std::optional<z3::expr> Computed =
+            convert(Raw, ComputationType, signedType(ComputationType));
+        std::optional<z3::expr> Updated =
+            Computed ? convert(*Computed, Variable->getType()) : std::nullopt;
+        if (!Updated)
+          return false;
+        Values.insert_or_assign(Variable, *Updated);
+        return Valid;
+      }
+      const auto *Binary = dyn_cast_or_null<BinaryOperator>(Expression);
+      if (!Binary || !Binary->isAssignmentOp())
+        return true;
+      const ValueDecl *Variable = TotalityVisitor::value(Binary->getLHS());
+      if (!Variable || !integerType(Variable->getType()))
+        return true;
+      std::optional<z3::expr> Updated;
+      if (Binary->getOpcode() == BO_Assign) {
+        bool SavedValid = Valid;
+        std::optional<z3::expr> Right = expression(Binary->getRHS());
+        if (Right)
+          Updated = convert(*Right, Variable->getType());
+        if (!Updated) {
+          Valid = SavedValid;
+          Updated = freshValue(Variable->getType(), "havoc");
+        }
+      } else if (const auto *Compound =
+                     dyn_cast<CompoundAssignOperator>(Binary)) {
+        std::optional<z3::expr> Old = scalar(Variable);
+        std::optional<z3::expr> Right = expression(Binary->getRHS());
+        if (!Old || !Right)
+          return false;
+        z3::expr Raw = *Old + *Right;
+        switch (Binary->getOpcode()) {
+        case BO_AddAssign: Raw = *Old + *Right; break;
+        case BO_SubAssign: Raw = *Old - *Right; break;
+        case BO_MulAssign: Raw = *Old * *Right; break;
+        default:
+          Valid = false;
+          return false;
+        }
+        std::optional<z3::expr> Computed = convert(
+            Raw, Compound->getComputationResultType(),
+            signedType(Compound->getComputationResultType()));
+        if (Computed)
+          Updated = convert(*Computed, Variable->getType());
+      }
+      if (!Updated) {
+        Valid = false;
+        return false;
+      }
+      Values.insert_or_assign(Variable, *Updated);
+      return Valid;
+    }
+
+    std::optional<z3::expr> initial(const ValueDecl *Variable) {
+      if (!scalar(Variable))
+        return std::nullopt;
+      return InitialValues.find(Variable)->second;
+    }
+
+    std::optional<z3::expr> current(const ValueDecl *Variable) {
+      return scalar(Variable);
+    }
+
+    bool disprovesStrictProgress(const z3::expr &Before,
+                                 const z3::expr &After,
+                                 ProgressKind Kind) {
+      if (!Valid || !Before.is_int() || !After.is_int())
+        return true;
+      /* Signed arithmetic definedness is an obligation, not an axiom.  It
+       * must follow from the path formula before it may participate in a
+       * termination proof. */
+      for (const z3::expr &Obligation : Definedness) {
+        Solver.push();
+        bool Added = addAssertion(!Obligation);
+        z3::check_result Result = Added ? Solver.check() : z3::unknown;
+        Solver.pop();
+        if (!Added || Result != z3::unsat)
+          return true;
+        if (!addAssertion(Obligation))
+          return true;
+      }
+      z3::expr Failure = Kind == ProgressKind::Up ? After <= Before
+                                                  : After >= Before;
+      if (!addAssertion(Failure) || !Valid)
+        return true;
+      return Solver.check() != z3::unsat;
+    }
+  };
+
+  static bool scalarCFGStatement(const Stmt *Statement) {
+    if (isa<DeclStmt>(Statement))
+      return true;
+    const auto *Expression = dyn_cast<Expr>(Statement);
+    Expression = Expression ? Expression->IgnoreParenImpCasts() : nullptr;
+    if (const auto *Unary = dyn_cast_or_null<UnaryOperator>(Expression))
+      return Unary->isIncrementDecrementOp();
+    const auto *Binary = dyn_cast_or_null<BinaryOperator>(Expression);
+    return Binary && Binary->isAssignmentOp();
+  }
+
+  void collectSMTPaths(const CFGBlock *Block, const CFGBlock *Header,
+                       SMTPath Path, std::set<const CFGBlock *> Visiting,
+                       std::vector<SMTPath> &Paths, bool &Unsupported) const {
+    if (Unsupported || Paths.size() >= 256) {
+      Unsupported = true;
+      return;
+    }
+    if (Block == Header) {
+      Paths.push_back(std::move(Path));
+      return;
+    }
+    if (!Block || !Visiting.insert(Block).second) {
+      /* A nested cycle needs its own summary before it can participate in
+       * an enclosing transition relation. */
+      Unsupported = true;
+      return;
+    }
+    for (const CFGElement &Element : *Block)
+      if (std::optional<CFGStmt> Item = Element.getAs<CFGStmt>())
+        if (scalarCFGStatement(Item->getStmt()))
+          Path.push_back({Item->getStmt(), nullptr, false});
+
+    const Stmt *Terminator = Block->getTerminatorStmt();
+    if (Terminator && (isa<SwitchStmt>(Terminator) ||
+                       isa<IndirectGotoStmt>(Terminator))) {
+      Unsupported = true;
+      return;
+    }
+    const Expr *Branch = Block->getLastCondition();
+    unsigned Index = 0;
+    for (const CFGBlock *Successor : Block->succs()) {
+      SMTPath Next = Path;
+      if (Branch)
+        Next.push_back({nullptr, Branch, Index == 0});
+      collectSMTPaths(Successor, Header, std::move(Next), Visiting,
+                      Paths, Unsupported);
+      ++Index;
+    }
+  }
+
+  bool stableSMTConditionInputs(const Stmt *Statement,
+                                const ValueDecl *Rank,
+                                const Stmt *Body,
+                                const Expr *Increment) const {
+    if (!Statement)
+      return true;
+    if (const auto *Reference = dyn_cast<DeclRefExpr>(Statement)) {
+      const auto *Variable = dyn_cast<VarDecl>(Reference->getDecl());
+      if (Variable && Variable != Rank && Variable->getType()->isIntegerType()) {
+        if (writesVariable(Body, Variable) ||
+            writesVariable(Increment, Variable))
+          return false;
+        bool HasCalls = containsCall(Body) || containsCall(Increment);
+        if (HasCalls && addressTaken(Current->getBody(), Variable))
+          return false;
+        if (HasCalls && !(isa<ParmVarDecl>(Variable) ||
+                          Variable->hasLocalStorage()))
+          return false;
+      }
+    }
+    for (const Stmt *Child : Statement->children())
+      if (!stableSMTConditionInputs(Child, Rank, Body, Increment))
+        return false;
+    return true;
+  }
+
+  bool z3StrictScalarRank(const Stmt *Loop, const Expr *Condition,
+                          const Expr *Increment, const Stmt *Body) const {
+    if (!CurrentCFG)
+      return false;
+    if (isa<DoStmt>(Loop))
+      return false;
+    if (containsStateMutation(Condition))
+      return false;
+    if (containsImpureCall(Condition))
+      return false;
+    if (containsAsm(Body) || containsAsm(Increment))
+      return false;
+    std::vector<Progress> Collected;
+    collectProgress(Increment, Collected);
+    collectProgress(Body, Collected);
+    std::vector<Progress> Candidates;
+    for (const Progress &Candidate : Collected) {
+      const auto *Variable = dyn_cast<VarDecl>(Candidate.Variable);
+      if (!Variable || !Variable->getType()->isIntegerType())
+        continue;
+      if (!(isa<ParmVarDecl>(Variable) || Variable->hasLocalStorage()))
+        continue;
+      if (addressTaken(Current->getBody(), Variable) ||
+          !validRankVariable(Candidate, Body, Increment))
+        continue;
+      if (!stableSMTConditionInputs(Condition, Variable, Body, Increment))
+        continue;
+      Candidates.push_back(Candidate);
+    }
+    if (Candidates.empty())
+      return false;
+    const CFGBlock *Header = nullptr;
+    for (const CFGBlock *Block : *CurrentCFG)
+      if (Block->getTerminatorStmt() == Loop) {
+        Header = Block;
+        break;
+      }
+    if (!Header || Header->succ_size() != 2)
+      return false;
+    const CFGBlock *BodyEntry = *Header->succ_begin();
+    std::vector<SMTPath> Paths;
+    bool Unsupported = false;
+    collectSMTPaths(BodyEntry, Header, {}, {}, Paths, Unsupported);
+    if (Unsupported || Paths.empty())
+      return false;
+
+    for (const Progress &Candidate : Candidates) {
+      const auto *Variable = dyn_cast<VarDecl>(Candidate.Variable);
+      assert(Variable && "eligible scalar rank has a variable");
+      bool AllStrict = true;
+      for (const SMTPath &Path : Paths) {
+        try {
+          ScalarSMTQuery Query(Context);
+          std::optional<z3::expr> Before = Query.initial(Variable);
+          if (!Before || (Condition && !Query.assertCondition(Condition, true))) {
+            AllStrict = false;
+            break;
+          }
+          for (const SMTPathStep &Step : Path) {
+            if (Step.Statement && !Query.apply(Step.Statement)) {
+              AllStrict = false;
+              break;
+            }
+            if (Step.Condition &&
+                !Query.assertCondition(Step.Condition, Step.Truth)) {
+              AllStrict = false;
+              break;
+            }
+          }
+          if (!AllStrict)
+            break;
+          std::optional<z3::expr> After = Query.current(Variable);
+          if (!After || Query.disprovesStrictProgress(*Before, *After,
+                                                      Candidate.Kind)) {
+            AllStrict = false;
+            break;
+          }
+        } catch (const z3::exception &) {
+          AllStrict = false;
+          break;
+        }
+      }
+      if (AllStrict)
+        return true;
+    }
+    return false;
+  }
+
   bool admissibleProgress(const Progress &Change) const {
     if (!Change.DynamicStep ||
         !Change.Variable->getType()->isPointerType())
@@ -4350,6 +4933,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       if (sentinelCondition(Condition, Change))
         return "sentinel-distance-rank";
     }
+    if (z3StrictScalarRank(Loop, Condition, Increment, Body))
+      return "strict-scalar-rank";
     /* A merge-style loop can consume either of two finite inputs on a
      * given pass.  Neither cursor is a rank by itself, but the sum of their
      * remaining distances strictly decreases when every backedge advances
@@ -4419,12 +5004,15 @@ public:
       return true;
     const FunctionDecl *Saved = Current;
     Current = Function;
+    CurrentCFG = CFG::buildCFG(Function, Function->getBody(), &Context,
+                               CFG::BuildOptions());
     llvm::outs() << "F\t" << key(Function) << '\t'
                  << file(Function->getLocation()) << '\t'
                  << line(Function->getLocation()) << '\t'
                  << (Function->isNoReturn() ? "noreturn" : "returns") << '\t'
                  << Function->getNumParams() << '\n';
     RecursiveASTVisitor<TotalityVisitor>::TraverseStmt(Function->getBody());
+    CurrentCFG.reset();
     Current = Saved;
     return true;
   }

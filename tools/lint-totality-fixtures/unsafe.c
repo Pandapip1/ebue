@@ -858,7 +858,7 @@ int dynamic_countdown_allows_negative(int n)
 
 int dynamic_countdown_allows_oversize(int n)
 {
-	while (n > 0) { /* totality-expect */
+	while (n > 0) {
 		int step = opaque_predicate();
 		if (step <= 0) return n;
 		n -= step;
@@ -3181,6 +3181,55 @@ int signed_body_asm(int i, int keep_running)
 	while (keep_running) { /* totality-expect */
 		i++;
 		__asm__ volatile("" : "+r"(i));
+	}
+	return i;
+}
+
+long write(int, const void *, __SIZE_TYPE__);
+long write_without_contract(int, const void *, __SIZE_TYPE__);
+
+__SIZE_TYPE__ z3_unbounded_result_can_wrap(int fd, const char *buf,
+	__SIZE_TYPE__ len)
+{
+	__SIZE_TYPE__ off = 0;
+	while (off < len) { /* totality-expect */
+		long written = write_without_contract(fd, buf + off, len - off);
+		if (written <= 0) return off;
+		off += (__SIZE_TYPE__)written;
+	}
+	return off;
+}
+
+__SIZE_TYPE__ z3_progress_bypass(int fd, const char *buf,
+	__SIZE_TYPE__ len, int bypass)
+{
+	__SIZE_TYPE__ off = 0;
+	while (off < len) { /* totality-expect */
+		long written = write(fd, buf + off, len - off);
+		if (written <= 0) return off;
+		if (bypass) continue;
+		off += (__SIZE_TYPE__)written;
+	}
+	return off;
+}
+
+__SIZE_TYPE__ z3_progress_cancelled(int fd, const char *buf,
+	__SIZE_TYPE__ len)
+{
+	__SIZE_TYPE__ off = 0;
+	while (off < len) { /* totality-expect */
+		long written = write(fd, buf + off, len - off);
+		if (written <= 0) return off;
+		off += (__SIZE_TYPE__)written;
+		off -= (__SIZE_TYPE__)written;
+	}
+	return off;
+}
+
+unsigned z3_unsupported_sort_is_unproved(unsigned i, double limit)
+{
+	while ((double)i < limit) { /* totality-expect */
+		i++;
 	}
 	return i;
 }

@@ -1111,3 +1111,18 @@ int signed_body_descent(int i, int keep_running)
 		i--;
 	return i;
 }
+
+long write(int, const void *, __SIZE_TYPE__);
+
+__SIZE_TYPE__ z3_guarded_write_progress(int fd, const char *buf,
+	__SIZE_TYPE__ len)
+{
+	__SIZE_TYPE__ off = 0;
+	while (off < len) {
+		long written = write(fd, buf + off, len - off);
+		if (written <= 0 || (__SIZE_TYPE__)written > len - off)
+			return off;
+		off += (__SIZE_TYPE__)written;
+	}
+	return off;
+}
