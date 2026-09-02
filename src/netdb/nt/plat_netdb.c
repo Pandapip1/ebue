@@ -1,53 +1,31 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * <netdb.h>'s Windows NT backend. The real, working implementation
- * (a /etc/hosts parser, a real /etc/nsswitch.conf-driven dispatcher,
- * and a real UDP DNS stub resolver over raw syscalls) was built for
- * native Linux only -- see src/netdb/linux/*.c and that pass's own
- * scope banner in include/netdb.h. That left getaddrinfo()/
- * gethostbyname() DECLARED (include/netdb.h is platform-shared) but
- * never DEFINED on NT: a real, disclosed gap `make linkcheck` catches
- * for exactly this reason (a public declaration with no reachable
- * definition is worse than no declaration at all -- a caller gets a
- * confusing link error instead of a clear "not on this platform").
+ * <netdb.h>'s Windows NT backend. The real implementation (a /etc/hosts
+ * parser, an /etc/nsswitch.conf-driven dispatcher, and a UDP DNS stub
+ * resolver) exists only for native Linux -- see src/netdb/linux/*.c.
+ * include/netdb.h declares these functions on every platform, so NT
+ * still needs a definition for each, or `make linkcheck` flags a public
+ * declaration with no reachable definition (worse than no declaration:
+ * a caller gets a confusing link error instead of a clear "not on this
+ * platform").
  *
- * This file is the honest stand-in: every entry point compiles and
- * links, and reports a real, specified failure -- EAI_FAIL ("a
- * non-recoverable failure in name resolution occurred", the exact
- * DESCRIPTION wording for "the implementation does not support name
- * resolution on this platform") -- rather than fabricating an answer
- * or silently succeeding with garbage. A real NT resolver (DnsQuery_
- * over NTDLL, or the same /etc/hosts + resolv.conf technique the
- * Linux backend uses, ported to NT's own file-path conventions) is
- * future work, not attempted here; this file exists so the symbol
- * table is honest in the meantime, matching how other genuinely
- * NT-side-missing functions in this tree (see include/unistd.h's own
- * NA-marked entries) are handled -- fail loud and documented, never
- * silent.
+ * Every entry point here is an honest stand-in: it compiles, links, and
+ * reports a real, specified failure -- EAI_FAIL ("a non-recoverable
+ * failure in name resolution occurred", the exact DESCRIPTION wording
+ * for "the implementation does not support name resolution on this
+ * platform") -- rather than fabricating an answer or silently
+ * succeeding with garbage. A real NT resolver (DnsQuery_, or the Linux
+ * backend's /etc/hosts + resolv.conf approach ported to NT's own path
+ * conventions) is future work.
  *
- * UPDATE (this pass): include/netdb.h grew getnameinfo() and the four
- * enumerable database families (host/network/protocol/service), all
- * backed by real flat-file parsers on Linux (src/netdb/linux/). NT has
- * no equivalent of any of those files by default, and -- unlike
- * getaddrinfo()/gethostbyname() just above, which have a genuine
- * network-side alternative this pass simply didn't build (DnsQuery_) --
- * there is no real per-machine database to reach for here at all short
- * of parsing %SystemRoot%\system32\drivers\etc\services (etc.), a real
- * file NT does ship, but reading it needs NT path/registry plumbing
- * (SystemRoot resolution, drive-letter paths) nothing in this tree's NT
- * backend has built yet for ANY database, checked directly: no nt/
- * subdirectory anywhere under src/ calls fopen() against a real system
- * path.
- * Rather than invent a new "reach into %SystemRoot%" convention on the
- * spot for exactly one file family, or a static built-in table
- * convention this codebase has never used anywhere else, every one of
- * these new functions follows the identical honest-stand-in shape
- * getaddrinfo()/gethostbyname() above already established: a real,
- * specified failure/empty-database result, never a fabricated one.
- * getnameinfo() is the one partial exception, and only because its
- * numeric case needs no database at all (see its own comment below).
- */
+ * getnameinfo() and the four enumerable database families (host/
+ * network/protocol/service) follow the same honest-stand-in shape: NT
+ * has no default per-machine database for any of them, and this
+ * backend does not parse %SystemRoot%\system32\drivers\etc\* or any
+ * other real NT path. getnameinfo() is the one partial exception, and
+ * only because its numeric case needs no database at all (see its own
+ * comment below). */
 #include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
