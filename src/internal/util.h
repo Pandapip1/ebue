@@ -147,7 +147,9 @@ static inline int __util_array_capacity(size_t current, size_t used, // NOLINT(b
  * way twice -- unlike true(1p)/false(1p) below. */
 int __util_basename_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_dirname_main(int argc, char **argv) __attribute__((nonnull(2)));
-int __util_pathchk_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_pathchk_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 int __util_pwd_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_readlink_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_realpath_main(int argc, char **argv) __attribute__((nonnull(2)));
@@ -174,7 +176,9 @@ int __util_chmod_main(int argc, char **argv) __attribute__((nonnull(2)));
  * false(1p) naming sense. */
 int __util_false_main(int argc, char **argv) __attribute__((__pure__));
 int __util_ln_main(int argc, char **argv) __attribute__((nonnull(2)));
-int __util_mkdir_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_mkdir_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 int __util_mkfifo_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_rmdir_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_test_main(int argc, char **argv) __attribute__((nonnull(2)));
@@ -189,8 +193,12 @@ int __util_true_main(int argc, char **argv) __attribute__((__pure__));
  * for the same reason the Tier-1 filesystem utilities above do -- a
  * real argv from a real caller is never NULL, and each formats argv[0]
  * or an operand from argv into a diagnostic on at least one path. */
-int __util_cat_main(int argc, char **argv) __attribute__((nonnull(2)));
-int __util_echo_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_cat_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
+int __util_echo_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 int __util_head_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_tail_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_tee_main(int argc, char **argv) __attribute__((nonnull(2)));
@@ -419,7 +427,9 @@ int __util_timeout_main(int argc, char **argv) __attribute__((nonnull(2)));
  * read (and stty, absent -a/-g, writes) the real terminal state behind
  * file descriptor 0, so a repeated call is not guaranteed to answer
  * the same way twice. */
-int __util_stty_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_stty_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 int __util_tty_main(int argc, char **argv) __attribute__((nonnull(2)));
 
 /* Tier 8 (this project's own POSIX-utilities plan originally deferred
@@ -498,7 +508,9 @@ int __util_write_main(int argc, char **argv) __attribute__((nonnull(2)));
  * wait on real child processes besides. */
 int __util_at_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_batch_main(int argc, char **argv) __attribute__((nonnull(2)));
-int __util_crontab_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_crontab_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 int __util_atd_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_crond_main(int argc, char **argv) __attribute__((nonnull(2)));
 

@@ -109,7 +109,8 @@ static int mkdir_p(char *path, mode_t leaf_mode, int is_leaf, int has_p)
 	return -1;
 }
 
-int __util_mkdir_main(int argc, char **argv)
+int __util_mkdir_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int i, opt_p = 0, fail = 0;
 	const char *mode_spec = 0;

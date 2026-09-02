@@ -28,6 +28,29 @@ void string_literal_creates_evidence(void)
 	dialect_use_string(initialized);
 }
 
+void dialect_use_string_vector(
+	int count,
+	char **values elements_withtok(dialect_terminated, count))
+	__attribute__((nonnull(2)))
+{
+	int i;
+
+	for (i = 0; i < count; i++)
+		dialect_use_string(values[i]);
+}
+
+void element_relation_survives_local_alias(
+	int count,
+	char **values elements_withtok(dialect_terminated, count))
+	__attribute__((nonnull(2)))
+{
+	char **alias = values;
+	int i;
+
+	for (i = 0; i < count; i++)
+		dialect_use_string(alias[i]);
+}
+
 void immutable_string_literal_table_creates_evidence(unsigned i)
 {
 	static const char *const table[] = { "first", "second" };

@@ -284,7 +284,8 @@ static int do_edit(void)
 	return 0;
 }
 
-int __util_crontab_main(int argc, char **argv)
+int __util_crontab_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	if (argc == 2 && !strcmp(argv[1], "-l")) return do_list();
 	if (argc == 2 && !strcmp(argv[1], "-r")) return do_remove();

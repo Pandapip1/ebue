@@ -66,6 +66,40 @@ struct TokenTransition {
   constexpr bool permitted() const { return Events == TokenEvent::None; }
 };
 
+enum class RelationSupport : uint8_t { Exact, Havoced, Unsupported };
+enum class ProofStatus : uint8_t { Unproved, Refuted, Proved };
+
+struct ElementTokenRelation {
+  TokenState Elements;
+  RelationSupport Support;
+  bool RequiresValuePredicate;
+  bool RefinesExcludedSentinel;
+};
+
+struct ElementTokenLookup {
+  TokenState Element;
+  TokenEvent Events;
+  bool ApplyValueRefinement;
+
+  constexpr bool proved() const { return Events == TokenEvent::None; }
+};
+
+/* Object identity, memory version, and index-domain proofs are supplied by
+ * each checker's semantic adapter.  The common algebra only releases the
+ * element token when every relation premise is exact; omitted or stale state
+ * remains unproved rather than being silently framed. */
+constexpr ElementTokenLookup lookupElementToken(
+    ElementTokenRelation Relation, bool SameMemoryVersion,
+    ProofStatus ValidIndex, ProofStatus ValueRefinement) {
+  if (Relation.Support != RelationSupport::Exact || !SameMemoryVersion ||
+      ValidIndex != ProofStatus::Proved ||
+      (Relation.RequiresValuePredicate &&
+       ValueRefinement != ProofStatus::Proved))
+    return {TokenState::Unknown, TokenEvent::StateUnproven, false};
+  return {Relation.Elements, TokenEvent::None,
+          Relation.RefinesExcludedSentinel};
+}
+
 /* A policy event does not erase the underlying C edge.  Unless an operation
  * has a precise result independently of its input (Drop and
  * ConsumeIfPresent), an unproved input or a violated precondition havocs the

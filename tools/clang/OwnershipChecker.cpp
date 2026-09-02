@@ -53,6 +53,12 @@ using CarrierCapabilityKey =
     std::pair<const MemRegion *, const IdentifierInfo *>;
 REGISTER_MAP_WITH_PROGRAMSTATE(CarrierCapabilityMap, CarrierCapabilityKey,
                                CarrierCapabilityKind)
+using AggregateElementKey =
+    std::pair<SymbolRef, const IdentifierInfo *>;
+REGISTER_MAP_WITH_PROGRAMSTATE(AggregateElementExtent, AggregateElementKey,
+                               SymbolRef)
+REGISTER_MAP_WITH_PROGRAMSTATE(ElementTokenOrigin, SymbolCapabilityKey,
+                               SymbolRef)
 using StrictLoanKey = std::pair<const MemRegion *, const IdentifierInfo *>;
 REGISTER_MAP_WITH_PROGRAMSTATE(StrictLoanMap, StrictLoanKey, const MemRegion *)
 REGISTER_SET_WITH_PROGRAMSTATE(ExpiredStrictLoanSet, const MemRegion *)
@@ -62,9 +68,13 @@ REGISTER_MAP_WITH_PROGRAMSTATE(ResourceMap, SymbolRef, unsigned)
 namespace {
 
 using ntlibc::algebra::excludedSentinel;
+using ntlibc::algebra::ElementTokenRelation;
 using ntlibc::algebra::findTokenSort;
 using ntlibc::algebra::hasQualifier;
 using ntlibc::algebra::LinearLoanClass;
+using ntlibc::algebra::lookupElementToken;
+using ntlibc::algebra::ProofStatus;
+using ntlibc::algebra::RelationSupport;
 using ntlibc::algebra::TokenEvent;
 using ntlibc::algebra::TokenEffect;
 using ntlibc::algebra::TokenState;
@@ -1327,6 +1337,7 @@ class OwnershipContractChecker : public Checker<check::ASTDecl<FunctionDecl>> {
 
   static bool isOwnershipContract(StringRef Annotation) {
     return Annotation.starts_with("withtok:") ||
+           Annotation.starts_with("elements_withtok:") ||
            Annotation.starts_with("withouttok:") ||
            Annotation.starts_with("consume:") ||
            Annotation.starts_with("consume_any:") ||
@@ -1372,6 +1383,258 @@ public:
       }
       ++Argument;
     }
+  }
+};
+
+static SymbolRef aggregateBaseSymbol(SVal Value) {
+  if (const MemRegion *Region = Value.getAsRegion())
+    if (const SymbolicRegion *Base = Region->getSymbolicBase())
+      return Base->getSymbol();
+  return Value.getAsSymbol(true);
+}
+
+static SymbolRef aggregateBaseForExpr(const Expr *Expression,
+                                      CheckerContext &C) {
+  const Expr *Core = Expression ? Expression->IgnoreParenImpCasts() : nullptr;
+  if (const auto *Reference = dyn_cast_or_null<DeclRefExpr>(Core))
+    if (const auto *Variable = dyn_cast<VarDecl>(Reference->getDecl()))
+      return aggregateBaseSymbol(C.getState()->getSVal(
+          C.getState()->getLValue(Variable, C.getLocationContext())));
+  return Expression ? aggregateBaseSymbol(C.getSVal(Expression)) : nullptr;
+}
+
+static bool aggregateIndexProven(const ArraySubscriptExpr *Access,
+                                 SymbolRef Upper, ProgramStateRef State,
+                                 CheckerContext &C) {
+  SVal Index = C.getSVal(Access->getIdx());
+  std::optional<DefinedOrUnknownSVal> DefinedIndex =
+      Index.getAs<DefinedOrUnknownSVal>();
+  if (!DefinedIndex || !Upper)
+    return false;
+  QualType IndexType = Index.getType(C.getASTContext());
+  QualType UpperType = Upper->getType();
+  if (IndexType.isNull() || UpperType.isNull() ||
+      !C.getASTContext().hasSameType(IndexType, UpperType) ||
+      !IndexType->isIntegralOrEnumerationType())
+    return false;
+  SValBuilder &Builder = C.getSValBuilder();
+  SVal Below = Builder.evalBinOp(State, BO_LT, *DefinedIndex,
+                                 nonloc::SymbolVal(Upper),
+                                 Builder.getConditionType());
+  std::optional<DefinedOrUnknownSVal> BelowCondition =
+      Below.getAs<DefinedOrUnknownSVal>();
+  if (!BelowCondition || State->assume(*BelowCondition, false))
+    return false;
+  if (IndexType->isSignedIntegerOrEnumerationType()) {
+    SVal NonNegative = Builder.evalBinOp(
+        State, BO_GE, *DefinedIndex, Builder.makeIntVal(0, IndexType),
+        Builder.getConditionType());
+    std::optional<DefinedOrUnknownSVal> Condition =
+        NonNegative.getAs<DefinedOrUnknownSVal>();
+    if (!Condition || State->assume(*Condition, false))
+      return false;
+  }
+  return true;
+}
+
+class AggregateElementTokenChecker
+    : public Checker<check::BeginFunction,
+                     check::PostStmt<ImplicitCastExpr>, check::Bind,
+                     check::PostCall> {
+
+  static ProgramStateRef havocAggregate(ProgramStateRef State,
+                                        SymbolRef Aggregate) {
+    llvm::SmallVector<AggregateElementKey, 4> Relations;
+    for (const auto &Relation : State->get<AggregateElementExtent>())
+      if (Relation.first.first == Aggregate)
+        Relations.push_back(Relation.first);
+    llvm::SmallVector<SymbolCapabilityKey, 8> Elements;
+    for (const auto &Element : State->get<ElementTokenOrigin>())
+      if (Element.second == Aggregate)
+        Elements.push_back(Element.first);
+    for (const SymbolCapabilityKey &Element : Elements) {
+      State = State->remove<SymbolCapabilityMap>(Element);
+      State = State->remove<ElementTokenOrigin>(Element);
+    }
+    for (const AggregateElementKey &Relation : Relations)
+      State = State->remove<AggregateElementExtent>(Relation);
+    return State;
+  }
+
+  static ProgramStateRef refineExcludedSentinel(
+      ProgramStateRef State, SVal Value, const IdentifierInfo *Family,
+      CheckerContext &C) {
+    std::optional<int64_t> Sentinel = excludedSentinel(
+        findTokenSort(C.getASTContext(), Family->getName()));
+    if (!Sentinel)
+      return State;
+    std::optional<DefinedOrUnknownSVal> Defined =
+        Value.getAs<DefinedOrUnknownSVal>();
+    if (!Defined)
+      return nullptr;
+    QualType Type = Value.getType(C.getASTContext());
+    if (Type->isPointerType())
+      return *Sentinel == 0 ? State->assume(*Defined, true) : nullptr;
+    if (!Type->isIntegralOrEnumerationType())
+      return nullptr;
+    SVal NotSentinel = C.getSValBuilder().evalBinOp(
+        State, BO_NE, *Defined,
+        C.getSValBuilder().makeIntVal(*Sentinel, Type),
+        C.getSValBuilder().getConditionType());
+    std::optional<DefinedOrUnknownSVal> Condition =
+        NotSentinel.getAs<DefinedOrUnknownSVal>();
+    return Condition ? State->assume(*Condition, true) : nullptr;
+  }
+
+  static bool parameterIsReadOnly(const FunctionDecl *Function,
+                                  unsigned Argument) {
+    if (!Function || Argument >= Function->getNumParams())
+      return false;
+    QualType Type = Function->getParamDecl(Argument)->getType();
+    bool SawPointer = false;
+    while (Type->isPointerType()) {
+      SawPointer = true;
+      Type = Type->getPointeeType();
+      if (!Type.isConstQualified())
+        return false;
+    }
+    return SawPointer;
+  }
+
+public:
+  void checkBeginFunction(CheckerContext &C) const {
+    const auto *Function =
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
+    if (!Function)
+      return;
+    ProgramStateRef State = C.getState();
+    const LocationContext *LC = C.getLocationContext();
+    bool Changed = false;
+    for (const ParmVarDecl *Parameter : Function->parameters())
+      for (const AnnotateAttr *Attr : Parameter->specific_attrs<AnnotateAttr>()) {
+        StringRef Text = Attr->getAnnotation();
+        if (!Text.consume_front("elements_withtok:"))
+          continue;
+        auto [FamilyName, ExtentName] = Text.split(':');
+        if (FamilyName.empty() || ExtentName.empty() || ExtentName.contains(':'))
+          continue;
+        std::optional<CapabilityKind> Kind =
+            dialectTokenKind(C.getASTContext(), FamilyName);
+        if (!Kind || *Kind != CapabilityKind::Duplicable)
+          continue;
+        const ParmVarDecl *Extent = nullptr;
+        for (const ParmVarDecl *Candidate : Function->parameters())
+          if (Candidate->getName() == ExtentName) {
+            Extent = Candidate;
+            break;
+          }
+        if (!Extent)
+          continue;
+        SVal AggregateValue =
+            State->getSVal(State->getLValue(Parameter, LC));
+        SVal ExtentValue = State->getSVal(State->getLValue(Extent, LC));
+        SymbolRef Aggregate = aggregateBaseSymbol(AggregateValue);
+        SymbolRef Upper = ExtentValue.getAsSymbol(true);
+        if (!Aggregate || !Upper)
+          continue;
+        const IdentifierInfo *Family =
+            &C.getASTContext().Idents.get(FamilyName);
+        State = State->set<AggregateElementExtent>({Aggregate, Family}, Upper);
+        Changed = true;
+      }
+    if (Changed)
+      C.addTransition(State);
+  }
+
+  void checkPostStmt(const ImplicitCastExpr *Cast,
+                     CheckerContext &C) const {
+    if (Cast->getCastKind() != CK_LValueToRValue)
+      return;
+    const auto *Access = dyn_cast<ArraySubscriptExpr>(
+        Cast->getSubExpr()->IgnoreParenImpCasts());
+    if (!Access)
+      return;
+    SymbolRef Aggregate = aggregateBaseForExpr(Access->getBase(), C);
+    if (!Aggregate)
+      return;
+    ProgramStateRef State = C.getState();
+    bool Changed = false;
+    for (const auto &Relation : State->get<AggregateElementExtent>()) {
+      if (Relation.first.first != Aggregate ||
+          !aggregateIndexProven(Access, Relation.second, State, C))
+        continue;
+      const IdentifierInfo *Family = Relation.first.second;
+      ElementTokenRelation AlgebraRelation{
+          TokenState::Duplicable, RelationSupport::Exact, false,
+          excludedSentinel(findTokenSort(C.getASTContext(), Family->getName()))
+              .has_value()};
+      auto Lookup = lookupElementToken(
+          AlgebraRelation, true, ProofStatus::Proved, ProofStatus::Unproved);
+      if (!Lookup.proved())
+        continue;
+      SVal Element = C.getSVal(Cast);
+      ProgramStateRef Refined =
+          Lookup.ApplyValueRefinement
+              ? refineExcludedSentinel(State, Element, Family, C)
+              : State;
+      if (!Refined)
+        continue;
+      State = setUnderlyingToken(Refined, Element, Family,
+                                 CapabilityKind::Duplicable);
+      if (SymbolRef ElementSymbol = Element.getAsSymbol(true))
+        State = State->set<ElementTokenOrigin>({ElementSymbol, Family},
+                                               Aggregate);
+      Changed = true;
+    }
+    if (Changed)
+      C.addTransition(State);
+  }
+
+  void checkBind(SVal Location, SVal Value, const Stmt *, CheckerContext &C) const {
+    ProgramStateRef State = C.getState();
+    SymbolRef Written = aggregateBaseSymbol(Location);
+    SymbolRef Escaped = aggregateBaseSymbol(Value);
+    llvm::SmallVector<SymbolRef, 4> Havoc;
+    if (Written)
+      for (const auto &Relation : State->get<AggregateElementExtent>())
+        if (Relation.first.first == Written)
+          Havoc.push_back(Written);
+    if (Written)
+      for (const auto &Element : State->get<ElementTokenOrigin>())
+        if (Element.first.first == Written)
+          Havoc.push_back(Element.second);
+    const MemRegion *Destination = Location.getAsRegion();
+    if (Escaped && Destination && !isa<VarRegion>(Destination))
+      for (const auto &Relation : State->get<AggregateElementExtent>())
+        if (Relation.first.first == Escaped)
+          Havoc.push_back(Escaped);
+    for (SymbolRef Aggregate : Havoc)
+      State = havocAggregate(State, Aggregate);
+    if (State != C.getState())
+      C.addTransition(State);
+  }
+
+  void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
+    ProgramStateRef State = C.getState();
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    llvm::SmallVector<SymbolRef, 4> Havoc;
+    for (unsigned Argument = 0; Argument < Call.getNumArgs(); ++Argument) {
+      if (parameterIsReadOnly(Function, Argument))
+        continue;
+      SymbolRef Passed = aggregateBaseSymbol(Call.getArgSVal(Argument));
+      if (!Passed)
+        continue;
+      for (const auto &Relation : State->get<AggregateElementExtent>())
+        if (Relation.first.first == Passed)
+          Havoc.push_back(Passed);
+      for (const auto &Element : State->get<ElementTokenOrigin>())
+        if (Element.first.first == Passed)
+          Havoc.push_back(Element.second);
+    }
+    for (SymbolRef Aggregate : Havoc)
+      State = havocAggregate(State, Aggregate);
+    if (State != C.getState())
+      C.addTransition(State);
   }
 };
 
@@ -3907,6 +4170,9 @@ extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
   Registry.addChecker<OwnershipContractChecker>(
       "ntlibc.OwnershipContract",
       "Requires source definitions to repeat header ownership contracts", "");
+  Registry.addChecker<AggregateElementTokenChecker>(
+      "ntlibc.AggregateElementToken",
+      "Relates versioned aggregate elements to nominal token states", "");
   Registry.addChecker<CapabilityTokenChecker>(
       "ntlibc.CapabilityToken",
       "Proves explicit linear and duplicable ownership-token transitions", "");

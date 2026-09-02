@@ -29,6 +29,10 @@ void dialect_mutex_destroy(dialect_mutex_t *mutex
 void dialect_mark_terminated(char *text grant(dialect_terminated));
 void dialect_invalidate_string(char *text drop(dialect_terminated));
 void dialect_use_string(const char *text withtok(dialect_terminated));
+void dialect_use_string_vector(
+	int count,
+	char **values elements_withtok(dialect_terminated, count))
+	__attribute__((nonnull(2)));
 void dialect_clear_string(char *text drop(dialect_terminated));
 void dialect_bad_clear_string(char *text drop(dialect_terminated));
 char *dialect_copy_string(char *text grant(dialect_terminated));

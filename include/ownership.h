@@ -26,6 +26,12 @@
 	__attribute__((annotate("qual:blocks_dereference")))
 #define withtok(token_name) \
 	__attribute__((annotate("withtok:" #token_name)))
+#ifdef NTLIBC_OWNERSHIP_ANALYSIS
+#define elements_withtok(token_name, extent_name) \
+	__attribute__((annotate("elements_withtok:" #token_name ":" #extent_name)))
+#else
+#define elements_withtok(token_name, extent_name)
+#endif
 #define withhandle(handle_name) \
 	__attribute__((annotate("withhandle:" #handle_name)))
 #define withouttok(token_name) \

@@ -71,7 +71,8 @@ static int copy_stream(int in, const char *label)
 	return 0;
 }
 
-int __util_cat_main(int argc, char **argv)
+int __util_cat_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int i, had_error = 0;
 

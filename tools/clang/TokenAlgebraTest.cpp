@@ -168,6 +168,43 @@ static bool testTransferTable() {
   return Passed;
 }
 
+static bool testElementRelations() {
+  constexpr ElementTokenRelation Exact{TokenState::Duplicable,
+                                       RelationSupport::Exact, false, true};
+  constexpr ElementTokenRelation Conditional{TokenState::Duplicable,
+                                             RelationSupport::Exact, true,
+                                             true};
+  constexpr ElementTokenRelation Havoced{TokenState::Duplicable,
+                                         RelationSupport::Havoced, false,
+                                         true};
+  ElementTokenLookup Present = lookupElementToken(
+      Exact, true, ProofStatus::Proved, ProofStatus::Unproved);
+  ElementTokenLookup Refined = lookupElementToken(
+      Conditional, true, ProofStatus::Proved, ProofStatus::Proved);
+  return require(Present.proved() &&
+                     Present.Element == TokenState::Duplicable &&
+                     Present.ApplyValueRefinement,
+                 "exact element relation was not released") &&
+         require(Refined.proved() && Refined.ApplyValueRefinement,
+                 "conditional element refinement was not preserved") &&
+         require(!lookupElementToken(Exact, false, ProofStatus::Proved,
+                                     ProofStatus::Unproved)
+                      .proved(),
+                 "stale memory version released an element token") &&
+         require(!lookupElementToken(Exact, true, ProofStatus::Unproved,
+                                     ProofStatus::Unproved)
+                      .proved(),
+                 "unproved index released an element token") &&
+         require(!lookupElementToken(Conditional, true, ProofStatus::Proved,
+                                     ProofStatus::Refuted)
+                      .proved(),
+                 "refuted value predicate released an element token") &&
+         require(!lookupElementToken(Havoced, true, ProofStatus::Proved,
+                                     ProofStatus::Unproved)
+                      .proved(),
+                 "havoced relation released an element token");
+}
+
 int main() {
   constexpr const char *Source = R"(
 typedef struct { char byte; } dynamic_token
@@ -235,7 +272,8 @@ typedef struct { char byte; } unsupported_internal
     return 1;
   clang::ASTContext &Context = AST->getASTContext();
   const TokenSort *Dynamic = findTokenSort(Context, "dynamic_token");
-  bool Passed = testTransitionTable() && testTransferTable();
+  bool Passed =
+      testTransitionTable() && testTransferTable() && testElementRelations();
   Passed &= require(Dynamic != nullptr, "nominal token typedef not found");
   Passed &= require(hasQualifier(Dynamic, "qual:dynamic_storage"),
                     "exact qualifier not found");

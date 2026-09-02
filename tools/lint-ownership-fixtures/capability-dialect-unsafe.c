@@ -15,6 +15,86 @@ void use_string_without_evidence(void)
 	dialect_use_string(text); /* ownership-expect: dialect-string-missing */
 }
 
+void uncontracted_elements_are_not_evidence(int count, char **values)
+	__attribute__((nonnull(2)))
+{
+	if (count > 0)
+		dialect_use_string(values[0]); /* ownership-expect: uncontracted-element */
+}
+
+void out_of_range_element_is_not_evidence(
+	int count,
+	char **values elements_withtok(dialect_terminated, count))
+	__attribute__((nonnull(2)))
+{
+	dialect_use_string(values[count]); /* ownership-expect: element-at-extent */
+}
+
+void negative_element_is_not_evidence(
+	int count,
+	char **values elements_withtok(dialect_terminated, count))
+	__attribute__((nonnull(2)))
+{
+	if (count > 0)
+		dialect_use_string(values[-1]); /* ownership-expect: negative-element */
+}
+
+void rebound_aggregate_is_not_evidence(
+	int count,
+	char **values elements_withtok(dialect_terminated, count), char **other)
+	__attribute__((nonnull(2)))
+{
+	values = other;
+	if (count > 0)
+		dialect_use_string(values[0]); /* ownership-expect: rebound-aggregate */
+}
+
+void written_element_is_not_evidence(
+	int count,
+	char **values elements_withtok(dialect_terminated, count), char *other)
+	__attribute__((nonnull(2)))
+{
+	if (count <= 0)
+		return;
+	values[0] = other;
+	dialect_use_string(values[0]); /* ownership-expect: written-element */
+}
+
+void alias_written_element_is_not_evidence(
+	int count,
+	char **values elements_withtok(dialect_terminated, count), char *other)
+	__attribute__((nonnull(2)))
+{
+	char **alias = values;
+
+	if (count <= 0)
+		return;
+	alias[0] = other;
+	dialect_use_string(values[0]); /* ownership-expect: alias-written-element */
+}
+
+void unknown_mutate_vector(char **values);
+
+void unknown_mutable_call_havocs_elements(
+	int count,
+	char **values elements_withtok(dialect_terminated, count))
+	__attribute__((nonnull(2)))
+{
+	if (count <= 0)
+		return;
+	unknown_mutate_vector(values);
+	dialect_use_string(values[0]); /* ownership-expect: unknown-element-havoc */
+}
+
+void converted_index_is_conservatively_unproved(
+	int count, unsigned index,
+	char **values elements_withtok(dialect_terminated, count))
+	__attribute__((nonnull(3)))
+{
+	if (count > 0 && index < (unsigned)count)
+		dialect_use_string(values[index]); /* ownership-expect: converted-element-index */
+}
+
 void use_string_after_invalidation(void)
 {
 	char text[8];

@@ -154,7 +154,8 @@ static int check_one(const char *path)
 	return err;
 }
 
-int __util_pathchk_main(int argc, char **argv)
+int __util_pathchk_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int i, status = 0;
 

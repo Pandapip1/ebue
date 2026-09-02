@@ -655,7 +655,8 @@ static void apply_pending(const struct pending *p, struct termios *t)
 	if (p->have_ospeed) t->c_ospeed = p->ospeed_val;
 }
 
-int __util_stty_main(int argc, char **argv)
+int __util_stty_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	struct pending p;
 	struct termios t;

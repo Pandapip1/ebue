@@ -48,7 +48,8 @@
 #include <stdio.h>
 #include "util.h"
 
-int __util_echo_main(int argc, char **argv)
+int __util_echo_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int i = 1;
 	int suppress_nl = 0;
