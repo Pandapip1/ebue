@@ -560,7 +560,27 @@ ifeq ($(PLATFORM),nt)
 PROG_LIBS = -lc -lntdll
 PROG_CRT = lib/crt1.o
 else
-PROG_LIBS = -lc
+# -lgcc: this clang/binutils PLATFORM=linux `-nostdlib` link never
+# supplies its own definitions for the 128-bit soft-float compiler-rt
+# symbols (__eqtf2/__subtf3/__extendsftf2/...) that aarch64's ABI
+# demands wherever long-double arithmetic is reachable from an object
+# file that actually gets pulled into the link. src/math/{exp,log,pow,
+# trig,floor,sqrt}.c each define their double- and long-double-suffixed
+# functions (e.g. exp()/expl()) in the same translation unit, so linking
+# in the double-precision one (needed by sh's builtin awk, or by fork/
+# wait/exec per posix-realtime-linux.exe's own -lgcc, added first,
+# narrowly, just below) drags in the unused long-double sibling and its
+# unresolved quad-arithmetic references too. Originally fixed narrowly,
+# for two test binaries only (see the -lgcc override rules below); by
+# the time `obj/sh/sh.exe` and the whole test/util-*.c tier were first
+# actually built+run on native Linux, the same gap showed up project-
+# wide (any PLATFORM=linux program linking those math objects at all),
+# so it now lives here instead, covering every real-program link
+# (PROG_LIBS/TESTPROG_LIBS are the same value -- see the aliasing
+# comment below). NT/tcc is unaffected (tcc supplies no such compiler-rt
+# split, and the ifeq above already keeps this out of that branch
+# entirely), so this is added only in this PLATFORM=linux else-branch.
+PROG_LIBS = -lc -lgcc
 # PLATFORM=linux's own crt is two objects, not one: crt/linux/$(ARCH)/
 # start.S's real _start (sets up the stack, finds argc/argv/envp/auxv,
 # calls __linux_start_main) is a SEPARATE object from crt/linux/crt1.c's
@@ -894,35 +914,42 @@ TEST_EXES := $(patsubst $(srcdir)/test/%.c,obj/test/%.exe,$(TEST_SRCS))
 # contained pass/fail test TEST_RUN could run on its own).
 #
 # Both this rule and posix-realtime-linux.exe's own override just below
-# add a bare `-lgcc` this pass's own testing surfaced as newly necessary:
-# fork()/wait()/exec() (src/process/{fork,wait,exec}.c) pull in this
-# object's own long-double math object files (src/math/{trig,exp,log,
-# pow,floor}.c -- confirmed by bisection, not guessed: a two-line probe
-# using only fork()+execv()+waitpid(), nothing math-related at all, hits
-# the identical undefined __eqtf2/__subtf3/__extendsftf2/... symbols),
-# whose 128-bit soft-float code these clang/binutils' own `-nostdlib`
-# link never supplies a definition for on its own. `make obj/sh/sh.exe`
-# -- this Makefile's own already-documented PLATFORM=linux claim (see
-# the ALL_LIBS comment above) -- was RE-CONFIRMED BROKEN by this same
-# probe before adding this: a real, pre-existing gap this pass's own
-# fork()+exec() regression test is the first thing in this tree to
-# actually trip on PLATFORM=linux, not something introduced here. Fixed
-# narrowly, for these two test binaries only (their own explicit
-# `-lgcc`), rather than added to TESTPROG_LIBS/PROG_LIBS project-wide:
-# that broader fix is real, disclosed follow-up work of its own (does
+# originally added a bare `-lgcc` this pass's own testing surfaced as
+# newly necessary: fork()/wait()/exec() (src/process/{fork,wait,exec}.c)
+# pull in this object's own long-double math object files (src/math/
+# {trig,exp,log,pow,floor}.c -- confirmed by bisection, not guessed: a
+# two-line probe using only fork()+execv()+waitpid(), nothing math-
+# related at all, hits the identical undefined __eqtf2/__subtf3/
+# __extendsftf2/... symbols), whose 128-bit soft-float code these clang/
+# binutils' own `-nostdlib` link never supplies a definition for on its
+# own. `make obj/sh/sh.exe` -- this Makefile's own already-documented
+# PLATFORM=linux claim (see the ALL_LIBS comment above) -- was RE-
+# CONFIRMED BROKEN by this same probe before adding this: a real, pre-
+# existing gap this pass's own fork()+exec() regression test is the
+# first thing in this tree to actually trip on PLATFORM=linux, not
+# something introduced here. Originally fixed narrowly, for these two
+# test binaries only, pending the broader project-wide question (does
 # every PLATFORM=linux program that touches fork/exec need it? does
-# `-lgcc`'s own libgcc.a interact safely with sh.exe's or
-# ntlibc-tcc's other dependencies?), genuinely separate from and out of
-# scope for the AIO worker-leak fix this test exists to prove.
+# `-lgcc`'s own libgcc.a interact safely with sh.exe's or ntlibc-tcc's
+# other dependencies?) -- that follow-up has since landed (PROG_LIBS/
+# TESTPROG_LIBS's own PLATFORM=linux branch above now carries `-lgcc`
+# for every real-program link, sh.exe included), so these two rules no
+# longer need their own explicit `-lgcc`; kept as explicit override
+# rules anyway (rather than falling back to the generic obj/test/%.exe
+# pattern rule) only because aio-leak-helper.exe's own recipe already
+# differs from that pattern rule in other ways (no $(TEST_DEPFLAGS), an
+# extra prerequisite) that have nothing to do with `-lgcc`.
 obj/test/aio-leak-helper.exe: $(srcdir)/test/aio-leak-helper-src/aio-leak-helper.c $(ALL_LIBS) | obj/test
-	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ $(TESTPROG_CRT) $< -Llib $(TESTPROG_LIBS) -lgcc
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ $(TESTPROG_CRT) $< -Llib $(TESTPROG_LIBS)
 
 # Overrides the generic obj/test/%.exe pattern rule (a more specific,
 # explicit rule always wins over a pattern rule in GNU make) purely to
-# add the same `-lgcc` -- see aio-leak-helper.exe's own comment just
-# above for why. Otherwise byte-identical to that generic recipe.
+# add the extra aio-leak-helper.exe prerequisite -- see that rule's own
+# comment just above for the `-lgcc` history (now carried by
+# TESTPROG_LIBS itself, not this recipe). Otherwise byte-identical to
+# that generic recipe.
 obj/test/posix-realtime-linux.exe: $(srcdir)/test/posix-realtime-linux.c $(ALL_LIBS) obj/test/aio-leak-helper.exe | obj/test
-	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) $(TEST_DEPFLAGS) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ $(TESTPROG_CRT) $< -Llib $(TESTPROG_LIBS) -lgcc
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) $(TEST_DEPFLAGS) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ $(TESTPROG_CRT) $< -Llib $(TESTPROG_LIBS)
 endif
 
 obj/test:
