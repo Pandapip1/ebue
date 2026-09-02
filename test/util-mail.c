@@ -405,7 +405,13 @@ static void concurrent_append_test(void)
 
 	for (i = 0; i < NCHILD; i++) {
 		char rel[64];
-		char body[512];
+		/* 20 lines at up to ~56 bytes each (a marker's own 64-byte
+		 * budget plus " line NN filler filler filler\n") is up to
+		 * ~1120 bytes -- 512 was short by more than half and let
+		 * strcat() below run this same stack frame's other locals
+		 * over, which is exactly the mechanism behind the real
+		 * segfault this size was found chasing. */
+		char body[2048];
 		int line;
 
 		snprintf(markers[i], sizeof markers[i], "UNIQUE-MARKER-%d-abcdefgh", i);
