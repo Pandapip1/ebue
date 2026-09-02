@@ -3,6 +3,7 @@
 
 #include "clang/AST/Expr.h"
 #include "clang/AST/ParentMap.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Analysis/AnalysisDeclContext.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
@@ -16,6 +17,7 @@
 
 #include <cctype>
 #include <memory>
+#include <optional>
 #include <string>
 
 using namespace clang;
@@ -124,6 +126,150 @@ class PointerProvenanceChecker
       if (Name == Candidate)
         return true;
     return false;
+  }
+
+  // A narrow interprocedural summary for the common static cursor helper:
+  // every non-null return is the same pointer parameter, possibly advanced
+  // by ordinary pointer arithmetic.  Because the function has internal
+  // linkage and the call is direct, its complete definition is available;
+  // rejecting address exposure, resets, asm, and non-returning fallthrough
+  // makes the returned pointer's array provenance an intrinsic contract of
+  // the body rather than a call-site assumption.
+  class ReturnedParameterVisitor
+      : public RecursiveASTVisitor<ReturnedParameterVisitor> {
+    const ParmVarDecl *Candidate;
+    ASTContext &Ctx;
+    bool Valid = true;
+    bool SawDerivedReturn = false;
+
+    bool isCandidate(const Expr *E) const {
+      E = E->IgnoreParenImpCasts();
+      const auto *DRE = dyn_cast<DeclRefExpr>(E);
+      return DRE && DRE->getDecl() == Candidate;
+    }
+
+    bool isNull(const Expr *E) const {
+      return E->isNullPointerConstant(Ctx,
+                                      Expr::NPC_ValueDependentIsNotNull);
+    }
+
+    bool derivesFromCandidate(const Expr *E) const {
+      E = E->IgnoreParens();
+      if (const auto *CE = dyn_cast<CastExpr>(E)) {
+        if (CE->getCastKind() == CK_NoOp ||
+            CE->getCastKind() == CK_BitCast ||
+            CE->getCastKind() == CK_LValueToRValue)
+          return derivesFromCandidate(CE->getSubExpr());
+        return false;
+      }
+      if (isCandidate(E))
+        return true;
+      if (const auto *BO = dyn_cast<BinaryOperator>(E)) {
+        if (BO->getOpcode() == BO_Add) {
+          return (derivesFromCandidate(BO->getLHS()) &&
+                  BO->getRHS()->getType()->isIntegerType()) ||
+                 (BO->getLHS()->getType()->isIntegerType() &&
+                  derivesFromCandidate(BO->getRHS()));
+        }
+        if (BO->getOpcode() == BO_Sub)
+          return derivesFromCandidate(BO->getLHS()) &&
+                 BO->getRHS()->getType()->isIntegerType();
+        if (BO->getOpcode() == BO_Comma)
+          return derivesFromCandidate(BO->getRHS());
+        return false;
+      }
+      if (const auto *CO = dyn_cast<ConditionalOperator>(E))
+        return (isNull(CO->getTrueExpr()) ||
+                derivesFromCandidate(CO->getTrueExpr())) &&
+               (isNull(CO->getFalseExpr()) ||
+                derivesFromCandidate(CO->getFalseExpr()));
+      return false;
+    }
+
+  public:
+    ReturnedParameterVisitor(const ParmVarDecl *Candidate, ASTContext &Ctx)
+        : Candidate(Candidate), Ctx(Ctx) {}
+
+    bool VisitReturnStmt(ReturnStmt *Return) {
+      const Expr *Value = Return->getRetValue();
+      if (!Value) {
+        Valid = false;
+      } else if (!isNull(Value)) {
+        if (!derivesFromCandidate(Value))
+          Valid = false;
+        else
+          SawDerivedReturn = true;
+      }
+      return true;
+    }
+
+    bool VisitUnaryOperator(UnaryOperator *Operation) {
+      if (Operation->getOpcode() == UO_AddrOf &&
+          isCandidate(Operation->getSubExpr()))
+        Valid = false;
+      return true;
+    }
+
+    bool VisitBinaryOperator(BinaryOperator *Operation) {
+      if (!Operation->isAssignmentOp() ||
+          !isCandidate(Operation->getLHS()))
+        return true;
+      if (Operation->getOpcode() == BO_Assign) {
+        if (!derivesFromCandidate(Operation->getRHS()))
+          Valid = false;
+      } else if (Operation->getOpcode() != BO_AddAssign &&
+                 Operation->getOpcode() != BO_SubAssign) {
+        Valid = false;
+      }
+      return true;
+    }
+
+    bool VisitGCCAsmStmt(GCCAsmStmt *) {
+      Valid = false;
+      return true;
+    }
+
+    bool VisitMSAsmStmt(MSAsmStmt *) {
+      Valid = false;
+      return true;
+    }
+
+    bool valid() const { return Valid && SawDerivedReturn; }
+  };
+
+  static std::optional<unsigned>
+  returnedPointerParameter(const FunctionDecl *FD, ASTContext &Ctx) {
+    if (!FD || FD->getStorageClass() != SC_Static ||
+        !FD->getReturnType()->isPointerType())
+      return std::nullopt;
+    for (const FunctionDecl *Redeclaration : FD->redecls())
+      if (Redeclaration->hasAttr<AliasAttr>() ||
+          Redeclaration->hasAttr<WeakRefAttr>() ||
+          Redeclaration->hasAttr<IFuncAttr>() ||
+          Redeclaration->hasAttr<UsedAttr>() ||
+          Redeclaration->hasAttr<RetainAttr>())
+        return std::nullopt;
+    const FunctionDecl *Definition = FD->getDefinition();
+    const auto *Body =
+        Definition ? dyn_cast_or_null<CompoundStmt>(Definition->getBody())
+                   : nullptr;
+    if (!Body || Body->body_empty() ||
+        !isa<ReturnStmt>(Body->body_back()))
+      return std::nullopt;
+    std::optional<unsigned> Result;
+    for (unsigned Index = 0; Index < Definition->getNumParams(); ++Index) {
+      const ParmVarDecl *Parameter = Definition->getParamDecl(Index);
+      if (!Parameter->getType()->isPointerType())
+        continue;
+      ReturnedParameterVisitor Visitor(Parameter, Ctx);
+      Visitor.TraverseStmt(const_cast<Stmt *>(Definition->getBody()));
+      if (!Visitor.valid())
+        continue;
+      if (Result)
+        return std::nullopt;
+      Result = Index;
+    }
+    return Result;
   }
 
   // isConstantSentinel: the source of an integer-to-pointer cast is a
@@ -509,6 +655,25 @@ public:
       State = State->set<NeedleAlias>(EndSymbol->getSymbol(), Haystack);
       C.addTransition(State);
       return;
+    }
+    const auto *OriginCall = dyn_cast_or_null<CallExpr>(Call.getOriginExpr());
+    if (OriginCall && OriginCall->getDirectCallee() == FD) {
+      std::optional<unsigned> Parameter =
+          returnedPointerParameter(FD, C.getASTContext());
+      if (Parameter && *Parameter < Call.getNumArgs()) {
+        ProgramStateRef State = C.getState();
+        const MemRegion *Origin = Call.getArgSVal(*Parameter).getAsRegion();
+        const MemRegion *Return = Call.getReturnValue().getAsRegion();
+        const auto *ReturnSymbol =
+            Return ? dyn_cast<SymbolicRegion>(Return->getBaseRegion())
+                   : nullptr;
+        if (Origin && ReturnSymbol) {
+          Origin = resolveAlias(Origin->getBaseRegion(), State);
+          State = State->set<NeedleAlias>(ReturnSymbol->getSymbol(), Origin);
+          C.addTransition(State);
+          return;
+        }
+      }
     }
     // isNeedleFunction: a well-known C-library "needle in haystack"
     // function whose contract guarantees its return value, if non-null,

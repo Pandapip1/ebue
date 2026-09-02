@@ -59,3 +59,47 @@ void *raw_brk(unsigned long address) {
 void *load_object(unsigned long address) {
   return (void *)address; /* pointer-provenance-expect */
 }
+
+static const char *mixed_cursor_return(const char *p, const char *other,
+                                       int choose) {
+  return choose ? p + 1 : other;
+}
+long mixed_cursor_origin(const char *p, const char *other, int choose) {
+  return mixed_cursor_return(p, other, choose) - p; /* pointer-provenance-expect */
+}
+
+static const char *reset_cursor(const char *p, const char *other) {
+  p = other;
+  return p;
+}
+long reset_cursor_origin(const char *p, const char *other) {
+  return reset_cursor(p, other) - p; /* pointer-provenance-expect */
+}
+
+static void replace_cursor(const char **p, const char *other) { *p = other; }
+static const char *aliased_cursor(const char *p, const char *other) {
+  replace_cursor(&p, other);
+  return p;
+}
+long aliased_cursor_origin(const char *p, const char *other) {
+  return aliased_cursor(p, other) - p; /* pointer-provenance-expect */
+}
+
+static const char *integer_cursor(const char *p, unsigned long delta) {
+  unsigned long bits = (unsigned long)p;
+  bits += delta;
+  return (const char *)bits;
+}
+long integer_cursor_origin(const char *p, unsigned long delta) {
+  return integer_cursor(p, delta) - p; /* pointer-provenance-expect */
+}
+
+const char *external_cursor(const char *p);
+long external_cursor_origin(const char *p) {
+  return external_cursor(p) - p; /* pointer-provenance-expect */
+}
+
+typedef const char *(*cursor_fn)(const char *);
+long indirect_cursor_origin(cursor_fn fn, const char *p) {
+  return fn(p) - p; /* pointer-provenance-expect */
+}
