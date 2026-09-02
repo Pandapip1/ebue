@@ -142,6 +142,27 @@ int __plat_process_times(__plat_handle_t h, __plat_handle_t job,
                           unsigned long long *ktime100ns, unsigned long long *utime100ns)
     __attribute__((nonnull(3, 4)));
 
+/* Tell the backend that `h`'s exit code and times have now been
+ * delivered to the caller -- src/process/wait.c's do_waitpid() calls
+ * this exactly once per reap, in its `reap:` block, right after both
+ * __plat_process_exit_code() and __plat_process_times() have been read
+ * (unconditionally: fill_child_rusage() always runs there, whether or
+ * not the caller asked for a struct rusage -- see that file's own
+ * comment). Neither of those two is ever called again for the same `h`
+ * afterward: a WNOWAIT caller's repeat read comes back from
+ * src/internal/libc.h's own struct __child.status/.done instead, one
+ * layer up, never by re-querying the backend.
+ *
+ * On NT this is a no-op: NtQueryInformationProcess can answer
+ * ProcessBasicInformation/ProcessTimes any number of times for as long
+ * as the handle stays open, and __child_remove()'s __plat_close(c->h)
+ * already owns the real release. A backend that instead has to stash
+ * that answer itself, because reporting it destroyed the only kernel
+ * copy (see this header's own banner on NtWaitForSingleObject vs.
+ * wait4(2) -- Linux, src/process/linux/plat_process.c) uses this call as
+ * the signal that its own stashed copy may finally be freed. */
+void __plat_process_reap_release(__plat_handle_t h);
+
 /* Resume a process this library previously suspended through kill()'s
  * job-control path (src/signal/signal.c, out of this interface's
  * scope). */

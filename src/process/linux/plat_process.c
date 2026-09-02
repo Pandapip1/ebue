@@ -293,6 +293,20 @@ static struct reap_entry *reap_alloc(int pid)
 	return 0;   /* table exhausted -- see the fallback note below */
 }
 
+/* Return a slot to the pool once its info has been delivered -- see
+ * __plat_process_reap_release()'s own comment (called from here) and
+ * plat_process.h's for the full lifecycle argument. pid == 0 is exactly
+ * "already free" (struct reap_entry's own comment), so a redundant or
+ * not-found release -- __plat_process_wait()'s degraded "table was full,
+ * nothing was ever cached for this pid" path, this file's own comment
+ * further down -- is silently a no-op, same as reap_find() already
+ * treats it. */
+static void reap_free(int pid)
+{
+	struct reap_entry *e = reap_find(pid);
+	if (e) e->pid = 0;
+}
+
 /* Byte-exact mirror of Linux's real struct rusage (confirmed against
  * the host: ru_utime at offset 0, ru_stime at offset 16, both
  * `struct timeval`, whole struct 144 bytes -- see the report), padded
@@ -397,6 +411,27 @@ int __plat_process_times(__plat_handle_t h, __plat_handle_t job,
 	*ktime100ns = e->ktime100ns;
 	*utime100ns = e->utime100ns;
 	return 0;
+}
+
+/* See plat_process.h's own comment on this call for the general
+ * contract; this backend is the one that actually needs it. A
+ * reap_cache slot exists only to bridge __plat_process_wait()'s real,
+ * irreversible wait4(2) reap to the __plat_process_exit_code()/
+ * __plat_process_times() reads do_waitpid() makes immediately
+ * afterward, in the same call -- once wait.c has both answers it never
+ * asks this backend again for the same handle (a WNOWAIT repeat read
+ * comes back out of struct __child.status one layer up instead, see
+ * plat_process.h). So the slot has no reason to survive past that
+ * point, and REAP_CACHE_MAX exists at all only because two calls happen
+ * to need it live at once, not because it is meant to be a durable
+ * history of past children. Freeing it here, rather than leaving it
+ * allocated for the rest of this process's life, is what keeps a
+ * long-running process (a shell, crond, atd, anything that forks in a
+ * loop) from exhausting all REAP_CACHE_MAX slots after its 257th total
+ * reap and then failing every wait*() on a real child from then on. */
+void __plat_process_reap_release(__plat_handle_t h)
+{
+	reap_free(unbox_pid(h));
 }
 
 /* ---- signal.c's job-control resume, via kill()'s job-control arm ----- */
