@@ -410,6 +410,18 @@ int __util_awk_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_time_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_timeout_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* Tier 6: terminal messaging.  write(1p)/mesg(1p) -- the plan's own
+ * "explicitly deferred / out of scope" tier, revisited: see
+ * src/util/mesg.c and src/util/util_write.c's own header comments for
+ * the full argument on what is real here given ntlibc's one-real-user
+ * model (src/misc/pwd.c), and src/util/termident.h for the terminal-
+ * identification mechanism both share.  __util_write_main() lives in
+ * util_write.c, not write.c, to avoid the same ar member-name
+ * collision src/util/util_basename.c's header explains in full (this
+ * time against src/unistd/write.c, the write(2) syscall). */
+int __util_mesg_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_write_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 #endif
 
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
