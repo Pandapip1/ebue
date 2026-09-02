@@ -438,7 +438,6 @@ struct m4_state {
 	int cur_divert;
 
 	struct m4_frame *top;
-	int *pb_data; size_t pb_len, pb_cap;
 
 	char **wraps; size_t nwraps, wraps_cap, wrap_pos;
 
@@ -555,7 +554,6 @@ static void push_frame(struct m4_state *st, char *buf, size_t len)
 static int getc_raw(struct m4_state *st)
 {
 	struct m4_frame *f;
-	if (st->pb_len) return st->pb_data[--st->pb_len];
 	for (;;) {
 		f = st->top;
 		if (!f) return -1;
@@ -565,17 +563,29 @@ static int getc_raw(struct m4_state *st)
 	}
 }
 
+/* Pushes `c` back so the next getc_raw() returns it again, by pushing a
+ * one-byte frame onto the SAME input-frame stack push_frame() uses --
+ * deliberately not a separate pushback buffer.  A separate buffer that
+ * getc_raw() always drained first (regardless of arrival order relative
+ * to frames) would put a just-ungotten character ahead of a macro
+ * expansion pushed by push_frame() AFTER it, even when the ungetc
+ * logically happened first and the expansion belongs in between: e.g.
+ * dispatch_macro() reads one lookahead byte to check for '(', ungets it
+ * when absent, and only then pushes the macro's own expansion -- that
+ * expansion must be read (and rescanned) before the lookahead byte, since
+ * the byte lexically follows the macro call in the real input, while the
+ * expansion replaces the call itself. Sharing one LIFO frame stack for
+ * both makes "most recently pushed, whether by ungetc or by a macro
+ * expansion, is read first" automatic instead of two competing
+ * priorities. */
 static void ungetc_raw(struct m4_state *st, int c)
 {
-	if (st->pb_len >= st->pb_cap) {
-		size_t newcap;
-		int *g;
-		if (!__util_array_capacity(st->pb_cap, st->pb_len, 1, 8, sizeof(int), &newcap)) { st->had_error = 1; return; }
-		g = __util_reallocarray(st->pb_data, newcap, sizeof(int));
-		if (!g) { st->had_error = 1; return; }
-		st->pb_data = g; st->pb_cap = newcap;
-	}
-	st->pb_data[st->pb_len++] = c;
+	char *buf;
+	if (c < 0) return;
+	buf = malloc(1);
+	if (!buf) { st->had_error = 1; return; }
+	buf[0] = (char)c;
+	push_frame(st, buf, 1);
 }
 
 /* Attempts to match `delim` starting at the current input position; on
@@ -583,9 +593,9 @@ static void ungetc_raw(struct m4_state *st, int c)
  * every character it had to read back (in the correct order) and
  * returns 0 having consumed nothing net.  getc_raw()/ungetc_raw() both
  * transparently cross input-frame boundaries (frames are popped as
- * they're exhausted, and pushback is frame-independent), so this
- * matches correctly even when `delim` straddles the seam between a
- * just-pushed macro expansion and the text beneath it. */
+ * they're exhausted, and pushback is itself just another frame on the
+ * same stack), so this matches correctly even when `delim` straddles the
+ * seam between a just-pushed macro expansion and the text beneath it. */
 static int peek_match(struct m4_state *st, const char *delim)
 {
 	size_t n = strlen(delim);
@@ -1729,7 +1739,6 @@ static void m4_free(struct m4_state *st)
 		st->top = f->down;
 		free(f->buf); free(f);
 	}
-	free(st->pb_data);
 	for (i = 1; i <= 9; i++) free(st->div[i].data);
 	for (i = 0; i < (int)st->nwraps; i++) free(st->wraps[i]);
 	free(st->wraps);
