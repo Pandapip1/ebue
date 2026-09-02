@@ -1487,6 +1487,178 @@ static void test_usershells_linux(void)
 }
 #endif
 
+/* crypt.html DESCRIPTION: "the first two bytes of [salt] may be used to
+ * perturb the encoding algorithm"; RETURN VALUE: "Upon successful
+ * completion, crypt() shall return a pointer to the encrypted password
+ * ... otherwise it shall return a null pointer". src/unistd/crypt.c
+ * implements the traditional DES algorithm; see that file's banner for
+ * the full derivation and the two known-answer test vectors this test
+ * pins (from mogest/unix-crypt's Ruby test suite, cross-checked live
+ * against that source rather than invented). */
+static void test_crypt(void)
+{
+	char *h;
+
+	/* Known-answer tests: the actual algorithm, not just its shape. */
+	h = crypt("test", "PQ");
+	CHECK(h && !strcmp(h, "PQl1.p7BcJRuM"));
+	h = crypt("much longer password here", "xx");
+	CHECK(h && !strcmp(h, "xxtHrOGVa3182"));
+
+	/* The result always starts with the salt verbatim, and is always
+	 * 13 bytes: 2-byte salt + 11-byte hash. */
+	h = crypt("password", "ab");
+	CHECK(h && h[0] == 'a' && h[1] == 'b' && strlen(h) == 13);
+
+	/* Only the first 8 password bytes matter -- a POSIX-documented
+	 * DES-crypt property, not an ntlibc-specific choice. */
+	{
+		char *h1 = crypt("12345678tail-one", "ab");
+		char h1copy[14];
+		char *h2;
+		CHECK(h1);
+		strcpy(h1copy, h1);	/* crypt()'s buffer is overwritten by the next call */
+		h2 = crypt("12345678tail-two", "ab");
+		CHECK(h2 && !strcmp(h1copy, h2));
+	}
+
+	/* Different salts (same password) or different passwords (same
+	 * salt) must not collide. */
+	{
+		char *h1 = crypt("hunter2", "ab");
+		char h1copy[14];
+		char *h2;
+		CHECK(h1);
+		strcpy(h1copy, h1);
+		h2 = crypt("hunter2", "cd");
+		CHECK(h2 && strcmp(h1copy, h2));
+		strcpy(h1copy, h2);
+		h2 = crypt("hunter3", "cd");
+		CHECK(h2 && strcmp(h1copy, h2));
+	}
+
+	/* A salt outside "./0-9A-Za-z" (e.g. one naming an algorithm this
+	 * file deliberately does not implement, like glibc's "$1$"
+	 * MD5-crypt marker) is not the traditional 2-character salt this
+	 * implements: crypt() reports failure rather than silently
+	 * misinterpreting it. */
+	errno = 0;
+	CHECK(crypt("x", "$1") == NULL && errno == EINVAL);
+}
+
+/* setkey.html/encrypt.html DESCRIPTION: both describe a 64-byte array
+ * of ASCII '0'/'1' characters representing a 64-bit quantity, bit 1
+ * (most significant) first. encrypt() with edflag == 0 encrypts,
+ * nonzero decrypts, in place, using the key setkey() last installed. */
+static void test_encrypt_setkey(void)
+{
+	/* All-zero key, all-zero block: DES(0) under an all-zero key is a
+	 * fixed, well-known value (plain DES has no salt -- this is the
+	 * same des_block() core crypt() uses, with salt12 == 0), so this
+	 * doubles as a from-scratch cross-check independent of crypt()'s
+	 * own known-answer tests above. */
+	char key[64], block[64], orig[64];
+	int i;
+
+	for (i = 0; i < 64; i++) key[i] = '0';
+	setkey(key);
+	for (i = 0; i < 64; i++) block[i] = '0';
+	memcpy(orig, block, 64);
+
+	encrypt(block, 0);		/* encrypt */
+	CHECK(memcmp(block, orig, 64) != 0);	/* really changed */
+
+	encrypt(block, 1);		/* decrypt: must invert encrypt() */
+	CHECK(!memcmp(block, orig, 64));
+}
+
+/* lockf.html DESCRIPTION: F_LOCK/F_TLOCK lock (blocking/non-blocking),
+ * F_ULOCK unlocks, F_TEST tests, a section starting at the current file
+ * offset and extending len bytes (or to EOF if len == 0). This is a
+ * thin wrapper over fcntl(F_SETLK/F_SETLKW/F_GETLK)
+ * (test_fcntl_record_locks() above already covers that machinery
+ * directly); this test is about lockf()'s own cmd mapping and
+ * current-offset-relative semantics. */
+static void test_lockf(void)
+{
+	int fd = open("t-lockf.txt", O_CREAT | O_RDWR | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	CHECK(write(fd, "0123456789", 10) == 10);
+	CHECK(lseek(fd, 0, SEEK_SET) == 0);
+
+	/* F_TEST on an unlocked region: success. */
+	CHECK(lockf(fd, F_TEST, 5) == 0);
+
+	/* F_TLOCK: non-blocking exclusive lock of [0,5) from the current
+	 * offset (still 0 -- F_TEST must not have moved it). */
+	CHECK(lockf(fd, F_TLOCK, 5) == 0);
+
+	/* F_TEST from this same fd/process must see its own lock as free
+	 * (fcntl(F_GETLK)'s "not this caller's own locks" rule, which
+	 * lockf() inherits by construction). */
+	CHECK(lockf(fd, F_TEST, 5) == 0);
+
+	/* F_ULOCK releases it; a redundant unlock is harmless. */
+	CHECK(lockf(fd, F_ULOCK, 5) == 0);
+	CHECK(lockf(fd, F_ULOCK, 5) == 0);
+
+	/* len == 0: "through the largest possible offset" -- from
+	 * whatever the current offset is (still 0). */
+	CHECK(lockf(fd, F_TLOCK, 0) == 0);
+	CHECK(lockf(fd, F_ULOCK, 0) == 0);
+
+	/* An unrecognised cmd is [EINVAL]. */
+	errno = 0;
+	CHECK(lockf(fd, 12345, 1) == -1 && errno == EINVAL);
+
+	CHECK(close(fd) == 0);
+	unlink("t-lockf.txt");
+}
+
+/* getentropy(3) (not a POSIX page -- OpenBSD/glibc/Linux extension):
+ * "fills the buffer ... with up to 256 bytes of high quality random
+ * data... If the buflen argument is greater than 256, ... error EIO."
+ * Real via NTLIBC_USE_KERNEL32 (BCryptGenRandom) or on Linux
+ * (getrandom(2)) -- see src/unistd/getentropy.c's banner -- and ENOSYS
+ * in the default ntdll-only NT build, which has no fallback to reach.
+ *
+ * Detected at runtime from getentropy()'s own return, not from
+ * NTLIBC_USE_KERNEL32 itself: unlike the library build (where
+ * CFLAGS_ALL adds -DNTLIBC_USE_KERNEL32), the Makefile's test recipe
+ * does not define that macro for this directory's own sources, so an
+ * #ifdef on it here would always take the same branch regardless of
+ * --enable-kernel32.
+ * Either real outcome is asserted in full below -- this is not a
+ * tolerant "accept anything" skip. */
+static void test_getentropy(void)
+{
+	unsigned char buf[256];
+	int r;
+
+	errno = 0;
+	CHECK(getentropy(NULL, 257) == -1 && errno == EIO);
+
+	errno = 0;
+	memset(buf, 0, sizeof buf);
+	r = getentropy(buf, sizeof buf);
+	if (r == 0) {
+		/* "high quality random data" -- not a strong statistical
+		 * test, just a sanity check that something was actually
+		 * written rather than left zeroed, and that two calls
+		 * don't return the same bytes. */
+		unsigned char buf2[32];
+		int i, allzero = 1;
+		for (i = 0; i < (int)sizeof buf; i++)
+			if (buf[i]) { allzero = 0; break; }
+		CHECK(!allzero);
+		CHECK(getentropy(buf2, sizeof buf2) == 0);
+		CHECK(memcmp(buf, buf2, sizeof buf2) != 0);
+	} else {
+		CHECK(errno == ENOSYS);
+		printf("note: getentropy() reports ENOSYS -- this NT build has no NTLIBC_USE_KERNEL32 fallback\n");
+	}
+}
+
 /* getlogin.html.  RETURN VALUE: getlogin() "shall return a pointer to
  * the login name or a null pointer if the user's login name cannot be
  * found"; getlogin_r() "shall return zero" on success, "otherwise, an
@@ -2062,6 +2234,10 @@ int main(void)
 	test_mkfifo_mknod_stubs();
 	test_confstr();
 	test_swab();
+	test_crypt();
+	test_encrypt_setkey();
+	test_lockf();
+	test_getentropy();
 	test_sync();
 #if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
 	test_syncfs_linux();

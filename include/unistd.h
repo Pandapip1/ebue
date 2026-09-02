@@ -174,16 +174,21 @@ size_t confstr(int, char *, size_t);
 #define F_TEST  3
 int setreuid(uid_t, uid_t);
 int setregid(gid_t, gid_t);
-int lockf(int, int, off_t);  /* undefined-ok: the separate lockf() wrapper
-	remains outside the implemented API even though fcntl record locking is
-	now backed by NT byte-range locks */
+/* path/fd required: src/unistd/lockf.c's lockf() is a thin wrapper over
+ * fcntl(F_SETLK/F_SETLKW/F_GETLK) (src/fcntl/fcntl.c), itself backed by
+ * NT byte-range locks; nothing in it needs a NULL check the underlying
+ * fcntl() call does not already provide. */
+int lockf(int, int, off_t);
 long gethostid(void);  /* undefined-ok: BSD host-id concept, no NT analogue */
 int nice(int);
 void sync(void);
 pid_t setpgrp(void);
-char *crypt(const char *, const char *);  /* undefined-ok: DES password
-	hashing is not something this library implements from scratch */
-void encrypt(char *, int);  /* undefined-ok: same DES machinery as crypt() */
+/* Both required: src/unistd/crypt.c's crypt() indexes salt[0]/salt[1]
+ * unconditionally, and encrypt() reads/writes all 64 elements of block
+ * unconditionally -- see that file's own banner for the algorithm and
+ * its known-answer-test verification. */
+char *crypt(const char *, const char *) __attribute__((nonnull(1, 2)));
+void encrypt(char *, int) __attribute__((nonnull(1)));
 /* src/dest required: src/unistd/swab.c's own swab() subscripts both
  * (s[i]/s[i+1], d[i]/d[i+1]) whenever nbytes > 0, with no NULL check of
  * either anywhere in its body. Every real call in this tree
@@ -233,9 +238,13 @@ int getdomainname(char *, size_t);  /* undefined-ok: NIS/YP domain name,
 int setdomainname(const char *, size_t);  /* undefined-ok: see getdomainname */
 char *getpass(const char *);  /* undefined-ok: needs echo-off terminal
 	input; this library has no termios-style tty control */
-int daemon(int, int);  /* undefined-ok: the fork()+setsid() BSD idiom, on
-	top of a fork() that already needs a patched Wine to run at all
-	(see CONTRIBUTING.md); not a foundation to build another function on */
+int daemon(int, int);  /* src/unistd/daemon.c: fork()+setsid(), the same
+	BSD idiom real fork() (src/process/fork.c, RtlCloneUserProcess-
+	backed, already used by vfork() -- src/unistd/vfork.c -- and by
+	this tree's own *-win.c fork tests) is a perfectly good foundation
+	for -- CONTRIBUTING.md's Wine caveat is about *running the test
+	suite for it* under an unpatched Wine, not about whether fork()
+	itself works on real NT (it does) */
 void setusershell(void);  /* undefined-ok: /etc/shells enumeration, no
 	such file or concept on NT -- the marker stays because it is still
 	true of, and only checked against, the NT build. Linux has a real,
@@ -256,11 +265,14 @@ long syscall(long, ...);  /* undefined-ok: NT has no stable, numbered
 	still true of, and only checked against, the NT build. */
 int execvpe(const char *, char *const [], char *const []);
 int issetugid(void);
-int getentropy(void *, size_t);  /* undefined-ok: no entropy source is
-	exported by ntdll; a real source (BCryptGenRandom, RtlGenRandom)
-	lives in bcrypt.dll/advapi32, which this library treats as an
-	exception to load, not a routine dependency (see
-	src/signal/signal.c's header comment on NTLIBC_USE_KERNEL32) */
+/* src/unistd/getentropy.c: real on Linux (src/unistd/linux/plat_unistd.c's
+ * __plat_getentropy(), getrandom(2)) and, under NTLIBC_USE_KERNEL32,
+ * real on NT too (src/unistd/nt/plat_unistd.c's __plat_getentropy(),
+ * BCryptGenRandom -- the same "fall back to kernel32" escape hatch
+ * src/unistd/ids.c's advapi32 use and src/signal/signal.c's
+ * SetConsoleCtrlHandler use already exercise). The default ntdll-only
+ * NT build has no fallback to reach and reports ENOSYS. */
+int getentropy(void *, size_t);
 extern int optreset;
 #endif
 

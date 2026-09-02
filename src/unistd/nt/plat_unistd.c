@@ -1086,4 +1086,73 @@ int __plat_chown_probe(int dirfd, const char *path, int flags)
 	return 0;
 }
 
+/* ======================================================================
+ * getentropy.c
+ * ====================================================================== */
+
+/* No ntdll export answers "give me random bytes" at all: ntdll's own
+ * RtlRandom/RtlRandomEx family are non-cryptographic PRNGs, documented
+ * as unsuitable for security purposes.  A real source exists --
+ * BCryptGenRandom, CNG's documented, still-supported entropy call --
+ * but it lives in bcrypt.dll, not ntdll, which is exactly the situation
+ * NTLIBC_USE_KERNEL32 exists for (configure --help: "allow the few
+ * places that have no pure-NTDLL way to do something to fall back to
+ * kernel32"; "kernel32" there is this project's name for the whole
+ * class of higher-level-DLL fallbacks, not literally kernel32.dll only
+ * -- src/unistd/ids.c's own lsa_domain_kind() above already loads
+ * advapi32.dll the identical way, under the identical flag).  Reached
+ * with LdrLoadDll()/LdrGetProcedureAddress() rather than linked against
+ * bcrypt's import library, same reasoning as every other
+ * NTLIBC_USE_KERNEL32 fallback in this tree (see src/signal/signal.c's
+ * install_ctrl_handler() banner): a binary built with this flag still
+ * only *links* against ntdll, and only pulls bcrypt.dll into its
+ * address space if it actually runs on a build where this was
+ * requested. Without the flag, there is no fallback to reach at all,
+ * so __plat_getentropy() is not compiled in and the front door
+ * (src/unistd/getentropy.c) reports ENOSYS itself. */
+#ifdef NTLIBC_USE_KERNEL32
+typedef NTSTATUS (NTAPI *bcrypt_gen_random_fn)(PVOID, unsigned char *, ULONG, ULONG);
+
+/* BCRYPT_USE_SYSTEM_PREFERRED_RNG (bcrypt.h): use the system-preferred
+ * RNG algorithm rather than an explicit BCRYPT_ALG_HANDLE, so no
+ * BCryptOpenAlgorithmProvider()/BCryptCloseAlgorithmProvider() pairing
+ * is needed around this -- a single call is the whole of this
+ * function. */
+#define BCRYPT_USE_SYSTEM_PREFERRED_RNG 0x00000002
+
+int __plat_getentropy(void *buf, size_t buflen)
+{
+	UNICODE_STRING dllname;
+	PVOID dll, proc;
+	bcrypt_gen_random_fn gen_random;
+	STRING procname;
+	NTSTATUS st;
+
+	RtlInitUnicodeString(&dllname, L"bcrypt.dll");
+	if (!NT_SUCCESS(LdrLoadDll(0, 0, &dllname, &dll))) { errno = ENOSYS; return -1; }
+
+	procname.Buffer = "BCryptGenRandom";
+	procname.Length = procname.MaximumLength = sizeof "BCryptGenRandom" - 1;
+	if (!NT_SUCCESS(LdrGetProcedureAddress(dll, &procname, 0, &proc))) {
+		LdrUnloadDll(dll);
+		errno = ENOSYS;
+		return -1;
+	}
+	gen_random = (bcrypt_gen_random_fn)proc;
+
+	st = gen_random(0, (unsigned char *)buf, (ULONG)buflen, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+	LdrUnloadDll(dll);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	return 0;
+}
+#else
+int __plat_getentropy(void *buf, size_t buflen)
+{
+	(void)buf;
+	(void)buflen;
+	errno = ENOSYS;
+	return -1;
+}
+#endif
+
 // NOLINTEND(misc-include-cleaner)

@@ -249,6 +249,20 @@ int __plat_process_exists(pid_t pid);
  * is all chown.html's shall-fail clauses ask for. */
 int __plat_chown_probe(int dirfd, const char *path, int flags);
 
+/* ---- src/unistd/getentropy.c ------------------------------------------ */
+
+/* Fill buf[0..buflen) with cryptographically strong random bytes,
+ * blocking (once, at most, at process startup on a not-yet-seeded
+ * kernel CSPRNG) rather than ever returning fewer bytes than asked for.
+ * 0 on success, -1/errno on failure. buflen is never more than 256 here
+ * -- src/unistd/getentropy.c's front door enforces getentropy(3)'s own
+ * [EIO] limit before calling this. On NT, only compiled in under
+ * NTLIBC_USE_KERNEL32 (see src/unistd/nt/plat_unistd.c and
+ * src/internal/kernel32.h's banner); with no real entropy source
+ * reachable from pure ntdll at all, getentropy() itself (this
+ * function's front door) reports ENOSYS without it. */
+int __plat_getentropy(void *buf, size_t buflen);
+
 #endif
 
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
