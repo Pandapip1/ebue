@@ -385,7 +385,7 @@ static int strbuf_append(struct m4_strbuf *b, const char *data, size_t n)
 		if (!g) return 0;
 		b->data = g; b->cap = newcap;
 	}
-	memcpy(b->data + b->len, data, n);
+	for (size_t i = 0; i < n; i++) b->data[b->len + i] = data[i];
 	b->len += n;
 	b->data[b->len] = 0;
 	return 1;
@@ -672,7 +672,8 @@ static int parse_builtin_sentinel(const char *s, int *id)
 	long v;
 
 	if (slen < mlen + 1) return 0;
-	if (memcmp(s, M4_BUILTIN_MAGIC, mlen) != 0) return 0;
+	for (size_t i = 0; i < mlen; i++)
+		if (s[i] != M4_BUILTIN_MAGIC[i]) return 0;
 	if (s[slen - 1] != '\x01') return 0;
 
 	p = s + mlen;
@@ -1202,7 +1203,7 @@ static char *bi_substr(struct m4_state *st, const char *s, const char *start_s, 
 	}
 	r = malloc(take + 1);
 	if (!r) { st->had_error = 1; return strdup(""); }
-	memcpy(r, s + start, take);
+	for (size_t i = 0; i < take; i++) r[i] = s[start + i];
 	r[take] = 0;
 	return r;
 }
@@ -1771,7 +1772,8 @@ int __util_m4_main(int argc, char **argv)
 				__util_diagf("m4: -D: %s: invalid name\n", val);
 				m4_free(&st); return 2;
 			}
-			memcpy(namebuf, val, namelen); namebuf[namelen] = 0;
+			for (size_t j = 0; j < namelen; j++) namebuf[j] = val[j];
+			namebuf[namelen] = 0;
 			define_macro(&st, namebuf, 0, 0, eq ? eq + 1 : "", 0);
 			continue;
 		}
