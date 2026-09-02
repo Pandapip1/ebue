@@ -12,11 +12,16 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ConstraintManager.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/RangedConstraintManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SValBuilder.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
 #include "llvm/ADT/APSInt.h"
+#include "llvm/ADT/SmallString.h"
+#ifdef NTLIBC_ARITHMETIC_Z3
+#include "z3++.h"
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -35,6 +40,9 @@ REGISTER_MAP_WITH_PROGRAMSTATE(ArithmeticContractOutput,
 REGISTER_SET_WITH_PROGRAMSTATE(ArithmeticContractOutputValid,
                                const StackFrameContext *)
 REGISTER_SET_WITH_PROGRAMSTATE(ArithmeticWideReducer, const MemRegion *)
+#ifdef NTLIBC_ARITHMETIC_Z3
+REGISTER_MAP_WITH_PROGRAMSTATE(ArithmeticZ3BranchFact, SymbolRef, bool)
+#endif
 
 namespace {
 
@@ -840,11 +848,320 @@ static std::string arithmeticText(const Stmt *Statement, CheckerContext &C);
 static std::string arithmeticSite(const Expr *Expression, CheckerContext &C);
 static std::string arithmeticContext(CheckerContext &C);
 
+#ifdef NTLIBC_ARITHMETIC_Z3
+// A deliberately small bridge from the range constraint manager to Z3.  It
+// translates only integer bit-vector expressions for which the Clang analyzer
+// records exact semantics.  Missing expressions merely omit a constraint, so
+// they can reduce proving power but cannot turn SAT into UNSAT.  The bridge
+// models C values, not lint policy: unsigned wrap and narrowing are represented
+// as their defined bit-vector results.  Callers separately assert the forbidden
+// semantic event (currently signed overflow), so this algebra can later serve
+// policy checks that intentionally forbid otherwise-defined wrapping.
+class ArithmeticZ3Engine {
+public:
+  z3::context Context;
+  z3::solver Solver;
+
+  ArithmeticZ3Engine() : Solver(Context) {
+    z3::params Parameters(Context);
+    Parameters.set("timeout", 10u);
+    Solver.set(Parameters);
+  }
+};
+
+class ArithmeticZ3Proof {
+  z3::context &ZCtx;
+  z3::solver &Solver;
+  ASTContext &AST;
+
+  static bool isUnsigned(QualType Type) {
+    return Type->isUnsignedIntegerOrEnumerationType();
+  }
+
+  bool sameDomain(QualType Left, QualType Right) const {
+    return !Left.isNull() && !Right.isNull() && Left->isIntegerType() &&
+           Right->isIntegerType() &&
+           AST.getIntWidth(Left) == AST.getIntWidth(Right) &&
+           isUnsigned(Left) == isUnsigned(Right);
+  }
+
+  bool constantDomain(const llvm::APSInt &Value, QualType Type) const {
+    return Value.getBitWidth() == AST.getIntWidth(Type) &&
+           Value.isUnsigned() == isUnsigned(Type);
+  }
+
+  z3::expr bitVector(const llvm::APSInt &Value, unsigned Width) {
+    llvm::APInt Bits = Value;
+    if (Bits.getBitWidth() < Width)
+      Bits = Value.isUnsigned() ? Bits.zext(Width) : Bits.sext(Width);
+    else if (Bits.getBitWidth() > Width)
+      Bits = Bits.trunc(Width);
+    llvm::SmallString<80> Text;
+    Bits.toString(Text, 10, false, false);
+    return ZCtx.bv_val(Text.c_str(), Width);
+  }
+
+  std::optional<z3::expr> translate(const SymExpr *Expression,
+                                    unsigned Depth = 0) {
+    if (!Expression || Depth > 24 || Expression->getType().isNull() ||
+        !Expression->getType()->isIntegerType())
+      return std::nullopt;
+    unsigned Width = AST.getIntWidth(Expression->getType());
+    if (const auto *Data = dyn_cast<SymbolData>(Expression)) {
+      std::string Name = "clang_sym_" + std::to_string(Data->getSymbolID());
+      return ZCtx.bv_const(Name.c_str(), Width);
+    }
+    // SymbolCast retains the effective source type internally, but Clang 18
+    // does not expose it.  The operand's type is not an equivalent substitute:
+    // chained narrowing/sign extension may be folded into one SymbolCast.
+    // Reject casts rather than risk choosing the wrong extension semantics.
+    if (isa<SymbolCast>(Expression))
+      return std::nullopt;
+    if (const auto *Unary = dyn_cast<UnarySymExpr>(Expression)) {
+      std::optional<z3::expr> Operand =
+          translate(Unary->getOperand(), Depth + 1);
+      if (!Operand || Operand->get_sort().bv_size() != Width)
+        return std::nullopt;
+      if (Unary->getOpcode() == UO_Minus)
+        return -*Operand;
+      if (Unary->getOpcode() == UO_Not)
+        return ~*Operand;
+      return std::nullopt;
+    }
+
+    auto Apply = [&](const z3::expr &Left, const z3::expr &Right,
+                     BinaryOperator::Opcode Opcode,
+                     QualType OperandType) -> std::optional<z3::expr> {
+      if (Left.get_sort().bv_size() != Right.get_sort().bv_size())
+        return std::nullopt;
+      switch (Opcode) {
+      case BO_Add:
+        return Left + Right;
+      case BO_Sub:
+        return Left - Right;
+      case BO_Mul:
+        return Left * Right;
+      case BO_And:
+        return Left & Right;
+      case BO_Or:
+        return Left | Right;
+      case BO_Xor:
+        return Left ^ Right;
+      case BO_EQ:
+      case BO_NE:
+      case BO_LT:
+      case BO_LE:
+      case BO_GT:
+      case BO_GE: {
+        bool Unsigned = isUnsigned(OperandType);
+        z3::expr Predicate =
+            Opcode == BO_EQ ? Left == Right
+            : Opcode == BO_NE ? Left != Right
+            : Opcode == BO_LT ? (Unsigned ? z3::ult(Left, Right)
+                                        : Left < Right)
+            : Opcode == BO_LE ? (Unsigned ? z3::ule(Left, Right)
+                                        : Left <= Right)
+            : Opcode == BO_GT ? (Unsigned ? z3::ugt(Left, Right)
+                                        : Left > Right)
+                              : (Unsigned ? z3::uge(Left, Right)
+                                          : Left >= Right);
+        // Clang symbolic comparisons have the C result type (normally int),
+        // not Boolean type.  Preserve that representation for RangeSet {0}
+        // and {1} constraints.
+        return z3::ite(Predicate, ZCtx.bv_val(1, Width),
+                       ZCtx.bv_val(0, Width));
+      }
+      default:
+        return std::nullopt;
+      }
+    };
+
+    if (const auto *Binary = dyn_cast<SymSymExpr>(Expression)) {
+      if (!sameDomain(Binary->getLHS()->getType(),
+                      Binary->getRHS()->getType()))
+        return std::nullopt;
+      std::optional<z3::expr> Left = translate(Binary->getLHS(), Depth + 1);
+      std::optional<z3::expr> Right = translate(Binary->getRHS(), Depth + 1);
+      if (!Left || !Right)
+        return std::nullopt;
+      if (!BinaryOperator::isComparisonOp(Binary->getOpcode()) &&
+          !sameDomain(Binary->getLHS()->getType(), Binary->getType()))
+        return std::nullopt;
+      return Apply(*Left, *Right, Binary->getOpcode(),
+                   Binary->getLHS()->getType());
+    }
+    if (const auto *Binary = dyn_cast<SymIntExpr>(Expression)) {
+      if (!constantDomain(Binary->getRHS(), Binary->getLHS()->getType()))
+        return std::nullopt;
+      std::optional<z3::expr> Left = translate(Binary->getLHS(), Depth + 1);
+      if (!Left)
+        return std::nullopt;
+      if (!BinaryOperator::isComparisonOp(Binary->getOpcode()) &&
+          !sameDomain(Binary->getLHS()->getType(), Binary->getType()))
+        return std::nullopt;
+      z3::expr Right = bitVector(Binary->getRHS(),
+                                 Left->get_sort().bv_size());
+      return Apply(*Left, Right, Binary->getOpcode(),
+                   Binary->getLHS()->getType());
+    }
+    if (const auto *Binary = dyn_cast<IntSymExpr>(Expression)) {
+      if (!constantDomain(Binary->getLHS(), Binary->getRHS()->getType()))
+        return std::nullopt;
+      std::optional<z3::expr> Right = translate(Binary->getRHS(), Depth + 1);
+      if (!Right)
+        return std::nullopt;
+      if (!BinaryOperator::isComparisonOp(Binary->getOpcode()) &&
+          !sameDomain(Binary->getRHS()->getType(), Binary->getType()))
+        return std::nullopt;
+      z3::expr Left = bitVector(Binary->getLHS(),
+                                Right->get_sort().bv_size());
+      return Apply(Left, *Right, Binary->getOpcode(),
+                   Binary->getRHS()->getType());
+    }
+    return std::nullopt;
+  }
+
+  std::optional<z3::expr> translate(NonLoc Value, QualType Type) {
+    if (std::optional<nonloc::ConcreteInt> Integer =
+            Value.getAs<nonloc::ConcreteInt>())
+      return bitVector(Integer->getValue(), AST.getIntWidth(Type));
+    return translate(Value.getAsSymbol());
+  }
+
+  bool isExactQueryValue(NonLoc Value, const Expr *Source, QualType Type) {
+    if (Value.getAs<nonloc::ConcreteInt>())
+      return true;
+    const Expr *Core = Source->IgnoreParenImpCasts();
+    if (isa<ExplicitCastExpr>(Core) ||
+        Core->getType().getCanonicalType() != Type.getCanonicalType())
+      return false;
+    SymbolRef Symbol = Value.getAsSymbol();
+    if (!Symbol || Symbol->getType().isNull() ||
+        !Symbol->getType()->isIntegerType())
+      return false;
+    return AST.getIntWidth(Symbol->getType()) == AST.getIntWidth(Type) &&
+           isUnsigned(Symbol->getType()) == isUnsigned(Type);
+  }
+
+  void addRange(const z3::expr &Expression, const RangeSet &Ranges) {
+    if (!Expression.is_bv() || Ranges.isEmpty() ||
+        Expression.get_sort().bv_size() != Ranges.getBitWidth())
+      return;
+    std::optional<z3::expr> Union;
+    for (const Range &R : Ranges) {
+      z3::expr From = bitVector(R.From(), Ranges.getBitWidth());
+      z3::expr To = bitVector(R.To(), Ranges.getBitWidth());
+      z3::expr Member = R.getConcreteValue()
+                            ? Expression == From
+                            : Ranges.isUnsigned()
+                                  ? z3::ule(From, Expression) &&
+                                        z3::ule(Expression, To)
+                                  : From <= Expression && Expression <= To;
+      Union = Union ? std::optional<z3::expr>(*Union || Member)
+                    : std::optional<z3::expr>(Member);
+    }
+    if (Union && Union->is_bool())
+      Solver.add(*Union);
+  }
+
+public:
+  ArithmeticZ3Proof(ArithmeticZ3Engine &Engine, ProgramStateRef State,
+                    ASTContext &AST)
+      : ZCtx(Engine.Context), Solver(Engine.Solver), AST(AST) {
+    Solver.reset();
+    for (const auto &Entry : getConstraintMap(State))
+      if (std::optional<z3::expr> Expression = translate(Entry.first))
+        addRange(*Expression, Entry.second);
+    for (const auto &Entry : State->get<ArithmeticZ3BranchFact>()) {
+      std::optional<z3::expr> Comparison = translate(Entry.first);
+      if (!Comparison)
+        continue;
+      if (Comparison->is_bool()) {
+        Solver.add(Entry.second ? *Comparison : !*Comparison);
+      } else if (Comparison->is_bv()) {
+        z3::expr Fact =
+            *Comparison == ZCtx.bv_val(Entry.second ? 1 : 0,
+                                       Comparison->get_sort().bv_size());
+        if (Fact.is_bool())
+          Solver.add(Fact);
+      }
+    }
+  }
+
+  bool provesNoSignedAddSubOverflow(NonLoc LeftValue, const Expr *LeftSource,
+                                    NonLoc RightValue,
+                                    const Expr *RightSource, QualType Type,
+                                    bool Subtract) {
+    // Loads through integer casts/narrow locals may be represented by the
+    // analyzer as their pre-conversion composite SymExpr.  Without the
+    // private source type of that conversion, accept a symbolic query only
+    // when the source expression itself has the exact operation domain and
+    // contains no explicit outer conversion.  Earlier defined arithmetic in
+    // a same-domain SVal DAG may remain composite; modular models of any
+    // already-undefined path only enlarge the query and are conservative.
+    if (!isExactQueryValue(LeftValue, LeftSource, Type) ||
+        !isExactQueryValue(RightValue, RightSource, Type))
+      return false;
+    std::optional<z3::expr> Left = translate(LeftValue, Type);
+    std::optional<z3::expr> Right = translate(RightValue, Type);
+    unsigned Width = AST.getIntWidth(Type);
+    if (!Left || !Right || Left->get_sort().bv_size() != Width ||
+        Right->get_sort().bv_size() != Width)
+      return false;
+    z3::expr Safe =
+        Subtract
+            ? z3::bvsub_no_overflow(*Left, *Right) &&
+                  z3::bvsub_no_underflow(*Left, *Right, true)
+            : z3::bvadd_no_overflow(*Left, *Right, true) &&
+                  z3::bvadd_no_underflow(*Left, *Right);
+    z3::expr Violation = !Safe;
+    if (!Violation.is_bool())
+      return false;
+    Solver.add(Violation);
+    // Only an UNSAT answer discharges the source obligation.  Timeout,
+    // unknown, and an explicit counterexample all preserve the finding.
+    return Solver.check() == z3::unsat;
+  }
+
+  bool provesNoSignedUnitOverflow(NonLoc Value, const Expr *Source,
+                                  QualType Type, bool Increasing) {
+    if (!isExactQueryValue(Value, Source, Type))
+      return false;
+    std::optional<z3::expr> Operand = translate(Value, Type);
+    if (!Operand)
+      return false;
+    llvm::APSInt Boundary =
+        Increasing ? SizeCastChecker::typeMax(AST, Type)
+                   : SizeCastChecker::typeMin(AST, Type);
+    z3::expr Violation =
+        *Operand == bitVector(Boundary, AST.getIntWidth(Type));
+    if (!Violation.is_bool())
+      return false;
+    Solver.add(Violation);
+    return Solver.check() == z3::unsat;
+  }
+
+};
+
+static ArithmeticZ3Engine &arithmeticZ3Engine() {
+  // Static-analyzer callbacks are serial within one translation-unit process;
+  // lint.sh provides process parallelism across translation units.  Reusing
+  // both context and solver avoids repeated Z3 initialization.  reset() gives
+  // each proof an independent assertion set while preserving the hard timeout.
+  static thread_local ArithmeticZ3Engine Engine;
+  return Engine;
+}
+#endif
+
 class SignedArithmeticChecker
     : public Checker<check::PreStmt<BinaryOperator>,
                      check::PreStmt<UnaryOperator>,
                      check::PostStmt<BinaryOperator>,
-                     check::PostStmt<DeclStmt>> {
+                     check::PostStmt<DeclStmt>
+#ifdef NTLIBC_ARITHMETIC_Z3
+                     , eval::Assume
+#endif
+                     > {
   mutable std::unique_ptr<BugType> BT;
 
   static std::optional<NonLoc> integerValue(const Expr *Expression,
@@ -891,6 +1208,13 @@ class SignedArithmeticChecker
         integerValue(Operation->getRHS(), Input, C);
     if (!Left || !Right)
       return true;
+#ifdef NTLIBC_ARITHMETIC_Z3
+    ArithmeticZ3Proof Z3(arithmeticZ3Engine(), Input, C.getASTContext());
+    if (Z3.provesNoSignedAddSubOverflow(
+            *Left, Operation->getLHS(), *Right, Operation->getRHS(), Type,
+            Subtract))
+      return false;
+#endif
     SValBuilder &Builder = C.getSValBuilder();
     NonLoc Zero = Builder.makeIntVal(0, Type).castAs<NonLoc>();
     NonLoc Maximum = Builder.makeIntVal(
@@ -937,6 +1261,23 @@ class SignedArithmeticChecker
     }
     return false;
   }
+
+#ifdef NTLIBC_ARITHMETIC_Z3
+  static bool unitOverflowFeasible(const UnaryOperator *Operation,
+                                   CheckerContext &C) {
+    ProgramStateRef State = C.getState();
+    std::optional<NonLoc> Value =
+        integerValue(Operation->getSubExpr(), State, C);
+    if (!Value)
+      return true;
+    UnaryOperatorKind Opcode = Operation->getOpcode();
+    bool Increasing = Opcode == UO_PreInc || Opcode == UO_PostInc;
+    ArithmeticZ3Proof Z3(arithmeticZ3Engine(), State, C.getASTContext());
+    bool Proved = Z3.provesNoSignedUnitOverflow(
+        *Value, Operation->getSubExpr(), Operation->getType(), Increasing);
+    return !Proved;
+  }
+#endif
 
   static bool multiplicationOverflowFeasible(const BinaryOperator *Operation,
                                               CheckerContext &C) {
@@ -1070,6 +1411,31 @@ class SignedArithmeticChecker
   }
 
 public:
+#ifdef NTLIBC_ARITHMETIC_Z3
+  ProgramStateRef evalAssume(ProgramStateRef State, SVal Condition,
+                             bool Assumption) const {
+    SymbolRef Symbol = Condition.getAsSymbol();
+    const auto *Comparison = dyn_cast_or_null<SymSymExpr>(Symbol);
+    if (!Comparison)
+      return State;
+    BinaryOperator::Opcode Opcode = Comparison->getOpcode();
+    bool StrictFact =
+        (Assumption && (Opcode == BO_LT || Opcode == BO_GT)) ||
+        (!Assumption && (Opcode == BO_LE || Opcode == BO_GE));
+    if (!StrictFact)
+      return State;
+    SymbolRef Left = Comparison->getLHS();
+    SymbolRef Right = Comparison->getRHS();
+    QualType LeftType = Left->getType();
+    QualType RightType = Right->getType();
+    if (LeftType.isNull() || RightType.isNull() ||
+        !LeftType->isSignedIntegerType() ||
+        !RightType->isSignedIntegerType() ||
+        LeftType.getCanonicalType() != RightType.getCanonicalType())
+      return State;
+    return State->set<ArithmeticZ3BranchFact>(Symbol, Assumption);
+  }
+#endif
   void checkPostStmt(const DeclStmt *Statement, CheckerContext &C) const {
     for (const Decl *Declaration : Statement->decls()) {
       const auto *Variable = dyn_cast<VarDecl>(Declaration);
@@ -1186,7 +1552,11 @@ public:
                   : (Opcode == UO_PreInc || Opcode == UO_PostInc)
                       ? Operand.Max >= Bounds.Max
                       : Operand.Min <= Bounds.Min;
-    if (Unsafe)
+    if (Unsafe
+#ifdef NTLIBC_ARITHMETIC_Z3
+        && (Opcode == UO_Minus || unitOverflowFeasible(Operation, C))
+#endif
+        )
       report(Operation, C);
   }
 };

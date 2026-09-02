@@ -53,6 +53,22 @@ int unchecked_subtraction(int left, int right)
 	return left - right; /* arithmetic-ub-expect */
 }
 
+long long ordered_operands_can_still_overflow(long long left, long long right)
+{
+	if (left <= right)
+		return 0;
+	return left - right; /* arithmetic-ub-expect */
+}
+
+int modular_difference_range_stays_unproved(int left, int right)
+{
+	int difference;
+	if (left <= right)
+		return 0;
+	difference = left - right; /* arithmetic-ub-expect */
+	return difference - 1; /* arithmetic-ub-expect */
+}
+
 int unchecked_multiplication(int left, int right)
 {
 	return left * right; /* arithmetic-ub-expect */
@@ -94,6 +110,76 @@ int unchecked_negation(int value)
 int unchecked_increment(int value)
 {
 	return ++value; /* arithmetic-ub-expect */
+}
+
+int nonstrict_order_does_not_bound_increment(int value, int limit)
+{
+	if (value > limit)
+		return 0;
+	return value++; /* arithmetic-ub-expect */
+}
+
+int nonstrict_order_does_not_bound_decrement(int value, int limit)
+{
+	if (value < limit)
+		return 0;
+	return value--; /* arithmetic-ub-expect */
+}
+
+int true_nonstrict_order_does_not_bound_increment(int value, int limit)
+{
+	if (value <= limit)
+		return value++; /* arithmetic-ub-expect */
+	return 0;
+}
+
+int true_nonstrict_order_does_not_bound_decrement(int value, int limit)
+{
+	if (value >= limit)
+		return value--; /* arithmetic-ub-expect */
+	return 0;
+}
+
+int invalidated_ordered_index;
+extern void mutate_ordered_index(void);
+
+int invalidated_order_does_not_bound_increment(int limit)
+{
+	if (invalidated_ordered_index >= limit)
+		return 0;
+	mutate_ordered_index();
+	return invalidated_ordered_index++; /* arithmetic-ub-expect */
+}
+
+volatile int volatile_ordered_index;
+
+int volatile_order_does_not_bound_increment(int limit)
+{
+	if (volatile_ordered_index >= limit)
+		return 0;
+	return volatile_ordered_index++; /* arithmetic-ub-expect */
+}
+
+int wider_order_does_not_bound_increment(int value, long limit)
+{
+	if ((long)value >= limit)
+		return 0;
+	return value++; /* arithmetic-ub-expect */
+}
+
+int unsigned_order_does_not_bound_increment(int value, unsigned limit)
+{
+	if ((unsigned)value >= limit)
+		return 0;
+	return value++; /* arithmetic-ub-expect */
+}
+
+long second_for_increment_remains_unbounded(long id)
+{
+	int attempt;
+	for (attempt = 0; attempt < 100000; attempt++, id++) /* arithmetic-ub-expect */
+		;
+	return id;
 }
 
 int unchecked_signed_left_shift(int value, unsigned count)
