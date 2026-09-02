@@ -38,27 +38,34 @@
  * classify it, fcntl(F_GETFL) for its access mode) rather than being
  * told, since nothing on this backend ever tells it.
  *
- * One case this does NOT cover, honestly: posix_spawn_file_actions_
- * adddup2() targeting a descriptor above 2 (src/process/posix_spawn.c
- * do_action()'s __SPAWN_DUP2 case) still uses __plat_dup() -- an
- * arbitrary-numbered duplicate -- rather than __plat_dup_to(), because
- * that call site's whole design (replay the actions on the PARENT's
- * own table, then undo them -- see posix_spawn.c's own banner) only
- * works because the duplicate's real number does NOT have to match
- * the target logical slot: forcing it to would mean dup3(2) closing
- * the PARENT's real descriptor at that exact number as an unavoidable
- * side effect, which is exactly the mutation posix_spawn() promises
- * not to leave behind, and which nothing could then undo (the parent's
- * original object at that number would simply be gone). Fixing that
- * case for real needs the target-fd wiring to happen in the CHILD,
- * after clone(2) but before execve(2) -- where __plat_process_spawn()
- * already does exactly this for fd 0/1/2's own mv[]/dup3 staging loop
- * -- generalized to whatever extra targets file actions name, which
- * is a larger change than this fix makes. A descriptor reaching a
- * child purely by not being FD_CLOEXEC (this file's own subject) is
- * unaffected by that gap and fully fixed by install_inherited() below;
- * only an EXPLICIT posix_spawn_file_actions_adddup2() to a target
- * above 2 still does not reach the child as the requested number.
+ * One case this file alone does NOT cover, by design:
+ * posix_spawn_file_actions_adddup2() targeting a descriptor above 2
+ * (src/process/posix_spawn.c do_action()'s __SPAWN_DUP2 case) still
+ * uses __plat_dup() -- an arbitrary-numbered duplicate -- rather than
+ * __plat_dup_to(), because that call site's whole design (replay the
+ * actions on the PARENT's own table, then undo them -- see
+ * posix_spawn.c's own banner) only works because the duplicate's real
+ * number does NOT have to match the target logical slot: forcing it to
+ * would mean dup3(2) closing the PARENT's real descriptor at that exact
+ * number as an unavoidable side effect, which is exactly the mutation
+ * posix_spawn() promises not to leave behind, and which nothing could
+ * then undo (the parent's original object at that number would simply
+ * be gone). A descriptor reaching a child purely by not being
+ * FD_CLOEXEC (this file's own subject) is unaffected by that and fully
+ * handled by install_inherited() below.
+ *
+ * The target-fd wiring itself now happens where it has to: in the
+ * CHILD, after clone(2) but before execve(2), the same window
+ * __plat_process_spawn()'s own mv[]/dup3 staging loop (src/process/
+ * linux/plat_process.c) already used for fd 0/1/2 -- generalized there
+ * to whatever extra targets posix_spawn.c's build_dup2_targets() names,
+ * carried over via __spawn_pending_dup2s() (struct __spawn_dup2_target,
+ * src/internal/libc.h). This file plays no part in that: it only ever
+ * runs after execve() has already replaced the child's image, by which
+ * point every target above 2 the file actions named is already sitting
+ * at the exact real number this file's own install_inherited() probe
+ * loop expects it at, indistinguishable from a descriptor the child was
+ * simply born with.
  *
  * Classification (below, shared between __fd_init() and this file's
  * own __handle_type()) reuses src/fcntl/linux/plat_fcntl.c's own

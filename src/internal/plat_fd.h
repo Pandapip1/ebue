@@ -110,11 +110,17 @@ int __plat_dup(__plat_handle_t h, int inheritable, __plat_handle_t *out)
  * plain __plat_dup() above already has to do by hand. A caller naming
  * a descriptor as its own dup2 target (POSIX_SPAWN_FILE_ACTIONS-style
  * adddup2(fd, fd), src/process/posix_spawn.c's do_action() comment)
- * would pass the same handle as both h and old -- not currently
- * reachable through this function (that call site still uses
- * __plat_dup() directly; see this function's own known-gap note in
- * src/internal/linux/plat_fd_init.c's banner) but handled correctly
- * regardless: never closed out from under the duplicate just made. */
+ * would pass the same handle as both h and old -- not reachable through
+ * this function even now (that call site still uses __plat_dup()
+ * directly, for a target above 2 as much as one at 2 or below: see
+ * do_action()'s own comment for why the duplicate is always made
+ * against the CURRENT source at that exact point in the action list
+ * regardless of target, and src/process/linux/plat_process.c's
+ * __plat_process_spawn() for how a target above 2 still reaches the
+ * child at the requested number without this function's help, via
+ * struct __spawn_dup2_target, libc.h) but handled correctly regardless
+ * if it ever were: never closed out from under the duplicate just
+ * made. */
 int __plat_dup_to(__plat_handle_t h, int newfd, __plat_handle_t old, int inheritable, __plat_handle_t *out)
     __attribute__((nonnull(5)));
 

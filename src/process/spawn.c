@@ -101,6 +101,32 @@ int __spawn_pending_priority(int *out)
 	return 1;
 }
 
+/* posix_spawn_file_actions_adddup2() targets above 2, for Linux's own
+ * __plat_process_spawn() (src/process/linux/plat_process.c) alone -- see
+ * struct __spawn_dup2_target's own comment (libc.h) for why this is the
+ * mirror image of pending_priority above: NT never reads it back, Linux
+ * is the only backend that needs a channel here at all. */
+static const struct __spawn_dup2_target *pending_dup2s;
+static int pending_dup2s_n;
+
+void __spawn_set_pending_dup2s(const struct __spawn_dup2_target *list, int n)
+{
+	pending_dup2s = list;
+	pending_dup2s_n = n;
+}
+
+void __spawn_clear_pending_dup2s(void)
+{
+	pending_dup2s = 0;
+	pending_dup2s_n = 0;
+}
+
+const struct __spawn_dup2_target *__spawn_pending_dup2s(int *out_n)
+{
+	*out_n = pending_dup2s_n;
+	return pending_dup2s;
+}
+
 /* Everything this file used to do inline -- building the UTF-16 command
  * line and environment block (see this file's own banner, above, for the
  * quoting rules and the measurements behind the standard-handle
