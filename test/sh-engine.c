@@ -777,6 +777,66 @@ static void test_funcdef_heredoc_before_list_operator(void)
 	check_roundtrip("f()()<<\"\"&x&\ny\n");
 }
 
+/* A here-document inside a function-definition body, where the function
+ * definition is followed by nothing at all -- <newline> or EOF, not one
+ * of '|'/'&'/'&&'/'||' -- the exact complement of
+ * test_funcdef_heredoc_before_list_operator() above.  Found by
+ * fuzz/fuzz_shparse.c (issues #4 and #7: both were this one bug, an
+ * ordinary libFuzzer run and an AFL++ run having found the same defect
+ * within a day of each other).
+ *
+ * <newline>/EOF is exactly the case parse_funcdef() drains the
+ * here-document itself, as a side effect of peeking the token that ends
+ * the body: next_raw_token() drains on producing T_NEWLINE or T_EOF (see
+ * its own comment), and that peek is what parse_funcdef() reads `end`
+ * from.  So by the time parse_funcdef() used to ask "is anything still
+ * pending?", the queue this bug's sibling above depends on had already
+ * answered "no" -- even though the body plainly had a here-document.
+ * cmd->func_body was then freed, along with the only place the drained
+ * body and terminator lived, and print_command()'s FUNCDEF case had
+ * nothing left to reprint but the bare "<<DELIM" operator text inside
+ * func_text.
+ *
+ * Reparsing that output registers a *fresh* pending here-document for
+ * the same "<<DELIM" text, and drains it against whatever the ENCLOSING
+ * list put after the function definition -- silently swallowing a
+ * following command into a heredoc body that, per the first print, does
+ * not exist, or erroring outright if nothing ever matches the
+ * delimiter.  Either way the fixed point print.c's banner promises
+ * fails, and an entire trailing command can go missing rather than a
+ * mismatched byte.
+ *
+ * The fix (see parse.c's struct lexer and parse_funcdef()) is to ask a
+ * question draining cannot retroactively unanswer: hd_seen counts every
+ * "<<"/"<<-" registered during the body's parse and is never
+ * decremented, so it still says "yes" here where pending_head alone no
+ * longer can. */
+static void test_funcdef_heredoc_at_end_of_line_roundtrip(void)
+{
+	/* The same shape as the UAF sibling's `f()(<<E)&`, but with no
+	 * operator at all after the body -- just the terminating <newline>
+	 * that both defects turn on. */
+	check_roundtrip("f()(:)<<X\nbody\nX\n");
+
+	/* The same shape with a command after it on the enclosing list: the
+	 * defect this test exists for is specifically that this trailing
+	 * command used to vanish (or the reparse errored outright), not
+	 * merely that a byte differed. */
+	check_roundtrip("f() (:)<<X\nbody\nX\necho hi\n");
+
+	/* '{ }' body, and a `<<-` (dash-strip) heredoc instead of `<<`,
+	 * exercising the other compound-command form and the other
+	 * heredoc-dash bit hd_seen has to catch regardless. */
+	check_roundtrip("f() { :; }<<-X\n\tbody\n\tX\necho hi\n");
+
+	/* An empty-body heredoc -- the terminator line matches immediately,
+	 * so there is nothing to swallow into *except* the next command,
+	 * which is exactly what the 14-byte fuzzer-minimized case reduces
+	 * to (funcdef, empty subshell, a plain redirect, an empty-bodied
+	 * heredoc, then a leftover word forming a second list item). */
+	check_roundtrip("f()()<f<<E\nE\nnext\n");
+}
+
 #if NTLIBC_TEST(PASS, sh_engine_heredoc_quoted_delim_roundtrip) /* The printer writes a here-document's quote-removed terminator.
 	 * the delimiter word was WRITTEN, while the parser matches
 	 * terminator lines against the delimiter with quote removal
@@ -4174,6 +4234,7 @@ int main(int argc, char **argv)
 
 	test_roundtrip();
 	test_funcdef_heredoc_before_list_operator();
+	test_funcdef_heredoc_at_end_of_line_roundtrip();
 
 	test_exec_simple_command_status(argv[0]);
 	test_exec_command_not_found();
