@@ -178,6 +178,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <time.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -791,7 +792,7 @@ static void test_wordexp_glob_and_quotes(void)
  * immediately undone by '..' -- revisits the SAME directory at the
  * SAME depth on every repeat, and src/glob/glob.c's do_glob() re-opens
  * and re-scans that directory, and re-recurses once per matching
- * entry, EVERY time.  The number of recursive do_glob() calls is
+ * entry, EVERY time.  The number of recursive do_glob() calls was
  * therefore exponential in the number of repeats even though the
  * directory tree involved is two subdirectories and one level deep --
  * the fuzzer's simulated volume has exactly that shape (fuzz/ntstubs.c's
@@ -800,22 +801,24 @@ static void test_wordexp_glob_and_quotes(void)
  * to the pattern built below, over a fixture with the fuzz harness's
  * own two-way branching factor.
  *
- * THE FIX is GLOB_STEP_LIMIT in src/glob/glob.c: do_glob() now counts
- * its own calls across one glob() invocation (a size_t threaded through
- * the recursion, incremented once per call) and fails with
- * GLOB_NOSPACE, the same as an allocation failure, once that count
- * passes a fixed ceiling, instead of continuing to recurse without
- * limit. wordexp() surfaces that as WRDE_NOSPACE -- emit_field()'s own
- * comment on its glob() call already documents that every non-NOMATCH
- * glob() failure becomes WRDE_NOSPACE, since <wordexp.h> has no code
- * that means anything more specific.
+ * THE FIX is now collapse_dotdot() in src/glob/glob.c (see its own long
+ * banner comment): glob() rewrites "component/../" pairs out of the
+ * PATTERN TEXT itself, once, before do_glob() ever starts recursing, so
+ * a repeated "wildcard immediately undone by '..'" pattern collapses to
+ * nothing at all -- do_glob() never revisits the fixture directory even
+ * once, let alone 2**24 times. GLOB_STEP_LIMIT (do_glob()'s own call
+ * counter, still in src/glob/glob.c) is what USED to be the fix here --
+ * it stopped the hang by giving up with GLOB_NOSPACE/WRDE_NOSPACE once
+ * its ceiling was crossed -- and it remains in place as belt-and-
+ * suspenders for other exponential shapes, but it is no longer what
+ * this specific pattern hits: collapsing removes the fan-out before
+ * do_glob() takes a single step, so the call count here never gets
+ * anywhere near the ceiling any more.
  *
- * 24 repeats of the wildcard/dot-dot pair against two subdirectories is
- * 2**24 in the worst case, comfortably past GLOB_STEP_LIMIT's 2**14
- * however conservatively the actual per-repeat branching is counted --
- * not balanced on the boundary -- and the guard bounds the cost of
- * reaching that failure, so this case finishes in a small fraction of
- * a second rather than the original 26. */
+ * What the pattern now textually reduces to is "" (every pair cancels;
+ * there is no literal component left over), which is exactly what a
+ * bare wordexp(".") also reduces to through do_glob()'s own pattern-
+ * exhausted branch: one word, ".". */
 static void test_wordexp_glob_alternation_bound(void)
 {
 	wordexp_t we;
@@ -830,19 +833,34 @@ static void test_wordexp_glob_alternation_bound(void)
 	CHECK(mkdir("wxab-1", 0755) == 0 || errno == EEXIST);
 	CHECK(mkdir("wxab-2", 0755) == 0 || errno == EEXIST);
 
-	/* POSITIVE CONTROL: a single repeat is nowhere near the ceiling, so
-	 * the guard must not stop an ordinary, well-formed expansion from
-	 * completing -- one match per subdirectory, each just undoing its
-	 * own single component of descent. "wxab-?" rather than a bare "*"
-	 * so the match count is exactly the two fixture directories however
-	 * many other files happen to be in this test binary's shared working
-	 * directory when this test runs. */
+	/* POSITIVE CONTROL, same shape as before, but the expected answer
+	 * changed along with the fix: a single "wildcard/.." repeat is a
+	 * WILDCARD canceled against a following "..", which collapse_dotdot()
+	 * now collapses unconditionally and with no filesystem check at all
+	 * (see its own banner comment's WILDCARD-branch reasoning) -- so this
+	 * no longer enumerates one match per fixture subdirectory the way an
+	 * uncollapsed glob("wxab-?/..", 0) still does (confirmed directly
+	 * against bash's own glob: "wxab-1/.. wxab-2/.."). It now resolves,
+	 * with zero readdir() calls against wxab-1/wxab-2 at all, to the
+	 * single word "." -- exactly what the deep pattern below also
+	 * reduces to. wxab-1/wxab-2 are kept as fixture directories anyway,
+	 * as a regression net: if collapse_dotdot() ever mis-classified
+	 * "wxab-?" as a LITERAL instead of a WILDCARD component, the literal
+	 * branch's existence check would fail (no directory is literally
+	 * named "wxab-?"), the pair would be left uncollapsed, and this
+	 * assertion would catch it by no longer matching "." at all. */
 	CHECK(wordexp("wxab-?/..", &we, 0) == 0);
-	CHECK(we.we_wordc == 2);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], ".") == 0);
 	wordfree(&we);
 
-	/* THE FINDING, bounded rather than left to hang. */
-	CHECK(wordexp(pat, &we, 0) == WRDE_NOSPACE);
+	/* THE FINDING, now collapsed rather than merely bounded: the same
+	 * pattern, 24 repeats deep, reduces the identical way, one cancel
+	 * per repeat, and reaches the identical single-word answer -- not
+	 * WRDE_NOSPACE any more, because GLOB_STEP_LIMIT's ceiling is no
+	 * longer what stands between this pattern and finishing. */
+	CHECK(wordexp(pat, &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], ".") == 0);
+	wordfree(&we);
 
 	CHECK(rmdir("wxab-1") == 0);
 	CHECK(rmdir("wxab-2") == 0);
@@ -1602,6 +1620,116 @@ static void test_globfree_idempotent(void)
 	globfree(&g);		/* must be a no-op, not a double free */
 	CHECK(g.gl_pathv == NULL);
 	CHECK(g.gl_pathc == 0);
+}
+
+/* src/glob/glob.c's collapse_dotdot() -- the pattern-level ".."-collapsing
+ * rewrite pass (see that file's own long banner comment for the full
+ * rewrite rules and the reasoning behind them). Four shapes, each
+ * exercising a different rule:
+ *
+ * 1. A deep repeat of "wildcard/../" must now resolve in well under a
+ *    second (it used to hit GLOB_STEP_LIMIT and fail with GLOB_NOSPACE --
+ *    see test_wordexp_glob_alternation_bound() below, which now expects
+ *    the collapsed-and-succeeded outcome instead) to exactly the same
+ *    single result plain glob("dg-target", ...) gives.
+ *
+ * 2. "dg-nonexistent/../dg-target" must NOT match even though
+ *    "dg-target" itself exists: XBD 4.13 Pathname Resolution requires
+ *    ".."'s predecessor to be a real, resolvable directory ("[e]ach
+ *    filename in the pathname is located in the directory specified by
+ *    its predecessor ... Pathname resolution shall fail if this cannot
+ *    be accomplished"), and "dg-nonexistent" is not one. A purely
+ *    textual rewrite that canceled this pair with no filesystem check at
+ *    all would turn this into an incorrect match -- confirmed against
+ *    glibc's own glob(), which also reports GLOB_NOMATCH here. This is
+ *    exactly the shape collapse_dotdot()'s LITERAL-component branch
+ *    exists to get right: the pair is left completely uncollapsed
+ *    (confirmed indirectly here -- do_glob() then rediscovers the same
+ *    GLOB_NOMATCH the unmodified pre-collapsing code already gave this
+ *    pattern).
+ *
+ * 3. "dg-nonexistent2/../dg-target" leading with a real ".." at the very
+ *    start of the pattern (nothing precedes it to cancel against) must
+ *    survive untouched -- glob("../dg-parent-target", ...) must still
+ *    name the real file one level up, not be silently dropped.
+ *
+ * 4. "dg-a/../../dg-parent-target" needs TWO cancellations to reach its
+ *    minimal form (the first ".." cancels "dg-a", confirmed a real
+ *    directory by one stat(); the second, now-leading ".." has nothing
+ *    left to cancel against and survives) -- proving the single
+ *    left-to-right stack pass in collapse_dotdot() reaches the same
+ *    fixed point a repeated rewrite-until-no-change pass would, in one
+ *    traversal. */
+static void test_glob_dotdot_collapse(void)
+{
+	glob_t g;
+	struct timespec t0, t1;
+	double elapsed;
+	static const char deep[] =
+		"dgw-?/../" "dgw-?/../" "dgw-?/../" "dgw-?/../"
+		"dgw-?/../" "dgw-?/../" "dgw-?/../" "dgw-?/../"
+		"dgw-?/../" "dgw-?/../" "dgw-?/../" "dgw-?/../"
+		"dgw-?/../" "dgw-?/../" "dgw-?/../" "dgw-?/../"
+		"dgw-?/../" "dgw-?/../" "dgw-?/../" "dgw-?/../"
+		"dgw-?/../" "dgw-?/../" "dgw-?/../" "dgw-?/../"
+		"dg-target";
+
+	/* --- 1: deep wildcard/".." repeat, must resolve fast to plain
+	 * "dg-target" --- */
+	CHECK(mkdir("dgw-1", 0755) == 0);
+	CHECK(mkdir("dgw-2", 0755) == 0);
+	close(creat("dg-target", 0644));
+
+	CHECK(glob("dg-target", 0, NULL, &g) == 0);
+	CHECK(g.gl_pathc == 1 && strcmp(g.gl_pathv[0], "dg-target") == 0);
+	globfree(&g);
+
+	CHECK(clock_gettime(CLOCK_MONOTONIC, &t0) == 0);
+	CHECK(glob(deep, 0, NULL, &g) == 0);
+	CHECK(clock_gettime(CLOCK_MONOTONIC, &t1) == 0);
+	elapsed = (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+	/* Was GLOB_NOSPACE via GLOB_STEP_LIMIT before pattern-level
+	 * collapsing existed, and even reaching that ceiling burned a
+	 * measurable fraction of a second on doomed enumeration. Collapsed,
+	 * do_glob() is handed the literal pattern "dg-target" -- one
+	 * stat() -- so well under a second is the bar, not "eventually
+	 * finishes". */
+	CHECK(elapsed < 1.0);
+	CHECK(g.gl_pathc == 1 && strcmp(g.gl_pathv[0], "dg-target") == 0);
+	globfree(&g);
+
+	CHECK(rmdir("dgw-1") == 0);
+	CHECK(rmdir("dgw-2") == 0);
+	CHECK(unlink("dg-target") == 0);
+
+	/* --- 2: a canceled LITERAL component must still be confirmed real --- */
+	close(creat("dg-target2", 0644));
+	CHECK(glob("dg-nonexistent/../dg-target2", 0, NULL, &g) == GLOB_NOMATCH);
+	CHECK(unlink("dg-target2") == 0);
+
+	/* --- 3: a leading ".." (nothing precedes it) is never collapsed --- */
+	close(creat("dg-parent-target", 0644));
+	CHECK(mkdir("dg-inner", 0755) == 0);
+	CHECK(chdir("dg-inner") == 0);
+	CHECK(glob("../dg-parent-target", 0, NULL, &g) == 0);
+	CHECK(g.gl_pathc == 1 && strcmp(g.gl_pathv[0], "../dg-parent-target") == 0);
+	globfree(&g);
+	CHECK(chdir("..") == 0);
+	CHECK(rmdir("dg-inner") == 0);
+	CHECK(unlink("dg-parent-target") == 0);
+
+	/* --- 4: iterative collapsing, "dg-a/../../X" -> "../X" --- */
+	CHECK(mkdir("dg-base", 0755) == 0);
+	CHECK(mkdir("dg-base/dg-a", 0755) == 0);
+	close(creat("dg-parent-target2", 0644));
+	CHECK(chdir("dg-base") == 0);
+	CHECK(glob("dg-a/../../dg-parent-target2", 0, NULL, &g) == 0);
+	CHECK(g.gl_pathc == 1 && strcmp(g.gl_pathv[0], "../dg-parent-target2") == 0);
+	globfree(&g);
+	CHECK(chdir("..") == 0);
+	CHECK(rmdir("dg-base/dg-a") == 0);
+	CHECK(rmdir("dg-base") == 0);
+	CHECK(unlink("dg-parent-target2") == 0);
 }
 
 static void test_glob_append_does_not_resort(void)
@@ -4072,6 +4200,7 @@ int main(int argc, char **argv)
 	test_glob_leading_period();
 	test_glob_tilde_is_ordinary();
 	test_globfree_idempotent();
+	test_glob_dotdot_collapse();
 
 	char cwd_before_ftw[512];
 
