@@ -213,9 +213,22 @@ void *__plat_alloc(size_t n, int zero) // NOLINT(bugprone-easily-swappable-param
 	if (n == 0) n = 1;
 
 	if (n > ntlibc_malloc_class_size(NTLIBC_MALLOC_NUM_CLASSES - 1)) {
-		/* Large path: one mapping, no free list involved. */
-		size_t total = ntlibc_malloc_roundup_page(NTLIBC_MALLOC_HDR_SIZE + n);
-		unsigned char *base = __plat_pages_alloc(total);
+		/* Large path: one mapping, no free list involved. n arrives here
+		 * as a caller-controlled size (calloc()'s own m*n overflow check
+		 * in src/malloc/malloc.c guards against the *multiply* wrapping,
+		 * but n itself can still legitimately be e.g. (size_t)-1 with no
+		 * multiply involved at all -- calloc((size_t)-1, 1)). Reject any
+		 * n that would make HDR_SIZE+n, or roundup_page's own
+		 * +(PAGE_SIZE-1), wrap past SIZE_MAX: unchecked, total silently
+		 * wraps to a small in-range value, __plat_pages_alloc() happily
+		 * hands back a tiny real mapping, and h->size/the memset below
+		 * keep the original huge n -- an out-of-bounds write on the very
+		 * next line. */
+		size_t total;
+		unsigned char *base;
+		if (n > (size_t)-1 - NTLIBC_MALLOC_HDR_SIZE - (NTLIBC_MALLOC_PAGE_SIZE - 1)) return 0;
+		total = ntlibc_malloc_roundup_page(NTLIBC_MALLOC_HDR_SIZE + n);
+		base = __plat_pages_alloc(total);
 		if (!base) return 0;
 		h = (struct ntlibc_malloc_chunk_hdr *)base;
 		h->size = n;
