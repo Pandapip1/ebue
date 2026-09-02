@@ -808,10 +808,12 @@ static int cmd_s(struct ed *ed, long from, long to, const char *args)
 	if (!extract_delimited(p, delim, &repl, &p)) { free(pat); return ed_fail(ed, "out of memory"); }
 
 	for (;;) {
+		const char *save = p;
+		skip_blanks(&p);
 		if (*p >= '0' && *p <= '9') { char *end; nth = strtol(p, &end, 10); p = end; }
 		else if (*p == 'g') { global = 1; p++; }
 		else if (*p == 'p' || *p == 'l' || *p == 'n') { print_fmt = *p; p++; }
-		else break;
+		else { p = save; break; }
 	}
 	if (nth < 1) nth = 1;
 	if (require_eol(ed, p) < 0) { free(pat); free(repl); return ED_ERR; }
