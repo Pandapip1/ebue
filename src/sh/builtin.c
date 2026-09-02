@@ -1,18 +1,15 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Stage 6a: a real built-in *dispatcher*, and the built-in utilities
- * the compound-command grammar (stages 6b onward) needs before it is
- * usable at all.
+ * A real built-in *dispatcher*, and the built-in utilities the
+ * compound-command grammar needs to be usable at all.
  *
  * ---- Why this file exists ---------------------------------------------
  *
- * Until this stage src/sh/execute.c had exactly one built-in, `cd`, matched
- * with a raw strcmp() on the *unexpanded* first word, and its own
- * comment said so explicitly: "this builtin exists to make stage 4's
- * subshell/brace tests exercisable, not to be a general-purpose builtin
- * dispatcher".  Two things are wrong with growing more built-ins that
- * way, and both are fixed here rather than replicated:
+ * A raw strcmp() on a command's *unexpanded* first word is the naive
+ * way to add a built-in, and src/sh/execute.c's dispatcher deliberately
+ * does not work that way. Two things are wrong with that approach, and
+ * both are fixed here rather than replicated:
  *
  *  - **It matched the wrong string.**  XCU 2.9.1 ("Command Search and
  *    Execution") searches for the command name *after* the word
@@ -37,11 +34,11 @@
  * `test`/`[`, `true` and `false` also exist as real standalone
  * executables now (obj/bin/test.exe etc., src/util/test.c and friends,
  * declared in src/internal/util.h) -- but stay registered here too,
- * deliberately, not as a historical leftover.  sh/main.c's comment
+ * deliberately, not as a historical leftover.  script.c's comment
  * about a script getting an honest exit 127 for a missing utility
  * still describes what __find_program() does when PATH lookup fails;
- * what changed is that these three no longer depend on lookup and a
- * working __spawn() succeeding at all.  That is exactly the property
+ * these three simply do not depend on that lookup, or on a working
+ * __spawn() succeeding, at all.  That is exactly the property
  * that matters at an early bootstrap point (see the memory this
  * project's POSIX-utilities plan cites): a builtin runs in this
  * process, unconditionally, before anything has proven `fork`/`exec`
@@ -731,11 +728,10 @@ static int bi_exit(struct sh_builtin_ctx *ctx)
 /* XCU cd(1p), and XCU 2.12: "Working directory as set by cd" is part of
  * the shell execution environment, so this can only ever run in the
  * shell's own process -- there is no cd.exe on any platform, and there
- * could not usefully be one.  Moved here from src/sh/execute.c, which
- * implemented it inline against the *unexpanded* first word and said in
- * its own comment that it was "not to be a general-purpose builtin
- * dispatcher"; this file is that dispatcher, and cd is now dispatched
- * on the expanded command name like every other built-in (XCU 2.9.1).
+ * could not usefully be one.  Implemented here rather than in
+ * src/sh/execute.c so it is dispatched on the expanded command name,
+ * like every other built-in (XCU 2.9.1), rather than matched against
+ * the *unexpanded* first word.
  *
  * Still deliberately not a complete cd(1p): no CDPATH search, no -L/-P
  * logical/physical distinction, no "cd -" to OLDPWD.  PWD and OLDPWD
@@ -831,7 +827,7 @@ static int set_list_variables(void)
  * Options are not implemented, and that is a refusal rather than a
  * silent no-op: `set -e` that did nothing would change the meaning of
  * every subsequent failure in the script without the script being able
- * to tell, which is exactly what sh/main.c's refusal list exists to
+ * to tell, which is exactly what script.c's refusal preflight exists to
  * prevent.  set(1p)'s EXIT STATUS makes ">0  An invalid option was
  * specified, or an error occurred" the right shape for saying so.
  *
