@@ -213,8 +213,8 @@
  * this matters is the very last line written to any output; see
  * write_linebuf_stream() below). */
 
-struct pline { char *text; size_t len; int has_nl; };
-struct linebuf { struct pline *v; size_t n, cap; };
+struct pline { char *text withtok(readable_span(len)); size_t len; int has_nl; };
+struct linebuf { struct pline *v withtok(readable_elements(n)) withtok(writable_elements(cap)); size_t n, cap; };
 
 static int lb_push(struct linebuf *lb, const char *text, size_t len, int has_nl)
 {

@@ -55,8 +55,8 @@
 /* ---- growable byte buffer: the field being built, plus a parallel
  * "quoted/escaped" flag per byte --------------------------------------- */
 struct fbuf {
-	char *data;
-	unsigned char *lit;
+	char *data withtok(readable_span(n)) withtok(writable_span(cap));
+	unsigned char *lit withtok(readable_span(n)) withtok(writable_span(cap));
 	size_t n, cap;
 };
 
