@@ -118,8 +118,10 @@ int fgetpos(FILE *__restrict, fpos_t *__restrict) __attribute__((nonnull(1, 2)))
  * fseeko(f, ...) with no check of its own. */
 int fsetpos(FILE *, const fpos_t *) __attribute__((nonnull(1, 2)));
 
-size_t fread(void *__restrict, size_t, size_t, FILE *__restrict);
-size_t fwrite(const void *__restrict, size_t, size_t, FILE *__restrict);
+size_t fread(void *__restrict ptr withtok(writable_span(size * nmemb)),
+	size_t size, size_t nmemb, FILE *__restrict stream);
+size_t fwrite(const void *__restrict ptr withtok(readable_span(size * nmemb)),
+	size_t size, size_t nmemb, FILE *__restrict stream);
 
 int fgetc(FILE *) __attribute__((nonnull(1)));
 int getc(FILE *) __attribute__((nonnull(1)));

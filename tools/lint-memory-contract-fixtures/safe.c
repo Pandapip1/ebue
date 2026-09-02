@@ -143,6 +143,13 @@ void contracted_suffix(
 	memset(out + offset, 0, length);
 }
 
+void contracted_product(
+	char *out withtok(fixture_writable_span(rows * columns)),
+	size_t rows, size_t columns)
+{
+	memset(out, 0, rows * columns);
+}
+
 struct counted_buffer {
 	const char *data withtok(fixture_readable_span(length));
 	size_t length;

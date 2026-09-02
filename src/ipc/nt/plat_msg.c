@@ -355,7 +355,11 @@ int msgsnd(int msqid, const void *msgp, size_t msgsz, int msgflg)
 	m->slot[slot].mtype = *typep;
 	m->slot[slot].length = (unsigned)msgsz;
 	m->slot[slot].sequence = m->sequence++;
-	if (msgsz) memcpy(m->slot[slot].data, (const char *)msgp + sizeof(long), msgsz);
+	if (msgsz) {
+		size_t j;
+		for (j = 0; j < msgsz; j++)
+			m->slot[slot].data[j] = ((const char *)msgp)[sizeof(long) + j];
+	}
 	m->qnum++;
 	m->cbytes += msgsz;
 	m->lspid = (int)getpid();
@@ -421,7 +425,11 @@ ssize_t msgrcv(int msqid, void *msgp, size_t msgsz, long msgtyp, int msgflg)
 		len = (unsigned)msgsz;
 	}
 	*typep = m->slot[slot].mtype;
-	if (len) memcpy((char *)msgp + sizeof(long), m->slot[slot].data, len);
+	if (len) {
+		unsigned j;
+		for (j = 0; j < len; j++)
+			((char *)msgp)[sizeof(long) + j] = m->slot[slot].data[j];
+	}
 	memset(&m->slot[slot], 0, sizeof m->slot[slot]);
 	if (m->qnum) m->qnum--;
 	if (m->cbytes >= len) m->cbytes -= len; else m->cbytes = 0;

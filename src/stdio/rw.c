@@ -17,6 +17,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <errno.h>
+#include "ownership_stubs.h"
 #include "stdio_impl.h"
 
 int __fgetc(FILE *f)
@@ -78,7 +79,8 @@ int ungetc(int c, FILE *f)
 	return (unsigned char)c;
 }
 
-size_t __fread(void *ptr, size_t size, size_t nmemb, FILE *f)
+size_t __fread(void *ptr withtok(writable_span(size * nmemb)),
+	size_t size, size_t nmemb, FILE *f)
 {
 	size_t total, got = 0;
 	unsigned char *p = ptr;
@@ -91,6 +93,7 @@ size_t __fread(void *ptr, size_t size, size_t nmemb, FILE *f)
 		return 0;
 	}
 	total = size * nmemb;
+	__ownership_writable_span(ptr, total);
 	if (!f->readable) { errno = EBADF; f->err = 1; return 0; }
 	while (f->nunget && got < total) p[got++] = (unsigned char)f->unget[--f->nunget];
 	if (got < total && __toread(f) < 0) return got / size;
@@ -98,8 +101,9 @@ size_t __fread(void *ptr, size_t size, size_t nmemb, FILE *f)
 		size_t avail = f->rend - f->rpos;
 		if (avail) {
 			size_t n = total - got;
+			size_t i;
 			if (n > avail) n = avail;
-			memmove(p + got, f->buf + f->rpos, n);
+			for (i = 0; i < n; i++) p[got + i] = f->buf[f->rpos + i];
 			f->rpos += n;
 			got += n;
 			continue;
@@ -116,7 +120,8 @@ size_t __fread(void *ptr, size_t size, size_t nmemb, FILE *f)
 	return got / size;
 }
 
-size_t __fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f)
+size_t __fwrite(const void *ptr withtok(readable_span(size * nmemb)),
+	size_t size, size_t nmemb, FILE *f)
 {
 	size_t total, put = 0;
 	const unsigned char *p = ptr;
@@ -136,6 +141,7 @@ size_t __fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f)
 		__ensure_buf(f);
 		if (!f->buf) { f->err = 1; break; }
 		if (f->wpos == 0 && total - put >= f->bufsz) {
+			__ownership_readable_span(p + put, total - put);
 			ssize_t r = __file_write(f, p + put, total - put);
 			if (r <= 0) { f->err = 1; break; }
 			put += (size_t)r;
@@ -146,11 +152,12 @@ size_t __fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f)
 		if (n > room) n = room;
 		{
 			int nl = 0;
+			size_t i;
 			if (f->bufmode == _IOLBF) {
 				size_t k;
 				for (k = 0; k < n; k++) if (p[put + k] == '\n') { nl = 1; break; }
 			}
-			memmove(f->buf + f->wpos, p + put, n);
+			for (i = 0; i < n; i++) f->buf[f->wpos + i] = p[put + i];
 			f->wpos += n;
 			put += n;
 			if (f->wpos >= f->bufsz || nl) {
@@ -161,8 +168,10 @@ size_t __fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f)
 	return put / size;
 }
 
-size_t fread(void *__restrict ptr, size_t size, size_t nmemb, FILE *__restrict f) { return __fread(ptr, size, nmemb, f); }
-size_t fwrite(const void *__restrict ptr, size_t size, size_t nmemb, FILE *__restrict f) { return __fwrite(ptr, size, nmemb, f); }
+size_t fread(void *__restrict ptr withtok(writable_span(size * nmemb)),
+	size_t size, size_t nmemb, FILE *__restrict f) { return __fread(ptr, size, nmemb, f); }
+size_t fwrite(const void *__restrict ptr withtok(readable_span(size * nmemb)),
+	size_t size, size_t nmemb, FILE *__restrict f) { return __fwrite(ptr, size, nmemb, f); }
 
 char *fgets(char *__restrict s, int n, FILE *__restrict f)
 {

@@ -28,15 +28,15 @@
 #include "ownership_stubs.h"
 #include "stdio_impl.h"
 
-ssize_t __file_read(FILE *f, void *buf, size_t n)
+ssize_t __file_read(FILE *f, void *buf withtok(writable_span(n)), size_t n)
 {
+	size_t i;
 	if (f->is_mem) {
 		size_t avail = f->mem_pos < f->mem_len ? f->mem_len - f->mem_pos : 0;
 		if (n > avail) n = avail;
 		if (n) {
 			const unsigned char *src = f->mem_buf + f->mem_pos;
-			__ownership_readable_span(src, n);
-			memmove(buf, src, n);
+			for (i = 0; i < n; i++) ((unsigned char *)buf)[i] = src[i];
 		}
 		f->mem_pos += n;
 		return (ssize_t)n;
@@ -76,7 +76,7 @@ static void mem_publish(FILE *f)
 	*f->mem_out_size = f->wmem ? n / sizeof(wchar_t) : n;
 }
 
-ssize_t __file_write(FILE *f, const void *buf, size_t n)
+ssize_t __file_write(FILE *f, const void *buf withtok(readable_span(n)), size_t n)
 {
 	if (f->is_mem) {
 		size_t avail;
@@ -134,21 +134,20 @@ ssize_t __file_write(FILE *f, const void *buf, size_t n)
 		if (n > avail) n = avail;   /* fmemopen: silently truncate, like a full device */
 		if (n) {
 			unsigned char *dst = f->mem_buf + f->mem_pos;
-			__ownership_writable_span(dst, n);
-			__ownership_readable_span(buf, n);
-			memmove(dst, buf, n);
+			size_t i;
+			for (i = 0; i < n; i++) dst[i] = ((const unsigned char *)buf)[i];
 		}
 		f->mem_pos += n;
 		if (f->mem_pos > f->mem_len) f->mem_len = f->mem_pos;
 		if (f->mem_len <= f->mem_size && term <= f->mem_size - f->mem_len) {
 			unsigned char *term_dst = f->mem_buf + f->mem_len;
-			memset(term_dst, 0, term);
+			size_t i;
+			for (i = 0; i < term; i++) term_dst[i] = 0;
 		}
 		mem_publish(f);
 		return (ssize_t)n;
 	}
 	if (f->fd < 0) { errno = EBADF; return -1; }
-	__ownership_readable_span(buf, n);
 	return write(f->fd, buf, n);
 }
 
@@ -209,8 +208,11 @@ int __fflush_locked(FILE *f)
 
 	if (f->writable && f->wpos) {
 		size_t end = f->wpos;
+		unsigned char *pending = f->buf;
+		if (end > f->bufsz) { errno = EIO; f->err = 1; f->wpos = 0; return -1; }
+		__ownership_readable_span(pending, end);
 		while (off < end) {
-			ssize_t n = __file_write(f, f->buf + off, end - off);
+			ssize_t n = __file_write(f, pending + off, end - off);
 			if (n <= 0) { f->err = 1; f->wpos = 0; return -1; }
 			if ((size_t)n > end - off) { errno = EIO; f->err = 1; f->wpos = 0; return -1; }
 			off += (size_t)n;
