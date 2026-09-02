@@ -147,3 +147,13 @@ void wait_on_borrowed_mutex(cond_t *cond, mutex_t *mutex) {
 }
 
 void wait_on_borrowed_semaphore(semaphore_t *sem) { sem_trywait(sem); }
+
+void failed_destroy_preserves_lifecycle(void) {
+  semaphore_t semaphore;
+  if (sem_init(&semaphore, 0, 0) != 0)
+    return;
+  if (sem_destroy(&semaphore) != 0) {
+    sem_post(&semaphore);
+    sem_destroy(&semaphore);
+  }
+}

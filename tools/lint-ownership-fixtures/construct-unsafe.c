@@ -24,6 +24,8 @@ int sem_destroy(semaphore_t *destroy(semaphore));
 int sem_post(semaphore_t *handle(semaphore));
 int open_custom(mutex_t *construct(first_class));
 int inspect_custom(mutex_t *handle(second_class));
+int destroy_custom(mutex_t *destroy(second_class));
+int inspect_first(mutex_t *handle(first_class));
 
 void use_uninitialized(void) {
   mutex_t mutex;
@@ -67,4 +69,24 @@ void mismatched_ownership_class(void) {
   mutex_t object;
   if (open_custom(&object) == 0)
     inspect_custom(&object); /* ownership-expect: construct-family-mismatch */
+}
+
+void invalid_destroy_havocs_lifecycle(void) {
+  mutex_t object;
+  if (open_custom(&object) != 0)
+    return;
+  if (destroy_custom(&object) == 0) { /* ownership-expect: destroy-family */
+    inspect_first(&object); /* ownership-expect: destroy-havoc */
+  }
+}
+
+void repeated_invalid_destroy_havocs_lifecycle(void) {
+  semaphore_t semaphore;
+  if (sem_init(&semaphore, 0, 0) != 0)
+    return;
+  if (sem_destroy(&semaphore) != 0)
+    return;
+  if (sem_destroy(&semaphore) == 0) { /* ownership-expect: repeated-destroy */
+    sem_post(&semaphore); /* ownership-expect: repeated-destroy-havoc */
+  }
 }

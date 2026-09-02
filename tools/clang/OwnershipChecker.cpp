@@ -16,12 +16,14 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
+#include "LifecycleAlgebra.h"
 #include "TokenAlgebra.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <cctype>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -32,8 +34,8 @@ using namespace ento;
 enum class OwnershipKind : unsigned char { Owned, Consumed };
 REGISTER_MAP_WITH_PROGRAMSTATE(OwnershipMap, SymbolRef, OwnershipKind)
 
-enum class ConstructKind : unsigned char { Live, Destroyed };
-REGISTER_MAP_WITH_PROGRAMSTATE(ConstructMap, const MemRegion *, ConstructKind)
+REGISTER_MAP_WITH_PROGRAMSTATE(ConstructMap, const MemRegion *,
+                               ntlibc::algebra::LifecycleState)
 REGISTER_MAP_WITH_PROGRAMSTATE(ConstructFamilyMap, const MemRegion *,
                                const IdentifierInfo *)
 
@@ -71,6 +73,12 @@ using ntlibc::algebra::excludedSentinel;
 using ntlibc::algebra::ElementTokenRelation;
 using ntlibc::algebra::findTokenSort;
 using ntlibc::algebra::hasQualifier;
+using ntlibc::algebra::LifecycleEvent;
+using ntlibc::algebra::LifecycleFact;
+using ntlibc::algebra::LifecycleFamilyId;
+using ntlibc::algebra::LifecycleOperation;
+using ntlibc::algebra::LifecycleState;
+using ntlibc::algebra::LifecycleTransition;
 using ntlibc::algebra::LinearLoanClass;
 using ntlibc::algebra::lookupElementToken;
 using ntlibc::algebra::ProofStatus;
@@ -80,6 +88,11 @@ using ntlibc::algebra::TokenEffect;
 using ntlibc::algebra::TokenState;
 using ntlibc::algebra::TokenTransfer;
 using ntlibc::algebra::transferToken;
+using ntlibc::algebra::absentLifecycle;
+using ntlibc::algebra::applyLifecycleOperation;
+using ntlibc::algebra::contains;
+using ntlibc::algebra::liveLifecycle;
+using ntlibc::algebra::unknownLifecycle;
 
 struct CapabilityPresence {
   bool Known;
@@ -1035,6 +1048,10 @@ struct ConstructCall {
 class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
   mutable std::unique_ptr<BugType> BT;
 
+  static LifecycleFamilyId familyId(const IdentifierInfo *Family) {
+    return {static_cast<uint64_t>(reinterpret_cast<uintptr_t>(Family))};
+  }
+
   static const IdentifierInfo *parameterAnnotation(const FunctionDecl *Function,
                                                    const AnnotateAttr *Attr,
                                                    StringRef Prefix) {
@@ -1159,6 +1176,59 @@ class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
     return Region && Region->getSymbolicBase() != nullptr;
   }
 
+  static LifecycleFact constructFact(ProgramStateRef State,
+                                     const MemRegion *Region,
+                                     const ConstructCall &Protocol,
+                                     bool TrustOpaqueBorrow) {
+    const LifecycleState *Phase = State->get<ConstructMap>(Region);
+    if (!Phase) {
+      if (hasStaticInitialization(Region, Protocol.StaticInitialization) ||
+          (TrustOpaqueBorrow && isOpaqueBorrow(Region)))
+        return liveLifecycle(familyId(Protocol.Family));
+      return absentLifecycle();
+    }
+    if (*Phase == LifecycleState::Unknown)
+      return unknownLifecycle();
+    if (*Phase == LifecycleState::Absent)
+      return absentLifecycle();
+    const IdentifierInfo *const *Family =
+        State->get<ConstructFamilyMap>(Region);
+    if (!Family)
+      return unknownLifecycle();
+    LifecycleFamilyId Id = familyId(*Family);
+    return *Phase == LifecycleState::Live
+               ? liveLifecycle(Id)
+               : ntlibc::algebra::releasedLifecycle(Id);
+  }
+
+  static ProgramStateRef setConstructFact(ProgramStateRef State,
+                                          const MemRegion *Region,
+                                          LifecycleFact Fact,
+                                          const IdentifierInfo *Family) {
+    State = State->set<ConstructMap>(Region, Fact.State);
+    if (Fact.State == LifecycleState::Live ||
+        Fact.State == LifecycleState::Released)
+      return State->set<ConstructFamilyMap>(Region, Family);
+    return State->remove<ConstructFamilyMap>(Region);
+  }
+
+  void reportRequirement(const LifecycleTransition &Transition,
+                         ConstructOperation Operation, const Stmt *Statement,
+                         ProgramStateRef State, CheckerContext &C) const {
+    if (contains(Transition.Events, LifecycleEvent::AlreadyReleased))
+      report(Operation == ConstructOperation::Destroy
+                 ? "owned construct is already destroyed"
+                 : "operation accesses a destroyed owned construct",
+             Statement, State, C);
+    else if (contains(Transition.Events, LifecycleEvent::FamilyMismatch))
+      report("owned construct ownership class does not match operation",
+             Statement, State, C);
+    else if (contains(Transition.Events, LifecycleEvent::MissingLive) ||
+             contains(Transition.Events, LifecycleEvent::StateUnproven))
+      report("owned construct is not proven initialized", Statement, State,
+             C);
+  }
+
   void requireLive(const CallEvent &Call, const ConstructCall &Protocol,
                    CheckerContext &C) const {
     unsigned Argument = Protocol.Argument;
@@ -1166,28 +1236,14 @@ class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
     if (!Region ||
         C.getState()->isNull(Call.getArgSVal(Argument)).isConstrainedTrue())
       return;
-    const ConstructKind *Kind = C.getState()->get<ConstructMap>(Region);
-    if (!Kind &&
-        (hasStaticInitialization(Region, Protocol.StaticInitialization) ||
-         isOpaqueBorrow(Region)))
-      return;
     const Stmt *Statement = Call.getOriginExpr();
     if (!Statement)
       return;
-    if (!Kind)
-      report("owned construct is not proven initialized", Statement,
-             C.getState(), C);
-    else if (*Kind == ConstructKind::Destroyed)
-      report(Protocol.Operation == ConstructOperation::Destroy
-                 ? "owned construct is already destroyed"
-                 : "operation accesses a destroyed owned construct",
-             Statement, C.getState(), C);
-    else if (const IdentifierInfo *const *Actual =
-                 C.getState()->get<ConstructFamilyMap>(Region)) {
-      if (*Actual != Protocol.Family)
-        report("owned construct ownership class does not match operation",
-               Statement, C.getState(), C);
-    }
+    LifecycleTransition Transition = applyLifecycleOperation(
+        constructFact(C.getState(), Region, Protocol, true),
+        familyId(Protocol.Family), LifecycleOperation::RequireLive);
+    reportRequirement(Transition, Protocol.Operation, Statement, C.getState(),
+                      C);
   }
 
 public:
@@ -1200,9 +1256,6 @@ public:
       const MemRegion *Region = argumentRegion(Call, Protocol.Argument);
       if (!Region)
         continue;
-      const ConstructKind *Kind = C.getState()->get<ConstructMap>(Region);
-      bool StaticLive = !Kind && hasStaticInitialization(
-                                     Region, Protocol.StaticInitialization);
       const Stmt *Statement = Call.getOriginExpr();
       if (!Statement)
         continue;
@@ -1213,12 +1266,14 @@ public:
         // stay "no information" for a double-construct proof specifically
         // -- trusting an opaque borrow as evidence of "definitely already
         // live" would risk hiding a real double pthread_mutex_init() on a
-        // borrowed pointer, which is exactly backwards. This path already
-        // does not misreport an opaque borrow as "already initialized"
-        // today (StaticLive is false for a SymbolicRegion, since
-        // hasStaticInitialization only matches a VarRegion), so there is
-        // nothing to fix on this branch.
-        if ((Kind && *Kind == ConstructKind::Live) || StaticLive)
+        // borrowed pointer, which is exactly backwards. The acquisition
+        // input therefore treats an opaque borrow as Absent, while the
+        // RequireLive/Release inputs below may trust it as an externally
+        // established live lifetime.
+        LifecycleTransition Transition = applyLifecycleOperation(
+            constructFact(C.getState(), Region, Protocol, false),
+            familyId(Protocol.Family), LifecycleOperation::Acquire);
+        if (contains(Transition.Events, LifecycleEvent::AlreadyLive))
           report("owned construct is already initialized", Statement,
                  C.getState(), C);
         continue;
@@ -1242,12 +1297,16 @@ public:
         const MemRegion *Region = argumentRegion(Call, Protocol.Argument);
         if (!Region)
           continue;
-        State = State->set<ConstructMap>(
-            Region, Protocol.Operation == ConstructOperation::Construct
-                        ? ConstructKind::Live
-                        : ConstructKind::Destroyed);
-        if (Protocol.Operation == ConstructOperation::Construct)
-          State = State->set<ConstructFamilyMap>(Region, Protocol.Family);
+        LifecycleOperation Operation =
+            Protocol.Operation == ConstructOperation::Construct
+                ? LifecycleOperation::Acquire
+                : LifecycleOperation::Release;
+        LifecycleTransition Transition = applyLifecycleOperation(
+            constructFact(State, Region, Protocol,
+                          Operation == LifecycleOperation::Release),
+            familyId(Protocol.Family), Operation);
+        State = setConstructFact(State, Region, Transition.After,
+                                 Protocol.Family);
       }
       C.addTransition(State);
       return;
@@ -1271,13 +1330,16 @@ public:
         const MemRegion *Region = argumentRegion(Call, Protocol.Argument);
         if (!Region)
           continue;
-        ConstructKind Next = Protocol.Operation == ConstructOperation::Construct
-                                 ? ConstructKind::Live
-                                 : ConstructKind::Destroyed;
-        Succeeded = Succeeded->set<ConstructMap>(Region, Next);
-        if (Protocol.Operation == ConstructOperation::Construct)
-          Succeeded =
-              Succeeded->set<ConstructFamilyMap>(Region, Protocol.Family);
+        LifecycleOperation Operation =
+            Protocol.Operation == ConstructOperation::Construct
+                ? LifecycleOperation::Acquire
+                : LifecycleOperation::Release;
+        LifecycleTransition Transition = applyLifecycleOperation(
+            constructFact(Succeeded, Region, Protocol,
+                          Operation == LifecycleOperation::Release),
+            familyId(Protocol.Family), Operation);
+        Succeeded = setConstructFact(Succeeded, Region, Transition.After,
+                                     Protocol.Family);
       }
       C.addTransition(Succeeded);
     }
