@@ -8,49 +8,41 @@
  * host).
  *
  * __plat_sock_recv()/__plat_sock_send() are the genuine POSIX-shaped
- * half of plat_socket.h that predates the rest of it.  Below them,
+ * half of plat_socket.h that predates the rest of it. Below them,
  * __plat_socket_{open,bind,connect,listen,accept}() are the socket-
  * CREATION half: real socket(2)/bind(2)/connect(2)/listen(2)/accept4(2)
- * syscalls, genuinely simple compared to the NT backend's \Device\Afd
- * wire protocol -- no EA-buffer-encoded open packets, no AFD_BIND_DATA/
- * AFD_CONNECT_INFO, no two-step wait-for-listen-then-accept dance, just
- * the kernel's own socket ABI, which ntlibc's own AF_INET (2), SOCK_
- * STREAM (1), IPPROTO_TCP (6) and struct sockaddr_in layout (family at
- * +0, port at +2, addr at +4, 16 bytes total) all already match exactly
- * -- confirmed against this host's real <sys/socket.h>/<netinet/in.h>
- * via a throwaway host-gcc oracle program, the same way plat_fcntl.c's
- * O_DIRECTORY/O_NOFOLLOW/O_DIRECT mismatch was caught, so nothing here
- * is assumed rather than verified. SOL_SOCKET/SO_REUSEADDR are the one
- * exception -- ntlibc's own <sys/socket.h> gives them a private encoding
- * (0xffff/0x0004) that does NOT match the real kernel ABI (1/2,
- * confirmed the same way), so __plat_socket_bind()'s reuseaddr flag is
- * translated to the kernel's own SOL_SOCKET/SO_REUSEADDR via an explicit
- * setsockopt(2) before bind(2) -- exactly the LX_MSG_* translation
- * pattern to_linux_flags() below already uses for send()/recv().
+ * syscalls -- much simpler than the NT backend's \Device\Afd wire
+ * protocol (no EA-buffer-encoded open packets, no AFD_BIND_DATA/
+ * AFD_CONNECT_INFO, no two-step wait-for-listen-then-accept dance),
+ * since ntlibc's own AF_INET (2), SOCK_STREAM (1), IPPROTO_TCP (6) and
+ * struct sockaddr_in layout (family at +0, port at +2, addr at +4, 16
+ * bytes total) already match the real kernel socket ABI exactly
+ * (confirmed against this host's real <sys/socket.h>/<netinet/in.h>).
+ * SOL_SOCKET/SO_REUSEADDR are the one exception -- ntlibc's own
+ * <sys/socket.h> gives them a private encoding (0xffff/0x0004) that
+ * does NOT match the real kernel ABI (1/2), so __plat_socket_bind()'s
+ * reuseaddr flag is translated to the kernel's own SOL_SOCKET/
+ * SO_REUSEADDR via an explicit setsockopt(2) before bind(2) -- the
+ * same LX_MSG_* translation pattern to_linux_flags() below uses for
+ * send()/recv().
  *
  * __plat_handle_t encoding: matches src/unistd/linux/plat_fd.c's own
  * boxed-fd scheme exactly (a real fd is stored as fd+1, so
  * __PLAT_HANDLE_NULL/0 never collides with the valid fd 0) -- a Linux
  * socket fd lives in the very same descriptor space as a Linux file fd,
- * so there is no reason for this backend to invent a second encoding;
- * whichever code installed the handle (a ported socket()/accept() some
- * day, or this pilot's own test harness standing in for them today) is
- * expected to box it the same way.
+ * so there is no reason for this backend to invent a second encoding.
  *
  * recv()/send()'s NT backend has real interpretation work to do here
  * (STATUS_*_DISCONNECTED -> a 0-byte recv() return, EPIPE/SIGPIPE
  * disambiguation on send() -- see src/socket/nt/plat_socket.c's own
  * comments) because NT's AFD ioctls hand back a raw NTSTATUS with no
  * native POSIX shape at all. None of that exists here: a Linux
- * recvfrom(2) already returns 0 on a clean peer shutdown natively (no
- * separate "which status means orderly close" table needed), and a
- * Linux sendto(2) against a broken connection already returns -EPIPE
- * *and* already has the kernel raise real SIGPIPE against this process
- * as an ordinary side effect (unless MSG_NOSIGNAL, which the kernel also
- * already honors) -- exactly the same story src/unistd/linux/plat_fd.c's
- * __plat_write() comment already tells for write()/broken pipes: the
- * signal is real and kernel-delivered, not something ntlibc must
- * synthesize itself the way the NT backend's __raise_internal() does.
+ * recvfrom(2) already returns 0 on a clean peer shutdown natively, and
+ * a Linux sendto(2) against a broken connection already returns -EPIPE
+ * and already has the kernel raise real SIGPIPE against this process
+ * as an ordinary side effect (unless MSG_NOSIGNAL) -- the signal is
+ * real and kernel-delivered, not something ntlibc must synthesize
+ * itself the way the NT backend's __raise_internal() does.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
