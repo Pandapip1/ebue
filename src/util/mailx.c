@@ -1,179 +1,120 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * mailx(1p): a real local mail client over a real mbox-format spool,
- * not a toy -- the infrastructure a real implementation needs (an
- * mbox reader/writer, real advisory locking) is genuinely small enough
- * to build here; what is explicitly, permanently out of scope is an
- * MTA/SMTP relay -- a real network mail-transfer agent is a whole
+ * mailx(1p): a real local mail client over a real mbox-format spool --
+ * an mbox reader/writer and real advisory locking are small enough to
+ * build here. Permanently out of scope: an MTA/SMTP relay, which is a
  * separate project, not a missing afternoon of work.
  *
  * ============================================================
  * SCOPE: WHAT "SENDING MAIL" HONESTLY MEANS HERE
  * ============================================================
  *
- * Real mailx(1p) sends by handing the composed message to sendmail(1)
- * (or an equivalent already on PATH), which then does the actual
- * routing/relay/queueing -- mailx itself never touches the wire.  This
- * platform has no MTA at all, static or otherwise, and building one
- * (even a "deliver to a local Unix-domain/named-pipe queue" one) is a
- * separate, much bigger project than mailx itself.  Rather than shell
- * out to a sendmail that doesn't exist, or fabricate a fake one that
- * silently drops mail, this implementation does real *local* delivery:
- * appending the composed message directly onto a real mbox file on
- * disk, on this same machine, using the recipient's own mailbox path.
+ * Real mailx(1p) hands the composed message to sendmail(1) for
+ * routing/relay/queueing; this platform has no MTA. Rather than shell
+ * out to a sendmail that doesn't exist or fake delivery, this
+ * implementation does real *local* delivery: appending the composed
+ * message onto a real mbox file on disk, using the recipient's own
+ * mailbox path.
  *
- * "The recipient's own mailbox" is a real, meaningful concept here for
- * exactly one recipient: src/misc/pwd.c's own header comment establishes
- * that this library's single-real-uid NT/Linux model means there is
- * genuinely, provably exactly one local user this process can ever be
- * running as -- getpwuid(getuid()) is authoritative, not a guess.  So
- * "local delivery" here means: an address that names that one real user
- * (by login name, ignoring any "@host" suffix -- there is no host to
- * resolve against) is delivered for real, by appending to that user's
- * own mailbox file; any other address is refused with a loud, honest
- * "user unknown" diagnostic and a nonzero exit, the same way a real
- * sendmail bounces mail for a name its aliases database doesn't know --
- * never silently dropped, never faked as delivered. This is the direct
- * mail-specific analogue of getpwnam()'s own "any *other* name ... is
- * refused cleanly ... rather than answered with a fabricated record"
- * rule.
+ * src/misc/pwd.c establishes that this library's single-real-uid
+ * NT/Linux model means there is exactly one local user a process can
+ * ever run as (getpwuid(getuid()) is authoritative). So "local
+ * delivery" means: an address naming that one real user (by login name,
+ * ignoring any "@host" suffix -- there is no host to resolve) is
+ * delivered for real; any other address is refused with a loud "user
+ * unknown" diagnostic and nonzero exit, never silently dropped or faked
+ * as delivered.
  *
  * ============================================================
  * MAILBOX PATHS
  * ============================================================
  *
- * Two distinct mailbox files, matching mailx.html's own DESCRIPTION
- * (Mailboxes / Message Handling):
+ * Two mailbox files, matching mailx.html's Mailboxes / Message Handling:
  *
  *   system mailbox  -- where new mail is delivered (Send Mode's target,
- *                       and Receive Mode's default source).  This
- *                       implementation has no shared, permission-
- *                       separated /var/mail-style spool directory to
- *                       put it in (there is exactly one real user per
- *                       the above, so there is nothing to separate it
- *                       *from* -- and NT has no such directory
- *                       convention at all), so the default is
- *                       `<pw_dir>/mailbox` (pw_dir = getpwuid()'s
- *                       pw_dir, i.e. %USERPROFILE%, per pwd.c), overridable
- *                       with the $MAIL environment variable exactly as
- *                       mailx.html's ENVIRONMENT VARIABLES section
- *                       describes for MAIL ("Determine the name of the
- *                       system mailbox").
- *   mbox            -- the secondary mailbox `-f` reads by default, and
- *                       where a `q` quit-save that started from the
- *                       system mailbox would traditionally migrate read-
- *                       but-kept messages to (see "DEFERRED" below for
- *                       why this implementation does not do that
- *                       migration).  Default `<pw_dir>/mbox` exactly
- *                       per mailx.html's own MBOX description,
- *                       overridable with $MBOX.
+ *                       Receive Mode's default source). No shared,
+ *                       permission-separated /var/mail-style spool
+ *                       exists here (one real user, and NT has no such
+ *                       convention anyway), so the default is
+ *                       `<pw_dir>/mailbox` (pw_dir = %USERPROFILE% via
+ *                       pwd.c), overridable with $MAIL.
+ *   mbox            -- the secondary mailbox `-f` reads by default.
+ *                       Default `<pw_dir>/mbox`, overridable with
+ *                       $MBOX. Traditional mailx migrates read-but-kept
+ *                       messages here on quit; this implementation does
+ *                       not (see "deliberate scope-narrowing on `q`"
+ *                       below).
  *
  * ============================================================
  * MBOX FORMAT: READ/WRITE, ESCAPING, AND LOCKING
  * ============================================================
  *
- * A message begins at a line that is exactly "From " (capital F, three
- * lowercase letters, one space) followed by an envelope sender and a
- * date, and which is either the first line of the file or immediately
- * preceded by an empty line -- mailx.html's own MBOX FORMAT clause,
- * quoted in parse_mbox() below.  Any body line a sender supplies that
- * itself begins "From " would be indistinguishable from a real
- * boundary, so it is escaped on write by prefixing a single '>' --
- * mailx.html: "mailx shall modify any such user-entered message body
- * lines ... by adding one or more characters to precede the 'F'."  This
- * implementation does not attempt to *unescape* on read (the
- * unescaping-safe "mboxrd" convention needs its own extra encode rule
- * this implementation does not add): a body line that was itself
- * user-typed as ">From ..." and a real escaped "From " line are not
- * distinguished on the way back out.  This is the same lossy corner
- * every traditional "mboxo"-family implementation has always had, not
- * a new gap -- documented rather than silently present.
+ * A message begins at a line that is exactly "From " followed by an
+ * envelope sender and date, and is either the first line of the file or
+ * immediately preceded by an empty line (mailx.html's MBOX FORMAT
+ * clause, quoted in parse_mbox() below). A body line a sender supplies
+ * that itself begins "From " is escaped on write with a leading '>'.
+ * This implementation does not *unescape* on read (the "mboxrd"
+ * convention needs an extra encode rule this implementation doesn't
+ * add): a user-typed ">From ..." and a real escaped "From " line are
+ * indistinguishable on the way back out -- the same lossy corner every
+ * traditional "mboxo"-family implementation has.
  *
- * Concurrent-append safety is real, via flock() (include/sys/file.h;
- * see src/file/flock.c's own header for why it is mandatory rather than
- * advisory on the NT backend, and simply POSIX-advisory-but-universally-
- * honored on Linux): every append acquires LOCK_EX on the destination
- * file descriptor before it even inspects the current end-of-file state
- * (ensure_blank_terminated() below), and holds it across the entire
- * append; every read session that might rewrite the file (a `q` with
- * pending deletions) holds LOCK_EX for the whole session. Two mailx
- * processes appending at once are therefore fully serialized -- the
- * second's flock() call blocks until the first's append (state-check
- * and write together) is completely done -- so the file can never end
- * up with two messages' bytes interleaved. test/util-mail.c proves this
- * against real concurrent child processes, not merely asserts it.
+ * Concurrent-append safety is real, via flock() (see src/file/flock.c
+ * for why it's mandatory on the NT backend, advisory-but-honored on
+ * Linux): every append holds LOCK_EX across the entire operation, from
+ * before it inspects EOF state (ensure_blank_terminated()) through the
+ * write; a read session that might rewrite the file (a `q` with pending
+ * deletions) holds LOCK_EX for the whole session. Two mailx processes
+ * appending at once are therefore fully serialized. test/util-mail.c
+ * proves this against real concurrent child processes.
  *
  * ============================================================
  * WHAT'S IMPLEMENTED, PRECISELY, AND WHAT IS DEFERRED
  * ============================================================
  *
- * Options: -s subject, -f [as a bare flag; the optional file operand
- * follows normally, matching mailx.html's SYNOPSIS line `mailx -f
- * [-HiNn] [-F] [file]` where -f itself takes no attached argument],
- * -H (headers only), -N (suppress the initial header summary), -u user
- * (refused unless user names the one real local user, per the scope
- * note above), -e (test for mail, per EXIT STATUS's -e clause), -i
- * (ignore SIGINT, real via signal(), same shape as src/util/tee.c's own
- * -i). -n is accepted as a documented no-op (see cat's -u for the
- * precedent of accepting rather than refusing a flag that controls
- * behavior this implementation never has anyway): the "system default
- * start-up file" -n says not to read is $MAILRC/.mailrc, which nothing
- * here ever reads regardless of this flag, so there is truly nothing
- * left for -n to disable. -F (record into a file named after the first
- * recipient) is refused outright (__util_diagf() + nonzero exit),
- * per this project's "an unsupported option must not look like it
- * worked" rule (src/sh/builtin.c's bi_set(), src/util/touch.c's -d) --
- * not implemented, not silently ignored.
+ * Options: -s subject, -f [bare flag; optional file operand follows
+ * normally], -H (headers only), -N (suppress header summary), -u user
+ * (refused unless it names the one real local user), -e (test for
+ * mail), -i (ignore SIGINT, real via signal(), same shape as
+ * src/util/tee.c's -i). -n is a documented no-op: the startup file it
+ * says not to read ($MAILRC/.mailrc) is never read regardless. -F
+ * (record into a file named after the first recipient) is refused
+ * outright -- not implemented, not silently ignored, per this project's
+ * "unsupported option must not look like it worked" rule
+ * (src/sh/builtin.c's bi_set(), src/util/touch.c's -d).
  *
- * Send Mode: matches mailx.html's DESCRIPTION exactly for the
- * mechanically-important, scriptable case -- reads the entire message
- * body from standard input up to EOF. The `~.`-escape body-command
- * language (User Portability Utilities option, itself separately
- * option-gated in the spec, exactly the kind of optional-marker this
- * project's own OPTS ledger already distinguishes from mandatory
- * behavior -- see [[project_opts_expected_libc_test_distinction]]) is
- * not implemented; real EOF (a script's pipe closing, or Ctrl-D at a
- * terminal) is the only way to end a message body here. If -s is not
- * given and stdin is a terminal, a `Subject: ` prompt is read
- * interactively; if stdin is not a terminal, the Subject header is
- * simply omitted, since a non-interactive caller has no way to answer
- * a prompt it cannot see.
+ * Send Mode: reads the entire message body from stdin up to EOF. The
+ * `~.`-escape body-command language (a separately option-gated spec
+ * feature) is not implemented; real EOF is the only way to end a
+ * message body. If -s is not given and stdin is a terminal, a
+ * `Subject: ` prompt is read interactively; otherwise the Subject
+ * header is omitted.
  *
  * Receive Mode: real mbox parsing (parse_mbox() below), a real header
- * summary, and an interactive command loop implementing the minimum
- * useful command set: p/print (also the default action for a bare
- * message number), n/next (also a blank input line, per mailx.html's
- * `next` description), d/delete, u/undelete, h/headers (redisplay the
- * summary), q/quit (rewrite the mailbox with deleted messages actually
- * removed -- see below for the one deliberate scope-narrowing on
- * this), x/exit/ex (quit leaving the file untouched), plus '='
- * (show the current message number), '#...' (comment, a no-op) and
- * '?' (a short command list) since they cost nothing extra once the
- * loop exists. A msglist is a bare message number or empty (meaning
- * "the current message", advancing to the next after a print); '*'
- * (all messages) and '$' (the last message) are also accepted. Full
- * msglist ranges/arithmetic (`n-m`, `+`, `-`, `^`) are NOT implemented
- * -- deferred, documented here rather than guessed at.
+ * summary, and an interactive command loop: p/print (also the default
+ * for a bare message number), n/next (also a blank input line),
+ * d/delete, u/undelete, h/headers, q/quit (rewrite the mailbox with
+ * deletions applied -- see below), x/exit/ex (quit untouched), '='
+ * (current message number), '#...' (comment, no-op), '?' (command
+ * list). A msglist is a bare message number, empty (current message),
+ * '*' (all), or '$' (last). Full msglist ranges/arithmetic (`n-m`, `+`,
+ * `-`, `^`) are not implemented.
  *
- * One deliberate scope-narrowing on `q`: real mailx, when quitting out
- * of the *system* mailbox, migrates messages that were read-but-not-
- * deleted into mbox and leaves only still-unread messages in the system
- * mailbox (mailx.html's `quit` command). This implementation always
- * does the mechanically simpler, still entirely real and correct thing:
- * `q` rewrites whichever file was actually opened (system mailbox, -f
- * file, or -u's mailbox) in place, keeping every message not marked
- * deleted in that same file and discarding only the ones that were.
- * There is no separate "read but kept" vs "still new" distinction
- * tracked across sessions (no Status: header is written), so every
- * message in a freshly opened mailbox displays as a plain, un-annotated
- * entry rather than carrying an O/N/R status letter. Both narrowings
- * are named explicitly here rather than silently approximated.
+ * Deliberate scope-narrowing on `q`: real mailx, quitting the *system*
+ * mailbox, migrates read-but-not-deleted messages into mbox and leaves
+ * only unread messages behind. This implementation always does the
+ * simpler, still-correct thing: `q` rewrites whichever file was
+ * actually opened in place, keeping every non-deleted message there. No
+ * Status: header is written and no read/unread distinction is tracked
+ * across sessions, so every message in a freshly opened mailbox
+ * displays unannotated.
  *
  * Never calls exit()/_exit() -- __util_mailx_main() runs as a shell
- * built-in too (src/sh/builtin.c's bi_mailx()), same rule as every
- * other utility in src/util/ (see src/util/dd.c's own header for the
- * established precedent this file follows).
+ * builtin too (src/sh/builtin.c's bi_mailx()), same rule as every
+ * other utility in src/util/ (see src/util/dd.c's header for the
+ * precedent).
  *
  * Spec consulted: https://pubs.opengroup.org/onlinepubs/9699919799/utilities/mailx.html
  */

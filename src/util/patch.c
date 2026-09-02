@@ -3,198 +3,126 @@
  *
  * patch(1p): `patch [-blNR] [-c|-e|-n|-u] [-d dir] [-D define] [-i
  * patchfile] [-o outfile] [-p num] [-r rejectfile] [file]` -- apply a
- * diff(1)-style difference report to a file.  Citations below are to
- * the real Open Group Base Specifications Issue 7 (POSIX.1-2017) XCU
- * patch(1p) page (fetched directly, not reconstructed from memory or
- * from GNU patch's much larger option set -- several GNU-only options,
- * e.g. --dry-run, -F/--fuzz=, -B/--backup-if-mismatch, are simply not
- * here at all, and are not claimed to be).
+ * diff(1)-style difference report to a file. Citations below are to the
+ * real POSIX.1-2017 XCU patch(1p) page; several GNU-only options (e.g.
+ * --dry-run, -F/--fuzz=, -B/--backup-if-mismatch) are not implemented.
  *
  * ---- FORMATS ---------------------------------------------------------
  *
- * DESCRIPTION: the utility "reads patch files containing diff output in
- * ... normal, copied context, unified context, or in the style of ed
- * ... and applies those differences" -- all four are implemented
- * (parse_normal_section(), parse_context_section(), parse_unified_
- * section(), parse_ed_section() below), with automatic format detection
- * (detect_at()) when none of -c/-e/-n/-u is given, matching "[the
- * utility] attempts automatic format detection unless overridden."
+ * All four formats the spec describes -- normal, copied context, unified
+ * context, and ed -- are implemented (parse_normal_section(),
+ * parse_context_section(), parse_unified_section(), parse_ed_section()
+ * below), with automatic format detection (detect_at()) when none of
+ * -c/-e/-n/-u is given.
  *
  * ---- MATCHING / FUZZ --------------------------------------------------
  *
- * "For each hunk, the patch utility shall begin to search for the place
- * to apply the patch at the line number at the beginning of the hunk,
- * plus or minus any offset used in applying the previous hunk.  If
- * lines matching the hunk context are not found, patch shall scan both
- * forwards and backwards at least 1000 bytes for a set of lines that
- * match the hunk context." -- find_match() below implements exactly
- * this: an exact try at the offset-adjusted expected position, then an
- * outward forward/backward scan.  This implementation's scan covers the
- * *entire* remaining buffer rather than stopping at a fixed byte count,
- * a strict superset of "at least 1000 bytes" -- except that the scan is
- * bounded below by `src`, the position already consumed by the previous
- * *successfully applied* hunk (apply_section() below), so a later hunk
- * can never match backward into content an earlier hunk already
- * emitted.  Real patch(1p) does not document this restriction either
- * way; it is a deliberate, narrow simplification here to keep hunk
- * application a single left-to-right pass with no reordering, which
- * this implementation's whole design (build the output by copying
- * source spans between matched hunks, see apply_section()) depends on.
+ * Per spec: search first at the hunk's stated line number (offset-
+ * adjusted by the previous hunk's own offset), then scan forwards and
+ * backwards at least 1000 bytes for matching context. find_match() below
+ * does exactly this, except its scan covers the *entire* remaining
+ * buffer (a strict superset of "at least 1000 bytes"), bounded below by
+ * `src`, the position already consumed by the previous successfully
+ * applied hunk (apply_section() below) -- so a later hunk can never
+ * match backward into content an earlier hunk already emitted. This
+ * keeps hunk application a single left-to-right pass with no reordering,
+ * which this implementation's whole design (copy source spans between
+ * matched hunks) depends on. "Already-applied" detection (a hunk's *new*
+ * content already present at the expected location, distinguished from
+ * a genuine mismatch) uses the same scan, per -N below.
  *
- * "already-applied" detection (a hunk's *new* content, not its old
- * content, already present at the expected location) is implemented the
- * same way, per -N's own wording below.
- *
- * When nothing matches at all -- neither the old content nor,
- * distinguishing this from a genuine mismatch, the already-applied new
- * content -- "the patch utility shall append the hunk to the reject
- * file" (write_rejects() below).  POSIX does not mandate the reject
- * file's own byte format (only that unmatched hunks land there), so
- * this implementation always writes rejects in one fixed, simple
- * unified-diff-shaped block (`@@ -old,oldcount +new,newcount @@` plus
- * ` `/`-`/`+`-prefixed lines), regardless of which format the input
- * patch used -- a real, deliberate simplification over round-tripping
- * each format's own reject syntax byte for byte.
+ * When nothing matches -- neither old nor already-applied-new content --
+ * the hunk is appended to the reject file (write_rejects() below).
+ * POSIX doesn't mandate the reject file's byte format, so this
+ * implementation always writes one fixed unified-diff-shaped block
+ * (`@@ -old,oldcount +new,newcount @@` plus ` `/`-`/`+`-prefixed lines)
+ * regardless of the input patch's own format.
  *
  * ---- OPTIONS IMPLEMENTED ----------------------------------------------
  *
- *  -b            "Save a copy of the original contents of each modified
- *                file, before the differences are applied, in a file of
- *                the same name with the suffix .orig appended to it."
- *                Implemented for the in-place (no -o) case only, which
- *                is the only case where a file is actually "modified"
- *                in place; -o redirects all output elsewhere and never
- *                touches the target file, so -b is a no-op alongside it
- *                (matching the literal "each modified file" wording).
+ *  -b            Save the original file as `.orig` before modifying it.
+ *                Implemented for the in-place (no -o) case only -- -o
+ *                never touches the target file, so -b is a no-op there.
  *  -c/-e/-n/-u   Force copied-context / ed / normal / unified
  *                interpretation instead of auto-detecting.
- *  -d dir        "Change the current directory to dir before
- *                processing."  The patch input itself (-i or stdin) is
- *                opened and fully read *before* the chdir(), matching
- *                conventional patch behaviour that -i's own pathname is
- *                resolved relative to the invoking directory, not the
- *                relocated one; every other pathname (the file operand,
- *                -o, -r, and each patch header's own filename) is
- *                resolved after the chdir(), which is the whole point
- *                of the option.
- *  -D define     "Mark changes with one of the following C preprocessor
- *                constructs: #ifdef define ... #endif" (pure addition)
- *                or "#ifndef define ... #endif" (pure deletion); a
- *                genuine change (old lines replaced by new ones) wraps
- *                both halves in a single #ifndef/#else/#endif.  Refused
- *                (loud diagnostic, nonzero exit -- this project's usual
- *                "never silently do something other than what was
- *                asked" rule, see e.g. src/util/sort.c's -m or
- *                src/util/dd.c's conv= for the same convention) when
- *                combined with -e: an ed script's 'd' command never
+ *  -d dir        chdir(dir) before processing. The patch input (-i or
+ *                stdin) is opened and fully read *before* the chdir(),
+ *                so its path resolves relative to the invoking
+ *                directory; every other pathname (file operand, -o, -r,
+ *                each patch header's filename) resolves after the
+ *                chdir().
+ *  -D define     Wrap pure additions in #ifdef define...#endif, pure
+ *                deletions in #ifndef define...#endif, and genuine
+ *                changes in a single #ifndef/#else/#endif. Refused
+ *                together with -e: an ed script's 'd' command never
  *                records the text it deletes (see ---- ED SCRIPTS ----
- *                below), so there is no old-line text available to wrap
- *                in the #ifndef branch.
- *  -i patchfile  "Read the patch information from the file named by the
- *                pathname patchfile, rather than the standard input."
- *  -l            "Cause any sequence of <blank> characters in the
- *                difference script to match any sequence of <blank>
- *                characters in the input file."  Applied only to the
- *                *matching* step (ws_loose_equal() below); every byte
- *                actually written to the patched output -- context
- *                lines, and old-line text wrapped by -D -- is always
- *                copied from the target file's own literal bytes, never
- *                from the patch file's copy, so -l never rewrites
- *                whitespace into the result the way a naive
- *                text-substitution implementation might.
- *  -N            "Ignore patches where the differences have already
- *                been applied to the file; by default, already-applied
- *                patches shall be rejected."  Both halves implemented:
- *                default behaviour treats an already-applied hunk as a
- *                reject (same accounting as a real mismatch, exit
- *                status 1), and -N instead copies the already-new
- *                content through untouched and continues.
- *  -o outfile    "Instead of modifying the files ... directly, write a
- *                copy of the file referenced by each patch, with the
- *                appropriate differences applied, to outfile."  The
- *                spec continues: "Multiple patches for a single file
- *                shall be applied to the intermediate versions of the
- *                file created by any previous patches, and shall result
- *                in multiple, concatenated versions of the file being
- *                written to outfile" -- describing the case of several
- *                *independent* patch files, each named on its own patch
- *                invocation, sharing one outfile across several runs.
- *                Within a *single* invocation, when an explicit file
- *                operand is given together with a patch stream that
- *                itself contains more than one file-header section (an
- *                unusual combination -- normally a stream with several
- *                sections has no operand at all, letting each section
- *                pick its own target from its own header), this
- *                implementation applies every hunk from every section,
- *                in stream order, to that one operand file as a single
- *                combined pass and writes one result, rather than
- *                producing the "multiple, concatenated versions"
- *                literal reading for that specific corner case -- a
- *                real, deliberate narrowing documented here because
- *                nothing in this project's own usage needs the
- *                concatenated-copies behaviour and it does not fit this
+ *                below), so there's no old-line text to put in the
+ *                #ifndef branch.
+ *  -i patchfile  Read the patch from patchfile instead of stdin.
+ *  -l            Blank sequences in the patch match any blank sequence
+ *                in the input file. Applies only to the *matching* step
+ *                (ws_loose_equal() below); every byte actually written
+ *                -- context lines, and old-line text wrapped by -D -- is
+ *                always copied from the target file's own literal
+ *                bytes, so -l never rewrites whitespace in the result.
+ *  -N            Treat an already-applied hunk as a no-op success
+ *                instead of a reject (the default: already-applied is
+ *                rejected, exit status 1, same accounting as a real
+ *                mismatch).
+ *  -o outfile    Write the patched result to outfile instead of
+ *                modifying the file in place. When an explicit file
+ *                operand is combined with a patch stream containing more
+ *                than one file-header section -- an unusual combination
+ *                -- this implementation applies every hunk from every
+ *                section, in stream order, to that one operand file as a
+ *                single combined pass, rather than the spec's literal
+ *                "multiple, concatenated versions" reading for that
+ *                corner case; this project has no use for the
+ *                concatenated-copies behavior and it doesn't fit this
  *                implementation's single-pass design.
- *  -p num        "For all pathnames in the patch file that indicate the
- *                names of files to be patched, delete num pathname
- *                components from the beginning of each pathname."
- *                (strip_components() below; components are '/'-
- *                separated, and stripping more than exist in a name
- *                just leaves its bare basename rather than erroring.)
- *  -R            "Reverse the sense of the patch script; that is,
- *                assume that the difference script was created from the
- *                new version to the old version."  Refused when
- *                combined with -e (an ed script has no old-line text to
- *                reconstruct a reverse application from, and the
- *                specification's own OPTIONS text for -R notes the ed-
- *                script case is excluded).
- *  -r rejectfile "Override the default reject filename.  In the default
- *                case, the reject file shall have the same name as the
- *                output file, with the suffix .rej appended to it."
- *  file          OPERANDS: "A pathname of a file to patch."  When
- *                given, it overrides whatever filename a context/
- *                unified header would otherwise select (see ---- NAME
- *                SELECTION ---- below), and is *required* -- rather
- *                than merely preferred -- for the normal and ed
- *                formats, neither of which carries any filename at all
- *                in its own patch text.
+ *  -p num        Strip num leading '/'-separated pathname components
+ *                from each patch pathname (strip_components() below);
+ *                stripping more than exist just leaves the bare
+ *                basename.
+ *  -R            Reverse the patch (apply as new-to-old). Refused
+ *                together with -e, per the same missing-old-line-text
+ *                reason as -D.
+ *  -r rejectfile Override the default reject filename (normally
+ *                outfile + ".rej").
+ *  file          Overrides whatever filename a context/unified header
+ *                would otherwise select (see ---- NAME SELECTION ----
+ *                below); *required* for the normal and ed formats,
+ *                which carry no filename in their own patch text.
  *
  * ---- NAME SELECTION (context/unified, no file operand) ----------------
  *
- * The real spec's EXTENDED DESCRIPTION describes a five-step filename-
- * determination algorithm (context-diff markers, then the "---"/"+++"
- * pair, then an "Index:" header, then an SCCS-retrieval attempt, and
- * finally an interactive prompt).  This implementation narrows that to
- * the first, cheapest, always-available part of it: after -p stripping,
- * pick_target_name() below prefers the "old" name if a file by that
- * name already exists, otherwise falls back to the "new" name.  SCCS/
- * RCS retrieval and interactive prompting are both deliberately not
- * implemented -- this utility, like every other one in this project, is
- * meant to run with no fork/exec dependency during early bootstrap
- * (src/internal/util.h's own header comment), where prompting a
- * terminal that may not exist yet is not a meaningful fallback anyway.
+ * The real spec's five-step filename algorithm (context-diff markers,
+ * "---"/"+++" pair, "Index:" header, SCCS retrieval, interactive prompt)
+ * is narrowed here to its first, cheapest, always-available part:
+ * pick_target_name() below prefers the "old" name if it already exists,
+ * else falls back to the "new" name. SCCS/RCS retrieval and interactive
+ * prompting are not implemented -- this utility, like every other one in
+ * this project, must run with no fork/exec dependency during early
+ * bootstrap (src/internal/util.h), where prompting a terminal that may
+ * not exist yet isn't a meaningful fallback anyway.
  *
  * ---- ED SCRIPTS --------------------------------------------------------
  *
- * A `diff -e` script carries no context at all: each command is just
+ * A `diff -e` script carries no context: each command is just
  * `addr1[,addr2]{a,c,d}`, optionally followed by literal replacement
- * text terminated by a line containing exactly ".".  Because such a
- * script's commands are always emitted in descending order of original
- * line number (each one operates on lines strictly below every command
- * still to come), apply_ed_section() below applies them directly,
- * splicing into a single in-memory copy of the file addressed by each
- * command's literal 1-based line numbers, with no matching or offset
- * bookkeeping at all -- unlike the other three formats, there is
- * nothing here for -l's whitespace looseness or the fuzzy scan above to
- * apply to, since there is no context to compare against.
+ * text terminated by a line containing exactly ".". Because such
+ * commands are always emitted in descending order of original line
+ * number, apply_ed_section() below applies them directly against a
+ * single in-memory copy of the file, addressed by each command's
+ * literal 1-based line numbers, with no matching or offset bookkeeping
+ * -- unlike the other three formats, there is no context here for -l or
+ * the fuzzy scan above to apply to.
  *
  * ---- EXIT STATUS -------------------------------------------------------
  *
- * "0 Successful completion." / "1 One or more lines were written to a
- * reject file." / ">1 An error occurred." -- note that 1 is reserved for
- * the specific "hunks were rejected" outcome, not a generic error, so
- * usage errors and I/O failures below always return 2, never 1 (the
- * same distinction src/util/sort.c's own header comment makes for its
- * -c option's exit status).
+ * 0 success, 1 hunks written to a reject file, >1 an error -- so usage
+ * errors and I/O failures below always return 2, never 1 (the same
+ * distinction src/util/sort.c's header makes for its -c option).
  */
 #include <stdio.h>
 #include <stdlib.h>

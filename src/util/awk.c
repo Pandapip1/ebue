@@ -3,165 +3,108 @@
  *
  * awk(1p) -- XCU: `awk [-F sepstring] [-v assignment]... program
  * [argument...]` or `awk [-F sepstring] -f progfile [-f progfile]...
- * [-v assignment]... [argument...]`. The whole of __util_awk_main()
- * below is just command-line parsing and wiring; the real work is
- * three sibling translation units, each with its own header comment
- * for the part it owns:
+ * [-v assignment]... [argument...]`. __util_awk_main() below is just
+ * command-line parsing and wiring; the real work is three sibling
+ * translation units, each with its own header comment:
  *
- *  - src/util/awk_priv.h: the shared token/AST/cell/interpreter types
- *    every one of the four files below this comment uses.
+ *  - src/util/awk_priv.h: shared token/AST/cell/interpreter types.
  *  - src/util/awk_lex.c: the lexer.
- *  - src/util/awk_parse.c: the recursive-descent parser, one function
- *    per grammar production, precedence chain documented in its own
- *    header.
+ *  - src/util/awk_parse.c: the recursive-descent parser.
  *  - src/util/awk_run.c: the tree-walking interpreter -- value/cell
- *    model, field splitting, comparisons, the built-in function table,
- *    getline, and the BEGIN/main-loop/END driver.
+ *    model, field splitting, comparisons, built-in functions, getline,
+ *    and the BEGIN/main-loop/END driver.
  *
- * This file's own job is: parse -F/-v/-f/--, assemble the program
- * text, parse it, build the interpreter, seed ENVIRON/ARGV/ARGC and
- * any -v assignments, run it, and translate its own EXIT STATUS
- * section ("If a syntax error occurs while awk is compiling the
- * program... awk shall write a diagnostic message to standard error
- * and shall exit with a non-zero exit status ... Otherwise, ... the
- * exit status ... shall be the value passed to ... exit(); otherwise
- * ... 0") into the process's own exit code.
+ * This file parses -F/-v/-f/--, assembles the program text, parses it,
+ * builds the interpreter, seeds ENVIRON/ARGV/ARGC and any -v
+ * assignments, runs it, and translates its EXIT STATUS section (syntax
+ * error -> nonzero diagnostic exit; otherwise exit()'s argument, else 0)
+ * into the process's own exit code.
  *
  * ---- OPTIONS -----------------------------------------------------------
  *
- *  -F sepstring   Sets FS before BEGIN runs (XCU: "shall be used to
- *                 set the value of FS to be sepstring", so this
- *                 simply seeds a global exactly like a -v assignment
- *                 -- and, per "If any of the characters ... are the
- *                 same as ... the value used for FS", the ordinary
- *                 single-space/single-char/ERE FS classification
- *                 (awk_run.c's split_into()) applies to it identically
- *                 to any other FS value).
+ *  -F sepstring   Sets FS before BEGIN runs -- seeds the same global a
+ *                 -v assignment would, so awk_run.c's ordinary FS
+ *                 classification (split_into()) applies to it
+ *                 identically.
  *  -v assignment  `name=value`, applied before BEGIN runs, in
- *                 left-to-right command-line order for repeats (last
- *                 one for a given name wins) -- XCU is silent on
- *                 -F/-v ordering relative to each other when both name
- *                 the same variable; this implementation processes
- *                 every option strictly in argv order, so whichever of
- *                 `-F` or `-v FS=...` appears later on the command
- *                 line wins. A deliberate, documented choice among
- *                 conforming ones, not a hidden default.
- *  -f progfile    May repeat; each file's text is concatenated (with a
- *                 newline inserted between files, in case one does not
- *                 end in one) to form the whole program, in the order
- *                 given -- XCU: "the concatenation of the contents of
- *                 each of the progfile operands". When at least one
- *                 -f is given, the first operand is NOT the program
- *                 text (it is instead the first `argument`).
+ *                 left-to-right command-line order (last repeat wins).
+ *                 XCU is silent on -F/-v ordering when both name the
+ *                 same variable; this implementation processes every
+ *                 option in argv order, so whichever appears later
+ *                 wins.
+ *  -f progfile    May repeat; each file's text is concatenated (with an
+ *                 inserted newline, in case one doesn't end in one) in
+ *                 the order given. When at least one -f is given, the
+ *                 first operand is NOT the program text -- it's the
+ *                 first `argument`.
  *  --             Ends option parsing explicitly.
  *
  * OPERANDS: with no -f, the first non-option operand is the program
- * text. Every operand after that (or after the last -f/-v when -f was
- * used) is a `file` or a `var=value` assignment, and -- this is the
- * specific trap the batch instructions called out -- a var=value
- * operand takes effect exactly when the main input loop *reaches* it
- * in ARGV order, not all at once before input processing starts:
- * `awk '{print x}' file1 x=5 file2` prints an empty x for every line
- * of file1 and "5" for every line of file2. This is implemented
- * naturally, not as a special case: awk_run.c's advance_to_next_argv_
- * file() recognizes and applies a var=value ARGV element the moment it
- * is reached while walking ARGV for the next input file, exactly the
- * same way real input processing consumes ARGV one element at a time.
- * -v assignments are different on purpose -- they are seeded here,
- * before BEGIN, so BEGIN can see them, matching XCU's "-v assignment
- * ... shall be used to set the value of a variable, or array element,
- * before ... BEGIN action(s) ... are executed."
+ * text. Every operand after that is a `file` or `var=value` assignment,
+ * and a var=value operand takes effect exactly when the main input loop
+ * *reaches* it in ARGV order, not all at once up front: `awk
+ * '{print x}' file1 x=5 file2` prints an empty x for file1's lines and
+ * "5" for file2's. This falls out naturally from awk_run.c's advance_
+ * to_next_argv_file(), which applies a var=value ARGV element the
+ * moment it's reached while walking ARGV for the next input file. -v
+ * assignments are seeded here, before BEGIN, so BEGIN can see them.
  *
- * ---- DELIBERATE SCOPE NARROWINGS (recorded here, the same way
- * src/util/dd.c documents its conv= coverage and src/util/df.c its
- * "no operands" case) -----------------------------------------------
+ * ---- DELIBERATE SCOPE NARROWINGS ---------------------------------------
  *
- *  - Numeric literals are decimal only; no hex float constants. XCU's
- *    own NUMBER token grammar is decimal-only anyway (a hex constant
- *    in awk source is a non-portable extension some implementations
- *    add) -- see awk_lex.c's header for exactly what a "0x1" literal
- *    lexes as instead (NUMBER 0 concatenated with NAME "x1").
+ *  - Numeric literals are decimal only -- XCU's own NUMBER grammar is
+ *    decimal-only anyway; see awk_lex.c's header for what "0x1" lexes
+ *    as instead (NUMBER 0 concatenated with NAME "x1").
  *  - Empty-string FS ("split into characters") is a common extension
- *    XCU does not itself define; this implementation's own reading
- *    (awk_run.c's split_into()) is "no separator ever occurs", i.e.
- *    the whole string is field 1 -- a real, working answer, just not
- *    the gawk-compatible one, and recorded here rather than left to
- *    be discovered by surprise.
- *  - RS's value beyond its very first character is never consulted
- *    (a multi-character or ERE RS is a gawk extension XCU does not
- *    define); XCU's own text is exactly "the first character of the
- *    value of RS should be used".
- *  - RS=="" (paragraph mode)'s "the <newline> character shall always
- *    be a field separator, no matter what value FS has" is implemented
- *    for FS==" " (already true -- blank includes newline) and for a
- *    single-character FS (unioned directly into the split), but NOT
- *    additionally unioned into a multi-character (ERE) FS -- an
- *    already-rare combination (paragraph mode *and* a regex FS)
- *    narrowed here rather than left silently half-right.
- *  - `nextfile` (skip to the next ARGV file without running END) is a
- *    real, widely-implemented extension this project's own "POSIX-
- *    mandatory only" scope excludes deliberately: it has no XCU
- *    awk(1p) citation at all.
- *  - `fflush()` as a callable built-in is likewise not implemented:
- *    it is a gawk/BWK extension, not one of XCU awk(1p)'s own mandatory
- *    functions. Every stream this implementation itself opens is still
- *    flushed at the right moments internally (before system()/a
- *    `| getline` pipe command runs, and at normal program exit) without
- *    a user-callable hook.
- *  - printf/sprintf's conversions carry no C length modifiers (h/hh/l/
- *    ll/L) -- meaningless here since every awk value is already a
- *    double or a string, never a typed vararg the way C's own printf()
- *    varargs are; the same narrowing src/util/util_printf.c's own
- *    header documents for printf(1p)'s conversions.
- *  - substr()'s m<=0 / m+n past the string's end behavior is XCU's own
- *    "the effect ... is unspecified" case; this implements the
- *    conventional clamping algorithm every real awk uses (a half-open
- *    [m, m+n) window over 1-based positions, clipped to what actually
- *    overlaps the string) -- see awk_run.c's own comment on it.
+ *    XCU doesn't define; this implementation's split_into() treats it
+ *    as "no separator ever occurs" (the whole string is field 1), not
+ *    the gawk-compatible behavior.
+ *  - RS's value beyond its first character is never consulted (a
+ *    multi-character or ERE RS is a gawk extension) -- XCU: "the first
+ *    character of the value of RS should be used".
+ *  - RS=="" (paragraph mode)'s "newline is always a field separator" is
+ *    implemented for FS==" " (already true) and a single-character FS
+ *    (unioned into the split), but not additionally unioned into a
+ *    multi-character (ERE) FS -- an already-rare combination.
+ *  - `nextfile` and `fflush()` are gawk/BWK extensions with no XCU
+ *    awk(1p) citation, so neither is implemented. Every stream this
+ *    implementation itself opens is still flushed at the right internal
+ *    moments (before system()/`| getline`, and at normal exit).
+ *  - printf/sprintf conversions carry no C length modifiers (h/hh/l/
+ *    ll/L) -- meaningless since every awk value is already a double or
+ *    a string, never a typed vararg.
+ *  - substr()'s m<=0 / m+n past the string's end is XCU's own
+ *    "unspecified" case; this implements the conventional clamping
+ *    every real awk uses (a half-open [m, m+n) window over 1-based
+ *    positions, clipped to what overlaps the string) -- see
+ *    awk_run.c's comment.
  *  - `for (k in arr)` iteration order is XCU's own "unspecified" --
- *    this implementation's order is whatever its hash table's bucket
- *    layout produces (awk_priv.h's struct awk_htab comment).
- *  - A user-defined function's array-vs-scalar parameter binding uses
- *    a dynamic (not static-analysis) rule: a bare-identifier argument
- *    whose current cell is either already an array or still completely
- *    uninitialized is bound *by reference* (aliased into the callee's
- *    frame directly); the first time that shared cell is used as a
- *    scalar inside the callee, the binding is silently forked into a
- *    private copy first (so the write never reaches the caller's
- *    variable) -- see awk_priv.h's struct awk_cell comment and
- *    awk_run.c's call_user_func() for the full mechanism. This gets
- *    the two well-known rules right (scalars always by value, arrays
- *    always by reference, and an uninitialized argument that the
- *    callee treats as an array becomes a real array in the caller's
- *    scope too) including through nested/chained calls, without a
- *    separate whole-program static analysis pass.
- *  - next/exit executed from inside a user-defined function (rather
- *    than directly in a rule's own action) unwind correctly to the
- *    nearest enclosing record/program boundary via a small persistent
- *    interpreter flag rather than setjmp/longjmp -- see awk_run.c's
- *    header for the mechanism and its one acknowledged rough edge
- *    (a next/exit whose effect would need to be observed mid-
- *    expression, e.g. as one of several arguments to a single print
- *    statement, instead lets any *later* argument of that same
- *    statement still evaluate before the statement bails).
- *  - Allocation failure anywhere in the parser or interpreter is
- *    treated as fatal (a diagnostic plus an unwind back to here --
- *    NOT a raw exit(2): see this file's own __util_awk_main() and
- *    awk_priv.h's "fatal-error unwind" header comment for why bi_awk()
- *    running as a no-fork shell built-in makes that distinction load-
- *    bearing) rather than threaded back through every one of this
- *    utility's many mutually-recursive functions as a real error
- *    return -- see awk_parse.c's and awk_run.c's own headers.  The
- *    same unwind now also catches every OTHER fatal runtime condition
- *    awk_run.c's fatal()/oom() cover (division by zero, a scalar/array
- *    type clash, an undefined function call, an invalid dynamic ERE, a
- *    failed output redirect open) -- none of them exit()s the process
- *    either, for the same reason.
+ *    it's whatever the hash table's bucket layout produces
+ *    (awk_priv.h's struct awk_htab).
+ *  - A user function's array-vs-scalar parameter binding is dynamic,
+ *    not static: a bare-identifier argument whose cell is already an
+ *    array or still uninitialized is bound *by reference*; the first
+ *    scalar use inside the callee forks it into a private copy first.
+ *    This gets scalars-by-value and arrays-by-reference right,
+ *    including an uninitialized argument the callee treats as an array
+ *    becoming a real array in the caller's scope -- see awk_priv.h's
+ *    struct awk_cell and awk_run.c's call_user_func().
+ *  - next/exit inside a user function unwind to the nearest enclosing
+ *    record/program boundary via a persistent interpreter flag rather
+ *    than setjmp/longjmp -- see awk_run.c's header for the mechanism
+ *    and its one rough edge (a next/exit whose effect would need to be
+ *    observed mid-expression instead lets any later argument of the
+ *    same statement still evaluate before the statement bails).
+ *  - Allocation failure anywhere in the parser or interpreter is fatal
+ *    (a diagnostic plus an unwind back to here, not a raw exit(2):
+ *    bi_awk() runs as a no-fork shell builtin, so exit()ing the process
+ *    would be a defect -- see awk_priv.h's "fatal-error unwind"
+ *    comment). The same unwind covers every other fatal runtime
+ *    condition (division by zero, a scalar/array type clash, an
+ *    undefined function call, an invalid dynamic ERE, a failed output
+ *    redirect open).
  *
  * tolower()/toupper() ARE implemented -- they are XCU awk(1p)'s own
- * mandatory string functions, not an extension, despite the task
- * brief's built-in list not naming them explicitly (that list was
- * itself a floor, not a ceiling).
+ * mandatory string functions, not an extension.
  */
 #include <stdio.h>
 #include <stdlib.h>

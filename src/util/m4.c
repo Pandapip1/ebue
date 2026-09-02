@@ -8,53 +8,35 @@
  *
  * ==== THE SCANNING MODEL =====================================================
  *
- * m4 has exactly one recursive text scanner (scan(), below), used for
- * BOTH the top-level input stream AND the collection of every macro
- * call's own arguments -- there is no separate "raw argument text"
- * pass.  Both jobs run the identical loop: recognize a comment and copy
- * it through verbatim (delimiters included); recognize a quoted region
- * and copy its content through with the delimiters stripped (never
- * scanning inside it for macro names, per m4.html: "[a quoted region]
- * shall not be interpreted for macro names during [this] scan"); or
- * recognize a macro-name word and, if it currently has a definition,
- * invoke it, pushing whatever text the call produces back onto the
- * input so it is scanned again -- exactly the "the macro's own output
- * shall be rescanned" rule -- before continuing.
+ * scan() is the one recursive text scanner, used both for the top-level
+ * input stream and for collecting each macro call's own arguments -- there
+ * is no separate "raw argument text" pass. Both jobs copy comments through
+ * verbatim, copy quoted regions through with delimiters stripped and their
+ * content never scanned for macro names (m4.html: quoted text "shall not
+ * be interpreted for macro names"), and invoke any recognized,
+ * currently-defined macro name, pushing its expansion back onto the input
+ * to be rescanned before continuing.
  *
- * Running argument collection through the very same scanner means a
- * macro call's arguments ARE macro-expanded as they are collected,
- * unless the caller quotes them.  This is not a shortcut taken here; it
- * is genuine, well-known m4 semantics and the entire reason idiomatic
- * m4 code quotes macro-name arguments and definition bodies at all:
- * `define(x,1)undefine(x)` really does try to undefine the macro named
- * "1" (x's own already-expanded value), not "x", because "x" is
- * expanded to "1" while undefine's argument is being collected, before
- * undefine(1p)'s own C code ever runs.  `undefine(\`x')` is what quotes
- * against exactly that, and is why this file does not special-case any
- * builtin's argument handling to avoid it -- doing so would be a
- * DEVIATION from real m4, not a fix.  The same eager-expansion property
- * is also how `eval(incr(1)+incr(2))` computes 5: incr(1) and incr(2)
- * are both macro calls inside eval's own argument text, and are
- * expanded to "1" and "2" before eval(1p)'s C code ever sees the
- * string "1+2".
+ * Because argument collection runs through this same scanner, a macro
+ * call's arguments ARE expanded as they are collected unless quoted --
+ * real m4 semantics, and the reason idiomatic m4 quotes macro-name
+ * arguments and definition bodies: `define(x,1)undefine(x)` undefines
+ * "1", not "x", because x is already expanded before undefine's C code
+ * runs. This file does not special-case any builtin's argument handling
+ * to avoid it; doing so would deviate from real m4.
  *
- * Pushing a macro's own expansion back onto the input (rather than
- * recursively re-invoking the scanner on it) means a long CHAIN of
- * macros expanding into one another (`define(a,b)define(b,c)...`)
- * costs no C call-stack depth at all -- it is one loop, reading from
- * whatever is now on top of the input-frame stack.  Only genuinely
- * NESTED macro calls inside one argument list (`foo(bar(baz(1)))`) use
- * real C recursion, one level per open, unmatched parenthesis -- bounded
- * by how deeply a real script actually nests calls, never by how many
- * macros end up chained through each other's output.
+ * A macro's expansion is pushed back onto the input rather than recursed
+ * into, so a long CHAIN of macros expanding into one another costs no C
+ * stack depth -- it's one loop reading whatever is on top of the
+ * input-frame stack. Only genuinely NESTED calls in one argument list
+ * (e.g. `foo(bar(baz(1)))`) use real C recursion, one level per open
+ * paren.
  *
- * QUOTING is depth-counted, not "first close-quote wins": an inner
- * left-quote inside an already-open quoted region increases a nesting
- * depth counter and is itself kept as literal content (not stripped);
- * only the transition from depth 1 to depth 0 is the true close, and
- * that pair alone has its delimiters removed.  This matches real m4
- * quote nesting and is what lets quoted text safely CONTAIN a stray
- * copy of the quote characters.
+ * QUOTING is depth-counted: an inner left-quote inside an already-open
+ * region increases a nesting counter and is kept as literal content; only
+ * the depth-1-to-0 transition strips delimiters. This matches real m4
+ * quote nesting and lets quoted text safely contain a stray quote
+ * character.
  *
  * ==== BUILTINS IMPLEMENTED ===================================================
  *
@@ -70,241 +52,150 @@
  * than numeric) argument form.
  *
  * ---- shift() DOES quote its output -----------------------------------------
- * m4.html, verbatim: "The defining text for the shift macro shall be a
- * comma-separated list of its arguments except the first one.  Each
- * argument shall be quoted using the current quoting strings." -- so
- * shift's output is wrapped per-argument exactly like $@'s, not left
- * bare like $*'s.
+ * m4.html: shift's defining text is its arguments after the first, "each
+ * ... quoted using the current quoting strings" -- so shift's output is
+ * per-argument quoted like $@'s, not bare like $*'s.
  *
- * ---- syscmd does not capture output (against one confusing live-page
- * paraphrase) -----------------------------------------------------------------
- * Two independent re-fetches of m4.html's syscmd paragraph both
- * rendered as "[t]he defining text shall be the string result of that
- * command" -- but the SAME paragraph also says "[n]o output redirection
- * shall be performed by the m4 utility," which cannot be true
- * simultaneously with m4 itself capturing a child's stdout into a
- * string. Read together with every real m4 implementation this project
- * is aware of (syscmd's own expansion is null; capturing output under a
- * DIFFERENT name, esyscmd, is the actual GNU extension this project
- * excludes above) and with the "not rescanned" clause immediately
- * after it (pointless to state about a string that never gets
- * produced), the more consistent reading is that the fetched wording is
- * either a documentation defect or a summarization artifact conflating
- * syscmd's paragraph with sysval's ("[t]he defining text of sysval ...
- * shall be the exit value ... as a string"). This file follows the
- * consistent, real-world reading: syscmd(cmd) runs cmd via system(),
- * lets its stdout/stderr go wherever the process's own fds already
- * point, expands to the empty string, and records the exit status for
- * sysval to report.
+ * ---- syscmd does not capture output ----------------------------------------
+ * m4.html both implies syscmd's result is the command's output AND states
+ * "[n]o output redirection shall be performed" -- contradictory read
+ * literally. Read against every real m4 (capturing output is esyscmd, the
+ * GNU extension excluded above): syscmd(cmd) runs cmd via system(), leaves
+ * stdout/stderr on the process's existing fds, expands to the empty
+ * string, and records the exit status for sysval.
  *
  * ---- ifelse's 6+-argument recursion ----------------------------------------
- * m4.html, verbatim, is implemented exactly: with 6 or more arguments
- * and the first two unequal, "the first three arguments shall be
- * discarded and processing shall restart with the remaining
- * arguments" -- bi_ifelse() below is a plain loop doing precisely that.
+ * m4.html, implemented exactly: with 6+ arguments and the first two
+ * unequal, "the first three arguments shall be discarded and processing
+ * shall restart with the remaining arguments" -- bi_ifelse() below is a
+ * plain loop doing that.
  *
  * ---- defn of a builtin preserves builtin-ness ------------------------------
- * defn(name) must let `define(new, defn(old))` install NEW as an alias
- * that still runs old's real C logic, not old's name as inert text.
- * Since argument collection already expanded defn(old) by the time
- * define()'s own C code sees its second argument (see the scanning
- * model above), defn() cannot just hand define() a raw, unexpanded
- * call to special-case. Instead, for a builtin, defn() emits a short,
+ * `define(new, defn(old))` must make NEW run old's real C logic, not
+ * old's name as inert text. Since argument collection already expands
+ * defn(old) before define() sees it, defn() cannot hand define() a raw
+ * call to special-case; instead, for a builtin, defn() emits a short
  * control-character-prefixed sentinel (M4_BUILTIN_MAGIC + decimal id +
- * a trailing 0x01), WRAPPED in the current quote strings so the one
- * rescan pass between defn's return and define()'s own argument value
- * strips the quotes but leaves the sentinel itself untouched (it starts
- * with 0x01, which can never begin a macro-name word, so it is never
- * itself misrecognized as a call). define()/pushdef() then check their
- * own second argument against this exact pattern (parse_builtin_sentinel())
- * before falling back to storing it as ordinary text, and install a
- * builtin alias instead when it matches. Collision with genuine user
- * text is astronomically unlikely (a leading 0x01 byte) and is an
- * accepted, documented risk, not a soundness gap this file tries to
- * close further. A bare, non-defn-argument use of `defn(somebuiltin)`
- * (i.e. its result reaching real output rather than define()'s second
- * argument) prints this same internal sentinel text instead of
- * something human-meaningful -- a narrow, cosmetic-only gap: defn of a
- * builtin is only meaningful, and only ever idiomatically used, as
- * define/pushdef's own second argument.
+ * trailing 0x01), wrapped in the current quote strings so the rescan
+ * between defn's return and define()'s argument strips the quotes but
+ * leaves the sentinel (starting with 0x01, never a macro-name byte)
+ * untouched. define()/pushdef() check their second argument against this
+ * pattern (parse_builtin_sentinel()) before falling back to plain text.
+ * Collision with genuine user text is accepted as astronomically
+ * unlikely. A bare, non-defn-argument use of `defn(somebuiltin)` prints
+ * this sentinel literally -- a narrow, cosmetic-only gap, since defn of a
+ * builtin is only ever idiomatically used as define/pushdef's own second
+ * argument.
  *
  * ---- eval(): 32-bit width, modular wraparound, C-style truncating division -
  * m4.html requires "signed integer arithmetic with at least 32-bit
- * precision"; this file uses int32_t/uint32_t explicitly (never `long`,
- * which is not guaranteed 32 bits on every host this project's own
- * sources are compiled on -- see src/wordexp/arith.c's own note on the
- * native-vs-target `long` width hazard, which applies identically
- * here). Overflow is defined as two's-complement modular wraparound,
- * computed through unsigned arithmetic exactly the way arith.c's own
- * wrap_to_long() does at long's width -- see that file's OVERFLOW
- * section for the underlying reasoning (signed overflow is undefined by
- * ISO C 6.5, POSIX does not mandate trapping it, and wraparound is what
- * real users of eval() expect). Division/modulus truncate toward zero
- * (C99 6.5.5p6, which is what every C compiler this project targets
- * already does). A negative eval() result is rendered in any radix as a
- * literal '-' followed by the magnitude's digits in that radix (never a
- * two's-complement bit pattern) -- radix-11-and-above digits above 9
- * use lowercase 'a'..'z', a fully conforming, documented choice
- * (m4.html leaves the letter case unspecified).
+ * precision"; this file uses int32_t/uint32_t explicitly, never `long`
+ * (not guaranteed 32 bits on every host -- see src/wordexp/arith.c's note
+ * on native-vs-target `long` width). Overflow wraps modulo 2^32 via
+ * unsigned arithmetic, the same technique as arith.c's wrap_to_long()
+ * (signed overflow is undefined by ISO C, POSIX doesn't mandate trapping
+ * it, and wraparound is what users expect). Division/modulus truncate
+ * toward zero (C99 6.5.5p6). A negative result renders as '-' plus the
+ * magnitude's digits (never two's-complement bits); radix digits above 9
+ * use lowercase 'a'..'z' (m4.html leaves case unspecified).
  *
  * ---- translit(): literal byte mapping only, no '-' range expansion --------
- * m4.html leaves duplicate-byte and '-'-range behaviour inside from/to
- * unspecified except at the very edges; this file implements the
- * simplest fully-conforming reading -- every byte of `from` maps
- * one-for-one, by index, to the same-index byte of `to` (or is deleted
- * if `to` is shorter/absent), with no special meaning for '-' at all.
+ * m4.html leaves duplicate-byte and '-'-range behavior in from/to
+ * unspecified; this implements the simplest conforming reading -- every
+ * byte of `from` maps one-for-one by index to the same-index byte of `to`
+ * (deleted if `to` is shorter/absent), with no special '-' meaning.
  *
  * ---- foo() is one empty argument, not zero ---------------------------------
- * m4.html does not say what an empty parenthesized call means for
- * argument count; every real m4 this project is aware of treats
- * `foo()` as a single empty argument ($#==1, $1==""), and this file
- * matches that common, if unstandardized, behaviour rather than
- * inventing a third convention.
+ * m4.html doesn't define an empty parenthesized call's argument count;
+ * every real m4 treats `foo()` as one empty argument ($#==1, $1==""), and
+ * this file matches that common convention.
  *
  * ---- changequote's single-argument form is refused, not guessed at --------
- * m4.html, verbatim: "[t]he behavior is unspecified if there is a
- * single argument or either argument is null." A single-argument
- * (or null-argument, 2-argument) call is diagnosed to stderr and
- * otherwise a no-op (quoting left unchanged) -- loud refusal, matching
- * this project's house style (e.g. src/util/sort.c's own -m refusal),
- * rather than silently guessing which of the two strings the caller
- * meant. changequote/changecom delimiter strings are additionally
- * capped at M4_MAXDELIM (32) bytes each, diagnosed and refused past
- * that -- comfortably past any real usage and past the "at least 5
- * characters" floor this batch's own briefing cites, but a real,
- * documented ceiling rather than an unbounded stack buffer.
+ * m4.html: "[t]he behavior is unspecified if there is a single argument
+ * or either argument is null." Such a call is diagnosed to stderr and
+ * left a no-op (quoting unchanged) -- loud refusal over guessing,
+ * matching this project's house style (e.g. src/util/sort.c's -m).
+ * Delimiter strings are capped at M4_MAXDELIM (32) bytes, diagnosed and
+ * refused past that.
  *
  * ---- divert()/undivert(): in-memory buffers, only 1-9, n>9 refused --------
- * Exactly the nine numbered buffers m4.html specifies are implemented,
- * as growable in-memory byte buffers (__util_mallocarray/
- * __util_reallocarray/__util_array_capacity throughout, never a temp
- * file). divert(n) for n>9 is diagnosed and refused (current diversion
- * left unchanged) rather than silently clamped or silently accepted
- * into an implementation-defined 10th-and-beyond bucket; n<0 (any
- * negative value, not just -1) discards output, per m4.html. undivert()
- * with no arguments empties 1..9 in numeric order into whatever the
- * CURRENT diversion is (so undivert() can itself be redirected into
- * another diversion, matching m4.html's own "[b]uffers can be
- * undiverted into other temporary buffers"); at true end-of-input the
- * automatic flush of any diversions still holding data instead always
- * targets the real process stdout directly, per m4.html's literal
- * "shall be written to standard output," and this file performs that
- * final flush on EVERY return path out of __util_m4_main() -- including
- * one m4exit() cut short early, or one cut short by m4wrap() text that
- * itself called m4exit() -- on the view that silently discarding
- * output the script already produced would be a worse surprise than a
- * script relying on m4exit() to suppress it (a use this file is not
- * aware any real script actually depends on). undivert()'s own argument
- * form only accepts diversion NUMBERS (matching m4.html); the GNU
- * filename form is one of the extensions this file's header already
- * excludes.
+ * The nine numbered buffers m4.html specifies are growable in-memory byte
+ * buffers (__util_mallocarray/__util_reallocarray/__util_array_capacity,
+ * never a temp file). divert(n) for n>9 is diagnosed and refused (current
+ * diversion unchanged); n<0 discards output, per m4.html. undivert() with
+ * no arguments empties 1..9 in numeric order into whatever the CURRENT
+ * diversion is, matching m4.html's "[b]uffers can be undiverted into
+ * other temporary buffers". At end-of-input, any diversion still holding
+ * data is auto-flushed straight to real stdout regardless of current
+ * diversion (m4.html: "shall be written to standard output"), on every
+ * return path out of __util_m4_main() including an early m4exit() --
+ * discarding already-produced output would be a worse surprise than
+ * honoring m4exit(). undivert()'s argument form only accepts numbers, per
+ * m4.html; GNU's filename form is one of the extensions excluded above.
  *
  * ---- -s is accepted and ignored --------------------------------------------
- * `#line` synchronization output for a downstream c99 preprocessor
- * phase is real, cheap-to-add-later output-formatting work this
- * project's own callers have no use for yet; -s is parsed (so scripts
- * that pass it do not fail with "unknown option") and does nothing,
- * which is spelled out here rather than left as a silent, undocumented
- * gap.
+ * `#line` output for a downstream c99 preprocessor phase has no consumer
+ * here yet; -s is parsed (so scripts passing it don't fail) and does
+ * nothing.
  *
  * ---- traceon/traceoff: minimal, functioning, not load-bearing -------------
- * m4.html leaves the trace format entirely unspecified ("written to
- * standard error in an unspecified format"). This file tracks an
- * on/off set of traced names (or a single "trace everything" flag) and
- * prints one "m4trace: name(args)" line to stderr per traced call --
- * enough to be a real, working feature, deliberately not developed
- * beyond that against the higher-stakes builtins above.
+ * m4.html leaves the trace format unspecified. This file tracks an on/off
+ * set of traced names (or "trace everything") and prints one
+ * "m4trace: name(args)" line per traced call to stderr.
  *
  * ---- mkstemp() is this library's own real mkstemp(), not reimplemented ----
- * include/stdlib.h / src/stdlib/mktemp.c already provide a real,
- * O_CREAT|O_EXCL-based mkstemp(); the m4 builtin of the same name is a
- * thin wrapper around it (copy the template into a mutable buffer, call
- * it, close() the returned descriptor immediately since m4 itself has
- * no use for it open, expand to the resulting pathname). maketemp() is
- * kept for spec completeness only -- m4.html itself: "[a]pplications
- * should use the mkstemp macro instead of the obsolescent maketemp
- * macro" -- and is implemented as the simplest non-collision-safe
- * reading (trailing run of 'X' replaced by decimal getpid()), matching
- * its own obsolescence rather than trying to make it safe.
+ * include/stdlib.h / src/stdlib/mktemp.c already provide a real
+ * O_CREAT|O_EXCL mkstemp(); the builtin is a thin wrapper (copy the
+ * template to a mutable buffer, call it, close() the descriptor
+ * immediately, expand to the resulting pathname). maketemp() is kept for
+ * spec completeness only (m4.html: "should use mkstemp instead of the
+ * obsolescent maketemp") and implemented as the simplest non-collision-
+ * safe reading: trailing 'X' run replaced by decimal getpid().
  *
  * ---- text-only buffers: no embedded-NUL guarantee inside include() --------
- * Every string this file threads through a macro's own C return value
- * (a builtin's result, a user macro's stored defining text, an
- * argument value) is an ordinary NUL-terminated C string, matching m4's
- * fundamentally textual nature and the same assumption this project's
- * other text utilities already make. The one place this narrows real
- * behaviour: include()'d file content flows through that same
- * NUL-terminated convention, so a byte past an embedded NUL in an
- * included file is lost -- top-level file/stdin operands, by contrast,
- * are read with an explicit byte count (slurp()) and are NOT subject to
- * this, since they are pushed onto the input stack with a real length
- * rather than round-tripped through a builtin's `char *` return value.
+ * Every string threaded through a macro's own C return value (a
+ * builtin's result, a stored macro body, an argument value) is an
+ * ordinary NUL-terminated C string. This narrows include(): file content
+ * past an embedded NUL is lost. Top-level file/stdin operands are not
+ * subject to this -- slurp() reads them with an explicit byte count and
+ * pushes them onto the input stack with a real length, not through a
+ * `char *` return.
  *
  * ---- exit() / _exit() are never called, and no state survives one call ----
  * __util_m4_main() can run in-process as a shell builtin
- * (src/sh/builtin.c's bi_m4()), sharing the calling shell's own
- * process -- see src/internal/util.h's Tier 4 comment and
- * src/util/dd.c's header (roughly lines 85-107) for why calling libc's
- * exit()/_exit() from in here would be a defect, not a shortcut. m4exit
- * only ever sets `st.exit_pending`/`st.exit_code` on the local
- * `struct m4_state`; every loop in scan()/collect_args() checks that
- * flag first thing on every iteration and unwinds cooperatively, all
- * the way back to an ordinary `return status;` at the bottom of this
- * function. m4wrap() text queued for end-of-input processing is still
- * scanned through the same cooperative loop, so an m4exit() reached
- * while processing wrap text stops promptly (the rest of that wrap
- * chunk, and any further-queued wrap texts, are skipped) without ever
- * calling exit(). Every byte of `struct m4_state` -- the macro table,
- * quote/comment strings, diversion buffers, input-frame stack, wrap
- * queue, trace set -- is allocated fresh on entry and freed on every
- * return path (m4_free()), so two sequential `m4` invocations in the
- * same shell session never share so much as one macro definition.
+ * (src/sh/builtin.c's bi_m4()), sharing the calling shell's process --
+ * see src/internal/util.h's Tier 4 comment and src/util/dd.c's header for
+ * why calling exit()/_exit() from here would be a defect. m4exit() only
+ * sets `st.exit_pending`/`st.exit_code` on the local `struct m4_state`;
+ * every loop in scan()/collect_args() checks that flag each iteration and
+ * unwinds cooperatively to an ordinary `return status;`. m4wrap() text is
+ * scanned through the same loop, so an m4exit() reached while processing
+ * wrap text stops promptly without calling exit(). Every byte of `struct
+ * m4_state` (macro table, quote/comment strings, diversion buffers,
+ * input-frame stack, wrap queue, trace set) is allocated on entry and
+ * freed on every return path (m4_free()), so sequential invocations in
+ * the same shell session never share state.
  *
  * ---- runaway expansion is bounded, and why that is not a correctness fix --
- * `define(a,a)a` -- a macro whose own expansion is itself -- loops
- * forever: "a" is looked up, found defined, its expansion ("a") is
- * pushed back onto the input-frame stack, and the top-level scan()
- * loop reads it right back off and does the same thing again. This is
- * NOT a defect in the sense src/regex/regex.c's own bounded-matching
- * fix was one: that bug was unbounded C recursion that could exhaust
- * the stack and crash, for input a correctly-implemented engine is
- * expected to always handle in bounded time. A macro processor that can
- * express its own non-termination is not defective; real m4
- * implementations hang on this input too, by design, the same way a
- * shell fork bomb or `while true; do :; done` "hangs" on purpose.
- * Nothing here changes that expansion really can run forever for a
- * hostile or merely careless script.
- *
- * What IS bounded is how long that can go on for CODE THAT RUNS
- * IN-PROCESS AS A SHELL BUILTIN, with no separate process to kill and --
- * unlike ed.c's SIGINT/SIGHUP polling discipline -- no signal-check
- * anywhere in scan()/collect_args() to poll for interruption; a shell
- * running a self-referential macro's expansion through the `m4` builtin
- * has no way to recover short of being killed from outside. Two
- * independent caps address this, one per dimension a run can fail to
- * terminate in:
+ * `define(a,a)a` loops forever by design -- real m4 implementations hang
+ * on this input too, the same way `while true; do :; done` does. Nothing
+ * here changes that expansion can run forever for a hostile or careless
+ * script. What IS bounded is how long that can go on for code running
+ * IN-PROCESS AS A SHELL BUILTIN, with no separate process to kill and no
+ * signal-check to poll for interruption. Two independent caps, checked at
+ * their one call site in dispatch_macro():
  *
  *   M4_MAX_EXPANSIONS bounds total macro invocations (the `define(a,a)a`
- *   shape above -- a long FLAT chain, no extra C-stack depth per call,
- *   per the "one loop" scanning-model description near the top of this
- *   comment);
+ *   shape -- a long flat chain, no extra C-stack depth per call);
  *
  *   M4_MAX_DEPTH bounds real C-stack recursion depth (the
- *   `len(len(len(...)))` shape -- genuinely nested, unmatched-paren
- *   macro calls, one C stack frame per level, reachable with NO prior
- *   define() at all since every builtin is predefined from m4_init()).
+ *   `len(len(len(...)))` shape -- genuinely nested calls, one C frame per
+ *   level).
  *
- * Both are checked at their one call site in dispatch_macro() (see the
- * comments there) and both unwind through the SAME cooperative path
- * m4exit() already uses (st->exit_pending/st->exit_code) back to an
- * ordinary `return status;`, with a nonzero status and one diagnostic
- * line, no differently from any other error this file reports. A
- * legitimate script -- even a long-running one -- is expected to stay
- * far under either limit; a script that does not is either genuinely
- * non-terminating (in which case this is the same trade a real m4
- * offers no answer to at all) or is doing something unusual enough that
- * a bounded, diagnosed stop is a better outcome than an unrecoverable
- * hang or a stack-exhaustion crash.
+ * Both unwind through the same cooperative path m4exit() uses
+ * (st->exit_pending/st->exit_code) to an ordinary `return status;`, with
+ * a nonzero status and one diagnostic line. A legitimate script is
+ * expected to stay far under either limit.
  */
 #include <stdio.h>
 #include <stdlib.h>
