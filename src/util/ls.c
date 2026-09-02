@@ -143,10 +143,14 @@ static int cmp_entries(const void *pa, const void *pb)
 
 	if (g_sort_opts->S) {
 		off_t sa = a->stat_ok ? a->st.st_size : 0, sb = b->stat_ok ? b->st.st_size : 0;
-		r = sa < sb ? 1 : sa > sb ? -1 : strcmp(a->name, b->name);
+		if (sa < sb) r = 1;
+		else if (sa > sb) r = -1;
+		else r = strcmp(a->name, b->name);
 	} else if (g_sort_opts->t) {
 		time_t ta = time_field(a), tb = time_field(b);
-		r = ta < tb ? 1 : ta > tb ? -1 : strcmp(a->name, b->name);
+		if (ta < tb) r = 1;
+		else if (ta > tb) r = -1;
+		else r = strcmp(a->name, b->name);
 	} else {
 		r = strcmp(a->name, b->name);
 	}
@@ -170,8 +174,13 @@ static void fmt_mode(mode_t m, char *out)
 {
 	static const char letters[9] = "rwxrwxrwx";
 	int i;
-	out[0] = S_ISDIR(m) ? 'd' : S_ISLNK(m) ? 'l' : S_ISCHR(m) ? 'c' :
-	         S_ISBLK(m) ? 'b' : S_ISFIFO(m) ? 'p' : S_ISSOCK(m) ? 's' : '-';
+	if (S_ISDIR(m)) out[0] = 'd';
+	else if (S_ISLNK(m)) out[0] = 'l';
+	else if (S_ISCHR(m)) out[0] = 'c';
+	else if (S_ISBLK(m)) out[0] = 'b';
+	else if (S_ISFIFO(m)) out[0] = 'p';
+	else if (S_ISSOCK(m)) out[0] = 's';
+	else out[0] = '-';
 	for (i = 0; i < 9; i++) out[1 + i] = (m & (0400 >> i)) ? letters[i] : '-';
 	if (m & S_ISUID) out[3] = (m & S_IXUSR) ? 's' : 'S';
 	if (m & S_ISGID) out[6] = (m & S_IXGRP) ? 's' : 'S';

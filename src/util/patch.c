@@ -443,6 +443,17 @@ static int patchfile_push_ed(struct patchfile *pf, const struct edcmd *e)
 	return 1;
 }
 
+/* Same as patchfile_push_hunk(), except a failed push also frees `h` --
+ * every one of this function's call sites (the three format-specific
+ * section parsers below) immediately returns 0 in that case anyway, so
+ * the cleanup belongs here rather than repeated at each call site. */
+static int push_hunk_checked(struct patchfile *pf, struct hunk *h)
+{
+	if (patchfile_push_hunk(pf, h)) return 1;
+	free_hunk(h);
+	return 0;
+}
+
 static void free_patchfile(struct patchfile *pf)
 {
 	size_t i;
@@ -632,7 +643,7 @@ static int parse_normal_section(struct linebuf *L, size_t *ip, struct patchfile 
 	while (*ip < L->n && is_normal_header_line(&L->v[*ip])) {
 		struct hunk h;
 		if (!parse_normal_hunk(L, ip, &h)) return 0;
-		if (!patchfile_push_hunk(pf, &h)) { free_hunk(&h); return 0; }
+		if (!push_hunk_checked(pf, &h)) return 0;
 	}
 	return pf->nhunks > 0;
 }
@@ -687,7 +698,7 @@ static int parse_unified_section(struct linebuf *L, size_t *ip, struct patchfile
 	while (*ip < L->n && starts_with(&L->v[*ip], "@@ -")) {
 		struct hunk h;
 		if (!parse_unified_hunk(L, ip, &h)) return 0;
-		if (!patchfile_push_hunk(pf, &h)) { free_hunk(&h); return 0; }
+		if (!push_hunk_checked(pf, &h)) return 0;
 	}
 	return pf->nhunks > 0;
 }
@@ -791,7 +802,7 @@ static int parse_context_section(struct linebuf *L, size_t *ip, struct patchfile
 	while (*ip < L->n && is_all_stars(&L->v[*ip])) {
 		struct hunk h;
 		if (!parse_context_hunk(L, ip, &h)) return 0;
-		if (!patchfile_push_hunk(pf, &h)) { free_hunk(&h); return 0; }
+		if (!push_hunk_checked(pf, &h)) return 0;
 	}
 	return pf->nhunks > 0;
 }
@@ -1143,7 +1154,10 @@ static int write_rejects(const char *rejpath, struct hunk **rejects, size_t n)
 		size_t k;
 		if (fprintf(f, "@@ -%ld,%ld +%ld,%ld @@\n", h->old_start, h->old_count, h->new_start, h->new_count) < 0) { fclose(f); return -1; }
 		for (k = 0; k < h->n; k++) {
-			char pfx = h->v[k].kind == HOP_CTX ? ' ' : (h->v[k].kind == HOP_DEL ? '-' : '+');
+			char pfx;
+			if (h->v[k].kind == HOP_CTX) pfx = ' ';
+			else if (h->v[k].kind == HOP_DEL) pfx = '-';
+			else pfx = '+';
 			if (fprintf(f, "%c%s\n", pfx, h->v[k].p.text) < 0) { fclose(f); return -1; }
 		}
 	}
@@ -1184,7 +1198,11 @@ int __util_patch_main(int argc, char **argv)
 		if (!strcmp(a, "-N")) { o.N = 1; continue; }
 		if (!strcmp(a, "-R")) { o.R = 1; continue; }
 		if (!strcmp(a, "-c") || !strcmp(a, "-e") || !strcmp(a, "-n") || !strcmp(a, "-u")) {
-			enum diff_format f = a[1] == 'c' ? FMT_CONTEXT : a[1] == 'e' ? FMT_ED : a[1] == 'n' ? FMT_NORMAL : FMT_UNIFIED;
+			enum diff_format f;
+			if (a[1] == 'c') f = FMT_CONTEXT;
+			else if (a[1] == 'e') f = FMT_ED;
+			else if (a[1] == 'n') f = FMT_NORMAL;
+			else f = FMT_UNIFIED;
 			if (o.forced_fmt != FMT_UNKNOWN && o.forced_fmt != f) {
 				__util_diagf("patch: only one of -c/-e/-n/-u may be given\n");
 				return 2;

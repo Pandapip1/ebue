@@ -753,7 +753,11 @@ static int32_t ev_mul(struct m4_eval *e)
 	for (;;) {
 		ev_ws(e);
 		if (*e->p == '*') {
-			e->p++; { int32_t r = ev_unary(e); v = ev_wrap((uint32_t)v * (uint32_t)r); }
+			e->p++;
+			{
+				int32_t r = ev_unary(e);
+				v = ev_wrap((uint32_t)v * (uint32_t)r);
+			}
 		} else if (*e->p == '/') {
 			e->p++;
 			{
@@ -1865,7 +1869,10 @@ int __util_m4_main(int argc, char **argv)
 	if (fflush(stdout) != 0) st.had_error = 1;
 
 	{
-		int code = st.exit_pending ? st.exit_code : (st.had_error ? 1 : 0);
+		int code;
+		if (st.exit_pending) code = st.exit_code;
+		else if (st.had_error) code = 1;
+		else code = 0;
 		m4_free(&st);
 		return code;
 	}
