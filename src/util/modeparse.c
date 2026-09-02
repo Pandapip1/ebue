@@ -61,8 +61,13 @@ static int parse_clause(const char **pp, mode_t *cur, mode_t umask_bits)
 
 	for (; *c == 'u' || *c == 'g' || *c == 'o' || *c == 'a'; c++) {
 		any_who = 1;
-		if (*c == 'a') who |= 1u | 2u | 4u;
-		else who |= (*c == 'u') ? 1u : (*c == 'g') ? 2u : 4u;
+		switch (*c) {
+		case 'u': who |= 1u; break;
+		case 'g': who |= 2u; break;
+		case 'o': who |= 4u; break;
+		case 'a': who |= 1u | 2u | 4u; break;
+		default: break; /* unreachable: loop condition already restricts *c to u/g/o/a */
+		}
 	}
 	if (*c != '+' && *c != '-' && *c != '=') return -1;
 
@@ -72,8 +77,14 @@ static int parse_clause(const char **pp, mode_t *cur, mode_t umask_bits)
 	while (*c == '+' || *c == '-' || *c == '=') {
 		char op = *c++;
 		unsigned perm = 0;
-		for (; *c == 'r' || *c == 'w' || *c == 'x'; c++)
-			perm |= (*c == 'r') ? 4u : (*c == 'w') ? 2u : 1u;
+		for (; *c == 'r' || *c == 'w' || *c == 'x'; c++) {
+			switch (*c) {
+			case 'r': perm |= 4u; break;
+			case 'w': perm |= 2u; break;
+			case 'x': perm |= 1u; break;
+			default: break; /* unreachable: loop condition already restricts *c to r/w/x */
+			}
+		}
 		apply_action(cur, effwho, mask_who, op, perm, umask_bits);
 	}
 	*pp = c;

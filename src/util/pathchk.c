@@ -84,7 +84,8 @@ static int check_one(const char *path)
 	 * the rest of this loop checks -- no NAME_MAX limit, no directory
 	 * of its own to search -- the same carve-out src/misc/basename.c
 	 * and src/misc/dirname.c make for the same two bytes. */
-	if (((unsigned)(path[0] | 32) - 'a') < 26u && path[1] == ':') {
+	if (((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) &&
+	    path[1] == ':') {
 		dstart = 2;
 		prefix[0] = path[0];
 		prefix[1] = ':';
