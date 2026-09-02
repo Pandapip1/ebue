@@ -2,6 +2,48 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <stddef.h>
 
+__SIZE_TYPE__ strlen(
+	const char * __attribute__((annotate("withtok:null_terminated"))));
+__SIZE_TYPE__ wcslen(
+	const __WCHAR_TYPE__ * __attribute__((annotate("withtok:null_terminated"))));
+
+__SIZE_TYPE__ inclusive_sentinel_length(const char *s)
+{
+	__SIZE_TYPE__ length = strlen(s);
+	__SIZE_TYPE__ i;
+	for (i = 0; i <= length; i++) {
+	}
+	return i;
+}
+
+__SIZE_TYPE__ propagated_inclusive_sentinel_length(const char *s)
+{
+	__SIZE_TYPE__ length = strlen(s);
+	__SIZE_TYPE__ copy = length;
+	__SIZE_TYPE__ i;
+	for (i = 0; i <= copy; i++) {
+	}
+	return i;
+}
+
+__SIZE_TYPE__ reversed_inclusive_sentinel_length(const char *s)
+{
+	__SIZE_TYPE__ length = strlen(s);
+	__SIZE_TYPE__ i;
+	for (i = 0; length >= i; i++) {
+	}
+	return i;
+}
+
+__SIZE_TYPE__ inclusive_wide_sentinel_length(const __WCHAR_TYPE__ *s)
+{
+	__SIZE_TYPE__ length = wcslen(s);
+	__SIZE_TYPE__ i;
+	for (i = 0; i <= length; i++) {
+	}
+	return i;
+}
+
 unsigned strict_bound(unsigned n)
 {
 	unsigned i;
