@@ -251,6 +251,113 @@ static bool testReplacementTable() {
   return Passed;
 }
 
+static bool testMorphismTables() {
+  constexpr LifecycleFamilyId External{1};
+  constexpr LifecycleFamilyId Internal{2};
+  constexpr LifecycleFamilyId Other{3};
+  constexpr LifecycleFamilyMorphism Morphism{External, Internal};
+  constexpr LifecycleFact States[] = {
+      unknownLifecycle(),      absentLifecycle(),
+      liveLifecycle(External), releasedLifecycle(External),
+      liveLifecycle(Internal), releasedLifecycle(Internal)};
+  constexpr LifecycleEvent RetagInputEvents[] = {
+      LifecycleEvent::StateUnproven,
+      LifecycleEvent::MissingLive,
+      LifecycleEvent::FamilyMismatch | LifecycleEvent::MorphismMismatch,
+      LifecycleEvent::AlreadyReleased | LifecycleEvent::FamilyMismatch |
+          LifecycleEvent::MorphismMismatch,
+      LifecycleEvent::None,
+      LifecycleEvent::AlreadyReleased};
+  constexpr LifecycleEvent DischargeInputEvents[] = {
+      LifecycleEvent::StateUnproven,
+      LifecycleEvent::MissingLive,
+      LifecycleEvent::None,
+      LifecycleEvent::AlreadyReleased,
+      LifecycleEvent::FamilyMismatch | LifecycleEvent::MorphismMismatch,
+      LifecycleEvent::AlreadyReleased | LifecycleEvent::FamilyMismatch |
+          LifecycleEvent::MorphismMismatch};
+  bool Passed = true;
+  for (unsigned WrongTarget = 0; WrongTarget < 2; ++WrongTarget)
+    for (unsigned State = 0; State < 6; ++State) {
+      LifecycleFamilyId Target = WrongTarget ? Other : External;
+      LifecycleMorphismTransition Result =
+          retagLifecycle(States[State], Target, Morphism);
+      LifecycleEvent Events = RetagInputEvents[State];
+      if (WrongTarget)
+        Events = Events | LifecycleEvent::MorphismMismatch;
+      LifecycleFact After = Events == LifecycleEvent::None
+                                ? liveLifecycle(External)
+                                : unknownLifecycle();
+      bool Cell = Result.Before == States[State] && Result.After == After &&
+                  Result.Morphism.External == External &&
+                  Result.Morphism.Internal == Internal &&
+                  Result.Events == Events &&
+                  Result.permitted() == (Events == LifecycleEvent::None);
+      if (!Cell)
+        std::fprintf(stderr,
+                     "lifecycle-algebra-test: retag cell target=%u state=%u\n",
+                     WrongTarget, State);
+      Passed &= Cell;
+    }
+
+  for (unsigned WrongRelease = 0; WrongRelease < 2; ++WrongRelease)
+    for (unsigned State = 0; State < 6; ++State) {
+      LifecycleFamilyId Release = WrongRelease ? Other : Internal;
+      LifecycleMorphismTransition Result =
+          dischargeLifecycle(States[State], Release, Morphism);
+      LifecycleEvent Events = DischargeInputEvents[State];
+      if (WrongRelease)
+        Events = Events | LifecycleEvent::MorphismMismatch;
+      LifecycleFact After = Events == LifecycleEvent::None
+                                ? releasedLifecycle(External)
+                                : unknownLifecycle();
+      bool Cell = Result.Before == States[State] && Result.After == After &&
+                  Result.Morphism.External == External &&
+                  Result.Morphism.Internal == Internal &&
+                  Result.Events == Events &&
+                  Result.permitted() == (Events == LifecycleEvent::None);
+      if (!Cell)
+        std::fprintf(
+            stderr,
+            "lifecycle-algebra-test: discharge cell release=%u state=%u\n",
+            WrongRelease, State);
+      Passed &= Cell;
+    }
+
+  constexpr LifecycleFamilyMorphism MissingExternal{NoLifecycleFamily,
+                                                    Internal};
+  constexpr LifecycleFamilyMorphism MissingInternal{External,
+                                                    NoLifecycleFamily};
+  constexpr LifecycleFamilyMorphism MissingMorphisms[] = {MissingExternal,
+                                                          MissingInternal};
+  for (LifecycleFamilyMorphism Missing : MissingMorphisms) {
+    LifecycleMorphismTransition Retag =
+        retagLifecycle(liveLifecycle(Internal), External, Missing);
+    Passed &= test(Retag.After == unknownLifecycle() &&
+                       Retag.Events == LifecycleEvent::MorphismMissing,
+                   "retag accepted an incomplete morphism");
+    LifecycleMorphismTransition Discharge =
+        dischargeLifecycle(liveLifecycle(External), Internal, Missing);
+    Passed &= test(Discharge.After == unknownLifecycle() &&
+                       Discharge.Events == LifecycleEvent::MorphismMissing,
+                   "discharge accepted an incomplete morphism");
+  }
+  constexpr LifecycleFamilyMorphism Reversed{Internal, External};
+  LifecycleMorphismTransition ReversedRetag =
+      retagLifecycle(liveLifecycle(Internal), External, Reversed);
+  Passed &=
+      test(ReversedRetag.After == unknownLifecycle() &&
+               contains(ReversedRetag.Events, LifecycleEvent::MorphismMismatch),
+           "retag accepted a reversed morphism");
+  LifecycleMorphismTransition ReversedDischarge =
+      dischargeLifecycle(liveLifecycle(External), Internal, Reversed);
+  Passed &= test(
+      ReversedDischarge.After == unknownLifecycle() &&
+          contains(ReversedDischarge.Events, LifecycleEvent::MorphismMismatch),
+      "discharge accepted a reversed morphism");
+  return Passed;
+}
+
 static bool testExitTable() {
   constexpr LifecycleFamilyId Family{1};
   constexpr LifecycleFact States[] = {unknownLifecycle(), absentLifecycle(),
@@ -282,7 +389,8 @@ static bool testExitTable() {
 
 int main() {
   return testOperationTable() && testFamilyAndMalformedFacts() &&
-                 testReplacementTable() && testExitTable()
+                 testReplacementTable() && testMorphismTables() &&
+                 testExitTable()
              ? 0
              : 1;
 }
