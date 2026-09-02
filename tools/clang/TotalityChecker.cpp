@@ -4447,6 +4447,15 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         Valid = false;
         return std::nullopt;
       }
+      /* A FieldDecl's declared type does not encode a bit-field's storage
+       * width.  Treating it as the full declared integer type would erase
+       * the narrowing performed by every store and can turn a real modular
+       * cycle into apparent signed-overflow termination. */
+      if (const auto *Field = dyn_cast<FieldDecl>(Declaration);
+          Field && Field->isBitField()) {
+        Support = TransitionSupport::Unsupported;
+        return std::nullopt;
+      }
       auto Found = Values.find(Declaration);
       if (Found != Values.end())
         return Found->second;
@@ -5222,6 +5231,210 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     }
   }
 
+  bool z3ReachableCycleAbsence(const Stmt *Loop, const Expr *Condition,
+                               const Expr *Increment, const Stmt *Body) const {
+    /* Spacer computes the least fixed point of Reach and nonempty Path.
+     * Deriving Bad means that some state reachable from the loop-entry
+     * predicate has a nonempty path back to itself.  Therefore only UNSAT of
+     * Bad proves termination.  SAT, unknown, timeout, or a transition which
+     * is not exact all conservatively leave the loop unproved.
+     *
+     * Keep this deliberately shallow.  It complements the exact 8-bit
+     * completeness query without making every unresolved production loop pay
+     * for a general CHC search. */
+    constexpr size_t StateSlotCap = 1;
+    constexpr size_t BackedgeCap = 4;
+    constexpr size_t PathStepCap = 24;
+    if (!CurrentCFG || isa<DoStmt>(Loop) || containsStateMutation(Condition) ||
+        containsImpureCall(Condition) || containsImpureCall(Body) ||
+        containsImpureCall(Increment) || containsAsm(Body) ||
+        containsAsm(Increment))
+      return false;
+    /* Reject obviously multi-state or non-scalar loops before enumerating
+     * CFG paths.  This cheap lexical slice is only a routing filter; the
+     * authoritative path-derived slice below must still independently pass
+     * every Exact check. */
+    std::set<const ValueDecl *> LexicalSlice;
+    std::set<const ValueDecl *> PerIterationDeclarations;
+    collectTransitionState(Condition, LexicalSlice, PerIterationDeclarations);
+    collectTransitionState(Body, LexicalSlice, PerIterationDeclarations);
+    collectTransitionState(Increment, LexicalSlice, PerIterationDeclarations);
+    for (const ValueDecl *Declaration : PerIterationDeclarations)
+      LexicalSlice.erase(Declaration);
+    if (LexicalSlice.size() != 1)
+      return false;
+    const ValueDecl *LexicalState = *LexicalSlice.begin();
+    QualType LexicalType = LexicalState->getType();
+    if ((!LexicalType->isIntegerType() && !LexicalType->isEnumeralType()) ||
+        LexicalType.isVolatileQualified() ||
+        Context.getIntWidth(LexicalType) < 32)
+      return false;
+    if (const auto *Field = dyn_cast<FieldDecl>(LexicalState);
+        Field && Field->isBitField())
+      return false;
+    std::optional<SMTLoopTransitions> Description =
+        collectSMTLoopTransitions(Loop, Condition);
+    if (!Description || Description->Slice.empty() ||
+        Description->Slice.size() > StateSlotCap ||
+        Description->Paths.size() > BackedgeCap)
+      return false;
+    for (const SMTPath &Path : Description->Paths) {
+      if (Path.Steps.size() > PathStepCap)
+        return false;
+      for (const ValueDecl *Declaration : Description->Slice) {
+        QualType Type = Declaration->getType();
+        if ((!Type->isIntegerType() && !Type->isEnumeralType()) ||
+            Type.isVolatileQualified())
+          return false;
+      }
+    }
+
+    try {
+      z3::context Z;
+      std::vector<std::unique_ptr<TransitionIR>> Backedges;
+      for (const SMTPath &Path : Description->Paths) {
+        std::unique_ptr<TransitionIR> Transition =
+            emitTransitionIR(Z, Condition, Path, Description->Slice);
+        if (!Transition || Transition->support() != TransitionSupport::Exact)
+          return false;
+        Backedges.push_back(std::move(Transition));
+      }
+      if (Backedges.empty())
+        return false;
+      const std::vector<TransitionIR::StateSlot> &Slots =
+          Backedges.front()->stateSlice();
+      if (Slots.empty() || Slots.size() > StateSlotCap)
+        return false;
+      for (const auto &Backedge : Backedges) {
+        const auto &OtherSlots = Backedge->stateSlice();
+        if (OtherSlots.size() != Slots.size())
+          return false;
+        for (size_t I = 0; I < Slots.size(); ++I)
+          if (OtherSlots[I].Identity != Slots[I].Identity ||
+              !z3::eq(OtherSlots[I].Before, Slots[I].Before) ||
+              !z3::eq(OtherSlots[I].After, Slots[I].After))
+            return false;
+      }
+
+      z3::sort_vector StateSorts(Z), PathSorts(Z);
+      for (size_t I = 0; I < Slots.size(); ++I) {
+        StateSorts.push_back(Z.int_sort());
+        PathSorts.push_back(Z.int_sort());
+      }
+      for (size_t I = 0; I < Slots.size(); ++I)
+        PathSorts.push_back(Z.int_sort());
+      z3::func_decl Reach =
+          Z.function("totality_reach", StateSorts, Z.bool_sort());
+      z3::func_decl Path =
+          Z.function("totality_path", PathSorts, Z.bool_sort());
+      z3::func_decl Bad =
+          Z.function("totality_cycle", 0, nullptr, Z.bool_sort());
+
+      z3::fixedpoint Fixedpoint(Z);
+      z3::params Parameters(Z);
+      Parameters.set("engine", "spacer");
+      /* Multiple backedges require Spacer to discover a disjunctive
+       * invariant and consistently need more than the single-edge budget in
+       * the fixture corpus.  They are already capped at four paths. */
+      Parameters.set("timeout", Backedges.size() > 1 ? 50u : 20u);
+      Fixedpoint.set(Parameters);
+      Fixedpoint.register_relation(Reach);
+      Fixedpoint.register_relation(Path);
+      Fixedpoint.register_relation(Bad);
+
+      z3::expr_vector Pre(Z), Post(Z), Start(Z), PrePost(Z), StartPre(Z),
+          StartPost(Z), StartPrePost(Z);
+      for (size_t I = 0; I < Slots.size(); ++I) {
+        std::string PreName = "chc_pre_" + std::to_string(I);
+        std::string PostName = "chc_post_" + std::to_string(I);
+        std::string StartName = "chc_start_" + std::to_string(I);
+        Pre.push_back(Z.int_const(PreName.c_str()));
+        Post.push_back(Z.int_const(PostName.c_str()));
+        Start.push_back(Z.int_const(StartName.c_str()));
+        PrePost.push_back(Pre.back());
+        StartPost.push_back(Start.back());
+        StartPrePost.push_back(Start.back());
+      }
+      for (size_t I = 0; I < Slots.size(); ++I) {
+        PrePost.push_back(Post[I]);
+        StartPre.push_back(Start[I]);
+        StartPrePost.push_back(Pre[I]);
+      }
+      for (size_t I = 0; I < Slots.size(); ++I)
+        StartPre.push_back(Pre[I]);
+      for (size_t I = 0; I < Slots.size(); ++I) {
+        StartPost.push_back(Post[I]);
+        StartPrePost.push_back(Post[I]);
+      }
+
+      auto Quantify = [&](const z3::expr_vector &Variables,
+                          const z3::expr &Rule) {
+        return Variables.empty() ? Rule : z3::forall(Variables, Rule);
+      };
+      auto AddRule = [&](z3::expr Rule, const char *Name) {
+        if (!Rule.is_bool())
+          return false;
+        Fixedpoint.add_rule(Rule, Z.str_symbol(Name));
+        return true;
+      };
+      auto Substitute = [&](z3::expr Formula, const z3::expr_vector &Before,
+                            const z3::expr_vector &After) {
+        z3::expr_vector From(Z), To(Z);
+        for (size_t I = 0; I < Slots.size(); ++I) {
+          From.push_back(Slots[I].Before);
+          To.push_back(Before[I]);
+          From.push_back(Slots[I].After);
+          To.push_back(After[I]);
+        }
+        return Formula.substitute(From, To);
+      };
+
+      z3::expr Entry = Backedges.front()->entryPredicate();
+      z3::expr_vector EntryFrom(Z);
+      for (const auto &Slot : Slots)
+        EntryFrom.push_back(Slot.Before);
+      Entry = Entry.substitute(EntryFrom, Pre);
+      z3::expr EntryRule = Quantify(Pre, z3::implies(Entry, Reach(Pre)));
+      if (!Entry.is_bool() || !AddRule(EntryRule, "entry"))
+        return false;
+
+      for (size_t EdgeIndex = 0; EdgeIndex < Backedges.size(); ++EdgeIndex) {
+        z3::expr Edge =
+            Substitute(Backedges[EdgeIndex]->exactRelation(), Pre, Post);
+        if (!Edge.is_bool())
+          return false;
+        z3::expr ReachRule =
+            Quantify(PrePost, z3::implies(Reach(Pre) && Edge, Reach(Post)));
+        z3::expr PathBaseRule =
+            Quantify(PrePost, z3::implies(Reach(Pre) && Edge, Path(PrePost)));
+        z3::expr PathStepRule = Quantify(
+            StartPrePost, z3::implies(Path(StartPre) && Edge, Path(StartPost)));
+        std::string ReachName = "reach_" + std::to_string(EdgeIndex);
+        std::string BaseName = "path_base_" + std::to_string(EdgeIndex);
+        std::string StepName = "path_step_" + std::to_string(EdgeIndex);
+        if (!AddRule(ReachRule, ReachName.c_str()) ||
+            !AddRule(PathBaseRule, BaseName.c_str()) ||
+            !AddRule(PathStepRule, StepName.c_str()))
+          return false;
+      }
+
+      z3::expr_vector SameState(Z);
+      for (size_t I = 0; I < Slots.size(); ++I)
+        SameState.push_back(Start[I]);
+      for (size_t I = 0; I < Slots.size(); ++I)
+        SameState.push_back(Start[I]);
+      z3::expr CycleRule = Quantify(Start, z3::implies(Path(SameState), Bad()));
+      if (!AddRule(CycleRule, "cycle"))
+        return false;
+      z3::expr Query = Bad();
+      if (!Query.is_bool())
+        return false;
+      return Fixedpoint.query(Query) == z3::unsat;
+    } catch (const z3::exception &) {
+      return false;
+    }
+  }
+
   bool admissibleProgress(const Progress &Change) const {
     if (!Change.DynamicStep ||
         !Change.Variable->getType()->isPointerType())
@@ -5384,6 +5597,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return "finite-state-transition";
     if (z3StrictScalarRank(Loop, Condition, Increment, Body))
       return "strict-scalar-rank";
+    if (z3ReachableCycleAbsence(Loop, Condition, Increment, Body))
+      return "reachable-cycle-absence";
     /* A merge-style loop can consume either of two finite inputs on a
      * given pass.  Neither cursor is a rank by itself, but the sum of their
      * remaining distances strictly decreases when every backedge advances
