@@ -1475,6 +1475,79 @@ static int man_read_file(const char *path, char **out, size_t *outlen)
  * comment for why this is a real, honest degrade rather than a real
  * whatis database). */
 
+/* A NAME line reads "<name>[, <name>...] \- <description>" (troff
+ * source) or, once decode_text() has expanded its escapes, "<name> -
+ * <description>" -- so the first " - " (space, hyphen, space) in the
+ * decoded text is the separator between the redundant name repeat and
+ * the actual description. Points *out/*out_len at the description; on
+ * a malformed or nonstandard NAME line with no such separator, leaves
+ * them pointing at the whole decoded line unchanged -- printing the
+ * raw line is still more useful than reporting no description at all. */
+static void man_apropos_split_description(
+	const char *text, size_t len, const char **out, size_t *out_len)
+{
+	size_t i;
+
+	for (i = 1; i + 1 < len; i++) {
+		if (text[i] == '-' && text[i - 1] == ' ' && text[i + 1] == ' ') {
+			*out = text + i + 2;
+			*out_len = len - (i + 2);
+			return;
+		}
+	}
+	*out = text;
+	*out_len = len;
+}
+
+/* Finds `.SH NAME`'s following line inside `text` (one whole, raw page
+ * buffer), decodes its troff escapes via this file's own decode_text()
+ * -- the same decoder the real formatting path uses, so apropos output
+ * never re-implements a second, parallel escape decoder -- and strips
+ * the leading "<name> - " repeat down to just the description. Appends
+ * the result to `out` (left empty, meaning "no match", if the page has
+ * no NAME section at all). */
+static void man_apropos_name_description(const char *text, size_t tlen, struct man_buf *out)
+{
+	const char *end = text + tlen;
+	const char *p = text;
+	const char *namehit = 0;
+	const char *line, *lineend;
+	struct man_buf decoded;
+	const char *desc;
+	size_t desclen, i;
+
+	while (p < end) {
+		const char *nl = memchr(p, '\n', (size_t)(end - p));
+		size_t linelen = nl ? (size_t)(nl - p) : (size_t)(end - p);
+		if (linelen == 8 && !strncmp(p, ".SH NAME", 8)) { namehit = p; break; }
+		p = nl ? nl + 1 : end;
+	}
+	if (!namehit) return; /* no NAME section: not a match, not an error */
+
+	line = memchr(namehit, '\n', (size_t)(end - namehit));
+	line = line ? line + 1 : end;
+	lineend = memchr(line, '\n', (size_t)(end - line));
+	if (!lineend) lineend = end;
+
+	memset(&decoded, 0, sizeof decoded);
+	if (!decode_text(&decoded, line, (size_t)(lineend - line))) { mbuf_free(&decoded); return; }
+
+	man_apropos_split_description(decoded.data ? decoded.data : "", decoded.len, &desc, &desclen);
+
+	/* decode_text() can still emit its own \fB/\fI font-change marker
+	 * bytes into `decoded` (it only strips markers already present in
+	 * its *input*); apropos output goes straight to printf(), with no
+	 * renderer downstream to turn those markers into real terminal
+	 * bytes, so drop them here rather than let them show up as raw
+	 * control characters. */
+	for (i = 0; i < desclen; i++) {
+		char c = desc[i];
+		if (c == MAN_M_BOLD || c == MAN_M_ITAL || c == MAN_M_ROMAN) continue;
+		if (!mbuf_appendc(out, c)) break;
+	}
+	mbuf_free(&decoded);
+}
+
 static int man_apropos(char **manpath, char **keywords, size_t nkeywords)
 {
 	size_t mi;
@@ -1495,43 +1568,34 @@ static int man_apropos(char **manpath, char **keywords, size_t nkeywords)
 				char *text; size_t tlen;
 				size_t nl = strlen(de->d_name);
 				size_t k;
+				struct man_buf desc;
 				if (nl < 3 || de->d_name[nl - 2] != '.') continue; /* need "<base>.<digit>" */
 				n = snprintf(path, sizeof path, "%s/%s", secdir, de->d_name);
 				if (n < 0 || (size_t)n >= sizeof path) continue;
 				if (!man_read_file(path, &text, &tlen)) continue;
+
+				memset(&desc, 0, sizeof desc);
+				man_apropos_name_description(text, tlen, &desc);
+				free(text);
+
 				for (k = 0; k < nkeywords; k++) {
-					const char *namehit = 0, *p = text;
-					const char *end = text + tlen;
-					while (p < end) {
-						const char *nl2 = memchr(p, '\n', (size_t)(end - p));
-						size_t linelen = nl2 ? (size_t)(nl2 - p) : (size_t)(end - p);
-						if (linelen == 8 && !strncmp(p, ".SH NAME", 8)) { namehit = p; break; }
-						p = nl2 ? nl2 + 1 : end;
+					size_t x, klen = strlen(keywords[k]);
+					int hit = 0;
+					for (x = 0; klen > 0 && x + klen <= desc.len; x++) {
+						if (strncasecmp(desc.data + x, keywords[k], klen) == 0) { hit = 1; break; }
 					}
-					if (namehit) {
-						const char *q = memchr(namehit, '\n', (size_t)(end - namehit));
-						q = q ? q + 1 : end;
-						{
-							const char *qend = memchr(q, '\n', (size_t)(end - q));
-							size_t qlen = qend ? (size_t)(qend - q) : (size_t)(end - q);
-							size_t x, klen = strlen(keywords[k]);
-							for (x = 0; klen > 0 && x + klen <= qlen; x++) {
-								if (strncasecmp(q + x, keywords[k], klen) == 0) {
-									char base[256];
-									size_t bn = nl - 2;
-									if (bn >= sizeof base) bn = sizeof base - 1;
-									for (size_t bi = 0; bi < bn; bi++)
-										base[bi] = de->d_name[bi];
-									base[bn] = 0;
-									printf("%s(%d) - %.*s\n", base, sec, (int)qlen, q);
-									any = 1;
-									break;
-								}
-							}
-						}
+					if (hit) {
+						char base[256];
+						size_t bn = nl - 2;
+						size_t bi;
+						if (bn >= sizeof base) bn = sizeof base - 1;
+						for (bi = 0; bi < bn; bi++) base[bi] = de->d_name[bi];
+						base[bn] = 0;
+						printf("%s(%d) - %.*s\n", base, sec, (int)desc.len, desc.data ? desc.data : "");
+						any = 1;
 					}
 				}
-				free(text);
+				mbuf_free(&desc);
 			}
 			closedir(dp);
 		}

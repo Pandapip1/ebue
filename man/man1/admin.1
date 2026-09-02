@@ -1,0 +1,148 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH ADMIN 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+admin \- create an SCCS file
+.SH SYNOPSIS
+.B admin
+\fB\-i\fR[\fIname\fR]
+[\fB\-t\fIname\fR]
+[\fB\-y\fR[\fIcomment\fR]]
+.I newfile
+.br
+.B admin
+.B \-n
+[\fB\-t\fIname\fR]
+[\fB\-y\fR[\fIcomment\fR]]
+.I newfile
+.RI [ newfile ]\ .\|.\|.
+.SH DESCRIPTION
+.B admin
+creates a new SCCS history file for each
+.I newfile
+operand, with a single initial delta whose SCCS ID (SID) is
+.BR 1.1 .
+.PP
+This implementation only creates new
+.I s.
+files; it does not modify the control parameters of an existing one.
+Given an operand that already exists, or neither
+.B \-i
+nor
+.B \-n
+at all,
+.B admin
+refuses with a diagnostic rather than doing nothing silently.
+.SH OPTIONS
+.TP
+\fB\-i\fR[\fIname\fR]
+Take the initial file content from
+.IR name .
+If
+.I name
+is omitted, the content is read from standard input instead. Exactly
+one
+.I newfile
+operand may be given with
+.BR \-i .
+.TP
+.B \-n
+Create the SCCS file with control information but no initial file
+content (an empty first delta). One or more
+.I newfile
+operands may be given with
+.BR \-n .
+.TP
+\fB\-t\fIname\fR
+Take descriptive text for the SCCS file from
+.IR name .
+Unlike the base standard,
+.I name
+is required whenever
+.B \-t
+is given; a bare
+.B \-t
+with no attached name is refused.
+.TP
+\fB\-y\fR[\fIcomment\fR]
+Use
+.I comment
+as the comment recorded for the initial delta. If
+.B \-y
+is given with no attached text, the comment is empty. If
+.B \-y
+is omitted entirely, a comment of the form \(dqdate and time created
+.I YY/MM/DD HH:MM:SS
+by
+.I user\(dq
+is synthesized instead.
+.PP
+Every other option (including
+.BR \-a ,
+.BR \-d ,
+.BR \-e ,
+.BR \-f ,
+.BR \-m ,
+.BR \-r ,
+.BR \-h ,
+and
+.BR \-z ,
+all of which a real
+.B admin
+uses to modify or audit an
+.I already-existing
+SCCS file) is refused with a diagnostic; none of them is implemented.
+Every SCCS file this implementation creates therefore always has the
+fixed initial SID
+.BR 1.1 .
+.SH OPERANDS
+.TP
+.I newfile
+The pathname of an SCCS file to create. Its basename must begin with
+the literal two characters \(dqs.\(dq; an operand that does not is
+refused with a diagnostic, and processing continues with the next
+operand.
+.SH APPLICATION USAGE
+A newly created SCCS file is given read-only permission mode
+(0444), matching real SCCS behavior.
+.PP
+Since this implementation has no counterpart for
+.BR delta (1)
+(committing a second delta to an existing file), every SCCS file it
+can produce has exactly one delta; the user-list and flags sections a
+real, actively-maintained SCCS file uses are written but always
+empty.
+.SH EXIT STATUS
+.TP
+.B 0
+Every
+.I newfile
+operand was processed successfully.
+.TP
+.B 1
+An operand was skipped (already existed, wrong basename, an
+unimplemented option was given, or an I/O error occurred); processing
+continues with any remaining operands.
+.TP
+.B 2
+A usage error: no operand was given, or
+.B \-i
+was combined with more than one
+.I newfile
+operand.
+.SH EXAMPLES
+Create
+.B s.hello.c
+from an existing file, with a comment:
+.nf
+admin \-ihello.c \-y"initial checkin" s.hello.c
+.fi
+.PP
+Create an empty SCCS file, then check in the same content later
+retrieves correctly:
+.nf
+admin \-n s.empty
+get \-p s.empty
+.fi
+.SH SEE ALSO
+.BR get (1)

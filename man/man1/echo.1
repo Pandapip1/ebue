@@ -19,14 +19,11 @@ is written.
 .B \-n
 Suppress the trailing
 .RB < newline >.
-Implemented despite XCU's own "implementation-defined" wording for a
-leading
+Recognized only as the very first argument; a
 .B \-n
-because it is not actually contested in practice: every shell this
-project's own bootstrap chain interoperates with treats a sole
-leading
-.B \-n
-the same way.
+appearing anywhere else is written out like any other
+.I string
+operand.
 .SH OPERANDS
 .TP
 .I string
@@ -47,7 +44,10 @@ instead.
 .SH EXIT STATUS
 .TP
 .B 0
-Always, on successful completion of the write.
+Successful completion.
+.TP
+.B >0
+A write to standard output failed.
 .SH SEE ALSO
 .BR printf (1),
 .BR cat (1)

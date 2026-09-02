@@ -11,19 +11,6 @@ true \- do nothing, successfully
 exits with a return status that indicates successful completion. It
 can be invoked with any combination of options and operands; all are
 ignored.
-.PP
-This is the standalone
-.B true
-utility
-.RB ( obj/bin/true.exe ),
-sharing its whole implementation with the identically-named
-.I sh
-built-in
-.RI ( "src/sh/builtin.c" ),
-via
-.B __util_true_main()
-in
-.BR src/util/true.c .
 .SH OPTIONS
 None.
 .SH OPERANDS
