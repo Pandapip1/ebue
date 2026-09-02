@@ -48,12 +48,6 @@
  *                      would not even link. A real Linux signal-delivery
  *                      front end (sigaction-based fault/vectored-handler
  *                      equivalent) is separate, larger, future work.
- *   __fenv_init()      src/math/fenv.c's fegetenv()/fesetenv() are
- *                      unconditional x87/SSE inline asm (`fnstenv`,
- *                      `stmxcsr`) with no aarch64 branch at all --
- *                      calling it would not even COMPILE on this arch.
- *                      Floating-point environment control has no aarch64
- *                      (FPCR/FPSR) implementation yet on any platform.
  *
  * None of these block argv/environ/TLS/errno/main()/exit-status working
  * end to end, which is what this file exists to prove -- see
@@ -713,6 +707,13 @@ _Noreturn void __linux_start_main(long *sp)
 	__progname = slash;
 
 	__fd_init();
+
+	/* Establishes FE_DFL_ENV (see src/math/fenv.c's own __fenv_init())
+	 * at genuine process startup, mirroring crt/crt1.c's identical call
+	 * on the NT side. Safe and correct on every arch this file supports:
+	 * src/math/fenv.c's fegetenv()/fesetenv() branch on __aarch64__ vs
+	 * __i386__/__x86_64__, and __fenv_init() itself is arch-agnostic. */
+	__fenv_init();
 
 	/* environ, not envp: main()'s own third argument should be the same
 	 * array getenv()/setenv() operate on -- environ itself -- not the
