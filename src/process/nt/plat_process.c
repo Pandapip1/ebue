@@ -183,7 +183,7 @@ static int append_arg(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 	}
 	if (*len) (*buf)[(*len)++] = ' ';
 	if (!need_quote) {
-		memcpy(*buf + *len, arg, n * sizeof(WCHAR));
+		for (i = 0; i < n; i++) (*buf)[*len + i] = arg[i];
 		*len += n;
 		return 0;
 	}
@@ -241,7 +241,7 @@ static int append_prog(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 	 * fallback if its contract ever changes. */
 	if (!*buf) { errno = ENOMEM; return -1; }
 	if (need_quote) (*buf)[(*len)++] = '"';
-	memcpy(*buf + *len, arg, n * sizeof(WCHAR));
+	for (i = 0; i < n; i++) (*buf)[*len + i] = arg[i];
 	*len += n;
 	if (need_quote) (*buf)[(*len)++] = '"';
 	return 0;
@@ -309,7 +309,10 @@ static WCHAR *build_env_block(char *const envp[])
 			blk = nb;
 			cap = nc;
 		}
-		memcpy(blk + len, w, wl * sizeof(WCHAR));
+		{
+			size_t j;
+			for (j = 0; j < wl; j++) blk[len + j] = w[j];
+		}
 		len += wl;
 		blk[len++] = 0;
 		__free(w);

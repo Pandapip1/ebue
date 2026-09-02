@@ -52,13 +52,14 @@ static int child_grow(void)
 {
 	struct __child *n;
 	int cap = __child_cap * 2;
+	int i;
 
 	if (__child_cap >= CHILD_CAP_LIMIT_) return -1;
 	if (cap > CHILD_CAP_LIMIT_) cap = CHILD_CAP_LIMIT_;
 	n = __malloc((size_t)cap * sizeof *n);
 	if (!n) return -1;
-	memcpy(n, __children, (size_t)__child_cap * sizeof *n);
-	memset(n + __child_cap, 0, (size_t)(cap - __child_cap) * sizeof *n);
+	for (i = 0; i < __child_cap; i++) n[i] = __children[i];
+	for (; i < cap; i++) n[i] = (struct __child){0};
 	if (__children != __child_seed) __free(__children);
 	__children = n;
 	__child_cap = cap;
