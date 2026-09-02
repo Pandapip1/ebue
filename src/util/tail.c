@@ -166,7 +166,9 @@ static int tail_one(int fd, enum tail_mode mode, int from_end, long long number,
 
 	if (mode == TAIL_BYTES) {
 		if (from_end) {
-			start = (number <= 0) ? len : ((size_t)number >= len ? 0 : len - (size_t)number);
+			if (number <= 0) start = len;
+			else if ((size_t)number >= len) start = 0;
+			else start = len - (size_t)number;
 		} else {
 			/* number is 1-based; "+1" is the first byte. */
 			size_t k = (size_t)(number - 1);

@@ -129,6 +129,19 @@ static int arg_take(struct argcur *a, const char **out)
 
 /* ---- numeric argument parsing (shared quote-char + C-constant rule) - */
 
+static int g_status; /* sticky: any per-conversion error makes the whole run fail */
+
+/* Every arg_signed()/arg_unsigned()/arg_double() call below is followed,
+ * at its one call site, by exactly this same action on failure -- folded
+ * in here so a genuine parse error can never be diagnosed once and
+ * missed at another call site (see arg_signed()/arg_unsigned()/
+ * arg_double() themselves for where this is invoked). */
+static void numeric_error(const char *arg)
+{
+	__util_diagf("printf: %s: expected a numeric value\n", arg);
+	g_status = 1;
+}
+
 static int leading_quote_char(const char *s, long *out)
 {
 	if ((s[0] == '\'' || s[0] == '"') && s[1] != 0) {
@@ -147,7 +160,7 @@ static int arg_signed(const char *s, long *out)
 	if (leading_quote_char(s, &v)) { *out = v; return 0; }
 	errno = 0;
 	v = strtol(s, &end, 0);
-	if (end == s || *end != 0) { *out = 0; return -1; }
+	if (end == s || *end != 0) { *out = 0; numeric_error(s); return -1; }
 	*out = v;
 	return 0;
 }
@@ -166,10 +179,10 @@ static int arg_unsigned(const char *s, unsigned long *out)
 	 * explicitly rather than silently printing a huge unsigned value. */
 	{
 		const char *p = s;
-		if (*p == '-') { *out = 0; return -1; }
+		if (*p == '-') { *out = 0; numeric_error(s); return -1; }
 	}
 	v = strtoul(s, &end, 0);
-	if (end == s || *end != 0) { *out = 0; return -1; }
+	if (end == s || *end != 0) { *out = 0; numeric_error(s); return -1; }
 	*out = v;
 	return 0;
 }
@@ -184,17 +197,9 @@ static int arg_double(const char *s, double *out)
 	if (leading_quote_char(s, &qv)) { *out = (double)qv; return 0; }
 	errno = 0;
 	v = strtod(s, &end);
-	if (end == s || *end != 0) { *out = 0.0; return -1; }
+	if (end == s || *end != 0) { *out = 0.0; numeric_error(s); return -1; }
 	*out = v;
 	return 0;
-}
-
-static int g_status; /* sticky: any per-conversion error makes the whole run fail */
-
-static void numeric_error(const char *arg)
-{
-	__util_diagf("printf: %s: expected a numeric value\n", arg);
-	g_status = 1;
 }
 
 /* ---- format string's own \-escape table (not %b's) ------------------ */
@@ -365,7 +370,7 @@ static void format_signed(const char *arg, const struct spec *sp)
 	int n = 0;
 	const char *sign = "";
 
-	if (arg_signed(arg, &v) < 0) numeric_error(arg);
+	(void)arg_signed(arg, &v); /* on failure: diagnosed already, v left 0 */
 	uv = v < 0 ? (unsigned long)(-(v + 1)) + 1UL : (unsigned long)v;
 	if (v < 0) sign = "-";
 	else if (sp->plus) sign = "+";
@@ -392,7 +397,7 @@ static void format_unsigned(const char *arg, const struct spec *sp, int base, in
 	const char *hex = upper ? "0123456789ABCDEF" : "0123456789abcdef";
 	const char *prefix = "";
 
-	if (arg_unsigned(arg, &v) < 0) numeric_error(arg);
+	(void)arg_unsigned(arg, &v); /* on failure: diagnosed already, v left 0 */
 	orig = v;
 
 	if (v == 0 && sp->prec == 0) {
@@ -486,7 +491,7 @@ static void format_float(const char *arg, const struct spec *sp, char conv)
 	const char *body = buf;
 	int n;
 
-	if (arg_double(arg, &v) < 0) numeric_error(arg);
+	(void)arg_double(arg, &v); /* on failure: diagnosed already, v left 0 */
 
 	if (v < 0.0 || (v == 0.0 && 1.0 / v < 0.0)) { sign = "-"; v = -v; }
 	else if (sp->plus) sign = "+";

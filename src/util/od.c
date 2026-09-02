@@ -160,9 +160,38 @@ static unsigned long long load_unit(const unsigned char *p, int size)
 	return v;
 }
 
-static int odigits(int size) { return size == 1 ? 3 : size == 2 ? 6 : size == 4 ? 11 : 22; }
-static int udigits(int size) { return size == 1 ? 3 : size == 2 ? 5 : size == 4 ? 10 : 20; }
-static int ddigits(int size) { return size == 1 ? 4 : size == 2 ? 6 : size == 4 ? 11 : 20; }
+/* Widest decimal rendering (in digits) of an unsigned/unsigned/signed
+ * value of `size` bytes -- one column-width table per -t o/u/d, each
+ * indexed the same way: size is always 1, 2, 4, or 8. */
+static int odigits(int size)
+{
+	switch (size) {
+	case 1: return 3;
+	case 2: return 6;
+	case 4: return 11;
+	default: return 22;
+	}
+}
+
+static int udigits(int size)
+{
+	switch (size) {
+	case 1: return 3;
+	case 2: return 5;
+	case 4: return 10;
+	default: return 20;
+	}
+}
+
+static int ddigits(int size)
+{
+	switch (size) {
+	case 1: return 4;
+	case 2: return 6;
+	case 4: return 11;
+	default: return 20;
+	}
+}
 
 /* od(1p)'s -t c escape table, quoted in full in this file's header. */
 static const char *char_field(unsigned char b, char tmp[8])
