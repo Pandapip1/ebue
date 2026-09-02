@@ -75,7 +75,7 @@ static int fails;
  * carg.html, cabs.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_complex_creal_cimag_conj)
+#if NTLIBC_TEST(PASS, posix_complex_creal_cimag_conj)
 #include <complex.h>
 #include <math.h>
 
@@ -159,7 +159,7 @@ static void test_posix_complex_creal_cimag_conj(void)
  * .../functions/cexp.html, clog.html, cpow.html, csqrt.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_complex_cexp_clog_cpow_csqrt)
+#if NTLIBC_TEST(PASS, posix_complex_cexp_clog_cpow_csqrt)
 #include <complex.h>
 #include <math.h>
 
@@ -232,7 +232,7 @@ static void test_posix_complex_cexp_clog_cpow_csqrt(void)
  * csinh.html, ctanh.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_complex_ctrig_and_chyperbolic)
+#if NTLIBC_TEST(PASS, posix_complex_ctrig_and_chyperbolic)
 #include <complex.h>
 #include <math.h>
 
@@ -299,7 +299,7 @@ static void test_posix_complex_ctrig_and_chyperbolic(void)
  * casinh.html, catanh.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_complex_inverse_branch_cuts)
+#if NTLIBC_TEST(PASS, posix_complex_inverse_branch_cuts)
 #include <complex.h>
 #include <math.h>
 
