@@ -261,6 +261,16 @@ static int wait_mode(int options)
 	return __PLAT_WAIT_BLOCK;
 }
 
+/* The pid job_report()/discover_self_stops() should look for: 0 for "any
+ * child" (waitpid's pid == -1 or 0), or the process id a negative pid
+ * names -- process groups are single processes here, the same
+ * normalization do_waitpid() applies to pid itself further down. */
+static pid_t stop_report_target(pid_t pid)
+{
+	if (pid == -1 || pid == 0) return 0;
+	return pid < 0 ? -pid : pid;
+}
+
 static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, int nowait)
 {
 	struct __child *c;
@@ -287,9 +297,8 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 	 * is still to be waited for -- only the report is consumed. */
 	if (options & (WUNTRACED | WCONTINUED)) {
 		if (options & WUNTRACED)
-			discover_self_stops(pid == -1 || pid == 0 ? 0 : pid < 0 ? -pid : pid);
-		c = job_report(pid == -1 || pid == 0 ? 0 : pid < 0 ? -pid : pid,
-		               options & (WUNTRACED | WCONTINUED));
+			discover_self_stops(stop_report_target(pid));
+		c = job_report(stop_report_target(pid), options & (WUNTRACED | WCONTINUED));
 		if (c) {
 			if (status) *status = c->jobstat;
 			if (ru) {

@@ -155,6 +155,18 @@ static unsigned __PLAT_APC_CALL notice_thread(void *argument)
 	return 0;
 }
 
+/* Whether `event` is actually supposed to fire a notification: SIGEV_NONE
+ * never does, and a SIGEV_SIGNAL naming signal 0 is the sigevent.h-blessed
+ * way to ask for silence too (sigev_signo != 0 mirrors the same "signal 0
+ * is a null signal" rule kill()/raise() apply). SIGEV_THREAD always
+ * fires -- valid_event() already requires its sigev_notify_function to be
+ * set. */
+static int event_wants_notify(const struct sigevent *event)
+{
+	return event->sigev_notify != SIGEV_NONE &&
+	       (event->sigev_notify != SIGEV_SIGNAL || event->sigev_signo != 0);
+}
+
 static void notify(const struct sigevent *event)
 {
 	if (!event || event->sigev_notify == SIGEV_NONE) return;
@@ -219,13 +231,11 @@ static void finish_locked(struct aio_request *request, int error, ssize_t result
 	request->state = REQ_DONE;
 	wake_waiters_locked(request);
 	*individual = request->cb->aio_sigevent;
-	*have_individual = individual->sigev_notify != SIGEV_NONE &&
-		(individual->sigev_notify != SIGEV_SIGNAL || individual->sigev_signo != 0);
+	*have_individual = event_wants_notify(individual);
 	*have_list = 0;
 	if (request->group && request->group->active && --request->group->remaining == 0) {
 		*list = request->group->event;
-		*have_list = list->sigev_notify != SIGEV_NONE &&
-			(list->sigev_notify != SIGEV_SIGNAL || list->sigev_signo != 0);
+		*have_list = event_wants_notify(list);
 		request->group->active = 0;
 	}
 }
@@ -565,6 +575,20 @@ static int suspend_list_ready(const struct aiocb *const list[], int count,
 	return 0;
 }
 
+/* The `now`-relative deadline, in 100ns ticks, for a POSIX timespec
+ * timeout -- saturating at LLONG_MAX rather than overflowing, both when
+ * converting the timespec itself to ticks and when adding it to `now`. */
+static long long timeout_deadline(const struct timespec *timeout, long long now)
+{
+	long long subsecond = (timeout->tv_nsec + 99) / 100;
+	long long ticks;
+	if (timeout->tv_sec > (LLONG_MAX - subsecond) / 10000000LL)
+		ticks = LLONG_MAX;
+	else
+		ticks = (long long)timeout->tv_sec * 10000000LL + subsecond;
+	return ticks > LLONG_MAX - now ? LLONG_MAX : now + ticks;
+}
+
 static void remove_waiter_locked(struct aio_waiter *waiter)
     NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 static void remove_waiter_locked(struct aio_waiter *waiter)
@@ -585,14 +609,8 @@ int aio_suspend(const struct aiocb *const list[], int count,
 	int any, handle_count;
 	if (count < 0 || !timeout_valid(timeout)) { errno = EINVAL; return -1; }
 	if (timeout) {
-		long long subsecond = (timeout->tv_nsec + 99) / 100;
-		long long ticks;
-		if (timeout->tv_sec > (LLONG_MAX - subsecond) / 10000000LL)
-			ticks = LLONG_MAX;
-		else
-			ticks = (long long)timeout->tv_sec * 10000000LL + subsecond;
 		start = __plat_query_system_time();
-		deadline = ticks > LLONG_MAX - start ? LLONG_MAX : start + ticks;
+		deadline = timeout_deadline(timeout, start);
 	}
 
 	/* Avoid requiring an event on the synchronous fallback path, where every
@@ -733,8 +751,7 @@ static void group_drop(struct aio_group *group)
 	__sig_lock();
 	if (group->active && --group->remaining == 0) {
 		event = group->event;
-		send = event.sigev_notify != SIGEV_NONE &&
-		       (event.sigev_notify != SIGEV_SIGNAL || event.sigev_signo != 0);
+		send = event_wants_notify(&event);
 		group->active = 0;
 	}
 	__sig_unlock();
