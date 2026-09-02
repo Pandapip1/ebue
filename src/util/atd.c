@@ -34,17 +34,15 @@
  * like a terminal at all -- see daemonize_if_tty() below. NT has no
  * controlling-terminal/session concept to detach from in the same
  * sense, so daemonize_if_tty() is a no-op there; what makes an NT
- * invocation of atd "a background process" is exactly what the task
- * this file was written for calls out as the honest scope line: it is
+ * invocation of atd "a background process" is simply that it is
  * spawned once (by whatever starts it -- see bin/atd.c) as an
  * ordinary long-running process, sleeping and polling, the same loop
  * shape as the Linux side. This is deliberately NOT a registered NT
- * service (Service Control Manager integration is a real, separate
- * undertaking -- writing a service host, install/uninstall via `sc`,
- * a ServiceMain entry point -- out of scope for this pass, same as
- * this project's other explicit "not attempting X" scope lines) --
- * an ordinary process that a user (or a real service wrapper, should
- * one ever be added) starts once is the honest, working scope here.
+ * service: Service Control Manager integration (a service host,
+ * install/uninstall via `sc`, a ServiceMain entry point) is a real,
+ * separate undertaking not attempted here -- an ordinary process
+ * that a user (or a real service wrapper, should one ever be added)
+ * starts once is the honest, working scope.
  *
  * THE POLL LOOP
  * ---------------

@@ -372,6 +372,16 @@ static void buf_delete_range(struct ed *ed, long from, long to)
 	buf_remove_range_nofree(ed, from, to);
 }
 
+/* Cursor to leave current after a delete-without-replacement: `want`
+ * (1-based, the old line just past the deleted range) if that line
+ * still exists, else the new last line, else 0 if the buffer is now
+ * empty. */
+static long cur_after_delete(long want, long nlines)
+{
+	if (!nlines) return 0;
+	return want <= nlines ? want : nlines;
+}
+
 /* ==== undo (single-level swap; see header comment) ======================= */
 
 static int save_undo_snapshot(struct ed *ed)
@@ -1208,7 +1218,7 @@ static int ed_exec_one(struct ed *ed, const char *cmdline, struct linesrc *texts
 			ed->cur = f2 - 1 + (long)tn;
 			free(txt);
 		} else {
-			ed->cur = ed->nlines ? (f2 <= ed->nlines ? f2 : ed->nlines) : 0;
+			ed->cur = cur_after_delete(f2, ed->nlines);
 		}
 		ed->modified = 1;
 		break;
@@ -1218,7 +1228,7 @@ static int ed_exec_one(struct ed *ed, const char *cmdline, struct linesrc *texts
 		if (parse_trailing_suffix(ed, p, &fmt) < 0) return ED_ERR;
 		if (from < 1 || to > ed->nlines || from > to) return ed_fail(ed, "invalid address");
 		buf_delete_range(ed, from, to);
-		ed->cur = ed->nlines ? (from <= ed->nlines ? from : ed->nlines) : 0;
+		ed->cur = cur_after_delete(from, ed->nlines);
 		ed->modified = 1;
 		if (fmt && ed->nlines) ed_print_range(ed, ed->cur, ed->cur, fmt);
 		break;

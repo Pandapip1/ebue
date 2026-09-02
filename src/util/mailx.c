@@ -1,10 +1,8 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * mailx(1p): a real local mail client over a real mbox-format spool --
- * not the toy this project's own POSIX-utilities plan (see
- * luminous-orbiting-biscuit.md) originally deferred mailx as needing
- * "infrastructure this plan doesn't build".  That infrastructure (an
+ * mailx(1p): a real local mail client over a real mbox-format spool,
+ * not a toy -- the infrastructure a real implementation needs (an
  * mbox reader/writer, real advisory locking) is genuinely small enough
  * to build here; what is explicitly, permanently out of scope is an
  * MTA/SMTP relay -- a real network mail-transfer agent is a whole
@@ -129,37 +127,34 @@
  * not implemented, not silently ignored.
  *
  * Send Mode: matches mailx.html's DESCRIPTION exactly for the
- * mechanically-important, scriptable case this task explicitly
- * prioritizes -- reads the entire message body from standard input up
- * to EOF. The `~.`-escape body-command language (User Portability
- * Utilities option, itself separately option-gated in the spec, exactly
- * the kind of optional-marker this project's own OPTS ledger already
- * distinguishes from mandatory behavior -- see
- * [[project_opts_expected_libc_test_distinction]]) is not implemented;
- * real EOF (a script's pipe closing, or Ctrl-D at a terminal) is the
- * only way to end a message body here. If -s is not given and stdin is
- * a terminal, a `Subject: ` prompt is read interactively; if stdin is
- * not a terminal, the Subject header is simply omitted, matching this
- * task's explicit priority (non-interactive scripting correctness
- * first).
+ * mechanically-important, scriptable case -- reads the entire message
+ * body from standard input up to EOF. The `~.`-escape body-command
+ * language (User Portability Utilities option, itself separately
+ * option-gated in the spec, exactly the kind of optional-marker this
+ * project's own OPTS ledger already distinguishes from mandatory
+ * behavior -- see [[project_opts_expected_libc_test_distinction]]) is
+ * not implemented; real EOF (a script's pipe closing, or Ctrl-D at a
+ * terminal) is the only way to end a message body here. If -s is not
+ * given and stdin is a terminal, a `Subject: ` prompt is read
+ * interactively; if stdin is not a terminal, the Subject header is
+ * simply omitted, since a non-interactive caller has no way to answer
+ * a prompt it cannot see.
  *
  * Receive Mode: real mbox parsing (parse_mbox() below), a real header
- * summary, and an interactive command loop implementing exactly the
- * minimum command set this task named explicitly: p/print (also the
- * default action for a bare message number), n/next (also a blank
- * input line, per mailx.html's `next` description), d/delete,
- * u/undelete, h/headers (redisplay the summary), q/quit (rewrite the
- * mailbox with deleted messages actually removed -- see below for the
- * one deliberate scope-narrowing on this), x/exit/ex (quit leaving the
- * file untouched), plus '=' (show the current message number), '#...'
- * (comment, a no-op) and '?' (a short command list) since they cost
- * nothing extra once the loop exists. A msglist is a bare message
- * number or empty (meaning "the current message", advancing to the
- * next after a print); '*' (all messages) and '$' (the last message)
- * are also accepted. Full msglist ranges/arithmetic (`n-m`, `+`, `-`,
- * `^`) are NOT implemented -- deferred, documented here rather than
- * guessed at, per this task's own explicit "interactive reader can be
- * simpler/more minimal if time is tight" allowance.
+ * summary, and an interactive command loop implementing the minimum
+ * useful command set: p/print (also the default action for a bare
+ * message number), n/next (also a blank input line, per mailx.html's
+ * `next` description), d/delete, u/undelete, h/headers (redisplay the
+ * summary), q/quit (rewrite the mailbox with deleted messages actually
+ * removed -- see below for the one deliberate scope-narrowing on
+ * this), x/exit/ex (quit leaving the file untouched), plus '='
+ * (show the current message number), '#...' (comment, a no-op) and
+ * '?' (a short command list) since they cost nothing extra once the
+ * loop exists. A msglist is a bare message number or empty (meaning
+ * "the current message", advancing to the next after a print); '*'
+ * (all messages) and '$' (the last message) are also accepted. Full
+ * msglist ranges/arithmetic (`n-m`, `+`, `-`, `^`) are NOT implemented
+ * -- deferred, documented here rather than guessed at.
  *
  * One deliberate scope-narrowing on `q`: real mailx, when quitting out
  * of the *system* mailbox, migrates messages that were read-but-not-

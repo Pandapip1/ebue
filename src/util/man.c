@@ -227,21 +227,18 @@
  * method") when no cached database exists, so it is not a fabricated
  * shortcut, just the one code path this file bothers to implement.
  *
- * ============================================================
- * "CLOSING THE LOOP": THIS REPOSITORY'S OWN man/man1/ PAGES
- * ============================================================
+ * ---- THIS REPOSITORY'S OWN man/man1/ PAGES -------------------------------
  *
  * This project ships a handful of real, hand-written man pages for its
  * own utilities under man/man1/ (true.1, false.1, cat.1, echo.1,
- * mkdir.1, man.1) -- not installed anywhere by the build (there is no
- * mandir/install-man wiring in this pass; see this file's own header
- * for why that's out of scope this round: this project's Makefile has
- * no existing $(prefix)-relative default-search-path precedent to
- * extend, unlike $(bindir)/$(libdir)/$(includedir), and inventing one
- * without a real installed-tree convention to match would be guessing,
- * not implementing). They exist to prove the macro subset above
- * against real, useful content (point $MANPATH at man/ in a checkout
- * and `man true` works today) and, together with test/util-man.c's
+ * mkdir.1, man.1) -- not installed anywhere by the build: this
+ * project's Makefile has no existing $(prefix)-relative default-
+ * search-path precedent to extend, unlike $(bindir)/$(libdir)/
+ * $(includedir), and inventing one without a real installed-tree
+ * convention to match would be guessing, not implementing. They exist
+ * to prove the macro subset above against real, useful content (point
+ * $MANPATH at man/ in a checkout and `man true` works today) and,
+ * together with test/util-man.c's
  * embedded copy of real-world GNU grep.1 content, to prove this
  * formatter against troff nobody wrote by hand for this project.
  *
