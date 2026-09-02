@@ -410,6 +410,18 @@ int __util_awk_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_time_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_timeout_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* Terminal-control utilities: stty(1p), tty(1p) -- both real against
+ * src/termios/termios.c's genuine tcgetattr()/tcsetattr() and
+ * src/unistd/ttyname.c's ttyname(), not a terminal database (that is
+ * tput's job, out of scope for this project entirely; see each file's
+ * own header comment for the exact XCU stty.html/tty.html coverage and
+ * every deliberate, cited scope narrowing). Neither is __pure__: both
+ * read (and stty, absent -a/-g, writes) the real terminal state behind
+ * file descriptor 0, so a repeated call is not guaranteed to answer
+ * the same way twice. */
+int __util_stty_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_tty_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 #endif
 
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

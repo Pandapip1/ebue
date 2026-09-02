@@ -1026,6 +1026,31 @@ static int bi_timeout(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== stty(1p), tty(1p) ===================================================
+ *
+ * Same reasoning as every other row in this table for staying
+ * registered here even though each also exists as a real standalone
+ * obj/bin/<name>.exe (src/util/stty.c, src/util/tty.c, declared in
+ * src/internal/util.h): a builtin runs in this process, unconditionally,
+ * without depending on __find_program()/__spawn() succeeding. Neither
+ * has any effect on the shell execution environment itself (2.12's
+ * list) -- both only read (stty, absent -a/-g, writes) real terminal
+ * state on fd 0 -- so `env_effect` is 0 for both, same as the rest of
+ * this table; neither is a 2.14 special built-in either. */
+static int bi_stty(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_stty(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_stty_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_tty(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_tty(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_tty_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* ==== the dispatcher ==================================================== */
 
 /* `special` is XCU 2.14's distinction, recorded because 2.8.1 hangs
@@ -1119,6 +1144,8 @@ static const struct sh_builtin builtins[] = {
 	{ "cmp",   0, 0, bi_cmp },
 	{ "time",    0, 0, bi_time },
 	{ "timeout", 0, 0, bi_timeout },
+	{ "stty",    0, 0, bi_stty },
+	{ "tty",     0, 0, bi_tty },
 	{ 0, 0, 0, 0 }
 };
 
