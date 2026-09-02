@@ -96,8 +96,12 @@ static void test_sched(void)
 	CHECK(sched_getscheduler(0) == SCHED_OTHER);
 	CHECK(sched_getparam(0, &param) == 0);
 	param.sched_priority = min;
-	CHECK(sched_setscheduler(0, SCHED_FIFO, &param) == 0);
-	CHECK(sched_getscheduler(0) == SCHED_FIFO);
+	/* SCHED_RR, not SCHED_FIFO: the kernel's own rt_sched_class only fills
+	 * in a real round-robin quantum for SCHED_RR tasks; sched_rr_get_interval()
+	 * on a SCHED_FIFO task legitimately reports an all-zero interval, since
+	 * FIFO has no time slice to report. */
+	CHECK(sched_setscheduler(0, SCHED_RR, &param) == 0);
+	CHECK(sched_getscheduler(0) == SCHED_RR);
 	param.sched_priority = max;
 	CHECK(sched_setparam(0, &param) == 0);
 	param.sched_priority = -1;
