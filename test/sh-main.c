@@ -173,6 +173,18 @@ static int out_is_empty(void)
 	return buf[0] == 0;
 }
 
+/* Unlike out_is_empty()/an exact strcmp(), this tolerates the rest of
+ * this process's own inherited environment (PATH, HOME, ...) showing up
+ * alongside whatever a test just exported -- which a listing built
+ * straight off environ (bi_export()'s env_effect=0 header comment,
+ * src/sh/builtin.c) always includes. */
+static int out_contains(const char *needle)
+{
+	static char buf[65536];
+	slurp_into(OUTFILE, buf, sizeof buf);
+	return strstr(buf, needle) != 0;
+}
+
 static void write_file(const char *path, const char *text)
 {
 	FILE *f = fopen(path, "wb");
@@ -328,12 +340,12 @@ static void test_compound_commands_run(void)
 
 static void test_refuses_unimplemented_builtins(void)
 {
-	/* The dangerous one: `export` as an external command would fail
-	 * with 127 while the variable silently stayed unexported. */
-	CHECK(run_c("export X=1", 0) == 2);
-	CHECK(err_contains("export"));
+	/* The dangerous one: `readonly` as an external command would fail
+	 * with 127 while the variable silently stayed writable. */
+	CHECK(run_c("readonly X=1", 0) == 2);
+	CHECK(err_contains("readonly"));
 
-	/* `export` is still on the list; `set` and `shift` came off it in
+	/* `readonly` is still on the list; `set` and `shift` came off it in
 	 * stage 7 and must now *work* rather than merely stop being
 	 * refused -- the difference between "the list shrank" and "the
 	 * list shrank and the utility works". */
@@ -363,6 +375,10 @@ static void test_refuses_unimplemented_builtins(void)
 	/* `umask` came off this list too -- test_umask() below is the real
 	 * end-to-end proof it works, not just that it stopped erroring. */
 	CHECK(run_c("umask 022", 0) == 0);
+	/* `export` came off this list too -- test_export() below is the
+	 * real end-to-end proof it works, not just that it stopped
+	 * erroring. */
+	CHECK(run_c("export X=1", 0) == 0);
 	CHECK(run_c("exit 3", 0) == 3);
 	CHECK(run_c(":", 0) == 0);
 	CHECK(run_c("true", 0) == 0);
@@ -429,9 +445,9 @@ static void test_functions_through_the_binary(void)
 	 * refused at the definition, before anything runs -- the property
 	 * sh/main.c's header calls refuse-before-running-anything. */
 	unlink("preflight2.txt");
-	sprintf(cmd, "'%s' --produce ran > preflight2.txt; f() { export X=1; }", self);
+	sprintf(cmd, "'%s' --produce ran > preflight2.txt; f() { readonly X=1; }", self);
 	CHECK(run_c(cmd, 0) == 2);
-	CHECK(err_contains("export"));
+	CHECK(err_contains("readonly"));
 	CHECK(slurp_into("preflight2.txt", buf, sizeof buf) != 0);
 }
 
@@ -519,7 +535,7 @@ static void test_refuses_before_running_anything(void)
 	char cmd[1600], buf[64];
 
 	unlink("preflight.txt");
-	sprintf(cmd, "'%s' --produce ran > preflight.txt; export X=1", self);
+	sprintf(cmd, "'%s' --produce ran > preflight.txt; readonly X=1", self);
 	CHECK(run_c(cmd, 0) == 2);
 	CHECK(slurp_into("preflight.txt", buf, sizeof buf) != 0);
 }
@@ -668,6 +684,82 @@ static void test_umask(void)
 	CHECK((st.st_mode & 0777) == 0644);
 }
 
+/* export(1p): "The shell shall give the export attribute to the
+ * variables corresponding to the specified names, which shall cause
+ * them to be in the environment of subsequently executed commands."
+ * bi_export()'s own header comment (src/sh/builtin.c) explains why this
+ * shell needs no separate exported/unexported bookkeeping to get that
+ * right: every shell variable already lives in the real environ. What
+ * only *this* test can prove is the end-to-end path export(1p) actually
+ * cares about -- that a name exported here shows up in a genuinely
+ * separate, spawned process's own real environment (via --print-env,
+ * which reads its *own* getenv(), not anything this shell reports about
+ * itself). */
+static void test_export(void)
+{
+	char cmd[1600], buf[64];
+
+	/* `export NAME=value`: sets it and exports it in one step. */
+	sprintf(cmd, "export SHT_EXPORT_A=bar; '%s' --print-env SHT_EXPORT_A", self);
+	CHECK(run_c(cmd, 0) == 0);
+	slurp_into(OUTFILE, buf, sizeof buf);
+	CHECK(strcmp(buf, "bar") == 0);
+
+	/* `export NAME` on an already-set variable: the value is unchanged,
+	 * and it is (still) visible to a spawned child. */
+	sprintf(cmd, "SHT_EXPORT_B=baz; export SHT_EXPORT_B; "
+	             "test \"$SHT_EXPORT_B\" = baz && '%s' --print-env SHT_EXPORT_B", self);
+	CHECK(run_c(cmd, 0) == 0);
+	slurp_into(OUTFILE, buf, sizeof buf);
+	CHECK(strcmp(buf, "baz") == 0);
+
+	/* A plain, never-`export`ed assignment is visible to a child too --
+	 * this shell's documented deviation (bi_export()'s own header
+	 * comment): there is no separate unexported-variable store to tell
+	 * it apart from the two cases just above. Asserted here as the
+	 * reason `export` has nothing extra left to prove for values, not
+	 * as new behaviour of `export` itself. */
+	sprintf(cmd, "SHT_EXPORT_C=qux; '%s' --print-env SHT_EXPORT_C", self);
+	CHECK(run_c(cmd, 0) == 0);
+	slurp_into(OUTFILE, buf, sizeof buf);
+	CHECK(strcmp(buf, "qux") == 0);
+
+	/* The bare listing form, and -p: export(1p)'s own format, "export
+	 * name=value", present among whatever else this process's inherited
+	 * environment happens to hold -- out_contains() rather than an
+	 * exact match, for the same reason set(1p)'s own listing test would
+	 * need it (bi_set()'s set_list_variables(), which bi_export() now
+	 * shares list_variables() with). */
+	CHECK(run_c("export SHT_EXPORT_D='has space'; export", 0) == 0);
+	CHECK(out_contains("export SHT_EXPORT_D='has space'\n"));
+	CHECK(run_c("export SHT_EXPORT_D='has space'; export -p", 0) == 0);
+	CHECK(out_contains("export SHT_EXPORT_D='has space'\n"));
+
+	/* -p takes no further operands (export(1p)'s SYNOPSIS: "export -p"
+	 * and "export name[=word]..." are the two forms, not a mix). */
+	CHECK(run_c("export -p SHT_EXPORT_A", 0) != 0);
+	CHECK(err_contains("export"));
+
+	/* An invalid identifier is a real, diagnosed error, and an operand
+	 * that follows a bad one is still processed rather than the whole
+	 * command being abandoned. */
+	CHECK(run_c("export 1BAD=x", 0) != 0);
+	CHECK(err_contains("export"));
+	sprintf(cmd, "export 1BAD=x SHT_EXPORT_E=ok; '%s' --print-env SHT_EXPORT_E", self);
+	CHECK(run_c(cmd, 0) == 0);
+	slurp_into(OUTFILE, buf, sizeof buf);
+	CHECK(strcmp(buf, "ok") == 0);
+
+	/* A pipeline stage is a subshell environment (XCU 2.12): the
+	 * setenv() an `export` there performs must not leak into the shell
+	 * that ran the pipeline once that stage's subshell environment is
+	 * discarded -- the same rule bi_set()/bi_shift() already enforce
+	 * for `set`/`shift` (this file's own test_refuses_unimplemented_
+	 * builtins() history), applied here to bi_export(). */
+	CHECK(run_c("export SHT_EXPORT_F=leaked | true; "
+	            "test \"$SHT_EXPORT_F\" = ''", 0) == 0);
+}
+
 /* Every fixture and capture file this suite creates, removed on the way
  * out.  tools/run-tests.py gives each test its own mktemp -d working
  * directory, so leaving them behind costs that path nothing -- but a
@@ -713,6 +805,15 @@ static int child_role(int argc, char **argv)
 		fflush(stdout);
 		return 0;
 	}
+	/* test_export()'s real end-to-end proof: this process's own real
+	 * environ, inherited through whatever actually spawned it -- not
+	 * anything the shell claims about itself. */
+	if (!strcmp(argv[1], "--print-env") && argc > 2) {
+		const char *v = getenv(argv[2]);
+		if (v) fputs(v, stdout);
+		fflush(stdout);
+		return v ? 0 : 1;
+	}
 	return -1;
 }
 
@@ -741,6 +842,7 @@ int main(int argc, char **argv)
 	test_compound_commands_run();
 	test_refuses_unimplemented_builtins();
 	test_umask();
+	test_export();
 	test_refuses_special_parameters();
 	test_positional_parameters_from_argv();
 	test_functions_through_the_binary();

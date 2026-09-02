@@ -889,13 +889,18 @@ static int write_quoted(const char *v)
 	return fputc('\'', stdout) == EOF ? -1 : 0;
 }
 
-static int set_list_variables(void)
+/* Shared by bi_set() (prefix "", set(1p)'s own "%s=%s\n") and bi_export()
+ * (prefix "export ", export(1p)'s "the format 'export name=value'") --
+ * both are this same environ walk with the same reinput-safe quoting,
+ * differing only in what precedes each line. */
+static int list_variables(const char *prefix)
 {
 	extern char **environ;
 	char **e;
 
 	for (e = environ; e && *e; e++) {
 		size_t name_length = strcspn(*e, "=");
+		if (fputs(prefix, stdout) < 0) return -1;
 		if (!(*e)[name_length]) {
 			if (fputs(*e, stdout) < 0 || fputc('\n', stdout) == EOF) return -1;
 			continue;
@@ -933,7 +938,7 @@ static int bi_set(struct sh_builtin_ctx *ctx)
 	int first = 1;
 
 	if (ctx->argc == 1) {
-		ctx->status = set_list_variables() == 0 ? 0 : 1;
+		ctx->status = list_variables("") == 0 ? 0 : 1;
 		return 0;
 	}
 	if (strcmp(ctx->argv[1], "--") == 0) {
@@ -1006,6 +1011,110 @@ static int bi_shift(struct sh_builtin_ctx *ctx)
 	if (!ctx->env_mutate) { ctx->status = 0; return 0; }
 	if (__sh_params_shift((int)n) < 0) { ctx->status = 2; return 0; }
 	ctx->status = 0;
+	return 0;
+}
+
+/* ==== export (XCU 2.14 special built-in, export(1p)) ===================
+ *
+ * bi_set()'s header comment above already states the deviation that
+ * matters here: this shell's only variable store is the real `environ`
+ * (src/sh/execute.c), so every "NAME=value" assignment -- with or
+ * without `export` in front of it -- already calls setenv() and is
+ * therefore already visible in a subsequently spawned command's real
+ * environment (execute.c's build_child_envp() copies straight from
+ * `environ`).  There is no separate exported/unexported distinction to
+ * maintain, which settles two of export(1p)'s three forms without any
+ * new state to track:
+ *
+ *  - `export NAME=value` performs exactly the setenv() a bare
+ *    `NAME=value` assignment already performs.
+ *  - `export NAME` on an existing NAME changes nothing: NAME's current
+ *    value is already the environ entry export(1p) asks this to
+ *    produce.
+ *  - `export NAME` on a NAME that is not yet set needs no "pending
+ *    export" flag either, for the same reason: this shell's *next*
+ *    plain assignment to NAME calls setenv() unconditionally
+ *    (exec_assignment_only(), execute.c), producing the identical
+ *    environ entry export(1p) would have produced by remembering NAME
+ *    now and consulting that memory at assignment time.  There is
+ *    nothing to remember between the two, so a bare NAME with no '='
+ *    below is a genuine no-op.
+ *
+ * What does not already exist without this builtin is the
+ * `export`/`export -p` listing form (export(1p): "the format
+ * 'export name=value'", reusing list_variables() above), and the fact
+ * that `export`/`export X=1` was refused outright before this builtin
+ * existed -- see src/sh/script.c's unimplemented_builtins and
+ * bi_umask()'s own comment above on the real at/batch bug this half of
+ * the fix is for: src/util/atbatch.c emits `export NAME=value` at the
+ * top of every generated job body, so a shell with no `export` built
+ * in refused every real at/batch job on that line.
+ *
+ * `env_effect` is 0 in the table below, same as bi_set()'s and for the
+ * same reason: the no-operand/-p form must still run and print in a
+ * pipeline stage ("export -p | ...") even though that stage's
+ * assignments must not leak out of its subshell environment, so the
+ * mutating half checks ctx->env_mutate itself rather than being
+ * skipped wholesale the way `cd` is. */
+static int is_valid_name(const char *s) __attribute__((nonnull(1)));
+static int is_valid_name(const char *s)
+{
+	size_t i;
+
+	if (!s[0] || (s[0] >= '0' && s[0] <= '9')) return 0;
+	for (i = 0; s[i]; i++) {
+		char c = s[i];
+		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		      (c >= '0' && c <= '9') || c == '_')) return 0;
+	}
+	return 1;
+}
+
+static int bi_export(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_export(struct sh_builtin_ctx *ctx)
+{
+	int i;
+	int status = 0;
+
+	if (ctx->argc == 1 || strcmp(ctx->argv[1], "-p") == 0) {
+		if (ctx->argc > 2) {
+			(void)fprintf(stderr, "export: -p: too many operands\n");
+			ctx->status = 2;
+			return 0;
+		}
+		ctx->status = list_variables("export ") == 0 ? 0 : 1;
+		return 0;
+	}
+
+	/* Same subshell reasoning as bi_set()/bi_shift() above. */
+	if (!ctx->env_mutate) { ctx->status = 0; return 0; }
+
+	for (i = 1; i < ctx->argc; i++) {
+		const char *arg = ctx->argv[i];
+		size_t namelen = strcspn(arg, "=");
+		char *name = __malloc(namelen + 1);
+
+		if (!name) {
+			(void)fprintf(stderr, "export: out of memory\n");
+			ctx->status = 2;
+			return 0;
+		}
+		__ownership_writable_span(name, namelen);
+		__ownership_readable_span(arg, namelen);
+		memcpy(name, arg, namelen);
+		name[namelen] = 0;
+		if (!is_valid_name(name)) {
+			(void)fprintf(stderr, "export: %s: not a valid identifier\n", name);
+			status = 1;
+			__free(name);
+			continue;
+		}
+		/* A bare NAME with no '=' needs no state change at all -- see
+		 * this function's own header comment. */
+		if (arg[namelen] == '=') setenv(name, arg + namelen + 1, 1);
+		__free(name);
+	}
+	ctx->status = status;
 	return 0;
 }
 
@@ -1314,6 +1423,9 @@ static const struct sh_builtin builtins[] = {
 	 * wholesale the way `cd` is. */
 	{ "set",   1, 0, bi_set },
 	{ "shift", 1, 0, bi_shift },
+	/* env_effect 0, same as `set`/`shift` just above and for the same
+	 * reason: see bi_export()'s own header comment. */
+	{ "export", 1, 0, bi_export },
 	/* `return`'s env_effect is 0 for the same reason `exit`'s is: its
 	 * effect in a subshell environment *is* the exit status, which
 	 * bi_return() produces either way, and it consults ctx->env_mutate
