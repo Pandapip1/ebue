@@ -387,12 +387,21 @@ static void promote_to_array(struct awk_cell *c)
 	awk_htab_init(c->arr);
 }
 
-static struct awk_cell *array_elem(struct awk_cell *arrcell, const char *key)
+/* Returns the cell stored under key in t, creating a fresh VK_UNINIT
+ * one first if key was absent -- the "look it up, and if that's not
+ * there make it" step both array_elem() (an array's own element table)
+ * and lookup_cell() below (the globals table) need identically. */
+static struct awk_cell *htab_get_or_create_cell(struct awk_htab *t, const char *key)
 {
-	void **slot = awk_htab_getp(arrcell->arr, key);
+	void **slot = awk_htab_getp(t, key);
 	if (!slot) oom();
 	if (!*slot) *slot = new_cell();
 	return *slot;
+}
+
+static struct awk_cell *array_elem(struct awk_cell *arrcell, const char *key)
+{
+	return htab_get_or_create_cell(arrcell->arr, key);
 }
 
 /* ==== variable resolution ================================================= */
@@ -404,12 +413,7 @@ static struct awk_cell *lookup_cell(struct awk_interp *ip, const char *name)
 		for (i = 0; i < ip->frame->nparams; i++)
 			if (!strcmp(ip->frame->names[i], name)) return ip->frame->cells[i];
 	}
-	{
-		void **slot = awk_htab_getp(&ip->globals, name);
-		if (!slot) oom();
-		if (!*slot) *slot = new_cell();
-		return *slot;
-	}
+	return htab_get_or_create_cell(&ip->globals, name);
 }
 
 static void set_global_str(struct awk_interp *ip, const char *name, const char *val)
@@ -1206,6 +1210,23 @@ static struct awk_value do_incrdecr(struct awk_interp *ip, struct awk_node *n, i
 	}
 }
 
+/* Resolves an N_ARRIDX node to its backing cell: promotes the base
+ * variable to an array on first use, then looks up (creating if
+ * absent) the SUBSEP-joined subscript's own element cell -- the shared
+ * first half of both eval_lvalue_read()'s and assign_lvalue()'s own
+ * N_ARRIDX cases below. */
+static struct awk_cell *resolve_arridx_cell(struct awk_interp *ip, struct awk_node *lv)
+{
+	struct awk_cell *c = lookup_cell(ip, lv->str);
+	char *key;
+	struct awk_cell *e;
+	promote_to_array(c);
+	key = build_subsep_key(ip, lv->list, lv->nlist);
+	e = array_elem(c, key);
+	free(key);
+	return e;
+}
+
 static struct awk_value eval_lvalue_read(struct awk_interp *ip, struct awk_node *lv)
 {
 	switch (lv->type) {
@@ -1220,16 +1241,8 @@ static struct awk_value eval_lvalue_read(struct awk_interp *ip, struct awk_node 
 		v_free(&idxv);
 		return get_field(ip, idx);
 	}
-	case N_ARRIDX: {
-		struct awk_cell *c = lookup_cell(ip, lv->str);
-		char *key;
-		struct awk_cell *e;
-		promote_to_array(c);
-		key = build_subsep_key(ip, lv->list, lv->nlist);
-		e = array_elem(c, key);
-		free(key);
-		return cell_to_value(ip, e);
-	}
+	case N_ARRIDX:
+		return cell_to_value(ip, resolve_arridx_cell(ip, lv));
 	default: {
 		struct awk_value v; v_uninit_init(&v); return v;
 	}
@@ -1252,17 +1265,9 @@ static void assign_lvalue(struct awk_interp *ip, struct awk_node *lv, struct awk
 		set_field(ip, idx, val);
 		return;
 	}
-	case N_ARRIDX: {
-		struct awk_cell *c = lookup_cell(ip, lv->str);
-		char *key;
-		struct awk_cell *e;
-		promote_to_array(c);
-		key = build_subsep_key(ip, lv->list, lv->nlist);
-		e = array_elem(c, key);
-		free(key);
-		assign_value_to_cell(e, val);
+	case N_ARRIDX:
+		assign_value_to_cell(resolve_arridx_cell(ip, lv), val);
 		return;
-	}
 	default:
 		return;
 	}
@@ -1303,13 +1308,17 @@ static struct awk_value eval(struct awk_interp *ip, struct awk_node *n)
 		struct awk_value rhs = eval(ip, n->b);
 		if (n->op != T_ASSIGN) {
 			struct awk_value cur = eval_lvalue_read(ip, n->a);
-			double result = arith(
-				n->op == T_ADD_ASSIGN ? T_PLUS :
-				n->op == T_SUB_ASSIGN ? T_MINUS :
-				n->op == T_MUL_ASSIGN ? T_STAR :
-				n->op == T_DIV_ASSIGN ? T_SLASH :
-				n->op == T_MOD_ASSIGN ? T_PERCENT : T_CARET,
-				v_num(&cur), v_num(&rhs));
+			int arith_op;
+			double result;
+			switch (n->op) {
+			case T_ADD_ASSIGN: arith_op = T_PLUS; break;
+			case T_SUB_ASSIGN: arith_op = T_MINUS; break;
+			case T_MUL_ASSIGN: arith_op = T_STAR; break;
+			case T_DIV_ASSIGN: arith_op = T_SLASH; break;
+			case T_MOD_ASSIGN: arith_op = T_PERCENT; break;
+			default: arith_op = T_CARET; break; /* T_POW_ASSIGN */
+			}
+			result = arith(arith_op, v_num(&cur), v_num(&rhs));
 			v_free(&cur);
 			v_free(&rhs);
 			v_num_init(&rhs, result);
@@ -1371,8 +1380,10 @@ static struct awk_value eval(struct awk_interp *ip, struct awk_node *n)
 		struct awk_value s = eval(ip, n->a);
 		regex_t *re = resolve_ere(ip, n->b);
 		int m = regexec(re, v_str(&s, convfmt_str(ip)), 0, NULL, 0) == 0;
+		int matched;
 		v_free(&s);
-		v_num_init(&v, (n->op ? !m : m) ? 1 : 0);
+		matched = n->op ? !m : m; /* n->op is the T_NOMATCH ("!~") negation flag */
+		v_num_init(&v, matched ? 1 : 0);
 		return v;
 	}
 	case N_RELOP: {
@@ -1425,11 +1436,28 @@ static struct awk_value eval(struct awk_interp *ip, struct awk_node *n)
 		return v;
 	}
 	case N_CALL: return call_builtin(ip, n);
-	case N_ELIST: return n->nlist ? eval(ip, n->list[0]) : (v_uninit_init(&v), v);
+	case N_ELIST:
+		if (n->nlist) return eval(ip, n->list[0]);
+		v_uninit_init(&v);
+		return v;
 	default:
 		v_uninit_init(&v);
 		return v;
 	}
+}
+
+/* Converts a wait(2)-style status (as pclose()/system() below both
+ * return it) into the plain exit-code integer close()'s and system()'s
+ * own awk(1p) return value is: -1 if pclose()/system() itself failed
+ * to obtain a status at all, the command's own exit code if it exited
+ * normally, or the raw status back unchanged for any other case (e.g.
+ * a signal-termination encoding) -- shared by both builtins below
+ * rather than duplicated. */
+static int wait_status_to_exit_code(int status)
+{
+	if (status < 0) return -1;
+	if (WIFEXITED(status)) return WEXITSTATUS(status);
+	return status;
 }
 
 /* ==== built-in function dispatch ========================================== */
@@ -1668,8 +1696,7 @@ static struct awk_value call_builtin(struct awk_interp *ip, struct awk_node *cal
 		if (found) {
 			struct awk_stream *st = found;
 			if (st->is_pipe) {
-				int status = pclose(st->f);
-				result = status < 0 ? -1 : (WIFEXITED(status) ? WEXITSTATUS(status) : status);
+				result = wait_status_to_exit_code(pclose(st->f));
 			} else {
 				result = fclose(st->f);
 			}
@@ -1686,7 +1713,7 @@ static struct awk_value call_builtin(struct awk_interp *ip, struct awk_node *cal
 		flush_all_streams(ip);
 		status = system(v_str(&s, convfmt_str(ip)));
 		v_free(&s);
-		v_num_init(&v, status < 0 ? -1 : (WIFEXITED(status) ? WEXITSTATUS(status) : status));
+		v_num_init(&v, wait_status_to_exit_code(status));
 		return v;
 	}
 	{
