@@ -206,7 +206,12 @@ unsigned ualarm(unsigned, unsigned);  /* undefined-ok: alarm()'s NT timer
 	and repeating is the part that cannot be honoured here: SIGALRM is
 	delivered by an APC that only runs while the thread is in an
 	alertable wait, so every expiry a computing thread missed would
-	arrive as one delivery rather than as a series */
+	arrive as one delivery rather than as a series -- the marker stays
+	because it is still true of, and only checked against, the NT build.
+	Linux has a real, genuinely repeating setitimer(ITIMER_REAL, ...)
+	now (src/time/linux/plat_itimer.c), and ualarm() is defined in terms
+	of exactly that -- not a second raw mechanism -- in
+	src/unistd/linux/plat_ualarm.c. */
 #endif
 
 #if defined(_GNU_SOURCE) || defined(_BSD_SOURCE)

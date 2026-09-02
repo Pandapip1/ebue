@@ -46,7 +46,15 @@ int getitimer (int, struct itimerval *);  /* undefined-ok: ITIMER_REAL's
 	src/signal/signal.c's ctrl_handler() already flags as tolerable only
 	because Ctrl-C is rare -- a real interval timer firing repeatedly is
 	not -- and src/unistd/sleep.c's banner records the second reason it
-	was rejected, which is what fork() would then be cloning */
+	was rejected, which is what fork() would then be cloning --
+	the marker stays because it is still true of, and only checked
+	against, the NT build. Linux has both a real signal-delivery model
+	and this library's own already-working, genuinely repeating software
+	timer machinery (src/time/timer.c's per-process timer manager
+	thread, previously only reachable through timer_create()), and does
+	define this one -- built on exactly that machinery rather than a raw
+	setitimer(2) syscall, in src/time/linux/plat_itimer.c, whose own
+	banner explains why. */
 int setitimer (int, const struct itimerval *__restrict, struct itimerval *__restrict);  /* undefined-ok: see getitimer */
 int utimes (const char *, const struct timeval [2]);
 
@@ -68,7 +76,12 @@ int adjtime (const struct timeval *, struct timeval *);  /* undefined-ok:
 	the clock at all is NtSetSystemTime (src/time/stime.c), a single hard
 	jump; there is no W32Time-style slew API reachable from a plain
 	process at either layer, so there is nothing to build the gradual
-	half of adjtime() on */
+	half of adjtime() on -- the marker stays because it is still true of,
+	and only checked against, the NT build. Linux has a real, genuinely
+	gradual NTP-style slewing API, adjtimex(2) (mode ADJ_OFFSET_
+	SINGLESHOT is BSD adjtime()'s own semantics verbatim -- a one-shot,
+	non-PLL slew, not a hard jump), and does define this one, in
+	src/time/linux/plat_adjtime.c. */
 #define timerisset(t) ((t)->tv_sec || (t)->tv_usec)
 #define timerclear(t) ((t)->tv_sec = (t)->tv_usec = 0)
 #define timercmp(s,t,op) ((s)->tv_sec == (t)->tv_sec ? \
