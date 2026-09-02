@@ -1,11 +1,13 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * getaddrinfo()/freeaddrinfo()/gai_strerror(): https://pubs.opengroup.
+ * getaddrinfo(): https://pubs.opengroup.
  * org/onlinepubs/9699919799/functions/freeaddrinfo.html. See
  * include/netdb.h's own banner for this pass's overall scope
  * (AF_INET only, no service-name database, "files"/"dns" NSS order
- * from a real /etc/nsswitch.conf).
+ * from a real /etc/nsswitch.conf). freeaddrinfo()/gai_strerror() have
+ * no OS dependency at all and live in the platform-shared src/netdb/
+ * netdb.c instead -- see that file's own header for why.
  *
  * Each returned struct addrinfo, its ai_addr, and (on the first node
  * only, when AI_CANONNAME was requested and a name was actually
@@ -72,17 +74,6 @@ static struct addrinfo *make_node(int socktype, int protocol,
 	ai->ai_addrlen = (socklen_t)sizeof *sin;
 	ai->ai_addr = (struct sockaddr *)sin;
 	return ai;
-}
-
-void freeaddrinfo(struct addrinfo *res)
-{
-	while (res) {
-		struct addrinfo *next = res->ai_next;
-		free(res->ai_addr);
-		free(res->ai_canonname);
-		free(res);
-		res = next;
-	}
 }
 
 int getaddrinfo(const char *__restrict node, const char *__restrict service,
@@ -180,22 +171,4 @@ int getaddrinfo(const char *__restrict node, const char *__restrict service,
 
 	*res = head;
 	return 0;
-}
-
-const char *gai_strerror(int code)
-{
-	switch (code) {
-	case 0:             return "Success";
-	case EAI_AGAIN:     return "Temporary failure in name resolution";
-	case EAI_BADFLAGS:  return "Invalid value for ai_flags";
-	case EAI_FAIL:      return "Non-recoverable failure in name resolution";
-	case EAI_FAMILY:    return "ai_family not supported";
-	case EAI_MEMORY:    return "Memory allocation failure";
-	case EAI_NONAME:    return "Name or service not known";
-	case EAI_SERVICE:   return "Servname not supported for ai_socktype";
-	case EAI_SOCKTYPE:  return "ai_socktype not supported";
-	case EAI_SYSTEM:    return "System error";
-	case EAI_OVERFLOW:  return "Argument buffer overflow";
-	default:            return "Unknown error";
-	}
 }
