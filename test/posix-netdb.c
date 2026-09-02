@@ -714,6 +714,20 @@ static void test_netdb_gethostbyname_fixture(void)
 #define ND_SYS_sendto      44
 #define ND_SYS_recvfrom    45
 #define ND_SYS_close       3
+#elif defined(__i386__)
+/* i386's direct per-call socket syscalls (not the old socketcall(2)
+ * multiplex, __NR_socketcall 102) -- added in Linux 4.3, confirmed
+ * against this host's own /nix/store linux-headers-7.1 <asm/
+ * unistd_32.h> and arch/x86/entry/syscalls/syscall_32.tbl. Using them
+ * is consistent with this tree's existing i386 baseline: src/fcntl/
+ * linux/plat_fcntl.c already calls SYS_statx (Linux 4.11) unconditionally
+ * on i386, a newer floor than 4.3. */
+#define ND_SYS_socket      359
+#define ND_SYS_bind        361
+#define ND_SYS_getsockname 367
+#define ND_SYS_sendto      369
+#define ND_SYS_recvfrom    371
+#define ND_SYS_close       6
 #endif
 
 #if defined(__aarch64__)
@@ -743,6 +757,37 @@ static long nd_raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5,
 	                 : "=a"(ret)
 	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
 	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+/* Same "args array in memory" trampoline as crt/linux/crt1.c's own
+ * raw_syscall() and src/fcntl/linux/plat_fcntl.c's own raw_syscall() --
+ * see either one's banner for why: i386 `int $0x80` wants nr in eax and
+ * up to 6 args in ebx/ecx/edx/esi/edi/ebp, but ebx/ebp are also cdecl
+ * callee-saved, leaving no register free to stage the syscall number in
+ * once all six argument registers are loaded. */
+static long nd_raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
 	return ret;
 }
 #endif
