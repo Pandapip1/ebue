@@ -106,6 +106,26 @@ class PointerProvenanceChecker
     return Current ? Current->getDeclKindName() : "unknown";
   }
 
+  // The standard strto* family writes either its input pointer or a pointer
+  // later in that same array through endptr.  The analyzer correctly gives
+  // the stored pointer a fresh symbol, but that symbol otherwise loses the
+  // standard library's same-object contract.  Keep the list literal and
+  // restricted to the narrow and wide conversion functions whose second
+  // argument is endptr.
+  static bool isStringConversionFunction(const FunctionDecl *FD) {
+    if (!FD || !FD->getIdentifier())
+      return false;
+    StringRef Name = FD->getName();
+    static constexpr llvm::StringLiteral Names[] = {
+        "strtod",  "strtof",   "strtold", "strtol",  "strtoll",
+        "strtoul", "strtoull", "wcstod",  "wcstof",  "wcstold",
+        "wcstol",  "wcstoll",  "wcstoul", "wcstoull"};
+    for (StringRef Candidate : Names)
+      if (Name == Candidate)
+        return true;
+    return false;
+  }
+
   // isConstantSentinel: the source of an integer-to-pointer cast is a
   // compile-time constant (e.g. NT's own `(HANDLE)(LONG_PTR)-1`
   // pseudo-handle convention -- see NtCurrentProcess()/NtCurrentThread()
@@ -464,6 +484,23 @@ public:
     const auto *FD = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
     if (!FD || !FD->getIdentifier())
       return;
+    if (isStringConversionFunction(FD) && Call.getNumArgs() > 1) {
+      ProgramStateRef State = C.getState();
+      const MemRegion *Haystack = Call.getArgSVal(0).getAsRegion();
+      const MemRegion *EndStorage = Call.getArgSVal(1).getAsRegion();
+      if (!Haystack || !EndStorage)
+        return;
+      Haystack = resolveAlias(Haystack->getBaseRegion(), State);
+      const MemRegion *EndValue = State->getSVal(EndStorage).getAsRegion();
+      const auto *EndSymbol =
+          EndValue ? dyn_cast<SymbolicRegion>(EndValue->getBaseRegion())
+                   : nullptr;
+      if (!Haystack || !EndSymbol)
+        return;
+      State = State->set<NeedleAlias>(EndSymbol->getSymbol(), Haystack);
+      C.addTransition(State);
+      return;
+    }
     // isNeedleFunction: a well-known C-library "needle in haystack"
     // function whose contract guarantees its return value, if non-null,
     // points somewhere inside its first argument.  Defined here, not as
