@@ -96,6 +96,7 @@
 #define SYS_write             64
 #define SYS_close             57
 #define SYS_kill              129
+#define SYS_rt_sigaction      134
 #define SYS_nanosleep         101
 #define SYS_msync             227
 #define SYS_getpid            172
@@ -460,6 +461,44 @@ int __plat_segv_code(void *addr)
 	long ret = syscall(SYS_msync, (void *)page, (unsigned long)4096, 4 /* MS_ASYNC */);
 	if (is_sys_error(ret) && (int)-ret == ENOMEM) return SEGV_MAPERR;
 	return SEGV_ACCERR;
+}
+
+/* rt_sigaction(2)'s own kernel-ABI struct, aarch64 layout (matching the
+ * generic asm-generic/signal.h every architecture that defines
+ * SA_RESTORER -- aarch64 among them -- uses): handler, flags, restorer,
+ * then a sigset_t sized for exactly _NSIG (64) kernel signals, one
+ * unsigned long. NOT this file's own (much larger, sig_valid()-checked-
+ * up-to-_NSIG-of-its-own) sigset_t from <signal.h> -- a different type
+ * with a different size the real syscall knows nothing about, which is
+ * exactly why sigsetsize below is sizeof(unsigned long), not sizeof
+ * (sigset_t). k_restorer is left null and SA_RESTORER unset: only
+ * meaningful when the kernel actually calls back into a user handler
+ * and has to return through it via rt_sigreturn(2), which never happens
+ * for the only two handler values this function ever installs, SIG_IGN
+ * and SIG_DFL -- see this file's own plat_signal.h comment on this
+ * function for why a real caught handler is out of scope here.
+ *
+ * Fields are named k_* rather than the POSIX sa_* names <signal.h>
+ * itself uses: sa_handler there is a macro (that header's own struct
+ * sigaction shares one storage slot between sa_handler and sa_sigaction
+ * through a union, same as this file's own signal.c banner already
+ * describes for handlers[]), and this struct's real ABI layout -- fixed
+ * by the kernel, not by this header -- has no union to expand it into. */
+struct kernel_sigaction {
+	void (*k_handler)(int);
+	unsigned long k_flags;
+	void (*k_restorer)(void);
+	unsigned long k_mask;
+};
+
+void __plat_sig_sync_kernel(int sig, int ignore)
+{
+	struct kernel_sigaction act;
+	act.k_handler = ignore ? SIG_IGN : SIG_DFL;
+	act.k_flags = 0;
+	act.k_restorer = 0;
+	act.k_mask = 0;
+	syscall(SYS_rt_sigaction, (long)sig, &act, 0L, (long)sizeof(unsigned long));
 }
 
 /* ---- named stop-events, keyed by the filesystem namespace ----------------

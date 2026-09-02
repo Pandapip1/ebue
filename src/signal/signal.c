@@ -257,6 +257,13 @@ void (*signal(int sig, void (*h)(int)))(int)
 	__sig_lock();
 	old = handlers[sig];
 	handlers[sig] = h;
+	/* See plat_signal.h's own comment on __plat_sig_sync_kernel(): keeps
+	 * a signal the kernel itself can raise synchronously out of a
+	 * syscall (SIGPIPE from write(), chief among them) actually ignored/
+	 * restored at the point the kernel decides whether to act, matching
+	 * what `old`/`h` already say here. */
+	if (h == SIG_IGN) __plat_sig_sync_kernel(sig, 1);
+	else if (old == SIG_IGN) __plat_sig_sync_kernel(sig, 0);
 	if (h == SIG_IGN || (h == SIG_DFL && !default_action(sig))) {
 		sigdelset(&process_pending.set, sig);
 		sigdelset(&thread_pending.set, sig);
@@ -281,7 +288,12 @@ int sigaction(int sig, const struct sigaction *act, struct sigaction *old)
 		old->sa_flags = act_flags[sig];
 	}
 	if (act) {
+		void (*prev)(int) = handlers[sig];
 		handlers[sig] = act->sa_handler;
+		/* signal()'s own matching call above -- see plat_signal.h's
+		 * comment on __plat_sig_sync_kernel(). */
+		if (act->sa_handler == SIG_IGN) __plat_sig_sync_kernel(sig, 1);
+		else if (prev == SIG_IGN) __plat_sig_sync_kernel(sig, 0);
 		if (act->sa_handler == SIG_IGN ||
 		    (act->sa_handler == SIG_DFL && !default_action(sig))) {
 			sigdelset(&process_pending.set, sig);
