@@ -121,7 +121,7 @@ static const char *resolve(struct walkstate *ws, const char *path, char **tmp)
 	int absolute = path[0] == '/' || path[0] == '\\' ||
 		(((path[0] | 0x20) >= 'a' && (path[0] | 0x20) <= 'z') && path[1] == ':');
 	size_t l0, l1;
-	char *full;
+	char *restrict full;
 
 	*tmp = NULL;
 	if (absolute || !cwd) return path;
@@ -386,7 +386,7 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 		r = 0;
 		while ((de = readdir(lv.dp)) != NULL) {
 			const char *name = de->d_name;
-			char *child;
+			char *restrict child;
 			size_t clen, namelen, off, separator;
 
 			/* readdir() returns a fixed struct dirent.  Validate its name

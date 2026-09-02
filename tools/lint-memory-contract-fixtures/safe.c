@@ -193,6 +193,15 @@ void copy_restrict_members(
 	memcpy(destination->bytes, source->bytes, sizeof destination->bytes);
 }
 
+void copy_local_restrict_pointer(
+	char *storage withtok(fixture_writable_span(length)),
+	const char *source withtok(fixture_readable_span(length)),
+	size_t length)
+{
+	char *restrict destination = storage;
+	memcpy(destination, source, length);
+}
+
 void copy_to_fresh_unknown_allocation(
 	const char *source withtok(fixture_readable_span(length)), size_t length)
 {

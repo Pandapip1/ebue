@@ -218,7 +218,7 @@ struct linebuf { struct pline *v; size_t n, cap; };
 
 static int lb_push(struct linebuf *lb, const char *text, size_t len, int has_nl)
 {
-	char *copy;
+	char *restrict copy;
 	size_t bytes;
 	struct pline *g;
 
@@ -323,7 +323,7 @@ static int linebuf_insert_block(struct linebuf *lb, size_t at, const struct line
 	}
 	memmove(&lb->v[at + need], &lb->v[at], (lb->n - at) * sizeof *lb->v);
 	for (i = 0; i < need; i++) {
-		char *copy;
+		char *restrict copy;
 		size_t bytes;
 		if (!__util_size_add(block->v[i].len, 1, &bytes)) return 0;
 		copy = malloc(bytes);
@@ -351,7 +351,7 @@ struct hunk {
 
 static int hunk_push(struct hunk *h, enum hop_kind kind, const char *text, size_t len, int has_nl)
 {
-	char *copy;
+	char *restrict copy;
 	size_t bytes;
 	struct hop *g;
 
@@ -553,14 +553,16 @@ static int parse_name_line(const struct pline *pl, const char *pfx, char **out)
 {
 	size_t plen = strlen(pfx), namelen, i;
 	const char *p;
+	char *restrict copy;
 	if (pl->len < plen || memcmp(pl->text, pfx, plen) != 0) return 0;
 	p = pl->text + plen;
 	namelen = pl->len - plen;
 	for (i = 0; i < namelen; i++) if (p[i] == '\t') { namelen = i; break; }
-	*out = malloc(namelen + 1);
-	if (!*out) return 0;
-	memcpy(*out, p, namelen);
-	(*out)[namelen] = 0;
+	copy = malloc(namelen + 1);
+	if (!copy) return 0;
+	memcpy(copy, p, namelen);
+	copy[namelen] = 0;
+	*out = copy;
 	return 1;
 }
 

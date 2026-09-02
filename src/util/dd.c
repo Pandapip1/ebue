@@ -269,8 +269,8 @@ static int dd_copy_blocked(int ifd, int ofd, const struct dd_opts *o,
 	uintmax_t *in_full, uintmax_t *in_partial, uintmax_t *out_full, uintmax_t *out_partial, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	int *had_error)
 {
-	char *ibuf = malloc((size_t)o->ibs);
-	char *obuf = malloc((size_t)o->obs);
+	char *restrict ibuf = malloc((size_t)o->ibs);
+	char *restrict obuf = malloc((size_t)o->obs);
 	size_t obuf_used = 0;
 	uintmax_t blocks = 0;
 

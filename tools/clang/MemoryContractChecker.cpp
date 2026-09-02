@@ -970,31 +970,31 @@ public:
                             .getQuantity());
   }
 
-  static const ParmVarDecl *rootParameter(const Expr *Expression) {
+  static const ValueDecl *rootRestrictedPointer(const Expr *Expression) {
     if (!Expression)
       return nullptr;
     Expression = Expression->IgnoreParenCasts();
     if (const auto *Reference = dyn_cast<DeclRefExpr>(Expression))
-      if (const auto *Parameter = dyn_cast<ParmVarDecl>(Reference->getDecl()))
-        return Parameter;
+      if (const auto *Value = dyn_cast<ValueDecl>(Reference->getDecl()))
+        return Value;
     if (const auto *Binary = dyn_cast<BinaryOperator>(Expression))
       if (Binary->getOpcode() == BO_Add || Binary->getOpcode() == BO_Sub)
-        return rootParameter(Binary->getLHS());
+        return rootRestrictedPointer(Binary->getLHS());
     if (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(Expression))
-      return rootParameter(Subscript->getBase());
+      return rootRestrictedPointer(Subscript->getBase());
     if (const auto *Member = dyn_cast<MemberExpr>(Expression))
-      return rootParameter(Member->getBase());
+      return rootRestrictedPointer(Member->getBase());
     if (const auto *Address = dyn_cast<UnaryOperator>(Expression))
       if (Address->getOpcode() == UO_AddrOf)
-        return rootParameter(Address->getSubExpr());
+        return rootRestrictedPointer(Address->getSubExpr());
     return nullptr;
   }
 
   static bool restrictDisjointSpanProven(const Expr *FirstExpression,
                                          const Expr *SecondExpression,
                                          SVal First, SVal Second) {
-    const ParmVarDecl *A = rootParameter(FirstExpression);
-    const ParmVarDecl *B = rootParameter(SecondExpression);
+    const ValueDecl *A = rootRestrictedPointer(FirstExpression);
+    const ValueDecl *B = rootRestrictedPointer(SecondExpression);
     if ((!A || !A->getType().isRestrictQualified()) &&
         (!B || !B->getType().isRestrictQualified()))
       return false;

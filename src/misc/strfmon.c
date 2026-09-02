@@ -114,7 +114,7 @@ static int put(struct out *o, const char *t, size_t l) __attribute__((nonnull(1,
 static int put(struct out *o, const char *t, size_t l)
 {
 	if (l > o->left) return -1;
-	memcpy(o->p, t, l);
+	memmove(o->p, t, l);
 	o->p += l;
 	o->left -= l;
 	o->written += l;
