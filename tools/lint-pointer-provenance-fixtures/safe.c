@@ -49,3 +49,16 @@ long conversion_end_in_input(const char *s) {
   (void)strtol(s, &end, 10);
   return end - s;
 }
+
+static const char *skip_digits(const char *p) {
+  if (*p < '0' || *p > '9')
+    return 0;
+  while (*p >= '0' && *p <= '9')
+    ++p;
+  return p;
+}
+
+long static_cursor_return(const char *s) {
+  const char *end = skip_digits(s);
+  return end ? end - s : -1;
+}

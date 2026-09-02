@@ -889,6 +889,16 @@ int dynamic_countdown_conditional_update(int n, int update)
 
 void opaque_rank_mutation(int *n);
 
+int transition_ir_havoc_can_bypass_progress(int n)
+{
+	while (n > 0) { /* totality-expect */
+		int transient = opaque_predicate();
+		if (transient)
+			n--;
+	}
+	return n;
+}
+
 int dynamic_countdown_escaped_rank(int n)
 {
 	while (n > 0) { /* totality-expect */

@@ -299,6 +299,30 @@ int signed_unconditional_countdown(int n)
 
 int opaque_dynamic_step(void);
 
+/* The transition slice must quantify this per-iteration value.  Treating it
+ * as an unchanged header-state slot would silently strengthen the relation. */
+unsigned transition_ir_havocs_transient(unsigned n)
+{
+	while (n > 0) {
+		int transient = opaque_dynamic_step();
+		(void)transient;
+		n--;
+	}
+	return n;
+}
+
+/* The existing rank proof may ignore this call because n does not escape.
+ * The general transition IR must nevertheless label the path unsupported
+ * until the shared effect algebra can supply an exact call summary. */
+unsigned transition_ir_marks_opaque_effect_unsupported(unsigned n)
+{
+	while (n > 0) {
+		opaque_exit_call();
+		n--;
+	}
+	return n;
+}
+
 int guarded_dynamic_countdown(int n)
 {
 	while (n > 0) {
