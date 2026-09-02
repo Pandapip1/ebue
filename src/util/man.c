@@ -776,6 +776,16 @@ static int man_maybe_consume_tag(struct man_ctx *c)
 	return man_flush_as_tag(c, c->tag_width);
 }
 
+/* Maps one letter of a .BI/.IB/.BR/.RB/.IR/.RI macro NAME to the font it
+ * selects: 'B' bold, 'I' italic, anything else (always 'R' in practice --
+ * the letter is one of the six macro names' own two characters) roman. */
+static int man_font_for_letter(char c)
+{
+	if (c == 'B') return MAN_M_BOLD;
+	if (c == 'I') return MAN_M_ITAL;
+	return MAN_M_ROMAN;
+}
+
 /* ==== macro dispatch ==================================================== */
 
 struct man_render {
@@ -1061,8 +1071,8 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 			 * -- see this file's own header comment for why all six
 			 * standard combinations are handled by this one shared
 			 * shape rather than just the three the task named. */
-			int f1 = (name[0] == 'B') ? MAN_M_BOLD : (name[0] == 'I') ? MAN_M_ITAL : MAN_M_ROMAN;
-			int f2 = (name[1] == 'B') ? MAN_M_BOLD : (name[1] == 'I') ? MAN_M_ITAL : MAN_M_ROMAN;
+			int f1 = man_font_for_letter(name[0]);
+			int f2 = man_font_for_letter(name[1]);
 			size_t i;
 			/* Joins to whatever the accumulator already holds (e.g. a
 			 * preceding .B/.I line in the same fill-mode paragraph)
@@ -1106,7 +1116,10 @@ static int man_emit_header(struct man_buf *out, int width, struct man_render *r)
 	ok = mbuf_appendstr(&left, r->title.data);
 	if (ok && r->section.len) { ok = mbuf_appendc(&left, '('); if (ok) ok = mbuf_appendstr(&left, r->section.data); if (ok) ok = mbuf_appendc(&left, ')'); }
 	if (ok) {
-		const char *ctr = r->manual.len ? r->manual.data : (r->source.len ? r->source.data : "");
+		const char *ctr;
+		if (r->manual.len) ctr = r->manual.data;
+		else if (r->source.len) ctr = r->source.data;
+		else ctr = "";
 		ok = man_center3(out, width, left.data, ctr, left.data);
 	}
 	mbuf_free(&left);

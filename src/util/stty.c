@@ -473,8 +473,11 @@ static void print_flags(const struct termios *t, int all)
 	{
 		tcflag_t csize = t->c_cflag & (tcflag_t)CSIZE;
 		if (all || csize != CS8) {
-			const char *name = csize == CS5 ? "cs5" : csize == CS6 ? "cs6" :
-				csize == CS7 ? "cs7" : "cs8";
+			const char *name;
+			if (csize == CS5) name = "cs5";
+			else if (csize == CS6) name = "cs6";
+			else if (csize == CS7) name = "cs7";
+			else name = "cs8";
 			printf("%s ", name);
 		}
 	}
