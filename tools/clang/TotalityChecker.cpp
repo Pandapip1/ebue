@@ -23,6 +23,124 @@ using namespace clang;
 
 namespace {
 
+/* Locally defined read-only helpers cannot mutate a caller's induction rank,
+ * bound, or sentinel object.  Infer that property conservatively so a small
+ * scalar predicate does not need a public semantic attribute merely to be
+ * transparent to a loop proof.  Termination remains an independent
+ * obligation: every accepted definition is still traversed normally. */
+class ReadonlyFunctionFacts {
+  struct Candidate {
+    bool Valid = true;
+    std::vector<const FunctionDecl *> Dependencies;
+  };
+
+  ASTContext &Context;
+  std::map<const FunctionDecl *, const FunctionDecl *> Definitions;
+  std::map<const FunctionDecl *, Candidate> Candidates;
+  std::set<const FunctionDecl *> Readonly;
+
+  static const Expr *ignore(const Expr *Expression) {
+    return Expression ? Expression->IgnoreParenImpCasts() : nullptr;
+  }
+
+  static bool localScalarWrite(const Expr *Expression,
+                               const FunctionDecl *Function) {
+    const auto *Reference = dyn_cast_or_null<DeclRefExpr>(ignore(Expression));
+    const auto *Variable =
+        Reference ? dyn_cast<VarDecl>(Reference->getDecl()) : nullptr;
+    return Variable && !Variable->hasGlobalStorage() &&
+           Variable->getDeclContext() == Function;
+  }
+
+  void inspect(const Stmt *Statement, const FunctionDecl *Function,
+               Candidate &Result) {
+    if (!Statement || !Result.Valid)
+      return;
+    if (isa<AsmStmt>(Statement)) {
+      Result.Valid = false;
+      return;
+    }
+    if (const auto *Expression = dyn_cast<Expr>(Statement)) {
+      if (Expression->getType().isVolatileQualified()) {
+        Result.Valid = false;
+        return;
+      }
+      const Expr *Plain = ignore(Expression);
+      if (const auto *Unary = dyn_cast_or_null<UnaryOperator>(Plain)) {
+        if (Unary->isIncrementDecrementOp() &&
+            !localScalarWrite(Unary->getSubExpr(), Function)) {
+          Result.Valid = false;
+          return;
+        }
+      }
+      if (const auto *Binary = dyn_cast_or_null<BinaryOperator>(Plain)) {
+        if (Binary->isAssignmentOp() &&
+            !localScalarWrite(Binary->getLHS(), Function)) {
+          Result.Valid = false;
+          return;
+        }
+      }
+      if (const auto *Call = dyn_cast_or_null<CallExpr>(Plain)) {
+        const FunctionDecl *Callee = Call->getDirectCallee();
+        if (!Callee) {
+          Result.Valid = false;
+          return;
+        }
+        Callee = Callee->getCanonicalDecl();
+        if (!Callee->hasAttr<PureAttr>() && !Callee->hasAttr<ConstAttr>()) {
+          auto Definition = Definitions.find(Callee);
+          if (Definition == Definitions.end()) {
+            Result.Valid = false;
+            return;
+          }
+          Result.Dependencies.push_back(Callee);
+        }
+      }
+    }
+    for (const Stmt *Child : Statement->children())
+      inspect(Child, Function, Result);
+  }
+
+public:
+  explicit ReadonlyFunctionFacts(ASTContext &Context) : Context(Context) {
+    for (Decl *Declaration : Context.getTranslationUnitDecl()->decls()) {
+      const auto *Function = dyn_cast<FunctionDecl>(Declaration);
+      if (!Function || !Function->isThisDeclarationADefinition() ||
+          !Context.getSourceManager().isWrittenInMainFile(
+              Context.getSourceManager().getExpansionLoc(
+                  Function->getLocation())))
+        continue;
+      Definitions[Function->getCanonicalDecl()] = Function;
+    }
+    for (const auto &[Canonical, Definition] : Definitions) {
+      Candidate Result;
+      inspect(Definition->getBody(), Definition, Result);
+      if (Result.Valid) {
+        Candidates.emplace(Canonical, std::move(Result));
+        Readonly.insert(Canonical);
+      }
+    }
+    bool Changed = true;
+    while (Changed) {
+      Changed = false;
+      for (const auto &[Function, Candidate] : Candidates) {
+        if (!Readonly.count(Function))
+          continue;
+        for (const FunctionDecl *Dependency : Candidate.Dependencies)
+          if (!Readonly.count(Dependency)) {
+            Readonly.erase(Function);
+            Changed = true;
+            break;
+          }
+      }
+    }
+  }
+
+  bool contains(const FunctionDecl *Function) const {
+    return Function && Readonly.count(Function->getCanonicalDecl());
+  }
+};
+
 /* A static function whose address never escapes has a closed set of callers
  * in this translation unit.  This summary proves an integer parameter
  * positive when every one of those calls supplies either a positive constant
@@ -312,6 +430,7 @@ public:
 class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   ASTContext &Context;
   SourceManager &SM;
+  const ReadonlyFunctionFacts &ReadonlyFunctions;
   const PositiveParameterFacts &PositiveParameters;
   const FunctionDecl *Current = nullptr;
 
@@ -1892,7 +2011,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return false;
   }
 
-  static bool containsImpureCall(const Stmt *Statement) {
+  bool containsImpureCall(const Stmt *Statement) const {
     if (!Statement)
       return false;
     if (const auto *Call = dyn_cast<CallExpr>(Statement)) {
@@ -1903,7 +2022,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
        * use the caller's comparison exactly as if the predicate had been
        * written inline.  Indirect and unannotated calls remain opaque. */
       if (!Callee ||
-          (!Callee->hasAttr<PureAttr>() && !Callee->hasAttr<ConstAttr>()))
+          (!Callee->hasAttr<PureAttr>() && !Callee->hasAttr<ConstAttr>() &&
+           !ReadonlyFunctions.contains(Callee)))
         return true;
     }
     for (const Stmt *Child : Statement->children())
@@ -3880,8 +4000,10 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
 
 public:
   TotalityVisitor(ASTContext &Context,
+                  const ReadonlyFunctionFacts &ReadonlyFunctions,
                   const PositiveParameterFacts &PositiveParameters)
       : Context(Context), SM(Context.getSourceManager()),
+        ReadonlyFunctions(ReadonlyFunctions),
         PositiveParameters(PositiveParameters) {}
 
   bool TraverseFunctionDecl(FunctionDecl *Function) {
@@ -3934,8 +4056,9 @@ public:
 class TotalityConsumer : public ASTConsumer {
 public:
   void HandleTranslationUnit(ASTContext &Context) override {
+    ReadonlyFunctionFacts ReadonlyFunctions(Context);
     PositiveParameterFacts PositiveParameters(Context);
-    TotalityVisitor(Context, PositiveParameters)
+    TotalityVisitor(Context, ReadonlyFunctions, PositiveParameters)
         .TraverseDecl(Context.getTranslationUnitDecl());
   }
 };

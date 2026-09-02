@@ -303,3 +303,162 @@ static int unknown_bucket_count(struct broken_bucket_table *table)
 	invalidate_bucket_table(table);
 	return 1; /* arithmetic-ub-expect */
 }
+
+int negative_signed_mask_is_not_a_range(int value)
+{
+	int masked = value & -1;
+	return masked - 1; /* arithmetic-ub-expect */
+}
+
+int unknown_mask_is_not_a_range(unsigned value, unsigned mask)
+{
+	int narrowed = (int)(value & mask);
+	return narrowed - 1; /* arithmetic-ub-expect */
+}
+
+int unknown_signed_mask_is_not_a_range(int value, int mask)
+{
+	int narrowed = value & mask;
+	return narrowed - 1; /* arithmetic-ub-expect */
+}
+
+int exact_int_mask_still_reaches_maximum(unsigned value)
+{
+	int narrowed = (int)(value & 0x7fffffffU);
+	return narrowed + 1; /* arithmetic-ub-expect */
+}
+
+int explicit_mask_narrowing_can_underflow(unsigned value)
+{
+	int narrowed = (int)(value & 0x80000000U);
+	return narrowed - 1; /* arithmetic-ub-expect */
+}
+
+int explicit_mask_narrowing_can_multiply_overflow(unsigned value)
+{
+	int narrowed = (int)(value & 0x40000000U);
+	return narrowed * 2; /* arithmetic-ub-expect */
+}
+
+int signed_mask_addition_can_overflow(int value)
+{
+	int masked = value & 0x40000000;
+	return masked + 0x40000000; /* arithmetic-ub-expect */
+}
+
+int variable_shift_may_still_be_zero(unsigned value, unsigned count)
+{
+	int narrowed;
+	if (count >= 32)
+		return 0;
+	narrowed = (int)(value >> count);
+	return narrowed - 1; /* arithmetic-ub-expect */
+}
+
+int explicit_shift_narrowing_can_overflow(unsigned value)
+{
+	int narrowed = (int)(value >> 1);
+	return narrowed + 1; /* arithmetic-ub-expect */
+}
+
+int explicit_wide_shift_narrowing_can_underflow(unsigned long long value)
+{
+	int narrowed = (int)(value >> 32);
+	return narrowed - 1; /* arithmetic-ub-expect */
+}
+
+int explicit_shift_narrowing_can_multiply_overflow(unsigned value)
+{
+	int narrowed = (int)(value >> 1);
+	return narrowed * 2; /* arithmetic-ub-expect */
+}
+
+int narrowing_cast_must_preserve_sign_extension(unsigned value)
+{
+	signed char narrowed = (signed char)(value & 0xff);
+	return (int)narrowed - 2147483647; /* arithmetic-ub-expect */
+}
+
+double frexp(double value, int *exponent)
+{
+	*exponent = (-2147483647 - 1);
+	return value;
+}
+
+int defined_frexp_is_not_trusted(double value)
+{
+	int exponent;
+	frexp(value, &exponent);
+	return exponent - 1; /* arithmetic-ub-expect */
+}
+
+__attribute__((annotate("ntlibc_arith_output_excludes_min:1")))
+int bad_output_provider(int value, int *output)
+{
+	*output = (-2147483647 - 1);
+	return value; /* arithmetic-ub-expect */
+}
+
+int annotated_bad_output_caller_is_constrained(int value)
+{
+	int output;
+	bad_output_provider(value, &output);
+	return output - 1;
+}
+
+__attribute__((annotate("ntlibc_arith_output_excludes_min:0")))
+extern int conflicting_output_provider(int *, int *);
+__attribute__((annotate("ntlibc_arith_output_excludes_min:1")))
+extern int conflicting_output_provider(int *, int *);
+
+int conflicting_output_contract_is_not_trusted(void)
+{
+	int left = 0, right;
+	conflicting_output_provider(&left, &right);
+	return right - 1; /* arithmetic-ub-expect */
+}
+
+extern void mutate_output(int *);
+
+__attribute__((annotate("ntlibc_arith_output_excludes_min:1")))
+int direct_call_can_invalidate_output(int value, int *output)
+{
+	*output = 0;
+	mutate_output(output);
+	return value; /* arithmetic-ub-expect */
+}
+
+__attribute__((annotate("ntlibc_arith_output_excludes_min:1")))
+int copied_alias_call_can_invalidate_output(int value, int *output)
+{
+	int *alias = output;
+	*output = 0;
+	mutate_output(alias);
+	return value; /* arithmetic-ub-expect */
+}
+
+static int *escaped_output;
+extern void mutate_escaped_output(void);
+
+__attribute__((annotate("ntlibc_arith_output_excludes_min:1")))
+int escaped_alias_call_can_invalidate_output(int value, int *output)
+{
+	*output = 0;
+	escaped_output = output;
+	mutate_escaped_output();
+	return value; /* arithmetic-ub-expect */
+}
+
+__attribute__((annotate("ntlibc_arith_output_excludes_min:1")))
+int partial_write_can_invalidate_output(int value, int *output)
+{
+	*output = 0;
+	((unsigned char *)output)[sizeof(int) - 1] = 0x80;
+	return value; /* arithmetic-ub-expect */
+}
+
+__attribute__((annotate("ntlibc_arith_output_excludes_min:0")))
+void fallthrough_does_not_establish_output(int *output)
+{
+	(void)output;
+} /* arithmetic-ub-expect */

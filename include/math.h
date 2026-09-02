@@ -107,9 +107,16 @@ long double fmodl(long double, long double);
  * fesetenv's FE_DFL_ENV sentinel), and src/math/frexp.c's three bodies
  * write through it on every path with no NULL check, matching musl and
  * glibc, neither of which check it either. */
-double      frexp(double, int *) __attribute__((nonnull(2)));
-float       frexpf(float, int *) __attribute__((nonnull(2)));
-long double frexpl(long double, int *) __attribute__((nonnull(2)));
+#ifdef NTLIBC_ARITHMETIC_ANALYSIS
+#define __arith_output_excludes_min(argument) \
+	__attribute__((annotate("ntlibc_arith_output_excludes_min:" #argument)))
+#else
+#define __arith_output_excludes_min(argument)
+#endif
+double      frexp(double, int *) __attribute__((nonnull(2))) __arith_output_excludes_min(1);
+float       frexpf(float, int *) __attribute__((nonnull(2))) __arith_output_excludes_min(1);
+long double frexpl(long double, int *) __attribute__((nonnull(2))) __arith_output_excludes_min(1);
+#undef __arith_output_excludes_min
 double      ldexp(double, int);
 float       ldexpf(float, int);
 long double ldexpl(long double, int);

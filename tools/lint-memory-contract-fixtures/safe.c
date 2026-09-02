@@ -34,6 +34,9 @@ size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 void consume_bytes(const void *source withtok(fixture_readable_span(length)),
 	size_t length);
+void consume_elements(
+	const unsigned *source withtok(fixture_readable_elements(count)),
+	size_t count);
 void copy_elements(
 	unsigned *restrict destination withtok(fixture_writable_elements(count)),
 	const unsigned *restrict source withtok(fixture_readable_elements(count)),
@@ -128,6 +131,28 @@ void contracted_suffix(
 	if (offset > capacity || length > capacity - offset)
 		return;
 	memset(out + offset, 0, length);
+}
+
+struct counted_buffer {
+	const char *data withtok(fixture_readable_span(length));
+	size_t length;
+};
+
+void consume_counted_buffer(const struct counted_buffer *buffer)
+{
+	consume_bytes(buffer->data, buffer->length);
+	if (buffer->length >= 2)
+		consume_bytes(buffer->data + 2, buffer->length - 2);
+}
+
+struct counted_elements {
+	const unsigned *data withtok(fixture_readable_elements(count));
+	size_t count;
+};
+
+void consume_counted_elements(const struct counted_elements *buffer)
+{
+	consume_elements(buffer->data, buffer->count);
 }
 
 struct fixture_record {

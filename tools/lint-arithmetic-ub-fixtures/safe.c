@@ -291,6 +291,92 @@ unsigned summarized_nonzero_field(unsigned value,
 	return value % table->count;
 }
 
+int signed_mask_bias(int value)
+{
+	int exponent = value & 0x7ff;
+	return exponent - 1023;
+}
+
+int reversed_signed_mask_bias(int value)
+{
+	int exponent = 0x7ff & value;
+	return exponent - 1023;
+}
+
+int unsigned_shift_mask_bias(unsigned long long bits)
+{
+	int exponent = (int)((bits >> 52) & 0x7ffu);
+	return exponent - 1023;
+}
+
+int unsigned_shift_without_mask(unsigned value)
+{
+	int narrowed = (int)(value >> 1);
+	return narrowed - 1;
+}
+
+int unsigned_wide_shift_fits_signed(unsigned long long value)
+{
+	int narrowed = (int)(value >> 33);
+	return narrowed - 1;
+}
+
+int reassigned_mask_range(unsigned value)
+{
+	int exponent = (int)(value & 0x7ffu);
+	exponent = (int)((value >> 16) & 0xffu);
+	return exponent - 255;
+}
+
+int value_preserving_signed_char_mask(unsigned value)
+{
+	signed char narrowed = (signed char)(value & 0x7f);
+	return (int)narrowed - 127;
+}
+
+int mask_at_int_bounds(unsigned value)
+{
+	int narrowed = (int)(value & 0x7fffffffU);
+	return narrowed + (-2147483647 - 1);
+}
+
+#define ARITH_OUTPUT_EXCLUDES_MIN(argument) \
+	__attribute__((annotate("ntlibc_arith_output_excludes_min:" #argument)))
+
+extern double frexp(double, int *) ARITH_OUTPUT_EXCLUDES_MIN(1);
+extern float frexpf(float, int *) ARITH_OUTPUT_EXCLUDES_MIN(1);
+extern long double frexpl(long double, int *) ARITH_OUTPUT_EXCLUDES_MIN(1);
+
+extern int provide_count(int, int *) ARITH_OUTPUT_EXCLUDES_MIN(1);
+
+int summarized_different_name_output(int value)
+{
+	int count;
+	provide_count(value, &count);
+	return count - 1;
+}
+
+int summarized_frexp_exponent(double value)
+{
+	int exponent;
+	frexp(value, &exponent);
+	return exponent - 1;
+}
+
+int summarized_frexpf_exponent(float value)
+{
+	int exponent;
+	frexpf(value, &exponent);
+	return exponent - 1;
+}
+
+int summarized_frexpl_exponent(long double value)
+{
+	int exponent;
+	frexpl(value, &exponent);
+	return exponent - 1;
+}
+
 /* Pointer subtraction belongs to provenance/object-bound analysis, not to
  * generic signed integer arithmetic. */
 long pointer_difference_is_not_integer_arithmetic(int *left, int *right)

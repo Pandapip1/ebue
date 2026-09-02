@@ -887,3 +887,36 @@ const char *positive_stride_cycle_root(const char *p, unsigned remaining)
 {
 	return positive_stride_cycle_a(p, 1, remaining);
 }
+
+static int inferred_readonly_leaf(unsigned char c)
+{
+	return c != 0;
+}
+
+static int inferred_readonly_scalar(unsigned char c)
+{
+	int copy = c;
+	copy &= 0x7f;
+	return inferred_readonly_leaf((unsigned char)copy);
+}
+
+unsigned inferred_readonly_scalar_bound(const unsigned char *p, unsigned n)
+{
+	unsigned i = 0;
+	while (i < n && inferred_readonly_scalar(p[i]))
+		i++;
+	return i;
+}
+
+static int inferred_readonly_pointer(const unsigned char *p, unsigned i)
+{
+	return p[i] != 0;
+}
+
+unsigned inferred_readonly_pointer_bound(const unsigned char *p, unsigned n)
+{
+	unsigned i = 0;
+	while (i < n && inferred_readonly_pointer(p, i))
+		i++;
+	return i;
+}

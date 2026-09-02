@@ -2419,3 +2419,109 @@ const char *switch_stride_root(const char *p, int arm)
 {
 	return switch_stride_leaf(p, sizeof(char), arm);
 }
+
+static int inferred_writer(unsigned *rank)
+{
+	*rank = 0;
+	return 1;
+}
+
+unsigned inferred_writer_condition(unsigned n)
+{
+	unsigned i = 0;
+	while (i < n && inferred_writer(&i)) { /* totality-expect */
+		i++;
+	}
+	return i;
+}
+
+static int inferred_alias_writer(unsigned *rank)
+{
+	unsigned *alias = rank;
+	*alias = 0;
+	return 1;
+}
+
+unsigned inferred_alias_writer_condition(unsigned n)
+{
+	unsigned i = 0;
+	while (i < n && inferred_alias_writer(&i)) { /* totality-expect */
+		i++;
+	}
+	return i;
+}
+
+static unsigned inferred_global;
+
+static int inferred_global_writer(void)
+{
+	inferred_global++;
+	return 1;
+}
+
+unsigned inferred_global_writer_condition(unsigned n)
+{
+	unsigned i = 0;
+	while (i < n && inferred_global_writer()) { /* totality-expect */
+		i++;
+	}
+	return i;
+}
+
+static volatile unsigned inferred_volatile;
+
+static int inferred_volatile_reader(void)
+{
+	return inferred_volatile != 0;
+}
+
+unsigned inferred_volatile_condition(unsigned n)
+{
+	unsigned i = 0;
+	while (i < n && inferred_volatile_reader()) { /* totality-expect */
+		i++;
+	}
+	return i;
+}
+
+static int inferred_asm_reader(unsigned value)
+{
+	__asm__ volatile("" : "+r"(value));
+	return value != 0;
+}
+
+unsigned inferred_asm_condition(unsigned n)
+{
+	unsigned i = 0;
+	while (i < n && inferred_asm_reader(i)) { /* totality-expect */
+		i++;
+	}
+	return i;
+}
+
+int inferred_unknown_reader(unsigned);
+
+unsigned inferred_unknown_condition(unsigned n)
+{
+	unsigned i = 0;
+	while (i < n && inferred_unknown_reader(i)) { /* totality-expect */
+		i++;
+	}
+	return i;
+}
+
+static int (*inferred_callback)(unsigned);
+
+static int inferred_indirect_reader(unsigned value)
+{
+	return inferred_callback(value);
+}
+
+unsigned inferred_indirect_condition(unsigned n)
+{
+	unsigned i = 0;
+	while (i < n && inferred_indirect_reader(i)) { /* totality-expect */
+		i++;
+	}
+	return i;
+}

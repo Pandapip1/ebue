@@ -30,6 +30,11 @@ using namespace ento;
 
 REGISTER_MAP_WITH_PROGRAMSTATE(ArithmeticContractField,
                                const StackFrameContext *, const MemRegion *)
+REGISTER_MAP_WITH_PROGRAMSTATE(ArithmeticContractOutput,
+                               const StackFrameContext *, const MemRegion *)
+REGISTER_SET_WITH_PROGRAMSTATE(ArithmeticContractOutputValid,
+                               const StackFrameContext *)
+REGISTER_SET_WITH_PROGRAMSTATE(ArithmeticWideReducer, const MemRegion *)
 
 namespace {
 
@@ -84,6 +89,77 @@ public:
   static bool contains(const Interval &Outer, const Interval &Inner) {
     return llvm::APSInt::compareValues(Outer.Min, Inner.Min) <= 0 &&
            llvm::APSInt::compareValues(Outer.Max, Inner.Max) >= 0;
+  }
+
+  static bool containsMaskOrUnsignedShift(const Expr *Expression,
+                                          unsigned Depth = 0) {
+    if (!Expression || Depth >= 16)
+      return false;
+    Expression = Expression->IgnoreParens();
+    if (const auto *Cast = dyn_cast<CastExpr>(Expression))
+      return containsMaskOrUnsignedShift(Cast->getSubExpr(), Depth + 1);
+    const auto *Binary = dyn_cast<BinaryOperator>(Expression);
+    if (!Binary)
+      return false;
+    if (Binary->getOpcode() == BO_And ||
+        (Binary->getOpcode() == BO_Shr &&
+         Binary->getLHS()->getType()->isUnsignedIntegerOrEnumerationType()))
+      return true;
+    return containsMaskOrUnsignedShift(Binary->getLHS(), Depth + 1) ||
+           containsMaskOrUnsignedShift(Binary->getRHS(), Depth + 1);
+  }
+
+  static std::optional<Interval>
+  syntacticReducerInterval(const Expr *Expression, ASTContext &Ctx,
+                           unsigned Depth = 0) {
+    if (!Expression || Depth >= 16)
+      return std::nullopt;
+    Expression = Expression->IgnoreParens();
+    if (const auto *Cast = dyn_cast<CastExpr>(Expression)) {
+      auto Operand = syntacticReducerInterval(Cast->getSubExpr(), Ctx,
+                                              Depth + 1);
+      if (!Operand)
+        return std::nullopt;
+      return Operand;
+    }
+    const auto *Binary = dyn_cast<BinaryOperator>(Expression);
+    if (!Binary)
+      return std::nullopt;
+    Interval Bounds = typeInterval(Ctx, Binary->getType());
+    if (Binary->getOpcode() == BO_And) {
+      const auto *Right = dyn_cast<IntegerLiteral>(
+          Binary->getRHS()->IgnoreParenImpCasts());
+      const auto *Left = dyn_cast<IntegerLiteral>(
+          Binary->getLHS()->IgnoreParenImpCasts());
+      const IntegerLiteral *Mask = Right ? Right : Left;
+      if (!Mask)
+        return Bounds;
+      llvm::APSInt Value(
+          Mask->getValue(),
+          Mask->getType()->isUnsignedIntegerOrEnumerationType());
+      llvm::APSInt Maximum = asMath(Value);
+      if (Maximum.isNegative() || Maximum > Bounds.Max)
+        return Bounds;
+      llvm::APSInt Zero(llvm::APInt(MathBits, 0), false);
+      return Interval{Zero, Maximum};
+    }
+    if (Binary->getOpcode() == BO_Shr &&
+        Binary->getLHS()->getType()->isUnsignedIntegerOrEnumerationType()) {
+      const auto *Count = dyn_cast<IntegerLiteral>(
+          Binary->getRHS()->IgnoreParenImpCasts());
+      if (!Count)
+        return Bounds;
+      uint64_t Shift = Count->getValue().getLimitedValue();
+      unsigned Width = Ctx.getIntWidth(Binary->getLHS()->getType());
+      if (Shift >= Width)
+        return Bounds;
+      llvm::APSInt Maximum = typeMax(Ctx, Binary->getLHS()->getType());
+      Maximum = llvm::APSInt(Maximum.lshr(static_cast<unsigned>(Shift)),
+                             Maximum.isUnsigned());
+      llvm::APSInt Zero(llvm::APInt(MathBits, 0), false);
+      return Interval{Zero, asMath(Maximum)};
+    }
+    return std::nullopt;
   }
 
   static llvm::APSInt minValue(std::initializer_list<llvm::APSInt> Values) {
@@ -185,17 +261,23 @@ public:
 
   static constexpr unsigned MaxSymbolDepth = 16;
 
-  static bool containsRemainder(SymbolRef Sym, unsigned Depth = 0) {
+  static bool containsRangeReducer(SymbolRef Sym, unsigned Depth = 0) {
     if (!Sym || Depth >= MaxSymbolDepth)
       return false;
-    if (const auto *Expression = dyn_cast<SymIntExpr>(Sym))
-      return Expression->getOpcode() == BO_Rem;
-    if (const auto *Expression = dyn_cast<IntSymExpr>(Sym))
-      return Expression->getOpcode() == BO_Rem;
-    if (const auto *Expression = dyn_cast<SymSymExpr>(Sym))
-      return Expression->getOpcode() == BO_Rem;
+    if (const auto *Expression = dyn_cast<SymIntExpr>(Sym)) {
+      BinaryOperator::Opcode Op = Expression->getOpcode();
+      return Op == BO_Rem;
+    }
+    if (const auto *Expression = dyn_cast<IntSymExpr>(Sym)) {
+      BinaryOperator::Opcode Op = Expression->getOpcode();
+      return Op == BO_Rem;
+    }
+    if (const auto *Expression = dyn_cast<SymSymExpr>(Sym)) {
+      BinaryOperator::Opcode Op = Expression->getOpcode();
+      return Op == BO_Rem;
+    }
     if (const auto *Cast = dyn_cast<SymbolCast>(Sym))
-      return containsRemainder(Cast->getOperand(), Depth + 1);
+      return containsRangeReducer(Cast->getOperand(), Depth + 1);
     return false;
   }
 
@@ -280,7 +362,7 @@ public:
           return intersectInterval(Bound, Interval{-Magnitude, Zero});
         return intersectInterval(Bound, Interval{-Magnitude, Magnitude});
       }
-      if (Op == BO_And && ResultUnsigned && !Right.isNegative())
+      if (Op == BO_And && !Right.isNegative() && Right <= Bound.Max)
         return intersectInterval(Bound, Interval{Zero, Right});
       if (Op == BO_Shr && ResultUnsigned) {
         unsigned Width = Ctx.getIntWidth(Type);
@@ -298,15 +380,20 @@ public:
       }
     } else if (const auto *SymInt = dyn_cast<IntSymExpr>(Sym)) {
       BinaryOperator::Opcode Op = SymInt->getOpcode();
+      llvm::APSInt LeftValue = asMath(SymInt->getLHS());
+      if (Op == BO_And && !LeftValue.isNegative() &&
+          LeftValue <= Bound.Max)
+        return intersectInterval(Bound, Interval{Zero, LeftValue});
       if (Op == BO_Add || Op == BO_Sub || Op == BO_Mul) {
-        llvm::APSInt Left = asMath(SymInt->getLHS());
         Interval Right = symbolInterval(SymInt->getRHS(), State, C, Depth + 1);
-        Interval Result = combineBinary(Op, Interval{Left, Left}, Right);
+        Interval Result =
+            combineBinary(Op, Interval{LeftValue, LeftValue}, Right);
         return intersectInterval(Bound, Result);
       }
     } else if (const auto *SymExprB = dyn_cast<SymSymExpr>(Sym)) {
       BinaryOperator::Opcode Op = SymExprB->getOpcode();
-      if (Op == BO_Rem || Op == BO_Add || Op == BO_Sub || Op == BO_Mul) {
+      if (Op == BO_Rem || Op == BO_And || Op == BO_Shr || Op == BO_Add ||
+          Op == BO_Sub || Op == BO_Mul) {
         Interval Left =
             symbolInterval(SymExprB->getLHS(), State, C, Depth + 1);
         Interval Right =
@@ -321,6 +408,21 @@ public:
             return intersectInterval(Bound, Interval{-Magnitude, Zero});
           return intersectInterval(Bound,
                                    Interval{-Magnitude, Magnitude});
+        }
+        if (Op == BO_And && Right.Min == Right.Max &&
+            !Right.Min.isNegative() && Right.Max <= Bound.Max)
+          return intersectInterval(Bound, Interval{Zero, Right.Max});
+        if (Op == BO_Shr && ResultUnsigned && Right.Min == Right.Max) {
+          unsigned Width = Ctx.getIntWidth(Type);
+          if (!Right.Min.isNegative() &&
+              Right.Min.getLimitedValue() < Width) {
+            unsigned Shift =
+                static_cast<unsigned>(Right.Min.getLimitedValue());
+            llvm::APSInt Maximum = typeMax(Ctx, Type);
+            Maximum = llvm::APSInt(Maximum.lshr(Shift), Maximum.isUnsigned());
+            return intersectInterval(Bound,
+                                     Interval{Zero, asMath(Maximum)});
+          }
         }
         if (Op == BO_Add || Op == BO_Sub || Op == BO_Mul) {
           Interval Result = combineBinary(Op, Left, Right);
@@ -338,6 +440,8 @@ public:
           symbolInterval(CastSym->getOperand(), State, C, Depth + 1);
       if (contains(Bound, Operand))
         return Operand;
+      if (containsRangeReducer(CastSym->getOperand()))
+        return Bound;
     }
 
     return intersectInterval(
@@ -373,15 +477,15 @@ public:
     Interval Result = bisectInterval(*Defined, Expr->getType(), State, C);
     if (Sym) {
       Interval Symbolic = symbolInterval(Sym, State, C, 0);
-      // Clang retains an unsigned SymSym remainder beneath a representable
-      // cast to a signed materialized local.  Its generic range query applies
-      // the signed expression bounds to that unsigned SVal and can return a
-      // spurious disjoint extreme.  The remainder interval is independently
-      // sound; carry it through only when every possible remainder fits the
-      // source expression's destination type.  All other symbol shapes keep
-      // the historical solver/intersection behavior.
+      // Clang retains unsigned remainder/mask/right-shift expressions beneath
+      // a representable cast to a signed materialized local.  Its generic
+      // range query applies the signed expression bounds to that unsigned
+      // SVal and can return a spurious disjoint extreme.  The reducer interval
+      // is independently sound; carry it through only when every possible
+      // value fits the source expression's destination type.  All other
+      // symbol shapes keep the historical solver/intersection behavior.
       Interval ExprRange = typeInterval(C.getASTContext(), Expr->getType());
-      if (containsRemainder(Sym) &&
+      if (containsRangeReducer(Sym) &&
           !C.getASTContext().hasSameType(Sym->getType(), Expr->getType()) &&
           contains(ExprRange, Symbolic))
         return Symbolic;
@@ -400,7 +504,9 @@ public:
     ASTContext &Ctx = C.getASTContext();
     Interval ResultType = typeInterval(Ctx, Expr->getType());
 
-    if (const auto *Cast = dyn_cast<ImplicitCastExpr>(Expr)) {
+    if (const auto *Cast = dyn_cast<CastExpr>(Expr);
+        Cast && (isa<ImplicitCastExpr>(Cast) ||
+                 containsMaskOrUnsignedShift(Cast->getSubExpr()))) {
       if (Cast->getCastKind() == CK_LValueToRValue) {
         if (std::optional<Interval> Known =
                 constrainedInterval(Cast, C, State))
@@ -442,10 +548,10 @@ public:
           return Interval{-Magnitude, Magnitude};
         }
       }
-      if (Binary->getOpcode() == BO_And &&
-          Expr->getType()->isUnsignedIntegerOrEnumerationType()) {
+      if (Binary->getOpcode() == BO_And) {
         Interval Right = expressionInterval(Binary->getRHS(), C, State);
-        if (Right.Min == Right.Max && !Right.Min.isNegative()) {
+        if (Right.Min == Right.Max && !Right.Min.isNegative() &&
+            Right.Max <= ResultType.Max) {
           llvm::APSInt Zero(llvm::APInt(MathBits, 0), false);
           return Interval{Zero, Right.Max};
         }
@@ -734,8 +840,11 @@ static std::string arithmeticText(const Stmt *Statement, CheckerContext &C);
 static std::string arithmeticSite(const Expr *Expression, CheckerContext &C);
 static std::string arithmeticContext(CheckerContext &C);
 
-class SignedArithmeticChecker : public Checker<check::PreStmt<BinaryOperator>,
-                                               check::PreStmt<UnaryOperator>> {
+class SignedArithmeticChecker
+    : public Checker<check::PreStmt<BinaryOperator>,
+                     check::PreStmt<UnaryOperator>,
+                     check::PostStmt<BinaryOperator>,
+                     check::PostStmt<DeclStmt>> {
   mutable std::unique_ptr<BugType> BT;
 
   static std::optional<NonLoc> integerValue(const Expr *Expression,
@@ -885,6 +994,63 @@ class SignedArithmeticChecker : public Checker<check::PreStmt<BinaryOperator>,
            llvm::APSInt::compareValues(Range.Max, Type.Max) > 0;
   }
 
+  static void constrainLocal(const VarDecl *Variable, const Expr *Source,
+                             CheckerContext &C) {
+    if (!Variable || !Variable->hasLocalStorage() ||
+        !SizeCastChecker::containsMaskOrUnsignedShift(Source))
+      return;
+    ProgramStateRef State = C.getState();
+    SVal Location = State->getLValue(Variable, C.getLocationContext());
+    const MemRegion *Region = Location.getAsRegion();
+    auto Value = Region ? State->getSVal(Location.castAs<Loc>())
+                              .getAs<DefinedOrUnknownSVal>()
+                        : std::nullopt;
+    if (!Region || !Value)
+      return;
+    auto Syntactic = SizeCastChecker::syntacticReducerInterval(
+        Source, C.getASTContext());
+    SizeCastChecker::Interval Range =
+        Syntactic ? *Syntactic
+                  : SizeCastChecker::expressionInterval(Source, C, State);
+    SizeCastChecker::Interval Bounds = SizeCastChecker::typeInterval(
+        C.getASTContext(), Variable->getType());
+    if (!SizeCastChecker::contains(Bounds, Range)) {
+      ProgramStateRef Marked = State->add<ArithmeticWideReducer>(Region);
+      if (Marked != State)
+        C.addTransition(Marked);
+      return;
+    }
+    State = State->remove<ArithmeticWideReducer>(Region);
+    unsigned Bits = C.getASTContext().getIntWidth(Variable->getType());
+    bool Unsigned =
+        Variable->getType()->isUnsignedIntegerOrEnumerationType();
+    llvm::APSInt Minimum =
+        SizeCastChecker::asSourceType(Range.Min, Bits, Unsigned);
+    llvm::APSInt Maximum =
+        SizeCastChecker::asSourceType(Range.Max, Bits, Unsigned);
+    ProgramStateRef Restricted = State->assumeInclusiveRange(
+        *Value, Minimum, Maximum, true);
+    if (Restricted && Restricted != C.getState())
+      C.addTransition(Restricted);
+  }
+
+  static SizeCastChecker::Interval operandInterval(const Expr *Expression,
+                                                   CheckerContext &C) {
+    ProgramStateRef State = C.getState();
+    const Expr *Storage = Expression;
+    while (const auto *Cast = dyn_cast<CastExpr>(Storage))
+      Storage = Cast->getSubExpr()->IgnoreParens();
+    if (Storage->isLValue()) {
+      SVal Location = State->getSVal(Storage, C.getLocationContext());
+      if (const MemRegion *Region = Location.getAsRegion())
+        if (State->contains<ArithmeticWideReducer>(Region)) {
+          return SizeCastChecker::typeInterval(C.getASTContext(),
+                                               Expression->getType());
+        }
+    }
+    return SizeCastChecker::expressionInterval(Expression, C);
+  }
+
   void report(const Expr *Expression, CheckerContext &C) const {
     ExplodedNode *Node = C.generateNonFatalErrorNode(C.getState());
     if (!Node)
@@ -904,6 +1070,25 @@ class SignedArithmeticChecker : public Checker<check::PreStmt<BinaryOperator>,
   }
 
 public:
+  void checkPostStmt(const DeclStmt *Statement, CheckerContext &C) const {
+    for (const Decl *Declaration : Statement->decls()) {
+      const auto *Variable = dyn_cast<VarDecl>(Declaration);
+      if (Variable && Variable->hasInit())
+        constrainLocal(Variable, Variable->getInit(), C);
+    }
+  }
+
+  void checkPostStmt(const BinaryOperator *Operation,
+                     CheckerContext &C) const {
+    if (Operation->getOpcode() != BO_Assign)
+      return;
+    const auto *Reference = dyn_cast<DeclRefExpr>(
+        Operation->getLHS()->IgnoreParenImpCasts());
+    constrainLocal(Reference ? dyn_cast<VarDecl>(Reference->getDecl())
+                             : nullptr,
+                   Operation->getRHS(), C);
+  }
+
   void checkPreStmt(const BinaryOperator *Operation, CheckerContext &C) const {
     // Pointer subtraction has a signed ptrdiff_t result, but its validity is
     // not an ordinary signed-integer overflow question: C requires both
@@ -918,8 +1103,8 @@ public:
     QualType Type = Operation->getType();
     if (!Type->isSignedIntegerType())
       return;
-    auto Left = SizeCastChecker::expressionInterval(Operation->getLHS(), C);
-    auto Right = SizeCastChecker::expressionInterval(Operation->getRHS(), C);
+    auto Left = operandInterval(Operation->getLHS(), C);
+    auto Right = operandInterval(Operation->getRHS(), C);
     auto Bounds = SizeCastChecker::typeInterval(C.getASTContext(), Type);
     std::optional<SizeCastChecker::Interval> Result;
     switch (Operation->getOpcode()) {
@@ -1071,7 +1256,7 @@ static std::string arithmeticContext(CheckerContext &C) {
 
 class ArithmeticContractChecker
     : public Checker<eval::Call, check::BeginFunction, check::PreCall,
-                     check::PostCall, check::EndFunction> {
+                     check::PostCall, check::Bind, check::EndFunction> {
   mutable std::unique_ptr<BugType> BT;
 
   struct RangeContract {
@@ -1082,6 +1267,12 @@ class ArithmeticContractChecker
   struct FieldContract {
     unsigned Argument;
     StringRef Field;
+  };
+
+  struct OutputContract {
+    unsigned Argument;
+    QualType Type;
+    RangeContract Range;
   };
 
   static std::optional<RangeContract> rangeContract(const ParmVarDecl *Param) {
@@ -1173,6 +1364,47 @@ class ArithmeticContractChecker
         Call->getArg(0)->IgnoreParenImpCasts());
     return Argument &&
            Argument->getDecl() == Definition->getParamDecl(0);
+  }
+
+  static std::optional<OutputContract>
+  outputContract(const FunctionDecl *Function, CheckerContext &C) {
+    if (!Function)
+      return std::nullopt;
+    std::optional<unsigned> Argument;
+    for (const FunctionDecl *Redeclaration : Function->redecls())
+      for (const AnnotateAttr *Attr :
+           Redeclaration->specific_attrs<AnnotateAttr>()) {
+        StringRef Text = Attr->getAnnotation();
+        if (!Text.consume_front("ntlibc_arith_output_excludes_min:"))
+          continue;
+        unsigned Parsed;
+        if (Text.getAsInteger(10, Parsed))
+          return std::nullopt;
+        if (Argument && *Argument != Parsed)
+          return std::nullopt;
+        Argument = Parsed;
+      }
+    if (!Argument || *Argument >= Function->getNumParams())
+      return std::nullopt;
+    QualType OutputType = Function->getParamDecl(*Argument)->getType();
+    if (!OutputType->isPointerType())
+      return std::nullopt;
+    QualType Pointee = OutputType->getPointeeType();
+    if (!Pointee->isSignedIntegerType())
+      return std::nullopt;
+    llvm::APSInt IntMinimum =
+        SizeCastChecker::typeMin(C.getASTContext(), Pointee);
+    llvm::APSInt IntMaximum =
+        SizeCastChecker::typeMax(C.getASTContext(), Pointee);
+    if (IntMinimum.getBitWidth() > 64 || IntMaximum.getBitWidth() > 64)
+      return std::nullopt;
+    int64_t Minimum = IntMinimum.getSExtValue() + 1;
+    int64_t Maximum = IntMaximum.getSExtValue();
+    RangeContract Range{Minimum, Maximum};
+    return nativeRange(Pointee, Range, C)
+               ? std::optional<OutputContract>(
+                     OutputContract{*Argument, Pointee, Range})
+               : std::nullopt;
   }
 
   static std::optional<FieldContract>
@@ -1296,6 +1528,28 @@ class ArithmeticContractChecker
     C.emitReport(std::move(Report));
   }
 
+  void reportInvalidOutput(const FunctionDecl *Function, StringRef Detail,
+                           CheckerContext &C) const {
+    const Stmt *Body = Function->getBody();
+    ExplodedNode *Node = C.generateNonFatalErrorNode(C.getState());
+    if (!Node || !Body)
+      return;
+    if (!BT)
+      BT = std::make_unique<BugType>(this, "Violated arithmetic contract",
+                                     categories::LogicError);
+    const SourceManager &SM = C.getSourceManager();
+    std::string Origin =
+        SM.getFilename(SM.getExpansionLoc(Body->getBeginLoc())).str();
+    std::string Message =
+        "arithmetic contract is not proven: " + Detail.str() + "; origin '" +
+        Origin + "'; context '" + Function->getQualifiedNameAsString() +
+        "'; expression 'function body'; site 'annotated function "
+        "definition'";
+    auto Report = std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
+    Report->addRange(Body->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+
 public:
   bool evalCall(const CallEvent &Call, CheckerContext &C) const {
     const FunctionDecl *Function = function(Call);
@@ -1327,6 +1581,17 @@ public:
     }
     ProgramStateRef State = C.getState();
     bool Changed = false;
+    if (auto Contract = outputContract(Function, C)) {
+      SVal Pointer = State->getSVal(State->getLValue(
+          Function->getParamDecl(Contract->Argument), C.getLocationContext()));
+      if (const MemRegion *Region = Pointer.getAsRegion()) {
+        const StackFrameContext *Frame =
+            C.getLocationContext()->getStackFrame();
+        State = State->set<ArithmeticContractOutput>(Frame, Region);
+        State = State->remove<ArithmeticContractOutputValid>(Frame);
+        Changed = true;
+      }
+    }
     for (const ParmVarDecl *Parameter : Function->parameters()) {
       auto Contract = rangeContract(Parameter);
       if (!Contract || !directOnlyRangeCallee(Function, C.getASTContext()))
@@ -1368,11 +1633,26 @@ public:
   }
 
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
-    const FunctionDecl *Function = function(Call);
-    if (!Function)
-      return;
     ProgramStateRef State = C.getState();
     bool Changed = false;
+    const auto *Current = definition(
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl()));
+    const StackFrameContext *Frame =
+        C.getLocationContext()->getStackFrame();
+    if (outputContract(Current, C) &&
+        State->contains<ArithmeticContractOutputValid>(Frame)) {
+      // A generic call may mutate the output directly, through a copied
+      // alias, or through an escaped/global alias.  A later proven full store
+      // may re-establish the contract; absent that, normal return must fail.
+      State = State->remove<ArithmeticContractOutputValid>(Frame);
+      Changed = true;
+    }
+    const FunctionDecl *Function = function(Call);
+    if (!Function) {
+      if (Changed)
+        C.addTransition(State);
+      return;
+    }
     for (unsigned Index = 0;
          Index < Function->getNumParams() && Index < Call.getNumArgs();
          ++Index) {
@@ -1406,6 +1686,23 @@ public:
 
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
     const FunctionDecl *Function = function(Call);
+    if (auto Contract = outputContract(Function, C)) {
+      auto Location = Call.getArgSVal(Contract->Argument).getAs<Loc>();
+      auto Bounds = nativeRange(Contract->Type, Contract->Range, C);
+      if (Location && Bounds) {
+        DefinedOrUnknownSVal Fresh =
+            C.getSValBuilder().conjureSymbolVal(
+                this, Call.getOriginExpr(), C.getLocationContext(),
+                Contract->Type, C.blockCount());
+        ProgramStateRef State = C.getState()->bindLoc(
+            *Location, Fresh, C.getLocationContext());
+        State = State->assumeInclusiveRange(
+            Fresh, Bounds->first, Bounds->second, true);
+        if (State)
+          C.addTransition(State);
+        return;
+      }
+    }
     const FunctionDecl *Definition = Function ? Function->getDefinition()
                                               : nullptr;
     auto Contract = Definition ? fieldContract(Definition) : std::nullopt;
@@ -1439,9 +1736,78 @@ public:
       C.addTransition(Success);
   }
 
+  void checkBind(SVal Location, SVal Value, const Stmt *,
+                 CheckerContext &C) const {
+    const auto *Function = definition(
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl()));
+    auto Contract = Function ? outputContract(Function, C) : std::nullopt;
+    const StackFrameContext *Frame =
+        C.getLocationContext()->getStackFrame();
+    const MemRegion *const *Output =
+        C.getState()->get<ArithmeticContractOutput>(Frame);
+    const MemRegion *Written = Location.getAsRegion();
+    if (!Contract || !Output || !Written)
+      return;
+    ProgramStateRef State = C.getState();
+    bool Exact = Written == *Output;
+    bool Overlaps = Exact || Written->isSubRegionOf(*Output) ||
+                    (*Output)->isSubRegionOf(Written) ||
+                    Written->getBaseRegion() == (*Output)->getBaseRegion();
+    if (!Overlaps)
+      return;
+    if (!Exact) {
+      State = State->remove<ArithmeticContractOutputValid>(Frame);
+      if (State != C.getState())
+        C.addTransition(State);
+      return;
+    }
+    bool Valid = false;
+    if (auto Defined = Value.getAs<NonLoc>()) {
+      SizeCastChecker::Interval Range = SizeCastChecker::bisectInterval(
+          *Defined, Contract->Type, State, C);
+      if (SymbolRef Symbol = Value.getAsSymbol())
+        Range = SizeCastChecker::intersectInterval(
+            Range,
+            SizeCastChecker::symbolInterval(Symbol, State, C, 0));
+      if (auto Bounds = nativeRange(Contract->Type, Contract->Range, C)) {
+        SizeCastChecker::Interval ContractRange{
+            SizeCastChecker::asMath(Bounds->first),
+            SizeCastChecker::asMath(Bounds->second)};
+        Valid = SizeCastChecker::contains(ContractRange, Range);
+      }
+    }
+    State = Valid ? State->add<ArithmeticContractOutputValid>(Frame)
+                  : State->remove<ArithmeticContractOutputValid>(Frame);
+    if (State != C.getState())
+      C.addTransition(State);
+  }
+
   void checkEndFunction(const ReturnStmt *Return, CheckerContext &C) const {
     const auto *Function = definition(
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl()));
+    if (outputContract(Function, C)) {
+      ProgramStateRef State = C.getState();
+      const StackFrameContext *Frame =
+          C.getLocationContext()->getStackFrame();
+      if (!State->contains<ArithmeticContractOutputValid>(Frame)) {
+        if (Return) {
+          const Expr *Expression = Return->getRetValue();
+          if (Expression)
+            report(Expression, State,
+                   "output parameter may equal its signed type minimum",
+                   C);
+          else
+            reportInvalidOutput(
+                Function, "output parameter is not established on return",
+                C);
+        } else {
+          reportInvalidOutput(
+              Function, "output parameter is not established on fallthrough",
+              C);
+        }
+      }
+      return;
+    }
     auto Contract = Function ? fieldContract(Function) : std::nullopt;
     if (!Contract || !Return || !Return->getRetValue() ||
         Contract->Argument >= Function->getNumParams())
