@@ -34,28 +34,30 @@ static int fails;
 
 static char obj_root[1024];
 
+/* Truncates `s` at its last path separator (in place). Returns -1 if
+ * `s` contains no separator at all, leaving `s` untouched. */
+static int strip_last_component(char *s)
+{
+	size_t i;
+
+	for (i = strlen(s); i > 0 && s[i - 1] != '/' && s[i - 1] != '\\'; i--)
+		;
+	if (i == 0) return -1;
+	s[i - 1] = 0;
+	return 0;
+}
+
 /* Same walk-up-from-argv[0] technique as test/util-tput.c's
  * find_obj_root(), copied rather than shared for the same reason that
  * file gives. */
 static int find_obj_root(const char *argv0)
 {
-	size_t n;
-	char *p;
-
 	if (!argv0 || !*argv0) return -1;
-	n = strlen(argv0);
-	if (n >= sizeof obj_root) return -1;
+	if (strlen(argv0) >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-sccs.exe" */
-
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/util-sccs.exe" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/test" */
 
 	return 0;
 }
@@ -63,12 +65,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -168,36 +172,50 @@ static int run_sh_c(const char *cmd)
 	return run(sh_path, argv);
 }
 
+/* Runs `path` with `args`, checking it exits with `want_status` and
+ * that its stderr contains `needle` -- the shape shared by most usage-
+ * and refusal-error tests below. */
+static void check_run_err(const char *path, char *const *args, int want_status, const char *needle)
+{
+	CHECK(run(path, args) == want_status);
+	CHECK(err_contains(needle));
+}
+
+/* Runs admin then get, checking both succeed -- the fixed prefix shared
+ * by every round-trip test below, each of which then goes on to check
+ * get's own output differently. */
+static void check_roundtrip_ok(char *const *aargv, char *const *gargv)
+{
+	CHECK(run(admin_path, aargv) == 0);
+	CHECK(run(get_path, gargv) == 0);
+}
+
 /* ==== admin(1p): usage / refusal paths ===================================== */
 
 static void test_admin_rejects_non_s_name(void)
 {
 	char *argv[] = { (char *)"admin", (char *)"-i" INFILE, (char *)"util-sccs-not-an-sfile", 0 };
 	write_file(INFILE, "one\ntwo\n");
-	CHECK(run(admin_path, argv) == 1);
-	CHECK(err_contains("not an SCCS file name"));
+	check_run_err(admin_path, argv, 1, "not an SCCS file name");
 	unlink("util-sccs-not-an-sfile");
 }
 
 static void test_admin_missing_operand(void)
 {
 	char *argv[] = { (char *)"admin", (char *)"-i" INFILE, 0 };
-	CHECK(run(admin_path, argv) == 2);
-	CHECK(err_contains("missing operand"));
+	check_run_err(admin_path, argv, 2, "missing operand");
 }
 
 static void test_admin_neither_i_nor_n(void)
 {
 	char *argv[] = { (char *)"admin", (char *)"s.util-sccs-neither", 0 };
-	CHECK(run(admin_path, argv) == 1);
-	CHECK(err_contains("modifying an existing SCCS file is not implemented"));
+	check_run_err(admin_path, argv, 1, "modifying an existing SCCS file is not implemented");
 }
 
 static void test_admin_refuses_unimplemented_option(void)
 {
 	char *argv[] = { (char *)"admin", (char *)"-a", (char *)"someuser", (char *)"s.util-sccs-a", 0 };
-	CHECK(run(admin_path, argv) == 1);
-	CHECK(err_contains("not implemented"));
+	check_run_err(admin_path, argv, 1, "not implemented");
 }
 
 /* ==== round trip: admin -i creates, get -p retrieves ======================= */
@@ -237,8 +255,7 @@ static void test_roundtrip_no_trailing_newline(void)
 	write_file(INFILE, "only line, no newline");
 	unlink("s.util-sccs-rt2");
 
-	CHECK(run(admin_path, aargv) == 0);
-	CHECK(run(get_path, gargv) == 0);
+	check_roundtrip_ok(aargv, gargv);
 	CHECK(out_equals("only line, no newline\n"));
 
 	unlink("s.util-sccs-rt2");
@@ -267,8 +284,7 @@ static void test_admin_n_empty(void)
 	char *gargv[] = { (char *)"get", (char *)"-p", (char *)"s.util-sccs-rt4", 0 };
 
 	unlink("s.util-sccs-rt4");
-	CHECK(run(admin_path, aargv) == 0);
-	CHECK(run(get_path, gargv) == 0);
+	check_roundtrip_ok(aargv, gargv);
 	CHECK(out_equals(""));
 	CHECK(err_contains("0 lines"));
 
@@ -283,8 +299,7 @@ static void test_admin_refuses_existing(void)
 	write_file(INFILE, "x\n");
 	unlink("s.util-sccs-rt5");
 	CHECK(run(admin_path, aargv) == 0);
-	CHECK(run(admin_path, aargv) == 1);
-	CHECK(err_contains("file already exists"));
+	check_run_err(admin_path, aargv, 1, "file already exists");
 
 	unlink("s.util-sccs-rt5");
 }
@@ -352,8 +367,7 @@ static void test_get_without_p_writes_gfile(void)
 	unlink("s.util-sccs-rt9");
 	unlink("util-sccs-rt9");
 
-	CHECK(run(admin_path, aargv) == 0);
-	CHECK(run(get_path, gargv) == 0);
+	check_roundtrip_ok(aargv, gargv);
 	/* No -p: the status line goes to stdout instead of stderr. */
 	CHECK(out_equals("1.1\n1 lines\n"));
 	CHECK(file_equals_text("util-sccs-rt9", "gfile content\n"));
@@ -369,8 +383,7 @@ static void test_get_dash_r_matching_sid(void)
 
 	write_file(INFILE, "v\n");
 	unlink("s.util-sccs-r10");
-	CHECK(run(admin_path, aargv) == 0);
-	CHECK(run(get_path, gargv) == 0);
+	check_roundtrip_ok(aargv, gargv);
 	CHECK(out_equals("v\n"));
 
 	unlink("s.util-sccs-r10");
@@ -384,8 +397,7 @@ static void test_get_dash_r_nonexistent_sid(void)
 	write_file(INFILE, "v\n");
 	unlink("s.util-sccs-r11");
 	CHECK(run(admin_path, aargv) == 0);
-	CHECK(run(get_path, gargv) == 1);
-	CHECK(err_contains("no such delta"));
+	check_run_err(get_path, gargv, 1, "no such delta");
 
 	unlink("s.util-sccs-r11");
 }
@@ -393,8 +405,7 @@ static void test_get_dash_r_nonexistent_sid(void)
 static void test_get_missing_operand(void)
 {
 	char *gargv[] = { (char *)"get", 0 };
-	CHECK(run(get_path, gargv) == 1);
-	CHECK(err_contains("missing operand"));
+	check_run_err(get_path, gargv, 1, "missing operand");
 }
 
 static void test_get_not_an_sfile(void)

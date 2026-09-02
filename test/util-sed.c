@@ -42,25 +42,27 @@ static int fails;
 
 static char obj_root[1024];
 
+/* Truncates `s` at its last path separator (in place). Returns -1 if
+ * `s` contains no separator at all, leaving `s` untouched. */
+static int strip_last_component(char *s)
+{
+	size_t i;
+
+	for (i = strlen(s); i > 0 && s[i - 1] != '/' && s[i - 1] != '\\'; i--)
+		;
+	if (i == 0) return -1;
+	s[i - 1] = 0;
+	return 0;
+}
+
 static int find_obj_root(const char *argv0)
 {
-	size_t n;
-	char *p;
-
 	if (!argv0 || !*argv0) return -1;
-	n = strlen(argv0);
-	if (n >= sizeof obj_root) return -1;
+	if (strlen(argv0) >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-sed.exe" */
-
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/util-sed.exe" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/test" */
 
 	return 0;
 }
@@ -68,12 +70,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -152,6 +156,14 @@ static int run_sh_c(const char *cmd)
 	return run(sh_path, argv);
 }
 
+/* Runs sed.exe with `argv`, checking it exits 0 and its stdout is
+ * exactly `expect` -- the shape shared by nearly every test below. */
+static void check_sed(char *const *argv, const char *expect)
+{
+	CHECK(run(sed_path, argv) == 0);
+	CHECK(out_equals(expect));
+}
+
 /* ==== s/// ================================================================= */
 
 /* No flags: only the first match on each line is replaced. */
@@ -159,15 +171,13 @@ static void test_s_default_first_only(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"s/o/0/", (char *)"scratch/s1", 0 };
 	make_file("scratch/s1", "foo boo\n");
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("f0o boo\n"));
+	check_sed(argv, "f0o boo\n");
 }
 
 static void test_s_global(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"s/o/0/g", (char *)"scratch/s1", 0 };
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("f00 b00\n"));
+	check_sed(argv, "f00 b00\n");
 }
 
 /* Four identical matches: only the 3rd is replaced -- catches an
@@ -177,8 +187,7 @@ static void test_s_numeric_occurrence(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"s/a/X/3", (char *)"scratch/s2", 0 };
 	make_file("scratch/s2", "a a a a\n");
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("a a X a\n"));
+	check_sed(argv, "a a X a\n");
 }
 
 /* -n plus s///p: only substituted lines are printed, and each exactly
@@ -187,8 +196,7 @@ static void test_s_print_flag_with_dash_n(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"-n", (char *)"s/cat/dog/p", (char *)"scratch/s3", 0 };
 	make_file("scratch/s3", "a cat sat\nno match here\nanother cat\n");
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("a dog sat\nanother dog\n"));
+	check_sed(argv, "a dog sat\nanother dog\n");
 }
 
 /* '&' (whole match) and a backreference together. */
@@ -196,8 +204,7 @@ static void test_s_ampersand_and_backref(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"s/\\(foo\\)bar/[&]-\\1/", (char *)"scratch/s4", 0 };
 	make_file("scratch/s4", "foobar\n");
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("[foobar]-foo\n"));
+	check_sed(argv, "[foobar]-foo\n");
 }
 
 /* ==== addressing ============================================================ */
@@ -206,15 +213,13 @@ static void test_addr_line_number(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"2d", (char *)"scratch/a1", 0 };
 	make_file("scratch/a1", "one\ntwo\nthree\n");
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("one\nthree\n"));
+	check_sed(argv, "one\nthree\n");
 }
 
 static void test_addr_dollar(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"$d", (char *)"scratch/a1", 0 };
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("one\ntwo\n"));
+	check_sed(argv, "one\ntwo\n");
 }
 
 /* /BRE/ address: XCU's own BRE interval syntax ("\{2\}"), not ERE's
@@ -224,8 +229,7 @@ static void test_addr_regex_bre(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"-n", (char *)"/[0-9]\\{2\\}/p", (char *)"scratch/a2", 0 };
 	make_file("scratch/a2", "id 7\nid 42\nid 9\nid 123\n");
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("id 42\nid 123\n"));
+	check_sed(argv, "id 42\nid 123\n");
 }
 
 /* Inclusive range 2,4 out of five lines, distinguishing a real range
@@ -234,16 +238,14 @@ static void test_addr_range(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"-n", (char *)"2,4p", (char *)"scratch/a3", 0 };
 	make_file("scratch/a3", "1\n2\n3\n4\n5\n");
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("2\n3\n4\n"));
+	check_sed(argv, "2\n3\n4\n");
 }
 
 /* Negation: everything EXCEPT the matching line survives. */
 static void test_addr_negate(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"/2/!d", (char *)"scratch/a3", 0 };
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("2\n"));
+	check_sed(argv, "2\n");
 }
 
 /* ==== d ===================================================================== */
@@ -252,8 +254,7 @@ static void test_delete(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"/skip/d", (char *)"scratch/d1", 0 };
 	make_file("scratch/d1", "keep\nskip this\nkeep too\n");
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("keep\nkeep too\n"));
+	check_sed(argv, "keep\nkeep too\n");
 }
 
 /* ==== multi-command scripts via -e ========================================== */
@@ -262,8 +263,7 @@ static void test_multi_dash_e(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"-e", (char *)"s/a/b/", (char *)"-e", (char *)"s/b/c/", (char *)"scratch/m1", 0 };
 	make_file("scratch/m1", "a\n");
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("c\n"));
+	check_sed(argv, "c\n");
 }
 
 /* ==== hold space: h/x/g round-trip ========================================== */
@@ -274,8 +274,7 @@ static void test_hold_space_roundtrip(void)
 	 * on line 2 exchange pattern and hold space. */
 	char *argv[] = { (char *)"sed", (char *)"-n", (char *)"1h;2{x;p}", (char *)"scratch/h1", 0 };
 	make_file("scratch/h1", "first\nsecond\n");
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("first\n"));
+	check_sed(argv, "first\n");
 }
 
 /* ==== y/// transliteration =================================================== */
@@ -284,8 +283,7 @@ static void test_y_translit(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"y/abc/xyz/", (char *)"scratch/y1", 0 };
 	make_file("scratch/y1", "abcabc\n");
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("xyzxyz\n"));
+	check_sed(argv, "xyzxyz\n");
 }
 
 /* ==== a\/i\/c\ text ========================================================= */
@@ -294,15 +292,13 @@ static void test_a_i_c_text(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"2{i\\\nBEFORE\na\\\nAFTER\n}", (char *)"scratch/aic1", 0 };
 	make_file("scratch/aic1", "one\ntwo\nthree\n");
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("one\nBEFORE\ntwo\nAFTER\nthree\n"));
+	check_sed(argv, "one\nBEFORE\ntwo\nAFTER\nthree\n");
 }
 
 static void test_c_text(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"2c\\\nCHANGED", (char *)"scratch/aic1", 0 };
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("one\nCHANGED\nthree\n"));
+	check_sed(argv, "one\nCHANGED\nthree\n");
 }
 
 /* ==== N/D: the classic multi-line gotcha ==================================== */
@@ -319,8 +315,7 @@ static void test_N_join_pairs(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"N;s/\\\n/,/", (char *)"scratch/nd1", 0 };
 	make_file("scratch/nd1", "a\nb\nc\nd\n");
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("a,b\nc,d\n"));
+	check_sed(argv, "a,b\nc,d\n");
 }
 
 /* ==== b/t branching ========================================================= */
@@ -332,8 +327,7 @@ static void test_branch_loop(void)
 {
 	char *argv[] = { (char *)"sed", (char *)":top;s/xx//;t top", (char *)"scratch/b1", 0 };
 	make_file("scratch/b1", "axxbxxcxx\n");
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("abc\n"));
+	check_sed(argv, "abc\n");
 }
 
 /* ==== q ====================================================================== */
@@ -341,8 +335,7 @@ static void test_branch_loop(void)
 static void test_quit(void)
 {
 	char *argv[] = { (char *)"sed", (char *)"2q", (char *)"scratch/a3", 0 };
-	CHECK(run(sed_path, argv) == 0);
-	CHECK(out_equals("1\n2\n"));
+	check_sed(argv, "1\n2\n");
 }
 
 /* ==== usage error ============================================================ */

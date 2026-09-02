@@ -45,25 +45,27 @@ static int fails;
 
 static char obj_root[1024];
 
+/* Truncates `s` at its last path separator (in place). Returns -1 if
+ * `s` contains no separator at all, leaving `s` untouched. */
+static int strip_last_component(char *s)
+{
+	size_t i;
+
+	for (i = strlen(s); i > 0 && s[i - 1] != '/' && s[i - 1] != '\\'; i--)
+		;
+	if (i == 0) return -1;
+	s[i - 1] = 0;
+	return 0;
+}
+
 static int find_obj_root(const char *argv0)
 {
-	size_t n;
-	char *p;
-
 	if (!argv0 || !*argv0) return -1;
-	n = strlen(argv0);
-	if (n >= sizeof obj_root) return -1;
+	if (strlen(argv0) >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-sortset.exe" */
-
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/util-sortset.exe" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/test" */
 
 	return 0;
 }
@@ -71,12 +73,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -165,37 +169,51 @@ static int run_sh_c(const char *cmd)
 	return run(sh_path, argv);
 }
 
+/* Runs `path` with `args`, checking it exits 0 and its stdout is
+ * exactly `expect` -- the shape shared by most single-output tests
+ * below. */
+static void check_out(const char *path, char *const *args, const char *expect)
+{
+	CHECK(run(path, args) == 0);
+	CHECK(out_equals(expect));
+}
+
+/* Runs `path` with `args`, checking it exits nonzero and its stderr
+ * contains `needle` -- the shape shared by most error-path tests
+ * below. */
+static void check_err(const char *path, char *const *args, const char *needle)
+{
+	CHECK(run(path, args) != 0);
+	CHECK(err_contains(needle));
+}
+
 /* ==== sort(1p) ============================================================ */
 
 static void test_sort_basic(void)
 {
 	char *argv[] = { (char *)"sort", (char *)"scratch/s1", 0 };
 	make_file("scratch/s1", "banana\napple\ncherry\n");
-	CHECK(run(sort_path, argv) == 0);
-	CHECK(out_equals("apple\nbanana\ncherry\n"));
+	check_out(sort_path, argv, "apple\nbanana\ncherry\n");
 }
 
 static void test_sort_dash_r(void)
 {
 	char *argv[] = { (char *)"sort", (char *)"-r", (char *)"scratch/s1", 0 };
-	CHECK(run(sort_path, argv) == 0);
-	CHECK(out_equals("cherry\nbanana\napple\n"));
+	check_out(sort_path, argv, "cherry\nbanana\napple\n");
 }
 
 static void test_sort_dash_n(void)
 {
 	char *argv[] = { (char *)"sort", (char *)"-n", (char *)"scratch/s2", 0 };
 	make_file("scratch/s2", "10\n2\n33\n4\n");
-	CHECK(run(sort_path, argv) == 0);
-	CHECK(out_equals("2\n4\n10\n33\n"));
+	check_out(sort_path, argv, "2\n4\n10\n33\n");
 }
 
 static void test_sort_dash_u(void)
 {
 	char *argv[] = { (char *)"sort", (char *)"-u", (char *)"scratch/s3", 0 };
 	make_file("scratch/s3", "b\na\nb\na\nc\n");
-	CHECK(run(sort_path, argv) == 0);
-	CHECK(out_equals("a\nb\nc\n"));
+	check_out(sort_path, argv, "a\nb\nc\n");
 }
 
 /* Lexicographic order of "2" vs "10" is the *opposite* of their numeric
@@ -206,8 +224,7 @@ static void test_sort_multikey_numeric_tiebreak(void)
 {
 	char *argv[] = { (char *)"sort", (char *)"-k1,1", (char *)"-k2,2n", (char *)"scratch/s4", 0 };
 	make_file("scratch/s4", "a 10\na 2\nb 5\nb 1\n");
-	CHECK(run(sort_path, argv) == 0);
-	CHECK(out_equals("a 2\na 10\nb 1\nb 5\n"));
+	check_out(sort_path, argv, "a 2\na 10\nb 1\nb 5\n");
 }
 
 /* -t plus a numeric key that ties (two lines both have field 2 == "2")
@@ -217,8 +234,7 @@ static void test_sort_dash_t_and_tiebreak(void)
 {
 	char *argv[] = { (char *)"sort", (char *)"-t,", (char *)"-k2,2n", (char *)"scratch/s5", 0 };
 	make_file("scratch/s5", "b,2\na,10\na,2\n");
-	CHECK(run(sort_path, argv) == 0);
-	CHECK(out_equals("a,2\nb,2\na,10\n"));
+	check_out(sort_path, argv, "a,2\nb,2\na,10\n");
 }
 
 static void test_sort_dash_c(void)
@@ -255,8 +271,7 @@ static void test_sort_missing_operand_reads_nothing_bad(void)
 	/* sort with an invalid option is a usage error, not silently
 	 * ignored. */
 	char *argv[] = { (char *)"sort", (char *)"-Q", (char *)"scratch/s1", 0 };
-	CHECK(run(sort_path, argv) != 0);
-	CHECK(err_contains("invalid option"));
+	check_err(sort_path, argv, "invalid option");
 }
 
 /* ==== uniq(1p) ============================================================= */
@@ -265,8 +280,7 @@ static void test_uniq_basic(void)
 {
 	char *argv[] = { (char *)"uniq", (char *)"scratch/u1", 0 };
 	make_file("scratch/u1", "a\na\nb\nb\nb\nc\n");
-	CHECK(run(uniq_path, argv) == 0);
-	CHECK(out_equals("a\nb\nc\n"));
+	check_out(uniq_path, argv, "a\nb\nc\n");
 }
 
 static void test_uniq_dash_c(void)
@@ -281,15 +295,13 @@ static void test_uniq_dash_c(void)
 static void test_uniq_dash_d(void)
 {
 	char *argv[] = { (char *)"uniq", (char *)"-d", (char *)"scratch/u1", 0 };
-	CHECK(run(uniq_path, argv) == 0);
-	CHECK(out_equals("a\nb\n"));
+	check_out(uniq_path, argv, "a\nb\n");
 }
 
 static void test_uniq_dash_u(void)
 {
 	char *argv[] = { (char *)"uniq", (char *)"-u", (char *)"scratch/u1", 0 };
-	CHECK(run(uniq_path, argv) == 0);
-	CHECK(out_equals("c\n"));
+	check_out(uniq_path, argv, "c\n");
 }
 
 /* -f skips whole fields (blank* nonblank*) before comparing: "x 1
@@ -309,17 +321,15 @@ static void test_uniq_dash_s(void)
 {
 	char *argv[] = { (char *)"uniq", (char *)"-s", (char *)"2", (char *)"scratch/u3", 0 };
 	make_file("scratch/u3", "aaXX\nbbXX\nccYY\n");
-	CHECK(run(uniq_path, argv) == 0);
 	/* first two chars ignored: "XX"=="XX" collapses the first pair,
 	 * "YY" differs so the third line stays. */
-	CHECK(out_equals("aaXX\nccYY\n"));
+	check_out(uniq_path, argv, "aaXX\nccYY\n");
 }
 
 static void test_uniq_mutually_exclusive(void)
 {
 	char *argv[] = { (char *)"uniq", (char *)"-d", (char *)"-u", (char *)"scratch/u1", 0 };
-	CHECK(run(uniq_path, argv) != 0);
-	CHECK(err_contains("mutually exclusive"));
+	check_err(uniq_path, argv, "mutually exclusive");
 }
 
 /* ==== comm(1p) ============================================================= */
@@ -329,10 +339,9 @@ static void test_comm_three_columns(void)
 	char *argv[] = { (char *)"comm", (char *)"scratch/c1", (char *)"scratch/c2", 0 };
 	make_file("scratch/c1", "a\nb\nc\nd\n");
 	make_file("scratch/c2", "b\nc\ne\n");
-	CHECK(run(comm_path, argv) == 0);
 	/* Hand-derived merge: a(1-only) b(common) c(common) d(1-only)
 	 * e(2-only). */
-	CHECK(out_equals("a\n\t\tb\n\t\tc\nd\n\te\n"));
+	check_out(comm_path, argv, "a\n\t\tb\n\t\tc\nd\n\te\n");
 }
 
 static void test_comm_dash_1_2(void)
@@ -340,8 +349,7 @@ static void test_comm_dash_1_2(void)
 	/* -1 -2: suppress both only-in-file columns, leaving just the
 	 * common lines, unindented. */
 	char *argv[] = { (char *)"comm", (char *)"-1", (char *)"-2", (char *)"scratch/c1", (char *)"scratch/c2", 0 };
-	CHECK(run(comm_path, argv) == 0);
-	CHECK(out_equals("b\nc\n"));
+	check_out(comm_path, argv, "b\nc\n");
 }
 
 static void test_comm_dash_3(void)
@@ -349,8 +357,7 @@ static void test_comm_dash_3(void)
 	/* -3: suppress the common column, leaving only each file's own
 	 * unique lines. */
 	char *argv[] = { (char *)"comm", (char *)"-3", (char *)"scratch/c1", (char *)"scratch/c2", 0 };
-	CHECK(run(comm_path, argv) == 0);
-	CHECK(out_equals("a\nd\n\te\n"));
+	check_out(comm_path, argv, "a\nd\n\te\n");
 }
 
 /* ==== join(1p) ============================================================= */
@@ -360,8 +367,7 @@ static void test_join_basic(void)
 	char *argv[] = { (char *)"join", (char *)"scratch/j1", (char *)"scratch/j2", 0 };
 	make_file("scratch/j1", "1 apple\n2 banana\n3 cherry\n");
 	make_file("scratch/j2", "2 red\n3 yellow\n4 green\n");
-	CHECK(run(join_path, argv) == 0);
-	CHECK(out_equals("2 banana red\n3 cherry yellow\n"));
+	check_out(join_path, argv, "2 banana red\n3 cherry yellow\n");
 }
 
 /* -a on both sides: unpairable lines from file1 AND file2 both appear,
@@ -369,15 +375,13 @@ static void test_join_basic(void)
 static void test_join_dash_a_both_sides(void)
 {
 	char *argv[] = { (char *)"join", (char *)"-a", (char *)"1", (char *)"-a", (char *)"2", (char *)"scratch/j1", (char *)"scratch/j2", 0 };
-	CHECK(run(join_path, argv) == 0);
-	CHECK(out_equals("1 apple\n2 banana red\n3 cherry yellow\n4 green\n"));
+	check_out(join_path, argv, "1 apple\n2 banana red\n3 cherry yellow\n4 green\n");
 }
 
 static void test_join_dash_o(void)
 {
 	char *argv[] = { (char *)"join", (char *)"-o", (char *)"0,2.2", (char *)"scratch/j1", (char *)"scratch/j2", 0 };
-	CHECK(run(join_path, argv) == 0);
-	CHECK(out_equals("2 red\n3 yellow\n"));
+	check_out(join_path, argv, "2 red\n3 yellow\n");
 }
 
 /* -a on both sides plus an explicit -o list plus -e: an unpaired line's
@@ -390,8 +394,7 @@ static void test_join_dash_a_dash_o_dash_e(void)
 		(char *)"-o", (char *)"1.1,1.2,2.2", (char *)"-e", (char *)"NONE",
 		(char *)"scratch/j1", (char *)"scratch/j2", 0
 	};
-	CHECK(run(join_path, argv) == 0);
-	CHECK(out_equals("1 apple NONE\n2 banana red\n3 cherry yellow\nNONE NONE green\n"));
+	check_out(join_path, argv, "1 apple NONE\n2 banana red\n3 cherry yellow\nNONE NONE green\n");
 }
 
 static void test_join_dash_t(void)
@@ -399,8 +402,7 @@ static void test_join_dash_t(void)
 	char *argv[] = { (char *)"join", (char *)"-t", (char *)",", (char *)"scratch/j3", (char *)"scratch/j4", 0 };
 	make_file("scratch/j3", "1,apple\n2,banana\n");
 	make_file("scratch/j4", "1,red\n2,green\n");
-	CHECK(run(join_path, argv) == 0);
-	CHECK(out_equals("1,apple,red\n2,banana,green\n"));
+	check_out(join_path, argv, "1,apple,red\n2,banana,green\n");
 }
 
 /* ==== tsort(1p) ============================================================= */
@@ -426,16 +428,14 @@ static void test_tsort_cycle_is_an_error(void)
 {
 	char *argv[] = { (char *)"tsort", (char *)"scratch/t2", 0 };
 	make_file("scratch/t2", "a b\nb c\nc a\n");
-	CHECK(run(tsort_path, argv) != 0);
-	CHECK(err_contains("cycle"));
+	check_err(tsort_path, argv, "cycle");
 }
 
 static void test_tsort_odd_tokens_is_an_error(void)
 {
 	char *argv[] = { (char *)"tsort", (char *)"scratch/t3", 0 };
 	make_file("scratch/t3", "a b c\n");
-	CHECK(run(tsort_path, argv) != 0);
-	CHECK(err_contains("odd"));
+	check_err(tsort_path, argv, "odd");
 }
 
 /* ==== the shell built-ins agree with the standalone executables ========== */

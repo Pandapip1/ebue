@@ -27,27 +27,29 @@ static int fails;
 
 static char obj_root[1024];
 
+/* Truncates `s` at its last path separator (in place). Returns -1 if
+ * `s` contains no separator at all, leaving `s` untouched. */
+static int strip_last_component(char *s)
+{
+	size_t i;
+
+	for (i = strlen(s); i > 0 && s[i - 1] != '/' && s[i - 1] != '\\'; i--)
+		;
+	if (i == 0) return -1;
+	s[i - 1] = 0;
+	return 0;
+}
+
 /* Same walk-up-from-argv[0] technique as test/util-trivial.c's
  * find_obj_root() -- see that file's header for why. */
 static int find_obj_root(const char *argv0)
 {
-	size_t n;
-	char *p;
-
 	if (!argv0 || !*argv0) return -1;
-	n = strlen(argv0);
-	if (n >= sizeof obj_root) return -1;
+	if (strlen(argv0) >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0;                       /* strip "/util-pathnames.exe" */
-
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0;                       /* strip "/test" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/util-pathnames.exe" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/test" */
 
 	return 0;
 }
@@ -55,12 +57,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -131,6 +135,15 @@ static int out_is(const char *expect)
 	return strcmp(buf, expect) == 0;
 }
 
+/* Runs `path` with `args`, checking it exits 0 and its stdout is
+ * exactly `expect` -- the shape shared by most single-output tests
+ * below. */
+static void check_ok_output(const char *path, char *const *args, const char *expect)
+{
+	CHECK(run(path, args) == 0);
+	CHECK(out_is(expect));
+}
+
 static char pwd_path[1024], basename_path[1024], dirname_path[1024];
 static char pathchk_path[1024], readlink_path[1024], realpath_path[1024];
 static char sh_path[1024];
@@ -169,22 +182,19 @@ static void test_pwd_rejects_operand(void)
 static void test_basename_strips_directory(void)
 {
 	char *argv[] = { (char *)"basename", (char *)"/usr/bin/foo", 0 };
-	CHECK(run(basename_path, argv) == 0);
-	CHECK(out_is("foo"));
+	check_ok_output(basename_path, argv, "foo");
 }
 
 static void test_basename_root(void)
 {
 	char *argv[] = { (char *)"basename", (char *)"/", 0 };
-	CHECK(run(basename_path, argv) == 0);
-	CHECK(out_is("/"));
+	check_ok_output(basename_path, argv, "/");
 }
 
 static void test_basename_strips_suffix(void)
 {
 	char *argv[] = { (char *)"basename", (char *)"/usr/lib/foo.sh", (char *)".sh", 0 };
-	CHECK(run(basename_path, argv) == 0);
-	CHECK(out_is("foo"));
+	check_ok_output(basename_path, argv, "foo");
 }
 
 static void test_basename_suffix_identical_to_whole_is_kept(void)
@@ -193,8 +203,7 @@ static void test_basename_suffix_identical_to_whole_is_kept(void)
 	 * removing ".sh" from ".sh" would be the whole string, so it must
 	 * NOT be removed. */
 	char *argv[] = { (char *)"basename", (char *)".sh", (char *)".sh", 0 };
-	CHECK(run(basename_path, argv) == 0);
-	CHECK(out_is(".sh"));
+	check_ok_output(basename_path, argv, ".sh");
 }
 
 static void test_basename_bad_argc(void)
@@ -210,15 +219,13 @@ static void test_basename_bad_argc(void)
 static void test_dirname_strips_last_component(void)
 {
 	char *argv[] = { (char *)"dirname", (char *)"/usr/bin/foo", 0 };
-	CHECK(run(dirname_path, argv) == 0);
-	CHECK(out_is("/usr/bin"));
+	check_ok_output(dirname_path, argv, "/usr/bin");
 }
 
 static void test_dirname_no_slash_is_dot(void)
 {
 	char *argv[] = { (char *)"dirname", (char *)"foo", 0 };
-	CHECK(run(dirname_path, argv) == 0);
-	CHECK(out_is("."));
+	check_ok_output(dirname_path, argv, ".");
 }
 
 static void test_dirname_bad_argc(void)

@@ -53,25 +53,27 @@ static int fails;
 
 static char obj_root[1024];
 
+/* Truncates `s` at its last path separator (in place). Returns -1 if
+ * `s` contains no separator at all, leaving `s` untouched. */
+static int strip_last_component(char *s)
+{
+	size_t i;
+
+	for (i = strlen(s); i > 0 && s[i - 1] != '/' && s[i - 1] != '\\'; i--)
+		;
+	if (i == 0) return -1;
+	s[i - 1] = 0;
+	return 0;
+}
+
 static int find_obj_root(const char *argv0)
 {
-	size_t n;
-	char *p;
-
 	if (!argv0 || !*argv0) return -1;
-	n = strlen(argv0);
-	if (n >= sizeof obj_root) return -1;
+	if (strlen(argv0) >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-strip.exe" */
-
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/util-strip.exe" */
+	if (strip_last_component(obj_root) != 0) return -1; /* strip "/test" */
 
 	return 0;
 }
@@ -79,12 +81,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -238,6 +242,17 @@ static int run_sh_c(const char *cmd)
 	return run(sh_path, argv);
 }
 
+/* Spawns the stripped binary at `path` on the fixed known-good input
+ * fixture (written by the caller beforehand) and checks it still runs
+ * correctly -- the shared shape of the actual acceptance check across
+ * every stripped-copy variant below. */
+static void check_stripped_binary_still_runs(const char *path)
+{
+	char *argv[] = { (char *)path, (char *)"scratch/strip_input.txt", 0 };
+	CHECK(run(path, argv) == 0);
+	CHECK(out_contains("stripped binary still works"));
+}
+
 /* ==== the real acceptance test: strip a working binary, run it ========== */
 
 static void test_strip_still_runs(void)
@@ -276,11 +291,7 @@ static void test_strip_still_runs(void)
 		CHECK(in != 0);
 		if (in) { fputs("stripped binary still works\n", in); fclose(in); }
 	}
-	{
-		char *cat_argv[] = { (char *)"scratch/cat_copy", (char *)"scratch/strip_input.txt", 0 };
-		CHECK(run("scratch/cat_copy", cat_argv) == 0);
-		CHECK(out_contains("stripped binary still works"));
-	}
+	check_stripped_binary_still_runs("scratch/cat_copy");
 }
 
 static void test_strip_builtin_agreement(void)
@@ -293,11 +304,7 @@ static void test_strip_builtin_agreement(void)
 	CHECK(run_sh_c("strip scratch/cat_copy2") == 0);
 	CHECK(!elf_has_section("scratch/cat_copy2", ".symtab"));
 
-	{
-		char *cat_argv[] = { (char *)"scratch/cat_copy2", (char *)"scratch/strip_input.txt", 0 };
-		CHECK(run("scratch/cat_copy2", cat_argv) == 0);
-		CHECK(out_contains("stripped binary still works"));
-	}
+	check_stripped_binary_still_runs("scratch/cat_copy2");
 }
 
 /* ==== -o output-file form ================================================= */
@@ -325,11 +332,7 @@ static void test_strip_dash_o(void)
 	CHECK(file_size("scratch/cat_stripped") < orig);
 	CHECK(!elf_has_section("scratch/cat_stripped", ".symtab"));
 
-	{
-		char *cat_argv[] = { (char *)"scratch/cat_stripped", (char *)"scratch/strip_input.txt", 0 };
-		CHECK(run("scratch/cat_stripped", cat_argv) == 0);
-		CHECK(out_contains("stripped binary still works"));
-	}
+	check_stripped_binary_still_runs("scratch/cat_stripped");
 }
 
 /* ==== usage errors ========================================================= */
