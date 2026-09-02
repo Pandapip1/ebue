@@ -391,9 +391,23 @@ pid_t getsid(pid_t p)
 	if (!pid_exists(p)) { errno = ESRCH; return -1; }
 	return sid;
 }
-/* There is nothing for the chown family to set -- NT has no POSIX owner
- * or group, and st_uid/st_gid report this process's current IDs -- but
- * "there is no ownership to change" is not "there is no path to resolve".
+/* Whether there is anything for the chown family to actually set is a
+ * per-backend question -- NT has no POSIX owner or group at all, and
+ * st_uid/st_gid report this process's current IDs regardless of what
+ * any chown() call here asked for (see this file's own banner); Linux
+ * has real per-inode ownership and a real fchownat(2)/fchown(2) to
+ * change it with.  __plat_chown()/__plat_fchown() (src/internal/
+ * plat_unistd.h) are where that split lives now -- NT's own
+ * implementation stays exactly the probe it always was, ignoring
+ * uid/gid and resolving the path/handle only far enough to answer
+ * chown.html's shall-fail clauses; Linux's own does the real
+ * chown, uid/gid's (uid_t)-1/(gid_t)-1 "leave unchanged" sentinel
+ * included, straight from its own real syscall's identical contract.
+ * Every front door below is unchanged by which backend is under it: it
+ * still just resolves d/p or f and forwards uid/gid down, and gets back
+ * either "there was nothing to set, but the path/handle checked out" or
+ * "it is set now" -- indistinguishable from this level, and chown.html
+ * does not ask this level to distinguish them.
  *
  * chown.html ERRORS, all shall-fail:
  *   "[ENOENT] A component of path does not name an existing file or path
@@ -403,35 +417,28 @@ pid_t getsid(pid_t p)
  * lchown.html repeats both.  fchown.html: "[EBADF] The fildes argument
  * is not an open file descriptor."  chown.html's fchownat() section adds
  * [EBADF] for a dirfd that is neither AT_FDCWD nor a valid descriptor
- * and [ENOTDIR] for one that is not a directory.
- *
- * chown("does-not-exist", ...) returning 0 is not a statement about
- * ownership, it is a statement that the file exists, and it is false: an
- * installer chowning a list of files it has just laid down loses its
- * only report that one of them is missing, and `chown()` failing with
- * ENOENT is a standard existence probe.  So the path is resolved and the
- * object opened for FILE_READ_ATTRIBUTES, which is exactly the evidence
- * those clauses ask for and nothing more; the handle is closed again
- * without a write of any kind.
- *
- * __ntpath_at() produces the empty-path [ENOENT], the dirfd [EBADF]/
- * [ENOTDIR] and the path-prefix [ENOTDIR] itself (src/internal/path.c),
- * so only the final open is left to this function.
+ * and [ENOTDIR] for one that is not a directory.  Both backends produce
+ * every one of these from the path/handle resolution their own
+ * __plat_chown()/__plat_fchown() already has to do to find the object to
+ * (not) chown in the first place -- see each backend's own comment for
+ * how.
  *
  * fchownat()'s [EINVAL] for an unrecognised flag is a *may*-fail on
  * chown.html, unlike unlinkat()'s, and accepting the bits is the
  * behaviour test/posix-unistd-ids.c pins; only AT_SYMLINK_NOFOLLOW is
- * read out of them.  FILE_OPEN_FOR_BACKUP_INTENT, and neither
- * FILE_DIRECTORY_FILE nor FILE_NON_DIRECTORY_FILE, so that the call
- * works on a directory and on a regular file alike. */
+ * read out of them by either backend. */
 int fchownat(int d, const char *p, uid_t u, gid_t g, int f) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
-	(void)u; (void)g;
-	return __plat_chown_probe(d, p, f);
+	return __plat_chown(d, p, u, g, f);
 }
 int chown(const char *p, uid_t u, gid_t g) { return fchownat(AT_FDCWD, p, u, g, 0); }
 int lchown(const char *p, uid_t u, gid_t g) { return fchownat(AT_FDCWD, p, u, g, AT_SYMLINK_NOFOLLOW); }
-int fchown(int f, uid_t u, gid_t g) { (void)u; (void)g; return __fd_get(f) ? 0 : -1; } // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+int fchown(int f, uid_t u, gid_t g) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+{
+	struct __fd *fd = __fd_get(f);
+	if (!fd) return -1;
+	return __plat_fchown(fd->h, u, g);
+}
 /* nice() used to be `(void)incr; return 0;` here, among identity calls it
  * has nothing to do with.  It moved to src/misc/resource.c, beside the
  * one piece of state getpriority()/setpriority() already keep this

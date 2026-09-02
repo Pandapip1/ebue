@@ -1205,16 +1205,75 @@ static void test_mkdirat(void)
 	CHECK(unlink("mdf.txt") == 0);
 }
 
-/* mkfifo.html and mknod.html.  Both are permanent stubs here -- see
- * test/POSIX-GAP-ACCOUNTING.md's "permanent degenerate stubs" table,
- * which records mkfifo/mkfifoat as ENOSYS (NT named pipes exist and are
- * pure NTDLL, but nobody has mapped FIFO semantics onto them) and
- * mknod/mknodat as EPERM.
+/* mkfifo.html and mknod.html.
  *
- * What is asserted is the one clause a stub can still honour, and which
- * both pages state in identical words: "If -1 is returned, no FIFO shall
- * be created" / "If -1 is returned, the new file shall not be created."
- * A stub that left debris behind would be worse than a stub.
+ * NT stays a permanent stub here -- see test/POSIX-GAP-ACCOUNTING.md's
+ * "permanent degenerate stubs" table, which records mkfifo/mkfifoat as
+ * ENOSYS (NT named pipes exist and are pure NTDLL, but nobody has
+ * mapped FIFO semantics onto them) and mknod/mknodat as EPERM; that
+ * table, and everything below through the #else, is unchanged by this
+ * comment's own update.
+ *
+ * Linux is not a stub: mknodat(2) is real there (src/stat/linux/
+ * plat_stat.c's own __plat_mknod(), src/stat/chmod.c's front doors),
+ * so this reads back genuine filesystem effects instead of pinning "no
+ * debris" against a call that can never succeed. mkfifo()/mkfifoat()
+ * and mknod() with S_IFIFO all create the same kind of object and
+ * always succeed for an unprivileged caller -- mknod(2)'s own words,
+ * "if pathname [...] specifies a FIFO or Unix domain socket, or the
+ * caller is privileged" -- so those are asserted as plain successes,
+ * S_ISFIFO and all. mknod() with S_IFCHR is the one case whose outcome
+ * genuinely depends on this process's own privilege (CAP_MKNOD), which
+ * a test run cannot assume either way -- verified during this pass:
+ * this sandbox's own unprivileged (uid 1000) process still had it,
+ * succeeding -- so both real outcomes are checked instead of assuming
+ * one: a real character-special node with S_ISCHR if the kernel allowed
+ * it, mknod.html's own "[EPERM] The invoking process does not have
+ * appropriate privileges and the file type is not FIFO-special" and no
+ * file if it did not. */
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+static void test_mkfifo_mknod_stubs(void)
+{
+	struct stat st;
+
+	CHECK(mkfifo("mff", 0666) == 0);
+	CHECK(stat("mff", &st) == 0 && S_ISFIFO(st.st_mode));
+	CHECK(unlink("mff") == 0);
+
+	CHECK(mkfifoat(AT_FDCWD, "mffa", 0666) == 0);
+	CHECK(stat("mffa", &st) == 0 && S_ISFIFO(st.st_mode));
+	CHECK(unlink("mffa") == 0);
+
+	/* The only portable use of mknod() is S_IFIFO with dev 0; it makes
+	 * the identical kind of object mkfifo() does. */
+	CHECK(mknod("mndf", S_IFIFO | 0666, 0) == 0);
+	CHECK(stat("mndf", &st) == 0 && S_ISFIFO(st.st_mode));
+	CHECK(unlink("mndf") == 0);
+
+	errno = 0;
+	if (mknod("mnd", S_IFCHR | 0666, 0) == 0) {
+		CHECK(stat("mnd", &st) == 0 && S_ISCHR(st.st_mode));
+		CHECK(unlink("mnd") == 0);
+	} else {
+		CHECK(errno == EPERM);
+		CHECK(stat("mnd", &st) == -1);
+	}
+
+	errno = 0;
+	if (mknodat(AT_FDCWD, "mnda", S_IFCHR | 0666, 0) == 0) {
+		CHECK(stat("mnda", &st) == 0 && S_ISCHR(st.st_mode));
+		CHECK(unlink("mnda") == 0);
+	} else {
+		CHECK(errno == EPERM);
+		CHECK(stat("mnda", &st) == -1);
+	}
+}
+#else
+/* What is asserted here is the one clause a stub can still honour, and
+ * which both pages state in identical words: "If -1 is returned, no
+ * FIFO shall be created" / "If -1 is returned, the new file shall not
+ * be created."  A stub that left debris behind would be worse than a
+ * stub.
  *
  * N/A, with the reason: every other clause on both pages (mode ANDed
  * with the file creation mask, the resulting file type, [EEXIST],
@@ -1262,6 +1321,7 @@ static void test_mkfifo_mknod_stubs(void)
 	CHECK(errno != 0);
 	CHECK(stat("mndf", &st) == -1);
 }
+#endif
 
 /* ---------------------------------------------------------------------
  * The rest of test/POSIX-GAP-ACCOUNTING.md's never-asserted <unistd.h>

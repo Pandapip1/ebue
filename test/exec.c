@@ -17,6 +17,13 @@
  * being true ten commits later, when abe9fc4 added
  * src/process/find_program.c.
  */
+/* wait3()/wait4()/setenv()/clock_gettime() below are all feature-test
+ * gated in ntlibc's own headers (see include/sys/wait.h's own comment on
+ * why); test/posix-unistd-exec.c already needs the identical define for
+ * the same reason.  Harmless noise under a lenient compiler that never
+ * enforced the gate, but a genuine build break under one (clang, here)
+ * that treats an implicit declaration as the hard ISO C99 error it is. */
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,6 +63,7 @@ static const char *const tricky[] = {
 
 #define RC_ARGV_MISMATCH 7
 #define RC_ENV_MISMATCH 8
+#define RC_PID_MISMATCH 9
 #define RC_EXEC_RETURNED 99
 #define RC_OK 0
 
@@ -303,6 +311,24 @@ static int exec_child(const char *self, const char *role)
 		fputs("buffered", f);           /* deliberately not flushed */
 		if (atexit(atexit_must_not_run)) return 4;
 		execl(self, self, "--exit", "0", (char *)0);
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+	} else if (!strcmp(role, "--exec-pid")) {
+		/* The real-exec bar, per src/process/exec.c's own banner:
+		 * on Linux execve() must replace THIS OS process's image in
+		 * place, not fork+wait a new one to stand in for it -- so
+		 * this process's own pid, captured right here before the
+		 * call, must be the exact pid still running once "--report-
+		 * pid" below checks it, not merely a process that happens to
+		 * report the same *output*.  A grandchild produced by a
+		 * disguised fork+emulate would still print the right
+		 * argv/exit status; it would not carry this pid. NT is not
+		 * tested here at all: its own exec() correctly does NOT
+		 * preserve pid (documented, deliberate -- see that banner),
+		 * so this role does not exist on that build. */
+		char pidbuf[32];
+		snprintf(pidbuf, sizeof pidbuf, "%ld", (long)getpid());
+		execl(self, self, "--report-pid", pidbuf, (char *)0);
+#endif
 	} else if (!strcmp(role, "--exec-f-badfd")) {
 		/* [EBADF] "The fd argument is not a valid file descriptor
 		 * open for executing." */
@@ -944,11 +970,32 @@ int main(int argc, char **argv)
 		return argv_child(argc, argv);
 	if (argc > 1 && (!strcmp(argv[1], "--argvl") || !strcmp(argv[1], "--argvl-env")))
 		return argvl_child(argc, argv);
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+	/* Reached only by the --exec-pid role's own execl() above, in the
+	 * SAME OS process if (and only if) that was a real in-place exec:
+	 * the pid it captured just before calling execl() is the value now
+	 * on the command line. */
+	if (argc > 2 && !strcmp(argv[1], "--report-pid"))
+		return (long)getpid() == atol(argv[2]) ? RC_OK : RC_PID_MISMATCH;
+#endif
 	if (argc > 1 && !strncmp(argv[1], "--exec-", 7)) return exec_child(argv[0], argv[1]);
 
 	CHECK(run_role(argv[0], "--exec-v") == 0);
 	CHECK(run_role(argv[0], "--exec-vp") == 0);
 	CHECK(run_role(argv[0], "--exec-ve") == 0);
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+	/* src/process/exec.c's real, in-place execve() on Linux: getpid()
+	 * must be unchanged across the exec, not merely the exec'd
+	 * program's output -- see exec_child()'s own "--exec-pid" comment
+	 * for exactly what a regression here would look like (a real pid,
+	 * just the WRONG one: a disguised fork+emulate would still pass
+	 * every other CHECK in this file). Not run against NT: its own
+	 * exec() family correctly does not preserve pid at all (documented
+	 * fork+wait stand-in, src/process/exec.c's own banner), so this
+	 * property is Linux-only by design, not merely by what this pass
+	 * touched. */
+	CHECK(run_role(argv[0], "--exec-pid") == RC_OK);
+#endif
 	/* the exec'd image's exit code is what exec's caller exits with */
 	CHECK(run_role(argv[0], "--exec-exit") == 200);
 	/* a missing program fails with ENOENT and exec returns */

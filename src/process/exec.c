@@ -13,6 +13,21 @@
  * This is the same thing the M2libc Windows port does, and the same
  * thing every from-scratch Unix-on-Windows layer without a personality
  * in the kernel ends up doing.
+ *
+ * Linux, unlike NT, has the real primitive this whole file's fork+wait
+ * dance is a stand-in for: execve(2) replaces the calling process's own
+ * image in place -- same pid, no new process, no parent watching a
+ * child at all.  __plat_process_exec() (src/process/linux/plat_process.c)
+ * is that real syscall, and execve() below calls it directly, under
+ * #if defined(__linux__), instead of running the emulation.  Nothing
+ * else in this file changes: execvpe()'s PATH search and [ENOEXEC]
+ * shell fallback, execv()/execl()/execle()/execlp()/fexecve() all still
+ * funnel through execve(), so a real in-place exec is exactly as far as
+ * this one #ifdef has to reach.  __plat_process_exec() itself is
+ * declared only for the Linux backend to implement (plat_process.h's
+ * own comment); confining every call to it inside #if defined(__linux__)
+ * is what keeps an NT build from ever referencing a symbol nothing
+ * there defines.
  */
 #include <unistd.h>
 #include <stdlib.h>
@@ -22,16 +37,31 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include "libc.h"
+#include "plat_process.h"
 
 int execve(const char *path, char *const argv[], char *const envp[])
 {
+#if !defined(__linux__)
 	int pid, status;
+#endif
 	struct stat st;
 	if (stat(path, &st) < 0) return -1;
 	if (!S_ISREG(st.st_mode) || !(st.st_mode & 0111)) {
 		errno = EACCES;
 		return -1;
 	}
+#if defined(__linux__)
+	/* The real thing: getpid() after this returns unchanged (or this
+	 * call does not return at all), unlike the fork+wait stand-in
+	 * below.  A failed real execve() already leaves this process's
+	 * image completely untouched -- POSIX's own promise for a *failed*
+	 * exec, exec.html's "the calling process image shall be
+	 * unchanged" -- so there is no cloexec-close, no _exit(), nothing
+	 * left for this function to do afterward on either path: success
+	 * never returns here, and failure returns exactly what
+	 * __plat_process_exec() reports. */
+	return __plat_process_exec(path, argv, envp);
+#else
 	pid = __spawn(path, argv, envp);
 	if (pid < 0) return -1;
 	/* Past this point exec has "succeeded": the new program is running
@@ -78,6 +108,7 @@ int execve(const char *path, char *const argv[], char *const envp[])
 	/* The child died by a signal; this process is standing in for it, so
 	 * end the same way and let *our* parent's waitpid see WIFSIGNALED. */
 	__nt_exit(__NT_SIGNAL_EXIT(WTERMSIG(status)));
+#endif
 }
 
 int execv(const char *path, char *const argv[])

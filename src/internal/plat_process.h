@@ -166,6 +166,22 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
                           const __plat_handle_t std[3], __plat_handle_t *out_process)
     __attribute__((nonnull(4, 5)));
 
+/* execve(2), for src/process/exec.c's own execve() ONLY on the one
+ * backend that has a real image-replacement primitive to call: Linux.
+ * NT's whole reason for this interface's fork()-shaped members above is
+ * that no NT call replaces a running process's image in place (see
+ * exec.c's own banner) -- so unlike every other function in this file,
+ * this one is declared here for symmetry but implemented ONLY by
+ * src/process/linux/plat_process.c; the NT backend defines nothing
+ * named this, and exec.c's own #if defined(__linux__) around every call
+ * to it is what keeps that from ever becoming an undefined-symbol link
+ * error on a build that has no definition to offer.
+ *
+ * Returns only on failure (-1, errno set), the same shape as the raw
+ * execve(2) it wraps: a successful call replaces this very process's
+ * image and never returns to its caller at all. */
+int __plat_process_exec(const char *path, char *const argv[], char *const envp[]);
+
 #endif
 
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

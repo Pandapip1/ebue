@@ -242,12 +242,25 @@ int __plat_pgrp_is_leader(pid_t pid);
  * for everything else. */
 int __plat_process_exists(pid_t pid);
 
-/* chown()/lchown()/fchownat(): there is no ownership to change, but
- * "there is no ownership to change" is not "there is no path to
- * resolve" -- this resolves `path` (relative to `dirfd`, honoring
- * AT_SYMLINK_NOFOLLOW in `flags`) and reports whether it exists, which
- * is all chown.html's shall-fail clauses ask for. */
-int __plat_chown_probe(int dirfd, const char *path, int flags);
+/* chown()/lchown()/fchownat(): change `path`'s (relative to `dirfd`,
+ * honoring AT_SYMLINK_NOFOLLOW in `flags`) owner/group to `uid`/`gid`
+ * ((uid_t)-1/(gid_t)-1 meaning "leave this one alone", exactly chown.html's
+ * own sentinel), resolving `path` regardless of whether this backend has
+ * anything to change.  NT has no POSIX owner or group at all (see
+ * src/unistd/ids.c's banner), so its own implementation ignores
+ * uid/gid entirely and is left with exactly the job its former name
+ * (__plat_chown_probe) described: resolve `path` and report whether it
+ * exists, which is all of chown.html's shall-fail clauses ever asked of
+ * a backend with nothing to set.  Linux has real ownership and a real
+ * fchownat(2) to set it with, so its own implementation does the whole
+ * job for real. */
+int __plat_chown(int dirfd, const char *path, uid_t uid, gid_t gid, int flags);
+
+/* fchown(): the fd-taking sibling of __plat_chown() just above, same
+ * uid/gid/-1 contract, against an already-resolved handle rather than a
+ * path -- exactly the split __plat_chmod()/__plat_chmodat()
+ * (src/internal/plat_stat.h) already draw for chmod(). */
+int __plat_fchown(__plat_handle_t h, uid_t uid, gid_t gid);
 
 /* ---- src/unistd/getentropy.c ------------------------------------------ */
 

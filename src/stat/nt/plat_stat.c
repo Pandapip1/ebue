@@ -288,6 +288,33 @@ int __plat_mkdir(int dirfd, const char *path, mode_t mode)
 	return 0;
 }
 
+/* ---- mkfifo/mknod (src/stat/chmod.c) ------------------------------------ */
+
+/* NT has no filesystem node type either mkfifo() or mknod() maps onto
+ * (chmod.c's own comment: named pipes are real NTDLL objects but nobody
+ * has mapped POSIX FIFO semantics -- blocking connect-on-open, byte
+ * stream, no peer identity -- onto them, and NTFS has no device-node
+ * concept at all), so this stays the unconditional stub both calls
+ * always were before they were routed through plat_stat.h: dirfd/path/
+ * dev are validated by nothing here and create nothing, matching every
+ * *at()-call clause both pages state in identical words, "no [FIFO/new
+ * file] shall be created". Which errno depends only on the requested
+ * type, not on which POSIX entry point asked: S_IFIFO gets mkfifo()'s
+ * own historical ENOSYS (not in mkfifo.html's ERRORS list, but no
+ * listed errno is truthful for a stub either -- see chmod.c's own
+ * comment); anything else gets mknod()'s own EPERM, POSIX's real answer
+ * for "the invoking process does not have appropriate privileges and
+ * the file type is not FIFO-special". Deciding it here from `mode`
+ * alone is what lets one function serve both entry points, exactly like
+ * this backend's mkfifoat()/mknod()/mknodat() front doors already
+ * collapse into one call. */
+int __plat_mknod(int dirfd, const char *path, mode_t mode, dev_t dev) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; mode and dev have distinct roles
+{
+	(void)dirfd; (void)path; (void)dev;
+	errno = (mode & S_IFMT) == S_IFIFO ? ENOSYS : EPERM;
+	return -1;
+}
+
 /* ---- stat/fstat (src/stat/stat.c) --------------------------------------- */
 
 /* A real st_dev (below) is always vi.VolumeSerialNumber, a plain ULONG
