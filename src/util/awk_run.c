@@ -30,7 +30,37 @@
  * separate from num/str lazy-caching.
  *
  * ALLOCATION FAILURE: fatal here too, the same policy and reasoning as
- * awk_parse.c's own header explains for the parser.
+ * awk_parse.c's own header explains for the parser -- and, as of this
+ * file's oom()/fatal() below, the same "unwind via awk_unwind_fatal(),
+ * never a raw exit()" requirement too: awk_run.c is where every OTHER
+ * fatal runtime condition also lives (division by zero, a scalar/array
+ * type clash, an undefined function call, an invalid dynamic ERE, a
+ * failed output redirect open), every one of them reachable from
+ * ordinary, easily-triggered awk source, and __util_awk_main() can be
+ * running as a no-fork src/sh/builtin.c built-in when any of them
+ * fires -- see awk_priv.h's "fatal-error unwind" header comment for
+ * the full design and its two disclosed tradeoffs (why setjmp/longjmp
+ * over threading real error returns, and why memory/FDs are not
+ * unwound-and-freed on that path).
+ *
+ * DOUBLE -> INTEGER CONVERSIONS THAT FEED AN ARRAY INDEX/ALLOCATION
+ * SIZE: funneled through d2long()/d2int() below rather than a bare
+ * (long)/(int) cast. A cast of a double outside the target type's
+ * range is undefined behavior in C (C11 6.3.1.4p1), not just "some
+ * implementation-defined large number" -- and this was a real, fuzzer-
+ * found bug, not a theoretical one: an absurd field reference like
+ * $111111111111111111111 (a huge decimal literal well outside `long`,
+ * let alone `int`, range) used to reach set_field() with idx already
+ * UB from the (long) cast at its call site, which set_field() then
+ * cast AGAIN, to (int), to size fields_reserve()'s allocation -- while
+ * a second, un-truncated use of the same `long idx` a few lines later
+ * walked the loop bound past that (int)-sized allocation, a genuine
+ * out-of-bounds heap write. d2long()/d2int() saturate instead: NaN
+ * maps to 0, anything outside the target range clamps to that range's
+ * nearest endpoint, so every later comparison/cast is over a value
+ * already inside a well-defined range -- no wraparound, no UB, and
+ * (paired with AWK_MAX_FIELD below) no more truncate-then-use-the-
+ * untruncated-value mismatch.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -39,21 +69,67 @@
 #include <ctype.h>
 #include <time.h>
 #include <errno.h>
+#include <limits.h>
 #include <sys/wait.h>
 #include "awk_priv.h"
 #include "ownership_stubs.h"
 #include "util.h"
 
+/* A field index or NF assignment past this is refused with a clean
+ * diagnostic (via fatal(), same as any other fatal runtime condition
+ * here) rather than attempted at all -- defense in depth alongside
+ * d2long()/d2int() below: even a legitimate-looking huge index that
+ * DOES fit in a long (unlike the UB case those two guard against)
+ * would otherwise size a real multi-hundred-megabyte-or-more
+ * fields_reserve() allocation for one `$N=` or `NF=` assignment. No
+ * real awk program legitimately needs anywhere near this many fields;
+ * 1,000,000 keeps the worst case (~8 bytes/pointer slot, plus one
+ * empty-string allocation per padded field) in the tens-of-megabytes
+ * range instead of unbounded. */
+#define AWK_MAX_FIELD 1000000L
+
+/* See this file's header comment ("DOUBLE -> INTEGER CONVERSIONS")
+ * above for why a bare (long) cast is not safe here. */
+static long d2long(double d)
+{
+	if (d != d) return 0; /* NaN: no ordering to saturate toward */
+	if (d >= (double)LONG_MAX) return LONG_MAX;
+	if (d <= (double)LONG_MIN) return LONG_MIN;
+	return (long)d;
+}
+
+static int d2int(double d)
+{
+	long l = d2long(d);
+	if (l > INT_MAX) return INT_MAX;
+	if (l < INT_MIN) return INT_MIN;
+	return (int)l;
+}
+
+/* printf's %d/%o/%u/%x/%X/%c conversions format via `long long`/
+ * `unsigned long long` rather than `long` (awk_format() below), so the
+ * saturating conversion for those needs its own long-long-range
+ * version rather than reusing d2long() -- LONG_MAX/LLONG_MAX are equal
+ * on this project's own targets in practice, but this is the correct
+ * one to reach for regardless of that. */
+static long long d2ll(double d)
+{
+	if (d != d) return 0;
+	if (d >= (double)LLONG_MAX) return LLONG_MAX;
+	if (d <= (double)LLONG_MIN) return LLONG_MIN;
+	return (long long)d;
+}
+
 static void oom(void)
 {
 	__util_diagf("awk: out of memory\n");
-	exit(2);
+	awk_unwind_fatal();
 }
 
 static void fatal(const char *msg)
 {
 	__util_diagf("awk: %s\n", msg);
-	exit(2);
+	awk_unwind_fatal();
 }
 
 static char *xstrdup(const char *s)
@@ -585,6 +661,12 @@ static void set_field(struct awk_interp *ip, long idx, struct awk_value *val)
 		return;
 	}
 	if (idx < 1) return; /* $(-1)="x": no defined effect; ignored rather than corrupting storage */
+	/* See AWK_MAX_FIELD's own comment above: refused cleanly here,
+	 * BEFORE idx is ever truncated to (int) below, so the fields_
+	 * reserve() allocation size and the loop bound that walks it are
+	 * guaranteed to agree -- see this file's header comment ("DOUBLE ->
+	 * INTEGER CONVERSIONS") for the out-of-bounds write this closes. */
+	if (idx > AWK_MAX_FIELD) fatal("field index too large");
 	if (idx > ip->nf) {
 		/* Fields between the old NF and this new one are filled with
 		 * "" (fully initialized, up to but NOT including idx-1's own
@@ -611,6 +693,7 @@ static void set_nf(struct awk_interp *ip, long newnf)
 {
 	int i;
 	if (newnf < 0) newnf = 0;
+	if (newnf > AWK_MAX_FIELD) fatal("NF assignment too large"); /* see AWK_MAX_FIELD's own comment */
 	if (newnf < ip->nf) {
 		for (i = (int)newnf; i < ip->nf; i++) { free(ip->flds[i]); ip->flds[i] = NULL; }
 		ip->nf = (int)newnf;
@@ -640,7 +723,7 @@ static regex_t *resolve_ere(struct awk_interp *ip, struct awk_node *node)
 			free(re);
 			__util_diagf("awk: invalid dynamic regular expression: %s\n", pat);
 			v_free(&v);
-			exit(2);
+			awk_unwind_fatal();
 		}
 		*slot = re;
 		v_free(&v);
@@ -771,7 +854,7 @@ static int advance_to_next_argv_file(struct awk_interp *ip)
 	struct awk_cell *argc_cell = lookup_cell(ip, "ARGC");
 
 	for (;;) {
-		long argc = (long)cell_num(argc_cell);
+		long argc = d2long(cell_num(argc_cell)); /* ARGC is user-assignable */
 		char key[32];
 		void *slot;
 		const char *s;
@@ -935,11 +1018,11 @@ static char *awk_format(struct awk_interp *ip, const char *fmt, struct awk_value
 				p++;
 			}
 			flags[nflags] = 0;
-			if (*p == '*') { width = (ai < nargs) ? (int)v_num(&args[ai++]) : 0; p++; }
+			if (*p == '*') { width = (ai < nargs) ? d2int(v_num(&args[ai++])) : 0; p++; }
 			else while (isdigit((unsigned char)*p)) { width = (width < 0 ? 0 : width) * 10 + (*p++ - '0'); }
 			if (*p == '.') {
 				p++;
-				if (*p == '*') { prec = (ai < nargs) ? (int)v_num(&args[ai++]) : 0; p++; }
+				if (*p == '*') { prec = (ai < nargs) ? d2int(v_num(&args[ai++])) : 0; p++; }
 				else { prec = 0; while (isdigit((unsigned char)*p)) prec = prec * 10 + (*p++ - '0'); }
 			}
 			conv = *p;
@@ -976,11 +1059,11 @@ static char *awk_format(struct awk_interp *ip, const char *fmt, struct awk_value
 
 				switch (conv) {
 				case 'd':
-					atype = AT_LL; llv = (long long)v_num(arg);
+					atype = AT_LL; llv = d2ll(v_num(arg));
 					snprintf(subfmt, sizeof subfmt, "%%%s%s%sll%c", flags, wbuf, pbuf, conv);
 					break;
 				case 'o': case 'u': case 'x': case 'X':
-					atype = AT_ULL; ullv = (unsigned long long)(long long)v_num(arg);
+					atype = AT_ULL; ullv = (unsigned long long)d2ll(v_num(arg));
 					snprintf(subfmt, sizeof subfmt, "%%%s%s%sll%c", flags, wbuf, pbuf, conv);
 					break;
 				case 'e': case 'E': case 'f': case 'F': case 'g': case 'G':
@@ -988,7 +1071,7 @@ static char *awk_format(struct awk_interp *ip, const char *fmt, struct awk_value
 					snprintf(subfmt, sizeof subfmt, "%%%s%s%s%c", flags, wbuf, pbuf, conv);
 					break;
 				case 'c':
-					if (v_numeric_ctx(arg)) cbuf[0] = (char)(long)v_num(arg);
+					if (v_numeric_ctx(arg)) cbuf[0] = (char)d2long(v_num(arg));
 					else { const char *s = v_str(arg, convfmt_str(ip)); cbuf[0] = s[0]; }
 					if (!cbuf[0]) { skip = 1; break; }
 					atype = AT_STR; sv = cbuf;
@@ -1110,7 +1193,7 @@ static FILE *resolve_redir_stream(struct awk_interp *ip, struct awk_node *n)
 		struct awk_value v = eval(ip, n->a);
 		const char *target = v_str(&v, convfmt_str(ip));
 		FILE *f = get_output_stream(ip, target, n->redir);
-		if (!f) { __util_diagf("awk: can't open output %s\n", target); v_free(&v); exit(2); }
+		if (!f) { __util_diagf("awk: can't open output %s\n", target); v_free(&v); awk_unwind_fatal(); }
 		v_free(&v);
 		return f;
 	}
@@ -1145,7 +1228,7 @@ static struct awk_value eval_lvalue_read(struct awk_interp *ip, struct awk_node 
 	}
 	case N_FIELD: {
 		struct awk_value idxv = eval(ip, lv->a);
-		long idx = (long)v_num(&idxv);
+		long idx = d2long(v_num(&idxv));
 		v_free(&idxv);
 		return get_field(ip, idx);
 	}
@@ -1171,12 +1254,12 @@ static void assign_lvalue(struct awk_interp *ip, struct awk_node *lv, struct awk
 	case N_VAR: {
 		struct awk_cell *c = lookup_cell(ip, lv->str);
 		assign_value_to_cell(c, val);
-		if (!strcmp(lv->str, "NF")) set_nf(ip, (long)cell_num(c));
+		if (!strcmp(lv->str, "NF")) set_nf(ip, d2long(cell_num(c)));
 		return;
 	}
 	case N_FIELD: {
 		struct awk_value idxv = eval(ip, lv->a);
-		long idx = (long)v_num(&idxv);
+		long idx = d2long(v_num(&idxv));
 		v_free(&idxv);
 		set_field(ip, idx, val);
 		return;
@@ -1403,11 +1486,19 @@ static struct awk_value call_builtin(struct awk_interp *ip, struct awk_node *cal
 		double m = na > 1 ? v_num_p(ip, a[1]) : 1;
 		double end = na > 2 ? m + v_num_p(ip, a[2]) : slen + 1; /* exclusive */
 		double start = m;
-		if (start < 1) start = 1;
-		if (end > slen + 1) end = slen + 1;
-		if (end < start) end = start;
+		/* m/n can be ANY string's numeric value, including strtod()'s
+		 * own "nan" spelling (v_num()'s unconditional strtod() call,
+		 * not gated by looks_numeric()'s VK_STRNUM classification --
+		 * e.g. substr("hello","nan",2)) -- NaN compares false against
+		 * everything, so the < clamps just below would silently leave
+		 * start/end as NaN instead of catching them; d2long() below
+		 * maps that case to 0 rather than letting a NaN reach a bare
+		 * (long) cast (undefined behavior). */
+		if (!(start >= 1)) start = 1;
+		if (!(end <= slen + 1)) end = slen + 1;
+		if (!(end >= start)) end = start;
 		{
-			long is = (long)start - 1, ie = (long)end - 1;
+			long is = d2long(start) - 1, ie = d2long(end) - 1;
 			if (is < 0) is = 0;
 			if (ie < is) ie = is;
 			if (ie > (long)slen) ie = (long)slen;
@@ -1833,7 +1924,7 @@ static enum awk_sig exec_stmt(struct awk_interp *ip, struct awk_node *n, struct 
 	case N_CONTINUE: return SIG_CONTINUE;
 	case N_NEXT: ip->unwind = SIG_NEXT; return SIG_NEXT;
 	case N_EXIT: {
-		if (n->a) { struct awk_value v = eval(ip, n->a); ip->exit_status = (int)v_num(&v); v_free(&v); }
+		if (n->a) { struct awk_value v = eval(ip, n->a); ip->exit_status = d2int(v_num(&v)); v_free(&v); }
 		ip->exiting = 1;
 		ip->unwind = SIG_EXIT;
 		return SIG_EXIT;
@@ -1899,7 +1990,7 @@ void awk_interp_set_str(struct awk_interp *ip, const char *name, const char *val
 	v_str_init(&v, xstrdup(val), looks_numeric(val) ? VK_STRNUM : VK_STR);
 	assign_value_to_cell(c, &v);
 	v_free(&v);
-	if (!strcmp(name, "NF")) set_nf(ip, (long)cell_num(c));
+	if (!strcmp(name, "NF")) set_nf(ip, d2long(cell_num(c)));
 }
 
 void awk_interp_setup_argv(struct awk_interp *ip, const char *prog_name, int nargs, char **args)

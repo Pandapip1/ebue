@@ -21,14 +21,18 @@
  * separate disambiguation rule for it; the precedence layering alone
  * produces the standard behavior every real awk implements.
  *
- * ALLOCATION FAILURE: treated as fatal here (a diagnostic and exit(2),
- * via oom() below) rather than threaded back through every one of this
- * file's ~40 mutually-recursive parse_*() functions as a NULL/error
- * return. Every other multi-stage parser in this tree (e.g.
- * src/util/modeparse.c) is small enough that propagating a NULL is
- * cheap; a recursive-descent parser building a whole program's AST is
- * not, and a partially-built tree has no well-defined owner to unwind
- * it through. A real awk program's source text is never so large that
+ * ALLOCATION FAILURE: treated as fatal here (a diagnostic and an unwind
+ * via oom() below -- see awk_priv.h's "fatal-error unwind" header
+ * comment for why that is awk_unwind_fatal(), not a raw exit(2): this
+ * parser can run underneath a no-fork shell built-in via
+ * __util_awk_main(), which must survive a fatal parse error, not die
+ * with it) rather than threaded back through every one of this file's
+ * ~40 mutually-recursive parse_*() functions as a NULL/error return.
+ * Every other multi-stage parser in this tree (e.g. src/util/
+ * modeparse.c) is small enough that propagating a NULL is cheap; a
+ * recursive-descent parser building a whole program's AST is not, and
+ * a partially-built tree has no well-defined owner to unwind it
+ * through. A real awk program's source text is never so large that
  * this matters in practice.
  */
 #include <stdlib.h>
@@ -40,7 +44,7 @@
 static void oom(void)
 {
 	__util_diagf("awk: out of memory\n");
-	exit(2);
+	awk_unwind_fatal();
 }
 
 static struct awk_node *mknode(enum awk_ntype type)
