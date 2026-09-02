@@ -99,7 +99,7 @@ size_t __fread(void *ptr, size_t size, size_t nmemb, FILE *f)
 		if (avail) {
 			size_t n = total - got;
 			if (n > avail) n = avail;
-			memcpy(p + got, f->buf + f->rpos, n);
+			memmove(p + got, f->buf + f->rpos, n);
 			f->rpos += n;
 			got += n;
 			continue;
@@ -150,7 +150,7 @@ size_t __fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f)
 				size_t k;
 				for (k = 0; k < n; k++) if (p[put + k] == '\n') { nl = 1; break; }
 			}
-			memcpy(f->buf + f->wpos, p + put, n);
+			memmove(f->buf + f->wpos, p + put, n);
 			f->wpos += n;
 			put += n;
 			if (f->wpos >= f->bufsz || nl) {

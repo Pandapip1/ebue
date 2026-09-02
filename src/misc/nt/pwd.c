@@ -135,15 +135,15 @@ static int fill_current(struct passwd *pw, char *buf, size_t bufsz, size_t *need
 	if (need > bufsz) { if (needp) *needp = need; return ERANGE; }
 
 	__ownership_writable_span(buf, nl);
-	memcpy(buf, name, nl);
+	memmove(buf, name, nl);
 	pw->pw_name = buf;
 	buf += nl;
 	__ownership_writable_span(buf, dl);
-	memcpy(buf, dir, dl);
+	memmove(buf, dir, dl);
 	pw->pw_dir = buf;
 	buf += dl;
 	__ownership_writable_span(buf, sl);
-	memcpy(buf, shell, sl);
+	memmove(buf, shell, sl);
 	pw->pw_shell = buf;
 
 	pw->pw_uid = getuid();
