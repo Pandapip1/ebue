@@ -23,12 +23,11 @@
  * honors by handing environ a __malloc()'d array of __malloc()'d
  * strings (__utf16_to_utf8() is itself __malloc()-based), never the
  * PEB's own environment block strings in place. Aliasing environ
- * directly onto the kernel's envp block, the way this file used to,
- * broke that contract: the kernel's initial-stack memory was never
- * allocated by this library's allocator at all, so the first
- * setenv() call to *overwrite* an inherited variable free()'d a
- * pointer into the kernel-provided stack block -- undefined behavior,
- * confirmed to crash in practice.
+ * directly onto the kernel's envp block would break that contract: the
+ * kernel's initial-stack memory was never allocated by this library's
+ * allocator at all, so the first setenv() call to *overwrite* an
+ * inherited variable would free() a pointer into the kernel-provided
+ * stack block -- undefined behavior, and a real crash in practice.
  *
  * What NT's loader does for free and this file must do by hand instead:
  * TLS. A dynamically-linked Windows PE gets its TLS block set up by the
@@ -55,19 +54,6 @@
  *                      calling it would not even COMPILE on this arch.
  *                      Floating-point environment control has no aarch64
  *                      (FPCR/FPSR) implementation yet on any platform.
- *   exit()'s front door src/exit/exit.c's exit()/_Exit() call
- *   (not called here)  __child_resume_stopped() (src/process/children.c)
- *                      before __plat_terminate() -- job-control
- *                      bookkeeping this file has not audited for Linux
- *                      safety. This file calls __plat_terminate()
- *                      (src/internal/plat_exit.h) directly instead,
- *                      the same terminal call exit()'s front door
- *                      itself ends in, just without that one
- *                      unaudited step in front of it. A program built
- *                      against this crt that calls exit()/_Exit()
- *                      itself still goes through the full front door;
- *                      only THIS file's own post-main() call is
- *                      narrowed.
  *
  * None of these block argv/environ/TLS/errno/main()/exit-status working
  * end to end, which is what this file exists to prove -- see
@@ -263,18 +249,12 @@ struct auxv_entry {
  * pure ELF/auxv bookkeeping, identical logic regardless of TLS
  * "variant".
  *
- * *load_bias_out is the piece this function used to get wrong (found
- * for real: a PIE build of fuzz/linux_pilot_test_crt.c -- the same
- * file this crt's own pilot script builds -static -no-pie, minus
- * those two flags -- segfaults in memcpy() at startup, reading
- * address 0x3fd60-ish, exactly this image's link-time PT_TLS
- * p_vaddr with no bias applied, instead of the real runtime address
- * some ASLR-random load base away). AT_PHDR ITSELF needs no fixing --
+ * *load_bias_out exists because AT_PHDR and a program header's own
+ * p_vaddr are not interchangeable. AT_PHDR ITSELF needs no fixing --
  * the Linux kernel's own ELF auxiliary vector contract guarantees it
  * is always the running image's real, already-mapped program headers
- * address, PIE or not, exactly like this function's own prior
- * comment already established -- so walking `phdr + i * phent` below
- * to find a program header is unconditionally correct. What is NOT
+ * address, PIE or not -- so walking `phdr + i * phent` below to find
+ * a program header is unconditionally correct. What is NOT
  * unconditionally correct is any p_vaddr field READ OUT OF one of
  * those program headers (PT_TLS's below, most importantly): that is
  * a LINK-TIME address baked into the file by the static linker, and
@@ -284,7 +264,9 @@ struct auxv_entry {
  * kernel (or, with a PT_INTERP present, the real dynamic linker that
  * maps the main image on the kernel's behalf) picks a random load
  * address, and every p_vaddr in the file needs that same random bias
- * added before it is a real, dereferenceable pointer.
+ * added before it is a real, dereferenceable pointer -- otherwise a
+ * PIE build reads PT_TLS's link-time p_vaddr directly and dereferences
+ * an address that was never mapped.
  *
  * The bias is computed the standard way real ELF loaders derive it
  * (musl's own dynamic-linker startup, glibc's ld.so, FreeBSD's rtld,
@@ -297,8 +279,8 @@ struct auxv_entry {
  * emits PT_PHDR for an ET_EXEC/ET_DYN image meant to be directly
  * execve()'d (the only kind AT_PHDR is ever meaningful for in the
  * first place), so this is not a fallback-only path; no PT_PHDR found
- * (or no auxv at all) leaves *load_bias_out at 0, the same as this
- * function's own prior unconditional behavior. */
+ * (or no auxv at all) simply leaves *load_bias_out at 0, correct for
+ * an ET_EXEC image, which has no bias to apply. */
 static struct elf_phdr *find_tls_phdr(long *auxv, unsigned long *load_bias_out)
     __attribute__((nonnull(1, 2)));
 static struct elf_phdr *find_tls_phdr(long *auxv, unsigned long *load_bias_out)
@@ -318,19 +300,17 @@ static struct elf_phdr *find_tls_phdr(long *auxv, unsigned long *load_bias_out)
 
 	/* ph->p_type below is a disclosed, deliberately unmarked residual,
 	 * surfaced only after auxv's own nonnull mark let this checker
-	 * explore further into this function than before (the "deeper
-	 * exploration unlocked" effect prior sweeps in this tree already
-	 * measured, not a regression): ph is `(struct elf_phdr *)(phdr + i
-	 * * phent)`, a local computed from phdr -- itself not a parameter,
-	 * but a VALUE read out of the kernel-supplied auxiliary vector's
-	 * own AT_PHDR entry a few lines above, guarded by `if (!phdr ||
-	 * ...) return;` before this loop is ever reached. `nonnull` has no
-	 * parameter to describe either fact on. Verified sound by hand
-	 * regardless: the Linux kernel's own ELF auxiliary vector contract
-	 * guarantees AT_PHDR points to the running image's real, mapped
-	 * program headers table whenever it is present at all -- the same
-	 * "external, non-in-tree, documented platform contract" class as
-	 * auxv/sp themselves. */
+	 * explore further into this function than before: ph is `(struct
+	 * elf_phdr *)(phdr + i * phent)`, a local computed from phdr --
+	 * itself not a parameter, but a VALUE read out of the kernel-
+	 * supplied auxiliary vector's own AT_PHDR entry a few lines above,
+	 * guarded by `if (!phdr || ...) return;` before this loop is ever
+	 * reached. `nonnull` has no parameter to describe either fact on.
+	 * Verified sound by hand regardless: the Linux kernel's own ELF
+	 * auxiliary vector contract guarantees AT_PHDR points to the
+	 * running image's real, mapped program headers table whenever it
+	 * is present at all -- the same "external, non-in-tree, documented
+	 * platform contract" class as auxv/sp themselves. */
 	for (i = 0; i < phnum; i++) {
 		struct elf_phdr *ph = (struct elf_phdr *)(phdr + i * phent);
 		if (ph->p_type == PT_TLS) tls = ph;
@@ -355,29 +335,23 @@ static struct elf_phdr *find_tls_phdr(long *auxv, unsigned long *load_bias_out)
  * against the AAELF64 spec since this project links against neither
  * musl nor glibc's crt.
  *
- * The dtv slot is no longer permanently unused: src/dlfcn/linux/
- * plat_dlfcn.c's own "TLS / per-library thread descriptors" banner
- * documents a real per-dlopen()'d-object TLS design built on top of it
- * -- a small integer "TLS module id" indexes this array to reach that
- * module's own miniature TCB-shaped TLS block, with module 1 reserved
- * for the main image's own TLS (needing no separate allocation: this
+ * The dtv slot is put to real use: src/dlfcn/linux/plat_dlfcn.c's own
+ * "TLS / per-library thread descriptors" banner documents a real
+ * per-dlopen()'d-object TLS design built on top of it -- a small
+ * integer "TLS module id" indexes this array to reach that module's
+ * own miniature TCB-shaped TLS block, with module 1 reserved for the
+ * main image's own TLS (needing no separate allocation: this
  * function's own `tp` already IS shaped exactly like a per-module TLS
  * block, so dtv[1] = tp below is simply correct, not a placeholder).
  * See tls_dtv_ensure_capacity() in that file for how the array grows
  * past its initial capacity here.
  *
- * This function now ALWAYS installs a TCB (with its own real DTV),
- * even for a program with no PT_TLS segment of its own at all: a later
+ * This function ALWAYS installs a TCB (with its own real DTV), even
+ * for a program with no PT_TLS segment of its own at all: a later
  * dlopen() of a PT_TLS-bearing object still needs a real TPIDR_EL0/DTV
  * to register itself into, and this is the only place that ever runs
  * before any such dlopen() could. `tls` being NULL just means an empty
- * (zero-length) main-image TLS block -- not "skip TCB setup entirely"
- * the way it used to. Every existing single-static-module program (the
- * overwhelmingly common case in practice: src/internal/errno.c's own
- * `__thread` errno alone gives almost every real ntlibc program a
- * nonempty PT_TLS segment) keeps working exactly as before -- this
- * change only ever ADDS a working TPIDR_EL0/DTV to the one narrow case
- * (no PT_TLS at all) that previously left it unset. */
+ * (zero-length) main-image TLS block, not that TCB setup is skipped. */
 static void linux_setup_tls(long *auxv)
 {
 	unsigned long load_bias;
@@ -477,13 +451,12 @@ static void linux_setup_tls(long *auxv)
  * further arch-guarded below, while the TCB layout/allocation logic
  * above it is shared between the two, both being variant II.
  *
- * NOT extended with a DTV the way aarch64's sibling above now is --
+ * NOT extended with a DTV the way aarch64's sibling above is --
  * src/dlfcn/linux/plat_dlfcn.c's own dlopen()-time per-object TLS
  * support (module-id allocation, the DTV-indexing __tls_get_addr/
- * TLSDESC resolver) is aarch64-only for this pass, and explicitly says
- * so at the one place x86_64 PT_TLS is actually refused (that file's
- * load_object()). The reason is real, not just "ran out of time": this
- * TCB is variant II (self-pointer-headed, TLS data at NEGATIVE tp
+ * TLSDESC resolver) is aarch64-only, and explicitly says so at the one
+ * place x86_64 PT_TLS is actually refused (that file's load_object()).
+ * This TCB is variant II (self-pointer-headed, TLS data at NEGATIVE tp
  * offsets), structurally different from variant I's dtv-headed layout
  * the aarch64 design above was built against -- adding a dtv slot HERE
  * would need it at a different, non-ABI-mandated position (variant II's
@@ -492,8 +465,7 @@ static void linux_setup_tls(long *auxv)
  * would use (a real `__tls_get_addr(tls_index*)` call, not a TLSDESC
  * sequence -- x86_64's own default TLS model differs from aarch64's
  * TLSDESC-only reality, see plat_dlfcn.c's own R_AARCH64_TLSDESC
- * comment) is a second, separately-derived resolver this pass did not
- * build. Concretely deferred, not silently assumed to carry over. */
+ * comment) is a second, separately-derived resolver not built here. */
 static void linux_setup_tls(long *auxv)
 {
 	unsigned long load_bias;
@@ -505,10 +477,10 @@ static void linux_setup_tls(long *auxv)
 	/* No PT_TLS segment: see aarch64's identical comment above -- the
 	 * thread pointer register simply stays whatever it was on entry.
 	 * Unlike aarch64's sibling above, this is still fine to leave as an
-	 * early return: nothing in this pass ever needs x86_64/i386's
-	 * TPIDR_EL0-equivalent (FS_BASE/%gs) to be set up in the "no TLS at
-	 * all" case, since per-object TLS is not implemented on this arch
-	 * (see this function's own banner just above). */
+	 * early return: nothing here ever needs x86_64/i386's TPIDR_EL0-
+	 * equivalent (FS_BASE/%gs) to be set up in the "no TLS at all"
+	 * case, since per-object TLS is not implemented on this arch (see
+	 * this function's own banner just above). */
 	if (!tls) return;
 
 	/* data_align MUST be the segment's own true p_align here, NOT
@@ -519,18 +491,13 @@ static void linux_setup_tls(long *auxv)
 	 * cannot disagree with anything the linker assumed. Variant II's
 	 * tpoff is NEGATIVE and computed by the linker as exactly `offset
 	 * - round_up(p_memsz, p_align)` using the segment's OWN declared
-	 * p_align -- silently rounding up to a larger alignment here would
-	 * grow tls_size beyond what every already-compiled `%fs:(tpoff)` /
-	 * `%gs:(tpoff)` access expects, moving tp away from where this
-	 * function's own data copy actually landed. Caught empirically,
-	 * not anticipated: an inflated minimum here (this function's own
-	 * former version) passed compilation and even ran without
-	 * faulting, but silently read the wrong memory for a fresh
-	 * `__thread` variable's own static initializer -- disassembly of
-	 * the failing case showed the compiled access as `%fs:0` (tp's own
-	 * self-pointer) then `-0x8(%rax)`, i.e. tpoff=-8, matching
-	 * round_up(p_memsz=8, the real p_align=4)=8 exactly, NOT the
-	 * inflated 16 this function used to compute tls_size with. */
+	 * p_align -- inflating the alignment used here would grow tls_size
+	 * beyond what every already-compiled `%fs:(tpoff)` / `%gs:(tpoff)`
+	 * access expects, moving tp away from where this function's own
+	 * data copy actually landed: for p_memsz=8, p_align=4, the linker
+	 * computes tpoff=-8 (`%fs:0` then `-0x8(%rax)`), so using anything
+	 * other than the true p_align=4 here silently reads the wrong
+	 * memory for a fresh `__thread` variable's own static initializer. */
 	data_align = tls->p_align ? tls->p_align : 1;
 	tcb_size = sizeof(void *); /* just the self-pointer -- nothing here
 	                            * ever reads a dtv, so no second word is
@@ -564,8 +531,8 @@ static void linux_setup_tls(long *auxv)
 	                             * every variant II ABI guarantees a
 	                             * plain `mov %fs:0, %reg` (or %gs) can
 	                             * always read back, even though nothing
-	                             * in this pass's own code ever needs to
-	                             * take that path itself. */
+	                             * in this code ever needs to take that
+	                             * path itself. */
 
 #if defined(__x86_64__)
 #define ARCH_SET_FS 0x1002
@@ -756,10 +723,9 @@ _Noreturn void __linux_start_main(long *sp)
 	 * every open stdio stream and runs atexit()/at_quick_exit()
 	 * handlers before it reaches __plat_terminate() itself (see
 	 * src/exit/exit.c) -- calling the raw platform primitive here
-	 * skipped both, so a real program's own unflushed stdout/stderr
-	 * output was silently lost on normal return from main() on native
-	 * Linux (the NT side, crt/crt1.c, already calls exit() correctly;
-	 * found for real while proving man(1p)'s own pager output). */
+	 * would skip both, silently losing a program's own unflushed
+	 * stdout/stderr output on normal return from main() (the NT side,
+	 * crt/crt1.c, already calls exit() the same way). */
 	exit(rc);
 }
 

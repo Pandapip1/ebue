@@ -215,9 +215,9 @@ static int name_eq_ci(const char *ascii, const WCHAR *w, size_t wn)
  * RECORD-computed from `cur`, a pointer-arithmetic offset off a live
  * circular list walk), so there is no signature for `nonnull` to
  * describe this on -- the same "struct/local-derived-pointer, not a
- * parameter" class this tree's own d24fe86 commit already established
- * for wait.c's discover_self_stops() and friends. Verified sound by
- * hand regardless: PEB_LDR_DATA's own InMemoryOrderModuleList is a
+ * parameter" class this tree already accepts elsewhere (e.g. wait.c's
+ * discover_self_stops()). Verified sound by hand regardless:
+ * PEB_LDR_DATA's own InMemoryOrderModuleList is a
  * genuinely circular, always-populated list for any live NT process
  * (ntdll.dll and the executable's own module are always entries), an
  * OS loader invariant, not something any guard in this function's own
@@ -276,10 +276,8 @@ void *__delayLoadHelper2(void *vdescr, void **piat)
 	 *
 	 * nametable[index] below is a disclosed, deliberately unmarked
 	 * residual, surfaced only after vdescr's own nonnull mark let this
-	 * checker explore further into this function than before (the same
-	 * "deeper exploration unlocked" effect prior sweeps in this tree
-	 * already measured, not a regression): nametable is `base +
-	 * descr->ImportNameTableRVA`, a local computed by pointer
+	 * checker explore further into this function than before: nametable
+	 * is `base + descr->ImportNameTableRVA`, a local computed by pointer
 	 * arithmetic, not a parameter of this function -- the same
 	 * "struct/local-derived pointer, not a parameter" class this
 	 * file's own find_mapped_module() comment already established.

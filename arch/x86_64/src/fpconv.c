@@ -56,8 +56,8 @@ unsigned long long __fixunsdfdi(double a)
 unsigned long long __fixunsxfdi(long double a)
 {
 	/* TinyCC follows the Win64 ABI: long double is the same 8-byte format
-	 * as double.  Decoding 80-bit x87 storage here used to read beyond the
-	 * object and returned zero for every ordinary input. */
+	 * as double, not the 80-bit x87 extended format -- decoding it as
+	 * 80-bit storage here would read past the object. */
 	return __fixunsdfdi((double)a);
 }
 
