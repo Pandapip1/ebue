@@ -14,12 +14,51 @@
  * shell or exec() sets them up before this program's first instruction
  * ever runs) and inherits every other still-open, non-close-on-exec
  * descriptor automatically, with the kernel itself as the only
- * bookkeeping authority -- ntlibc's own __fds[] table here only needs
- * to learn about the three standard ones; every other inherited fd
- * remains perfectly usable at the raw-syscall level even before this
- * library's table knows about it (exactly like a descriptor a Linux
- * program opens with a raw syscall of its own, bypassing this library
- * entirely, already works today).
+ * bookkeeping authority for the raw numbers -- unlike NT, nothing here
+ * needs to be TOLD which extra descriptors a parent meant to hand
+ * down; a real fork()+execve() (src/process/linux/plat_process.c's own
+ * __plat_process_spawn()) already carries every one of them across,
+ * at the same real fd number, with no renumbering step this library
+ * performs or could intercept.
+ *
+ * What IS this library's own job, and was missing entirely until
+ * install_inherited() below: ntlibc's own __fds[] table in a freshly
+ * exec'd process is a brand new, zeroed array that has never heard of
+ * any of them. A raw descriptor surviving exec is perfectly usable at
+ * the syscall level from the moment this function returns (exactly
+ * like one a Linux program opens with a raw syscall of its own,
+ * bypassing this library entirely, already works today) -- but every
+ * ntlibc-level operation on it (read()/write()/fcntl()/close()/dup(),
+ * all of which resolve a small integer to a handle by indexing
+ * __fds[], never by asking the kernel "is this open") returns EBADF
+ * until the table itself knows the slot is occupied. install_inherited()
+ * closes that gap the same way this file's own install_std() already
+ * establishes fd 0/1/2: by asking the kernel what is really there
+ * (fcntl(F_GETFD) as an existence probe, statx(2) via classify_fd() to
+ * classify it, fcntl(F_GETFL) for its access mode) rather than being
+ * told, since nothing on this backend ever tells it.
+ *
+ * One case this does NOT cover, honestly: posix_spawn_file_actions_
+ * adddup2() targeting a descriptor above 2 (src/process/posix_spawn.c
+ * do_action()'s __SPAWN_DUP2 case) still uses __plat_dup() -- an
+ * arbitrary-numbered duplicate -- rather than __plat_dup_to(), because
+ * that call site's whole design (replay the actions on the PARENT's
+ * own table, then undo them -- see posix_spawn.c's own banner) only
+ * works because the duplicate's real number does NOT have to match
+ * the target logical slot: forcing it to would mean dup3(2) closing
+ * the PARENT's real descriptor at that exact number as an unavoidable
+ * side effect, which is exactly the mutation posix_spawn() promises
+ * not to leave behind, and which nothing could then undo (the parent's
+ * original object at that number would simply be gone). Fixing that
+ * case for real needs the target-fd wiring to happen in the CHILD,
+ * after clone(2) but before execve(2) -- where __plat_process_spawn()
+ * already does exactly this for fd 0/1/2's own mv[]/dup3 staging loop
+ * -- generalized to whatever extra targets file actions name, which
+ * is a larger change than this fix makes. A descriptor reaching a
+ * child purely by not being FD_CLOEXEC (this file's own subject) is
+ * unaffected by that gap and fully fixed by install_inherited() below;
+ * only an EXPLICIT posix_spawn_file_actions_adddup2() to a target
+ * above 2 still does not reach the child as the requested number.
  *
  * Classification (below, shared between __fd_init() and this file's
  * own __handle_type()) reuses src/fcntl/linux/plat_fcntl.c's own
@@ -43,13 +82,26 @@
 
 #if defined(__aarch64__)
 #define SYS_statx 291
+#define SYS_fcntl 25
 #elif defined(__x86_64__)
 #define SYS_statx 332
+#define SYS_fcntl 72
 #elif defined(__i386__)
 #define SYS_statx 383
+#define SYS_fcntl 55
 #else
 #error "plat_fd_init.c: unsupported architecture"
 #endif
+
+/* fcntl(2) command numbers: F_GETFD/F_GETFL, unlike a syscall number,
+ * have no per-architecture table to get wrong (uapi/asm-generic/
+ * fcntl.h; none of aarch64/x86_64/i386 override either) -- the same
+ * "no host-oracle probe needed" reasoning src/process/linux/
+ * plat_process.c's own F_DUPFD_LX comment already gives for this
+ * exact class of constant. */
+#define F_GETFD_LX 1
+#define F_GETFL_LX 3
+#define FD_CLOEXEC_LX 1
 
 #define AT_EMPTY_PATH_LX     0x1000
 #define STATX_BASIC_STATS_LX 0x7ff
@@ -200,11 +252,55 @@ static void install_std(int fd)
 	__fd_install_at(fd, (HANDLE)(long)(fd + 1), fd == 0 ? O_RDONLY : O_WRONLY, type);
 }
 
+/* Every descriptor above 2 that is still open when a freshly exec'd
+ * process starts was inherited from whatever spawned it -- see this
+ * file's own banner for why the raw number is already correct at the
+ * kernel level and all that is missing is this library's OWN __fds[]
+ * entry for it. Found by probing every candidate slot directly with
+ * fcntl(F_GETFD) rather than by parsing /proc/self/fd/: this file's
+ * own __fd_close_all_cloexec() (src/internal/fd.c) already loops the
+ * identical FD_MAX bound at a comparable process-lifecycle boundary,
+ * and a plain probe needs no directory-entry parsing and no procfs
+ * mount to be present at all, unlike src/internal/linux/handle_path.c's
+ * own (unrelated) use of /proc/self/fd for a different purpose.
+ *
+ * fcntl(F_GETFD) alone answers two questions in one syscall: whether
+ * the slot is open at all (EBADF if not), and -- since a descriptor
+ * that reached this point with FD_CLOEXEC set would already have been
+ * closed by the execve(2) that got this process running, never
+ * surviving to be seen here -- confirms that bit really is clear
+ * rather than merely assuming it. F_GETFL supplies the access mode/
+ * O_APPEND/O_NONBLOCK bits that classify_fd()'s statx(2) cannot: see
+ * struct __fd's own `flags` field comment (src/internal/libc.h) for
+ * why the access mode in particular is load-bearing, not decorative. */
+static void install_inherited(void)
+{
+	int fd;
+	for (fd = 3; fd < FD_MAX; fd++) {
+		long fdflags = raw_syscall(SYS_fcntl, (long)fd, (long)F_GETFD_LX, 0L, 0L, 0L, 0L);
+		long flflags;
+		unsigned flags;
+		int type;
+
+		if (is_sys_error(fdflags)) continue; /* not open */
+
+		type = classify_fd(fd);
+		if (type == __FD_UNKNOWN) continue; /* raced closed between the two probes -- leave it out rather than guess */
+
+		flflags = raw_syscall(SYS_fcntl, (long)fd, (long)F_GETFL_LX, 0L, 0L, 0L, 0L);
+		flags = is_sys_error(flflags) ? 0 : ((unsigned)flflags & (O_ACCMODE | O_APPEND | O_NONBLOCK));
+		if (fdflags & FD_CLOEXEC_LX) flags |= O_CLOEXEC; /* should not happen (see banner) -- recorded faithfully if it somehow does */
+
+		__fd_install_at(fd, (HANDLE)(long)(fd + 1), flags, type);
+	}
+}
+
 void __fd_init(void)
 {
 	install_std(0);
 	install_std(1);
 	install_std(2);
+	install_inherited();
 }
 
 // NOLINTEND(misc-include-cleaner)

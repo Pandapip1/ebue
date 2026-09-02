@@ -20,8 +20,16 @@ static int dup_to(int fd, int newfd, int cloexec) // NOLINT(bugprone-easily-swap
 	__plat_handle_t h;
 	if (!f) return -1;
 	state = *f;
-	if (__plat_dup(f->h, !cloexec, &h) < 0) return -1;
-	if (__fds[newfd].h) __plat_close(__fds[newfd].h);
+	/* __plat_dup_to(), not __plat_dup(): newfd is not merely the table
+	 * slot this duplicate is filed under, it is the descriptor NUMBER
+	 * dup2()/dup3() are specified to produce -- see plat_fd.h's own
+	 * comment on why only the "_to" variant guarantees that on every
+	 * backend. Passing __fds[newfd].h through as `old` (rather than
+	 * closing it here first, or after) hands its disposal to the one
+	 * place that knows how to do it safely for this backend -- see
+	 * that same comment for why closing it ourselves, on either side
+	 * of the call, is not simply equivalent. */
+	if (__plat_dup_to(f->h, newfd, __fds[newfd].h, !cloexec, &h) < 0) return -1;
 	__fd_install_at(newfd, h, (state.flags & ~O_CLOEXEC) | (cloexec ? O_CLOEXEC : 0), state.type);
 	__fds[newfd].pad = state.pad;
 	__fds[newfd].shm_mode_valid = state.shm_mode_valid;

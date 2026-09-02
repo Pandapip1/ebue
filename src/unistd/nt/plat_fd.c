@@ -187,4 +187,30 @@ int __plat_dup(__plat_handle_t h, int inheritable, __plat_handle_t *out)
 	return 0;
 }
 
+int __plat_dup_to(__plat_handle_t h, int newfd, __plat_handle_t old, int inheritable, __plat_handle_t *out)
+{
+	/* See plat_fd.h's own comment on this function: a HANDLE's numeric
+	 * value carries no meaning here, so there is nothing `newfd` could
+	 * even ask this backend to do differently. */
+	(void)newfd;
+	if (__plat_dup(h, inheritable, out) < 0) return -1;
+	/* NtDuplicateObject() above has no "replace this target" mode the
+	 * way Linux's dup3(2) does, so closing whatever `old` occupied is
+	 * this call's own job -- `old != h` guards the adddup2(fd, fd)
+	 * shape (plat_fd.h's own comment), where closing it would destroy
+	 * the handle just duplicated above rather than a separate one. */
+	if (old && old != h) __plat_close(old);
+	return 0;
+}
+
+void __plat_set_cloexec(__plat_handle_t h, int cloexec)
+{
+	/* See plat_fd.h's own comment: this backend's inheritance is
+	 * entirely __fds[]-table-driven, so this function's only caller
+	 * has already achieved the same effect by removing/restoring the
+	 * table entry itself -- there is no separate real-object state
+	 * left for this to touch. */
+	(void)h; (void)cloexec;
+}
+
 // NOLINTEND(misc-include-cleaner)
