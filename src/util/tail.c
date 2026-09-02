@@ -78,6 +78,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include "util.h"
+#include "ownership_stubs.h"
 
 /* -f's poll interval.  200ms: frequent enough that an interactive
  * `tail -f` reads as "instant" the way GNU tail's 1s default does not,
@@ -90,15 +91,15 @@
 
 enum tail_mode { TAIL_LINES, TAIL_BYTES };
 
-static int write_all(const char *buf, size_t len)
+static int write_all(const char *buf withtok(readable_span(len)), size_t len)
 {
-	const char *p = buf;
-	while (len > 0) {
-		ssize_t w = write(STDOUT_FILENO, p, len);
+	size_t off = 0;
+	while (off < len) {
+		__ownership_readable_span(buf + off, len - off);
+		ssize_t w = write(STDOUT_FILENO, buf + off, len - off);
 		if (w < 0) return -1;
-		if (!w || (size_t)w > len) { errno = EIO; return -1; }
-		p += (size_t)w;
-		len -= (size_t)w;
+		if (!w || (size_t)w > len - off) { errno = EIO; return -1; }
+		off += (size_t)w;
 	}
 	return 0;
 }
@@ -127,6 +128,7 @@ static size_t read_all(int fd, char **out)
 			buf = nb;
 			cap = newcap;
 		}
+		__ownership_writable_span(buf + len, cap - len);
 		r = read(fd, buf + len, cap - len);
 		if (r < 0) { free(buf); *out = 0; return (size_t)-1; }
 		if (r == 0) break;
@@ -208,6 +210,7 @@ static int tail_one(int fd, enum tail_mode mode, int from_end, long long number,
 		}
 	}
 
+	__ownership_readable_span(buf + start, len - start);
 	if (write_all(buf + start, len - start) < 0) {
 		int saved = errno;
 		__util_diagf("tail: %s: %s\n", label, strerror(saved));
