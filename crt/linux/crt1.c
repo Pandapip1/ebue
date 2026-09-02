@@ -9,13 +9,26 @@
  *
  * NT's crt1.c reads argv/environ out of the PEB, because Windows hands
  * a process one command-line string and one environment block that
- * still need parsing. Linux needs none of that: the kernel places
- * already-split argc/argv[]/envp[]/auxv[] directly on the initial
- * stack (System V ABI, all three 64-bit targets this project cares
- * about), so this file's job shrinks to reading them, not building
- * them -- no split_cmdline()/build_environ() equivalent exists here at
- * all, and no allocator is needed for argv/environ (they simply alias
- * the kernel-provided arrays in place).
+ * still need parsing. Linux needs none of that for argv: the kernel
+ * places already-split argc/argv[]/envp[]/auxv[] directly on the
+ * initial stack (System V ABI, all three 64-bit targets this project
+ * cares about), so argv simply aliases the kernel-provided array in
+ * place -- no split_cmdline() equivalent exists here at all.
+ *
+ * environ is different, and DOES need a real build_environ() of its
+ * own (see linux_build_environ() below): src/env/setenv.c's __putenv()
+ * calls plain free() on a slot's old value when overwriting it, and
+ * plain realloc() on the environ array itself when growing it -- the
+ * same contract crt/crt1.c's own build_environ() (NT side) already
+ * honors by handing environ a __malloc()'d array of __malloc()'d
+ * strings (__utf16_to_utf8() is itself __malloc()-based), never the
+ * PEB's own environment block strings in place. Aliasing environ
+ * directly onto the kernel's envp block, the way this file used to,
+ * broke that contract: the kernel's initial-stack memory was never
+ * allocated by this library's allocator at all, so the first
+ * setenv() call to *overwrite* an inherited variable free()'d a
+ * pointer into the kernel-provided stack block -- undefined behavior,
+ * confirmed to crash in practice.
  *
  * What NT's loader does for free and this file must do by hand instead:
  * TLS. A dynamically-linked Windows PE gets its TLS block set up by the
@@ -614,6 +627,50 @@ static void linux_setup_tls(long *auxv)
 }
 #endif
 
+/* Builds this library's own, independently-owned copy of the initial
+ * environment: a __malloc()'d, NULL-terminated array of __malloc()'d
+ * "name=value" strings, mirroring crt/crt1.c's build_environ() (NT
+ * side) exactly -- see this file's own top banner for why aliasing
+ * envp in place (this function's predecessor) was a real, confirmed
+ * bug rather than a harmless shortcut. __malloc()/__free(), not
+ * malloc()/free(): this runs before __fd_init(), the same "crt startup,
+ * not yet a POSIX caller" situation src/malloc/crt_alloc.c's own banner
+ * documents envp itself as one of __malloc()'s intended call sites for.
+ *
+ * envp is required: this function's one real call site passes
+ * __linux_start_main's own `envp`, itself `argv + argc + 1` -- always
+ * within the same kernel-provided initial stack block sp already
+ * points into, per the System V ABI process-startup contract this
+ * file's own __linux_start_main banner already establishes. NULL
+ * envp (a valid, if rare, exec(2) contract) is handled explicitly
+ * below, not by this attribute -- envp itself, the array's base
+ * pointer, is never NULL. */
+static char **linux_build_environ(char **envp) __attribute__((nonnull(1)));
+static char **linux_build_environ(char **envp)
+{
+	size_t count = 0, i;
+	char **ev;
+
+	while (envp[count]) count++;
+
+	ev = (char **)__malloc(sizeof(char *) * (count + 1));
+	if (!ev) return 0;
+
+	for (i = 0; i < count; i++) {
+		size_t len = strlen(envp[i]);
+		char *s = (char *)__malloc(len + 1);
+		if (!s) {
+			while (i > 0) __free(ev[--i]);
+			__free(ev);
+			return 0;
+		}
+		memcpy(s, envp[i], len + 1);
+		ev[i] = s;
+	}
+	ev[count] = 0;
+	return ev;
+}
+
 /* sp is required: `long argc = sp[0];` below is this function's very
  * first statement, dereferencing sp unconditionally with no guard.
  * Its one real caller is not anything in this tree but the kernel
@@ -675,7 +732,13 @@ _Noreturn void __linux_start_main(long *sp)
 
 	__argc = (int)argc;
 	__argv = argv;
-	environ = envp;
+	environ = linux_build_environ(envp);
+	if (!environ) {
+		static const char msg[] =
+			"ntlibc: out of memory building environ at startup\n";
+		raw_syscall(SYS_write, 2, (long)msg, sizeof msg - 1, 0, 0, 0);
+		__plat_terminate(111);
+	}
 	__progname_full = argc > 0 ? argv[0] : empty_progname;
 	slash = __progname_full;
 	for (char *p = __progname_full; *p; p++)
@@ -684,7 +747,11 @@ _Noreturn void __linux_start_main(long *sp)
 
 	__fd_init();
 
-	rc = main((int)argc, argv, envp);
+	/* environ, not envp: main()'s own third argument should be the same
+	 * array getenv()/setenv() operate on -- environ itself -- not the
+	 * raw kernel-provided block it was built from (mirrors NT's own
+	 * `main(__argc, __argv, __environ)` call below in crt/crt1.c). */
+	rc = main((int)argc, argv, environ);
 	/* exit(rc), not __plat_terminate(rc) directly: exit() flushes
 	 * every open stdio stream and runs atexit()/at_quick_exit()
 	 * handlers before it reaches __plat_terminate() itself (see
