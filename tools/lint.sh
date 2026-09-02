@@ -39,7 +39,7 @@
 #             to remain representable.  Its relational side solver requires
 #             Clang/LLVM 18 development files, pkg-config, and Z3 development
 #             headers and library.
-#   ownership currently opt-in while its initial proof backlog is triaged.
+#   ownership enabled by default.
 #             Manual header/stub contracts identify producers, reallocations,
 #             and unique freers. Path-sensitive checkers prove every dynamic
 #             allocation is released or transferred before function exit,
@@ -1908,7 +1908,7 @@ stage_purity() {
 	return $any
 }
 
-requested_stages=${*:-warn analyze cppcheck shell sizearith fallible locks lockset provenance reentrancy variadic signals abizeroinit initproof errno purity undefined unreferenced widthmod}
+requested_stages=${*:-warn analyze cppcheck shell sizearith fallible locks lockset provenance reentrancy variadic signals abizeroinit initproof errno purity ownership undefined unreferenced widthmod}
 stages=
 for requested_stage in $requested_stages; do
 	case $requested_stage in

@@ -1059,7 +1059,7 @@ install-check: config.mak
 #
 LINT_REQUIRED_STAGES = warn analyze cppcheck shell sizearith fallible locks \
 	lockset provenance reentrancy variadic signals abizeroinit initproof \
-	errno purity undefined unreferenced widthmod
+	errno purity ownership undefined unreferenced widthmod
 
 lint:
 	./tools/lint.sh $(LINT_REQUIRED_STAGES)
