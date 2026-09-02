@@ -104,7 +104,8 @@ static int decode_line(const char *prog, const char *line, size_t have,
 	return 0;
 }
 
-int __util_uudecode_main(int argc, char **argv)
+int __util_uudecode_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int i = 1;
 	const char *out_override = 0, *in_path = 0;

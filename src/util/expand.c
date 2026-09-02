@@ -53,7 +53,8 @@ static void expand_stream(FILE *f, const struct tablist *tl)
 	}
 }
 
-int __util_expand_main(int argc, char **argv)
+int __util_expand_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	struct tablist tl;
 	int have_t = 0;

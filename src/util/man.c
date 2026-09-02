@@ -1531,7 +1531,8 @@ static int man_apropos(char **manpath, char **keywords, size_t nkeywords)
 
 /* ==== entry point ======================================================= */
 
-int __util_man_main(int argc, char **argv)
+int __util_man_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int i;
 	int opt_k = 0;

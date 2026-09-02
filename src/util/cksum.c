@@ -142,7 +142,8 @@ static int cksum_one(const char *path, uint32_t *out_crc, uintmax_t *out_len)
 	return 0;
 }
 
-int __util_cksum_main(int argc, char **argv)
+int __util_cksum_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int i, had_error = 0;
 

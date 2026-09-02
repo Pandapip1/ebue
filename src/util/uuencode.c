@@ -72,7 +72,8 @@ static void emit_line(const unsigned char *buf, size_t n)
 	putchar('\n');
 }
 
-int __util_uuencode_main(int argc, char **argv)
+int __util_uuencode_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int i = 1;
 	const char *src_path = 0, *decode_name;

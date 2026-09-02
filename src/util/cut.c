@@ -221,7 +221,8 @@ static void process_field_mode(FILE *f, const struct range *ranges, size_t nr, c
 	free(line);
 }
 
-int __util_cut_main(int argc, char **argv)
+int __util_cut_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int mode = 0; /* 'b', 'c' or 'f' */
 	const char *listspec = NULL;

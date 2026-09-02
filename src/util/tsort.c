@@ -136,7 +136,8 @@ static char *slurp(FILE *f, size_t *outlen)
 	return buf;
 }
 
-int __util_tsort_main(int argc, char **argv)
+int __util_tsort_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	FILE *f = stdin;
 	int have_file = 0;

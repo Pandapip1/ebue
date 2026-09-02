@@ -222,7 +222,8 @@ static int print_cup(const struct term_entry *t, const char *rowarg, const char 
 	return 0;
 }
 
-int __util_tput_main(int argc, char **argv)
+int __util_tput_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	const char *type = 0, *op;
 	const struct term_entry *t;

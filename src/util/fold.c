@@ -152,7 +152,8 @@ static void fold_stream(FILE *f, long width, int opt_b, int opt_s)
 	free(line);
 }
 
-int __util_fold_main(int argc, char **argv)
+int __util_fold_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int opt_b = 0, opt_s = 0;
 	long width = 80;

@@ -227,12 +227,18 @@ int __util_wc_main(int argc, char **argv) __attribute__((nonnull(2)));
  * Each still gets nonnull(2) for the same reason the Tier 1 block above
  * does: a real argv from a real caller is never NULL, and a usage-error
  * path taken with argc==1 still needs argv[0] for its own diagnostic. */
-int __util_cksum_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_cksum_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 int __util_dd_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_df_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_du_main(int argc, char **argv) __attribute__((nonnull(2)));
-int __util_uudecode_main(int argc, char **argv) __attribute__((nonnull(2)));
-int __util_uuencode_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_uudecode_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
+int __util_uuencode_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 
 /* Tier 2 continued: text-formatting/file-splitting utilities (XCU
  * printf(1p), od(1p), pr(1p), tabs(1p), split(1p), csplit(1p)).
@@ -262,7 +268,9 @@ int __util_tabs_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_comm_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_join_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_sort_main(int argc, char **argv) __attribute__((nonnull(2)));
-int __util_tsort_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_tsort_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 int __util_uniq_main(int argc, char **argv) __attribute__((nonnull(2)));
 
 /* Tier 2 continued: text-formatting utilities (XCU cut(1p), paste(1p),
@@ -272,12 +280,20 @@ int __util_uniq_main(int argc, char **argv) __attribute__((nonnull(2)));
  * twice (a pipe, a file another process is still writing, etc.) even
  * though none of them ever writes anything back to the filesystem the
  * way the mkdir/rmdir/mkfifo/ln/chmod/touch block above does. */
-int __util_cut_main(int argc, char **argv) __attribute__((nonnull(2)));
-int __util_expand_main(int argc, char **argv) __attribute__((nonnull(2)));
-int __util_fold_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_cut_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
+int __util_expand_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
+int __util_fold_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 int __util_paste_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_tr_main(int argc, char **argv) __attribute__((nonnull(2)));
-int __util_unexpand_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_unexpand_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 
 /* Tier 4: "bigger engine" utilities -- real parsers, not just option
  * loops over stdio.  patch(1p) is the first: it reads a diff(1)-style
@@ -460,7 +476,9 @@ int __util_tty_main(
  * the real terminal size via ioctl(TIOCGWINSZ) when one is attached,
  * and writes to stdout as its entire purpose -- a repeated call is not
  * guaranteed to answer the same way twice. */
-int __util_tput_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_tput_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 
 /* Tier 9: SCCS (Source Code Control System) tooling -- admin(1p), and
  * enough of get(1p) to retrieve what admin(1p) creates.  This project's
@@ -554,7 +572,9 @@ int __util_mailx_main(int argc, char **argv) __attribute__((nonnull(2)));
  * and real tbl/eqn content are unsupported rather than silently
  * mis-rendered). Not __pure__: it reads real files under $MANPATH,
  * queries the real terminal size, and may spawn a real pager. */
-int __util_man_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_man_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
+	__attribute__((nonnull(2)));
 
 #endif
 

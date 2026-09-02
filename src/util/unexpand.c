@@ -135,7 +135,8 @@ static void unexpand_stream(FILE *f, const struct tablist *tl, int effective_a)
 	free(line);
 }
 
-int __util_unexpand_main(int argc, char **argv)
+int __util_unexpand_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	struct tablist tl;
 	int opt_a = 0, have_t = 0;
