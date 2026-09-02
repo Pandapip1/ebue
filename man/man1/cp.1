@@ -1,0 +1,167 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH CP 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+cp \- copy files
+.SH SYNOPSIS
+.B cp
+.RB [ \-f ]
+.I source_file target_file
+.br
+.B cp
+.RB [ \-f ]
+.I source_file
+.RI [ source_file ]\ .\|.\|.
+.I target_dir
+.br
+.B cp
+.B \-R
+.RB [ \-f ]
+.I source_file
+.RI [ source_file ]\ .\|.\|.
+.I target
+.SH DESCRIPTION
+.B cp
+copies the contents of
+.I source_file
+to
+.IR target_file .
+If
+.I source_file
+is itself a symbolic link, its referent's contents are followed and
+copied \(em the destination is always created as an ordinary file (or, with
+.BR \-R ", a directory tree)."
+.PP
+If more than one
+.I source_file
+is given, or a single
+.I source_file
+is given together with a
+.I target
+that already exists as a directory, each
+.I source_file
+is copied into that directory under its own final pathname component
+(that is, the destination is
+.IR target_dir /basename( source_file )).
+It is an error for more than one
+.I source_file
+to be given when the last operand does not name an existing directory.
+.PP
+With
+.BR \-R ,
+a
+.I source_file
+that names a directory is copied as a whole tree: the directory and
+every entry beneath it are recreated under the destination. Symbolic
+links, FIFOs, device nodes, and sockets found
+.I inside
+such a tree are not recreated; each one is reported with a diagnostic
+and causes the overall exit status to be nonzero, but the rest of the
+tree is still copied. Without
+.BR \-R ,
+a
+.I source_file
+that names a directory is skipped with a diagnostic rather than copied.
+.PP
+.B cp
+refuses to copy a file onto itself (detected by matching device and
+inode number between the resolved source and an existing destination),
+and, with
+.BR \-R ,
+refuses to copy a directory into its own subtree. The self-subtree
+check is a plain, case-insensitive textual comparison of the
+.I source_file
+and
+.I target
+operands as given, with
+.B /
+and
+.B \e
+treated as equivalent; it does not resolve symbolic links, "..", or
+two differently-spelled paths that happen to name the same place, so
+it catches the direct, common case rather than every disguised one.
+.SH OPTIONS
+.TP
+.B \-R
+Copy directories recursively, as described above. The lowercase
+.B \-r
+is accepted as an exact synonym.
+.TP
+.B \-r
+Synonym for
+.BR \-R .
+.TP
+.B \-f
+If a destination file cannot be opened for writing, remove it and
+retry the open once. This applies only to the destination open
+itself; it has no effect on any other failure (a read error, a write
+error, or a failure encountered while walking a directory tree).
+.TP
+.B \-i
+Not implemented.
+.B cp
+prints a diagnostic and exits immediately with status 2 rather than
+prompting before an overwrite; there is no interactive-confirmation
+behavior available for this option to enable.
+.TP
+.B \-p
+Not implemented.
+.B cp
+prints a diagnostic and exits immediately with status 2 rather than
+partially honor it: every file this build creates gets the platform's
+ordinary default create permissions (governed by the umask), and every
+directory it creates is made mode 0777 before the umask is applied,
+regardless of the source's actual mode, owner, or timestamps.
+.TP
+.BR \-H ", " \-L ", " \-P
+Not implemented.
+These options select which symbolic links named directly on the
+command line are followed; none of the three is implemented, so each
+is refused with a diagnostic and exit status 2 rather than have
+.B cp
+silently pick one behavior to emulate.
+.SH OPERANDS
+.TP
+.I source_file
+A pathname of a file or (with
+.BR \-R )
+directory to copy.
+.TP
+.I target_file
+A pathname of the destination file, used only in the exactly-one-source
+form.
+.TP
+.I target_dir
+A pathname of an existing directory, used when copying one or more
+source files into it under their own basenames.
+.TP
+.I target
+A pathname of the destination, used with
+.BR \-R ;
+if it already exists as a directory, each
+.I source_file
+is copied into it as described above, otherwise it is used as the name
+of a single copied tree.
+.SH EXIT STATUS
+.TP
+.B 0
+Every operand was copied successfully.
+.TP
+.B 1
+An error occurred while copying one or more operands; the rest of the
+operands were still attempted.
+.TP
+.B 2
+A usage error occurred: an invalid or unsupported option, a missing
+operand, a missing destination operand, or more than one
+.I source_file
+given with a
+.I target
+that is not an existing directory. No copying is attempted in this
+case.
+.SH SEE ALSO
+.BR mv (1),
+.BR rm (1),
+.BR ln (1),
+.BR mkdir (1),
+.BR chmod (1)

@@ -1,0 +1,100 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH PATHCHK 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+pathchk \- check pathnames
+.SH SYNOPSIS
+.B pathchk
+.I pathname
+.RI [ pathname ]\ .\|.\|.
+.SH DESCRIPTION
+.B pathchk
+checks each
+.I pathname
+operand against the limits and naming rules of the underlying
+filesystem, without creating, opening, or otherwise touching the file
+it names. Multiple operands are processed in turn; a failed check on
+one operand does not stop the rest from being checked. Nothing is
+written to standard output; results are reported only through
+diagnostics on standard error and the exit status.
+.PP
+For each
+.IR pathname \|,
+a diagnostic is written, and the exit status is set to reflect
+failure, if any of the following is true:
+.RS
+.IP \(bu 2
+The whole
+.I pathname
+is longer than the filesystem's maximum pathname length.
+.IP \(bu 2
+Any single component of
+.I pathname
+is longer than the filesystem's maximum component (file name) length.
+.IP \(bu 2
+Any component of
+.I pathname
+contains a byte that is not valid in the directory that contains it:
+on this build, that means any ASCII control byte (0x00\-0x1F), or any
+of the seven characters
+.BR < ", " > ", " : ,
+a double quote,
+.BR | ", " ? ", and " * .
+.IP \(bu 2
+An existing directory named by a leading portion of
+.I pathname
+is not searchable by the invoking process.
+.RE
+.PP
+A leading portion of
+.I pathname
+that does not exist at all is not treated as an error by itself \(em
+checking of the search-permission condition above simply stops at the
+first pathname prefix that does not exist, since there is nothing left
+to check the permissions of.
+.PP
+A leading drive letter and colon (such as
+.BR C: )
+are recognized and are not themselves treated as a pathname component
+subject to the component-length or searchability checks.
+.SH OPTIONS
+.TP
+.BR \-p ", " \-P
+Not implemented. Each causes
+.B pathchk
+to print a diagnostic and exit immediately with status 2 rather than
+run a different check set than the default one described above:
+.B \-p
+would check against fixed, portable minimum limits instead of this
+filesystem's real ones, and
+.B \-P
+would additionally forbid a leading
+.B \-
+or an empty
+.IR pathname \|;
+neither substituted check set is implemented.
+.SH OPERANDS
+.TP
+.I pathname
+A pathname to check. A single
+.B \-
+is treated as an ordinary
+.I pathname
+operand, not as an option.
+.SH EXIT STATUS
+.TP
+.B 0
+Every
+.I pathname
+operand passed all of the checks.
+.TP
+.B >0
+An error occurred: an invalid or unimplemented option, no
+.I pathname
+operand at all, or one or more
+.I pathname
+operands failed a check.
+.SH SEE ALSO
+.BR basename (1),
+.BR dirname (1),
+.BR realpath (1)

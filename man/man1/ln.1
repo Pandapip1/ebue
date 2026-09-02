@@ -1,0 +1,95 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH LN 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+ln \- link files
+.SH SYNOPSIS
+.B ln
+.RB [ \-fs ]
+.I source_file target_file
+.br
+.B ln
+.RB [ \-fs ]
+.I source_file
+.RI [ source_file ]\ .\|.\|.
+.I target_dir
+.SH DESCRIPTION
+.B ln
+creates a link named
+.I target_file
+that refers to
+.IR source_file .
+By default the link is a hard link (see
+.BR \-s
+below).
+.PP
+If more than one
+.I source_file
+is given, or a single
+.I source_file
+is given together with a final operand that already exists as a
+directory, each
+.I source_file
+is linked into that directory under its own final pathname component.
+.PP
+Without
+.BR \-f ,
+if the destination pathname already exists,
+.B ln
+leaves it untouched, writes a diagnostic, and continues with any
+remaining
+.I source_file
+operands rather than creating that one link.
+.SH OPTIONS
+.TP
+.B \-f
+If the destination pathname already exists (checked without following
+a symbolic link at that name, so an existing dangling symbolic link
+still counts), remove it first so the link can be created in its
+place.
+.TP
+.B \-s
+Create a symbolic link instead of a hard link. The
+.B \-f
+and
+.B \-s
+options may be combined in one argument (for example
+.BR \-fs )
+or given separately.
+.TP
+.BR \-L ", " \-P
+Not implemented. Each must be given as its own, separate argument to
+be recognized as one of these options at all; when given that way,
+.B ln
+prints a diagnostic and exits immediately with status 1 rather than
+guess which of a symbolic-link source's two identities \(em the link
+itself, or the file it resolves to \(em a hard link should be made
+to. Neither flag given is equivalent to
+.BR \-P .
+.SH OPERANDS
+.TP
+.I source_file
+A pathname naming the existing file (or, with
+.BR \-s ,
+any pathname, existing or not) that the new link refers to.
+.TP
+.I target_file
+A pathname for the new link, used in the exactly-one-source form.
+.TP
+.I target_dir
+A pathname of an existing directory, used when linking one or more
+source operands into it under their own basenames.
+.SH EXIT STATUS
+.TP
+.B 0
+Every operand was linked successfully.
+.TP
+.B >0
+An error occurred: an invalid option, a missing operand, or a failure
+creating one or more of the requested links. In the exactly-one-source
+form this stops immediately; in the multiple-source/target_dir form,
+a failure on one source does not stop the rest from being attempted.
+.SH SEE ALSO
+.BR cp (1),
+.BR rm (1),
+.BR readlink (1)

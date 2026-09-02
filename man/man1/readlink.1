@@ -1,0 +1,49 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH READLINK 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+readlink \- print the target of a symbolic link
+.SH SYNOPSIS
+.B readlink
+.I path
+.RI [ path ]\ .\|.\|.
+.SH DESCRIPTION
+.B readlink
+prints the raw target text stored in each symbolic link named by a
+.I path
+operand, one per line, exactly as stored \(em it is not canonicalized,
+resolved relative to any directory, or checked for existence. Multiple
+operands are processed in turn; a failure on one operand does not stop
+the rest from being attempted.
+.PP
+No options are recognized; every command-line argument, including one
+that begins with
+.BR \- ,
+is treated as a
+.I path
+operand.
+.SH OPERANDS
+.TP
+.I path
+A pathname of a symbolic link.
+.SH EXIT STATUS
+.TP
+.B 0
+The target of every
+.I path
+operand was printed successfully.
+.TP
+.B 1
+A
+.I path
+operand did not exist, was not a symbolic link, or its target could
+not otherwise be read; the rest of the operands were still attempted.
+Also used if writing a result to standard output failed.
+.TP
+.B 2
+No
+.I path
+operand was given.
+.SH SEE ALSO
+.BR realpath (1),
+.BR ln (1)

@@ -1,0 +1,64 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH BASENAME 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+basename \- return non-directory portion of a pathname
+.SH SYNOPSIS
+.B basename
+.I string
+.RI [ suffix ]
+.SH DESCRIPTION
+.B basename
+writes the final pathname component of
+.I string
+to standard output, followed by a newline.
+.PP
+If
+.I suffix
+is given, and it is not identical to the whole of the final pathname
+component, and it is identical to a suffix of that component, the
+.I suffix
+is removed before the result is written.
+.PP
+Exactly one or two operands are accepted; no options are recognized.
+.SH OPERANDS
+.TP
+.I string
+A pathname. An empty
+.I string
+produces a single
+.BR . \|.
+A
+.I string
+consisting entirely of one or more
+.B /
+characters (the root directory) produces a single
+.BR / .
+A drive-letter prefix such as
+.B C:
+is recognized and is never itself treated as the final pathname
+component: a bare drive letter with no following separator (such as
+.BR C: )
+produces a single
+.BR . \|,
+and a drive root (such as
+.BR C:\e )
+produces the drive letter, colon, and one separator unchanged.
+.TP
+.I suffix
+A suffix to remove from the final pathname component of
+.IR string ,
+if it is present there and is not the entire component.
+.SH EXIT STATUS
+.TP
+.B 0
+Successful completion.
+.TP
+.B 1
+Writing the result to standard output failed.
+.TP
+.B 2
+Fewer than one or more than two operands were given.
+.SH SEE ALSO
+.BR dirname (1),
+.BR pathchk (1)

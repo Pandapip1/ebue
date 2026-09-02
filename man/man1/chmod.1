@@ -1,0 +1,137 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH CHMOD 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+chmod \- change file modes
+.SH SYNOPSIS
+.B chmod
+.I mode file
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B chmod
+changes the file permission bits of each
+.I file
+operand to
+.IR mode .
+Multiple
+.I file
+operands are processed in turn; a failure changing one file's mode
+does not stop the rest from being attempted. The
+.I mode
+operand itself, however, is parsed once, before any file is touched;
+if it is malformed,
+.B chmod
+reports it as a usage error and does not attempt any of the
+.I file
+operands at all.
+.PP
+Each
+.I file
+is
+.BR stat (2)'d
+before
+.I mode
+is applied to it, so a symbolic
+.I mode
+(see OPERANDS below) is always evaluated relative to that specific
+file's own current permission bits \(em the same
+.I mode
+string can change different files by different amounts depending on
+each one's starting permissions.
+.SH OPTIONS
+.TP
+.B \-R
+Not implemented. When given as the first argument,
+.B chmod
+prints a diagnostic and exits immediately with status 1 rather than
+recurse (or silently fail to recurse) into a directory tree. Only this
+exact, unadorned first argument is recognized this way; only a
+single-file, non-recursive change of mode is supported.
+.SH OPERANDS
+.TP
+.I mode
+The change to make to each
+.IR file 's
+mode, in one of two forms:
+.RS
+.TP
+Octal
+One to four octal digits (characters
+.BR 0 \- 7 ,
+value at most
+.BR 07777 ),
+taken as the resulting mode bits directly \(em this is the only form
+that can set the setuid, setgid, or sticky bits.
+.TP
+Symbolic
+A comma-separated list of clauses, each of the form
+\fI[who...](op perm...)+\fR, where
+.I who
+is any combination of the letters
+.BR u ", " g ", " o ", and " a
+.RB ( a
+means
+.BR ugo ,
+and is assumed when
+.I who
+is omitted),
+.I op
+is one of
+.BR + ", " \- ", or " = ,
+and
+.I perm
+is any combination of the letters
+.BR r ", " w ", and " x .
+When
+.I who
+is omitted from a clause, the
+.I perm
+bits that clause would set are first filtered by the invoking
+process's file creation mask, one class at a time; when
+.I who
+is given explicitly, no such filtering is applied. A
+.I mode
+operand may begin with
+.BR + ", " \- ", or " =
+directly (with
+.I who
+therefore omitted), so, for example,
+.B chmod \-w file
+is a valid symbolic
+.I mode
+that removes write permission, not an unrecognized option.
+.RE
+.IP
+The
+.BR X ", " s ", and " t
+.I perm
+letters, and using a
+.I who
+letter itself as a
+.I perm
+to copy another class's bits, are not supported in symbolic
+.IR mode \|;
+a symbolic
+.I mode
+using any of them is rejected outright as invalid rather than
+approximated. Use an octal
+.I mode
+to set the setuid, setgid, or sticky bits.
+.TP
+.I file
+A pathname of a file whose permission bits are to be changed.
+.SH EXIT STATUS
+.TP
+.B 0
+The utility executed successfully and all requested changes were made.
+.TP
+.B >0
+An error occurred: an invalid
+.I mode
+operand (no files are changed in this case),
+.BR \-R ,
+a missing operand, or a failure changing the mode of one or more of
+the named files.
+.SH SEE ALSO
+.BR mkdir (1),
+.BR mkfifo (1)

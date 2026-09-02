@@ -1,0 +1,59 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH REALPATH 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+realpath \- print the resolved absolute pathname
+.SH SYNOPSIS
+.B realpath
+.I path
+.RI [ path ]\ .\|.\|.
+.SH DESCRIPTION
+.B realpath
+prints the canonicalized absolute pathname of each
+.I path
+operand, one per line: symbolic links are resolved, and
+.B .
+and
+.B ..
+components are removed. Multiple operands are processed in turn; a
+failure on one operand does not stop the rest from being attempted.
+.PP
+No options are recognized.
+.PP
+Every
+.I path
+operand must currently exist; unlike some other implementations of
+this utility,
+.B realpath
+does not accept a
+.I path
+whose final component is missing and return the resolved form of its
+parent with that missing name appended \(em a nonexistent
+.I path
+is always an error, at any component.
+.SH OPERANDS
+.TP
+.I path
+A pathname of an existing file, directory, or other filesystem entry.
+.SH EXIT STATUS
+.TP
+.B 0
+Every
+.I path
+operand was resolved and printed successfully.
+.TP
+.B 1
+A
+.I path
+operand could not be resolved (for example, because some component of
+it does not exist); the rest of the operands were still attempted.
+Also used if writing a result to standard output failed.
+.TP
+.B 2
+No
+.I path
+operand was given.
+.SH SEE ALSO
+.BR readlink (1),
+.BR pwd (1),
+.BR pathchk (1)
