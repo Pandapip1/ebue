@@ -27,11 +27,11 @@
 # compile/link evidence (and, where noted, a native aarch64-linux run of
 # the unmodified upstream source), not an observed Wine run.
 #
-# COUNTS PASS=1501 BUG=0 UNIMPL=4 NA=102 FLAKY=3
+# COUNTS PASS=1503 BUG=0 UNIMPL=4 NA=100 FLAKY=3
 aio_error/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	Race between the AIO worker thread and the checking loop: baseline disagreed across runs (PASS when EINPROGRESS was observed, UNRESOLVED when all 128 writes completed first), resolved only by host scheduling.
 aio_read/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNTESTED because prioritized I/O is not supported; asynchronous I/O itself is implemented
 aio_return/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite check is self-contradictory: after probing an invalid aiocb it expects aio_error on a different completed request to return EINVAL
-aio_suspend/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNSUPPORTED because asynchronous I/O is not implemented
+aio_suspend/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite's own gate does an exact-equality sysconf(_SC_ASYNCHRONOUS_IO) check against the POSIX.1-2001 value; this project deliberately answers the POSIX.1-2008 value, so it exits UNSUPPORTED regardless of AIO's real implementation status
 aio_write/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNTESTED because prioritized I/O is not supported; asynchronous I/O itself is implemented
 clock_getcpuclockid/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
 clock_getcpuclockid/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
@@ -68,8 +68,6 @@ mmap/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome
 mmap/6-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
 mq_timedsend/5-2.c	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	Baseline disagreed across repeated runs (PASS with EINTR after a cross-process signal, TIMEOUT under Wine); source review found no missing lock or lost wakeup in src/thread/mqueue.c's wait_count(), so the likelier cause is the test's own parent-side heuristic (assume the child is blocked after one 3s sleep()) combined with Wine's cross-process scheduling latency.
 munmap/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the test hard-codes the Unix /dev/zero device, which does not exist in the Windows target environment
-nanosleep/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	requires fork(), but Wine does not implement ntdll RtlCloneUserProcess
-nanosleep/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	requires fork(), but Wine does not implement ntdll RtlCloneUserProcess
 pthread_atfork/3-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
 pthread_attr_setschedpolicy/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	Suite fixture pins itself to one CPU via sched_setaffinity()/CPU_SET (a glibc/Linux extension) before exercising scheduling-policy propagation; ntlibc implements neither cpu_set_t nor sched_setaffinity()/sched_getaffinity() today.
 pthread_barrier_destroy/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	fixture publishes ENTERED_THREAD before calling pthread_barrier_wait; destruction during a wait is undefined and measured 20 EBUSY PASS plus 20 pre-entry UNSUPPORTED outcomes
