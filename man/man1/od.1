@@ -1,0 +1,184 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH OD 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+od \- dump files in octal and other formats
+.SH SYNOPSIS
+.B od
+.RB [ \-A
+.IR base ]
+.RB [ \-j
+.IR skip ]
+.RB [ \-N
+.IR count ]
+.RB [ \-t
+.IR type ]
+.RB [ \-v ]
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B od
+writes an offset\-and\-formatted\-data dump of its input to standard
+output, 16 bytes per output row (a short final row is written with
+fewer). By default, offsets are octal and each row's data is 8
+octal\-formatted 2\-byte units. Multiple
+.I file
+operands are read as one logical concatenated stream, the same way
+.BR cat (1)
+concatenates them.
+.PP
+Without
+.BR \-v ,
+any run of output rows that would be byte\-for\-byte identical to the
+row immediately before it (ignoring the differing offset) is replaced
+by a single line containing only an asterisk. Only a full 16\-byte
+row can ever be elided this way; a shorter final row is always
+printed.
+.PP
+A trailing line giving the final total offset, with no data, is
+always printed at the end (unless
+.B \-A n
+is given) \(em this is how a reader can see the exact total byte
+count even when it lands exactly on a row boundary, or was elided
+entirely.
+.SH OPTIONS
+.TP
+.BI \-A " base"
+Select the base that byte offsets are printed in.
+.I base
+must be exactly one of:
+.RS
+.TP
+.B d
+Decimal.
+.TP
+.B o
+Octal (the default when
+.B \-A
+is not given).
+.TP
+.B x
+Hexadecimal.
+.TP
+.B n
+No offsets are printed at all, on any output line (including the
+final byte\-count line).
+.RE
+.TP
+.BI \-j " skip"
+Skip
+.I skip
+bytes of input before dumping. Skipping past the end of the input is
+not an error. See OPERANDS below for
+.IR skip 's
+own numeric syntax.
+.TP
+.BI \-N " count"
+Dump at most
+.I count
+bytes of input. See OPERANDS below for
+.IR count 's
+own numeric syntax.
+.TP
+.BI \-t " type"
+Select the output format for each unit of data.
+.I type
+is one of:
+.RS
+.TP
+.BI x N
+Unsigned hexadecimal, in units of
+.I N
+bytes.
+.TP
+.BI o N
+Unsigned octal, in units of
+.I N
+bytes.
+.TP
+.BI d N
+Signed decimal, in units of
+.I N
+bytes.
+.TP
+.BI u N
+Unsigned decimal, in units of
+.I N
+bytes.
+.TP
+.B c
+Character dump (see below). Takes no size suffix.
+.RE
+.RS
+.I N
+must be exactly 1, 2, 4, or 8 for the
+.BR x / o / d / u
+forms; the alternative letter\-coded sizes
+.RB ( C , " S" , " I" , " L" )
+that POSIX also allows are not accepted. When
+.B \-t
+is not given at all, the default is as if
+.B "\-t o2"
+had been given. Multi\-byte units are decoded in this platform's own
+native (little\-endian) byte order.
+.RE
+.TP
+.B \-v
+Disable the repeated\-row elision described in DESCRIPTION: every row
+is printed in full, even when identical to the one before it.
+.SH OPERANDS
+.TP
+.I skip ", " count
+A numeric argument to
+.B \-j
+or
+.BR \-N ,
+given as a decimal number, a hexadecimal number with a leading
+.BR 0x / 0X ,
+or an octal number with a leading zero, optionally followed by a
+single multiplier suffix:
+.B b
+(\(mu512),
+.B k
+(\(mu1024), or
+.B m
+(\(mu1048576).
+.TP
+.I file
+A pathname of an input file. If no
+.I file
+operand is given at all, standard input is used.
+.SH APPLICATION USAGE
+The character dump
+.RB ( "\-t c" )
+writes
+.BR \e\e ", " \ea ", " \eb ", " \ef ", " \en ", " \er ", " \et ", "
+and
+.B \ev
+for the corresponding control characters, a NUL byte as
+.BR \e0 ,
+every other printable byte as itself, and every other byte as a
+three\-digit octal escape.
+.PP
+The named\-character format
+.RB ( "\-t a" ),
+the floating\-point format
+.RB ( "\-t f" ),
+and the letter\-coded unit sizes
+.RB ( C / S / I / L )
+that POSIX
+.B od
+also defines are not implemented; requesting any of them is a usage
+error rather than a silent misinterpretation.
+.SH EXIT STATUS
+.TP
+.B 0
+All input was dumped successfully.
+.TP
+.B 1
+An error occurred: an invalid option or option argument, an
+unsupported
+.B \-t
+type, or a file that could not be opened.
+.SH SEE ALSO
+.BR cat (1),
+.BR wc (1)

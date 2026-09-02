@@ -1,0 +1,170 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH PR 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+pr \- paginate files for printing
+.SH SYNOPSIS
+.B pr
+.RB [ \-t ]
+.RB [ \-d ]
+.RB [ \-F | \-f ]
+.RB [ \-r ]
+.RB [ \-h
+.IR header ]
+.RB [ \-l
+.IR lines ]
+.RB [ \-o
+.IR offset ]
+.RB [ \-w
+.IR width ]
+.RB [ \-n [ char ][ width ]]
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B pr
+paginates each
+.I file
+for a line\-printer\-style device: a five\-line page header (a
+date/time, a name, and a page number), a body of text, and a
+five\-line trailer, repeated every page length lines (default 66).
+.PP
+Page numbering is continuous across every
+.I file
+operand: a second file's first page is not renumbered back to 1.
+Each file operand always starts on a fresh page \(em a file's own
+partial last page is never shared with the next file's first lines
+\(em and every page, including a file's own last (possibly short)
+one, is padded with blank filler lines up to the full page length
+before its trailer is written.
+.PP
+This implementation covers
+.BR pr 's
+default single\-column mode. It does not implement multi\-column
+output or merging several files side by side into columns of their
+own; the options that would request either of those are refused (see
+OPTIONS).
+.SH OPTIONS
+.TP
+.B \-d
+Double\-space the text body: a blank line is written after every
+text line.
+.TP
+.RB [ \-F | \-f ]
+Separate pages with a single form\-feed character instead of the
+default five\-line blank trailer.
+.B \-f
+is accepted as an exact synonym of
+.BR \-F ;
+POSIX's own difference between the two (\fB\-f\fR may pause before
+each page on a terminal) does not apply here.
+.TP
+.BI \-h " header"
+Use
+.I header
+in the page header in place of each file's own pathname.
+.TP
+.BI \-l " lines"
+Set the page length to
+.I lines
+instead of the default of 66.
+.I lines
+must be a positive decimal integer, and large enough to leave room
+for the header and trailer (10 lines) unless
+.B \-t
+is also given.
+.TP
+.BI \-n [ char ][ width ]
+Number each line of text (not header, trailer, or filler lines).
+.I width
+decimal digits (default 5) are printed, followed by
+.I char
+(default \fI<tab>\fR). If the character immediately after
+.B \-n
+is not a decimal digit, it is taken as
+.IR char ;
+whatever decimal digits follow (if any) are taken as
+.IR width .
+.TP
+.BI \-o " offset"
+Prepend
+.I offset
+space characters to every output line, including header, body, and
+trailer lines.
+.I offset
+must be a non\-negative decimal integer.
+.TP
+.B \-r
+Do not write a diagnostic when a file fails to open. The file is
+still skipped and the run still exits with a non\-zero status; only
+the message is suppressed.
+.TP
+.B \-t
+Omit the page header and trailer entirely; only the text body is
+written.
+.TP
+.BI \-w " width"
+Accepted and stored, but has no effect: POSIX defines
+.B \-w
+as sizing multiple text\-column output, and this implementation has
+no multiple\-text\-column output for it to size.
+.SH OPERANDS
+.TP
+.I file
+A pathname of an input file. If
+.B \-
+is given, standard input is used, and (unless
+.B \-h
+is also given) the page header's name field is left blank rather than
+showing a literal
+.BR \- .
+If no
+.I file
+operand is given at all, standard input is used the same way.
+.SH APPLICATION USAGE
+The following are real
+.B pr
+features that this implementation does not support; requesting any
+of them is refused with a diagnostic and a non\-zero exit, rather than
+silently ignored or partially honored:
+.RS
+.IP \(bu 2
+A leading
+.B +
+argument (start pagination at a given page number).
+.IP \(bu 2
+A bare numeric option (a column count) or
+.B \-a
+(across, rather than down, column order): multi\-column output.
+.IP \(bu 2
+.B \-m
+(merge several files side by side into columns of their own).
+.IP \(bu 2
+.B \-e
+and
+.B \-i
+(input and output tab expansion).
+.IP \(bu 2
+.B \-s
+(the XSI column\-separator character option).
+.RE
+.PP
+The page header's date and time are rendered the way the POSIX
+locale's
+.B date
+.RB "\(dq" "+%b %e %H:%M %Y" "\(dq"
+format would render them, for example
+.RB "\(dq" "Jan  5 14:30 2024" "\(dq."
+.SH EXIT STATUS
+.TP
+.B 0
+All input files were paginated successfully.
+.TP
+.B 1
+An error occurred: an invalid option or option argument, a request
+for an unsupported feature (see APPLICATION USAGE), a page length too
+small to hold a header and trailer, or a file that could not be
+opened, read, or written; processing continues with the next operand
+where possible.
+.SH SEE ALSO
+.BR fold (1),
+.BR cat (1),
+.BR wc (1)

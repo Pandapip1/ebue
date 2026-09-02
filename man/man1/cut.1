@@ -1,0 +1,164 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH CUT 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+cut \- cut out selected fields, bytes, or characters of each line of a file
+.SH SYNOPSIS
+.B cut
+.BI \-b " list"
+.RB [ \-n ]
+.RI [ file ]\ .\|.\|.
+.br
+.B cut
+.BI \-c " list"
+.RI [ file ]\ .\|.\|.
+.br
+.B cut
+.BI \-f " list"
+.RB [ \-d
+.IR delim ]
+.RB [ \-s ]
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B cut
+cuts out and writes to standard output the selected portion of each
+line of each
+.I file
+\(em bytes, characters, or tab\-delimited fields, according to which
+of
+.BR \-b ", " \-c ", "
+or
+.B \-f
+is given.
+Exactly one of the three must be given; giving more than one, or
+none, is a usage error.
+.PP
+In field mode
+.RB ( \-f ),
+a line with no delimiter character on it is passed through unmodified
+unless
+.B \-s
+is given. In byte and character mode, the newline itself is never
+selectable and is always preserved on lines that have one.
+.SH OPTIONS
+.TP
+.BI \-b " list"
+Select the bytes named by
+.I list
+from each line, counted from 1.
+.TP
+.BI \-c " list"
+Select the characters named by
+.I list
+from each line, counted from 1. Characters are decoded as UTF\-8; a
+byte that cannot be decoded (an invalid or incomplete sequence)
+falls back to a single raw byte, so a corrupt byte is never silently
+dropped or allowed to desynchronize the rest of the line.
+.TP
+.BI \-d " delim"
+Use
+.I delim
+instead of \fI<tab>\fR as the field delimiter. Only valid with
+.BR \-f ;
+combining it with
+.B \-b
+or
+.B \-c
+is a usage error.
+.I delim
+must be exactly one character.
+.TP
+.BI \-f " list"
+Select the fields named by
+.I list
+from each line, where fields are separated by the delimiter
+character (\fI<tab>\fR by default, or the argument to
+.BR \-d ).
+.TP
+.B \-n
+Accepted as a recognized option token, but always refused with a
+usage error: rounding a byte selection
+.RB ( \-b )
+to the nearest character boundary is not implemented by this
+version.
+.TP
+.B \-s
+Suppress lines with no delimiter character on them entirely, instead
+of passing them through unmodified. Only valid with
+.BR \-f ;
+combining it with
+.B \-b
+or
+.B \-c
+is a usage error.
+.SH OPERANDS
+.TP
+.I list
+A comma\- or \fI<blank>\fR\-separated list of positive decimal
+integers and/or ranges. An element may be:
+.RS
+.IP \(bu 2
+.IR N ,
+the
+.IR N th
+byte, character, or field, counted from 1;
+.IP \(bu 2
+.IR N\- ,
+from the
+.IR N th
+to the end of the line;
+.IP \(bu 2
+.IR N\-M ,
+from the
+.IR N th
+through the
+.IR M th
+inclusive (\fIM\fR must be at least \fIN\fR);
+.IP \(bu 2
+.IR \-M ,
+from the first through the
+.IR M th
+inclusive.
+.RE
+.RS
+The selected bytes, characters, or fields are always written in
+ascending position order, regardless of the order
+.I list
+names them in and regardless of how many of its ranges overlap a
+given position.
+.RE
+.TP
+.I file
+A pathname of an input file. If
+.B \-
+is given, standard input is used. If no
+.I file
+operand is given at all, standard input is used.
+.SH EXIT STATUS
+.TP
+.B 0
+All input files were processed successfully.
+.TP
+.B 1
+A file could not be opened or read; processing continues with the
+next operand.
+.TP
+.B 2
+A usage error: no mode (or more than one) was given, an invalid
+.IR list ,
+.B \-n
+was given,
+.B \-d
+or
+.B \-s
+was combined with
+.B \-b
+or
+.BR \-c ,
+or
+.I delim
+was not exactly one character.
+.SH SEE ALSO
+.BR paste (1),
+.BR tr (1),
+.BR wc (1)

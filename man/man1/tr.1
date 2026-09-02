@@ -1,0 +1,230 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH TR 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+tr \- translate, squeeze, and/or delete characters
+.SH SYNOPSIS
+.B tr
+.RB [ \-c | \-C ]
+.RB [ \-s ]
+.I string1 string2
+.br
+.B tr
+.B \-s
+.RB [ \-c | \-C ]
+.I string1
+.br
+.B tr
+.B \-d
+.RB [ \-c | \-C ]
+.I string1
+.br
+.B tr
+.B \-ds
+.RB [ \-c | \-C ]
+.I string1 string2
+.SH DESCRIPTION
+.B tr
+reads characters from standard input, translates, squeezes, and/or
+deletes them according to
+.I string1
+and (when present)
+.IR string2 ,
+and writes the result to standard output. There are no file operands
+\(em input is always standard input, output always standard output.
+Exactly one of the four combinations shown in SYNOPSIS is accepted;
+any other combination of
+.BR \-c / \-C ", " \-d ", "
+and
+.B \-s
+with operands is a usage error, including the wrong number of
+operands for the combination requested.
+.PP
+With no
+.BR \-d ,
+each character read that appears in
+.I string1
+(as expanded \(em see OPERANDS) is replaced with the character at the
+corresponding position of
+.I string2
+(also as expanded). If
+.IR string2 's
+expansion is shorter than
+.IR string1 's
+(after any
+.B \-c / \-C
+complement is applied), it is padded out to the same length by
+repeating its own last character.
+.PP
+With
+.BR \-d ,
+each character read that appears in
+.I string1
+is deleted from the output instead.
+.PP
+With
+.BR \-s ,
+after any deletion or translation has already taken place, a run of
+two or more consecutive identical characters in the output is
+replaced by a single occurrence, but only for a character that
+appears in the applicable set: \fIstring2\fR's expansion when a
+.I string2
+operand is present (plain translate\-with\-squeeze, and
+.BR \-ds ),
+or \fIstring1\fR's expansion (after
+.BR \-c / \-C )
+otherwise (\fB\-s\fR alone).
+.SH OPTIONS
+.TP
+.B \-c
+Complement the set of characters named by
+.IR string1 :
+operate on every byte value 0\-255 that is
+.I not
+in
+.IR string1 ,
+in ascending numeric order.
+.TP
+.B \-C
+Accepted as an exact synonym of
+.BR \-c .
+POSIX distinguishes complementing by character value
+.RB ( \-c )
+from complementing in the current collating sequence
+.RB ( \-C ),
+but this implementation has no multibyte\-aware collation order
+beyond plain ascending numeric order, so the two are identical here.
+.TP
+.B \-d
+Delete every character read that appears in
+.I string1
+(after any
+.B \-c / \-C
+complement), instead of translating it.
+.TP
+.B \-s
+Squeeze runs of repeated output characters down to one occurrence;
+see DESCRIPTION for exactly which characters this applies to in each
+combination.
+.SH OPERANDS
+.TP
+.I string1
+The source character set: every character read that matches an entry
+in
+.I string1
+(after
+.BR \-c / \-C ,
+if given) is a candidate for deletion, translation, or squeezing.
+.TP
+.I string2
+The replacement character set, required for plain translate and for
+.BR \-ds ,
+optional for
+.B \-s
+alone, and refused for plain
+.B \-d
+(without
+.BR \-s ).
+.PP
+Both
+.I string1
+and
+.I string2
+share the same grammar, expanded once into a flat list of characters
+before translation begins:
+.RS
+.IP \(bu 2
+An ordinary character stands for itself.
+.IP \(bu 2
+.BR \e\e ", " \ea ", " \eb ", " \ef ", " \en ", " \er ", " \et ", "
+and
+.B \ev
+are the named backslash escapes. \fB\e\fIddd\fR is one to three
+octal digits, giving that byte value. A backslash followed by
+anything else stands for the literal character after it (rather than
+being refused, unlike most other ambiguous constructs in this
+grammar); a trailing backslash with nothing after it stands for
+itself.
+.IP \(bu 2
+.IB c \- c2
+is an ascending range of characters from
+.I c
+through
+.IR c2 ,
+inclusive.
+.I c2
+must not sort before
+.IR c ;
+a descending range is a usage error, not silently reversed.
+.IP \(bu 2
+.BI [: name :]
+is one of the twelve POSIX character classes:
+.BR alnum ", " alpha ", " blank ", " cntrl ", " digit ", " graph ", "
+.BR lower ", " print ", " punct ", " space ", " upper ,
+and
+.BR xdigit .
+Every byte value 0\-255 classified true by that class is included, in
+ascending order.
+.IP \(bu 2
+.BI [= c =]
+is the equivalence class of
+.IR c .
+With no collating\-sequence database beyond byte value, the
+equivalence class of a character is just that character itself.
+.IP \(bu 2
+.IB x *n
+(only valid within
+.I string2 )
+repeats the character
+.I x
+.I n
+times.
+.I n
+may be omitted or given as 0, meaning "however many copies are needed
+to make \fIstring2\fR's total expansion as long as \fIstring1\fR's";
+at most one such construct is honored per string, and a second one is
+a usage error. A leading\-zero
+.I n
+is interpreted as octal, otherwise decimal.
+.RE
+.SH EXIT STATUS
+.TP
+.B 0
+Successful completion.
+.TP
+.B 1
+A memory allocation failed while building the complement of
+.I string1
+(with
+.BR \-c / \-C ).
+.TP
+.B 2
+A usage error: an invalid option, the wrong number or combination of
+.I string1
+/
+.I string2
+operands for the
+.BR \-c / \-C / \-d / \-s
+combination given, an empty
+.IR string2 ,
+a
+.I string1
+/
+.I string2
+grammar violation (an unterminated
+.B [: :]
+or
+.B [= =]
+construct, an unknown class name, a descending range, an
+.B [ \fIx\fB*\fIn\fB]
+construct in
+.IR string1 ,
+or a second such construct in the same string), or a memory
+allocation failure while expanding
+.I string1
+or
+.IR string2 .
+.SH SEE ALSO
+.BR cut (1),
+.BR fold (1),
+.BR paste (1)

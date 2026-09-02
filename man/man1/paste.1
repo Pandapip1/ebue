@@ -1,0 +1,80 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH PASTE 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+paste \- merge corresponding or consecutive lines of files
+.SH SYNOPSIS
+.B paste
+.RB [ \-s ]
+.RB [ \-d
+.IR list ]
+.I file
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+By default,
+.B paste
+concatenates the corresponding lines of every
+.I file
+operand: for each output row, one line is read from each file and
+joined into a single output line, replacing every newline except the
+last with a delimiter character. Once a file runs out of lines, it
+contributes an empty field for every remaining output row \(em the
+merge does not stop until every file has reached end\-of\-file.
+.PP
+At least one
+.I file
+operand is required;
+.B paste
+with no operands at all is a usage error.
+.SH OPTIONS
+.TP
+.BI \-d " list"
+Use the characters of
+.I list
+in place of the default \fI<tab>\fR as the delimiter between merged
+fields, one character per field boundary, reused circularly from the
+beginning of
+.I list
+once it is exhausted.
+.I list
+may contain the backslash escapes
+.BR \en " (newline), " \et " (tab), and " \e\e " (a literal backslash);"
+any other backslash sequence is a usage error, as is an empty
+.IR list .
+.TP
+.B \-s
+Serial mode: instead of merging corresponding lines across files,
+concatenate every line of one file at a time onto a single output
+row, delimited the same way, writing one output row per
+.I file
+operand in the order given.
+.SH OPERANDS
+.TP
+.I file
+A pathname of an input file. If
+.B \-
+is given, standard input is used. A file that cannot be opened is
+diagnosed and thereafter treated as permanently empty \(em it
+contributes only empty fields in parallel mode, or a single empty
+output row in serial mode \(em while the rest of the files given
+continue to be merged normally.
+.SH EXIT STATUS
+.TP
+.B 0
+All input files were merged successfully.
+.TP
+.B 1
+One or more files could not be opened (the files that did open were
+still merged), or a memory allocation failed.
+.TP
+.B 2
+A usage error: an invalid option, no
+.I file
+operand at all, or an invalid
+.I list
+argument to
+.BR \-d .
+.SH SEE ALSO
+.BR cut (1),
+.BR tr (1),
+.BR wc (1)

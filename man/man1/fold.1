@@ -1,0 +1,103 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH FOLD 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+fold \- filter for folding lines
+.SH SYNOPSIS
+.B fold
+.RB [ \-bs ]
+.RB [ \-w
+.IR width ]
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B fold
+copies each
+.I file
+to standard output, breaking the lines of its input so that no output
+line exceeds
+.I width
+column positions (default 80).
+.PP
+Three characters affect the column position that is tracked while
+folding, unless
+.B \-b
+is given:
+.RS
+.IP \(bu 2
+\fI<tab>\fR advances the column position to the next tab stop, fixed
+every 8 columns.
+.IP \(bu 2
+\fI<backspace>\fR decrements the column position by one; it never
+becomes negative.
+.IP \(bu 2
+\fI<carriage\-return>\fR resets the column position to zero.
+.RE
+.PP
+A single unit (byte, or decoded character) that is by itself wider
+than
+.I width
+is still emitted, alone, on its own output line, rather than being
+split or dropped.
+.SH OPTIONS
+.TP
+.B \-b
+Count
+.I width
+in bytes rather than column positions. Every byte, including
+\fI<tab>\fR, \fI<backspace>\fR, and \fI<carriage\-return>\fR, counts
+as exactly one; those three characters lose their special
+column\-tracking meaning entirely in this mode.
+.TP
+.B \-s
+If a segment of a line contains a \fI<blank>\fR (space or tab) within
+the first
+.I width
+column positions (or bytes, with
+.BR \-b ),
+break the line after the last such \fI<blank>\fR instead of exactly
+at
+.IR width .
+If there is no qualifying \fI<blank>\fR,
+.B \-s
+has no effect for that output segment.
+.TP
+.BI \-w " width"
+Fold lines at
+.I width
+column positions (or bytes, with
+.BR \-b )
+instead of the default of 80.
+.I width
+must be a positive decimal integer.
+.SH OPERANDS
+.TP
+.I file
+A pathname of an input file. If
+.B \-
+is given, standard input is used. If no
+.I file
+operand is given at all, standard input is used.
+.SH APPLICATION USAGE
+Without
+.BR \-b ,
+each input character is decoded as UTF\-8 and counted as exactly one
+column, regardless of that character's actual display width; wide
+characters (for example, many CJK characters that occupy two display
+cells) are not given any special treatment.
+.SH EXIT STATUS
+.TP
+.B 0
+All input files were processed successfully.
+.TP
+.B 1
+A file could not be opened or read; processing continues with the
+next operand.
+.TP
+.B 2
+A usage error: an invalid option or an invalid
+.I width
+argument.
+.SH SEE ALSO
+.BR cut (1),
+.BR pr (1),
+.BR wc (1)

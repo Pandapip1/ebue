@@ -1,0 +1,94 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH WC 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+wc \- count lines, words, and bytes (or characters) in files
+.SH SYNOPSIS
+.B wc
+.RB [ \-c | \-m ]
+.RB [ \-l ]
+.RB [ \-w ]
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B wc
+reads each
+.I file
+and, by default, writes the number of newline characters, words, and
+bytes it contains. When one or more of
+.BR \-c ", " \-l ", " \-m ", "
+or
+.B \-w
+is given,
+.B wc
+reports only the counts requested \(em but always in the fixed
+order newlines, words, then bytes\-or\-characters, regardless of the
+order the options were given on the command line.
+.PP
+Each output line has the form
+.RS
+.nf
+\fInewlines words bytes\fR \fIfile\fR
+.fi
+.RE
+with any of the three counts omitted according to the options given.
+No
+.I file
+field is printed when a count is being taken from standard input with
+no operands. When more than one
+.I file
+operand is given, a final line labeled
+.B total
+is printed with the sums across every file that was read
+successfully.
+.SH OPTIONS
+.TP
+.B \-c
+Report the byte count. Mutually exclusive with
+.BR \-m ;
+giving both is a usage error.
+.TP
+.B \-l
+Report the newline count.
+.TP
+.B \-m
+Report the character count instead of the byte count. Input is
+decoded as UTF\-8: a byte sequence that cannot be decoded counts as
+one character and is skipped one byte at a time, and a multibyte
+sequence still incomplete at end\-of\-file is likewise counted one
+byte at a time, so no trailing bytes are ever silently dropped from
+the count. Mutually exclusive with
+.BR \-c .
+.TP
+.B \-w
+Report the word count. A word is a maximal non\-empty run of
+characters delimited by whitespace, classified byte\-by\-byte; this
+is exact for UTF\-8 input, since no continuation or lead byte of a
+multibyte sequence is ever itself classified as whitespace.
+.SH OPERANDS
+.TP
+.I file
+A pathname of an input file. If
+.B \-
+is given, standard input is used at that point. If no
+.I file
+operand is given at all, standard input is used and no filename is
+printed.
+.SH EXIT STATUS
+.TP
+.B 0
+All input files were counted successfully.
+.TP
+.B 1
+An error occurred (an invalid option,
+.B \-c
+and
+.B \-m
+given together, a count that overflowed, or a file that could not be
+opened or read); processing continues with the next operand, and a
+file that failed is excluded from the
+.B total
+line.
+.SH SEE ALSO
+.BR head (1),
+.BR tail (1),
+.BR cut (1)
