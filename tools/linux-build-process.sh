@@ -85,6 +85,7 @@ FILES="
 	src/process/wait.c
 	src/process/children.c
 	src/process/linux/plat_process.c
+	src/signal/linux/plat_signal.c
 	src/unistd/close.c
 	src/unistd/read.c
 	src/unistd/write.c
@@ -93,6 +94,20 @@ FILES="
 	fuzz/linux_pilot_harness_process.c
 	fuzz/linux_pilot_test_process.c
 "
+# src/signal/linux/plat_signal.c was missing until commit d47e081f
+# ("Send real SIGHUP to orphaned stopped children on Linux") made
+# src/process/children.c's clear_stops() call the real
+# __plat_sig_deliverable_to_other_process() -- a real, previously-hidden
+# gap CI never reached because tools/linux-build-crt.sh and then
+# tools/linux-build-fs.sh always failed to link first. Traced by reading
+# children.c's real call and confirming: unlike tools/linux-build-fs.sh/
+# tools/linux-build-open.sh's own __free gap, nothing else in this
+# FILES list needed the allocator or the fd table plat_signal.c's OTHER
+# functions reach (__plat_sigevent_create()'s __fd_install(), see
+# tools/linux-build-misc.sh's own comment) -- this pilot's own test
+# never calls anything that reaches that code path, so --gc-sections
+# drops it, and the build links and runs clean with just this one file
+# added. Verified with a full clean rebuild+run.
 
 echo "$TAG: compiling ($CC, native ELF)..."
 objs=""
