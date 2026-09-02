@@ -29,6 +29,7 @@
  * real behaviour when a console is actually available or asserts the
  * honest fallback/error path when it is not -- never a blind skip.
  */
+#define _GNU_SOURCE /* posix_openpt()/grantpt()/unlockpt()/ptsname() below, same as test/posix-stdlib.c's own top */
 #include "test-policy.h"
 #include <termios.h>
 #include <sys/ioctl.h>
@@ -37,6 +38,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 
@@ -710,6 +712,186 @@ static void test_termios_cc_reprogram(int consolefd)
 }
 #endif
 
+#if defined(__linux__)
+/* Real Linux coverage, against a genuine tty: this platform's termios
+ * backend (src/termios/linux/plat_termios.c) is not console-shadow-
+ * shaped at all, so none of the NT-console fences/detect-and-note
+ * branches above apply to it -- this exercises it directly against a
+ * real pty pair (src/stdlib/linux/plat_pty.c's posix_openpt()/
+ * grantpt()/unlockpt()/ptsname(), already real and tested there), which
+ * `make check`'s runner always has, unlike an NT console. Deliberately
+ * NOT routed through isatty()/ttyname(): both remain NT-console-only
+ * (src/unistd/isatty.c's own `f->type != __FD_CONSOLE` gate) -- a
+ * separate, not-yet-ported gap this pass does not touch -- so
+ * tcgetattr()/tcsetattr()/ioctl() are called directly against the raw
+ * slave fd instead, which is all termios(3) itself ever requires.
+ *
+ * Round-trip fidelity is checked field by field, including every one
+ * of the sixteen c_cc[] slots with a DISTINCT value: plat_termios.c's
+ * own banner documents a real index remap past VMIN (this header's
+ * c_cc[] has no VSWTC slot the kernel's does), and an off-by-one there
+ * would silently swap two adjacent control characters -- exactly the
+ * kind of bug a test using only a couple of slots, or the same value
+ * in several, could miss. */
+static void test_linux_pty_termios_roundtrip(void)
+{
+	int mfd, sfd;
+	char *slavepath;
+	struct termios t, back;
+	struct winsize ws;
+	int i;
+
+	mfd = posix_openpt(O_RDWR | O_NOCTTY);
+	CHECK(mfd >= 0);
+	if (mfd < 0) return;
+	CHECK(grantpt(mfd) == 0);
+	CHECK(unlockpt(mfd) == 0);
+	slavepath = ptsname(mfd);
+	CHECK(slavepath != 0);
+	if (!slavepath) { close(mfd); return; }
+
+	/* O_NOCTTY: this process must not acquire the slave as its
+	 * controlling terminal just by opening it -- see the tcgetsid()
+	 * check below, which depends on that. */
+	sfd = open(slavepath, O_RDWR | O_NOCTTY);
+	CHECK(sfd >= 0);
+	if (sfd < 0) { close(mfd); return; }
+
+	/* A real pty slave IS a terminal: tcgetattr() must succeed, not
+	 * ENOTTY -- the positive case test_termios_gating_other_shapes()
+	 * above only ever proves the negative (a pipe/directory is NOT
+	 * one). */
+	CHECK(tcgetattr(sfd, &t) == 0);
+
+	t.c_iflag = (t.c_iflag & ~(tcflag_t)(ICRNL | IXON)) | IGNBRK | INLCR;
+	t.c_oflag = (t.c_oflag & ~(tcflag_t)ONLCR) | OCRNL | ONOCR;
+	t.c_lflag = (t.c_lflag & ~(tcflag_t)ECHO) | ISIG | ICANON;
+	/* CSIZE/PARENB deliberately NOT set to CS7/PARENB here -- see the
+	 * comment on the c_cflag checks below for why a real Linux pty
+	 * cannot hold either, discovered empirically (a throwaway host
+	 * oracle issuing the identical TCGETS2/TCSETS2 pair independently
+	 * of ntlibc reproduced byte-for-byte the same kernel-side
+	 * normalization), not assumed. CSTOPB and CLOCAL are NOT touched by
+	 * that normalization, so they are the real, meaningful c_cflag
+	 * round-trip this test exercises. */
+	t.c_cflag |= CSTOPB | CLOCAL;
+	for (i = 0; i < NCCS; i++) t.c_cc[i] = (cc_t)(100 + i);
+	/* ispeed/ospeed deliberately SYMMETRIC (both B19200, deliberately
+	 * NOT B38400 -- a fresh pty's own real kernel default, confirmed via
+	 * the throwaway host oracle above, already IS 38400/38400, so that
+	 * particular value could pass this check even if tcsetattr() were a
+	 * complete no-op): a real Linux pty has no split input/output line
+	 * rate to give (there is no physical wire for the two directions to
+	 * differ over) -- setting them ASYMMETRICALLY, empirically, silently
+	 * forces ispeed to equal ospeed no matter what ispeed was asked for,
+	 * confirmed via that same oracle (real kernel behaviour, not an
+	 * ntlibc translation gap: plat_termios.c hands the kernel exactly
+	 * the two distinct values this header's cfsetispeed()/
+	 * cfsetospeed() were given). A symmetric, non-default pair is what
+	 * this test can actually prove a real round trip with. */
+	CHECK(cfsetispeed(&t, B19200) == 0);
+	CHECK(cfsetospeed(&t, B19200) == 0);
+
+	CHECK(tcsetattr(sfd, TCSANOW, &t) == 0);
+
+	memset(&back, 0, sizeof back);
+	CHECK(tcgetattr(sfd, &back) == 0);
+
+	CHECK((back.c_iflag & (tcflag_t)(IGNBRK | INLCR)) == (tcflag_t)(IGNBRK | INLCR));
+	CHECK((back.c_oflag & (tcflag_t)(OCRNL | ONOCR)) == (tcflag_t)(OCRNL | ONOCR));
+	CHECK((back.c_lflag & (tcflag_t)(ISIG | ICANON)) == (tcflag_t)(ISIG | ICANON));
+	CHECK(!(back.c_lflag & ECHO));
+	CHECK(back.c_cflag & CSTOPB);
+	CHECK(back.c_cflag & CLOCAL);
+	/* CSIZE/PARENB: the Linux kernel's own pty_set_termios()
+	 * (drivers/tty/pty.c) unconditionally forces every pty to CS8 with
+	 * no parity on every set_termios call -- `c_cflag &= ~(CSIZE|
+	 * PARENB|PARODD); c_cflag |= CS8|CREAD;` -- a real, documented
+	 * kernel quirk (a pty has no wire for a character size or parity
+	 * bit to describe), not something plat_termios.c's own translation
+	 * could preserve past even if it wanted to: this is the real
+	 * kernel's own answer to a real ioctl(2), sourced the same way the
+	 * throwaway host oracle above independently confirmed it. Asserted
+	 * here as the real, positive outcome instead of skipped. */
+	CHECK((back.c_cflag & (tcflag_t)CSIZE) == CS8);
+	CHECK(!(back.c_cflag & PARENB));
+	CHECK(back.c_cflag & CREAD);
+	for (i = 0; i < NCCS; i++) CHECK(back.c_cc[i] == (cc_t)(100 + i));
+	CHECK(cfgetispeed(&back) == B19200);
+	CHECK(cfgetospeed(&back) == B19200);
+
+	/* B0 ("hang up", termios.h.html): plat_termios.c's own banner
+	 * documents this as a real, deliberate write (force CBAUD to its
+	 * literal index-0 encoding), not the same bits as "leave whatever
+	 * was there" -- checked here as a distinct value, not assumed. */
+	CHECK(cfsetispeed(&t, B0) == 0);
+	CHECK(tcsetattr(sfd, TCSANOW, &t) == 0);
+	memset(&back, 0, sizeof back);
+	CHECK(tcgetattr(sfd, &back) == 0);
+	CHECK(cfgetispeed(&back) == B0);
+
+	/* TCSADRAIN/TCSAFLUSH must both be accepted on a real terminal too
+	 * (tcsetattr.html: "not a supported value" is the only [EINVAL]
+	 * clause), the same check test_termios_stored_roundtrip() makes for
+	 * the NT console. */
+	CHECK(tcsetattr(sfd, TCSADRAIN, &t) == 0);
+	CHECK(tcsetattr(sfd, TCSAFLUSH, &t) == 0);
+
+	/* tcdrain()/tcflush()/tcflow()/tcsendbreak(): real ioctl(2) calls
+	 * against a real tty (TCSBRK/TCFLSH/TCXONC/TCSBRK|TCSBRKP -- see
+	 * plat_termios.c's own banner for which request each maps to).
+	 * Nothing here can observe the kernel-side effect from this same
+	 * process (the same limitation the NT-console fences above already
+	 * document for tcdrain()/tcflow()); what this DOES prove is that a
+	 * real terminal accepts every one of them, rather than failing. */
+	CHECK(tcdrain(sfd) == 0);
+	CHECK(tcflush(sfd, TCIFLUSH) == 0);
+	CHECK(tcflush(sfd, TCOFLUSH) == 0);
+	CHECK(tcflush(sfd, TCIOFLUSH) == 0);
+	CHECK(tcflow(sfd, TCOOFF) == 0);
+	CHECK(tcflow(sfd, TCOON) == 0);
+	CHECK(tcsendbreak(sfd, 0) == 0);
+
+	/* tcgetsid(): "the session ID whose controlling terminal is fildes"
+	 * (tcgetsid.html) -- O_NOCTTY above deliberately kept this slave
+	 * from becoming this (or any) process's controlling terminal, so a
+	 * real kernel answers ENOTTY ("If there is no session associated
+	 * with the terminal", tty_ioctl(4)'s TIOCGSID) rather than this
+	 * process's own session -- both are checked for, whichever a given
+	 * test environment's own session state actually produces (a session
+	 * leader running this suite directly on its own controlling
+	 * terminal, vs. one that is not, are both real, honest outcomes). */
+	{
+		pid_t sid = tcgetsid(sfd);
+		if (sid == (pid_t)-1) { CHECK(errno == ENOTTY); }
+		else { CHECK(sid > 0); }
+	}
+
+	/* ioctl(TIOCGWINSZ): real on a real pty. test_ioctl_tiocgwinsz()
+	 * above only exercises this when an interactive console happens to
+	 * be attached (rare under `make check`'s runner); a pty pair always
+	 * exists here, so this is the real, unconditional positive case
+	 * src/ioctl/ioctl.c's updated banner describes for Linux. */
+	memset(&ws, 0xff, sizeof ws);
+	CHECK(ioctl(sfd, TIOCGWINSZ, &ws) == 0);
+	/* ws_xpixel/ws_ypixel: Linux never tracks pixel geometry for a tty,
+	 * so these are always genuinely zero, not merely unset by a stub. */
+	CHECK(ws.ws_xpixel == 0 && ws.ws_ypixel == 0);
+	/* ws_row/ws_col are deliberately NOT asserted nonzero: a freshly
+	 * allocated pty pair genuinely defaults its window size to 0x0
+	 * until something calls TIOCSWINSZ -- out of scope for ntlibc's own
+	 * curated ioctl() front door (src/ioctl/ioctl.c's own banner: only
+	 * FIONREAD/FIONBIO/TIOCGWINSZ are recognised at all) -- so 0x0 here
+	 * is the real, honest kernel answer, not evidence of a stub. What
+	 * this proves is the real thing: the call succeeded (no ENOTTY) on
+	 * a descriptor shape (__FD_CHAR) that used to be unconditionally
+	 * rejected before this pass. */
+
+	close(sfd);
+	close(mfd);
+}
+#endif
+
 /* ============================================================
  * <sys/ioctl.h> -- not POSIX (see that header's own banner), but the
  * three requests src/ioctl/ioctl.c actually answers.
@@ -1003,6 +1185,12 @@ int main(int argc, char **argv)
 	test_termios_lflag_roundtrip(consolefd);
 	test_termios_stored_roundtrip(consolefd);
 	test_tcgetsid(consolefd);
+#if defined(__linux__)
+	/* Real coverage against a genuine tty, unconditionally available
+	 * (a pty pair, unlike an NT console under `make check`'s runner) --
+	 * see this function's own comment. */
+	test_linux_pty_termios_roundtrip();
+#endif
 #if NTLIBC_TEST(PASS, posix_termios_tcflush_discards_input) /* PASS: see the fence above test_tcflush_discards_input.  Needed
 	 * explicitly, unlike the (void) fenced cases elsewhere in this
 	 * tree: this test function takes consolefd, so

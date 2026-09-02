@@ -40,6 +40,22 @@
  * assumed -- see src/stat/linux/plat_stat.c's own banner, which uses
  * the identical struct and makes the fuller case for it (this file only
  * needs stx_size out of it).
+ *
+ * __plat_tiocgwinsz() is the third function this file implements, added
+ * alongside the original two rather than in a file of its own: a
+ * single ioctl(TIOCGWINSZ) syscall, no translation of any kind needed
+ * -- TIOCGWINSZ's numeric value (0x5413) and struct winsize's layout
+ * (ws_row/ws_col/ws_xpixel/ws_ypixel, four unsigned shorts) are already
+ * ntlibc's own <sys/ioctl.h> values, and those already match the real
+ * Linux kernel ABI bit-for-bit (confirmed against this host's own
+ * <asm-generic/ioctls.h>/<asm-generic/termios.h>), the same "no
+ * translation needed" situation __plat_fionread_pipe()'s own FIONREAD
+ * call already documents above. No fd-type check of any kind: src/ioctl/
+ * ioctl.c's own TIOCGWINSZ case calls this for ANY fd (Linux folds every
+ * character device into __FD_CHAR -- see that file's updated banner),
+ * so the real ioctl(2) call itself, via the kernel's own ioctl_tty(2)
+ * dispatch, is what decides ENOTTY vs success; this function does not
+ * pre-judge that.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -163,6 +179,13 @@ int __plat_file_eof_and_pos(__plat_handle_t h, long long *eof, long long *pos) /
 
 	*eof = (long long)stx.stx_size;
 	*pos = ret;
+	return 0;
+}
+
+int __plat_tiocgwinsz(__plat_handle_t h, struct winsize *ws)
+{
+	long ret = raw_syscall(SYS_ioctl, (long)unbox(h), (long)TIOCGWINSZ, (long)ws, 0L, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
 
