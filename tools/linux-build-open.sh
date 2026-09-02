@@ -67,9 +67,29 @@ FILES="
 	src/unistd/linux/plat_fd.c
 	src/string/memcpy.c
 	src/internal/errno.c
+	src/malloc/crt_alloc.c
+	src/malloc/linux/plat_malloc.c
+	src/thread/linux/plat_thread.c
 	fuzz/linux_pilot_harness_fs.c
 	fuzz/linux_pilot_test_open.c
 "
+# src/malloc/crt_alloc.c, src/malloc/linux/plat_malloc.c and
+# src/thread/linux/plat_thread.c -- the identical gap and identical fix
+# tools/linux-build-fs.sh's own comment already documents in full
+# (src/stat/chmod.c's fchmod() calls __free() on its EACCES retry path;
+# __malloc()/__free() need __plat_alloc()/__plat_dealloc()
+# (plat_malloc.c); the allocator's own lock needs
+# __plat_thread_alertable_yield() (plat_thread.c), and
+# __plat_thread_spawn() -- this file's only other function needing an
+# unresolved symbol, __ntlibc_linux_clone() -- is never called here
+# either, so --gc-sections drops it before the link needs it). This
+# script links fuzz/linux_pilot_harness_fs.c, the SAME harness (and the
+# same dead EACCES branch) tools/linux-build-fs.sh already uses -- see
+# that file's own comment for why __handle_path()'s NULL stub makes the
+# call unreachable at runtime but not at link time. Confirmed by
+# reproducing the identical `undefined reference to __free` failure
+# here first, then fixing it the same way and verifying with a full
+# clean rebuild+run.
 
 echo "$TAG: compiling ($CC, native ELF)..."
 objs=""
