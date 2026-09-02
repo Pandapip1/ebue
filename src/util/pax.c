@@ -766,6 +766,17 @@ static int ensure_parent_dirs(const char *path)
 	return 0;
 }
 
+/* Drains `m`'s data out of `reader` without writing it anywhere, for a
+ * regular-file member materialize() has decided not to extract (a -k/-u
+ * skip, or a parent-directory failure) -- keeps the archive stream
+ * positioned at the next member's header instead of leaving it stuck
+ * mid-data.  `reader` is NULL in copy mode (there is no archive to
+ * drain from), so this is a harmless no-op there. */
+static void materialize_skip_data(struct pax_reader *reader, const struct pax_member *m)
+{
+	if (reader && m->type == PAX_REG) pax_reader_copy_data(reader, m, -1);
+}
+
 /* Creates one filesystem entry for `m` at `destpath`, reading `size`
  * bytes of data (a regular file's contents) from `reader`/`srcfd`
  * (exactly one of which is non-NULL/non-negative, chosen by the
@@ -782,17 +793,17 @@ static int materialize(const struct pax_member *m, const char *destpath,
 
 	if (exists && opts->keep_existing) {
 		if (opts->verbose) __util_diagf("pax: %s: already exists, not overwritten (-k)\n", destpath);
-		if (reader && m->type == PAX_REG) pax_reader_copy_data(reader, m, -1);
+		materialize_skip_data(reader, m);
 		return 0;
 	}
 	if (exists && opts->newer_only && (unsigned long)existing.st_mtime >= m->mtime) {
-		if (reader && m->type == PAX_REG) pax_reader_copy_data(reader, m, -1);
+		materialize_skip_data(reader, m);
 		return 0;
 	}
 
 	if (ensure_parent_dirs(destpath) < 0) {
 		__util_diagf("pax: %s: cannot create parent directories: %s\n", destpath, strerror(errno));
-		if (reader && m->type == PAX_REG) pax_reader_copy_data(reader, m, -1);
+		materialize_skip_data(reader, m);
 		return -1;
 	}
 
@@ -1091,6 +1102,18 @@ static void print_listing(const struct pax_member *m, int verbose)
 	}
 }
 
+/* Drains a member's data out of the archive without extracting or
+ * printing it, for one this build's own reader has already fully
+ * consumed the header of but decided not to materialize (an unmatched
+ * pattern, list mode, or a name-safety refusal below) -- keeps the
+ * stream positioned at the next member's header. Only PAX_REG and
+ * PAX_HARDLINK members carry data blocks of their own; every other type
+ * is already zero-size by parse_ustar_block()/read_cpio_header(). */
+static void reader_skip_data(struct pax_reader *r, const struct pax_member *m)
+{
+	if (m->type == PAX_REG || m->type == PAX_HARDLINK) pax_reader_copy_data(r, m, -1);
+}
+
 static int do_list_or_read(const char *archive, char **patterns, int npat, int complement,
                              int do_extract, int no_recurse, int keep_existing, int newer_only, int verbose)
 {
@@ -1108,20 +1131,20 @@ static int do_list_or_read(const char *archive, char **patterns, int npat, int c
 		if (rc == 0) break;
 
 		if (!pax_name_matches(m.name, patterns, npat, complement)) {
-			if (m.type == PAX_REG || m.type == PAX_HARDLINK) pax_reader_copy_data(&r, &m, -1);
+			reader_skip_data(&r, &m);
 			continue;
 		}
 
 		if (!do_extract) {
 			print_listing(&m, verbose);
-			if (m.type == PAX_REG || m.type == PAX_HARDLINK) pax_reader_copy_data(&r, &m, -1);
+			reader_skip_data(&r, &m);
 			continue;
 		}
 
 		if (!name_is_safe(m.name)) {
 			__util_diagf("pax: %s: refusing to extract an absolute path or a path "
 			                "containing '..' (see src/util/pax.c's header)\n", m.name);
-			if (m.type == PAX_REG || m.type == PAX_HARDLINK) pax_reader_copy_data(&r, &m, -1);
+			reader_skip_data(&r, &m);
 			failed = 1;
 			continue;
 		}
