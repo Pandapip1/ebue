@@ -86,6 +86,7 @@ FILES="
 	src/internal/errno.c
 	src/internal/ldbl_layout_check.c
 	src/exit/linux/plat_exit.c
+	src/exit/exit.c
 	src/socket/sendrecv.c
 	src/socket/linux/plat_socket.c
 	src/string/memcpy.c
@@ -97,9 +98,13 @@ FILES="
 	src/string/strcmp.c
 	src/string/strncmp.c
 	src/string/strerror.c
+	src/string/strrchr.c
+	src/string/memrchr.c
 	src/stdlib/mbrtowc.c
 	src/math/fabs.c
 	src/math/fpclassify.c
+	src/math/fenv.c
+	src/malloc/crt_alloc.c
 	src/malloc/malloc.c
 	src/malloc/linux/plat_malloc.c
 	src/dlfcn/dlfcn.c
@@ -109,11 +114,64 @@ FILES="
 	src/stdio/buf.c
 	src/stdio/mem.c
 	src/stdio/seek.c
+	src/stdio/file.c
 	src/unistd/write.c
 	src/unistd/lseek.c
 	src/misc/resource.c
 	src/misc/linux/plat_misc.c
+	src/process/children.c
+	src/thread/pthread.c
+	src/thread/pthread_cancel.c
+	src/thread/pthread_tsd.c
+	src/misc/sched.c
 "
+# This list was stale since before crt/linux/crt1.c grew its own
+# `__fd_init(); __signal_init(); __fenv_init();` sequence (unconditional
+# in __linux_start_main(), same as tools/linux-build-crt.sh's own
+# fuzz/linux_pilot_test_crt.c uses): this script links the REAL
+# lib/crt1.o too, so it needs the identical closure, and never got it.
+# Traced and closed the same portable subset tools/linux-build-crt-
+# cross.sh's own comment already documents in full (exit.c, crt_alloc.c,
+# fenv.c, and everything exit()/__exit_internal() reaches in turn:
+# children.c's __child_resume_stopped(), stdio/file.c's __stdio_exit()),
+# plus two gaps specific to this script's own dlfcn/printf-based FILES:
+# src/string/strrchr.c's real body needs memrchr.c (plat_dlfcn.c's own
+# dirname_of() call to strrchr()), and plat_dlfcn.c's self_symtab_load()
+# calls the real pthread_once() (src/thread/pthread_tsd.c, needing
+# pthread.c/pthread_cancel.c alongside it same as tools/
+# linux-build-crt-cross.sh's own thread block) and, through
+# pthread_cancel.c's own deferral loop, sched_yield() (src/misc/sched.c).
+#
+# What is still NOT closeable, for the exact same reason tools/
+# linux-build-crt-cross.sh's own comment already gives in full:
+# __signal_init() (crt1.c's own unconditional call) and exit()'s own
+# __plat_sig_default_terminate() call both bottom out in src/signal/
+# linux/plat_signal.c; children.c's __child_resume_stopped() bottoms out
+# in src/process/linux/plat_process.c; and pthread_cancel.c's own
+# locking (__plat_fast_lock/_unlock(), used by its cancellation-state
+# machinery) bottoms out in src/thread/linux/plat_thread.c. All three
+# files hardcode aarch64's `svc #0` raw-syscall calling convention with
+# no x86_64/i386 branch -- confirmed the same way, empirically, not
+# assumed. src/signal/signal.c itself (kill(), __sig_current_mask_copy())
+# is deliberately NOT added either: it would only trade the current
+# "kill undefined" link error for the identical plat_signal.c-rooted
+# ones already listed, while colliding with fuzz/
+# linux_pilot_dlfcn_cross_yield.c's own pre-existing __raise_internal()
+# stub (a real, reproduced `duplicate symbol: __raise_internal` --
+# checked, not guessed).
+#
+# Net result: this script's link now fails on EXACTLY the eleven
+# symbols rooted in those three unported backend files (__signal_init,
+# __plat_sig_default_terminate, __plat_sig_deliverable_to_other_process,
+# kill, __sig_current_mask_copy, __plat_process_resume,
+# __plat_fast_lock, __plat_fast_unlock, __plat_wait_one,
+# __plat_event_create, __plat_event_set) -- confirmed by a real clean
+# build, not the six-symbol tip tools/linux-build-dlfcn-cross.sh used to
+# stop at before this list was ever updated. This is real, disclosed,
+# pre-existing scope, the same as tools/linux-build-crt-cross.sh's own
+# "two scripts remaining link failures" -- porting those three backends
+# to x86_64/i386 is separate, tracked work, not a FILES= omission this
+# list can close.
 
 INC="-I$srcdir/src/internal -I$BUILD/obj/include -I$srcdir/include -I$srcdir/arch/$arch -I$srcdir/arch/generic"
 CFLAGS="-std=c99 -nostdinc -fno-builtin -fno-stack-protector -g -O0 -ffunction-sections -fdata-sections \
