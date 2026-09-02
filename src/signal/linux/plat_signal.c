@@ -265,22 +265,45 @@ void __plat_signal_wait(__plat_handle_t wake_event, int has_timeout, long long t
 	syscall(SYS_nanosleep, &ts, 0L);
 }
 
+/* plat_signal.h's own comment on this function names its only two real
+ * call sites -- both in signal.c's stop-event handling
+ * (__sig_consume_child_stop(), stop_self()'s retraction path) -- and
+ * both hand it a handle from __plat_stop_event_create()/
+ * __plat_stop_event_probe() above: a raw struct ntlibc_linux_sync*
+ * (src/internal/linux/sync.h), the SAME domain __plat_event_set()
+ * (src/thread/linux/plat_thread.c) already uses for that handle, NOT
+ * this file's own box()/unbox() eventfd domain __plat_signal_wait()
+ * uses for `wake_event` -- a genuinely different __plat_handle_t
+ * domain, same class of mismatch this file's own banner already
+ * discloses for __plat_kill_open()'s bare-pid convention. Decoding a
+ * sync-object pointer as `fd+1` here used to hand ppoll(2)/read(2) a
+ * garbage descriptor built from the mmap address's low bits -- never
+ * matching a real fd, so the poll always timed out and this always
+ * reported "not signalled" even after __plat_event_set() genuinely set
+ * it. That is a real, confirmed hang, not a theoretical one:
+ * __sig_consume_child_stop() (signal.c) never saw a self-stop
+ * (stop_self()'s SIGSTOP/SIGTSTP/SIGTTIN/SIGTTOU raise() case) recorded
+ * this way, so waitpid(WUNTRACED) polled discover_self_stops() in a
+ * busy retry loop that could never succeed, confirmed via strace
+ * against test/posix-signal-crossproc.c's test_self_stop_is_waitable().
+ *
+ * __plat_event_set()'s own comment records that this platform's only
+ * event kind is manual-reset (unlike NT's auto-reset
+ * SynchronizationEvent this handle nominally represents), so the
+ * auto-reset "peek and consume" contract this function's own header
+ * comment promises has to be implemented here, not inherited from the
+ * kernel primitive the way ppoll()+read() got it for free from
+ * EFD_SEMAPHORE: a compare-exchange from 1 to 0 is exactly that --
+ * atomic across the processes sharing this MAP_SHARED word, so a
+ * concurrent __plat_event_set() cannot be lost and two concurrent
+ * peeks cannot both consume the same signal. */
 int __plat_event_peek(__plat_handle_t ev)
 {
-	int fd = unbox(ev);
-	struct pollfd pfd;
-	struct timespec zero;
-	unsigned long long val;
+	struct ntlibc_linux_sync *obj = (struct ntlibc_linux_sync *)ev;
+	int expected = 1;
 
-	pfd.fd = fd; pfd.events = POLLIN; pfd.revents = 0;
-	zero.tv_sec = 0; zero.tv_nsec = 0;
-	if (syscall(SYS_ppoll, &pfd, 1L, &zero, 0L, 0L) <= 0 || !(pfd.revents & POLLIN))
-		return 0;
-	/* Consume it -- an eventfd read is what makes EFD_SEMAPHORE mode
-	 * auto-reset, matching NtWaitForSingleObject's own consuming peek
-	 * for a SynchronizationEvent. */
-	syscall(SYS_read, (long)fd, &val, 8L);
-	return 1;
+	return __atomic_compare_exchange_n(&obj->futex, &expected, 0, 0,
+	                                   __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
 }
 
 /* ---- signal.c's kill()-adjacent job control and fault classification */
