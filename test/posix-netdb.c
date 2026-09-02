@@ -10,17 +10,32 @@
  * posix_netdb_getaddrinfo_loopback and posix_netdb_gai_strerror_text
  * fences below are UNWRAPPED accordingly -- they now run for real,
  * every call site's original clause citations kept verbatim (nothing
- * about what they assert changed, only whether the code compiles).
- * posix_netdb_getnameinfo_numeric and every database-enumeration fence
- * (service/protocol/host/network) are UNCHANGED, still UNIMPL: none of
- * getnameinfo()/the four enumerable databases are part of this pass's
- * own scope (see include/netdb.h's banner for exactly why each one is
- * deferred, not silently dropped). New, non-POSIX-clause-audit
- * coverage for this pass's own real backends -- the /etc/hosts and
- * /etc/nsswitch.conf fixture behavior, and a real UDP round trip
- * against a hermetic fake DNS server this file spins up itself -- is
- * appended after the original POSIX audit content, not mixed into it.
+ * about what they assert changed, only whether the code compiles). New,
+ * non-POSIX-clause-audit coverage for this pass's own real backends --
+ * the /etc/hosts and /etc/nsswitch.conf fixture behavior, and a real
+ * UDP round trip against a hermetic fake DNS server this file spins up
+ * itself -- is appended after the original POSIX audit content, not
+ * mixed into it.
  *
+ * UPDATE (this later pass): getnameinfo() and all four enumerable
+ * databases (service/protocol/host/network) are real now too --
+ * include/netdb.h's own banner has the full inventory. Every remaining
+ * UNIMPL fence below (posix_netdb_getnameinfo_numeric,
+ * posix_netdb_getservbyname_wellknown, posix_netdb_getprotobyname_tcp,
+ * posix_netdb_hostent_sequential_access, posix_netdb_netent_lookup) is
+ * UNWRAPPED accordingly, each call site's original clause citations
+ * again kept verbatim. Two of the five needed a real, disclosed change
+ * beyond just deleting the #if: posix_netdb_hostent_sequential_access
+ * and posix_netdb_netent_lookup originally walked whatever this host's
+ * own real /etc/hosts / /etc/networks happened to contain, which is
+ * unsound the moment that file is large (this environment's own real
+ * /etc/hosts is an ad-block list with tens of thousands of entries,
+ * measured directly while verifying this pass -- see each test's own
+ * comment for the fix, the same NTLIBC_TEST_HOSTS_PATH-shaped fixture
+ * override src/internal/nss_paths.h already provides and this file's
+ * own test_netdb_hosts_fixture() already uses for the identical reason).
+ *
+
  * POSIX.1-2017 (IEEE Std 1003.1-2017, The Open Group Base
  * Specifications Issue 7, 2018 Edition), served at
  * https://pubs.opengroup.org/onlinepubs/9699919799/ ; clause text read
@@ -92,6 +107,7 @@
  * for the same pattern already established across this test suite. */
 #define _GNU_SOURCE
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "test-policy.h"
@@ -99,6 +115,16 @@
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; \
 	printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
+
+/* fixture_write(): defined further down (this file's own "not a
+ * POSIX-clause fence" section), forward-declared here so the hosts/
+ * networks sequential-access tests below -- which need a small,
+ * controlled database rather than whatever this host's own real
+ * /etc/hosts or /etc/networks happens to contain -- can use it too. See
+ * that section's own banner and src/internal/nss_paths.h for why an
+ * env-var fixture override is this codebase's standing answer to
+ * exactly this problem. */
+static void fixture_write(const char *path, const char *content);
 
 /* ==================================================================
  * Name resolution -- .../functions/freeaddrinfo.html (which specifies
@@ -174,7 +200,11 @@ static void test_posix_netdb_getaddrinfo_loopback(void)
 	      == EAI_NONAME);
 }
 
-#if NTLIBC_TEST(UNIMPL, posix_netdb_getnameinfo_numeric)
+/* UNWRAPPED (was NTLIBC_TEST(UNIMPL, posix_netdb_getnameinfo_numeric)):
+ * getnameinfo() now exists on both platforms (src/netdb/linux/
+ * getnameinfo.c, src/netdb/nt/plat_netdb.c) and the NI_NUMERICHOST |
+ * NI_NUMERICSERV case this test exercises needs no database on either
+ * one -- see include/netdb.h's own banner. */
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -222,7 +252,6 @@ static void test_posix_netdb_getnameinfo_numeric(void)
 			  NULL, 0, serv, sizeof serv, NI_NUMERICSERV) == 0);
 	CHECK(strcmp(serv, "80") == 0);
 }
-#endif
 
 /* UNWRAPPED (was NTLIBC_TEST(UNIMPL, posix_netdb_gai_strerror_text)):
  * <netdb.h> already included above. */
@@ -268,7 +297,9 @@ static void test_posix_netdb_gai_strerror_text(void)
  * specifies setservent/getservent/getservbyname/getservbyport too
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_netdb_getservbyname_wellknown)
+/* UNWRAPPED (was NTLIBC_TEST(UNIMPL, posix_netdb_getservbyname_wellknown)):
+ * a real /etc/services(5) parser now backs this whole family
+ * (src/netdb/linux/services.c); see that file's own banner. */
 #include <netdb.h>
 #include <netinet/in.h>
 
@@ -329,13 +360,14 @@ static void test_posix_netdb_getservbyname_wellknown(void)
 		CHECK(se->s_name != NULL);
 	endservent();
 }
-#endif
 
 /* ==================================================================
  * The protocol database -- .../functions/endprotoent.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_netdb_getprotobyname_tcp)
+/* UNWRAPPED (was NTLIBC_TEST(UNIMPL, posix_netdb_getprotobyname_tcp)):
+ * a real /etc/protocols(5) parser now backs this whole family
+ * (src/netdb/linux/protocols.c); see that file's own banner. */
 #include <netdb.h>
 #include <netinet/in.h>
 
@@ -377,14 +409,29 @@ static void test_posix_netdb_getprotobyname_tcp(void)
 		CHECK(pe->p_name != NULL);
 	endprotoent();
 }
-#endif
 
 /* ==================================================================
  * The host and network databases --
  * .../functions/endhostent.html, endnetent.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_netdb_hostent_sequential_access)
+/* UNWRAPPED (was NTLIBC_TEST(UNIMPL, posix_netdb_hostent_sequential_access)):
+ * a real sequential /etc/hosts(5) walk now backs sethostent()/
+ * gethostent()/endhostent() (src/netdb/linux/hostent.c). Unlike
+ * getservbyname_wellknown/getprotobyname_tcp just above, this one CANNOT
+ * safely run against this host's own real /etc/hosts: an ad-block-style
+ * hosts file (routinely thousands of lines, blocking known ad/tracker
+ * domains) is a completely ordinary real-world /etc/hosts, and would
+ * fire this test's own 64-entry guard before gethostent() ever
+ * legitimately reaches end-of-database -- a fact about this particular
+ * machine's own configuration, not about the interface (measured
+ * directly against this environment's real /etc/hosts while verifying
+ * this pass: tens of thousands of entries, not the handful the original
+ * fence's own reasoning assumed). The fix is the same env-var fixture
+ * override src/internal/nss_paths.h already provides and this file's own
+ * test_netdb_hosts_fixture() (further down) already uses for the
+ * identical reason: a small, controlled /etc/hosts this test fully
+ * controls, not whatever this host happens to have. */
 #include <netdb.h>
 #include <sys/socket.h>
 
@@ -392,6 +439,13 @@ static void test_posix_netdb_hostent_sequential_access(void)
 {
 	struct hostent *he;
 	int entries = 0;
+
+	fixture_write("nd-hosts",
+		"127.0.0.1 localhost\n"
+		"::1 localhost6\n" /* real IPv6 literal: must be skipped, not counted */
+		"# a comment line, must not be parsed as a record\n"
+		"10.0.0.5 seqhost.example seqalias\n");
+	CHECK(setenv("NTLIBC_TEST_HOSTS_PATH", "nd-hosts", 1) == 0);
 
 	/* endhostent.html: "The sethostent() function shall open a
 	 * connection to the database and set the next entry for retrieval
@@ -424,13 +478,25 @@ static void test_posix_netdb_hostent_sequential_access(void)
 		entries++;
 	}
 	/* Terminated rather than ran to the guard: the null-pointer
-	 * end-of-database clause is what stops this loop. */
+	 * end-of-database clause is what stops this loop. With the fixture
+	 * above (2 real IPv4 lines, 1 skipped IPv6 line, 1 comment) this is
+	 * exactly 2, not merely "some number less than 64". */
 	CHECK(entries < 64);
+	CHECK(entries == 2);
 	endhostent();
-}
-#endif
 
-#if NTLIBC_TEST(UNIMPL, posix_netdb_netent_lookup)
+	unsetenv("NTLIBC_TEST_HOSTS_PATH");
+}
+
+/* UNWRAPPED (was NTLIBC_TEST(UNIMPL, posix_netdb_netent_lookup)):
+ * a real /etc/networks(5) parser now backs this whole family
+ * (src/netdb/linux/networks.c); see that file's own banner for why
+ * /etc/networks being absent (the common case on a real machine) is
+ * this database's own normal empty state. The same fixture-override
+ * reasoning as the hostent test just above applies here too: a
+ * controlled fixture makes this deterministic instead of depending on
+ * whether this particular host happens to have a networks database
+ * (and, if so, how big it is) at all. */
 #include <netdb.h>
 #include <sys/socket.h>
 
@@ -438,6 +504,12 @@ static void test_posix_netdb_netent_lookup(void)
 {
 	struct netent *ne;
 	int entries = 0;
+
+	fixture_write("nd-networks",
+		"loopnet 127.0.0.0\n"
+		"# a comment line, must not be parsed as a record\n"
+		"seqnet 10.0\n");
+	CHECK(setenv("NTLIBC_TEST_NETWORKS_PATH", "nd-networks", 1) == 0);
 
 	/* endnetent.html: "The setnetent() function shall open and rewind
 	 * the database ... The getnetent() function shall read the next
@@ -459,6 +531,7 @@ static void test_posix_netdb_netent_lookup(void)
 		entries++;
 	}
 	CHECK(entries < 64);
+	CHECK(entries == 2);
 	endnetent();
 
 	/* "The getnetbyaddr() function shall search the database from the
@@ -469,13 +542,24 @@ static void test_posix_netdb_netent_lookup(void)
 	 * beginning and find the first entry for which the network name
 	 * specified by name matches the n_name member".  RETURN VALUE
 	 * gives the miss case, which is the one guaranteed to be
-	 * reachable on a host with no network database: "a null pointer if
-	 * the end of the database was reached or the requested entry was
-	 * not found." */
+	 * reachable regardless of what this fixture contains: "a null
+	 * pointer if the end of the database was reached or the requested
+	 * entry was not found." */
 	CHECK(getnetbyname("no-such-network-name") == NULL);
 	CHECK(getnetbyaddr(0xfffffffeUL, AF_INET) == NULL);
+
+	/* The positive case, now decidable against a fixture this test
+	 * fully controls: "loopnet 127.0.0.0" is the real Debian-shipped
+	 * /etc/networks loopback entry (src/netdb/linux/networks.c's own
+	 * banner records the exact real-world file this line is drawn
+	 * from), n_net == 0x7f000000 in host byte order. */
+	ne = getnetbyname("loopnet");
+	CHECK(ne != NULL);
+	if (ne != NULL) CHECK(ne->n_net == 0x7f000000UL);
+	CHECK(getnetbyaddr(0x7f000000UL, AF_INET) != NULL);
+
+	unsetenv("NTLIBC_TEST_NETWORKS_PATH");
 }
-#endif
 
 /* ==================================================================
  * Not a POSIX-clause fence: real coverage of THIS PASS'S OWN backends
@@ -812,19 +896,18 @@ static void test_netdb_dns_udp_roundtrip(void)
 int main(void)
 {
 	test_posix_netdb_getaddrinfo_loopback();
+	test_posix_netdb_getnameinfo_numeric();
 	test_posix_netdb_gai_strerror_text();
+	test_posix_netdb_getservbyname_wellknown();
+	test_posix_netdb_getprotobyname_tcp();
+	test_posix_netdb_hostent_sequential_access();
+	test_posix_netdb_netent_lookup();
 
 	test_netdb_hosts_fixture();
 	test_netdb_nsswitch_hosts_files_only();
 	test_netdb_gethostbyname_fixture();
 	test_netdb_dns_udp_roundtrip();
 
-	/* Every remaining case below main() in source order is still
-	 * fenced (getnameinfo() and the four enumerable databases -- see
-	 * this file's own top banner for exactly what this pass built and
-	 * what it deliberately left for later). tools/test-policy.py
-	 * --pedantic re-decides each one; this comment is not the
-	 * authority for it. */
 	if (!fails) printf("posix-netdb: all tests passed\n");
 	return fails != 0;
 }

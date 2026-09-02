@@ -38,29 +38,29 @@
  * door onto the exact same __hosts_resolve() walk getaddrinfo()
  * itself uses, not a second resolver).
  *
+ * UPDATE (this pass): every database family the previous pass declined
+ * is now real. getnameinfo() (src/netdb/linux/getnameinfo.c) does a
+ * genuine reverse /etc/hosts walk (__hosts_lookup_reverse(), src/netdb/
+ * linux/hosts.c) before falling back to numeric -- the one piece the
+ * old banner said hosts.c didn't build yet, built now as exactly the
+ * "small addition on top of the forward scan" that banner already
+ * anticipated. Its OWN remaining gap, disclosed rather than silently
+ * fixed: no PTR DNS query type is sent, so a name that exists only in
+ * DNS (never in the local hosts file) still falls back to numeric --
+ * see that file's own banner. The four enumerable databases (host/
+ * network/protocol/service) are real /etc/hosts(5) (sequential this
+ * time, not by-name)/etc/networks(5)/etc/protocols(5)/etc/services(5)
+ * parsers -- src/netdb/linux/hostent.c's sethostent()/gethostent()/
+ * endhostent(), and src/netdb/linux/networks.c, protocols.c,
+ * services.c respectively -- each following the identical
+ * fopen()-returns-NULL-is-a-clean-empty-database shape __hosts_lookup()
+ * already established (see networks.c's own banner for why that matters
+ * most for /etc/networks specifically: most real machines have none).
+ *
  * Deliberately NOT built this pass (a real gap, not a decline --
  * documented per this project's own house style rather than silently
  * absent):
  *
- *   - getnameinfo(): needs a reverse (address -> name) walk this
- *     pass's hosts.c does not build (see its own banner) and, for the
- *     non-numeric case, a PTR DNS query type this resolver does not
- *     send. A real addition on top of what exists, not a redesign.
- *   - The host/network/protocol/service ENUMERATION database
- *     families (sethostent/gethostent/endhostent, setnetent/
- *     getnetent/getnetbyname/getnetbyaddr/endnetent, setprotoent/
- *     getprotoent/getprotobyname/getprotobynumber/endprotoent,
- *     setservent/getservent/getservbyname/getservbyport/endservent):
- *     not part of this task's own concrete-deliverables list, and
- *     each is a genuinely separate small parser (/etc/hosts
- *     enumerated rather than looked-up, /etc/services, /etc/protocols,
- *     /etc/networks) with its own struct family this header does not
- *     declare -- see this project's own "a declared-but-undefined
- *     symbol is a latent bug" rule (this header's <sys/socket.h>
- *     sibling states it explicitly): nothing here names getservbyname
- *     or struct servent because nothing in this tree defines them
- *     yet. test/posix-netdb.c's existing UNIMPL fences for all of the
- *     above are left exactly as they were.
  *   - AF_INET6/AAAA records anywhere in this header's real behavior:
  *     this project's socket layer has no IPv6 transport yet (see
  *     <sys/socket.h>'s own banner), so getaddrinfo() with
@@ -133,10 +133,17 @@ struct addrinfo {
 #define AI_ALL         0x0020
 #define AI_ADDRCONFIG  0x0040
 
-/* netdb.h.html NI_* flags: declared for getnameinfo() header
- * completeness even though that function itself is not built this
- * pass (see this header's own banner) -- POSIX defines these as part
- * of <netdb.h> unconditionally, not scoped to the function existing. */
+/* netdb.h.html NI_* flags for getnameinfo() (src/netdb/linux/
+ * getnameinfo.c, src/netdb/nt/plat_netdb.c). NI_NUMERICHOST/
+ * NI_NUMERICSERV are always honored exactly (no database is consulted
+ * at all for either); NI_NAMEREQD is honored on Linux (a name that
+ * cannot be found makes the call fail rather than silently falling back
+ * to numeric); NI_DGRAM selects "udp" over "tcp" when resolving a
+ * non-numeric service name. NI_NOFQDN is declared for header
+ * completeness but has no observable effect: nothing in this
+ * implementation's /etc/hosts walk ever returns more of a name than the
+ * file itself already spells out, so there is no "trim the domain
+ * suffix" transformation to apply either way. */
 #define NI_NOFQDN       0x0001
 #define NI_NUMERICHOST  0x0002
 #define NI_NAMEREQD     0x0004
@@ -168,6 +175,18 @@ int getaddrinfo(const char *__restrict, const char *__restrict,
 void freeaddrinfo(struct addrinfo *);
 const char *gai_strerror(int);
 
+/* getnameinfo(): the reverse of getaddrinfo() -- see this header's own
+ * banner for exactly what each platform backend does (Linux: a real
+ * /etc/hosts reverse walk plus a real /etc/services lookup, falling
+ * back to numeric per DESCRIPTION whenever a name genuinely cannot be
+ * found; NT: numeric-only, honestly, see src/netdb/nt/plat_netdb.c's
+ * own banner). sa required: every real caller passes a real sockaddr,
+ * and DESCRIPTION gives no meaning to a NULL one -- there is no address
+ * to report on at all without it. */
+int getnameinfo(const struct sockaddr *__restrict, socklen_t,
+                 char *__restrict, socklen_t, char *__restrict, socklen_t, int)
+    __attribute__((nonnull(1)));
+
 /* gethostbyname(): XSI/legacy, removed from this edition of POSIX
  * (test/posix-netdb.c's own header comment records the check), kept
  * as a real, disclosed extension -- see this header's own banner.
@@ -179,6 +198,77 @@ const char *gai_strerror(int);
  * any NULL check would matter (a NULL name cannot be a hostname). */
 struct hostent *gethostbyname(const char *)
     __attribute__((nonnull(1)));
+
+/* sethostent()/gethostent()/endhostent(): endhostent.html's sequential
+ * host-database walk -- one struct hostent per line of the same
+ * /etc/hosts gethostbyname() above already reads, in file order rather
+ * than by name. src/netdb/linux/hostent.c is the real Linux body;
+ * src/netdb/nt/plat_netdb.c's own banner explains its NT behavior. */
+void sethostent(int);
+struct hostent *gethostent(void);
+void endhostent(void);
+
+/* netdb.h.html: "struct netent" -- the four members POSIX mandates. */
+struct netent {
+	char *n_name;
+	char **n_aliases;
+	int n_addrtype;
+	uint32_t n_net;
+};
+
+/* setnetent()/getnetent()/endnetent()/getnetbyname()/getnetbyaddr():
+ * endnetent.html's network database -- see src/netdb/linux/networks.c's
+ * own banner for the real Linux /etc/networks(5) parser (and for why
+ * that file being routinely absent is this database's own normal empty
+ * state, not an error) and src/netdb/nt/plat_netdb.c's banner for NT. */
+void setnetent(int);
+struct netent *getnetent(void);
+void endnetent(void);
+struct netent *getnetbyname(const char *)
+    __attribute__((nonnull(1)));
+struct netent *getnetbyaddr(uint32_t, int);
+
+/* netdb.h.html: "struct protoent" -- the three members POSIX mandates. */
+struct protoent {
+	char *p_name;
+	char **p_aliases;
+	int p_proto;
+};
+
+/* setprotoent()/getprotoent()/endprotoent()/getprotobyname()/
+ * getprotobynumber(): endprotoent.html's protocol database -- see
+ * src/netdb/linux/protocols.c's own banner for the real Linux
+ * /etc/protocols(5) parser and src/netdb/nt/plat_netdb.c's banner for
+ * NT. */
+void setprotoent(int);
+struct protoent *getprotoent(void);
+void endprotoent(void);
+struct protoent *getprotobyname(const char *)
+    __attribute__((nonnull(1)));
+struct protoent *getprotobynumber(int);
+
+/* netdb.h.html: "struct servent" -- the four members POSIX mandates. */
+struct servent {
+	char *s_name;
+	char **s_aliases;
+	int s_port;
+	char *s_proto;
+};
+
+/* setservent()/getservent()/endservent()/getservbyname()/
+ * getservbyport(): endservent.html's service database -- see
+ * src/netdb/linux/services.c's own banner for the real Linux
+ * /etc/services(5) parser and src/netdb/nt/plat_netdb.c's banner for
+ * NT. name/proto and port/proto are each individually optional per
+ * DESCRIPTION ("If proto is a null pointer, any value of the s_proto
+ * member shall be matched"), so only the non-nullable positional
+ * arguments (name, port) carry nonnull. */
+void setservent(int);
+struct servent *getservent(void);
+void endservent(void);
+struct servent *getservbyname(const char *, const char *)
+    __attribute__((nonnull(1)));
+struct servent *getservbyport(int, const char *);
 
 /* h_errno: gethostbyname()'s own non-POSIX error-reporting channel,
  * exactly as legacy as gethostbyname() itself -- kept for the same

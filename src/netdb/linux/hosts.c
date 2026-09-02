@@ -5,13 +5,12 @@
  * -- a real /etc/hosts(5) parser. See src/netdb/linux/netdb_internal.h
  * for this function's exact contract.
  *
- * Deliberately NOT built: reverse (address -> name) lookup. Nothing in
- * this pass's public surface needs it -- getaddrinfo()/gethostbyname()
- * are both forward-only, and getnameinfo() (the POSIX interface that
- * WOULD need it) is out of scope for this pass entirely (see
- * include/netdb.h's own banner). A reverse walk over this same file
- * would be a small addition on top of the forward scan below, not a
- * different parser; left for whenever getnameinfo() is built.
+ * UPDATE (this pass): getnameinfo() (src/netdb/linux/getnameinfo.c) and
+ * gethostent() (src/netdb/linux/hostent.c) now need exactly the reverse
+ * (address -> name) and sequential walks this file's own banner used to
+ * say were out of scope -- both built below as small additions on top
+ * of the forward scan, sharing its line-shape rules (parse_hosts_addr())
+ * rather than re-deriving them.
  */
 #include <ctype.h>
 #include <stdio.h>
@@ -31,6 +30,34 @@
 static int looks_like_v6(const char *tok)
 {
 	return strchr(tok, ':') != NULL;
+}
+
+/* parse_hosts_addr(): shared first half of every /etc/hosts(5) line
+ * parse in this file (forward lookup, reverse lookup, sequential
+ * enumeration) -- splits off the leading whitespace-delimited address
+ * field (mutating `line` in place, same as every parser here), skips a
+ * real IPv6 literal or an address inet_pton() cannot parse, and returns
+ * a pointer to the remainder of the line (the name-tokens portion,
+ * possibly empty). Returns NULL for a line this parser has nothing to
+ * say about (blank, or an address field that is IPv6 or unparsable);
+ * every caller's per-line loop just continues past that. Does NOT
+ * strip a trailing '#' comment -- callers do that first, exactly as
+ * this file's original __hosts_lookup() always has, since the comment
+ * cut has to happen before ANY field is split out of the line. */
+static char *parse_hosts_addr(char *line, struct in_addr *out)
+{
+	char *p = line;
+	char *addrtok;
+
+	while (*p == ' ' || *p == '\t') p++;
+	addrtok = p;
+	while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
+	if (p == addrtok) return NULL; /* blank/comment-only line */
+	if (*p) *p++ = '\0';
+
+	if (looks_like_v6(addrtok)) return NULL;
+	if (inet_pton(AF_INET, addrtok, out) != 1) return NULL;
+	return p;
 }
 
 int __hosts_lookup(const char *name, struct in_addr *addrs, int maxaddrs,
@@ -90,4 +117,97 @@ int __hosts_lookup(const char *name, struct in_addr *addrs, int maxaddrs,
 
 	fclose(f);
 	return found;
+}
+
+int __hosts_lookup_reverse(const struct in_addr *addr, char *name, size_t namesz)
+{
+	FILE *f;
+	char line[HOSTS_LINE_MAX];
+	int found = 0;
+
+	f = fopen(__NSS_HOSTS_PATH(), "r");
+	if (!f) return 0;
+
+	while (!found && fgets(line, sizeof line, f) != NULL) {
+		char *hash = strchr(line, '#');
+		struct in_addr a;
+		char *rest, *nametok;
+
+		if (hash) *hash = '\0';
+		rest = parse_hosts_addr(line, &a);
+		if (!rest) continue;
+		if (a.s_addr != addr->s_addr) continue;
+
+		while (*rest == ' ' || *rest == '\t') rest++;
+		if (*rest == '\0' || *rest == '\n') continue; /* address, no name: malformed */
+		nametok = rest;
+		while (*rest && *rest != ' ' && *rest != '\t' && *rest != '\n') rest++;
+		*rest = '\0';
+
+		if (namesz > 0) {
+			size_t n = strlen(nametok);
+			if (n >= namesz) n = namesz - 1;
+			memcpy(name, nametok, n);
+			name[n] = '\0';
+		}
+		found = 1;
+	}
+
+	fclose(f);
+	return found;
+}
+
+int __hosts_read_entry(FILE *f, struct in_addr *addr,
+                        char *name, size_t namesz,
+                        char *aliasbuf, size_t aliasbufsz,
+                        char **aliases, int maxaliases, int *naliases)
+{
+	char line[HOSTS_LINE_MAX];
+
+	*naliases = 0;
+	while (fgets(line, sizeof line, f) != NULL) {
+		char *hash = strchr(line, '#');
+		char *rest, *canontok;
+		size_t off = 0;
+		int n = 0;
+
+		if (hash) *hash = '\0';
+		rest = parse_hosts_addr(line, addr);
+		if (!rest) continue;
+
+		while (*rest == ' ' || *rest == '\t') rest++;
+		if (*rest == '\0' || *rest == '\n') continue; /* address, no name: malformed */
+		canontok = rest;
+		while (*rest && *rest != ' ' && *rest != '\t' && *rest != '\n') rest++;
+		if (*rest) *rest++ = '\0';
+
+		if (namesz > 0) {
+			size_t l = strlen(canontok);
+			if (l >= namesz) l = namesz - 1;
+			memcpy(name, canontok, l);
+			name[l] = '\0';
+		}
+
+		for (;;) {
+			char *tok;
+			size_t toklen;
+
+			while (*rest == ' ' || *rest == '\t') rest++;
+			if (*rest == '\0' || *rest == '\n') break;
+			tok = rest;
+			while (*rest && *rest != ' ' && *rest != '\t' && *rest != '\n') rest++;
+			toklen = (size_t)(rest - tok);
+			if (*rest) *rest++ = '\0';
+
+			if (n < maxaliases && off + toklen + 1 <= aliasbufsz) {
+				memcpy(aliasbuf + off, tok, toklen);
+				aliasbuf[off + toklen] = '\0';
+				aliases[n++] = aliasbuf + off;
+				off += toklen + 1;
+			}
+		}
+		*naliases = n;
+		return 1;
+	}
+	return 0;
 }
