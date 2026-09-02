@@ -189,7 +189,7 @@ int __plat_process_cpu_ticks(long long *kernel, long long *user) // NOLINT(bugpr
  * workaround -- see plat_mem.c's banner for the analogous story on the
  * mman side). The manager thread is the opposite: a correct
  * implementation needs real thread creation plus a real cross-thread
- * wake primitive, and this pass deliberately did not attempt either,
+ * wake primitive, and this file deliberately does not attempt either,
  * for a specific reason beyond "out of scope":
  *
  *   1. Thread creation via clone(2) (CLONE_VM|CLONE_FS|CLONE_FILES|
@@ -212,12 +212,11 @@ int __plat_process_cpu_ticks(long long *kernel, long long *user) // NOLINT(bugpr
  *      silently until the next unrelated wakeup happens to occur. That
  *      is not a hang and not a crash -- it is a timer that fires late,
  *      exactly the shape of bug a short smoke test does not reliably
- *      catch (this project's own instruction for this work says so
- *      explicitly), and the accuracy bar the rest of this migration
- *      holds itself to (fuzz/linux_pilot_test.c's msync()-through-a-
- *      real-fd round trip, not just "the mapping that wrote it") is not
- *      one a rushed attempt at both (1) and (2) together would clear
- *      with confidence.
+ *      catch, and the accuracy bar this port holds itself to elsewhere
+ *      (fuzz/linux_pilot_test.c's msync()-through-a-real-fd round trip,
+ *      not just "the mapping that wrote it") is not one a rushed
+ *      attempt at both (1) and (2) together would clear with
+ *      confidence.
  *   3. Both of the above have to work with no libc runtime underneath
  *      them at all (this file's own -nostdinc, no-host-libc discipline):
  *      clone()'s child begins executing with a valid CLONE_VM

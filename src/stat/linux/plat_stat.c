@@ -36,19 +36,15 @@
  * them by accident later.
  *
  * __plat_chmodat(), __plat_mkdir(), __plat_fstatat(),
- * __plat_statvfs_path(), and __plat_set_times_at() ARE implemented here
- * now, real: they used to take `struct __ntpath *np` -- an already-NT-
- * resolved path object each front door built via __ntpath_at()/
- * __ntpath() itself before this interface was ever reached, with no
- * POSIX-shaped way to hand a resolved path to a non-NT backend. That
- * coupling is gone: plat_stat.h now hands each of these five a raw,
- * unresolved (dirfd, path) pair (see that header's own updated banner),
- * exactly the same relocation src/internal/plat_fcntl.h's __plat_open()
- * already got (src/fcntl/linux/plat_fcntl.c, commit ce4763c) -- and this
- * backend needs almost the same amount of translation __plat_open()
- * needed: none. Real Linux syscalls already take (dirfd, path) directly,
- * and this backend never calls __vfs_resolve_at() at all (see
- * plat_stat.h's own banner for why that call stays NT-only in practice
+ * __plat_statvfs_path(), and __plat_set_times_at() are implemented here,
+ * real: plat_stat.h hands each of these five a raw, unresolved (dirfd,
+ * path) pair (see that header's own banner), the same shape
+ * src/internal/plat_fcntl.h's __plat_open() takes (src/fcntl/linux/
+ * plat_fcntl.c) -- and this backend needs almost the same amount of
+ * translation __plat_open() needed: none. Real Linux syscalls already
+ * take (dirfd, path) directly, and this backend never calls
+ * __vfs_resolve_at() at all (see plat_stat.h's own banner for why
+ * that call stays NT-only in practice
  * even though the function itself is shared, portable code) -- Linux
  * already has real, native `/dev/null` etc, so there is no synthetic
  * overlay to consult in the first place. `dirfd` is resolved the same
@@ -74,8 +70,8 @@
  * means a caller that changes ntlibc's own umask() without there being
  * any real syscall to back it will not see that change reflected in a
  * newly created file or directory's mode on this backend -- a real,
- * pre-existing gap this task inherits rather than introduces, and too
- * large to fix cleanly here (it would mean either wiring ntlibc's
+ * pre-existing gap, not introduced here, and too large to fix cleanly
+ * here (it would mean either wiring ntlibc's
  * umask() to a real umask(2) syscall everywhere, changing this
  * backend's process-wide state as a side effect of a single call, or
  * auditing every mode-bearing Linux syscall site to mask by hand); left
@@ -196,8 +192,8 @@
  * freestanding build and collapses every failure to exactly -1 with
  * glibc's OWN errno rather than the raw kernel -errno this file's
  * is_sys_error()/`errno = (int)-ret` translation requires -- see
- * src/mman/linux/plat_mem.c's fix (commit 299458a) for the fuller
- * account, confirmed independently across six other Linux backends.
+ * src/mman/linux/plat_mem.c's fix for the fuller account, confirmed
+ * independently across six other Linux backends.
  * aarch64's syscall calling convention: x8 = syscall number, x0..x5 =
  * up to 6 arguments, result (or -errno in [-4095,-1]) in x0. */
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct

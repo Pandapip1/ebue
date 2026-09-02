@@ -21,8 +21,8 @@
  * s_port stores the port ALREADY in network byte order (htons()'d at
  * parse time) -- endservent.html's own struct servent member
  * description ("s_port: A value which, when converted to uint16_t,
- * yields the port number in network byte order") and this pass's own
- * test/posix-netdb.c assertion (`(uint16_t)se->s_port == htons(80)`)
+ * yields the port number in network byte order") and test/
+ * posix-netdb.c's own assertion (`(uint16_t)se->s_port == htons(80)`)
  * both require exactly that, matching every real implementation.
  *
  * Non-reentrant static storage: same house style as src/netdb/linux/

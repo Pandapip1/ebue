@@ -7,13 +7,11 @@
  * statically-linked "files"/"dns" backends, dispatched by a real
  * config file, rather than an attempt to dlopen() glibc's own
  * libnss_*.so.2 modules, which are built against glibc's private,
- * unstable internal ABI and would not run against this project's own
- * from-scratch dlopen() even if DT_NEEDED chasing existed for it --
- * see src/dlfcn/linux/plat_dlfcn.c's own "Also worth stating for the
- * NSS case" paragraph, which reasoned about exactly this and flagged
- * it as this pass's own work. musl's real-world precedent is the same
- * call: musl supports only built-in "files"/"dns", never dynamically
- * loaded NSS modules, for the identical ABI-instability reason.
+ * unstable internal ABI that ntlibc's own dlopen() (src/dlfcn/linux/
+ * plat_dlfcn.c) has no reason to replicate. musl's real-world
+ * precedent is the same call: musl supports only built-in
+ * "files"/"dns", never dynamically loaded NSS modules, for the
+ * identical ABI-instability reason.
  *
  * What is genuinely NOT implemented, on purpose: the `[STATUS=action]`
  * qualifier glibc's own nsswitch.conf(5) supports after a service name
@@ -25,7 +23,7 @@
  * order until one produces a result, which is nsswitch.conf's own
  * documented default action set anyway (SUCCESS=return,
  * UNAVAIL=continue, NOTFOUND=continue, TRYAGAIN=continue) for every
- * status this pass's two backends can even produce. An admin who
+ * status this file's two backends can even produce. An admin who
  * writes an explicit non-default action list to get different
  * fallback behavior will not get it; documented here rather than
  * silently almost-right.

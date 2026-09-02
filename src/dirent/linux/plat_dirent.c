@@ -7,16 +7,12 @@
  * syscall(2), no host libc, -nostdinc against ntlibc's own headers,
  * aarch64 syscall numbers confirmed against this host).
  *
- * This replaces the earlier ENOSYS stub, now that
- * src/internal/plat_dirent.h has grown __plat_dir_decode_one() -- the
- * backend-neutral decoding step that stub's own banner said was the
- * missing piece ("either a backend-neutral record format this interface
- * hands back ... or an entirely separate Linux-native front door").
  * src/dirent/readdir.c's __dirstream_next() and src/dirent/getdents.c's
- * getdents() no longer hardcode NT's FILE_ID_BOTH_DIR_INFORMATION at
- * all; they decode through __plat_dir_decode_one() instead, so this
- * backend just needs its own real getdents64(2) plus a decoder for
- * linux_dirent64 -- no separate front door required.
+ * getdents() decode through the backend-neutral __plat_dir_decode_one()
+ * (src/internal/plat_dirent.h) rather than hardcoding NT's
+ * FILE_ID_BOTH_DIR_INFORMATION, so this backend just needs its own real
+ * getdents64(2) plus a decoder for linux_dirent64 -- no separate front
+ * door required.
  *
  * linux_dirent64's exact layout (d_ino: u64 @0, d_off: u64 @8, d_reclen:
  * u16 @16, d_type: u8 @18, d_name[]: NUL-terminated @19, chained by

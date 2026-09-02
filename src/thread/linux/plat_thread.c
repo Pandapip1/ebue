@@ -264,8 +264,8 @@ static long futex_wake(int *uaddr, int count)
  * primitive). */
 
 /* This function's own `out`, and map_named_sem()'s below, are the
- * common root of a whole class of findings this sweep leaves as an
- * honest residual rather than force-fitting `nonnull`: every
+ * common root of a whole class of findings left as an honest residual
+ * rather than force-fitting `nonnull`: every
  * __plat_*_create()/_open()/_open_or_create() below writes
  * `obj->futex`/`obj->kind`/`obj->max` unconditionally right after
  * calling this function (or map_named_sem()), and `obj` is that
@@ -274,13 +274,13 @@ static long futex_wake(int *uaddr, int count)
  * -1; }` -- the identical "checked allocation, then use" shape this
  * tree's own malloc() already gets trusted for elsewhere (see
  * tools/clang/OwnershipChecker.cpp's own allocator-family extent
- * tracking, 8a56a66), just via this backend's raw_syscall(SYS_mmap,
- * ...) instead of a call the checker already recognizes as an
- * allocator. Verified sound by hand at every one of this file's own
- * call sites (is_sys_error() is checked before `obj`/`*out` is ever
- * touched, with no path that skips it); teaching the checker to trust
- * this specific raw-syscall idiom the same way is a real, narrow lemma
- * this pass did not attempt, not a shortcut taken here. */
+ * tracking), just via this backend's raw_syscall(SYS_mmap, ...)
+ * instead of a call the checker already recognizes as an allocator.
+ * Verified sound by hand at every one of this file's own call sites
+ * (is_sys_error() is checked before `obj`/`*out` is ever touched,
+ * with no path that skips it); teaching the checker to trust this
+ * specific raw-syscall idiom the same way is a real, narrow lemma not
+ * yet attempted, not a shortcut taken here. */
 static int alloc_sync(struct ntlibc_linux_sync **out)
 {
 	long ret = raw_syscall(SYS_mmap, 0, (long)sizeof(struct ntlibc_linux_sync),
@@ -430,8 +430,8 @@ int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout, // NOLINT
  * own small synchronization problem) and no caller in this port's scope
  * needs it. NOT this file's to define: __plat_thread_resume() --
  * despite being declared in plat_thread.h, its one real implementation
- * is process's (src/process/nt/plat_process.c), per this task's own
- * multiple-definition history; a Linux one belongs there, not here.
+ * is process's (src/process/nt/plat_process.c); a Linux one belongs
+ * there, not here.
  *
  * A REAL, SERIOUS, CONFIRMED CONSEQUENCE of "no CLONE_SETTLS" that the
  * scope note above only gestured at: every thread this function spawns
@@ -458,8 +458,8 @@ int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout, // NOLINT
  * whose size/layout matches this program's own linked TLS segment (the
  * ELF PT_TLS entry's size/alignment) plus CLONE_SETTLS -- genuinely
  * tied to the "no real crt/startup exists for a Linux target build yet"
- * gap already disclosed elsewhere in this port's history, not a small,
- * separately fixable thing. Any code that spawns multiple threads via
+ * gap already disclosed elsewhere in this port, not a small, separately
+ * fixable thing. Any code that spawns multiple threads via
  * this function and relies on __thread storage being independent per
  * thread (pthread_create()'s own full path would, once ported; this
  * port's own pthread_mutex_t test works around it by staying single-
@@ -551,10 +551,10 @@ __plat_handle_t __plat_thread_duplicate_self(void)
  * in some interaction with the semaphore-based blocking path
  * mutex_acquire() ALSO uses for its own, separate, already-proven-
  * correct wait (src/thread/pthread_mutex.c's own semaphore/
- * __plat_wait_one() path, unrelated to this lock, and unaffected by
- * this change). Rather than keep chasing a subtle concurrency bug in a
- * hand-written wakeup protocol for a lock that never needs to sleep in
- * the first place, this backend uses the lock shape that is trivially,
+ * __plat_wait_one() path, unrelated to this lock). Rather than keep
+ * chasing a subtle concurrency bug in a hand-written wakeup protocol
+ * for a lock that never needs to sleep in the first place, this
+ * backend uses the lock shape that is trivially,
  * inspection-obviously correct for its actual job: spin, yielding the
  * CPU between attempts so a contended spin cannot starve the holder
  * (which is running right now, on this same host, and will release
@@ -845,10 +845,9 @@ static void named_mutant_path(const char *name, char *buf, size_t bufsz)
  * function. Unlike the named-semaphore group above, this uses plain
  * O_CREAT (no O_EXCL): two processes both naming a brand-new lock for
  * the first time both legitimately need a valid, initialized lock back,
- * not a create-vs-open distinction. That first-touch initialization
- * used to be a real, confirmed race, not just a theoretical one: an
- * earlier version of this function checked `obj->kind !=
- * NTLIBC_LX_SYNC_SEMAPHORE` and then, non-atomically, wrote
+ * not a create-vs-open distinction. That first-touch initialization is
+ * a real, confirmed race if done naively -- checking `obj->kind !=
+ * NTLIBC_LX_SYNC_SEMAPHORE` and then, non-atomically, writing
  * obj->max/obj->futex/obj->kind in plain (non-atomic) stores. Two
  * processes racing the same fresh backing file could both observe
  * kind==0 and both start that write sequence; if process A's writes

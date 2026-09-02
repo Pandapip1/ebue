@@ -3,7 +3,7 @@
  *
  * getaddrinfo(): https://pubs.opengroup.
  * org/onlinepubs/9699919799/functions/freeaddrinfo.html. See
- * include/netdb.h's own banner for this pass's overall scope
+ * include/netdb.h's own banner for this file's overall scope
  * (AF_INET only, no service-name database, "files"/"dns" NSS order
  * from a real /etc/nsswitch.conf). freeaddrinfo()/gai_strerror() have
  * no OS dependency at all and live in the platform-shared src/netdb/

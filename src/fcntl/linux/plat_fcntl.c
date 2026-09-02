@@ -8,17 +8,12 @@
  * syscall numbers confirmed against this host's own <sys/syscall.h> as
  * an oracle).
  *
- * __plat_open() IS implemented here now. plat_fcntl.h used to take a
- * `struct __ntpath *np` -- an already-NT-resolved path object -- built
- * entirely by src/fcntl/open.c's own front door before this interface
- * was ever reached, with no POSIX- or Linux-shaped way to hand a
- * resolved path to a non-NT backend. That coupling is gone: the
- * interface now hands __plat_open() a raw, unresolved (dirfd, path)
- * pair (see plat_fcntl.h's own updated banner), and the NT-specific
- * resolution machinery (VFS-overlay lookup, __ntpath_at(), the $LXMOD
- * extended-attribute buffer) moved into src/fcntl/nt/plat_fcntl.c's
- * own __plat_open() body instead -- the same relocation every other
- * NT-specific interpretation step in this migration already got.
+ * __plat_open() is implemented here, real: plat_fcntl.h hands it a raw,
+ * unresolved (dirfd, path) pair (see that header's own banner), not an
+ * already-NT-resolved `struct __ntpath *np`. The NT-specific resolution
+ * machinery (VFS-overlay lookup, __ntpath_at(), the $LXMOD extended-
+ * attribute buffer) lives in src/fcntl/nt/plat_fcntl.c's own
+ * __plat_open() body instead.
  *
  * This backend's own __plat_open() needs almost none of NT's flag
  * translation: Linux's real openat(2) already takes (dirfd, path)
@@ -212,8 +207,8 @@ static int to_linux_open_flags(int flags)
  * syscall(), every fallocate(2) failure collapses to ret==-1, so
  * that comparison would never match and the degradation path would
  * never trigger even when it should. See src/mman/linux/plat_mem.c's
- * fix (commit 299458a) for the fuller account of this bug, confirmed
- * independently across six other Linux backends. aarch64's syscall
+ * fix for the fuller account of this bug, confirmed independently
+ * across six other Linux backends. aarch64's syscall
  * calling convention: x8 = syscall number, x0..x5 = up to 6
  * arguments, result (or -errno in [-4095,-1]) in x0. */
 #if defined(__aarch64__)

@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Linux implementation of src/internal/plat_mem.h -- the second real
- * backend behind the platform-abstraction seam the NT pilot (f4b5c99)
- * introduced, proving the interface against an OS whose memory-mapping
- * primitives look nothing like NT's.
+ * backend behind the platform-abstraction seam the NT pilot introduced,
+ * proving the interface against an OS whose memory-mapping primitives
+ * look nothing like NT's.
  *
  * Every call here is a single raw Linux syscall, issued directly via
  * syscall(2) rather than through any host libc wrapper -- ntlibc talks

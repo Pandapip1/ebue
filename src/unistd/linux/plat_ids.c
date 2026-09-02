@@ -4,7 +4,7 @@
  * Real Linux backends for the four res*id() calls and euidaccess()/
  * eaccess(), all declared in include/unistd.h under _GNU_SOURCE and
  * marked "undefined-ok" there for NT specifically (see that header's
- * own updated comments, and syscall()'s comment in src/unistd/linux/
+ * own comments, and syscall()'s comment in src/unistd/linux/
  * plat_unistd.c for the precedent this file follows): NT's single-
  * fixed-identity model (src/unistd/ids.c's own getuid()/geteuid()) has
  * no ruid/euid/suid triple to report, and no effective-vs-real access-

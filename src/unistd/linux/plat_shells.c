@@ -3,8 +3,8 @@
  *
  * setusershell()/getusershell()/endusershell(): real, from-scratch
  * /etc/shells enumeration for native Linux. include/unistd.h's own
- * comment on these three used to say "no such file or concept on NT" --
- * true of NT, where there genuinely is no /etc/shells (or any
+ * comment on these three says "no such file or concept on NT" -- true
+ * of NT, where there genuinely is no /etc/shells (or any
  * registered-shell concept at all) to enumerate, and that reasoning
  * stays for NT; Linux has a real, simple, line-oriented /etc/shells
  * this backend can just read (same NT-reasoning-stays-Linux-gets-real-

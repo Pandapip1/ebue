@@ -187,11 +187,10 @@
  * (per "NAMESPACE ISOLATION" above), so two threads racing dlopen()/
  * dlclose() on independent objects do not corrupt each other's -- but
  * the module-id/DTV-growth state (next_tls_module_id, dtv_capacity,
- * the real TCB's own dtv array) is just as unsynchronized as
- * self_symtab_load() used to be, and pthread_once() cannot fix it
- * (that state legitimately changes on every dlopen(), not just the
- * first). A real fix needs a mutex around load_object()/teardown_obj()
- * as a whole -- deferred, disclosed rather than hidden.
+ * the real TCB's own dtv array) is unsynchronized, and pthread_once()
+ * cannot fix it (that state legitimately changes on every dlopen(), not
+ * just the first). A real fix needs a mutex around load_object()/
+ * teardown_obj() as a whole -- deferred, disclosed rather than hidden.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -233,8 +232,7 @@ static int table_bytes(size_t count, size_t element_size, size_t *out)
  * so this loader cannot silently inherit the rest of this tree's
  * hardcoded assumption the way a less address-space-sensitive piece of
  * code might get away with. Not fixed in mman.c/sysconf.c themselves:
- * that is a separate, pre-existing bug in code this task did not touch
- * and is out of scope to correct here; this file simply does not
+ * that is a separate, pre-existing bug there; this file simply does not
  * depend on it. The true value is read once from /proc/self/auxv's
  * AT_PAGESZ entry -- the same kind of "ask the kernel directly via
  * /proc" technique self_symtab_load() below already uses for a
@@ -309,8 +307,8 @@ static unsigned long pgup(unsigned long v) { unsigned long p = real_page_size();
  * model (Elf64_* structs, DT_RELA, no-addend-implicit-in-instruction
  * REL) does not carry over to i386's real ABI (ELF32, DT_REL, implicit
  * addends) by just adding a syscall trampoline and a relocation-type
- * table -- seebelow's own banner update for exactly what a real i386
- * loader port would additionally need. */
+ * table -- see this file's own top banner for what a real i386 loader
+ * port would additionally need. */
 #if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
@@ -442,7 +440,7 @@ typedef struct {
  * DT_GNU_HASH already is elsewhere in this file -- every glibc- and
  * musl-linked shared object this loader is likely to ever see emits
  * one. See "PT_GNU_RELRO hardening" at this file's own load_object()
- * for what this pass now does with it. */
+ * for what load_object() does with it. */
 #define PT_GNU_RELRO 0x6474e552
 
 #define PF_X 1
@@ -572,14 +570,12 @@ static const char main_handle_token;
  * once per process and kept resident for its lifetime (never freed --
  * a real loader's own symbol tables are resident for the same reason:
  * they may be needed again at any future dlopen()/dlsym() call). The
- * lazy init itself is now genuinely once-only, not just "probably fine
- * in practice": self_symtab_load() below wraps the real work
- * (self_symtab_load_once()) in a real pthread_once() (src/thread/
- * pthread_tsd.c) rather than the plain, racy `if (self_symtab_ready)
- * return; ... self_symtab_ready = 1;` this file's own former "THREAD
- * SAFETY" banner disclosed as its one real gap -- see that banner
- * (updated alongside this change) for why pthread_once() specifically,
- * not a hand-rolled mutex. */
+ * lazy init itself is genuinely once-only: self_symtab_load() below
+ * wraps the real work (self_symtab_load_once()) in a real pthread_once()
+ * (src/thread/pthread_tsd.c) rather than a plain, racy `if
+ * (self_symtab_ready) return; ... self_symtab_ready = 1;` -- see the
+ * "THREAD SAFETY" banner above for why pthread_once() specifically, not
+ * a hand-rolled mutex. */
 static int self_symtab_ready;      /* 0 = not attempted, 1 = ready, -1 = failed permanently */
 static Elf64_Sym *self_syms;
 static char *self_strs;
@@ -766,7 +762,7 @@ static void *resolve_export(struct dlobj *obj, const char *name)
  * direct dependencies' own exports first, then their dependencies' (a
  * plain two-tier breadth order, not a strict flattened "global symbol
  * scope" a real ld.so's own default-namespace resolution builds --
- * sufficient for the dependency chains this pass's own test fixtures
+ * sufficient for the dependency chains this file's own test fixtures
  * exercise, and disclosed as a real scope line rather than silently
  * assumed complete: a symbol satisfiable only through a GRANDCHILD
  * dependency while a nearer object also defines a same-named but
@@ -827,11 +823,9 @@ static int resolve_symref(struct dlobj *obj, uint32_t symidx, uint64_t *out)
  *
  * See this file's own top "TLS / PER-LIBRARY THREAD DESCRIPTORS" banner
  * for the full design this section implements: INDEX, NEVER SWAP. The
- * real, TPIDR_EL0-addressed TCB (crt/linux/crt1.c's linux_setup_tls(),
- * extended alongside this change to give it a real DTV array instead of
- * a permanently-NULL slot) gains a DTV: dtv[0] is unused/reserved,
- * dtv[1] is the main image's own TLS block (crt1.c sets this up itself
- * -- see that function's own updated comment), and dtv[N] for N >= 2 is
+ * real, TPIDR_EL0-addressed TCB (crt/linux/crt1.c's linux_setup_tls())
+ * has a real DTV: dtv[0] is unused/reserved, dtv[1] is the main image's
+ * own TLS block (crt1.c sets this up itself), and dtv[N] for N >= 2 is
  * this file's own doing: a small integer "TLS module id", allocated
  * below by setup_object_tls() to any dlopen()'d object with a PT_TLS
  * segment, pointing at a SECOND, independently malloc()'d block shaped
@@ -882,13 +876,13 @@ static int tls_dtv_ensure_capacity(unsigned int module_id)
 	/* Repoint tp[0] at the bigger array. old_dtv is intentionally never
 	 * freed -- see this file's own "THREAD SAFETY" banner: dlopen()/
 	 * dlclose() still take no lock against each other (only self_
-	 * symtab_load()'s own race is fixed by this pass, via pthread_
-	 * once() above), so a hypothetically concurrent reader could still
-	 * be mid-read of the old array when this runs; freeing it out from
-	 * under that read would turn a disclosed non-issue (a redundant
-	 * read of consistent, unfreed data) into a real use-after-free.
-	 * Same tradeoff self_symtab_load()'s own tables already made before
-	 * this pass, and still make: resident for the process's lifetime. */
+	 * symtab_load()'s own race is fixed, via pthread_once() above), so a
+	 * hypothetically concurrent reader could still be mid-read of the
+	 * old array when this runs; freeing it out from under that read
+	 * would turn a disclosed non-issue (a redundant read of consistent,
+	 * unfreed data) into a real use-after-free. Same tradeoff self_
+	 * symtab_load()'s own tables already make: resident for the
+	 * process's lifetime. */
 	*(void ***)tp = new_dtv;
 	dtv_capacity = new_capacity;
 	return 0;
@@ -900,7 +894,7 @@ static int tls_dtv_ensure_capacity(unsigned int module_id)
  * point it is actually defined:
  *
  * A `__thread` access in dlopen()'d PIC code compiles to (confirmed by
- * disassembling this pass's own test fixture on this exact host/clang):
+ * disassembling this file's own test fixture on this exact host/clang):
  *
  *     adrp x0, :tlsdesc:sym              // x0 = page(&entry)
  *     ldr  x1, [x0, :tlsdesc_lo12:sym]   // x1 = entry.resolver
@@ -1055,7 +1049,7 @@ static int apply_one_reloc(struct dlobj *obj, const Elf64_Rela *r,
 			/* No symbol: the addend directly gives the offset within
 			 * THIS object's own PT_TLS segment -- the shape a `static
 			 * __thread` variable accessed from within the same .so
-			 * compiles to (confirmed empirically against this pass's
+			 * compiles to (confirmed empirically against this file's
 			 * own test fixture). */
 			if (!obj->tls_module_id) {
 				seterr("dlopen: internal error: R_AARCH64_TLSDESC on an object with no PT_TLS module");
@@ -1073,9 +1067,9 @@ static int apply_one_reloc(struct dlobj *obj, const Elf64_Rela *r,
 			if (sym->st_shndx == SHN_UNDEF) {
 				/* A TLS symbol DEFINED in another object (a dependency,
 				 * or the main image) -- cross-object TLS symbol
-				 * resolution is not implemented in this pass (see this
-				 * file's own TLS banner): loud, clean failure, not a
-				 * silent mis-relocation. */
+				 * resolution is not implemented (see this file's own
+				 * TLS banner): loud, clean failure, not a silent
+				 * mis-relocation. */
 				seterr("dlopen: undefined TLS symbol: %s (TLS symbols defined in ANOTHER object are not yet resolved -- see plat_dlfcn.c's own TLS banner)",
 				       obj->dynstr + sym->st_name);
 				return -1;
@@ -1097,22 +1091,21 @@ static int apply_one_reloc(struct dlobj *obj, const Elf64_Rela *r,
 	}
 	case R_AARCH64_IRELATIVE:
 		/* Deliberately NOT resolved here -- see apply_one_irelative()/
-		 * apply_irelative_table() further down (and load_object()'s
-		 * own new "IRELATIVE resolution" pass, between protection-
-		 * narrowing and PT_GNU_RELRO hardening) for why: this type's
-		 * whole job (see its own #define comment) is to CALL a
-		 * resolver function, and at the point apply_reloc_table()
-		 * runs this object's own PT_LOAD segments are still mapped
-		 * PROT_READ|PROT_WRITE only (see load_object()'s own comment
-		 * on that first mapping pass) -- NOT yet PROT_EXEC, which
-		 * only the later protection-narrowing pass restores.
-		 * Confirmed empirically, not just reasoned: calling the
-		 * resolver at this point genuinely SIGSEGVs (non-executable
-		 * .text), caught by this pass's own dlfix_ifunc.so test
-		 * fixture before this deferral was added. Returning 0 here
-		 * (not an error) leaves the relocated slot untouched for now;
-		 * apply_irelative_table() revisits this exact same table
-		 * later and does the real work once .text is executable. */
+		 * apply_irelative_table() further down (and load_object()'s own
+		 * "IRELATIVE resolution" pass, between protection-narrowing and
+		 * PT_GNU_RELRO hardening) for why: this type's whole job (see
+		 * its own #define comment) is to CALL a resolver function, and
+		 * at the point apply_reloc_table() runs this object's own
+		 * PT_LOAD segments are still mapped PROT_READ|PROT_WRITE only
+		 * (see load_object()'s own comment on that first mapping pass)
+		 * -- NOT yet PROT_EXEC, which only the later protection-
+		 * narrowing pass restores. Confirmed empirically, not just
+		 * reasoned: calling the resolver at this point genuinely
+		 * SIGSEGVs (non-executable .text), caught by this file's own
+		 * dlfix_ifunc.so test fixture. Returning 0 here (not an error)
+		 * leaves the relocated slot untouched for now; apply_irelative_
+		 * table() revisits this exact same table later and does the
+		 * real work once .text is executable. */
 		return 0;
 #elif defined(__x86_64__)
 	case R_X86_64_RELATIVE:
@@ -1180,7 +1173,7 @@ static int apply_reloc_table(struct dlobj *obj, uint64_t tbl_vaddr, uint64_t tbl
  * executable (the resolver this calls lives there) and before its
  * PT_GNU_RELRO hardening pass (the GOT slot this writes into can fall
  * inside the RELRO-covered range on a real linker's output -- confirmed
- * against this pass's own dlfix_ifunc.so fixture -- so writing it AFTER
+ * against this file's own dlfix_ifunc.so fixture -- so writing it AFTER
  * RELRO already locked that range read-only would fault). Every
  * relocation type other than the platform's own IRELATIVE constant is
  * silently skipped here (not an error): apply_one_reloc() already
@@ -1256,7 +1249,7 @@ static void run_ctors(struct dlobj *obj, Elf64_Dyn *dyn)
 			 * PT_LOAD segment, and its entries get plain R_*_RELATIVE
 			 * dynamic relocations at static-link time -- already
 			 * applied by apply_reloc_table() above, like any other
-			 * data pointer (confirmed against this pass's own test
+			 * data pointer (confirmed against this file's own test
 			 * fixture) -- NOT a link-time vaddr this function itself
 			 * would need to re-bias through ADDR(). */
 			void (*fn)(void) = (void (*)(void))(uintptr_t)arr[i];
@@ -1358,14 +1351,13 @@ static void teardown_obj(struct dlobj *obj)
 	free(obj);
 }
 
-/* The real loader, renamed from a former, non-recursive __plat_dlopen()
- * body: now genuinely recursive (DT_NEEDED chasing -- see below -- calls
- * this again for each dependency), so `file` is not necessarily a
- * caller-given top-level path any more, and `depth` bounds that
- * recursion (see the check just below). __plat_dlopen() itself, further
- * down, is now a thin wrapper: MAIN_IMAGE_HANDLE's special-casing and
- * the RTLD_* `mode` parameter both belong to the PUBLIC entry point, not
- * to this internal one. */
+/* The real loader: genuinely recursive (DT_NEEDED chasing -- see below --
+ * calls this again for each dependency), so `file` is not necessarily a
+ * caller-given top-level path, and `depth` bounds that recursion (see
+ * the check just below). __plat_dlopen() itself, further down, is a
+ * thin wrapper: MAIN_IMAGE_HANDLE's special-casing and the RTLD_* `mode`
+ * parameter both belong to the PUBLIC entry point, not to this internal
+ * one. */
 static struct dlobj *load_object(const char *file, int depth)
 {
 	int fd = -1;
@@ -1460,9 +1452,9 @@ static struct dlobj *load_object(const char *file, int depth)
 			 * descriptors" banner: aarch64's variant-I TCB (dtv-headed)
 			 * is implemented; x86_64/i386's variant-II TCB (self-
 			 * pointer-headed, TLS data at NEGATIVE tp offsets) is a
-			 * structurally different shape this pass did not extend to
-			 * -- refused cleanly, before anything is mapped, rather
-			 * than loaded with no working TLS story. */
+			 * structurally different shape not implemented here --
+			 * refused cleanly, before anything is mapped, rather than
+			 * loaded with no working TLS story. */
 			seterr("dlopen: %s: has a PT_TLS segment (__thread variables) -- per-object TLS is implemented for aarch64 only so far (x86_64's variant-II TCB shape needs separate follow-up work, see plat_dlfcn.c's own TLS banner), not on this architecture", file);
 			goto fail;
 #endif
@@ -1676,7 +1668,7 @@ static struct dlobj *load_object(const char *file, int depth)
 	 * above, because it calls a resolver FUNCTION that lives in this
 	 * object's own .text, which that pass is what makes executable in
 	 * the first place -- calling it any earlier genuinely SIGSEGVs
-	 * (confirmed empirically against this pass's own dlfix_ifunc.so
+	 * (confirmed empirically against this file's own dlfix_ifunc.so
 	 * fixture, not just reasoned about); (2) BEFORE PT_GNU_RELRO
 	 * hardening just below, because the GOT slot an IRELATIVE
 	 * relocation writes its resolved value into commonly falls inside

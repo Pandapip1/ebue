@@ -1,18 +1,18 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Linux's real <pwd.h> backend -- the NSS task's own "passwd" database,
- * "files" service: a genuine /etc/passwd(5) parser, gated by a real
+ * Linux's real <pwd.h> backend -- the "passwd" NSS database's "files"
+ * service: a genuine /etc/passwd(5) parser, gated by a real
  * /etc/nsswitch.conf lookup (src/internal/nsswitch.h) the same way
  * src/netdb/linux/ gates the "hosts" database. src/misc/nt/pwd.c is
  * the pre-existing, behavior-unchanged NT sibling (NT has no
  * /etc/passwd at all; see that file's own header for why single-user
  * synthesis is the honest answer there).
  *
- * There is exactly one recognized service for "passwd" in this pass
+ * There is exactly one recognized service for "passwd" in this file
  * ("files" -- no LDAP/NIS/systemd-userdb backend is built, matching
- * the top-level task's own scope line: no directory-service backend
- * for passwd/group). So __nsswitch_order("passwd", ...) is consulted
+ * this library's own scope: no directory-service backend for
+ * passwd/group). So __nsswitch_order("passwd", ...) is consulted
  * for exactly one fact: is "files" present in the configured order at
  * all. If an admin's nsswitch.conf explicitly configures passwd with
  * a service this library does not implement (or an empty list), every
@@ -28,7 +28,7 @@
  * have no [ERANGE] in their ERRORS list, so getpwnam()/getpwuid() grow
  * their own shared buffer instead of ever returning it, exactly like
  * the NT file's own comment explains). getpwent()/setpwent()/
- * endpwent() now enumerate the REAL file sequentially (a FILE* plus a
+ * endpwent() enumerate the REAL file sequentially (a FILE* plus a
  * persistent getline() buffer, both reset by setpwent()/endpwent()) --
  * genuine enumeration of a real, potentially-multi-entry database,
  * unlike the NT file's honest one-entry version of the same functions.

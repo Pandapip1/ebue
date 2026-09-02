@@ -7,8 +7,8 @@
  * (raw syscall(2) via a local `svc #0` trampoline -- NOT `extern long
  * syscall(long, ...)`, which resolves to the host's real glibc at link
  * time in a non-freestanding build and silently discards the real
- * -errno on failure; see plat_mem.c's fix, commit 299458a, for the full
- * account -- no host libc, -nostdinc against ntlibc's own headers,
+ * -errno on failure; see plat_mem.c's fix for the full account -- no
+ * host libc, -nostdinc against ntlibc's own headers,
  * aarch64 syscall numbers confirmed against this host's own
  * <sys/syscall.h> as an oracle).
  *

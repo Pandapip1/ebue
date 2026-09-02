@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * gethostbyname()/h_errno: a legacy/XSI extension outside this edition
- * of POSIX, kept as a real, disclosed addition on this pass's own
- * explicit request -- see include/netdb.h's own banner for why, and
- * for why herror()/hstrerror() are not included alongside it.
+ * of POSIX, kept as a real, disclosed addition -- see include/netdb.h's
+ * own banner for why, and for why herror()/hstrerror() are not
+ * included alongside it.
  *
  * This is a second, thinner front door onto the exact same
  * __hosts_resolve() walk src/netdb/linux/addrinfo.c's getaddrinfo()
@@ -20,7 +20,7 @@
  * h_addr_list (n+1 pointers, each pointing at a 4-byte address, the
  * array NUL-pointer-terminated per <netdb.h>'s own DESCRIPTION) and
  * their backing bytes all live in one packed, growable buffer;
- * h_aliases is a separate static {NULL} array (this pass tracks no
+ * h_aliases is a separate static {NULL} array (this file tracks no
  * alias list -- see src/netdb/linux/hosts.c's own banner on why
  * reverse/alias enumeration is out of scope -- but the member itself
  * must still be a valid non-NULL "terminated by a null pointer" array
