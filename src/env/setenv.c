@@ -110,3 +110,17 @@ int unsetenv(const char *name)
 	}
 	return 0;
 }
+
+/* Restored per test/libc-test-expected.txt's "env" row: musl's libc-test
+ * functional/env.c calls clearenv() directly, so this XSI function is a
+ * real consumer after all (see 49b8099, which removed it for having
+ * none at the time). */
+int clearenv(void)
+{
+	char **e;
+	if (__environ) {
+		for (e = __environ; *e; e++) if (!is_putenv(*e)) free(*e);
+		__environ[0] = 0;
+	}
+	return 0;
+}

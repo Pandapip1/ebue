@@ -231,6 +231,7 @@ size_t malloc_usable_size(void *);
  * always fails, since NT's process model has no run-queue-length
  * average to report at all, not even approximately). */
 int getloadavg(double *, int);
+int clearenv(void);
 #define WCOREDUMP(s) ((s) & 0x80)
 #define WIFCONTINUED(s) ((s) == 0xffff)
 withtok(heap_allocated)

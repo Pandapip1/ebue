@@ -145,7 +145,20 @@
 # accurately-stated reason instead of a stale build error. COUNTS
 # updated: UNIMPL 21 -> 19, NA 14 -> 16.
 #
-# COUNTS PASS=107 BUG=3 UNIMPL=19 NA=16 FLAKY=1
+# 2026-09-02 (env): this row's UNIMPL reason named clearenv() as an
+# "unused non-POSIX extension" per 49b8099 -- wrong, this corpus test
+# calls it directly, so the removal commit's own "no stated consumer"
+# premise did not hold for this one caller. clearenv() is restored
+# verbatim (src/env/setenv.c, declared again in include/stdlib.h;
+# secure_getenv() stays removed, a separate and still-valid call).
+# Confirmed by building and linking the unmodified corpus source under
+# x86_64-win32-tcc (clean), and, since src/env/*.c has no nt/linux
+# split, by building AND RUNNING that same unmodified source natively
+# on this project's aarch64-linux backend: exit 0, no t_error output.
+# Not run under Wine in this environment (none installed). COUNTS
+# updated: PASS 107 -> 108, UNIMPL 19 -> 18.
+#
+# COUNTS PASS=108 BUG=3 UNIMPL=18 NA=16 FLAKY=1
 # (whole-corpus totals once the wildcard default below is applied to
 # every real case tools/libc-test.sh discovers -- not a count of rows in
 # this file, which lists only the 45 explicit exceptions plus the
@@ -157,7 +170,7 @@ dlopen                            runtime=wine,target_arch=x86_64,kernel32=no  U
 dlopen_dso                        runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to 'main'
 dn_expand-empty                   runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  dn_expand-empty.c:4: error: include file 'resolv.h' not found
 dn_expand-ptr-0                   runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  dn_expand-ptr-0.c:4: error: include file 'resolv.h' not found
-env                               runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to 'clearenv' (dropped as an unused non-POSIX extension in 49b8099)
+env                               runtime=wine,target_arch=x86_64,kernel32=no  PASS  was UNIMPL for a missing clearenv(); this corpus test turned out to be the real consumer 49b8099 said did not exist, so clearenv() is restored (src/env/setenv.c, include/stdlib.h), reusing the exact removed body verbatim -- same __environ/is_putenv() bookkeeping setenv()/unsetenv() already use, no reinvention. Confirmed here: the unmodified corpus source now compiles and links clean under x86_64-win32-tcc (lib/crt1.o + lib/libc.a + lib/libntdll.a, no errors). Not run under Wine in this environment (none installed), but src/env/*.c has no nt/linux split, so the exact same corpus source was also built and RUN natively on this project's aarch64-linux target (lib/start.o + lib/crt1.o + lib/libc.a): exit 0, no t_error output -- every assertion in the file passed, including clearenv()'s own (environ non-null after clearing, environ[0] == 0)
 execle-env                        runtime=wine,target_arch=x86_64,kernel32=no  NA  no /bin/sh on the target; execle("/bin/sh",...) cannot succeed
 fcntl                             runtime=wine,target_arch=x86_64,kernel32=no  BUG  F_SETLK across fork(): the child inherits the same NT file object, so its byte-range-lock request does not conflict with the parent's lock as POSIX requires for the child's distinct process; the test reports "lock failed to work"
 flockfile-list                     runtime=wine,target_arch=x86_64,kernel32=no  PASS  was UNIMPL for a real, mechanical duplicate-symbol bug, now fixed: lib/crt1.o (first object in every link this project produces, including this one) references __malloc()/__free() unconditionally, and those two used to live in the same translation unit as the public malloc()/calloc()/free()/realloc()/aligned_alloc() family (src/malloc/malloc.c). A static archive resolves an unresolved reference at object granularity, so crt1.o's need for __malloc/__free pulled that whole object into every link -- including this test, which interposes its own malloc()/calloc()/free() (a documented, POSIX-legal thing to do) and collided with the public symbols riding along. __malloc()/__free() now live alone in src/malloc/crt_alloc.c, calling __plat_alloc()/__plat_dealloc() directly instead of the public front door, so pulling them in no longer pulls in anything this test defines itself. Reproduced and confirmed fixed by hand here (tcc -c/-o the corpus source plus this project's own harness helpers against lib/crt1.o, lib/libc.a, lib/libntdll.a: link symbol collisions are gone, `x86_64-win32-tcc` produces flockfile-list.exe cleanly) -- not run under Wine in this environment (none installed here), so behaviour past the link is inspection, not an observed exit code
