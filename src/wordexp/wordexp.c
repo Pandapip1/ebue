@@ -68,19 +68,18 @@ static int fbuf_push(struct fbuf *b, char c, int literal)
 static int fbuf_push(struct fbuf *b, char c, int literal) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	if (b->n == b->cap) {
-		char *old_data = b->data;
-		unsigned char *old_lit = b->lit;
 		size_t nc;
 		if (!__array_next_capacity(b->cap, b->n, 1, 64, 1, &nc)) return -1;
+		if (b->n > nc) return -1;
 		char *nd = __malloc(nc);
 		unsigned char *nl = __malloc(nc);
 		if (!nd || !nl) { __free(nd); __free(nl); return -1; }
-		if (old_data) {
-			memcpy(nd, old_data, b->n);
-			memcpy(nl, old_lit, b->n);
+		if (b->data) {
+			memcpy(nd, b->data, b->n);
+			memcpy(nl, b->lit, b->n);
 		}
-		__free(old_data);
-		__free(old_lit);
+		__free(b->data);
+		__free(b->lit);
 		b->data = nd;
 		b->lit = nl;
 		b->cap = nc;
@@ -119,7 +118,7 @@ static int fbuf_push_str(struct fbuf *b, const char *s, int literal)
  * private one (not shared: neither module is meant to depend on the
  * other's internals) ----------------------------------------------------- */
 struct pv {
-	char **v;
+	char **v withtok(readable_elements(n)) withtok(writable_elements(cap));
 	size_t n, cap;
 };
 
@@ -135,14 +134,17 @@ static int pv_push(struct pv *p, char *s)
 	if (!s) return -1;
 	if (p->n == p->cap) {
 		char **old = p->v;
-		size_t nc;
+		size_t nc, bytes, oldbytes;
 		if (!__array_next_capacity(p->cap, p->n, 1, 16,
 		    sizeof *p->v, &nc)) { __free(s); return -1; }
-		char **nv = (char **)__malloc(nc * sizeof *nv);
+		bytes = nc * sizeof *p->v;
+		oldbytes = p->n * sizeof *p->v;
+		if (oldbytes > bytes) { __free(s); return -1; }
+		char **nv = (char **)__malloc(bytes);
 		if (!nv) { __free(s); return -1; }
 		if (old) {
-			__ownership_writable_span(nv, p->n * sizeof *nv);
-			memcpy((void *)nv, (const void *)old, p->n * sizeof *nv);
+			memcpy((void *)nv, (const void *)p->v,
+			    p->n * sizeof *p->v);
 		}
 		__free((void *)old);
 		p->v = nv;
