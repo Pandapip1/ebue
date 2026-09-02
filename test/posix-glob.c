@@ -78,10 +78,10 @@
  * of scope for the base function and does not depend on the sibling
  * <pwd.h> work at all.  glibc's non-standard GLOB_TILDE flag is a
  * different story: if ntlibc ever added that GNU extension, it would
- * need getpwnam() for `~user` (not just getenv("HOME") for bare `~`),
- * which is exactly what a sibling agent is adding right now -- noted
- * below at GLOB_TILDE rather than assumed either way, since GLOB_TILDE
- * is not itself a POSIX.1-2017 base requirement.
+ * need getpwnam() for `~user` (not just getenv("HOME") for bare `~`);
+ * getpwnam() itself now exists (wordexp()'s own tilde expansion below
+ * uses it), but GLOB_TILDE is still unimplemented, and it is not itself
+ * a POSIX.1-2017 base requirement.
  *
  * wordexp.h -- no longer split at all.  wordexp() is defined as
  * performing shell word expansion "as described in XCU Word
@@ -200,12 +200,12 @@ static int unverified;
 /* ===================================================================
  * fnmatch.h -- functions/fnmatch.html, basedefs/fnmatch.h.html
  *
- * Values below are this file's own choice (no committed header exists
- * yet for a sibling agent to have picked real ones): any nonzero,
- * distinct bit per flag and any nonzero FNM_NOMATCH satisfy the spec,
- * which only requires FNM_NOMATCH be "a defined constant" distinct
- * from the DESCRIPTION's "0 on match" and says nothing about its
- * numeric value.
+ * Values below are this file's own choice, which include/fnmatch.h now
+ * pins to match (declared locally here per this file's convention, not
+ * included): any nonzero, distinct bit per flag and any nonzero
+ * FNM_NOMATCH satisfy the spec, which only requires FNM_NOMATCH be "a
+ * defined constant" distinct from the DESCRIPTION's "0 on match" and
+ * says nothing about its numeric value.
  * =================================================================== */
 #define FNM_PATHNAME	0x1	/* '/' in string only matched by literal '/' in pattern */
 #define FNM_NOESCAPE	0x2	/* backslash is an ordinary character, not an escape */
@@ -1866,8 +1866,8 @@ static void test_glob_append_does_not_resort(void)
  * Neither artefact was a glob() defect.  Both were fuzz/fuzz_glob.c's
  * check() asserting strcmp order across the whole of gl_pathv, boundary
  * included -- exactly the property the clause above says does not hold.
- * That harness bug is fixed in the same commit as this test; see the
- * comment above check().  This test exists so the conformant behaviour
+ * That harness bug is fixed; see the comment above check().  This
+ * test exists so the conformant behaviour
  * the harness misjudged is pinned by something that does not depend on
  * the harness at all. */
 static void test_glob_fuzz_append_same_pattern_runs(void)
@@ -2500,13 +2500,11 @@ static void test_regex_subexpression_capture(void)
 	/* "\{1,\}" (strict POSIX BRE), not bare '+': a bare '+' is an
 	 * ordinary character in BRE (regcomp.html's ERE grammar is the
 	 * only place '+' means one-or-more) -- see src/regex/regex.c's
-	 * apply_repeat() comment on is_plus/is_quest. This test used to
-	 * read "\\(a+\\)\\(b+\\)" and pass only because this library's
-	 * own BRE parser wrongly let that ERE meaning leak into BRE mode;
-	 * fixed together with that bug (found via test/util-grep.c's
-	 * test_grep_bre_basic), pattern updated here so this test still
-	 * exercises the same thing (subexpression capture around a
-	 * one-or-more repeat) without depending on the bug. */
+	 * apply_repeat() comment on is_plus/is_quest. Do not simplify this
+	 * back to "\\(a+\\)\\(b+\\)": that pattern only exercises the same
+	 * subexpression-capture property if the BRE parser is wrong enough
+	 * to let '+' mean one-or-more, which this library's own parser
+	 * once did (see test/util-grep.c's test_grep_bre_basic). */
 	CHECK(regcomp(&re, "\\(a\\{1,\\}\\)\\(b\\{1,\\}\\)", 0) == 0);
 	CHECK(re.re_nsub == 2);
 	CHECK(regexec(&re, "xxaaabbbyy", 3, m, 0) == 0);
@@ -3629,24 +3627,8 @@ static void test_search_hsearch_table_full(void)
 	hdestroy();
 }
 
-/* GitHub issues #10 (fuzz/fuzz_search.c under tools/fuzz.sh, libFuzzer)
- * and #9 (the same harness under tools/afl-fuzz.sh, AFL++) were filed,
- * and re-filed nightly, against fuzz_search with no reproducer attached
- * to either issue itself -- each comment only links a CI run whose
- * artifact expires. This is the one from run 33508418747,
- * crashes/crash-b4175009555daabbbbbf70f9dfa078794ca84166 (base64
- * AAAALQDAALEAGwBRAAbAHgAAJQAN, 21 bytes): under
- * -fsanitize=fuzzer,address,undefined it printed
- *
- *   src/search/hsearch.c:120:45: runtime error: unsigned integer
- *   overflow: 0 - 1 cannot be represented in type 'size_t'
- *
- * Decoded through fuzz_search.c's own input format (bytes 0-1 the table
- * size seed, then one length-prefixed key per record), this drives
- * hcreate(0) -- an 8-slot table -- and nine distinct one- or two-byte
- * keys through ENTER. The ninth ENTER, with the table already full and
- * the key not among the eight already stored, walks every slot without
- * a match: hsearch()'s linear-probe loop used to spell that "for (i =
+/* fuzz/fuzz_search.c found an unsigned integer overflow in
+ * hsearch()'s linear-probe loop: it used to spell the loop "for (i =
  * start, remaining = size; remaining-- > 0; ...)", and the postfix
  * decrement on the exiting check -- remaining already 0, the
  * comparison false, but the decrement runs anyway -- took an unsigned
@@ -3658,21 +3640,6 @@ static void test_search_hsearch_table_full(void)
  * comment above the fixed loop in hsearch() for the mechanism and the
  * fix: the decrement moved to the loop's increment clause, where it
  * only ever fires on a `remaining` already known to be >= 1.
- *
- * Issue #9 is almost certainly the same defect reached by a second
- * engine: same harness, same fuzz_search binary, and every one of the
- * five AFL++ crashes in that same run's own job log terminates via
- * SIGABRT (sig:06) -- the signal -fno-sanitize-recover=undefined
- * raises. No AFL crash artifact could be downloaded to compare
- * byte-for-byte, because GitHub's artifact upload step fails for every
- * AFL finding in this repository's CI (AFL++ names crash files with a
- * literal ':', which artifact upload refuses outright -- an unrelated
- * CI defect, not fixed here). A search of src/search/*.c for this same
- * remaining--/size_t anti-pattern found exactly one hit -- this one;
- * lsearch.c's lfind() already tests `remaining > 0` before
- * decrementing, the form this fix brings hsearch() into line with --
- * so there is no second unmarked wrap left in this module for a second
- * engine to have found independently.
  *
  * The reproducer below does not replay the fuzzer's bytes -- the exact
  * capacity hcreate() rounds a request up to is deliberately

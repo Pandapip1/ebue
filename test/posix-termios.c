@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Clause-by-clause coverage for the three headers this pass adds:
+ * Clause-by-clause coverage for three headers:
  * <termios.h> (src/termios/termios.c), <sys/ioctl.h> (src/ioctl/
  * ioctl.c, a BSD/SVR4 extension, not POSIX -- see that header's own
  * banner for why it exists anyway), and <sys/file.h>'s flock()
@@ -609,21 +609,19 @@ static void test_tcflow_suspends_output(int consolefd)
 	   discard assertion this clause needs, and portable POSIX API
 	   rather than another hand-resolved kernel32 entry point.
 
-	What is still genuinely left out, honestly, not smuggled in as
-	"done": no type-ahead is injected before the flush, so the
-	assertion below is "nothing was pending after the flush", which
-	holds vacuously when nothing was pending before it too. Proving
-	the DISCARD half specifically -- something really was queued,
-	then genuinely vanished -- needs kernel32's WriteConsoleInput()
-	(resolvable the same way test/spawn-stdhandle-attr.c resolves
-	NtCreateUserProcess, or src/termios/termios.c's own k32_proc()
-	resolves FlushConsoleInputBuffer -- "ntlibc does not wrap it" was
-	never the real blocker, ntlibc's API surface is not a test's
-	ceiling) plus a hand-declared, ABI-exact KEY_EVENT_RECORD/
-	INPUT_RECORD layout this session had no real console to validate
-	that declaration against. Left unwritten rather than guessed at
-	and possibly wrong -- same call this fence made before, still
-	honest, now scoped to exactly the one remaining piece. */
+	What is still genuinely left out: no type-ahead is injected before
+	the flush, so the assertion below is "nothing was pending after
+	the flush", which holds vacuously when nothing was pending before
+	it too. Proving the DISCARD half specifically -- something really
+	was queued, then genuinely vanished -- needs kernel32's
+	WriteConsoleInput() (resolvable the same way
+	test/spawn-stdhandle-attr.c resolves NtCreateUserProcess, or
+	src/termios/termios.c's own k32_proc() resolves
+	FlushConsoleInputBuffer -- "ntlibc does not wrap it" was never the
+	real blocker, ntlibc's API surface is not a test's ceiling) plus a
+	hand-declared, ABI-exact KEY_EVENT_RECORD/INPUT_RECORD layout that
+	needs a real console to validate against. Left unwritten rather
+	than guessed at and possibly wrong. */
 static void test_tcflush_discards_input(int consolefd)
 {
 	fd_set rfds;
@@ -722,7 +720,7 @@ static void test_termios_cc_reprogram(int consolefd)
  * `make check`'s runner always has, unlike an NT console. Deliberately
  * NOT routed through isatty()/ttyname(): both remain NT-console-only
  * (src/unistd/isatty.c's own `f->type != __FD_CONSOLE` gate) -- a
- * separate, not-yet-ported gap this pass does not touch -- so
+ * separate, not-yet-ported gap -- so
  * tcgetattr()/tcsetattr()/ioctl() are called directly against the raw
  * slave fd instead, which is all termios(3) itself ever requires.
  *
@@ -884,8 +882,8 @@ static void test_linux_pty_termios_roundtrip(void)
 	 * FIONREAD/FIONBIO/TIOCGWINSZ are recognised at all) -- so 0x0 here
 	 * is the real, honest kernel answer, not evidence of a stub. What
 	 * this proves is the real thing: the call succeeded (no ENOTTY) on
-	 * a descriptor shape (__FD_CHAR) that used to be unconditionally
-	 * rejected before this pass. */
+	 * a descriptor shape (__FD_CHAR) that ioctl() used to reject
+	 * unconditionally. */
 
 	close(sfd);
 	close(mfd);

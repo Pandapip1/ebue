@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Clause-by-clause POSIX.1-2017 audit of the four headers this commit
- * adds: <grp.h>, <sys/utsname.h>, <sys/times.h>, <sys/uio.h>. One file,
+ * Clause-by-clause POSIX.1-2017 audit of four headers:
+ * <grp.h>, <sys/utsname.h>, <sys/times.h>, <sys/uio.h>. One file,
  * since none of the four is large on its own -- same reasoning as
  * test/posix-sysmisc.c bundling several small headers together. Every
  * assertion cites the clause of
@@ -32,9 +32,9 @@
  * consuming TU must opt in itself, the same as test/posix-time.c/
  * test/posix-unistd.c already do). A tcc/Wine build apparently never
  * exercised this gap (tcc's own default visibility must differ from
- * clang -std=c99's); caught only now, building this file for the
- * first time with a native clang toolchain (this pass's own NSS
- * verification path) rather than introduced by anything below. */
+ * clang -std=c99's); only a native clang toolchain build of this file
+ * catches it, and it is a pre-existing gap, not introduced by anything
+ * below. */
 #define _GNU_SOURCE
 #include "test-policy.h"
 #include <grp.h>
@@ -765,18 +765,14 @@ static clock_t timeval_to_clockticks(const struct timeval *tv)
  * earns depends on the machine it lands on, while the thing being
  * asserted -- "> 0 ticks" -- is a threshold, not a proportion.  On a
  * GitHub-hosted Windows Server 2025 x86_64 runner the child-side loop
- * fell under that threshold and the assertion failed (CI run
- * 32796247127), while the identical source passed on the slower i386
- * and kernel32 legs of the same run.
+ * fell under that threshold and the assertion failed, while the
+ * identical source passed on the slower i386 and kernel32 legs of the
+ * same run.
  *
- * The comment this replaces claimed the old child loop was measured at
- * 49 ticks under stock Wine, which would have been a 49x margin.  It is
- * not: re-measuring the same 20,000,000-iteration loop, three runs in a
- * row on one machine, gives 3, 2 and 1 ticks.  So the margin was
- * between 2x and 0x before this change, and the prose asserting
- * otherwise was itself the failure -- a measurement reporting on its
- * own speed rather than on the quantity it names, described as if it
- * had been checked.
+ * A fixed 20,000,000-iteration loop is not a safe margin: re-measuring
+ * it, three runs in a row on one machine, gives 3, 2 and 1 ticks --
+ * nowhere near enough headroom to be a reliable floor above the
+ * "> 0 ticks" threshold being asserted.
  *
  * Why the floor is so easy to miss: NT does not accumulate process CPU
  * time, it *samples* it.  The clock ISR charges one tick to whichever
@@ -1298,9 +1294,8 @@ static void test_writev_all_zero(void)
 }
 
 /* XSH 2.9.7 "Thread Interactions with Regular File Operations"
- * (functions/V2_chap02.html#tag_15_09_07) -- checked against the live
- * spec page, and note the citation, which an earlier version of this
- * comment got wrong: this is XSH chapter 2, not XBD.  Verbatim: "All of
+ * (functions/V2_chap02.html#tag_15_09_07) -- this is XSH chapter 2,
+ * not XBD.  Verbatim: "All of
  * the following functions shall be atomic with respect to each other in
  * the effects specified in POSIX.1-2017 when they operate on regular
  * files or symbolic links", followed by a table of 39 functions that

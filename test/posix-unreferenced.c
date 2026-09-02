@@ -2,8 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Clause-by-clause POSIX.1-2017 audit of the POSIX-specified functions
- * that tools/lint-unreferenced.sh found no test/*.c even calls.  At the
- * commit that landed that check the list was 56 names long; eight of
+ * that tools/lint-unreferenced.sh found no test/*.c even calls.  When
+ * that check was introduced the list was 56 names long; eight of
  * them are POSIX interfaces with a specification page to hold them to:
  *
  *   puts, scanf, renameat, fchmodat, sigwait, psignal, roundl,
@@ -906,8 +906,7 @@ static void test_renameat_errors(void)
 	 * separate investigation to establish and would otherwise have to be
 	 * rediscovered.  Both newfd assertions passed unchanged across the
 	 * whole period in which renameat() ignored newfd entirely and every
-	 * dirfd-relative destination failed with ENOENT (fixed in "renameat:
-	 * honour newfd for the destination path").  They could not have
+	 * dirfd-relative destination failed with ENOENT.  They could not have
 	 * detected it: __ntpath_at() rejects a bad or non-directory
 	 * descriptor BEFORE the rename is attempted, so what these lines
 	 * exercise is the rejection path, while the defect lived entirely in
@@ -1116,15 +1115,14 @@ static void test_renameat_einval(void)
        * [EROFS] -- N/A, environment: mounting a read-only volume is not
        * something the test suite can arrange.
        *
-       * RE-AUDITED, STILL BUG, NOT ATTEMPTED THIS PASS: same missing
-       * ACL/DACL infrastructure as the three chmod fences in
-       * test/posix-unistd.c (see the fuller writeup on
+       * Still a BUG: same missing ACL/DACL infrastructure as the three
+       * chmod fences in test/posix-unistd.c (see the fuller writeup on
        * test_chmod_cannot_clear_read_bits there) -- this one needs it
        * for a directory-level deny ACE rather than a file-permission
        * one, but it is the identical gap: no NtSetSecurityObject/
        * RtlAddAccessDeniedAce declared anywhere in src/internal/nt.h,
-       * and no working Wine in this session to write and verify that
-       * code against real NT behaviour. */
+       * and no working Wine available to write and verify that code
+       * against real NT behaviour. */
 static void test_renameat_eacces(void)
 {
 	CHECK(mkdir("ren.d/ro", 0755) == 0);
@@ -1424,23 +1422,16 @@ static void test_fchmodat_empty_at_dirfd(void)
        * changed, both must change together or the two branches will
        * disagree.
        *
-       * RE-CHECKED THIS PASS, PER THE TASK'S OWN INSTRUCTION TO LOOK AT
-       * WHAT ELSE USES THIS SHARED CODE BEFORE TOUCHING IT: `grep -rl
-       * "__ntpath_at\|__ntpath(" src/` finds 17 files -- stat, chmod,
-       * mkdir, unlink/rmdir, rename, open, statvfs, utimensat, link
-       * and more, i.e. essentially every filesystem-path-taking
-       * function this library has. That confirms rather than merely
-       * repeats the fence's own claim: a component-by-component rewrite
+       * `grep -rl "__ntpath_at\|__ntpath(" src/` finds 17 files -- stat,
+       * chmod, mkdir, unlink/rmdir, rename, open, statvfs, utimensat,
+       * link and more, i.e. essentially every filesystem-path-taking
+       * function this library has. So a component-by-component rewrite
        * of __ntpath()/__ntpath_at() to satisfy XBD 4.13 here would be a
        * change to the path-resolution semantics of the entire library,
-       * not a scoped fix to this one clause -- exactly the kind of
-       * "smuggled-in" scope change this fence already argues against,
-       * and exactly the kind of thing that cannot be verified correct
-       * across 17 call sites without a working Wine in this session to
-       * run the existing suite against afterward. Left as recorded, not
-       * fixed, per the fence's own standing decision -- this pass found
-       * no reason to overturn it, only confirmation that it still
-       * holds. */
+       * not a scoped fix to this one clause, and cannot be verified
+       * correct across 17 call sites without a working Wine to run the
+       * existing suite against afterward. Left as recorded, not
+       * fixed. */
 static void test_pathres_dotdot_over_nondir(void)
 {
 	struct stat st;
@@ -1583,13 +1574,13 @@ static void test_fchmodat_dot_component(void)
        * [EROFS] -- N/A, environment: a read-only volume is not
        * arrangeable from the suite.
        *
-       * RE-AUDITED, STILL BUG, NOT ATTEMPTED THIS PASS: same missing
-       * ACL/DACL infrastructure as the three chmod fences in
-       * test/posix-unistd.c and test_renameat_eacces() above (see the
-       * fuller writeup on test_chmod_cannot_clear_read_bits) -- no
+       * Still a BUG: same missing ACL/DACL infrastructure as the three
+       * chmod fences in test/posix-unistd.c and test_renameat_eacces()
+       * above (see the fuller writeup on
+       * test_chmod_cannot_clear_read_bits) -- no
        * NtSetSecurityObject/RtlAddAccessDeniedAce declared anywhere in
-       * src/internal/nt.h, and no working Wine in this session to
-       * write and verify that code against real NT behaviour. This
+       * src/internal/nt.h, and no working Wine available to write and
+       * verify that code against real NT behaviour. This
        * fixture also depends on chmod("chm.d/noexec", 0000) actually
        * denying search on the directory, which is the exact chmod
        * gap those other fences already document; fixing this one
@@ -1659,12 +1650,12 @@ static void test_fchmodat_eperm(void)
        * a current Wine checkout does handle FSCTL_SET_REPARSE_POINT, in
        * server/fd.c beside the FSCTL_DISMOUNT_VOLUME case that is the
        * only one 9.0 had; and wine-10.19 is independently documented as
-       * the reparse-point release.  RELAYED from the session that took
-       * the measurements above, and NOT re-derivable here because the
-       * local Wine clone is shallow and carries no 9.0 tag: the commit
-       * 95f83739d "server: Implement FSCTL_SET_REPARSE_POINT", and the
-       * 9.0 line number server/fd.c:2409.  Treat those two as the
-       * citation to re-check first if this paragraph is ever doubted.
+       * the reparse-point release.  Not independently re-derivable from
+       * this machine's local Wine clone, which is shallow and carries
+       * no 9.0 tag; the citation to re-check first if this paragraph is
+       * ever doubted is commit 95f83739d "server: Implement
+       * FSCTL_SET_REPARSE_POINT", and the 9.0 line number
+       * server/fd.c:2409.
        *
        * Do NOT read ENOSYS as evidence of STATUS_NOT_IMPLEMENTED here.
        * src/internal/errno.c:82-84 maps THREE statuses onto ENOSYS --

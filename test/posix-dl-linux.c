@@ -19,8 +19,8 @@
  * DT_NEEDED chasing, DT_INIT_ARRAY constructor execution, per-object
  * TLS (aarch64), PT_GNU_RELRO hardening, R_AARCH64_IRELATIVE/
  * R_X86_64_IRELATIVE ("ifunc") dispatch -- is REAL, LANDED, WORKING
- * code as of this pass (see plat_dlfcn.c's own updated banner
- * sections), so every test below runs unfenced, the same as this
+ * code (see plat_dlfcn.c's own updated banner sections), so every
+ * test below runs unfenced, the same as this
  * file's NT sibling's own "what already works" section.
  *
  * Fixtures: the sources under test/dl-linux-fixtures/, real Linux .so's built by the
@@ -33,10 +33,10 @@
  * below), not the process's current working directory: `make check`'s
  * own tools/run-tests.py runs every test from a freshly created temp
  * directory (see that script's own run_one()), so a plain "./dlfix_
- * dep.so" relative-to-cwd path would not resolve there even though it
- * is not this pass's own concern -- `make check` is Wine/NT-only and
- * this file is Linux-only, see the Makefile's own PLATFORM=linux gate
- * -- making the lookup argv[0]-relative instead costs nothing and
+ * dep.so" relative-to-cwd path would not resolve there even though
+ * `make check` never actually runs this file -- it is Wine/NT-only,
+ * and this file is Linux-only, see the Makefile's own PLATFORM=linux
+ * gate -- making the lookup argv[0]-relative instead costs nothing and
  * means this test is not silently relying on being run from exactly
  * one particular directory.
  */
@@ -247,26 +247,24 @@ static void test_dt_init_array_runs_once_per_instance(const char *dir)
  * concept Linux's own fork() needs no help with at all (every fd is
  * already inherited by a real fork() child regardless), so this is
  * pure NT-shaped overhead on this platform, not a correctness
- * requirement. Empirically, in the sandboxed environment this pass was
- * developed and tested in, that overhead was observed to leave THIS
- * process's own low-numbered descriptors (stdin/stdout/stderr) shuffled
- * onto different fd numbers, and a dlopen() call immediately following
- * a fork() in the same process then failed its own file-backed mmap()
- * with a genuine kernel ENODEV -- reproduced down to a ~20-line
- * standalone repro using nothing but fork()+mmap(MAP_FIXED)+open() (not
- * committed; see this pass's own report for the transcript), and NOT
- * reproducible through plain host glibc doing the identical sequence,
- * which points at src/process/fork.c's own NT-shaped fd-inheritance
- * dance interacting badly with THIS environment's mmap() implementation
- * specifically, not at anything in src/dlfcn/linux/plat_dlfcn.c (the
- * file this whole test suite exists to exercise) or in a real, non-
- * sandboxed Linux kernel. Fixing fork.c's own Linux behavior is real,
- * separate, out-of-scope follow-up work (this pass's own mandate is
- * plat_dlfcn.c and crt1.c's TLS setup, not src/process/fork.c) --
- * ordering this one test last is what keeps its own real, working
- * fork()-based proof from disturbing any dlopen() this file still
- * needs to run afterward, without papering over or silently rewriting
- * behavior in a subsystem this pass does not own. */
+ * requirement. That overhead has been observed to leave THIS process's
+ * own low-numbered descriptors (stdin/stdout/stderr) shuffled onto
+ * different fd numbers, and a dlopen() call immediately following a
+ * fork() in the same process then failed its own file-backed mmap()
+ * with a genuine kernel ENODEV -- reproducible down to a ~20-line
+ * standalone repro using nothing but fork()+mmap(MAP_FIXED)+open(),
+ * and NOT reproducible through plain host glibc doing the identical
+ * sequence, which points at src/process/fork.c's own NT-shaped
+ * fd-inheritance dance interacting badly with this environment's
+ * mmap() implementation specifically, not at anything in
+ * src/dlfcn/linux/plat_dlfcn.c (the file this whole test suite exists
+ * to exercise) or in a real, non-sandboxed Linux kernel. Fixing
+ * fork.c's own Linux behavior is real, separate, out-of-scope
+ * follow-up work -- ordering this one test last is what keeps its own
+ * real, working fork()-based proof from disturbing any dlopen() this
+ * file still needs to run afterward, without papering over or
+ * silently rewriting behavior in a subsystem this test does not
+ * own. */
 static void test_pt_gnu_relro_hardening(const char *dir)
 {
 	char path[4096];
@@ -313,8 +311,8 @@ static void test_pt_gnu_relro_hardening(const char *dir)
  */
 
 #if defined(__aarch64__)
-/* aarch64: this pass implements the real thing -- see plat_dlfcn.c's
- * own TLSDESC resolver. bump_tls_counter() must actually work, and two
+/* aarch64: plat_dlfcn.c implements the real thing -- see its own
+ * TLSDESC resolver. bump_tls_counter() must actually work, and two
  * independent dlopen() instances of the identical .so must get two
  * genuinely separate TLS blocks ("own TD per library", not a shared
  * DTV slot aliased between them). */
@@ -350,11 +348,11 @@ static void test_pt_tls_per_object(const char *dir)
 	CHECK(dlclose(t1) == 0);
 }
 #else
-/* Every other arch this pass's own crt/PT_TLS handling supports
- * (x86_64/i386): per-object TLS is NOT implemented -- see plat_dlfcn.c's
- * own TLS banner for exactly why (x86_64's "variant II" TCB shape is
+/* Every other arch this crt/PT_TLS handling supports (x86_64/i386):
+ * per-object TLS is NOT implemented -- see plat_dlfcn.c's own TLS
+ * banner for exactly why (x86_64's "variant II" TCB shape is
  * structurally different from aarch64's, and needs a separately-derived
- * resolver this pass did not build). dlopen() must keep refusing
+ * resolver that does not exist yet). dlopen() must keep refusing
  * cleanly, exactly as it always has, never loading a PT_TLS segment it
  * cannot correctly place. */
 static void test_pt_tls_per_object(const char *dir)

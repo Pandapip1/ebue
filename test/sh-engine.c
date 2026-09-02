@@ -781,9 +781,8 @@ static void test_funcdef_heredoc_before_list_operator(void)
  * definition is followed by nothing at all -- <newline> or EOF, not one
  * of '|'/'&'/'&&'/'||' -- the exact complement of
  * test_funcdef_heredoc_before_list_operator() above.  Found by
- * fuzz/fuzz_shparse.c (issues #4 and #7: both were this one bug, an
- * ordinary libFuzzer run and an AFL++ run having found the same defect
- * within a day of each other).
+ * fuzz/fuzz_shparse.c: an ordinary libFuzzer run and an AFL++ run both
+ * found the same defect independently.
  *
  * <newline>/EOF is exactly the case parse_funcdef() drains the
  * here-document itself, as a side effect of peeking the token that ends
@@ -1081,7 +1080,6 @@ static void test_exec_reuses_wordexp_param_expansion(const char *self)
  * execute this AST node yet"), never silently misexecuted -- see
  * sh.h's __sh_exec_*() comment.
  *
- * This test used to assert exactly the opposite of what it asserts now.
  * Command substitution in a redirection target word and in an unquoted
  * here-document body were stage 4's named, tested "not yet"; stage 5
  * implements them, so those three -1s became results, and they are
