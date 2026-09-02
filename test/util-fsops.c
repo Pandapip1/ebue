@@ -231,6 +231,20 @@ static void test_rmdir_dash_p(void)
 
 /* ==== mkfifo(1p) ========================================================= */
 
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+/* This tree's mkfifo() (src/stat/chmod.c) is real on Linux -- a genuine
+ * mknodat(2) FIFO, src/stat/linux/plat_stat.c's own __plat_mknod() --
+ * so the utility must report the real success and leave a real FIFO
+ * behind, not the ENOSYS this same test pins on NT (see the #else
+ * arm's own comment for why that side stays a stub). */
+static void test_mkfifo_reports_the_real_enosys_stub(void)
+{
+	struct stat st;
+	char *argv[] = { (char *)"mkfifo", (char *)"scratch/fifo1", 0 };
+	CHECK(run(mkfifo_path, argv) == 0);
+	CHECK(stat("scratch/fifo1", &st) == 0 && S_ISFIFO(st.st_mode));
+}
+#else
 static void test_mkfifo_reports_the_real_enosys_stub(void)
 {
 	/* This tree's mkfifo() (src/stat/chmod.c) is a genuine ENOSYS stub
@@ -241,6 +255,7 @@ static void test_mkfifo_reports_the_real_enosys_stub(void)
 	CHECK(err_contains("mkfifo:"));
 	CHECK(access("scratch/fifo1", F_OK) != 0);
 }
+#endif
 
 static void test_mkfifo_validates_mode_before_the_enosys_call(void)
 {
@@ -479,7 +494,15 @@ static void test_builtins_match_standalone(void)
 	CHECK(run_sh_c("rmdir scratch/shd1") == 0);
 	CHECK(access("scratch/shd1", F_OK) != 0);
 
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+	CHECK(run_sh_c("mkfifo scratch/shfifo") == 0); /* real FIFO, see above */
+	{
+		struct stat st;
+		CHECK(stat("scratch/shfifo", &st) == 0 && S_ISFIFO(st.st_mode));
+	}
+#else
 	CHECK(run_sh_c("mkfifo scratch/shfifo") != 0); /* ENOSYS, see above */
+#endif
 
 	CHECK(run_sh_c("ln scratch/src1 scratch/shhard") == 0);
 	CHECK(access("scratch/shhard", F_OK) == 0);

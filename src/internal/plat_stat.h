@@ -106,6 +106,33 @@ int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode);
  * actually reports here. 0/-1(errno). */
 int __plat_mkdir(int dirfd, const char *path, mode_t mode);
 
+/* mkfifoat()/mknod()/mknodat() (src/stat/chmod.c): create a new
+ * filesystem node `path` (relative to `dirfd`) whose type is `mode`'s
+ * S_IF* bits and whose permission bits are its low 12 -- mkfifoat()'s
+ * own front door ORs in S_IFIFO itself before calling here, so this one
+ * function serves both POSIX calls exactly the way Linux's own
+ * mknodat(2) serves both (a FIFO is simply mknod() with S_IFIFO and no
+ * device).  `dev` is meaningful only for S_IFCHR/S_IFBLK and is passed
+ * straight through in whatever encoding the caller built it in: this
+ * library exposes no makedev()/major()/minor() of its own (a real gap,
+ * not silently worked around here) to construct or decode one in any
+ * other form, so a device node with a real major/minor is not
+ * constructible through this library today regardless of what this
+ * function does with the bits it is handed -- only S_IFIFO (dev always
+ * 0) and the unprivileged-EPERM path for S_IFCHR/S_IFBLK are anything
+ * this project's own tests exercise.
+ *
+ * NT has no filesystem node type any of this maps onto (see chmod.c's
+ * own comment on mkfifo()/mknod() there), so its own implementation
+ * stays the unconditional stub both calls always were -- ENOSYS for a
+ * FIFO (mode & S_IFMT == S_IFIFO), EPERM for anything else, decided
+ * from `mode` alone so one function can still tell mkfifo()'s [ENOSYS]
+ * from mknod()'s [EPERM] apart with no separate entry point.  Linux has
+ * a real mknodat(2) and creates the node for real, mode unmasked
+ * exactly like __plat_mkdir() above (the real kernel applies its own
+ * umask). 0/-1(errno). */
+int __plat_mknod(int dirfd, const char *path, mode_t mode, dev_t dev);
+
 /* The guts of stat()/fstat(): fill *st from an open handle of __FD_*
  * type `type` -- see stat.c's own banner for the $LXMOD/compatibility-
  * default mode policy and the synthetic st_dev/st_ino this assigns a

@@ -55,7 +55,24 @@ static mode_t umask_value = 022;
 mode_t umask(mode_t m) { mode_t o = umask_value; umask_value = m & 0777; return o; }
 unsigned __umask_get(void) { return umask_value; }
 
-int mkfifo(const char *p, mode_t m) { (void)p; (void)m; errno = ENOSYS; return -1; }
-int mkfifoat(int d, const char *p, mode_t m) { (void)d; (void)p; (void)m; errno = ENOSYS; return -1; }
-int mknod(const char *p, mode_t m, dev_t dv) { (void)p; (void)m; (void)dv; errno = EPERM; return -1; } // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
-int mknodat(int d, const char *p, mode_t m, dev_t dv) { (void)d; (void)p; (void)m; (void)dv; errno = EPERM; return -1; } // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+/* mkfifo()/mknod() and their *at() siblings all reduce to one call:
+ * Linux's own mknodat(2) already IS "mknod, optionally relative to a
+ * dirfd", and mkfifo() is simply that with S_IFIFO forced into the type
+ * bits and no device -- so mkfifoat() ORs it in and every one of the
+ * four forwards straight to __plat_mknod() (src/internal/plat_stat.h).
+ * NT has no filesystem node type any of this maps onto -- no POSIX FIFO
+ * semantics mapped onto its own named-pipe object, no device-node
+ * concept on NTFS at all -- so its own __plat_mknod() (src/stat/nt/
+ * plat_stat.c) stays the unconditional ENOSYS-for-FIFO/EPERM-for-
+ * anything-else stub every one of these four calls always was before
+ * this indirection existed; Linux's own (src/stat/linux/plat_stat.c)
+ * creates the node for real. mode is passed through whole (S_IF* type
+ * bits and permission bits together) rather than masked here: which
+ * bits are meaningful, and which of them the real kernel's own umask
+ * applies to, is each backend's own business, exactly like
+ * __plat_mkdir() above already leaves mode unmasked for the same
+ * reason. */
+int mkfifo(const char *p, mode_t m) { return mkfifoat(AT_FDCWD, p, m); }
+int mkfifoat(int d, const char *p, mode_t m) { return __plat_mknod(d, p, (m & 07777) | S_IFIFO, 0); }
+int mknod(const char *p, mode_t m, dev_t dv) { return mknodat(AT_FDCWD, p, m, dv); } // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+int mknodat(int d, const char *p, mode_t m, dev_t dv) { return __plat_mknod(d, p, m, dv); } // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles

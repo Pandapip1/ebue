@@ -181,6 +181,7 @@
 #define SYS_fchmodat  53
 #define SYS_fchmodat2 452
 #define SYS_mkdirat   34
+#define SYS_mknodat   33
 #define SYS_statx     291
 #define SYS_statfs    43
 #define SYS_fstatfs   44
@@ -359,6 +360,32 @@ int __plat_mkdir(int dirfd, const char *path, mode_t mode)
 	if (rd == -1 && dirfd != AT_FDCWD) return -1; /* errno already set */
 
 	ret = raw_syscall(SYS_mkdirat, (long)rd, (long)path, (long)(mode & 07777), 0L, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
+/* mkfifoat()/mknod()/mknodat() (src/stat/chmod.c): Linux's own
+ * mknodat(2) already takes exactly this (dirfd, path, mode, dev) shape
+ * -- `mode` carrying both the S_IF* node type and the permission bits
+ * together is the real kernel ABI's own convention, not something this
+ * function assembles -- so it needs no translation of its own, unlike
+ * __plat_mkdir() just above it never calls ntlibc's own __umask_get()
+ * either, for the identical reason that file's own comment gives: the
+ * real kernel applies the real process umask itself. `dev` is passed
+ * through exactly as given; see plat_stat.h's own comment on why a
+ * device node with a real major/minor is not constructible through
+ * this library at all today (no makedev()/major()/minor()), which
+ * makes any translation here moot -- only S_IFIFO (dev always 0) and
+ * the CAP_MKNOD-gated EPERM path for S_IFCHR/S_IFBLK are reachable
+ * through this library's own callers. */
+int __plat_mknod(int dirfd, const char *path, mode_t mode, dev_t dev) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; mode and dev have distinct roles
+{
+	int rd = resolve_dirfd(dirfd);
+	long ret;
+
+	if (rd == -1 && dirfd != AT_FDCWD) return -1; /* errno already set */
+
+	ret = raw_syscall(SYS_mknodat, (long)rd, (long)path, (long)mode, (long)dev, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }

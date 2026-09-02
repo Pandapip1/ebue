@@ -494,4 +494,23 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 	return (int)pid;
 }
 
+/* ---- exec.c: a real, in-place execve(2) -- the primitive NT's own --- */
+/* ---- backend has nothing to offer for; see plat_process.h's own ----- */
+/* ---- comment on this function for why it exists on this backend ----- */
+/* ---- alone. --------------------------------------------------------- */
+
+int __plat_process_exec(const char *path, char *const argv[], char *const envp[])
+{
+	long ret = raw_syscall(SYS_execve, (long)path, (long)argv, (long)envp, 0L, 0L, 0L);
+	/* execve(2) returns to its caller at all only on failure -- a raw
+	 * kernel -errno in [-4095,-1], the same convention is_sys_error()
+	 * above already translates for every other syscall in this file.
+	 * A success return is never seen here: the kernel replaces this
+	 * thread's whole address space and resumes at the new image's
+	 * entry point instead of returning from the `svc #0` at all, so
+	 * there is no "ret == 0" success case to distinguish. */
+	errno = is_sys_error(ret) ? (int)-ret : EINVAL;
+	return -1;
+}
+
 // NOLINTEND(misc-include-cleaner)

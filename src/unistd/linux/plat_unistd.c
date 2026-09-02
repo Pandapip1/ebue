@@ -106,6 +106,8 @@
 #define SYS_readlinkat         78
 #define SYS_symlinkat          36
 #define SYS_newfstatat         79
+#define SYS_fchownat           54
+#define SYS_fchown             55
 #define SYS_ftruncate          46
 #define SYS_fsync              82
 #define SYS_pipe2              59
@@ -551,27 +553,42 @@ int __plat_process_exists(pid_t pid)
 	return (int)-ret == EPERM;
 }
 
-/* There is real ownership to probe on Linux (unlike NT), but
- * __plat_chown_probe()'s contract is deliberately narrower than a real
- * chown: it only has to resolve `path` and report whether it exists,
- * honoring AT_SYMLINK_NOFOLLOW -- src/unistd/ids.c's fchownat() front
- * door reports success unconditionally otherwise, matching the NT
- * backend's "there is no ownership to change" stance (see that file's
- * banner) rather than actually chown()ing, which is a larger,
- * deliberately out-of-scope change to the front door itself. */
-int __plat_chown_probe(int dirfd, const char *path, int flags)
+/* There is real ownership to set on Linux (unlike NT, whose own
+ * __plat_chown() stays a path-resolving probe -- see that backend's own
+ * comment): fchownat(2) already takes the identical (dirfd, path, uid,
+ * gid, flags) shape src/unistd/ids.c's fchownat() front door hands
+ * down, uid/gid's (uid_t)-1/(gid_t)-1 "leave unchanged" sentinel and
+ * all, so nothing here needs translating.
+ *
+ * `flags` is masked to AT_SYMLINK_NOFOLLOW before the syscall rather
+ * than passed through whole, matching resolve_dirfd()'s neighbours in
+ * this file (__plat_chmodat() above does not need to, because
+ * fchmodat2(2) is the one that takes a flags word here; classic
+ * fchownat(2) has taken one since it was introduced and validates it
+ * strictly -- confirmed against this host: an unrecognised bit is a
+ * real EINVAL from the kernel, not silently ignored). ids.c's own
+ * fchownat() front door treats an unrecognised flag bit as a *may*-fail
+ * it chooses not to fail (chown.html's [EINVAL] for one is a may-fail,
+ * unlike unlinkat()'s shall-fail -- see that file's own comment), so
+ * this backend keeps that promise by only ever forwarding the one flag
+ * bit chown.html defines at all. */
+int __plat_chown(int dirfd, const char *path, uid_t uid, gid_t gid, int flags) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; uid/gid/flags have distinct roles
 {
 	int rd = resolve_dirfd(dirfd);
-	/* Oversized past the real 128-byte aarch64 struct stat (confirmed
-	 * against this host's own <sys/stat.h>): the contents are never
-	 * read, only whether the syscall itself succeeds, so the margin
-	 * costs nothing and guards against a wider layout on some other
-	 * future architecture. */
-	unsigned char stbuf[256];
 	long ret;
 	if (rd == -1 && dirfd != AT_FDCWD) return -1;
-	ret = raw_syscall(SYS_newfstatat, (long)rd, (long)path, (long)stbuf,
-	                 (long)(flags & AT_SYMLINK_NOFOLLOW), 0L, 0L);
+	ret = raw_syscall(SYS_fchownat, (long)rd, (long)path, (long)uid, (long)gid,
+	                 (long)(flags & AT_SYMLINK_NOFOLLOW), 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
+/* fchown(2): the handle-taking sibling, same (uid_t)-1/(gid_t)-1
+ * sentinel, no path or dirfd resolution needed -- `h` already names an
+ * open Linux fd via this file's own fd+1 boxing (unbox() above). */
+int __plat_fchown(__plat_handle_t h, uid_t uid, gid_t gid)
+{
+	long ret = raw_syscall(SYS_fchown, (long)unbox(h), (long)uid, (long)gid, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }

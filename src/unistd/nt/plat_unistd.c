@@ -1059,14 +1059,17 @@ int __plat_process_exists(pid_t p)
  * resolve".  So the path is resolved and the object opened for
  * FILE_READ_ATTRIBUTES, which is exactly the evidence chown.html's
  * shall-fail clauses ask for and nothing more; the handle is closed
- * again without a write of any kind.
+ * again without a write of any kind.  uid/gid are accepted (the
+ * plat_unistd.h contract every backend shares) and ignored, exactly as
+ * before this function grew them: there is still nothing on this
+ * backend to set them to.
  *
  * __ntpath_at() produces the empty-path [ENOENT], the dirfd [EBADF]/
  * [ENOTDIR] and the path-prefix [ENOTDIR] itself, so only the final open
  * is left to this function.  FILE_OPEN_FOR_BACKUP_INTENT, and neither
  * FILE_DIRECTORY_FILE nor FILE_NON_DIRECTORY_FILE, so that the call
  * works on a directory and on a regular file alike. */
-int __plat_chown_probe(int dirfd, const char *path, int flags)
+int __plat_chown(int dirfd, const char *path, uid_t uid, gid_t gid, int flags)
 {
 	struct __ntpath np;
 	IO_STATUS_BLOCK io;
@@ -1075,6 +1078,7 @@ int __plat_chown_probe(int dirfd, const char *path, int flags)
 	NTSTATUS st;
 	ULONG options;
 
+	(void)uid; (void)gid;
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	options = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT |
 		(flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0);
@@ -1083,6 +1087,17 @@ int __plat_chown_probe(int dirfd, const char *path, int flags)
 	__ntpath_free(&np);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	NtClose(h);
+	return 0;
+}
+
+/* fchown(): src/unistd/ids.c's own front door already turned `f` into a
+ * validated handle via __fd_get() before calling here, which is all
+ * fchown.html's own [EBADF] asks for -- same "nothing to set, but
+ * resolution still matters" split as __plat_chown() above, minus any
+ * path resolution of its own since a handle needs none. */
+int __plat_fchown(__plat_handle_t h, uid_t uid, gid_t gid)
+{
+	(void)h; (void)uid; (void)gid;
 	return 0;
 }
 
