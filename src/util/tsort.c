@@ -59,8 +59,8 @@ static size_t nnodes, nodecap;
 
 static int find_node(const char *name)
 {
-	size_t i, count = nnodes;
-	for (i = 0; i < count; i++)
+	size_t i;
+	for (i = 0; i < nnodes; i++)
 		if (!strcmp(nodes[i].name, name)) return (int)i;
 	return -1;
 }
