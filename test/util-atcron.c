@@ -44,6 +44,13 @@
  * a fixed sleep, and given its own SLOW_TESTS entry in
  * tools/run-tests.py.
  */
+/* usleep()/kill()/setenv()/unsetenv() below are all gated behind
+ * _POSIX_SOURCE/_POSIX_C_SOURCE/_XOPEN_SOURCE/_GNU_SOURCE/_BSD_SOURCE
+ * in ntlibc's own headers (include/unistd.h, include/signal.h,
+ * include/stdlib.h) -- none of which a plain -std=c99 build defines on
+ * its own. Same fix, same reasoning, as test/posix-stdlib.c's own
+ * top-of-file _GNU_SOURCE define. */
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
