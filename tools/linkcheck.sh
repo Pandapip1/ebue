@@ -253,6 +253,30 @@ mkdir -p "$builddir" || exit 1
 INC="-I$srcdir/arch/$ARCH -I$srcdir/arch/generic -Iobj/include -I$srcdir/include"
 CFLAGS="$CFLAGS_C99FSE $CFLAGS_AUTO -D_XOPEN_SOURCE=700 -D_ALL_SOURCE $INC"
 
+# The scanner below is clang-18, but the real target for every arch this
+# project builds (x86_64-win32-tcc, i386-win32-tcc, arm64-win32-tcc) is
+# tcc -- and tcc predefines __TINYC__ itself, automatically, with no
+# CFLAGS involvement at all, the same way any compiler predefines its
+# own identifying macro. clang has no way to know to simulate that
+# unless told, so without this, the scanner sees a header exactly as
+# clang itself would parse it -- not as the real target compiler would
+# -- silently defeating this whole function's own header comment above
+# ("a declaration hidden behind an #ifdef this arch's flags do not
+# satisfy is correctly invisible here too, the same as it would be to a
+# real caller"). Found real: include/complex.h's `#ifdef __TINYC__ /
+# #define __STDC_NO_COMPLEX__ 1 #else <66 declarations> #endif` is
+# exactly this shape, and every one of those 66 was a false-positive
+# "unlinkable" finding here before this fix -- correctly undeclared
+# under a real tcc compile (src/complex/*.c's own bodies compile to
+# empty translation units there, by the same #ifdef), but visible to
+# this scanner's clang-only view. Guarded on $CC naming tcc specifically
+# rather than defined unconditionally, so a future non-tcc target
+# (nothing in this tree today, but ARCH/CC are config.mak-driven) is not
+# silently told it is tcc when it is not.
+case "$CC" in
+*tcc*) CFLAGS="$CFLAGS -D__TINYC__" ;;
+esac
+
 # ---------------------------------------------------------------------
 # The scanner: tools/clang/DeclScanner.cpp, a real clang AST walk (see
 # that file's own header comment for the full contract).  It replaced a
