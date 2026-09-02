@@ -112,7 +112,7 @@ int __util_time_main(int argc, char **argv)
 {
 	int i = 1;
 	char *resolved;
-	int pid, status, rc;
+	int pid, status, rc, spawn_errno;
 	struct timespec real0, real1;
 	struct rusage ru0, ru1;
 
@@ -145,10 +145,19 @@ int __util_time_main(int argc, char **argv)
 	(void)getrusage(RUSAGE_CHILDREN, &ru0);
 	(void)clock_gettime(CLOCK_MONOTONIC, &real0);
 	pid = __spawn(resolved, &argv[i], environ);
+	/* Captured before free(): __spawn()'s own errno is the only thing
+	 * that distinguishes "found but not executable" (126) from "not
+	 * really found after all" (127, e.g. a race, or -- as here --
+	 * __find_program() taking an explicit path/drive-letter name on
+	 * faith without itself checking existence, see find_program.c's
+	 * has_dir() branch) -- and nothing between here and the check below
+	 * is documented not to disturb errno on the success path, so the
+	 * read has to happen immediately. */
+	spawn_errno = errno;
 	free(resolved);
 	if (pid < 0) {
-		__util_diagf("time: %s: %s\n", argv[i], strerror(errno));
-		return 126;
+		__util_diagf("time: %s: %s\n", argv[i], strerror(spawn_errno));
+		return spawn_errno == ENOENT ? 127 : 126;
 	}
 	if (waitpid(pid, &status, 0) < 0) {
 		__util_diagf("time: %s\n", strerror(errno));
