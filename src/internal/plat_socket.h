@@ -14,18 +14,19 @@
  * Unlike plat_mem.h/plat_fd.h this is NOT the only place this
  * subsystem's raw NT syscalls end up: src/socket/afdsupport.c's
  * __afd_open()/__afd_ioctl() (declared in src/internal/afd.h, which is
- * out of scope to change) are a stable AFD-domain entry point files
- * under src/socket/ not yet converted to this interface (getname.c,
- * shutdown.c, sockopt.c) call directly and already interpret a raw
- * NTSTATUS/HANDLE themselves -- moving THEIR actual NtCreateFile/
- * NtDeviceIoControlFile/NtWaitForSingleObject calls means relocating
- * those two functions' bodies into src/socket/nt/plat_socket.c too,
- * verbatim, still under their own afd.h-declared names and NT-shaped
- * signatures, rather than inventing a POSIX-shaped __plat_ twin that
- * those unconverted callers would have no way to reach.  That is the
- * "less clean than mman's/unistd's" divergence the top-level migration
- * report calls out for this subsystem: AFD's own contract is not being
- * redesigned, only relocated.
+ * out of scope to change) are a stable AFD-domain entry point that
+ * getname.c's getpeername() half and sockopt.c never actually needed to
+ * reach in the first place -- getpeername() is pure struct __fd field
+ * access (f->peer/f->peer_len, populated generically by connect.c/
+ * accept.c) and sockopt.c only manipulates the __SOCK_ST_REUSEADDR-style
+ * bits below, so neither one has an NT syscall to relocate.  getname.c's
+ * getsockname() half and shutdown.c did, and have been converted to
+ * __plat_socket_getsockname()/__plat_socket_shutdown() below exactly
+ * like bind()/connect()/listen()/accept() were: the front door's own
+ * bookkeeping (the __SOCK_ST_* checks, the unbound-socket wildcard
+ * short-circuit) stays in the front door, and only the actual wire-
+ * protocol/syscall step moved into src/socket/nt/plat_socket.c and
+ * src/socket/linux/plat_socket.c.
  *
  * __plat_sock_recv()/__plat_sock_send() are the genuine POSIX-shaped
  * half of this file that predates the rest of it -- ssize_t, errno
@@ -81,10 +82,10 @@ ssize_t __plat_sock_send(__plat_handle_t h, const void *buf, size_t len, int fla
  * for __FD_SOCKET descriptors -- this library's own bookkeeping, not
  * anything either backend's wire protocol actually defines.  Numerically
  * identical to src/internal/afd.h's own AFD_ST_* (kept there, unchanged,
- * for the AFD-specific front doors -- getname.c/shutdown.c/sockopt.c/
- * sendrecv.c -- not yet converted to this interface): both name bits of
- * the very same struct __fd byte for the very same socket, so the two
- * definitions must never be allowed to drift apart. */
+ * for src/socket/afdsupport.c and sendrecv.c's NT-only innards, which
+ * still reach AFD directly and are out of this interface's scope): both
+ * name bits of the very same struct __fd byte for the very same socket,
+ * so the two definitions must never be allowed to drift apart. */
 #define __SOCK_ST_BOUND     0x01
 #define __SOCK_ST_LISTENING 0x02
 #define __SOCK_ST_CONNECTED 0x04
@@ -111,6 +112,20 @@ int __plat_socket_listen(__plat_handle_t h, unsigned long backlog);
  * fa). */
 int __plat_socket_accept(__plat_handle_t h, struct sockaddr *addr, socklen_t *len, __plat_handle_t *out)
     __attribute__((nonnull(4)));
+
+/* getsockname(): addr/len follow the same truncate-if-too-small
+ * convention as __plat_socket_accept()'s -- the front door's own
+ * full-sized local buffer is passed straight through.  Only called once
+ * the front door has already established the socket is bound (an
+ * unbound socket's wildcard-address short-circuit stays in the front
+ * door, exactly like bind()'s auto-bind-before-connect/listen stays in
+ * listen.c/connect.c rather than moving here). */
+int __plat_socket_getsockname(__plat_handle_t h, struct sockaddr *addr, socklen_t *len);
+/* shutdown(): `how` is the plain SHUT_RD/SHUT_WR/SHUT_RDWR value from
+ * <sys/socket.h> -- validating it against those three values and
+ * checking __SOCK_ST_CONNECTED both stay in the front door; only the
+ * actual disconnect step is here. */
+int __plat_socket_shutdown(__plat_handle_t h, int how);
 
 #endif
 
