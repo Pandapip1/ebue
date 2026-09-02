@@ -18,6 +18,15 @@ tokdef conflicting_implementation_allocated
 	dynamic_storage
 	implemented_by(heap_allocated)
 	implemented_by(inherited_allocated);
+tokdef transform_only_allocated
+	dynamic_storage;
+
+withtok(transform_only_allocated)
+static void *transform_without_terminal_freer(
+	void *object consume(transform_only_allocated))
+{
+	return object;
+}
 
 void inherited_destroy(void *consume(inherited_allocated));
 withtok(inherited_allocated)

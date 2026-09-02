@@ -104,6 +104,7 @@ static int is_sys_error(long ret)
 	return (unsigned long)ret >= (unsigned long)-4095L;
 }
 
+withtok(platform_pages_allocated)
 void *__plat_pages_alloc(size_t n)
 {
 	long ret = raw_syscall(SYS_mmap, 0, (long)n, PROT_READ_LX | PROT_WRITE_LX,

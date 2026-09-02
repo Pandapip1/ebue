@@ -117,12 +117,21 @@ def validate_contracts(contracts: set[tuple[str, str, str]], fixture: bool) -> l
                 "inherited)"
             )
     for family, functions in sorted(producers.items()):
-        linked = declared.get(family, set()) | explicit.get(family, set())
+        # A same-family consume+return function is an ownership transformer,
+        # not a terminal freer: it replaces or forwards one live generation
+        # while preserving the caller's obligation in its return value.
+        # It therefore cannot satisfy the requirement for an independently
+        # callable terminal release operation, and must not make the real
+        # freer look ambiguous merely because it also consumes its inputs.
+        linked = (declared.get(family, set()) |
+                  explicit.get(family, set())) - functions
         if len(linked) != 1:
             errors.append(f"family '{family}' returned by {sorted(functions)} has "
                           f"{len(linked)} freer(s), expected exactly one: {sorted(linked)}")
     for family in sorted(set(declared) | set(explicit)):
-        linked = declared.get(family, set()) | explicit.get(family, set())
+        linked = ((declared.get(family, set()) |
+                   explicit.get(family, set())) -
+                  producers.get(family, set()))
         for freer in sorted(linked):
             if freer in definitions and freer not in explicit.get(family, set()):
                 inherited_here = freer in inherited.get(family, set())

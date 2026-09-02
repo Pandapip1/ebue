@@ -48,6 +48,18 @@ void conditional_reallocation(void)
 		free(old);
 }
 
+withtok(heap_allocated)
+void *same_family_transform(void *old consume(heap_allocated))
+{
+	free(old);
+	return malloc(16);
+}
+
+void transformed_release(void)
+{
+	free(same_family_transform(malloc(8)));
+}
+
 void repeated_reallocation(void)
 {
 	void *first = malloc(8);

@@ -107,3 +107,4 @@ void inherited_destroy(void *object)
 /* allocation-contract-expect: unknown implementation family is an error */
 /* allocation-contract-expect: malformed implementation is an error */
 /* allocation-contract-expect: conflicting implementation is an error */
+/* allocation-contract-expect: same-family transformer is not a terminal freer */
