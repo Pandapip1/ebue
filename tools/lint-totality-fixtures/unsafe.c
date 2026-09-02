@@ -2002,3 +2002,324 @@ unsigned constant_stride_default_bypasses_zero(unsigned select)
 	}
 	return i;
 }
+
+static const char *zero_stride_leaf(const char *p, unsigned stride)
+{
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+const char *zero_stride_root(const char *p)
+{
+	return zero_stride_leaf(p, 0);
+}
+
+static const char *mixed_stride_leaf(const char *p, int stride)
+{
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+const char *mixed_stride_root(const char *p, int zero)
+{
+	mixed_stride_leaf(p, 1);
+	return mixed_stride_leaf(p, zero ? 0 : -1);
+}
+
+static const char *address_taken_stride_leaf(const char *p, unsigned stride)
+{
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+const char *(*address_taken_stride_pointer)(const char *, unsigned) =
+	address_taken_stride_leaf;
+
+const char *address_taken_stride_root(const char *p)
+{
+	return address_taken_stride_leaf(p, 1);
+}
+
+const char *address_taken_stride_indirect(const char *p)
+{
+	return address_taken_stride_pointer(p, 1);
+}
+
+const char *external_stride_leaf(const char *p, unsigned stride)
+{
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+static const char *missing_stride_calls(const char *p, unsigned stride)
+{
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+__SIZE_TYPE__ unevaluated_stride_call(const char *p)
+{
+	return sizeof(missing_stride_calls(p, 1));
+}
+
+static const char *cycle_stride_b(const char *, unsigned);
+
+static const char *cycle_stride_a(const char *p, unsigned stride)
+{
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return cycle_stride_b(p, stride); /* totality-expect */
+}
+
+static const char *cycle_stride_b(const char *p, unsigned stride)
+{
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return cycle_stride_a(p, stride); /* totality-expect */
+}
+
+static const char *narrow_stride_leaf(const char *p, unsigned char stride)
+{
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+const char *narrow_stride_root(const char *p)
+{
+	return narrow_stride_leaf(p, (unsigned char)256);
+}
+
+static const char *mutated_stride_leaf(const char *p, unsigned stride)
+{
+	stride = 0;
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+const char *mutated_stride_root(const char *p)
+{
+	return mutated_stride_leaf(p, 1);
+}
+
+static const char *aliased_stride_leaf(const char *p, unsigned stride)
+{
+	unsigned *alias = &stride;
+	*alias = 0;
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+const char *aliased_stride_root(const char *p)
+{
+	return aliased_stride_leaf(p, 1);
+}
+
+static const char *used_stride_leaf(const char *p, unsigned stride)
+	__attribute__((used));
+
+static const char *used_stride_leaf(const char *p, unsigned stride)
+{
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+const char *used_stride_root(const char *p)
+{
+	return used_stride_leaf(p, 1);
+}
+
+static const char *alias_attribute_stride_leaf(const char *p,
+	unsigned stride)
+{
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+extern __typeof__(alias_attribute_stride_leaf) alias_attribute_stride_entry
+	__attribute__((alias("alias_attribute_stride_leaf")));
+
+const char *alias_attribute_stride_root(const char *p)
+{
+	return alias_attribute_stride_leaf(p, 1);
+}
+
+static const char *weakref_stride_leaf(const char *p, unsigned stride)
+{
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+static __typeof__(weakref_stride_leaf) weakref_stride_entry
+	__attribute__((weakref("weakref_stride_leaf")));
+
+const char *weakref_stride_root(const char *p)
+{
+	return weakref_stride_leaf(p, 1);
+}
+
+static const char *asm_stride_leaf(const char *p, unsigned stride)
+{
+	__asm__("" : "+r"(stride));
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+const char *asm_stride_root(const char *p)
+{
+	return asm_stride_leaf(p, 1);
+}
+
+static const char *narrow_forward_stride_leaf(const char *p,
+	unsigned char stride)
+{
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+static const char *narrow_forward_stride_mid(const char *p, unsigned stride)
+{
+	return narrow_forward_stride_leaf(p, stride);
+}
+
+const char *narrow_forward_stride_root(const char *p)
+{
+	return narrow_forward_stride_mid(p, 1);
+}
+
+static const char *narrow_expression_stride_leaf(const char *p,
+	unsigned stride)
+{
+	while (*p) { /* totality-expect */
+		p += (unsigned char)stride;
+	}
+	return p;
+}
+
+const char *narrow_expression_stride_root(const char *p)
+{
+	return narrow_expression_stride_leaf(p, 256);
+}
+
+static const char *forward_mutation_leaf(const char *p, unsigned stride)
+{
+	while (*p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+static const char *forward_mutation_mid(const char *p, unsigned stride)
+{
+	stride = 0;
+	return forward_mutation_leaf(p, stride);
+}
+
+const char *forward_mutation_root(const char *p)
+{
+	return forward_mutation_mid(p, 1);
+}
+
+static unsigned positive_unsigned_skip_leaf(unsigned limit, unsigned stride)
+{
+	unsigned i = 0;
+	while (i < limit) { /* totality-expect */
+		i += stride;
+	}
+	return i;
+}
+
+unsigned positive_unsigned_skip_root(unsigned limit)
+{
+	return positive_unsigned_skip_leaf(limit, 2);
+}
+
+static const char *positive_stride_without_sentinel_leaf(const char *p,
+	unsigned stride, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+const char *positive_stride_without_sentinel_root(const char *p,
+	int keep_running)
+{
+	return positive_stride_without_sentinel_leaf(p, 1, keep_running);
+}
+
+int stride_impure_condition(void);
+
+static const char *condition_stride_leaf(const char *p, unsigned stride)
+{
+	while (stride_impure_condition() && *p) { /* totality-expect */
+		p += stride;
+	}
+	return p;
+}
+
+const char *condition_stride_root(const char *p)
+{
+	return condition_stride_leaf(p, 1);
+}
+
+static const char *goto_stride_leaf(const char *p, unsigned stride, int skip)
+{
+	while (*p) { /* totality-expect */
+		if (skip)
+			goto bypass_stride;
+		p += stride;
+bypass_stride:
+		skip = !skip;
+	}
+	return p;
+}
+
+const char *goto_stride_root(const char *p, int skip)
+{
+	return goto_stride_leaf(p, 1, skip);
+}
+
+static const char *switch_stride_leaf(const char *p, unsigned stride, int arm)
+{
+	while (*p) { /* totality-expect */
+		switch (arm) {
+		case 1:
+			p += stride;
+		}
+	}
+	return p;
+}
+
+const char *switch_stride_root(const char *p, int arm)
+{
+	return switch_stride_leaf(p, sizeof(char), arm);
+}

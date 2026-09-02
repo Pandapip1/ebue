@@ -11,8 +11,10 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cctype>
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -20,9 +22,296 @@ using namespace clang;
 
 namespace {
 
+/* A static function whose address never escapes has a closed set of callers
+ * in this translation unit.  This summary proves an integer parameter
+ * positive when every one of those calls supplies either a positive constant
+ * or a similarly proved, unmodified parameter.  Requiring a constant-rooted
+ * fixpoint rejects unreachable recursive forwarding cycles. */
+class PositiveParameterFacts {
+  struct CallSite {
+    const CallExpr *Call;
+    const FunctionDecl *Caller;
+  };
+
+  ASTContext &Context;
+  std::map<const FunctionDecl *, const FunctionDecl *> Definitions;
+  std::map<const FunctionDecl *, std::vector<CallSite>> Calls;
+  std::set<const FunctionDecl *> AddressTaken;
+  std::set<std::string> AliasedNames;
+  std::set<const ParmVarDecl *> Positive;
+
+  class Collector : public RecursiveASTVisitor<Collector> {
+    PositiveParameterFacts &Facts;
+    const FunctionDecl *Current = nullptr;
+
+    bool directCallee(const DeclRefExpr *Reference,
+                      const FunctionDecl *Target) const {
+      DynTypedNode Node = DynTypedNode::create(*Reference);
+      for (;;) {
+        auto Parents = Facts.Context.getParents(Node);
+        if (Parents.size() != 1)
+          return false;
+        if (const auto *Call = Parents[0].get<CallExpr>()) {
+          const FunctionDecl *Direct = Call->getDirectCallee();
+          return Direct && Direct->getCanonicalDecl() == Target;
+        }
+        const Expr *Parent = Parents[0].get<Expr>();
+        if (!Parent || (!isa<ImplicitCastExpr>(Parent) &&
+                        !isa<ParenExpr>(Parent)))
+          return false;
+        Node = DynTypedNode::create(*Parent);
+      }
+    }
+
+    bool potentiallyEvaluated(const CallExpr *Call) const {
+      DynTypedNode Node = DynTypedNode::create(*Call);
+      for (;;) {
+        auto Parents = Facts.Context.getParents(Node);
+        if (Parents.size() != 1)
+          return true;
+        if (Parents[0].get<UnaryExprOrTypeTraitExpr>())
+          return false;
+        if (const auto *Parent = Parents[0].get<Expr>()) {
+          Node = DynTypedNode::create(*Parent);
+          continue;
+        }
+        return true;
+      }
+    }
+
+  public:
+    explicit Collector(PositiveParameterFacts &Facts) : Facts(Facts) {}
+
+    bool TraverseFunctionDecl(FunctionDecl *Function) {
+      const FunctionDecl *Saved = Current;
+      if (const FunctionDecl *Definition = Function->getDefinition())
+        Current = Definition;
+      bool Result =
+          RecursiveASTVisitor<Collector>::TraverseFunctionDecl(Function);
+      Current = Saved;
+      return Result;
+    }
+
+    bool VisitFunctionDecl(FunctionDecl *Function) {
+      if (Function->isThisDeclarationADefinition())
+        Facts.Definitions[Function->getCanonicalDecl()] = Function;
+      if (const auto *Alias = Function->getAttr<AliasAttr>())
+        Facts.AliasedNames.insert(Alias->getAliasee().str());
+      if (const auto *WeakReference = Function->getAttr<WeakRefAttr>())
+        if (!WeakReference->getAliasee().empty())
+          Facts.AliasedNames.insert(WeakReference->getAliasee().str());
+      if (const auto *Indirect = Function->getAttr<IFuncAttr>())
+        Facts.AliasedNames.insert(Indirect->getResolver().str());
+      return true;
+    }
+
+    bool VisitCallExpr(CallExpr *Call) {
+      const FunctionDecl *Callee = Call->getDirectCallee();
+      if (Callee && potentiallyEvaluated(Call))
+        Facts.Calls[Callee->getCanonicalDecl()].push_back({Call, Current});
+      return true;
+    }
+
+    bool VisitDeclRefExpr(DeclRefExpr *Reference) {
+      const auto *Function = dyn_cast<FunctionDecl>(Reference->getDecl());
+      if (Function) {
+        const FunctionDecl *Canonical = Function->getCanonicalDecl();
+        if (!directCallee(Reference, Canonical))
+          Facts.AddressTaken.insert(Canonical);
+      }
+      return true;
+    }
+  };
+
+  static const Expr *ignore(const Expr *Expression) {
+    return Expression ? Expression->IgnoreParenImpCasts() : nullptr;
+  }
+
+  static bool containsAsm(const Stmt *Statement) {
+    if (!Statement)
+      return false;
+    if (isa<AsmStmt>(Statement))
+      return true;
+    for (const Stmt *Child : Statement->children())
+      if (containsAsm(Child))
+        return true;
+    return false;
+  }
+
+  static bool externallyRetained(const FunctionDecl *Function) {
+    for (const FunctionDecl *Redeclaration : Function->redecls())
+      if (Redeclaration->hasAttr<AliasAttr>() ||
+          Redeclaration->hasAttr<WeakRefAttr>() ||
+          Redeclaration->hasAttr<IFuncAttr>() ||
+          Redeclaration->hasAttr<UsedAttr>() ||
+          Redeclaration->hasAttr<RetainAttr>())
+        return true;
+    return false;
+  }
+
+  static bool writtenOrEscaped(const Stmt *Statement,
+                               const ParmVarDecl *Parameter) {
+    if (!Statement)
+      return false;
+    if (const auto *Expression = dyn_cast<Expr>(Statement)) {
+      const Expr *Plain = ignore(Expression);
+      if (const auto *Unary = dyn_cast_or_null<UnaryOperator>(Plain)) {
+        const auto *Reference = dyn_cast_or_null<DeclRefExpr>(
+            ignore(Unary->getSubExpr()));
+        if (Reference && Reference->getDecl() == Parameter &&
+            (Unary->isIncrementDecrementOp() ||
+             Unary->getOpcode() == UO_AddrOf))
+          return true;
+      }
+      if (const auto *Binary = dyn_cast_or_null<BinaryOperator>(Plain)) {
+        const auto *Reference = dyn_cast_or_null<DeclRefExpr>(
+            ignore(Binary->getLHS()));
+        if (Binary->isAssignmentOp() && Reference &&
+            Reference->getDecl() == Parameter)
+          return true;
+      }
+    }
+    for (const Stmt *Child : Statement->children())
+      if (writtenOrEscaped(Child, Parameter))
+        return true;
+    return false;
+  }
+
+  bool samePositiveConstant(const Expr *Argument) const {
+    if (!Argument)
+      return false;
+    Expr::EvalResult Initial;
+    if (!Argument->EvaluateAsInt(Initial, Context))
+      return false;
+    const llvm::APSInt &Value = Initial.Val.getInt();
+    if (Value.isNegative() || Value.isZero())
+      return false;
+    const Expr *Current = Argument->IgnoreParens();
+    while (const auto *Cast = dyn_cast<CastExpr>(Current)) {
+      Expr::EvalResult Before;
+      Current = Cast->getSubExpr()->IgnoreParens();
+      if (!Current->EvaluateAsInt(Before, Context) ||
+          Before.Val.getInt().isNegative() || Before.Val.getInt().isZero() ||
+          llvm::APSInt::compareValues(Value, Before.Val.getInt()) != 0)
+        return false;
+    }
+    return true;
+  }
+
+  bool preservesPositiveParameter(const Expr *Expression,
+                                  const ParmVarDecl *&Source) const {
+    Expression = Expression ? Expression->IgnoreParens() : nullptr;
+    if (const auto *Cast = dyn_cast_or_null<ImplicitCastExpr>(Expression)) {
+      QualType From = Cast->getSubExpr()->getType();
+      QualType To = Cast->getType();
+      if (!From->isIntegerType() || !To->isIntegerType())
+        return false;
+      unsigned FromWidth = Context.getIntWidth(From);
+      unsigned ToWidth = Context.getIntWidth(To);
+      bool Preserved = To->isUnsignedIntegerType()
+                           ? ToWidth >= FromWidth
+                           : (From->isSignedIntegerType()
+                                  ? ToWidth >= FromWidth
+                                  : ToWidth > FromWidth);
+      return Preserved &&
+             preservesPositiveParameter(Cast->getSubExpr(), Source);
+    }
+    const auto *Reference = dyn_cast_or_null<DeclRefExpr>(Expression);
+    Source = Reference ? dyn_cast<ParmVarDecl>(Reference->getDecl()) : nullptr;
+    return Source != nullptr;
+  }
+
+public:
+  explicit PositiveParameterFacts(ASTContext &Context) : Context(Context) {
+    Collector(*this).TraverseDecl(Context.getTranslationUnitDecl());
+
+    struct Constraint {
+      bool Valid = true;
+      bool Anchor = false;
+      std::vector<const ParmVarDecl *> Dependencies;
+    };
+    std::map<const ParmVarDecl *, Constraint> Constraints;
+    for (const auto &[Canonical, Definition] : Definitions) {
+      if (Definition->getStorageClass() != SC_Static ||
+          AddressTaken.count(Canonical) || externallyRetained(Definition) ||
+          AliasedNames.count(Definition->getNameAsString()) ||
+          containsAsm(Definition->getBody()))
+        continue;
+      auto FoundCalls = Calls.find(Canonical);
+      if (FoundCalls == Calls.end() || FoundCalls->second.empty())
+        continue;
+      for (const ParmVarDecl *Parameter : Definition->parameters()) {
+        if (!Parameter->getType()->isIntegerType() ||
+            writtenOrEscaped(Definition->getBody(), Parameter))
+          continue;
+        unsigned Index = Parameter->getFunctionScopeIndex();
+        Constraint Candidate;
+        for (const CallSite &Site : FoundCalls->second) {
+          if (Index >= Site.Call->getNumArgs()) {
+            Candidate.Valid = false;
+            break;
+          }
+          const Expr *Argument = Site.Call->getArg(Index);
+          if (samePositiveConstant(Argument)) {
+            Candidate.Anchor = true;
+            continue;
+          }
+          const ParmVarDecl *Source = nullptr;
+          if (!Site.Caller ||
+              !preservesPositiveParameter(Argument, Source) ||
+              Source->getDeclContext() != Site.Caller ||
+              writtenOrEscaped(Site.Caller->getBody(), Source)) {
+            Candidate.Valid = false;
+            break;
+          }
+          Candidate.Dependencies.push_back(Source);
+        }
+        if (Candidate.Valid)
+          Constraints.emplace(Parameter, std::move(Candidate));
+      }
+    }
+
+    for (const auto &[Parameter, Constraint] : Constraints)
+      if (Constraint.Anchor)
+        Positive.insert(Parameter);
+    bool Changed = true;
+    while (Changed) {
+      Changed = false;
+      for (const auto &[Parameter, Constraint] : Constraints) {
+        if (Positive.count(Parameter))
+          continue;
+        for (const ParmVarDecl *Dependency : Constraint.Dependencies)
+          if (Positive.count(Dependency)) {
+            Positive.insert(Parameter);
+            Changed = true;
+            break;
+          }
+      }
+    }
+    Changed = true;
+    while (Changed) {
+      Changed = false;
+      for (const auto &[Parameter, Constraint] : Constraints) {
+        if (Positive.count(Parameter))
+          for (const ParmVarDecl *Dependency : Constraint.Dependencies)
+            if (!Positive.count(Dependency)) {
+              Positive.erase(Parameter);
+              Changed = true;
+              break;
+            }
+      }
+    }
+  }
+
+  bool contains(const ParmVarDecl *Parameter) const {
+    return Positive.count(Parameter) != 0;
+  }
+};
+
 class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   ASTContext &Context;
   SourceManager &SM;
+  const PositiveParameterFacts &PositiveParameters;
   const FunctionDecl *Current = nullptr;
 
   enum class ProgressKind { Up, Down };
@@ -376,6 +665,10 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         Binary->getLHS()->getType()->isIntegerType() &&
         Binary->getRHS()->getType()->isIntegerType() &&
         DynamicStep->getType()->isIntegerType();
+    bool DynamicPointerStep = DynamicStep &&
+        Binary->getLHS()->getType()->isPointerType() &&
+        Binary->getRHS()->getType()->isIntegerType() &&
+        DynamicStep->getType()->isIntegerType();
     /* A step larger than one can jump over the bound and wrap.  In
      * particular, `for (unsigned i = 0; i < UINT_MAX; i += 2)` does not
      * terminate.  Unit steps are the only context-free scalar proof. */
@@ -387,16 +680,16 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
           positiveConstantStep(Binary->getRHS())) ||
          (Variable->getType()->isPointerType() &&
           strictlyPositive(Binary->getRHS())) ||
-         DynamicIntegerStep))
+         DynamicIntegerStep || DynamicPointerStep))
       return makeProgress(
           Variable, ProgressKind::Up, Base, Binary->getLHS(),
-          DynamicIntegerStep ||
+          DynamicIntegerStep || DynamicPointerStep ||
                   (Variable->getType()->isUnsignedIntegerType() &&
                    !unitInteger(Binary->getRHS()))
               ? Binary->getRHS()
               : nullptr,
           false, unitInteger(Binary->getRHS()),
-          DynamicIntegerStep ? DynamicStep : nullptr);
+          (DynamicIntegerStep || DynamicPointerStep) ? DynamicStep : nullptr);
     if (Binary->getOpcode() == BO_SubAssign &&
         (unitInteger(Binary->getRHS()) ||
          (Variable->getType()->isSignedIntegerType() &&
@@ -437,6 +730,10 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
             Binary->getLHS()->getType()->isIntegerType() &&
             Operation->getRHS()->getType()->isIntegerType() &&
             AssignedStep->getType()->isIntegerType();
+        bool DynamicAssignedPointerStep = AssignedStep &&
+            Binary->getLHS()->getType()->isPointerType() &&
+            Operation->getRHS()->getType()->isIntegerType() &&
+            AssignedStep->getType()->isIntegerType();
         if (Operation->getOpcode() == BO_Add &&
             (unitInteger(Operation->getRHS()) ||
              (Variable->getType()->isSignedIntegerType() &&
@@ -445,16 +742,18 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
               positiveConstantStep(Operation->getRHS())) ||
              (Variable->getType()->isPointerType() &&
               strictlyPositive(Operation->getRHS())) ||
-             DynamicAssignedStep))
+             DynamicAssignedStep || DynamicAssignedPointerStep))
           return makeProgress(
               Variable, ProgressKind::Up, Base, Binary->getLHS(),
-              DynamicAssignedStep ||
+              DynamicAssignedStep || DynamicAssignedPointerStep ||
                       (Variable->getType()->isUnsignedIntegerType() &&
                        !unitInteger(Operation->getRHS()))
                   ? Operation->getRHS()
                   : nullptr,
               false, unitInteger(Operation->getRHS()),
-              DynamicAssignedStep ? AssignedStep : nullptr);
+              (DynamicAssignedStep || DynamicAssignedPointerStep)
+                  ? AssignedStep
+                  : nullptr);
         if (Operation->getOpcode() == BO_Sub &&
             (unitInteger(Operation->getRHS()) ||
              (Variable->getType()->isSignedIntegerType() &&
@@ -3242,7 +3541,10 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
      * zero is signed overflow, so no infinite *defined* C execution is
      * admitted.  nonzeroWhen() also handles `n != 0` and conjunctions while
      * deliberately requiring both arms of a disjunction to imply nonzero. */
-    if (!Change.GuardedStep && Change.Kind == ProgressKind::Down &&
+    bool SentinelSafeStep = !Change.GuardedStep ||
+        (Change.Variable->getType()->isPointerType() &&
+         Change.DynamicStep && admissibleProgress(Change));
+    if (SentinelSafeStep && Change.Kind == ProgressKind::Down &&
         Change.Variable->getType()->isIntegerType() &&
         rankNonzeroWhen(Condition, Change, true))
       return true;
@@ -3252,7 +3554,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
      * sufficiently wide unsigned indices exhaust every possible object.
      * Narrow unsigned indices require the explicit scalar bound handled
      * above, because their modular arithmetic can revisit the same bytes. */
-    return !Change.GuardedStep && sentinelDomainCannotCycle(Change) &&
+    return SentinelSafeStep && sentinelDomainCannotCycle(Change) &&
            sentinelRead(Condition, Change);
   }
 
@@ -3298,6 +3600,15 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return std::nullopt;
   }
 
+  bool admissibleProgress(const Progress &Change) const {
+    if (!Change.DynamicStep ||
+        !Change.Variable->getType()->isPointerType())
+      return true;
+    const auto *Step = dyn_cast<ParmVarDecl>(Change.DynamicStep);
+    return Step && PositiveParameters.contains(Step) &&
+           preservesPositiveValue(Change.GuardedStep, Step);
+  }
+
   std::string loopProof(const Stmt *Loop, const Expr *Condition,
                         const Expr *Increment, const Stmt *Body,
                         bool ConditionBeforeBody) const {
@@ -3325,6 +3636,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         return "strict-scalar-rank";
     }
     if (std::optional<Progress> Change = progress(Increment)) {
+      if (!admissibleProgress(*Change))
+        return "unproved";
       /* The for increment is on every backedge, but an additional body
        * mutation could cancel it or turn the effective step into a
        * sentinel-skipping/wrapping step. */
@@ -3365,6 +3678,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     std::vector<Progress> IncrementCandidates;
     collectProgress(Increment, IncrementCandidates);
     for (const Progress &Change : IncrementCandidates) {
+      if (!admissibleProgress(Change))
+        continue;
       Mutation BodyMutation = mutation(Body, Change);
       if (guardedConstantStrideAscent(Loop, Condition, Body, Increment,
                                       Change))
@@ -3400,7 +3715,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     std::vector<Progress> Candidates;
     collectProgress(Body, Candidates);
     for (const Progress &Change : Candidates) {
-      if (!validRankVariable(Change, Body, Increment) ||
+      if (!admissibleProgress(Change) ||
+          !validRankVariable(Change, Body, Increment) ||
           !bodyGuaranteesProgress(Body, Change))
         continue;
       if (strictComparison(Condition, Change, Body, Increment))
@@ -3437,7 +3753,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         pairedConditionValuesAreLocal(Condition)) {
       for (size_t I = 0; I < Candidates.size(); ++I) {
         const Progress &First = Candidates[I];
-        if (!isa<VarDecl>(First.Variable) ||
+        if (!admissibleProgress(First) ||
+            !isa<VarDecl>(First.Variable) ||
             First.Kind != ProgressKind::Up ||
             addressTaken(Current->getBody(), First.Variable) ||
             !validRankVariable(First, Body) ||
@@ -3446,7 +3763,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
           continue;
         for (size_t J = I + 1; J < Candidates.size(); ++J) {
           const Progress &Second = Candidates[J];
-          if (!isa<VarDecl>(Second.Variable) ||
+          if (!admissibleProgress(Second) ||
+              !isa<VarDecl>(Second.Variable) ||
               Second.Kind != ProgressKind::Up || sameRank(First, Second) ||
               addressTaken(Current->getBody(), Second.Variable) ||
               !validRankVariable(Second, Body) ||
@@ -3477,8 +3795,10 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   }
 
 public:
-  explicit TotalityVisitor(ASTContext &Context)
-      : Context(Context), SM(Context.getSourceManager()) {}
+  TotalityVisitor(ASTContext &Context,
+                  const PositiveParameterFacts &PositiveParameters)
+      : Context(Context), SM(Context.getSourceManager()),
+        PositiveParameters(PositiveParameters) {}
 
   bool TraverseFunctionDecl(FunctionDecl *Function) {
     if (!Function->isThisDeclarationADefinition() ||
@@ -3530,7 +3850,9 @@ public:
 class TotalityConsumer : public ASTConsumer {
 public:
   void HandleTranslationUnit(ASTContext &Context) override {
-    TotalityVisitor(Context).TraverseDecl(Context.getTranslationUnitDecl());
+    PositiveParameterFacts PositiveParameters(Context);
+    TotalityVisitor(Context, PositiveParameters)
+        .TraverseDecl(Context.getTranslationUnitDecl());
   }
 };
 
