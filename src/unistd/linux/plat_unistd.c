@@ -119,6 +119,7 @@
 #define SYS_kill              129
 #define SYS_setpgid           154
 #define SYS_getpgid           155
+#define SYS_getrandom         278
 
 /* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
  * the call path at all. NOT `extern long syscall(long, ...)`: that
@@ -530,6 +531,40 @@ int __plat_chown_probe(int dirfd, const char *path, int flags)
 	ret = raw_syscall(SYS_newfstatat, (long)rd, (long)path, (long)stbuf,
 	                 (long)(flags & AT_SYMLINK_NOFOLLOW), 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
+/* ======================================================================
+ * getentropy.c
+ * ====================================================================== */
+
+/* getrandom(2), always with flags == 0: no GRND_NONBLOCK (getentropy()
+ * has no non-blocking mode to honour -- src/unistd/getentropy.c's front
+ * door blocks like any other caller of this backend would want) and no
+ * GRND_RANDOM (that flag selects the legacy /dev/random-equivalent
+ * behaviour, which can genuinely block for a long time on boot entropy;
+ * the default source getrandom(2) otherwise draws from is the same
+ * CSPRNG /dev/urandom uses once seeded, blocking only until the kernel
+ * considers it seeded, which is what getentropy() -- BSD's non-blocking-
+ * after-boot entropy call -- is specified to want). A short return
+ * (interrupted by a signal, or more bytes requested than the kernel
+ * fills in one call) is looped rather than surfaced, same as a short
+ * read()/write() elsewhere in this tree is never handed back raw to a
+ * caller who asked for an exact byte count. */
+int __plat_getentropy(void *buf, size_t buflen)
+{
+	unsigned char *p = buf;
+	size_t left = buflen;
+	while (left) {
+		long ret = raw_syscall(SYS_getrandom, (long)p, (long)left, 0L, 0L, 0L, 0L);
+		if (is_sys_error(ret)) {
+			if ((int)-ret == EINTR) continue;
+			errno = (int)-ret;
+			return -1;
+		}
+		p += ret;
+		left -= (size_t)ret;
+	}
 	return 0;
 }
 

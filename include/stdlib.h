@@ -188,8 +188,10 @@ char *l64a (long);
  * for i == 0, with no NULL check -- every real caller passes a real
  * string. */
 long a64l (const char *) __attribute__((nonnull(1)));
-void setkey (const char *);  /* undefined-ok: DES-based, like crypt()/
-	encrypt() in unistd.h -- not reimplemented from scratch */
+/* key required: src/unistd/crypt.c's setkey() reads all 64 elements of
+ * key unconditionally -- same DES machinery as crypt()/encrypt() in
+ * unistd.h, see that file's own banner. */
+void setkey (const char *) __attribute__((nonnull(1)));
 double drand48 (void);
 double erand48 (unsigned short [3]);
 long int lrand48 (void);
