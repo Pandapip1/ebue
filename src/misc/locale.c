@@ -9,6 +9,7 @@
 #include <string.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <limits.h>
 
 /* ntlibc supports exactly one locale, "C".  locale_t is an opaque
  * pointer; we hand out the address of one static object for it. */
@@ -53,20 +54,25 @@ static struct lconv __posix_lconv = { // NOLINT(bugprone-reserved-identifier,cer
 	.mon_grouping = (char *)"",
 	.positive_sign = (char *)"",
 	.negative_sign = (char *)"",
-	.int_frac_digits = 127,
-	.frac_digits = 127,
-	.p_cs_precedes = 127,
-	.p_sep_by_space = 127,
-	.n_cs_precedes = 127,
-	.n_sep_by_space = 127,
-	.p_sign_posn = 127,
-	.n_sign_posn = 127,
-	.int_p_cs_precedes = 127,
-	.int_p_sep_by_space = 127,
-	.int_n_cs_precedes = 127,
-	.int_n_sep_by_space = 127,
-	.int_p_sign_posn = 127,
-	.int_n_sign_posn = 127,
+	/* "not available", per the pages for each of these members: they
+	 * are `char`, and CHAR_MAX -- not the literal 127 -- is the value
+	 * that means that, because CHAR_MAX itself is what's implementation
+	 * -defined (limits.h): 127 on a signed-char target, 255 where plain
+	 * char is unsigned (this project's aarch64 target). */
+	.int_frac_digits = CHAR_MAX,
+	.frac_digits = CHAR_MAX,
+	.p_cs_precedes = CHAR_MAX,
+	.p_sep_by_space = CHAR_MAX,
+	.n_cs_precedes = CHAR_MAX,
+	.n_sep_by_space = CHAR_MAX,
+	.p_sign_posn = CHAR_MAX,
+	.n_sign_posn = CHAR_MAX,
+	.int_p_cs_precedes = CHAR_MAX,
+	.int_p_sep_by_space = CHAR_MAX,
+	.int_n_cs_precedes = CHAR_MAX,
+	.int_n_sep_by_space = CHAR_MAX,
+	.int_p_sign_posn = CHAR_MAX,
+	.int_n_sign_posn = CHAR_MAX,
 };
 
 struct lconv *localeconv(void)
