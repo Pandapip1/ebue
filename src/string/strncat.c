@@ -12,7 +12,12 @@ char *strncat(char *__restrict d withtok(null_terminated),
 {
 	char *a = d;
 	d += strlen(d);
-	while (n && *s) n--, *d++ = *s++;
+	while (n && *s) {
+		*d = *s;
+		d++;
+		s++;
+		n--;
+	}
 	*d = 0;
 	return a;
 }

@@ -13,8 +13,10 @@ void *memccpy(void *__restrict dest, const void *__restrict src, int c, size_t n
 	const unsigned char *s = src;
 	c = (unsigned char)c;
 	for (; n; n--) {
-		unsigned char byte = *s++;
-		*d++ = byte;
+		unsigned char byte = *s;
+		s++;
+		*d = byte;
+		d++;
 		if (byte == c) return d;
 	}
 	return 0;

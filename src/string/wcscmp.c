@@ -4,6 +4,9 @@
 
 int wcscmp(const wchar_t *l, const wchar_t *r)
 {
-	for (; *l == *r && *l; l++, r++);
+	while (*l == *r && *l) {
+		l++;
+		r++;
+	}
 	return (int)*l - (int)*r;
 }

@@ -8,7 +8,10 @@ int strcasecmp(const char *_l withtok(null_terminated),
 {
 	const unsigned char *l = (void *)_l, *r = (void *)_r;
 	int lc, rc;
-	for (; *l && *r && (*l == *r || tolower(*l) == tolower(*r)); l++, r++);
+	while (*l && *r && (*l == *r || tolower(*l) == tolower(*r))) {
+		l++;
+		r++;
+	}
 	lc = tolower(*l);
 	rc = tolower(*r);
 	if (lc < rc) return -1;

@@ -10,7 +10,12 @@
 wchar_t *wcsncpy(wchar_t *__restrict d, const wchar_t *__restrict s, size_t n)
 {
 	wchar_t *a = d;
-	while (n && *s) n--, *d++ = *s++;
+	while (n && *s) {
+		*d = *s;
+		d++;
+		s++;
+		n--;
+	}
 	wmemset(d, 0, n);
 	return a;
 }

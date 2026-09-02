@@ -16,8 +16,10 @@ int strverscmp(const char *l0, const char *r0)
 	for (dp = i = 0; l[i] == r[i]; i++) {
 		int c = l[i];
 		if (!c) return 0;
-		if (!isdigit(c)) dp = i+1, z = 1;
-		else if (c != '0') z = 0;
+		if (!isdigit(c)) {
+			dp = i+1;
+			z = 1;
+		} else if (c != '0') z = 0;
 	}
 
 	if (l[dp] != '0' && r[dp] != '0') {

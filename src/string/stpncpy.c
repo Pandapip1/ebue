@@ -10,7 +10,12 @@
 char *stpncpy(char *__restrict d withtok(writable_span(n)),
 	const char *__restrict s, size_t n)
 {
-	for (; n && (*d = *s); n--, s++, d++);
+	while (n > 0 && *s != '\0') {
+		*d = *s;
+		d++;
+		s++;
+		n--;
+	}
 	memset(d, 0, n);
 	return d;
 }

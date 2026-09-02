@@ -27,13 +27,23 @@
 
 wchar_t *wcpcpy(wchar_t *__restrict d, const wchar_t *__restrict s)
 {
-	for (; (*d = *s); s++, d++);
+	while (*s != L'\0') {
+		*d = *s;
+		d++;
+		s++;
+	}
+	*d = L'\0';
 	return d;
 }
 
 wchar_t *wcpncpy(wchar_t *__restrict d, const wchar_t *__restrict s, size_t n)
 {
-	for (; n && (*d = *s); n--, s++, d++);
+	while (n > 0 && *s != L'\0') {
+		*d = *s;
+		d++;
+		s++;
+		n--;
+	}
 	wmemset(d, 0, n);
 	return d;
 }

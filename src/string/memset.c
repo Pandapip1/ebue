@@ -14,7 +14,12 @@ void *memset(void *dest withtok(writable_span(n)), int c, size_t n) // NOLINT(bu
 		size_t w = (unsigned char)c;
 		w |= w << 8; w |= w << 16;
 		if (sizeof(size_t) > 4) w |= w << 16 << 16;
-		while (align_bytes > 0) { *s++ = (unsigned char)c; n--; align_bytes--; }
+		while (align_bytes > 0) {
+			*s = (unsigned char)c;
+			s++;
+			n--;
+			align_bytes--;
+		}
 		for (; n >= sizeof(size_t);
 		     n -= sizeof(size_t), s += sizeof(size_t))
 			*(size_t *)s = w;
