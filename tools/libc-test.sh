@@ -413,6 +413,21 @@ if ! $CC -c $CFLAGS_C99FSE $CFLAGS_AUTO -D_GNU_SOURCE $INC \
 fi
 hobjs="$hobjs obj/libc-test/shim.o"
 
+# See test/libc-test-shim-src/libc-test-rpath-stub.c's own header: the
+# no-op __rpath a real dlopen() consumer with no extra search
+# directories would define. Compiled once here; linked in per-test
+# below, only for the sources that actually call dlopen() (build_one()),
+# rather than unconditionally, so a corpus source that never touches
+# dlopen() never carries an unused definition into its link.
+RPATH_STUB="$srcdir/test/libc-test-shim-src/libc-test-rpath-stub.c"
+# shellcheck disable=SC2086
+if ! $CC -c $CFLAGS_C99FSE $CFLAGS_AUTO -D_GNU_SOURCE $INC \
+     -o obj/libc-test/rpath-stub.o "$RPATH_STUB" 2>"$W/rpath-stub.err"; then
+	echo "libc-test: $RPATH_STUB does not compile." >&2
+	sed 's/^/    /' "$W/rpath-stub.err" >&2
+	exit 1
+fi
+
 # $ledger_corpus (functional/ + regression/, built above for --cases-file)
 # is this build/run list's base; math, when opted in, is appended on top
 # of it and deliberately stays outside the ledger's case list.
@@ -433,9 +448,21 @@ build_one() {
 		echo NA > "$W/out/$n.state"
 		return
 	fi
+	# __rpath (include/ntlibc/rpath.h) is documented as a symbol the
+	# CALLING PROGRAM defines, not one libc provides -- see
+	# tools/linkcheck.sh's linkcheck_exception() for the identical story
+	# against the library's own dlopen()/dlsym()/dlclose()/dlerror()
+	# entry points. Every upstream corpus source that calls dlopen()
+	# hits the same unresolved reference here for the same reason
+	# (confirmed by `grep -l dlopen` over the corpus: exactly dlopen.c,
+	# tls_align_dlopen.c, tls_init_dlopen.c and tls_get_new-dtv.c, the 4
+	# cases this used to fail for), so link in the no-op-search-path
+	# companion object built above whenever the source references it.
+	rpath_obj=""
+	grep -q 'dlopen(' "$f" && rpath_obj="obj/libc-test/rpath-stub.o"
 	# shellcheck disable=SC2086
 	if $CC $CFLAGS_C99FSE $CFLAGS_AUTO -D_GNU_SOURCE $INC -nostdlib \
-	    -o "obj/libc-test/$n.exe" "$srcdir/lib/crt1.o" "$f" $hobjs \
+	    -o "obj/libc-test/$n.exe" "$srcdir/lib/crt1.o" "$f" $hobjs $rpath_obj \
 	    -L"$srcdir/lib" -lc -lntdll > "$W/out/$n.build" 2>&1; then
 		echo built > "$W/out/$n.state"
 	else
