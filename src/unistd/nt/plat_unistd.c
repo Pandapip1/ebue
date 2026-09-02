@@ -169,16 +169,15 @@ NTSTATUS __pipe_handles(HANDLE *rp, HANDLE *wp, int inherit)
 	HANDLE r, w;
 	NTSTATUS st;
 	unsigned pid = (unsigned)(ULONG_PTR)__teb()->ClientId.UniqueProcess;
-	unsigned n;
 	const char pfx[] = "\\Device\\NamedPipe\\ntlibc.";
 	int i = 0;
 
 	for (; pfx[i]; i++) name[i] = (unsigned char)pfx[i];
 	/* "<pid>.<serial>" in hex */
-	for (n = 8; n > 0;) { n--; name[i++] = (unsigned char)"0123456789abcdef"[(pid >> (n * 4)) & 15]; }
+	i = __nt_append_hex32(name, i, pid);
 	name[i++] = '.';
 	serial++;
-	for (n = 8; n > 0;) { n--; name[i++] = (unsigned char)"0123456789abcdef"[(serial >> (n * 4)) & 15]; }
+	i = __nt_append_hex32(name, i, serial);
 	name[i] = 0;
 	us.Buffer = name;
 	if ((size_t)i > __US_MAX_WCHARS) return STATUS_NAME_TOO_LONG;
@@ -1030,14 +1029,10 @@ static pid_t pgid_event_owner;
 static void pgid_event_name(pid_t pid, WCHAR name[48], UNICODE_STRING *us)
 {
 	static const char prefix[] = "\\BaseNamedObjects\\ntlibc-pgrp.";
-	unsigned upid = (unsigned)pid;
-	int i = 0, n;
+	int i = 0;
 
 	for (; prefix[i]; i++) name[i] = (unsigned char)prefix[i];
-	for (n = 8; n > 0;) {
-		n--;
-		name[i++] = (unsigned char)"0123456789abcdef"[(upid >> (n * 4)) & 15];
-	}
+	i = __nt_append_hex32(name, i, (unsigned)pid);
 	name[i] = 0;
 	us->Buffer = name;
 	if ((size_t)i > __US_MAX_WCHARS) {

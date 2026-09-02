@@ -175,7 +175,7 @@ static size_t nt_prefix_root(const UNICODE_STRING *nt)
 	size_t n = nt->Length / sizeof(WCHAR);
 
 	if (n < 7 || b[0] != '\\' || b[1] != '?' || b[2] != '?' || b[3] != '\\') return n;
-	if (!(((b[4] | 0x20) >= 'a' && (b[4] | 0x20) <= 'z') && b[5] == ':' && b[6] == '\\')) return n;
+	if (!__nt_is_drive_letter(b[4]) || b[5] != ':' || b[6] != '\\') return n;
 	return 7;
 }
 
@@ -495,11 +495,6 @@ static int normalize_rel(WCHAR *w, size_t *np, int *trailing)
  * own verdict in that case.  On success *out owns a single __malloc'd
  * buffer, held in ->dos exactly as the __ntpath_at() branch does, so
  * __ntpath_free() releases it. */
-static int drive_letter(WCHAR c)
-{
-	return ((c | 0x20) >= 'a' && (c | 0x20) <= 'z');
-}
-
 static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
                                  struct __ntpath *out, ULONG attributes)
 {
@@ -510,7 +505,7 @@ static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
 	size_t bodyn, curn = 0, bn, len;
 	ULONG got;
 
-	if (n >= 3 && drive_letter(dos[0]) && dos[1] == ':' && dos[2] == '\\') {
+	if (n >= 3 && __nt_is_drive_letter(dos[0]) && dos[1] == ':' && dos[2] == '\\') {
 		letter = dos[0];
 		body = dos + 2;
 		bodyn = n - 2;
@@ -520,7 +515,7 @@ static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
 		got = RtlGetCurrentDirectory_U(sizeof cur, cur);
 		if (!got || got > sizeof cur) return -1;
 		curn = got / sizeof(WCHAR);
-		if (curn < 2 || !drive_letter(cur[0]) || cur[1] != ':') return -1;
+		if (curn < 2 || !__nt_is_drive_letter(cur[0]) || cur[1] != ':') return -1;
 		letter = cur[0];
 		if (dos[0] == '\\') {
 			body = dos;
@@ -629,7 +624,7 @@ static int ntpath_at_impl(int dirfd, const char *path, struct __ntpath *out,
 		}
 	}
 	absolute = path[0] == '/' || path[0] == '\\' ||
-		(((path[0] | 0x20) >= 'a' && (path[0] | 0x20) <= 'z') && path[1] == ':');
+		(__nt_is_drive_letter((unsigned char)path[0]) && path[1] == ':');
 	if (dirfd == AT_FDCWD || absolute) return ntpath_impl(path, out, attributes, overlay);
 
 	/* Relative to a directory handle: the object manager resolves a
