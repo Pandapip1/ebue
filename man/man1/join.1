@@ -1,0 +1,161 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH JOIN 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+join \- relational join of two sorted files
+.SH SYNOPSIS
+.B join
+.RB [ \-a
+.IR file_number ]
+.RB [ \-e
+.IR string ]
+.RB [ \-o
+.IR list ]
+.RB [ \-t
+.IR char ]
+.RB [ \-1
+.IR field ]
+.RB [ \-2
+.IR field ]
+.I file1
+.I file2
+.SH DESCRIPTION
+.B join
+reads
+.I file1
+and
+.IR file2 ,
+which must already be sorted in byte-collating order on their
+respective join fields, and for each pair of lines whose join fields
+compare equal, writes one output line combining them. Exactly one of
+.I file1
+and
+.I file2
+may be
+.B \-
+to mean standard input; both may not be
+.BR \- .
+.PP
+.B join
+never sorts or verifies the sort order of its input.
+.PP
+Unless
+.B \-t
+is given, each line is split into fields on runs of one or more
+<blank> characters, with leading <blank> characters ignored entirely
+and never producing an empty leading field. This is a plain
+whitespace tokenization, and is not the same field-splitting rule
+.BR sort (1)
+applies by default.
+.PP
+Without
+.BR \-o ,
+each output line consists of the join field, followed by the
+remaining fields of the matching
+.I file1
+line, followed by the remaining fields of the matching
+.I file2
+line, each separated by the output field separator. For an unpairable
+line printed because of
+.BR \-a ,
+there is no counterpart to draw fields from, so the output is simply
+that line's own fields, with the join field first; no placeholder
+fields are added for the missing side.
+.SH OPTIONS
+.TP
+.BI \-a " file_number"
+In addition to the normal matched output, also print each unpairable
+line of file
+.I file_number
+(1 or 2). May be given for both files, as \fB\-a 1 \-a 2\fR.
+.TP
+.BI \-e " string"
+Within
+.BR \-o 's
+output only, replace any empty output field with
+.IR string .
+This has no effect on the default output format used when
+.B \-o
+is not given.
+.TP
+.BI \-o " list"
+Construct each output line from exactly the fields named in
+.IR list ,
+instead of the default layout described above.
+.I list
+is one or more field specifiers, separated by <comma> or <blank>
+characters:
+.B 0
+for the join field, or \fIfile_number\fR.\fIfield\fR (\fIfile_number\fR
+1 or 2,
+.I field
+a positive field number) for a specific field of one input line.
+.B \-o
+may be given more than once; each occurrence appends to the same
+output field list. A field named in
+.I list
+that does not exist on a given output line (including every
+.I file2
+field of an unpairable
+.I file1
+line printed under
+.BR \-a ,
+or vice versa) is an empty output field, subject to
+.BR \-e .
+.TP
+.BI \-t " char"
+Use
+.I char
+as the field separator: every occurrence of
+.I char
+on a line is significant, so adjacent occurrences produce an empty
+field between them, and leading occurrences produce an empty first
+field.
+.I char
+also becomes the output field separator, replacing the default single
+<space>.
+.TP
+.BI \-1 " field"
+Join on field
+.I field
+of
+.I file1
+(default 1).
+.TP
+.BI \-2 " field"
+Join on field
+.I field
+of
+.I file2
+(default 1).
+.SH OPERANDS
+.TP
+.I file1
+The pathname of the first input file, or
+.B \-
+for standard input.
+.TP
+.I file2
+The pathname of the second input file, or
+.B \-
+for standard input.
+.SH APPLICATION USAGE
+.B \-v
+(print only unpairable lines, suppressing the normal matched output)
+is not implemented, and is refused with a diagnostic rather than
+silently mapped onto
+.BR \-a .
+.SH EXIT STATUS
+.TP
+.B 0
+The files were joined and written successfully.
+.TP
+.B 1
+An error occurred: an invalid option or option argument, a missing,
+extra, or doubled
+.B \-
+operand, an unreadable input file, or a write failure.
+.SH SEE ALSO
+.BR sort (1),
+.BR comm (1),
+.BR uniq (1)

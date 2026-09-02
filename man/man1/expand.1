@@ -1,0 +1,75 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH EXPAND 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+expand \- convert tabs to spaces
+.SH SYNOPSIS
+.B expand
+.RB [ \-t
+.IR tablist ]
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B expand
+copies each
+.I file
+(or standard input, if none is given) to standard output, replacing
+each <tab> character with the number of <space> characters needed to
+reach the next tab stop.
+.PP
+Input is read and copied one byte at a time, so there is no limit on
+the length of an input line.
+.PP
+Each <backspace> character is copied to the output unchanged, and
+decrements the column position used for tab stop calculations; the
+column position is never decremented below the first column.
+.SH OPTIONS
+.TP
+.BI \-t " tablist"
+Set the tab stops used for the conversion, instead of the default of
+every 8th column.
+.I tablist
+may be given as a separate argument
+(\fB\-t\fR \fItablist\fR)
+or attached directly to the option
+(\fB\-t\fR\fItablist\fR).
+.I tablist
+is either:
+.RS
+.IP \(bu 2
+a single positive decimal integer, in which case tab stops are set
+that many columns apart; or
+.IP \(bu 2
+two or more positive decimal integers, separated by <comma> or <blank>
+characters, given in strictly ascending order, in which case tab stops
+are set at exactly those column numbers. Once the last listed column
+is passed, no further tab stops exist and any remaining <tab> is
+replaced by a single <space>.
+.RE
+.IP
+A
+.I tablist
+that is empty, contains a non-numeric or non-positive value, or is not
+in strictly ascending order (when more than one value is given) is
+rejected as invalid.
+.SH OPERANDS
+.TP
+.I file
+A pathname of an input file. If
+.B \-
+is given, standard input is used at that point in the operand
+sequence.
+.SH EXIT STATUS
+.TP
+.B 0
+All input files were copied successfully.
+.TP
+.B 1
+An input file could not be opened; the remaining operands are still
+processed.
+.TP
+.B 2
+An option or its argument was invalid.
+.SH SEE ALSO
+.BR unexpand (1),
+.BR tabs (1),
+.BR cat (1)

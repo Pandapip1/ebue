@@ -1,0 +1,102 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH SPLIT 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+split \- split a file into pieces
+.SH SYNOPSIS
+.B split
+.RB [ \-l
+.IR line_count \ |
+.B \-b
+.IR n [ k | m ]]
+.RB [ \-a
+.IR suffix_length ]
+.RI [ file
+.RI [ name ]]
+.SH DESCRIPTION
+.B split
+reads
+.I file
+(or standard input, if
+.I file
+is omitted or is
+.BR \- )
+and writes it out as a sequence of consecutively-named output files,
+each one piece of the input.
+.PP
+Output files are named by appending a suffix to
+.IR name ,
+starting at as many copies of the letter
+.B a
+as the suffix length and incrementing like a base-26 odometer:
+.BR aa ,
+.BR ab ,
+\&.\|.\|.\&
+.BR az ,
+.BR ba ,
+and so on. If more pieces are produced than the current suffix
+length can name, this is reported as an error rather than wrapping
+back around and overwriting an earlier piece.
+.PP
+Exactly one output file is always created for a given input, even
+when the input is empty.
+.SH OPTIONS
+.TP
+.BI \-l " line_count"
+Split into pieces of
+.I line_count
+lines each (the last piece may be shorter). This is the default mode,
+with
+.I line_count
+of 1000, when neither
+.B \-l
+nor
+.B \-b
+is given.
+.TP
+.BI \-b " n[k|m]"
+Split into pieces of
+.I n
+bytes each (the last piece may be shorter), instead of splitting by
+line count.
+.I n
+may be followed by
+.B k
+to multiply it by 1024, or
+.B m
+to multiply it by 1,048,576.
+.B \-l
+and
+.B \-b
+are mutually exclusive.
+.TP
+.BI \-a " suffix_length"
+Use
+.I suffix_length
+letters for each output file's suffix, instead of the default of 2.
+.SH OPERANDS
+.TP
+.I file
+The pathname of the file to split. If omitted, or given as
+.BR \- ,
+standard input is used.
+.TP
+.I name
+The prefix for each output file's name. The default is the single
+character
+.BR x .
+.SH EXIT STATUS
+.TP
+.B 0
+The input was split successfully.
+.TP
+.B >0
+An error occurred: an invalid option or option argument, conflicting
+.B \-l
+and
+.BR \-b ,
+too many pieces for the suffix length, an unreadable input file, or a
+write failure.
+.SH SEE ALSO
+.BR csplit (1),
+.BR cat (1)

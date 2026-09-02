@@ -1,0 +1,105 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH UNIQ 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+uniq \- report or filter out repeated lines in a file
+.SH SYNOPSIS
+.B uniq
+.RB [ \-c | \-d | \-u ]
+.RB [ \-f
+.IR fields ]
+.RB [ \-s
+.IR chars ]
+.RI [ input_file
+.RI [ output_file ]]
+.SH DESCRIPTION
+.B uniq
+reads
+.I input_file
+(or standard input, if omitted or given as
+.BR \- )
+one line at a time and writes it to
+.I output_file
+(or standard output, if omitted or given as
+.BR \- ),
+collapsing each run of
+.B adjacent
+equal lines into a single output line. Only immediately-adjacent
+lines are ever compared;
+.B uniq
+never sorts its input, so a caller wanting duplicates collapsed
+regardless of position should sort the input first.
+.PP
+Comparison is an exact byte comparison, after skipping any prefix
+named by
+.B \-f
+and/or
+.BR \-s ;
+there is no case-insensitive comparison mode.
+.SH OPTIONS
+.TP
+.B \-c
+Precede each output line with the number of lines in its input run
+that compared equal, right-justified in a 7-character field followed
+by a space.
+.TP
+.B \-d
+Write only the first line of each run that occurred more than once
+(i.e., only actual duplicates).
+.TP
+.B \-u
+Write only lines that occurred exactly once (i.e., were never
+duplicated).
+.RS
+.PP
+.BR \-c ,
+.BR \-d ,
+and
+.B \-u
+are mutually exclusive; giving more than one is an error.
+.RE
+.TP
+.BI \-f " fields"
+Ignore the first
+.I fields
+fields (each field being a run of <blank> characters followed by a
+run of non-<blank> characters) when comparing lines. If a line has
+fewer than
+.I fields
+fields, comparison starts from the end of the line (an empty
+remainder).
+.TP
+.BI \-s " chars"
+Ignore the first
+.I chars
+characters after the
+.B \-f
+skip (or from the beginning of the line, if
+.B \-f
+is not given) when comparing lines. If fewer than
+.I chars
+characters remain, comparison starts from the end of the line.
+.SH OPERANDS
+.TP
+.I input_file
+The pathname of the file to read, or
+.B \-
+for standard input.
+.TP
+.I output_file
+The pathname of the file to write, or
+.B \-
+for standard output.
+.SH EXIT STATUS
+.TP
+.B 0
+The input was processed successfully.
+.TP
+.B >0
+An error occurred: an invalid option or option argument, conflicting
+.BR \-c / \-d / \-u ,
+too many operands, an unreadable input file, or an unwritable output
+file.
+.SH SEE ALSO
+.BR sort (1),
+.BR comm (1)

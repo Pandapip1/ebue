@@ -1,0 +1,81 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH TABS 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+tabs \- set terminal hardware tab stops
+.SH SYNOPSIS
+.B tabs
+.RB [ \-N ]
+.br
+.B tabs
+.B \-T
+.I type
+.SH DESCRIPTION
+.B tabs
+writes an escape sequence to standard output that clears every
+existing hardware tab stop on the terminal and sets new ones at a
+uniform interval, then returns the cursor to column 1.
+.PP
+With no operands,
+.B tabs
+is equivalent to
+.BR "tabs \-8" .
+.PP
+Tab stops are always set out to a fixed, generous column bound, since
+this implementation has no way to query the attached terminal's real
+width; a real terminal simply ignores a tab-stop request past its own
+last column.
+.SH OPTIONS
+.TP
+.BI \- N
+Set tab stops every
+.I N
+columns, where
+.I N
+is a single decimal digit from 1 to 9.
+.TP
+.B \-0
+Refused: clearing the existing tab stops without setting any new ones
+is not supported.
+.TP
+.BI \-T " type"
+Refused unconditionally: this implementation has no terminal
+capability database to look up
+.I type
+in, and only supports the uniform-interval form described above.
+Note that no argument is consumed for
+.BR \-T ,
+so any following word is left to be processed as a separate,
+also-unsupported operand.
+.SH OPERANDS
+None of the following forms of a real
+.B tabs
+utility are supported by this implementation, and each is refused
+with a diagnostic rather than silently approximated:
+.RS
+.IP \(bu 2
+a named preset such as
+.BR \-a ,
+.BR \-c ,
+.BR \-c2 ,
+.BR \-c3 ,
+.BR \-f ,
+.BR \-p ,
+.BR \-s ,
+or
+.BR \-u ;
+.IP \(bu 2
+an explicit tab-stop list, such as
+.RB \(dq "tabs 1,10 +8" \(dq.
+.RE
+.SH EXIT STATUS
+.TP
+.B 0
+The tab stops were set successfully.
+.TP
+.B >0
+An unsupported option or operand was given, or a write to standard
+output failed.
+.SH SEE ALSO
+.BR expand (1),
+.BR unexpand (1)

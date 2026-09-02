@@ -1,0 +1,75 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH UNEXPAND 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+unexpand \- convert spaces to tabs
+.SH SYNOPSIS
+.B unexpand
+.RB [ \-a ]
+.RB [ \-t
+.IR tablist ]
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B unexpand
+copies each
+.I file
+(or standard input, if none is given) to standard output, converting
+<blank> (<space> or <tab>) characters at the beginning of each line
+into the maximum number of <tab> characters followed by the minimum
+number of <space> characters needed to reach the same column
+positions. The leading run of <blank> characters on each line is
+always converted this way, regardless of its length or of whether
+.B \-a
+was given.
+.PP
+Each <backspace> character is copied to the output unchanged, and
+decrements the column position used for tab stop calculations; the
+column position is never decremented below the first column.
+.SH OPTIONS
+.TP
+.B \-a
+In addition to the leading run on each line, also convert every other
+run of two or more <blank> characters that immediately precedes a tab
+stop, anywhere in the line. A single <blank> character is left
+unconverted even if it lands exactly on a tab stop.
+.TP
+.BI \-t " tablist"
+Set the tab stops used for the conversion, instead of the default of
+every 8th column, using the same
+.I tablist
+grammar as
+.BR expand (1)
+(a single interval, or a strictly ascending comma/blank-separated
+list of column numbers).
+.I tablist
+may be given as a separate argument or attached directly to the
+option
+(\fB\-t\fR\fItablist\fR).
+Giving
+.B \-t
+enables the same additional mid-line conversion that
+.B \-a
+enables; the two options may be combined, with no additional effect
+beyond either one alone.
+.SH OPERANDS
+.TP
+.I file
+A pathname of an input file. If
+.B \-
+is given, standard input is used at that point in the operand
+sequence.
+.SH EXIT STATUS
+.TP
+.B 0
+All input files were copied successfully.
+.TP
+.B 1
+An input file could not be opened; the remaining operands are still
+processed.
+.TP
+.B 2
+An option or its argument was invalid.
+.SH SEE ALSO
+.BR expand (1),
+.BR tabs (1),
+.BR cat (1)

@@ -1,0 +1,67 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH TEE 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+tee \- duplicate standard input
+.SH SYNOPSIS
+.B tee
+.RB [ \-ai ]
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B tee
+copies standard input to standard output, making a copy in each
+.I file
+operand as well. Data is written out to standard output and to every
+still-open destination file as soon as it is read, with no internal
+buffering that would hold it back.
+.PP
+If a
+.I file
+operand cannot be opened, a diagnostic is written and that
+destination is dropped before copying begins; the remaining
+destinations, and standard output, still receive the full input. If a
+write to an already-open destination fails partway through, a
+diagnostic is written, that destination is closed and dropped, and
+copying continues to the remaining destinations \(em a single broken
+destination never stops the others, or standard output, from
+receiving the rest of standard input.
+.SH OPTIONS
+.TP
+.B \-a
+Append to each
+.I file
+operand instead of truncating it.
+.TP
+.B \-i
+Ignore the
+.B SIGINT
+signal for the duration of the run.
+.SH OPERANDS
+.TP
+.I file
+A pathname of an output file. Unlike some operands elsewhere in this
+suite,
+.B \-
+is not special here: a
+.I file
+operand of
+.B \-
+names a literal file called
+.BR \- ,
+not standard output.
+.SH EXIT STATUS
+.TP
+.B 0
+Standard input was copied successfully to standard output and to
+every
+.I file
+operand.
+.TP
+.B >0
+An error occurred: an invalid option, a read error on standard input,
+a write error on standard output, or a write error on one or more
+.I file
+operands (after any operands that failed to open at all were already
+dropped).
+.SH SEE ALSO
+.BR cat (1)

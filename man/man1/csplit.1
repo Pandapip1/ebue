@@ -1,0 +1,144 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH CSPLIT 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+csplit \- split a file into context-determined pieces
+.SH SYNOPSIS
+.B csplit
+.RB [ \-k ]
+.RB [ \-s ]
+.RB [ \-f
+.IR prefix ]
+.RB [ \-n
+.IR number ]
+.I file
+.I arg
+.RI [ arg ]\ .\|.\|.
+.SH DESCRIPTION
+.B csplit
+reads
+.I file
+(or standard input, if
+.I file
+is
+.BR \- )
+entirely into memory, then writes it out as a sequence of
+consecutively-numbered output files, split at the boundaries named by
+each
+.I arg
+operand, in the order given. After the last
+.I arg
+has been applied, one final piece is always written, running from
+wherever the last
+.I arg
+left off through the end of the file, even if it is empty.
+.PP
+Each successfully created piece's size in bytes is printed to
+standard output, one line per piece, unless
+.B \-s
+is given.
+.PP
+Each
+.I arg
+is matched starting from the current position in the file (just past
+wherever the previous
+.I arg
+left off) and searches forward; it can never match a position before
+the current one.
+.PP
+By default, if any error occurs while processing the
+.I arg
+operands, every piece already created during this run is removed
+before exiting; see
+.B \-k
+to keep them instead.
+.SH OPTIONS
+.TP
+.B \-k
+Leave any already-created output files in place if an error occurs,
+instead of removing them.
+.TP
+.B \-s
+Suppress the per-piece size messages that would otherwise be printed
+to standard output.
+.TP
+.BI \-f " prefix"
+Name each created file using
+.I prefix
+as the filename prefix, instead of the default
+.BR xx ,
+followed by a zero-padded numeric suffix.
+.TP
+.BI \-n " number"
+Use
+.I number
+decimal digits, zero-padded, for each created file's numeric suffix,
+instead of the default of 2.
+.SH OPERANDS
+.TP
+.I file
+The pathname of the file to split. If given as
+.BR \- ,
+standard input is used.
+.TP
+.I arg
+One of the following forms, applied in the order given:
+.RS
+.TP
+.I line_no
+Create a piece from the current position up to, but not including,
+line
+.IR line_no .
+.I line_no
+must be a positive line number at or after the current position.
+.TP
+.I /regexp/[offset]
+Create a piece from the current position up to, but not including,
+the next line matching the basic regular expression
+.IR regexp ,
+adjusted by
+.I offset
+lines if given (a signed decimal integer, written directly after the
+closing
+.BR / ;
+the resulting line must still be at or after the current position and
+within the file). The delimiting
+.B /
+character may appear literally inside
+.I regexp
+if escaped as
+.BR \e/ .
+.TP
+.I %regexp%[offset]
+Equivalent to
+.IR /regexp/[offset] ,
+except that no output file is created for the skipped section \(em
+the current position still advances past it.
+.RE
+.IP
+The
+.RB \(dq "{num}" \(dq
+repeat-count form (\(dqapply the previous
+.I regexp
+operand
+.I num
+more times\(dq) is not implemented, and is refused with a diagnostic.
+.SH EXIT STATUS
+.TP
+.B 0
+The file was split successfully.
+.TP
+.B >0
+An error occurred: an invalid option or option argument, a missing
+.I file
+or
+.I arg
+operand, an unreadable input file, an
+.I arg
+that is malformed, out of range, or fails to match, a
+.RB \(dq "{num}" \(dq
+operand, or a write failure.
+.SH SEE ALSO
+.BR split (1),
+.BR grep (1),
+.BR sed (1)
