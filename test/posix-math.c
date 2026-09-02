@@ -1712,6 +1712,36 @@ static unsigned fenv_x87_cw_no_rc(const fenv_t *e)
 	return ((unsigned)b[1] << 8 | b[0]) & ~0x0c00u;
 }
 
+/* AArch64's counterpart: fenv_t's first four bytes are FPCR (rounding
+ * mode, trap enables, and the mode bits like FZ that neither reaches --
+ * see arch/aarch64/bits/fenv.h). Read through unsigned char for the
+ * same reason as above: fenv_t's members are implementation-private. */
+static unsigned int fenv_aarch64_fpcr(const fenv_t *e)
+{
+	const unsigned char *b = (const unsigned char *)e;
+	return (unsigned int)b[0] | (unsigned int)b[1] << 8 |
+	       (unsigned int)b[2] << 16 | (unsigned int)b[3] << 24;
+}
+
+#if defined(__aarch64__)
+/* mrs/msr operate on 64-bit Xn registers; narrowing through `unsigned
+ * long` rather than handing clang a 32-bit operand directly is the same
+ * choice src/math/fenv.c's own read_fpcr()/write_fpcr() make, for the
+ * same reason (avoids a register/operand width mismatch). */
+static unsigned int test_read_fpcr(void)
+{
+	unsigned long v;
+	__asm__ __volatile__("mrs %0, fpcr" : "=r"(v));
+	return (unsigned int)v;
+}
+
+static void test_write_fpcr(unsigned int v)
+{
+	unsigned long vv = v;
+	__asm__ __volatile__("msr fpcr, %0" : : "r"(vv));
+}
+#endif
+
 /* feclearexcept.html/feraiseexcept.html/fetestexcept.html/
  * fegetexceptflag.html RETURN VALUE, the clause each of the five flag
  * functions states for a zero argument:
@@ -1925,21 +1955,45 @@ static void test_fenv_updateenv_reraises(void)
  * reach it -- so no other test can disturb this one by accident. */
 static void test_fenv_dfl_env_captured_at_startup(void)
 {
-	unsigned short orig, cw;
 	fenv_t e;
 
 	CHECK(g_startup_env_ok);
-	__asm__ __volatile__("fnstcw %0" : "=m"(orig));
-	cw = (unsigned short)(orig | 0x0300u);	/* PC = 64-bit (extended) */
-	__asm__ __volatile__("fldcw %0" : : "m"(cw));
+#if defined(__i386__) || defined(__x86_64__)
+	{
+		unsigned short orig, cw;
 
-	CHECK(fesetenv(FE_DFL_ENV) == 0);
-	CHECK(fegetenv(&e) == 0);
-	CHECK((fenv_x87_cw_no_rc(&e) & 0x0300u) ==
-	      (fenv_x87_cw_no_rc(&g_startup_env) & 0x0300u));
+		__asm__ __volatile__("fnstcw %0" : "=m"(orig));
+		cw = (unsigned short)(orig | 0x0300u);	/* PC = 64-bit (extended) */
+		__asm__ __volatile__("fldcw %0" : : "m"(cw));
 
-	/* restore exactly what was found on entry -- process-global state */
-	__asm__ __volatile__("fldcw %0" : : "m"(orig));
+		CHECK(fesetenv(FE_DFL_ENV) == 0);
+		CHECK(fegetenv(&e) == 0);
+		CHECK((fenv_x87_cw_no_rc(&e) & 0x0300u) ==
+		      (fenv_x87_cw_no_rc(&g_startup_env) & 0x0300u));
+
+		/* restore exactly what was found on entry -- process-global state */
+		__asm__ __volatile__("fldcw %0" : : "m"(orig));
+	}
+#elif defined(__aarch64__)
+	{
+		unsigned int orig, fpcr;
+
+		/* FPCR has no x87-style precision control, but FZ (flush-to-zero,
+		 * bit 24) plays the same role this test needs: a mode bit
+		 * fesetround() cannot reach. */
+		orig = test_read_fpcr();
+		fpcr = orig | (1u << 24);
+		test_write_fpcr(fpcr);
+
+		CHECK(fesetenv(FE_DFL_ENV) == 0);
+		CHECK(fegetenv(&e) == 0);
+		CHECK((fenv_aarch64_fpcr(&e) & (1u << 24)) ==
+		      (fenv_aarch64_fpcr(&g_startup_env) & (1u << 24)));
+
+		/* restore exactly what was found on entry -- process-global state */
+		test_write_fpcr(orig);
+	}
+#endif
 }
 
 static void test_fenv_dfl_env_is_startup_env(void)
@@ -1954,7 +2008,9 @@ static void test_fenv_dfl_env_is_startup_env(void)
 static void test_fenv_getenv_does_not_modify(void)
 {
 	fenv_t e;
+#if defined(__i386__) || defined(__x86_64__)
 	unsigned short cw, orig;
+#endif
 
 	/* Save the control word found on entry and restore exactly it at the
 	 * end.  Exception masking is process-global hardware state, and a
@@ -1975,6 +2031,7 @@ static void test_fenv_getenv_does_not_modify(void)
 	 * So the round trip is deliberately NOT exercised here;
 	 * test_fenv_env_roundtrip() covers fesetenv() on an environment that
 	 * is safe to install. */
+#if defined(__i386__) || defined(__x86_64__)
 	__asm__ __volatile__("fnstcw %0" : "=m"(orig));
 	cw = orig & (unsigned short)~0x04u;	/* unmask divide-by-zero (ZM) */
 	__asm__ __volatile__("fldcw %0" : : "m"(cw));
@@ -1985,11 +2042,33 @@ static void test_fenv_getenv_does_not_modify(void)
 	CHECK((cw & 0x04) == 0);		/* fegetenv must not have masked it */
 
 	__asm__ __volatile__("fldcw %0" : : "m"(orig));
+#elif defined(__aarch64__)
+	{
+		unsigned int fpcr, orig32;
+
+		/* fegetenv() here is two plain mrs reads (src/math/fenv.c's own
+		 * aarch64 banner), so it has no FNSTENV-style side effect to
+		 * undo -- but the check is worth keeping as real coverage
+		 * against a regression, mirroring the x86 case above with
+		 * FPCR's DZE trap-enable bit (9) in place of the x87 ZM mask
+		 * bit: unmasked here means the bit is SET, not clear. */
+		orig32 = test_read_fpcr();
+		fpcr = orig32 | (1u << 9);
+		test_write_fpcr(fpcr);
+
+		CHECK(fegetenv(&e) == 0);
+
+		fpcr = test_read_fpcr();
+		CHECK((fpcr & (1u << 9)) != 0);	/* fegetenv must not have masked it */
+
+		test_write_fpcr(orig32);
+	}
+#endif
 }
 
 static void test_fenv_holdexcept_installs_nonstop(void)
 {
-#ifndef __i386__
+#ifdef __x86_64__
 	fenv_t h;
 	unsigned int mx, orig;
 
@@ -2015,6 +2094,25 @@ static void test_fenv_holdexcept_installs_nonstop(void)
 
 	CHECK(fesetenv(&h) == 0);
 	__asm__ __volatile__("ldmxcsr %0" : : "m"(orig));
+#elif defined(__aarch64__)
+	fenv_t h;
+	unsigned int fpcr, orig;
+
+	/* Same test, FPCR's five trap-enable bits (8-12, see
+	 * src/math/fenv.c's aarch64 feholdexcept()) in place of MXCSR's six
+	 * mask bits -- and the opposite polarity: non-stop mode is these
+	 * bits CLEAR, not set. */
+	orig = test_read_fpcr();
+	fpcr = orig & ~(1u << 9);		/* unmask (trap-enable) divide-by-zero */
+	test_write_fpcr(fpcr);
+
+	CHECK(feholdexcept(&h) == 0);
+
+	fpcr = test_read_fpcr();
+	CHECK((fpcr & (0x1fu << 8)) == 0);
+
+	CHECK(fesetenv(&h) == 0);
+	test_write_fpcr(orig);
 #endif
 }
 
