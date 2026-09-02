@@ -210,8 +210,15 @@ unsigned ualarm(unsigned, unsigned);  /* undefined-ok: alarm()'s NT timer
 #define L_XTND 2
 int brk(void *);  /* undefined-ok: this library's allocator is NT's private
 	heap (RtlAllocateHeap, src/malloc/malloc.c), not a single growable
-	brk-style arena; there is no NT primitive shaped like brk() */
-void *sbrk(intptr_t);  /* undefined-ok: same brk-heap mismatch as brk() */
+	brk-style arena; there is no NT primitive shaped like brk() -- the
+	marker stays because it is still true of, and only checked against,
+	the NT build. Linux has a real brk(2) syscall and a real,
+	independent program-break, separate from whatever this library's own
+	malloc() does internally (src/malloc/linux/plat_malloc.c is entirely
+	mmap(2)-based and never touches it) -- implemented for real in
+	src/unistd/linux/plat_brk.c, the same way musl and glibc both ship a
+	real brk()/sbrk() alongside their own mmap-based mallocs. */
+void *sbrk(intptr_t);  /* undefined-ok: see brk */
 pid_t vfork(void);
 int vhangup(void);  /* undefined-ok: hangs up a Unix controlling terminal,
 	a session/tty concept this library does not model */
@@ -230,11 +237,17 @@ int daemon(int, int);  /* undefined-ok: the fork()+setsid() BSD idiom, on
 	top of a fork() that already needs a patched Wine to run at all
 	(see CONTRIBUTING.md); not a foundation to build another function on */
 void setusershell(void);  /* undefined-ok: /etc/shells enumeration, no
-	such file or concept on NT */
+	such file or concept on NT -- the marker stays because it is still
+	true of, and only checked against, the NT build. Linux has a real,
+	simple, line-oriented /etc/shells this library just reads, in
+	src/unistd/linux/plat_shells.c. */
 void endusershell(void);  /* undefined-ok: see setusershell */
 char *getusershell(void);  /* undefined-ok: see setusershell */
 int acct(const char *);  /* undefined-ok: Unix process accounting is a
-	kernel facility NT has no equivalent of */
+	kernel facility NT has no equivalent of -- the marker stays because
+	it is still true of, and only checked against, the NT build. Linux
+	has a real acct(2) syscall and does define this one, in
+	src/unistd/linux/plat_unistd.c. */
 long syscall(long, ...);  /* undefined-ok: NT has no stable, numbered
 	raw-syscall ABI exposed to user mode the way this presumes; the Nt*
 	entry points this library calls directly are the closest analogue.
@@ -257,7 +270,11 @@ int setresuid(uid_t, uid_t, uid_t);  /* undefined-ok: real/effective/saved
 	IDs are a Linux-specific refinement of Unix credentials; this
 	library's getuid()/geteuid() (src/unistd/ids.c) already report a
 	single fixed identity, so there is nothing for the triple to select
-	between */
+	between -- the marker stays because it is still true of, and only
+	checked against, the NT build. Linux has real setresuid(2)/
+	setresgid(2)/getresuid(2)/getresgid(2) syscalls with real, distinct
+	ruid/euid/suid, and does define all four, in
+	src/unistd/linux/plat_ids.c. */
 int setresgid(gid_t, gid_t, gid_t);  /* undefined-ok: see setresuid */
 int getresuid(uid_t *, uid_t *, uid_t *);  /* undefined-ok: see setresuid */
 int getresgid(gid_t *, gid_t *, gid_t *);  /* undefined-ok: see setresuid */
@@ -265,10 +282,17 @@ withtok(heap_allocated)
 char *get_current_dir_name(void);
 int syncfs(int);  /* undefined-ok: syncs an entire filesystem by fd; NT has
 	no per-volume sync primitive this library wires up, and fsync()
-	(src/unistd/fsync.c) already covers the per-descriptor case */
+	(src/unistd/fsync.c) already covers the per-descriptor case -- the
+	marker stays because it is still true of, and only checked against,
+	the NT build. Linux has a real syncfs(2) syscall and does define this
+	one, in src/unistd/linux/plat_unistd.c. */
 int euidaccess(const char *, int);  /* undefined-ok: distinguishes real
 	from effective uid the same way access() does not need to here --
-	see setresuid on why this library's uid/euid are not distinct */
+	see setresuid on why this library's uid/euid are not distinct -- the
+	marker stays because it is still true of, and only checked against,
+	the NT build. Linux has a real effective-id access check
+	(faccessat2(2)'s AT_EACCESS), and does define this one, in
+	src/unistd/linux/plat_ids.c. */
 int eaccess(const char *, int);  /* undefined-ok: glibc alias of
 	euidaccess(); see euidaccess */
 pid_t gettid(void);

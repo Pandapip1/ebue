@@ -929,6 +929,15 @@ static uid_t sid_uid(const SID *sid)
 	return uid == (uid_t)-1 ? UID_FALLBACK : uid;
 }
 
+/* NT has no POSIX group identity distinct from the fixed uid model this
+ * file's own banner describes -- the same constant getgid()/getegid()
+ * already answered directly (src/unistd/ids.c) before this seam
+ * existed; only the location moved, not the value. */
+gid_t __plat_detect_gid(void)
+{
+	return 1000;
+}
+
 uid_t __plat_detect_uid(void)
 {
 	union {

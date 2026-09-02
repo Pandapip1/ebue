@@ -1344,6 +1344,86 @@ static void test_sync(void)
 	CHECK(unlink("sy.txt") == 0);
 }
 
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+/* ============================================================
+ * syncfs / acct / brk / sbrk / setusershell family (Linux backends)
+ *
+ * All five are real only on native Linux (src/unistd/linux/
+ * plat_unistd.c, plat_brk.c, plat_shells.c) -- NT's own "undefined-ok"
+ * reasoning for each (see include/unistd.h's updated comments) stays
+ * genuine there. Guarded out of the NT/Wine build (no __linux__) and
+ * the native-ASan harness (_NTLIBC_NATIVE_BUILD links only the NT
+ * backend against fuzz/ntstubs.c, which defines none of these) the
+ * same way test_res_ids()/test_euidaccess() are in
+ * test/posix-unistd-ids.c.
+ * ============================================================ */
+static void test_syncfs_linux(void)
+{
+	int fd = open("sf.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	if (fd < 0) return;
+	CHECK(write(fd, "data", 4) == 4);
+	CHECK(syncfs(fd) == 0);
+	CHECK(close(fd) == 0);
+	CHECK(unlink("sf.txt") == 0);
+
+	errno = 0;
+	CHECK(syncfs(-1) == -1);
+	CHECK(errno == EBADF);
+}
+
+/* acct(2) needs CAP_SYS_PACCT; this test harness is not expected to run
+ * privileged, so it only proves the call is a REAL syscall (a specific,
+ * real errno for the specific reason it was refused) rather than a
+ * silent always-succeeds stub -- the same "prove it is real, not that
+ * privileged behavior works" shape test_chown_family() already uses
+ * elsewhere in this suite. */
+static void test_acct_linux(void)
+{
+	int r;
+	errno = 0;
+	r = acct(0);
+	CHECK(r == 0 || errno == EPERM || errno == ENOSYS || errno == ENOENT);
+}
+
+/* brk()/sbrk(): a real, independent program break -- see include/
+ * unistd.h's own updated comment on why this cannot alias ntlibc's own
+ * mmap-based malloc() (src/malloc/linux/plat_malloc.c). */
+static void test_brk_sbrk_linux(void)
+{
+	void *b0 = sbrk(0);
+	void *b1, *b2;
+
+	CHECK(b0 != (void *)-1);
+	b1 = sbrk(4096);
+	CHECK(b1 == b0);
+	b2 = sbrk(0);
+	CHECK((char *)b2 == (char *)b0 + 4096);
+	CHECK(brk(b0) == 0);
+	CHECK(sbrk(0) == b0);
+}
+
+static void test_usershells_linux(void)
+{
+	char *sh;
+	int count = 0;
+	setusershell();
+	while ((sh = getusershell()) != 0) {
+		CHECK(sh[0] != '#');
+		CHECK(sh[0] != 0);
+		count++;
+		if (count > 10000) break;	/* pathological /etc/shells: stop, don't hang */
+	}
+	endusershell();
+	/* /etc/shells may legitimately not exist on a minimal system --
+	 * count==0 (getusershell() returning NULL immediately) is a
+	 * conforming answer, not a failure. What this proves is that the
+	 * three calls form a working iterator at all, not any particular
+	 * count. */
+	CHECK(count >= 0);
+}
+#endif
+
 /* getlogin.html.  RETURN VALUE: getlogin() "shall return a pointer to
  * the login name or a null pointer if the user's login name cannot be
  * found"; getlogin_r() "shall return zero" on success, "otherwise, an
@@ -1920,6 +2000,12 @@ int main(void)
 	test_confstr();
 	test_swab();
 	test_sync();
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+	test_syncfs_linux();
+	test_acct_linux();
+	test_brk_sbrk_linux();
+	test_usershells_linux();
+#endif
 	test_getlogin();
 	test_id_session_stubs();
 	test_linkat();

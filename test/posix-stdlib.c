@@ -8,6 +8,10 @@
  * functions/<name>.html it checks.  See test/posix-coverage/stdlib.md
  * for the full ledger, including what those five files already cover.
  */
+/* ptsname_r() (tested below, Linux-only) is _GNU_SOURCE; the same
+ * define test/posix-unistd-ids.c's own top already carries for its
+ * own _GNU_SOURCE-only coverage. */
+#define _GNU_SOURCE
 #include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -817,6 +821,74 @@ static void test_getsubopt_keylist(void)
 	CHECK(subopts != 0 && *subopts == 0);
 }
 
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+/* ============================================================
+ * posix_openpt / grantpt / unlockpt / ptsname / ptsname_r (Linux
+ * backend, src/stdlib/linux/plat_pty.c)
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_openpt.html
+ *
+ * Real only on native Linux -- NT genuinely has no PTY concept (see
+ * include/stdlib.h's own updated comment), so this whole family stays
+ * undefined-ok there. Guarded out of the NT/Wine build (no __linux__)
+ * and the native-ASan harness (_NTLIBC_NATIVE_BUILD links only the NT
+ * backend against fuzz/ntstubs.c, which defines none of these five)
+ * the same way test/posix-unistd-ids.c's own test_res_ids() is.
+ * ============================================================ */
+static void test_posix_openpt_family(void)
+{
+	int mfd, sfd;
+	char *slave;
+	char buf[64];
+	ssize_t n;
+	char rb[16];
+
+	mfd = posix_openpt(O_RDWR | O_NOCTTY);
+	CHECK(mfd >= 0);
+	if (mfd < 0) return;
+
+	CHECK(grantpt(mfd) == 0);
+	CHECK(unlockpt(mfd) == 0);
+
+	slave = ptsname(mfd);
+	CHECK(slave != 0);
+	if (slave) CHECK(!strncmp(slave, "/dev/pts/", 9));
+
+	CHECK(ptsname_r(mfd, buf, sizeof buf) == 0);
+	CHECK(slave != 0 && !strcmp(slave, buf));
+
+	/* ERANGE for a buffer too small to hold the real answer. */
+	CHECK(ptsname_r(mfd, buf, 1) == ERANGE);
+
+	/* EBADF/EINVAL-shaped failure for a descriptor that is not a ptmx
+	 * master at all -- grantpt()/unlockpt() must not silently succeed
+	 * on an unrelated fd. */
+	{
+		int junk = open("/dev/null", O_RDONLY);
+		CHECK(junk >= 0);
+		if (junk >= 0) {
+			CHECK(grantpt(junk) == -1);
+			CHECK(unlockpt(junk) == -1);
+			close(junk);
+		}
+	}
+
+	/* The master/slave pair actually work as a real pty: open the
+	 * slave and prove data flows across it, not just that the naming
+	 * machinery answers something. */
+	if (slave) {
+		sfd = open(slave, O_RDWR | O_NOCTTY);
+		CHECK(sfd >= 0);
+		if (sfd >= 0) {
+			CHECK(write(mfd, "hi\n", 3) == 3);
+			n = read(sfd, rb, sizeof rb);
+			CHECK(n > 0);
+			close(sfd);
+		}
+	}
+	close(mfd);
+}
+#endif
+
 int main(int argc, char **argv)
 {
 	if (argc > 1 && !strcmp(argv[1], "--posix-stdlib-quickexit"))
@@ -835,6 +907,9 @@ int main(int argc, char **argv)
 	test_system();
 	test_a64l();
 	test_getsubopt_keylist();
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+	test_posix_openpt_family();
+#endif
 	test_quick_exit(argv[0]);
 
 	if (!fails) printf("posix-stdlib: all tests passed\n");

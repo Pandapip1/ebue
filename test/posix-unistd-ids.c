@@ -307,6 +307,96 @@ static void test_setid_family(void)
 	errno = 0; CHECK(setgid((gid_t)-1) == -1 && errno == EINVAL);
 }
 
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+/* ============================================================
+ * setresuid / setresgid / getresuid / getresgid (Linux backend)
+ * https://man7.org/linux/man-pages/man2/setresuid.2.html
+ *
+ * _GNU_SOURCE-only, and real only on native Linux (src/unistd/linux/
+ * plat_ids.c) -- see include/unistd.h's own updated comment: NT's
+ * single-fixed-identity reasoning stays true there, so these four are
+ * still undefined-ok on that build. Guarded out of both the NT/Wine
+ * build (__linux__ undefined there) and the native-ASan harness
+ * (_NTLIBC_NATIVE_BUILD, which links only the NT backend against
+ * fuzz/ntstubs.c and so has no real definition of any of these four --
+ * see tools/asan-build.sh's own "other platform" skip rule for every
+ * Linux-backend source file under src/.
+ * ============================================================ */
+static void test_res_ids(void)
+{
+	uid_t ru, eu, su;
+	gid_t rg, eg, sg;
+
+	CHECK(getresuid(&ru, &eu, &su) == 0);
+	CHECK(getresgid(&rg, &eg, &sg) == 0);
+	/* This process never called setuid()/setresuid() before now, so
+	 * the real/effective/saved triple the kernel reports agrees with
+	 * plain getuid()/getgid() -- both real on this backend (see
+	 * src/unistd/linux/plat_unistd.c's __plat_detect_uid()/
+	 * __plat_detect_gid()). */
+	CHECK(ru == getuid() && eu == getuid() && su == getuid());
+	CHECK(rg == getgid() && eg == getgid() && sg == getgid());
+
+	/* Every argument (uid_t)-1 changes nothing -- real Linux semantics,
+	 * the same "leave alone" marker setreuid() already documents for
+	 * its own two arguments -- and needs no privilege, so this
+	 * exercises the syscall's real success path even when the test
+	 * harness itself runs unprivileged. */
+	CHECK(setresuid((uid_t)-1, (uid_t)-1, (uid_t)-1) == 0);
+	CHECK(setresgid((gid_t)-1, (gid_t)-1, (gid_t)-1) == 0);
+	/* getuid()/getgid() still agree afterward: setresuid()/setresgid()
+	 * on success invalidate src/unistd/ids.c's own cache
+	 * (__ids_creds_cache_invalidate()), so this also proves that
+	 * invalidation does not desync the two from the real kernel id. */
+	CHECK(getuid() == ru);
+	CHECK(getgid() == rg);
+
+	/* An unprivileged process may not set an id it does not already
+	 * hold to something else. */
+	if (ru != 0) {
+		errno = 0;
+		CHECK(setresuid(0, ru, ru) == -1);
+		CHECK(errno == EPERM);
+	}
+}
+
+/* ============================================================
+ * euidaccess / eaccess (Linux backend)
+ * https://man7.org/linux/man-pages/man3/euidaccess.3.html
+ * ============================================================ */
+static void test_euidaccess(void)
+{
+	char tmpl[] = "posixeuidacc-XXXXXX";
+	int fd;
+
+	fd = mkstemp(tmpl);
+	CHECK(fd >= 0);
+	if (fd >= 0) close(fd);
+
+	CHECK(chmod(tmpl, 0644) == 0);
+	CHECK(euidaccess(tmpl, F_OK) == 0);
+	CHECK(euidaccess(tmpl, R_OK) == 0);
+	CHECK(eaccess(tmpl, R_OK) == 0);
+
+	if (getuid() != 0) {
+		/* Root bypasses every permission bit, so this half only holds
+		 * for an unprivileged test run -- the common case, and the
+		 * one this whole function (the EFFECTIVE-id check) exists to
+		 * prove. */
+		CHECK(chmod(tmpl, 0000) == 0);
+		errno = 0;
+		CHECK(euidaccess(tmpl, R_OK) == -1);
+		CHECK(errno == EACCES);
+		chmod(tmpl, 0644);
+	}
+	unlink(tmpl);
+
+	errno = 0;
+	CHECK(euidaccess("/no/such/path/at/all/ntlibc-test", F_OK) == -1);
+	CHECK(errno == ENOENT);
+}
+#endif
+
 /* ============================================================
  * getpgrp / getpgid / getsid / setpgid / setpgrp / setsid
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/getpgrp.html
@@ -1010,6 +1100,10 @@ int main(int argc, char **argv)
 	test_getid_always_successful();
 	test_getgroups();
 	test_setid_family();
+#if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
+	test_res_ids();
+	test_euidaccess();
+#endif
 	test_process_group_and_session(self);
 	test_chown_family();
 	test_alarm();

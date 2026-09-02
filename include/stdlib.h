@@ -178,7 +178,11 @@ int putenv (char *) __attribute__((nonnull(1)));
 int posix_openpt (int);  /* undefined-ok: Unix98 pseudo-terminal allocation
 	has no NT counterpart (NT's console/pipe model is a different shape
 	entirely); grantpt/unlockpt/ptsname[_r] below are the rest of the
-	same PTY API and share this reason */
+	same PTY API and share this reason -- the marker stays because it is
+	still true of, and only checked against, the NT build. Linux has a
+	completely real, well-defined one (/dev/ptmx plus the TIOCGPTN/
+	TIOCSPTLCK ioctls), and does define all five, in
+	src/stdlib/linux/plat_pty.c. */
 int grantpt (int);  /* undefined-ok: see posix_openpt */
 int unlockpt (int);  /* undefined-ok: see posix_openpt */
 char *ptsname (int);  /* undefined-ok: see posix_openpt */
@@ -233,7 +237,8 @@ void qsort_r (void *, size_t, size_t, int (*)(const void *, const void *, void *
 
 #ifdef _GNU_SOURCE
 int ptsname_r(int, char *, size_t);  /* undefined-ok: see posix_openpt in
-	the _XOPEN_SOURCE block above */
+	the _XOPEN_SOURCE block above -- also defined for real on Linux, in
+	src/stdlib/linux/plat_pty.c */
 /* dp/sign are both required in ecvt()/fcvt() (src/stdlib/ecvt.c): sign
  * is dereferenced unconditionally as each function's first real
  * statement (`*sign = x < 0 || ...;`), and dp is written on every one
