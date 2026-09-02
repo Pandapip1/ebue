@@ -22,7 +22,21 @@ extern "C" {
  * ever pick), no errno, no global/static state, no I/O.  Each is a
  * total function of its one int argument -- calling any of them twice
  * with the same c always gives the same answer, with nothing else
- * observable in between.  Marked __attribute__((__pure__)) accordingly. */
+ * observable in between.  Marked __attribute__((__pure__)) accordingly.
+ *
+ * Deliberately ASCII-only for c in 0x80-0xff, even though wctype.h's
+ * isw*() family is now backed by real Unicode data (see that header's
+ * own banner comment): this is not a limitation these two families
+ * happen to still share, it is the UTF-8-correct answer. ntlibc's char*
+ * strings are UTF-8 (src/internal/utf.c), and in UTF-8 a single byte in
+ * 0x80-0xff is never a complete character on its own -- it is always
+ * either a continuation byte (0x80-0xbf) or a multi-byte sequence's
+ * lead byte (0xc0-0xf4), and isalpha(int) et al. only ever see one byte
+ * at a time, with no way to look at its neighbours. There is no decoded
+ * code point for that lone byte to classify: "false" is correct, not
+ * merely consistent with a locale position. Handing these functions a
+ * decoded code point instead -- e.g. isalpha(0xe9) for "é" -- is exactly
+ * the case iswalpha(0xe9) exists to answer instead. */
 int   isalnum(int) __attribute__((__pure__));
 int   isalpha(int) __attribute__((__pure__));
 int   isblank(int) __attribute__((__pure__));

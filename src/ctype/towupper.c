@@ -2,12 +2,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * towupper.html: same shape as towlower.html, the other direction.
- * Mirrors src/ctype/toupper.c's ASCII bit trick, valid here because
- * iswlower() already confined wc to 'a'-'z'. */
+ * Backed by the real Unicode Simple_Uppercase_Mapping field -- see
+ * towlower.c's own comment for the full reasoning, which mirrors
+ * exactly here. */
 #include <wctype.h>
+#include "libc.h"
 
 wint_t towupper(wint_t wc)
 {
-	if (iswlower(wc)) return wc & 0x5f;
-	return wc;
+	return __unicode_to_upper(wc);
 }
