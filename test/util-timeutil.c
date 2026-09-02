@@ -169,17 +169,20 @@ static void check_timing_report(void)
 	CHECK(ri < ui && ui < si);
 }
 
-/* Every operand below that names a command for time/timeout to spawn
- * uses the fully resolved obj/bin/*.exe path (true_path, not bare
- * "true"), deliberately: __util_time_main()/__util_timeout_main()
+/* Every operand below that names a *real* command for time/timeout to
+ * spawn uses the fully resolved obj/bin/*.exe path (true_path, not
+ * bare "true"), deliberately: __util_time_main()/__util_timeout_main()
  * always resolve their own utility operand via __find_program()/PATH
  * (see each file's header comment on why -- they never dispatch to a
  * shell builtin in-process), and this test process's own PATH is
  * whatever tools/run-tests.py's harness happens to export, not
  * something this file can assume points at obj/bin at all. A
  * directory-qualified path skips the PATH search entirely
- * (src/process/find_program.c's has_dir()), which is what every case
- * below relies on instead. */
+ * (src/process/find_program.c's has_dir()), which is what every such
+ * case below relies on instead. The two "command not found" cases
+ * below are the deliberate exception -- they need the PATH search to
+ * actually run and fail, so they use a bare, nonexistent name instead;
+ * see the comment on test_time_command_not_found() for why. */
 
 static void test_time_basic(void)
 {
@@ -214,9 +217,22 @@ static void test_time_missing_operand(void)
 	CHECK(err_contains("missing operand"));
 }
 
+/* Bare (non-slash-qualified) name, deliberately: only a name with no
+ * directory part goes through __find_program()'s PATH search, whose
+ * own failure (no candidate anywhere on PATH) is what actually
+ * produces this "command not found" text (src/util/util_time.c). A
+ * slash-qualified path that doesn't exist takes a different path
+ * entirely -- __find_program()'s has_dir() branch (src/process/find_
+ * program.c) returns it unchecked, so the ENOENT instead surfaces
+ * from the __spawn() attempt itself as strerror(ENOENT) ("No such
+ * file or directory"), exactly like real bash/GNU coreutils report it
+ * (verified directly: `bash -c ./no-such-utility-xyz` and `timeout 2
+ * ./no-such-utility-xyz` both say "No such file or directory", while
+ * the bare-name form says "command not found") -- so a slash-qualified
+ * operand here would not exercise this message at all. */
 static void test_time_command_not_found(void)
 {
-	char *argv[] = { (char *)"time", (char *)"./no-such-utility-xyz", 0 };
+	char *argv[] = { (char *)"time", (char *)"no-such-utility-xyz", 0 };
 	CHECK(run(time_path, argv) == 127);
 	CHECK(err_contains("command not found"));
 }
@@ -310,9 +326,11 @@ static void test_timeout_invalid_signal(void)
 	CHECK(err_contains("invalid signal"));
 }
 
+/* Bare name -- see test_time_command_not_found()'s comment above for
+ * why a slash-qualified operand would not exercise this message. */
 static void test_timeout_command_not_found(void)
 {
-	char *argv[] = { (char *)"timeout", (char *)"2", (char *)"./no-such-utility-xyz", 0 };
+	char *argv[] = { (char *)"timeout", (char *)"2", (char *)"no-such-utility-xyz", 0 };
 	CHECK(run(timeout_path, argv) == 127);
 	CHECK(err_contains("command not found"));
 }
