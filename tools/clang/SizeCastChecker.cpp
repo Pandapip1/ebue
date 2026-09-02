@@ -20,6 +20,7 @@
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/SmallString.h"
 #ifdef NTLIBC_ARITHMETIC_Z3
+#include "ExactCScalarSMT.h"
 #include "z3++.h"
 #endif
 
@@ -864,7 +865,11 @@ public:
 
   ArithmeticZ3Engine() : Solver(Context) {
     z3::params Parameters(Context);
-    Parameters.set("timeout", 10u);
+    // Whole-tree analyzer processes run concurrently.  A 10 ms budget made
+    // otherwise identical UNSAT queries depend on scheduler pressure after
+    // the shared algebra added a small wrapper expression.  Keep a hard bound,
+    // but leave enough room for stable proof across the supported ABI sweeps.
+    Parameters.set("timeout", 50u);
     Solver.set(Parameters);
   }
 };
@@ -873,9 +878,18 @@ class ArithmeticZ3Proof {
   z3::context &ZCtx;
   z3::solver &Solver;
   ASTContext &AST;
+  ntlibc::algebra::ScalarSMT Algebra;
 
   static bool isUnsigned(QualType Type) {
     return Type->isUnsignedIntegerOrEnumerationType();
+  }
+
+  ntlibc::algebra::CType cType(QualType Type) const {
+    // The analyzer's SymExpr operands have already undergone C's integer
+    // promotions and usual arithmetic conversions.  Width orders all target
+    // domains used here; the shared algebra retains an explicit rank so a
+    // future AST adapter can distinguish equal-width ranks where needed.
+    return {AST.getIntWidth(Type), AST.getIntWidth(Type), isUnsigned(Type)};
   }
 
   bool sameDomain(QualType Left, QualType Right) const {
@@ -936,11 +950,22 @@ class ArithmeticZ3Proof {
         return std::nullopt;
       switch (Opcode) {
       case BO_Add:
-        return Left + Right;
       case BO_Sub:
-        return Left - Right;
-      case BO_Mul:
-        return Left * Right;
+      case BO_Mul: {
+        ntlibc::algebra::CType Type = cType(OperandType);
+        std::optional<ntlibc::algebra::SemanticResult> L =
+            Algebra.input(Left, Type);
+        std::optional<ntlibc::algebra::SemanticResult> R =
+            Algebra.input(Right, Type);
+        if (!L || !R)
+          return std::nullopt;
+        std::optional<ntlibc::algebra::SemanticResult> Result =
+            Opcode == BO_Add    ? Algebra.addConverted(*L, *R)
+            : Opcode == BO_Sub  ? Algebra.subtractConverted(*L, *R)
+                                : Algebra.multiplyConverted(*L, *R);
+        return Result ? std::optional<z3::expr>(Result->Value)
+                      : std::nullopt;
+      }
       case BO_And:
         return Left & Right;
       case BO_Or:
@@ -1067,7 +1092,8 @@ class ArithmeticZ3Proof {
 public:
   ArithmeticZ3Proof(ArithmeticZ3Engine &Engine, ProgramStateRef State,
                     ASTContext &AST)
-      : ZCtx(Engine.Context), Solver(Engine.Solver), AST(AST) {
+      : ZCtx(Engine.Context), Solver(Engine.Solver), AST(AST),
+        Algebra(ZCtx, cType(AST.IntTy), cType(AST.UnsignedIntTy)) {
     Solver.reset();
     for (const auto &Entry : getConstraintMap(State))
       if (std::optional<z3::expr> Expression = translate(Entry.first))
@@ -1108,13 +1134,21 @@ public:
     if (!Left || !Right || Left->get_sort().bv_size() != Width ||
         Right->get_sort().bv_size() != Width)
       return false;
-    z3::expr Safe =
-        Subtract
-            ? z3::bvsub_no_overflow(*Left, *Right) &&
-                  z3::bvsub_no_underflow(*Left, *Right, true)
-            : z3::bvadd_no_overflow(*Left, *Right, true) &&
-                  z3::bvadd_no_underflow(*Left, *Right);
-    z3::expr Violation = !Safe;
+    ntlibc::algebra::CType Domain = cType(Type);
+    std::optional<ntlibc::algebra::SemanticResult> L =
+        Algebra.input(*Left, Domain);
+    std::optional<ntlibc::algebra::SemanticResult> R =
+        Algebra.input(*Right, Domain);
+    if (!L || !R)
+      return false;
+    std::optional<ntlibc::algebra::SemanticResult> Result =
+        Subtract ? Algebra.subtract(*L, *R) : Algebra.add(*L, *R);
+    if (!Result)
+      return false;
+    // The scalar algebra describes exact semantics and events.  This checker's
+    // existing permission policy still forbids only signed overflow; defined
+    // unsigned wrap and narrowing are deliberately not new findings here.
+    z3::expr Violation = Result->Events.SignedOverflow.simplify();
     if (!Violation.is_bool())
       return false;
     Solver.add(Violation);
@@ -1130,11 +1164,28 @@ public:
     std::optional<z3::expr> Operand = translate(Value, Type);
     if (!Operand)
       return false;
-    llvm::APSInt Boundary =
-        Increasing ? SizeCastChecker::typeMax(AST, Type)
-                   : SizeCastChecker::typeMin(AST, Type);
-    z3::expr Violation =
-        *Operand == bitVector(Boundary, AST.getIntWidth(Type));
+    ntlibc::algebra::CType Domain = cType(Type);
+    std::optional<ntlibc::algebra::SemanticResult> Input =
+        Algebra.input(*Operand, Domain);
+    if (!Input)
+      return false;
+    std::optional<ntlibc::algebra::SemanticResult> Result =
+        Algebra.unitStep(*Input, Increasing);
+    if (!Result)
+      return false;
+    std::optional<ntlibc::algebra::SemanticResult> Stored =
+        Algebra.convert(*Result, Domain);
+    if (!Stored)
+      return false;
+    // ++/-- computes in the promoted domain and stores back into the operand.
+    // Preserve the lint's existing signed-representability policy by rejecting
+    // loss in that assignment conversion; the algebra itself correctly keeps
+    // such a target conversion defined and merely records the event.
+    z3::expr Violation = Result->Type.sameDomain(Domain)
+                             ? Result->Events.SignedOverflow
+                             : Stored->Events.SignedOverflow ||
+                                   Stored->Events.NarrowingLoss;
+    Violation = Violation.simplify();
     if (!Violation.is_bool())
       return false;
     Solver.add(Violation);

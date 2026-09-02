@@ -1083,8 +1083,13 @@ stage_arithub() {
 	fi
 
 	plugin=$builddir/ntlibc-arithmetic-ub-checker.so
+	algebra_test=$builddir/ntlibc-exact-c-scalar-smt-test
 	# llvm-config and pkg-config deliberately return shell words, not one
 	# argument.
+	# shellcheck disable=SC2046,SC2086
+	clang++-18 -std=c++17 tools/clang/ExactCScalarSMTTest.cpp \
+		-o "$algebra_test" $z3_flags || return 1
+	"$algebra_test" || return 1
 	# shellcheck disable=SC2046,SC2086
 	clang++-18 -fPIC -shared -DNTLIBC_ARITHMETIC_Z3 \
 		$(llvm-config-18 --cxxflags) \
