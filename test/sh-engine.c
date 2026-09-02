@@ -3202,6 +3202,88 @@ static void test_builtin_set(const char *self)
 	}
 }
 
+/* export(1p): "The shell shall give the export attribute to the
+ * variables corresponding to the specified names, which shall cause
+ * them to be in the environment of subsequently executed commands."
+ * bi_export()'s own header comment (src/sh/builtin.c) explains why this
+ * shell needs no separate exported/unexported bookkeeping to get that
+ * right: every shell variable already lives in the real environ, which
+ * is exactly what these assertions check directly -- run() executes the
+ * engine in this same process (unlike test/sh-main.c's spawn of a whole
+ * second sh.exe), so a bare getenv()/setenv() here is the ground truth. */
+static void test_builtin_export(const char *self)
+{
+	int status;
+	char *v;
+
+	unsetenv("SHT_EXPORT_A");
+	CHECK(run("export SHT_EXPORT_A=bar", &status) == 0 && status == 0);
+	v = getenv("SHT_EXPORT_A");
+	CHECK(v && strcmp(v, "bar") == 0);
+	unsetenv("SHT_EXPORT_A");
+
+	/* `export NAME` on an already-set variable leaves its value alone. */
+	setenv("SHT_EXPORT_B", "baz", 1);
+	CHECK(run("export SHT_EXPORT_B", &status) == 0 && status == 0);
+	v = getenv("SHT_EXPORT_B");
+	CHECK(v && strcmp(v, "baz") == 0);
+	unsetenv("SHT_EXPORT_B");
+
+	/* -p takes no further operands (export(1p) SYNOPSIS: "export -p"
+	 * and "export name[=word]..." are the two forms, not a mix). */
+	CHECK(run("export -p x", &status) == 0 && status > 0);
+
+	/* An invalid identifier is a real, diagnosed error, and an operand
+	 * that follows a bad one is still processed rather than the whole
+	 * command being abandoned. */
+	unsetenv("SHT_EXPORT_E");
+	CHECK(run("export 1BAD=x SHT_EXPORT_E=ok", &status) == 0 && status != 0);
+	v = getenv("SHT_EXPORT_E");
+	CHECK(v && strcmp(v, "ok") == 0);
+	unsetenv("SHT_EXPORT_E");
+
+	/* A pipeline stage is a subshell environment (XCU 2.12): an
+	 * `export`'s setenv() there must not leak into the shell that ran
+	 * the pipeline once that stage's subshell environment is discarded
+	 * -- the same rule test_builtin_set()/test_builtin_shift() already
+	 * check for `set`/`shift`, applied here to bi_export(). */
+	unsetenv("SHT_EXPORT_F");
+	CHECK(run("export SHT_EXPORT_F=leaked | true", &status) == 0 && status == 0);
+	CHECK(getenv("SHT_EXPORT_F") == 0);
+
+	/* A subshell *inherits* an exported variable (XCU 2.12 duplicates
+	 * the shell execution environment for "(...)"), the complementary
+	 * half of the pipeline check just above. */
+	setenv("SHT_EXPORT_G", "seen", 1);
+	CHECK(run("( test \"$SHT_EXPORT_G\" = seen )", &status) == 0 && status == 0);
+	unsetenv("SHT_EXPORT_G");
+
+	/* No operands, and -p: the variable listing, asserted on the bytes
+	 * for the same reason test_builtin_set()'s own listing check is --
+	 * "printed nothing" and "printed the right thing" are both exit 0,
+	 * and the quoting (export(1p): "suitable for reinput") is the half
+	 * a naive implementation gets wrong. bi_export() shares
+	 * list_variables() with bi_set(), so this is the same check with an
+	 * "export " prefix on each line. */
+	if (file_redir_supported(self)) {
+		char src[512], *tmp = make_tmp(), *got;
+		if (tmp) {
+			setenv("SHT_EXPORT_LIST", "has space and 'quote'", 1);
+			snprintf(src, sizeof src, "export > %s", tmp);
+			CHECK(run(src, &status) == 0 && status == 0);
+			got = slurp(tmp);
+			CHECK(got != 0);
+			if (got) {
+				CHECK(strstr(got, "export SHT_EXPORT_LIST='has space and '\\''quote'\\'''\n") != 0);
+				free(got);
+			}
+			remove(tmp);
+			free(tmp);
+			unsetenv("SHT_EXPORT_LIST");
+		}
+	}
+}
+
 /* shift(1p): "Positional parameter 1 shall be assigned the value of
  * parameter (1+n) ... If n is not given, it shall be assumed to be 1.
  * If n is 0, the positional and special parameters are not changed."
@@ -4316,6 +4398,7 @@ int main(int argc, char **argv)
 	test_brace_form_disambiguation();
 	test_empty_field_deletion(argv[0]);
 	test_builtin_set(argv[0]);
+	test_builtin_export(argv[0]);
 	test_builtin_shift();
 	test_params_are_subshell_scoped();
 	test_params_are_not_environment_variables();

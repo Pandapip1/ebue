@@ -61,13 +61,13 @@
  * than diagnosed, because they are syntactically indistinguishable from
  * something the engine does support:
  *
- *   - Reserved words and unimplemented built-ins. `case` and `export`
+ *   - Reserved words and unimplemented built-ins. `case` and `readonly`
  *     still lex as ordinary WORD tokens (sh.h's banner), so
  *     `case x in y) ;; esac` parses as simple commands and would run a
  *     program called "case". PATH lookup then fails and the shell
  *     reports "case: command not found" with status 127 -- a true
- *     statement about a fiction. `export X=1` is worse: it fails with
- *     127 while the variable is silently *not* exported.
+ *     statement about a fiction. `readonly X=1` is worse: it fails with
+ *     127 while the variable is silently left writable.
  *
  *     Function definitions are not in this class: XCU 2.9.5 gives them
  *     a real grammar, so `f() { ... }` is parsed and `f` really is
@@ -179,15 +179,15 @@ static const char *const reserved[] = {
  * are equally intrinsic.
  *
  * A name comes off this list exactly when src/sh/builtin.c grows a real
- * implementation of it, never before. `cd`, `:`, `exit` and `umask` are
- * already gone (src/sh/builtin.c's dispatcher); `test`, `[`, `true` and
- * `false` were never on it, because on a POSIX system they are genuine
- * external utilities and letting PATH lookup fail honestly was the
- * right answer -- except that this platform has no /bin at all, which
- * is why src/sh/builtin.c builds them in too (see its own header).
+ * implementation of it, never before. `cd`, `:`, `exit`, `umask` and
+ * `export` are already gone (src/sh/builtin.c's dispatcher); `test`, `[`,
+ * `true` and `false` were never on it, because on a POSIX system they
+ * are genuine external utilities and letting PATH lookup fail honestly
+ * was the right answer -- except that this platform has no /bin at all,
+ * which is why src/sh/builtin.c builds them in too (see its own header).
  * Anything still on this list is refused, up front, by name. */
 static const char *const unimplemented_builtins[] = {
-	".", "break", "continue", "eval", "exec", "export",
+	".", "break", "continue", "eval", "exec",
 	"readonly", "times", "trap", "unset",
 	"alias", "unalias", "bg", "fg", "jobs", "command", "getopts",
 	"hash", "read", "ulimit", "wait",
@@ -345,7 +345,7 @@ static int check_command(const struct sh_command *c)
 		/* The body is source text (src/sh/sh.h), not a subtree, so it
 		 * is re-parsed to be checked.  Checking it *here*, at the
 		 * definition, is what keeps this file's refuse-before-anything-
-		 * runs property: a function whose body uses `export` or `$!`
+		 * runs property: a function whose body uses `readonly` or `$!`
 		 * would otherwise be defined happily and blow up on the call,
 		 * by which time half the script has run.  A parse failure is
 		 * impossible for text src/sh/parse.c already parsed once, and
