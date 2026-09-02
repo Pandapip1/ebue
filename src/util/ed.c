@@ -211,7 +211,7 @@ static int strbuf_reserve(struct strbuf *s, size_t additional)
 static int strbuf_append(struct strbuf *s, const char *p, size_t n)
 {
 	if (!strbuf_reserve(s, n)) return 0;
-	memcpy(s->data + s->len, p, n);
+	for (size_t i = 0; i < n; i++) s->data[s->len + i] = p[i];
 	s->len += n;
 	s->data[s->len] = 0;
 	return 1;
@@ -345,7 +345,8 @@ static int buf_insert_after(struct ed *ed, long after_line, char **newlines, siz
 	size_t at = (size_t)after_line, i;
 	if (!count) return 1;
 	if (!buf_reserve(ed, count)) return 0;
-	memmove(ed->lines + at + count, ed->lines + at, (ed->nlines - at) * sizeof *ed->lines);
+	for (size_t i = ed->nlines; i > at; i--)
+		ed->lines[i + count - 1] = ed->lines[i - 1];
 	for (i = 0; i < count; i++) ed->lines[at + i] = newlines[i];
 	ed->nlines += count;
 	marks_shift_insert(ed, after_line, (long)count);
@@ -358,7 +359,8 @@ static int buf_insert_after(struct ed *ed, long after_line, char **newlines, siz
 static void buf_remove_range_nofree(struct ed *ed, long from, long to)
 {
 	size_t at0 = (size_t)(from - 1), count = (size_t)(to - from + 1);
-	memmove(ed->lines + at0, ed->lines + at0 + count, (ed->nlines - (at0 + count)) * sizeof *ed->lines);
+	for (size_t i = at0; i + count < ed->nlines; i++)
+		ed->lines[i] = ed->lines[i + count];
 	ed->nlines -= count;
 	marks_shift_delete(ed, from, to);
 }
@@ -1256,7 +1258,8 @@ static int ed_exec_one(struct ed *ed, const char *cmdline, struct linesrc *texts
 			char **tmp = __util_mallocarray(count, sizeof *tmp);
 			if (!tmp) return ed_fail(ed, "out of memory");
 			if (is_move) {
-				memcpy(tmp, ed->lines + (from - 1), count * sizeof *tmp);
+				for (size_t i = 0; i < count; i++)
+					tmp[i] = ed->lines[from - 1 + i];
 				buf_remove_range_nofree(ed, from, to);
 				if (addr3 > to) addr3 -= (long)count;
 			} else {
