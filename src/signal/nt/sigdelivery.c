@@ -78,22 +78,11 @@
  * existing in ReactOS or Wine is not evidence about Microsoft's ntdll),
  * so the honest position is "untested, avoid it" rather than "safe,
  * assumed". So sig_delivery_thread() below never reuses an instance or
- * calls FSCTL_PIPE_DISCONNECT at all. Instead it overlaps two instances
- * during each handoff: after reading request A, it creates listening
- * instance B before acknowledging A, then closes A and waits on B.
- * NtCreateNamedPipeFile uses FILE_OPEN_IF for B because the named-pipe
- * object already exists; FILE_CREATE means "the object name must be new"
- * and correctly rejects a second instance.
- *
- * A per-target named NT mutant serializes request/reply exchanges made by
- * every sending process. The server acknowledges every packet only after
- * the replacement instance exists, so the next mutant owner cannot reach
- * NtOpenFile during a close/recreate gap. If that next owner connects to B
- * before the server reaches FSCTL_PIPE_LISTEN, NT reports
- * STATUS_PIPE_CONNECTED; that is successful handoff, not an error. This
- * explicit request/reply ordering is the reason kill() needs no timed
- * retry. One extra NtCreateNamedPipeFile+NtClose pair per signal remains
- * immaterial for a control channel rather than a hot data path.
+ * calls FSCTL_PIPE_DISCONNECT at all; it always publishes a fresh
+ * listening instance before acknowledging the request it just served,
+ * serialized across processes by a per-target named NT mutant. See
+ * sig_delivery_thread() and sig_try_deliver_remote_info() below for the
+ * handoff mechanics.
  *
  * Locking. Before this file, signal.c's own header truthfully said "no
  * threading support to speak of" -- sigwait()'s banner already
@@ -101,43 +90,14 @@
  * control handler thread), unguarded. This file adds a second, ordinary
  * one: sig_delivery_thread() calls __raise_internal() concurrently with
  * whatever the application thread is doing, and both sides read and
- * write signal.c's shared dispositions and process-pending queue.
- * Thread masks, thread-pending state and alternate stacks are TLS.
- * __sig_lock()/__sig_unlock() below are a
- * RECURSIVE mutex built from a SynchronizationEvent (auto-reset: the
- * first waiter to see it signalled is the only one released, the "P"/"V"
- * a binary semaphore needs) plus an owning-thread id and a re-entry
- * depth -- signal.c acquires it around every external entry point that
- * touches that state (sigaction(), signal(), sigprocmask(),
- * sigpending(), sigaltstack()) and around every call to
- * __raise_internal() (raise(), the vectored exception handler, the
- * optional console-control handler, and sig_delivery_thread() below).
- * __raise_internal() itself never locks -- it assumes its caller
- * already holds the lock, which sigprocmask()'s own internal call to it
- * (draining newly-unblocked pending signals) depends on.
- *
- * Recursive is still load-bearing for nested internal delivery before and
- * after the application callback. The callback itself runs outside the lock:
- * otherwise a handler waiting for another thread deadlocks when that thread
- * reaches any signal-aware cancellation point. The owner-id-plus-depth pair
- * lets the SAME thread walk back in without waiting on itself while a
- * genuinely DIFFERENT thread still blocks for real; lock_owner/lock_depth are
- * touched only by whichever thread currently owns the lock, or is in
- * the middle of acquiring it, where a torn read of a stale owner value
- * only ever costs one spurious real wait, never a wrong grant -- actual
- * exclusion is still lock_event, an NT synchronization primitive.
- *
- * Per-thread masks, pending queues, wait state, fault metadata, and alternate
- * stacks make concurrent handlers independent while dispositions and the
- * process-pending queue remain protected by this lock.
- *
- * __sig_lock()/__sig_unlock() are no-ops if the mutex event was never
- * created (lock_event == 0): a process whose __sig_delivery_init() ran
- * before this file existed cannot happen (there is no such build), but
- * a process on a platform where even NtCreateEvent fails is not
- * something this file should turn into a crash -- see __sig_delivery_init()
- * below for why that stays possible in principle and degrades instead
- * of failing __signal_init() outright. */
+ * write signal.c's shared dispositions and process-pending queue (thread
+ * masks, thread-pending state and alternate stacks stay TLS, so they need
+ * no lock). __sig_lock()/__sig_unlock() below are a recursive mutex --
+ * why recursive, and why the application's handler callback runs with it
+ * released, are explained at their own definitions further down -- that
+ * signal.c acquires around every external entry point touching that
+ * state and around every __raise_internal() call. __raise_internal()
+ * itself never locks: it assumes its caller already holds the lock. */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
  * public-header contract; transitive ABI declarations are intentional,
