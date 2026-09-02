@@ -100,7 +100,7 @@
 
 struct tok { char *text; size_t line; };
 
-struct buf { char *p; size_t len, cap; };
+struct buf { char *p withtok(readable_span(len)) withtok(writable_span(cap)); size_t len, cap; };
 
 static int buf_putc(struct buf *b, int ch) __attribute__((nonnull(1)));
 static int buf_putc(struct buf *b, int ch)

@@ -312,7 +312,7 @@ static void flush_appends(struct append_queue *q)
  * hold spaces (all three can grow past any fixed size via N, G, H, s///
  * with backreferences, etc.) ================================================ */
 
-struct buf { char *data; size_t len, cap; };
+struct buf { char *data withtok(readable_span(len)) withtok(writable_span(cap)); size_t len, cap; };
 
 static int buf_reserve(struct buf *b, size_t extra)
 {
