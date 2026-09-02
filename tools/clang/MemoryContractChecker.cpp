@@ -1604,7 +1604,13 @@ public:
     SmallVector<DisjointContract, 1> Disjoint;
     tokenContracts(Function, Spans, Disjoint);
     ProgramStateRef ContractState = C.getState();
-    if (isManualProofCall(Function)) {
+    const auto *Frame =
+        dyn_cast_or_null<StackFrameContext>(C.getLocationContext());
+    /* A proof axiom that is necessary in its defining function can become
+     * redundant after that function is inlined into a stronger caller.  Such
+     * a caller-specific fact cannot be used to narrow the source-level axiom;
+     * diagnose migration scaffolding only in the function's own entry frame. */
+    if (isManualProofCall(Function) && Frame && Frame->inTopFrame()) {
       bool Reported = false;
       for (const SpanContract &Contract : Spans) {
         if (Contract.Operation != MemoryTokenOperation::Grant ||
