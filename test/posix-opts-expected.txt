@@ -9,98 +9,26 @@
 # Unlike libc-test-expected.txt, this file does NOT need one row per real
 # case. It lists only the cases whose disposition deviates from PASS, plus
 # one trailing wildcard row (case "*") that declares PASS as the suite's
-# own default for every case with no more specific row. That row is not
-# decoration: tools/testlib.py's resolve() falls back to a case="*" rule
-# whenever a case-specific search comes up empty, so "everything else is
-# PASS" is a real, matched rule here, not a hidden default argument in
-# Python. Which cases are "real" -- so that a case with no row here still
-# gets adjudicated, rather than silently dropped -- comes independently
-# from tools/posix-opts.py's own IFACES.rglob("*.c") discovery (see its
-# resolved_policy()), not from what happens to be listed below.
+# own default for every case with no more specific row. tools/testlib.py's
+# resolve() falls back to a case="*" rule whenever a case-specific search
+# comes up empty, so "everything else is PASS" is a real, matched rule
+# here, not a hidden default argument in Python. Which cases are "real" --
+# so that a case with no row here still gets adjudicated, rather than
+# silently dropped -- comes independently from tools/posix-opts.py's own
+# IFACES.rglob("*.c") discovery (see its resolved_policy()), not from what
+# happens to be listed below.
 #
 # Baseline: ntlibc 3feb5cf, LTP 4c0cfb8, x86_64-win32-tcc, Wine,
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# 2026-09-01 refresh: the pthread.h-blocked UNIMPL rows here (15 of them,
-# all reading "OPTS class A: compile/link blocked by pthread.h") predated
-# include/pthread.h and src/thread/*.c, which now exist and implement a
-# real pthread surface. Rebuilt every one of those 15 cases against the
-# current tree with x86_64-win32-tcc: 12 now compile and link cleanly with
-# no other error (the rows below this note), so they were removed and now
-# resolve via the wildcard PASS row. The remaining 3 (fork/13-1.c,
-# pthread_create/1-6.c, pthread_create/11-1.c) still fail to build, but
-# for an unrelated and now-accurate reason -- see their rows. This
-# refresh's environment had a working x86_64-win32-tcc but no runnable
-# x86_64 Wine (only an aarch64-windows Wine build was available, which
-# cannot load x86_64 PE images, and a real x86_64 Wine run under
-# qemu-x86_64 user-mode emulation consistently hit wine-preloader's own
-# "Unable to find a guest_base to satisfy all guest address mapping
-# requirements" -- a qemu-user/Wine layout incompatibility, not anything
-# case-specific), so the 12 PASS conversions rest on clean compile/link
-# evidence only, not on an independent Wine run of the built .exe files.
+# This environment has a working x86_64-win32-tcc but no runnable x86_64
+# Wine; unless a row says otherwise, its non-PASS reason rests on
+# compile/link evidence (and, where noted, a native aarch64-linux run of
+# the unmodified upstream source), not an observed Wine run.
 #
-# 2026-09-01, SOCK_DGRAM: the 7 NA rows reading "suite prerequisite is
-# unavailable: cancellation fixture requires socketpair(AF_UNIX,
-# SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram
-# sockets" (aio_cancel/2-1..7-1.c, lio_listio/2-1.c) predated real
-# SOCK_DGRAM support -- <sys/socket.h>, src/socket/socket.c,
-# src/socket/socketpair.c, both src/socket/{linux,nt}/plat_socket.c.
-# Their shared fixture (third_party/ltp's aio_test.h setup_aio()) now
-# runs its real assertions instead of being skipped, so they were
-# removed and now resolve via the wildcard PASS row -- like the 12
-# conversions above, this rests on the strongest evidence obtainable in
-# this sandbox, not an independent Wine run of the wine/x86_64 profile
-# these rows themselves target: this session's Wine is confirmed broken
-# (not merely absent, per this repo's own tooling notes), so verification
-# instead built and ran the literal third_party/ltp source for all 7
-# cases against a native-Linux ntlibc build (aarch64-linux, real
-# socketpair(2)/getsockopt(2) syscalls) -- all 7 compiled, linked, and
-# printed their own "Test PASSED"/"...PASSED" line on repeated clean
-# runs, with the real, kernel-enforced datagram flow control the
-# fixture's blocking-write assertions depend on (an early loopback-UDP
-# construction was tried first and rejected: real UDP does not couple a
-# sender's buffer to whether its peer is reading, so writes returned
-# EMSGSIZE instead of blocking -- see src/internal/plat_socket.h's
-# __plat_socketpair() banner). The NT backend (\Device\Udp, by analogy
-# to \Device\Tcp -- src/internal/afd.h's AFD_TRANSPORT_UDP comment) was
-# not independently exercised the same way; it compiles cleanly against
-# x86_64-win32-tcc but its runtime behaviour under the wine/x86_64
-# profile these rows select remains unverified in this sandbox.
-#
-# 2026-09-02, pthread.h CLOCK_* visibility: the 3 NA rows this note used
-# to cover -- pthread_cancel/2-3.c, pthread_condattr_getclock/1-2.c,
-# pthread_condattr_setclock/1-1.c, each reading "suite fixture ... uses
-# CLOCK_REALTIME without including the required time.h header" -- were
-# blamed on the suite (a real gap in these fixtures relative to strict
-# POSIX, since pthread.h alone does not mandate CLOCK_REALTIME's
-# visibility) rather than on ntlibc. That premise no longer matches
-# reality: include/pthread.h now includes <time.h> directly, so
-# CLOCK_REALTIME (and the rest of the CLOCK_* family) is transitively
-# visible from pthread.h alone here too, the same accepted behaviour
-# musl and glibc already give these exact fixtures -- which is why the
-# fixtures never needed their own time.h include on those platforms
-# either. Rebuilt all 3 against the current tree with x86_64-win32-tcc,
-# the same compile_command() link line tools/posix-opts.py's own
-# build_one() uses (lib/crt1.o + the corpus source + $SUITE/lib/common.c
-# -Llib -lc -lntdll): all 3 now compile and link completely clean, no
-# errors -- pthread_cancel/2-3.c carries one pre-existing, unrelated
-# warning ("function might return no value: 'test_main'"); the other 2
-# have none. Removed below and now resolve via the wildcard PASS row,
-# the same treatment the 12 pthread.h-blocked conversions above got in
-# the 2026-09-01 refresh note, and the same evidence-and-disclosure
-# convention test/libc-test-expected.txt uses for flockfile-list/mntent:
-# this environment has a working x86_64-win32-tcc but no runnable x86_64
-# Wine (see the 2026-09-01 refresh note above for what was tried and why
-# it did not work), so this rests on clean compile/link evidence only,
-# not on an independent Wine run of the built .exe files. COUNTS
-# updated: PASS 1499 -> 1502, NA 105 -> 102.
-#
-# COUNTS PASS=1502 BUG=0 UNIMPL=3 NA=102 FLAKY=3
-# (whole-suite totals once the wildcard default below is applied to every
-# real case tools/posix-opts.py discovers -- not a count of rows in this
-# file, which lists only the 109 explicit exceptions plus the wildcard.)
-aio_error/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	baseline disagreed across repeated runs after AIO implementation: PASS when EINPROGRESS was observed and UNRESOLVED when all 128 small writes completed before the probe. Re-reviewed src/thread/aio.c: a single persistent worker thread (aio_worker()) drains requests[] in FIFO order (next_queued()) while submit() enqueues all 128 aio_write() calls back to back; the queue lock and completion handshake (finish_locked(), wake_waiters_locked()) are correct on inspection -- no missing lock or lost wakeup found -- so which of the 128 the checking loop still finds QUEUED/RUNNING is a genuine race between the submitting thread and the worker thread, resolved only by host scheduling, the same load-sensitivity class as the CLOCK_BOUND cases. Could not re-run: this sandbox's Wine cannot execute x86_64 PE binaries (stock aarch64 Wine only ships aarch64-windows support and fails every PE load with STATUS_NOT_SUPPORTED; an x86_64-linux Wine run under qemu-user's ELF emulation instead crashes inside Wine's own PE loader trying to reserve its guest address space), so no fresh pass/fail ratio was collected here and the CI-observed split above is unconfirmed but unchallenged
+# COUNTS PASS=1501 BUG=0 UNIMPL=4 NA=102 FLAKY=3
+aio_error/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	Race between the AIO worker thread and the checking loop: baseline disagreed across runs (PASS when EINPROGRESS was observed, UNRESOLVED when all 128 writes completed first), resolved only by host scheduling.
 aio_read/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNTESTED because prioritized I/O is not supported; asynchronous I/O itself is implemented
 aio_return/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite check is self-contradictory: after probing an invalid aiocb it expects aio_error on a different completed request to return EINVAL
 aio_suspend/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNSUPPORTED because asynchronous I/O is not implemented
@@ -122,31 +50,31 @@ clock_settime/7-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suit
 clock_settime/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNTESTED
 clock_settime/speculative/4-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNRESOLVED because this runtime cannot set the system clock
 clock_settime/speculative/4-4.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNRESOLVED because this runtime cannot set the system clock
-fork/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	pthread.h no longer blocks this (include/pthread.h now exists); it now fails at link with tcc: error: unresolved reference to 'setitimer' and 'getitimer', which are deliberately unimplemented -- see include/sys/time.h's own "undefined-ok" comment on getitimer()/setitimer(): a repeating interval timer needs queued signal delivery, and SIGALRM here only arrives through an APC that runs while the thread is in an alertable wait, so repeat expiries would coalesce instead of queueing
+fork/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	tcc: error: unresolved reference to 'setitimer' and 'getitimer', which are deliberately unimplemented (include/sys/time.h's "undefined-ok" comment: a repeating timer needs queued signal delivery this platform's APC-based SIGALRM cannot provide).
 fork/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the test requires an external gencat utility to generate its message catalog
-kill/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED, not load noise: the case returns PTS_UNRESOLVED from its own setuid(1) privilege-drop guard at 2-2.c:58, reached unconditionally after a kill(999999, 0) ESRCH check that is itself timing-independent, and setuid() now refuses every id but this platform's single identity, so it cannot resolve on any box, quiet or loaded. A PASS or FAIL here means setuid() stopped refusing: re-adjudicate this row, do not retry it
-kill/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED, not load noise: the case returns PTS_UNRESOLVED from its own setuid(1) privilege-drop guard at 3-1.c:26, its first statement, before any test work runs, and setuid() now refuses every id but this platform's single identity, so it cannot resolve on any box, quiet or loaded. A PASS or FAIL here means setuid() stopped refusing: re-adjudicate this row, do not retry it
-mlock/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- mlock.html's [EPERM] names "appropriate privilege", which XBD leaves implementation-defined; the specific mechanism this case probes (RLIMIT_MEMLOCK soft limit + CAP_IPC_LOCK) is a Linux capability model, and the case's own comment scopes it explicitly: "(Linux 2.6.9 and later)". This platform's mlock() is a real, working NtLockVirtualMemory() call bounded by NT's own working-set quota, not by RLIMIT_MEMLOCK -- src/misc/resource.c does not tie the two together, so setrlimit(RLIMIT_MEMLOCK, 0) changes nothing this mlock() consults, and the call genuinely succeeds. Not reclassified for convenience: the case is asserting a Linux-specific privilege mechanism this platform has no equivalent of, not a POSIX base requirement mlock() fails to meet
-mlock/speculative/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- mlock.html's [EPERM] names "appropriate privilege", which XBD leaves implementation-defined; the specific mechanism this case probes (RLIMIT_MEMLOCK soft limit + CAP_IPC_LOCK) is a Linux capability model, and the case's own comment scopes it explicitly: "(Linux 2.6.9 and later)". This platform's mlock() is a real, working NtLockVirtualMemory() call bounded by NT's own working-set quota, not by RLIMIT_MEMLOCK -- src/misc/resource.c does not tie the two together, so setrlimit(RLIMIT_MEMLOCK, 0) changes nothing this mlock() consults, and the call genuinely succeeds. Not reclassified for convenience: the case is asserting a Linux-specific privilege mechanism this platform has no equivalent of, not a POSIX base requirement mlock() fails to meet
-mlockall/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- may-fail privilege probe built after mlockall() implementation but returned UNRESOLVED because mlockall(MCL_CURRENT) succeeded. As with mlock/12-1, POSIX leaves the appropriate privilege implementation-defined; this case specifically tries to manufacture its denial through a Unix uid transition and RLIMIT_MEMLOCK=0, while ntlibc has one fixed NT identity and mlockall() is bounded by NtLockVirtualMemory's working-set quota rather than src/misc/resource.c's non-enforceable RLIMIT_MEMLOCK. It therefore does not test a base mlockall() requirement on this platform
-mlockall/3-7.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- built after mlockall() implementation but returned UNRESOLVED before calling mlockall(): the case creates an empty regular file and immediately asks mmap() for one page without first extending the object; NtCreateSection cannot create that zero-length file view, so this run never reaches any memory-lock assertion. The sibling shared-memory form mlockall/3-6 reaches the identical MCL_CURRENT+msync(MS_INVALIDATE) assertion and passes
-mlockall/speculative/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- duplicate speculative form of mlockall/15-1; built after mlockall() implementation but returned UNRESOLVED because the call succeeded instead of exercising the case's Unix uid+RLIMIT_MEMLOCK privilege model, which this NT target does not use
-mmap/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	changed from PASS to FLAKY: this case compares st_atime across a sleep(1)+mmap write, no fork() involved, but CI run 33025643000 (commit d39cdac) observed FLAKY across its 3 attempts under stock Wine -- atime-granularity timing, same class of load-sensitivity as the CLOCK_BOUND cases, just not clock-interface named so tools/posix-opts.py's CLOCK_BOUND list does not serialize it. Confirmed by source review that this has no ntlibc-side lever: ntlibc does not track st_atime itself at all -- src/stat/nt/plat_stat.c reads it straight out of NtQueryInformationFile's FILE_BASIC_INFORMATION.LastAccessTime -- so its update timing is entirely Wine/host-filesystem policy. Could not re-run to refresh the ratio: this sandbox's Wine cannot execute x86_64 PE binaries at all (see aio_error/2-1.c's row for the specific failure modes), so the CI-measured numbers above stand unconfirmed but unchallenged
-mmap/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- built after MCL_FUTURE implementation but returned UNRESOLVED before mmap(): its prerequisite setrlimit(RLIMIT_MEMLOCK, 512KiB) fails with EINVAL. src/misc/resource.c deliberately rejects lowering RLIMIT_MEMLOCK because NT has no enforceable per-process memlock-budget primitive; mlockall()/mmap() use NtLockVirtualMemory's real working-set quota instead. The case's constructed Unix rlimit condition therefore cannot be established on this platform, so its EAGAIN assertion is never reached
-mmap/24-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural Linux-specific stress case: its safety bound is implemented by reading and lowering /proc/sys/vm/max_map_count, which does not exist on this target; without that Linux sysctl the loop deliberately creates mappings toward SIZE_MAX and can exhaust Wine's host-side mapping metadata before producing a portable verdict
+kill/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	Structural UNRESOLVED, not load noise: the case returns PTS_UNRESOLVED from its own setuid(1) privilege-drop guard, unconditionally, because setuid() refuses every id but this platform's single identity.
+kill/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	Structural UNRESOLVED, not load noise: the case returns PTS_UNRESOLVED from its own setuid(1) privilege-drop guard as its first statement, because setuid() refuses every id but this platform's single identity.
+mlock/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	mlock.html's [EPERM] privilege is implementation-defined; this case probes a Linux-specific RLIMIT_MEMLOCK+CAP_IPC_LOCK mechanism, but ntlibc's mlock() is bounded by NT's own working-set quota (not RLIMIT_MEMLOCK) and genuinely succeeds.
+mlock/speculative/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	mlock.html's [EPERM] privilege is implementation-defined; this case probes a Linux-specific RLIMIT_MEMLOCK+CAP_IPC_LOCK mechanism, but ntlibc's mlock() is bounded by NT's own working-set quota (not RLIMIT_MEMLOCK) and genuinely succeeds.
+mlockall/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	Same as mlock/12-1: POSIX leaves the privilege implementation-defined, and mlockall() here is bounded by NT's working-set quota rather than the non-enforceable RLIMIT_MEMLOCK this case tries to manufacture EPERM with, so it succeeds instead.
+mlockall/3-7.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	Returns UNRESOLVED before calling mlockall(): the case mmaps a page over an empty regular file without extending it first, and NtCreateSection cannot create that zero-length view. The sibling mlockall/3-6 reaches the real assertion and passes.
+mlockall/speculative/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	Duplicate speculative form of mlockall/15-1: mlockall() succeeds instead of exercising the case's Unix uid+RLIMIT_MEMLOCK privilege model, which this NT target does not use.
+mmap/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	st_atime comparison across a sleep(1)+mmap write is timing-sensitive under Wine (CI observed FLAKY across 3 attempts); ntlibc does not track st_atime itself, reading it straight from NtQueryInformationFile, so this is Wine/filesystem timing, not an ntlibc defect.
+mmap/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	Returns UNRESOLVED before mmap(): its prerequisite setrlimit(RLIMIT_MEMLOCK, 512KiB) fails with EINVAL because NT has no enforceable per-process memlock budget for mlockall()/mmap() to honor.
+mmap/24-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	Structural Linux-specific stress case: its safety bound reads /proc/sys/vm/max_map_count, which does not exist here, so the loop can exhaust Wine's host-side mapping metadata before producing a portable verdict.
 mmap/31-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
 mmap/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
 mmap/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
 mmap/6-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
-mq_timedsend/5-2.c	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	baseline disagreed across repeated isolated runs after message-queue implementation: PASS with EINTR after cross-process signal and TIMEOUT under Wine. Re-reviewed src/thread/mqueue.c's wait_count() (the shared blocking path for mq_timedsend/mq_timedreceive) end to end: it already accounts for the specific race a cross-process signal only marks process-pending and never runs the handler on the listener thread, by polling __sig_thread_caught_count() every <=50ms slice and draining pending signals both before and after each wait, so a signal delivered at any point is observed within one slice, not lost. Also specifically checked __timespec_diff_ticks (src/internal/libc.h) against this test's ts.tv_sec=TIME_T_MAX abstime for an overflow that could turn "block forever" into a spurious near-immediate timeout; it saturates the seconds*ticks-per-second product to INT64_MAX before it can overflow, so that hypothesis is ruled out. No missing lock or lost-wakeup found. The likelier mechanism is upstream of ntlibc: the test's own parent-side heuristic (assume the child is blocked once one 3s sleep() completes uninterrupted) is not guaranteed correct, and cross-process IPC/scheduling latency under Wine can make it wrong in either direction. Could not re-run to get a fresh ratio: this sandbox's Wine cannot execute x86_64 PE binaries (see aio_error/2-1.c's row), so the split above stands unconfirmed but unchallenged
+mq_timedsend/5-2.c	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	Baseline disagreed across repeated runs (PASS with EINTR after a cross-process signal, TIMEOUT under Wine); source review found no missing lock or lost wakeup in src/thread/mqueue.c's wait_count(), so the likelier cause is the test's own parent-side heuristic (assume the child is blocked after one 3s sleep()) combined with Wine's cross-process scheduling latency.
 munmap/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the test hard-codes the Unix /dev/zero device, which does not exist in the Windows target environment
 nanosleep/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	requires fork(), but Wine does not implement ntdll RtlCloneUserProcess
 nanosleep/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	requires fork(), but Wine does not implement ntdll RtlCloneUserProcess
 pthread_atfork/3-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-pthread_attr_setschedpolicy/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the fixture pins itself to one CPU via sched_setaffinity()/CPU_SET (glibc's GNU/Linux cpu_set_t extension, <sched.h>) before exercising scheduling-policy propagation; ntlibc implements neither cpu_set_t nor sched_setaffinity()/sched_getaffinity() today. NT's SetThreadAffinityMask (kernel32, NTLIBC_USE_KERNEL32) is a real per-thread analogue that could eventually back this, but it needs the whole cpu_set_t/CPU_SET/sched_setaffinity surface built first (a separate, larger addition than this one test pair) -- checked and left NA rather than guessed at
+pthread_attr_setschedpolicy/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	Suite fixture pins itself to one CPU via sched_setaffinity()/CPU_SET (a glibc/Linux extension) before exercising scheduling-policy propagation; ntlibc implements neither cpu_set_t nor sched_setaffinity()/sched_getaffinity() today.
 pthread_barrier_destroy/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	fixture publishes ENTERED_THREAD before calling pthread_barrier_wait; destruction during a wait is undefined and measured 20 EBUSY PASS plus 20 pre-entry UNSUPPORTED outcomes
-pthread_create/1-6.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	pthread.h and sys/pstat.h/sys/sysctl.h no longer block this (pthread.h now exists at include/pthread.h; the sysctl/pstat probes are optional and skipped); it now fails at link with tcc: error: unresolved reference to 'setitimer' and 'getitimer', which are deliberately unimplemented -- see include/sys/time.h's own "undefined-ok" comment on getitimer()/setitimer(): a repeating interval timer needs queued signal delivery, and SIGALRM here only arrives through an APC that runs while the thread is in an alertable wait, so repeat expiries would coalesce instead of queueing
-pthread_create/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	pthread.h no longer blocks this (include/pthread.h now exists); it now fails at link with tcc: error: unresolved reference to 'setitimer', which is deliberately unimplemented -- see include/sys/time.h's own "undefined-ok" comment on setitimer(): a repeating interval timer needs queued signal delivery, and SIGALRM here only arrives through an APC that runs while the thread is in an alertable wait, so repeat expiries would coalesce instead of queueing
+pthread_create/1-6.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	tcc: error: unresolved reference to 'setitimer' and 'getitimer', which are deliberately unimplemented (include/sys/time.h's "undefined-ok" comment: a repeating timer needs queued signal delivery this platform's APC-based SIGALRM cannot provide).
+pthread_create/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	tcc: error: unresolved reference to 'setitimer', which is deliberately unimplemented (include/sys/time.h's "undefined-ok" comment: a repeating timer needs queued signal delivery this platform's APC-based SIGALRM cannot provide).
 pthread_mutex_getprioceiling/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
 pthread_mutex_getprioceiling/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
 pthread_mutex_getprioceiling/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
@@ -190,14 +118,14 @@ sched_setscheduler/19-4.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baselin
 sched_setscheduler/20-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test assumes a Unix PID 1 owned by a different identity; this runtime has neither that PID namespace nor multiple identities
 sched_setscheduler/22-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test requires optional PTHREAD_SCOPE_PROCESS contention scope, which this one-to-one NT thread implementation does not support
 sched_setscheduler/22-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test requires optional PTHREAD_SCOPE_PROCESS contention scope, which this one-to-one NT thread implementation does not support
-sched_yield/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the fixture pins itself to one CPU via sched_setaffinity()/CPU_SET (glibc's GNU/Linux cpu_set_t extension, <sched.h>) before exercising yield ordering; ntlibc implements neither cpu_set_t nor sched_setaffinity()/sched_getaffinity() today. NT's SetThreadAffinityMask (kernel32, NTLIBC_USE_KERNEL32) is a real per-thread analogue that could eventually back this, but it needs the whole cpu_set_t/CPU_SET/sched_setaffinity surface built first (a separate, larger addition than this one test pair) -- checked and left NA rather than guessed at
-sem_open/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- built after semaphore implementation but returned UNRESOLVED: the case expects a Unix effective-uid transition plus mode 0444/0222 to manufacture EACCES. ntlibc exposes one fixed NT identity, so the second sem_open() remains the same principal opening the same object and succeeds; this platform cannot establish the case's permission-model prerequisite
-sem_post/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- case returned UNTESTED before exercising sem_post() because _POSIX_PRIORITY_SCHEDULING is deliberately not claimed on this target; its priority-inversion scheduling prerequisite is unavailable, while the seven direct sem_post cases build and pass
+sched_yield/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	Suite fixture pins itself to one CPU via sched_setaffinity()/CPU_SET (a glibc/Linux extension) before exercising yield ordering; ntlibc implements neither cpu_set_t nor sched_setaffinity()/sched_getaffinity() today.
+sem_open/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	The case expects a Unix effective-uid transition plus mode 0444/0222 to manufacture EACCES; ntlibc exposes one fixed NT identity, so the second sem_open() is the same principal opening the same object and succeeds.
+sem_post/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	Case returns UNTESTED before exercising sem_post() because _POSIX_PRIORITY_SCHEDULING is deliberately not claimed on this target; the seven direct sem_post cases build and pass.
 sem_unlink/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the test hard-codes exec of /bin/ls, which does not exist in the Windows target environment
 sem_unlink/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test requires changing to a second Unix effective identity, which ntlibc's single-identity runtime does not support
-sem_unlink/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- the case passes an uninitialized automatic char array to sem_unlink(), then treats only ENOENT as success. That is undefined input rather than a semaphore name and produced a deterministic FAIL here; the three valid-name sem_unlink cases independently pass unlink, post-unlink handle use, and name removal
+sem_unlink/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	The case passes an uninitialized automatic char array to sem_unlink() and treats only ENOENT as success -- undefined input, not a semaphore name; the three valid-name sem_unlink cases pass independently.
 sem_unlink/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture says it tests a component longer than NAME_MAX but constructs exactly NAME_MAX bytes, which is a valid semaphore name
-shm_open/23-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- structural stress case launches 1000 forked processes and has each attempt 1000 shared-memory creations with sleeps between iterations (one million operations); it exceeded the 25-second focused bound without reaching a verdict. The semaphore is only a counter lock inside that stress and its ordinary process-shared fork behavior is covered by passing sem_timedwait/2-1
+shm_open/23-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	Structural stress case: 1000 forked processes each attempt 1000 shared-memory creations with sleeps between iterations (one million operations), exceeding the 25-second focused bound without reaching a verdict.
 shm_open/26-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED: the case requires a non-root identity distinct from the current user, but ntlibc exposes one fixed Windows-SID-derived identity
 shm_unlink/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED: the case requires a non-root identity distinct from the current user, but ntlibc exposes one fixed Windows-SID-derived identity
 shm_unlink/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED: the case requires a non-root identity distinct from the current user, but ntlibc exposes one fixed Windows-SID-derived identity
