@@ -50,7 +50,20 @@ MEASURE_PREFIX = "measure:"
 # Unlike sh-engine's entry, this one has a mechanism behind it: the cost
 # is proportional to a constant in the test, and process creation on
 # native NT is the expensive thing being measured.
-SLOW_TESTS = {"sh-engine": 600, "fork-cloexec-exec-win": 600}
+#
+# util-atcron: crontab(5)'s finest field is minutes (no seconds field
+# exists at all -- see src/util/crontime.h), so test_crond_runs_a_due_
+# entry() in test/util-atcron.c genuinely has to wait for a real
+# wall-clock minute boundary, up to ~65 s in the worst case (a
+# schedule set for "the next minute" issued one tick after that
+# minute already started), plus margin for atd/crond's own poll
+# latency and process startup. This is not a mechanism-based measured
+# cost the way fork-cloexec-exec-win's entry is -- it is a hard floor
+# imposed by crontab(5)'s own granularity, which no daemon poll
+# interval can shrink -- so 120 s (a single missed real minute
+# boundary) would false-positive as a timeout on an ordinary, working
+# run under any load at all.
+SLOW_TESTS = {"sh-engine": 600, "fork-cloexec-exec-win": 600, "util-atcron": 180}
 
 
 def timeout_for(path: Path, default: int) -> int:

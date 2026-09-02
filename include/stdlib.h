@@ -221,6 +221,11 @@ void *valloc (size_t);
 withtok(heap_allocated)
 void *memalign(size_t, size_t);
 size_t malloc_usable_size(void *);
+/* getloadavg(): real on Linux (src/stdlib/linux/plat_getloadavg.c,
+ * via /proc/loadavg -- src/util/atd.c's batch(1p) load gate uses it
+ * for real); undefined-ok on NT (src/stdlib/nt/plat_getloadavg.c --
+ * always fails, since NT's process model has no run-queue-length
+ * average to report at all, not even approximately). */
 int getloadavg(double *, int);
 #define WCOREDUMP(s) ((s) & 0x80)
 #define WIFCONTINUED(s) ((s) == 0xffff)
