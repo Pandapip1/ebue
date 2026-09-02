@@ -15,17 +15,21 @@
  *  - FROBNICATE_1: hand-written troff source exercising every macro
  *    src/util/man.c's own header comment lists as supported (.TH,
  *    .SH/.SS, .TP/.IP, .PP/.LP, .B/.I, the alternating-font pairs,
- *    .RS/.RE, .nf/.fi, .br) plus the common escape subset.
+ *    .RS/.RE, .nf/.fi, .br, .ds/.nr/.rn and \* / \n interpolation)
+ *    plus the common escape subset.
  *  - GREP1_EXCERPT: a REAL, unmodified 210-line prefix of GNU grep's
  *    own grep.1 (from a real Linux system's /nix/store, gzip -dc'd by
  *    hand once to produce this literal text -- not paraphrased, not
  *    hand-simplified), proving this formatter against troff nobody
  *    wrote for this project. It opens with real .de/.ie/.ds/.nr
- *    boilerplate this project's man(1p) deliberately does not execute
- *    (see src/util/man.c's own header, "WHAT IS DELIBERATELY NOT
- *    IMPLEMENTED") before reaching real NAME/SYNOPSIS/DESCRIPTION/
- *    OPTIONS content that DOES use the supported macro subset --
- *    exactly the boundary this project's man(1p) is scoped to.
+ *    boilerplate: the .de-body and .ie-guarded lines are still spans
+ *    this project's man(1p) deliberately never executes (see src/
+ *    util/man.c's own header, "WHAT IS DELIBERATELY NOT IMPLEMENTED"),
+ *    but the bare, top-level `.ds`/`.nr` lines among them (e.g. `.ds mC
+ *    CW`) ARE now real definitions -- before reaching real NAME/
+ *    SYNOPSIS/DESCRIPTION/OPTIONS content that uses the supported
+ *    macro subset, exactly the boundary this project's man(1p) is
+ *    scoped to.
  *
  * Spec pages consulted (https://pubs.opengroup.org/onlinepubs/9699919799/):
  *   utilities/man.html (SYNOPSIS, OPTIONS, OPERANDS, EXIT STATUS)
@@ -240,7 +244,7 @@ static const char FROBNICATE_1[] =
 	".RB ( \\(bu )\n"
 	"bullet and a copyright\n"
 	".RB ( \\(co )\n"
-	"sign and an unsupported string register\n"
+	"sign and an undefined string register\n"
 	".RB ( \\*(xx )\n"
 	"that must vanish silently.\n"
 	".SS Subsection Heading\n"
@@ -262,6 +266,31 @@ static const char FROBNICATE_1[] =
 	"    literal line two, indented\n"
 	".fi\n"
 	"Back to normal filled text after .fi.\n"
+	".SH REGISTERS\n"
+	".ds GREETING hello register world\n"
+	".nr COUNT 5\n"
+	"String register:\n"
+	".B \\*[GREETING]\n"
+	".br\n"
+	"Number register:\n"
+	".B \\n[COUNT]\n"
+	".br\n"
+	".nr COUNT +3\n"
+	"Relative increment:\n"
+	".B \\n[COUNT]\n"
+	".br\n"
+	".rn COUNT KOUNT\n"
+	"Renamed register:\n"
+	".B \\n[KOUNT]\n"
+	".br\n"
+	"Old name after rename:\n"
+	".B \\n[COUNT]\n"
+	".br\n"
+	"Undefined number register:\n"
+	".B \\n(zz\n"
+	".br\n"
+	"Groff detection register:\n"
+	".B \\n(.g\n"
 	".SH SEE ALSO\n"
 	".BR true (1)\n";
 
@@ -552,6 +581,46 @@ static void test_finds_and_formats_frobnicate(void)
 	CHECK(plain_contains("--help"));
 }
 
+/* .ds/.nr/.rn and \* / \n interpolation, real end-to-end -- see
+ * FROBNICATE_1's own "REGISTERS" section. Each label:value pair sits
+ * on its own line via .br, so a value never lands split across a
+ * word-wrap boundary. */
+static void test_registers(void)
+{
+	char *argv[3];
+	argv[0] = (char *)"man"; argv[1] = (char *)"frobnicate"; argv[2] = 0;
+	CHECK(run(man_path, argv) == 0);
+	slurp_both();
+
+	/* .ds GREETING hello register world, then \*[GREETING] -- the
+	 * bracket name form, since GREETING is longer than the two
+	 * characters the \*(xx paren form reads. */
+	CHECK(plain_contains("String register: hello register world"));
+
+	/* .nr COUNT 5, then \n[COUNT]. */
+	CHECK(plain_contains("Number register: 5"));
+
+	/* .nr COUNT +3 (relative add onto the current value 5), then
+	 * \n[COUNT] again -- proves the register was actually updated, not
+	 * just re-set to 3. */
+	CHECK(plain_contains("Relative increment: 8"));
+
+	/* .rn COUNT KOUNT, then \n[KOUNT] reads the renamed register's
+	 * value, and \n[COUNT] (the old name) is undefined again -- 0,
+	 * exactly as if COUNT had never been defined at all. */
+	CHECK(plain_contains("Renamed register: 8"));
+	CHECK(plain_contains("Old name after rename: 0"));
+
+	/* A number register that was never defined at all: 0, not an
+	 * error and not the raw escape syntax. */
+	CHECK(plain_contains("Undefined number register: 0"));
+
+	/* \n(.g: the built-in "is this groff" register -- see src/util/
+	 * man.c's own header comment ("REGISTERS") for why this file
+	 * answers 1. */
+	CHECK(plain_contains("Groff detection register: 1"));
+}
+
 static void test_section_operand_restricts_search(void)
 {
 	char *argv[4];
@@ -703,6 +772,7 @@ int main(int argc, char **argv)
 	}
 
 	test_finds_and_formats_frobnicate();
+	test_registers();
 	test_section_operand_restricts_search();
 	test_no_such_page();
 	test_apropos_dash_k();
