@@ -111,8 +111,8 @@ using namespace ento;
 
 namespace {
 
-constexpr llvm::StringLiteral TrustedPrimitives[] = {"__errno_location",
-                                                     "__teb"};
+constexpr llvm::StringLiteral TrustedPrimitives[] = {
+    "__errno_location", "__teb", "__ownership_string_terminated"};
 
 bool isTrustedPrimitive(StringRef Name) {
   for (StringRef Trusted : TrustedPrimitives)

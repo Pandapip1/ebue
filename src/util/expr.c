@@ -115,8 +115,12 @@ static int is_num_candidate(const char *s)
 static int null_or_zero(const char *v) __attribute__((nonnull(1), __pure__));
 static int null_or_zero(const char *v)
 {
+	const char *p;
 	if (!*v) return 1;
-	return is_num_candidate(v) && strtol(v, NULL, 10) == 0;
+	if (!is_num_candidate(v)) return 0;
+	p = *v == '-' ? v + 1 : v;
+	for (; *p; p++) if (*p != '0') return 0;
+	return 1;
 }
 
 static const char *peek(struct expr_ctx *c) __attribute__((nonnull(1)));

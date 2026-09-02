@@ -225,6 +225,19 @@ static void test_expr_zero_is_exit_1(void)
 	CHECK(out_equals("0\n"));
 }
 
+static void test_expr_zero_spellings(void)
+{
+	char *negative[] = { (char *)"expr", (char *)"-000", 0 };
+	char *leading[] = { (char *)"expr", (char *)"000000000000000000000", 0 };
+	char *large[] = { (char *)"expr", (char *)"999999999999999999999", 0 };
+	CHECK(run(expr_path, negative) == 1);
+	CHECK(out_equals("-000\n"));
+	CHECK(run(expr_path, leading) == 1);
+	CHECK(out_equals("000000000000000000000\n"));
+	CHECK(run(expr_path, large) == 0);
+	CHECK(out_equals("999999999999999999999\n"));
+}
+
 static void test_expr_string_compare(void)
 {
 	char *eq[] = { (char *)"expr", (char *)"foo", (char *)"=", (char *)"foo", 0 };
@@ -581,6 +594,7 @@ int main(int argc, char **argv)
 	test_expr_arith();
 	test_expr_precedence();
 	test_expr_zero_is_exit_1();
+	test_expr_zero_spellings();
 	test_expr_string_compare();
 	test_expr_numeric_vs_lexicographic();
 	test_expr_match_length();
