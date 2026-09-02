@@ -291,7 +291,7 @@ HARNESSES = strtod printf scanf utf path strptime strtol strftime \
             iconv strfmon catgets m4 sed ed awk grep expr \
             resolv nsswitch patch pax ar \
             util_printf tr find xargs cut \
-            sort csplit od
+            sort csplit od uudecode uuencode test
 EXES = $(HARNESSES:%=$(OUT)/fuzz_%)
 SHIM_OBJ = $(SHIM_SRC:%.c=$(OUT)/%.o)
 COVSHIM_OBJ = $(SHIM_SRC:%.c=$(COVOUT)/%.o)
