@@ -6,9 +6,11 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/Decl.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
 
+#include <cctype>
 #include <cstdint>
 #include <optional>
 
@@ -77,8 +79,7 @@ constexpr TokenTransition applyTokenOperation(TokenState Before,
               TokenEffect::None};
     return Before == TokenState::Absent
                ? TokenTransition{Before, TokenState::Unknown,
-                                 TokenEvent::MissingRequired,
-                                 TokenEffect::None}
+                                 TokenEvent::MissingRequired, TokenEffect::None}
                : TokenTransition{Before, Before, TokenEvent::None,
                                  TokenEffect::None};
   case TokenOperation::RequireAbsent:
@@ -97,10 +98,9 @@ constexpr TokenTransition applyTokenOperation(TokenState Before,
               TokenEffect::None};
     return Before == TokenState::Absent
                ? TokenTransition{Before, TokenState::Unknown,
-                                 TokenEvent::MissingRequired,
-                                 TokenEffect::None}
-               : TokenTransition{Before, TokenState::Absent,
-                                 TokenEvent::None, TokenEffect::None};
+                                 TokenEvent::MissingRequired, TokenEffect::None}
+               : TokenTransition{Before, TokenState::Absent, TokenEvent::None,
+                                 TokenEffect::None};
   case TokenOperation::ConsumeIfPresent:
   case TokenOperation::Drop:
     return {Before, TokenState::Absent, TokenEvent::None, TokenEffect::None};
@@ -123,8 +123,7 @@ constexpr TokenTransition applyTokenOperation(TokenState Before,
               TokenEffect::None};
     if (Before == TokenState::Duplicable)
       return {Before, Before, TokenEvent::None, TokenEffect::None};
-    return {Before, TokenState::Unknown,
-            TokenEvent::DuplicationClassMismatch,
+    return {Before, TokenState::Unknown, TokenEvent::DuplicationClassMismatch,
             TokenEffect::None};
   }
   return {Before, TokenState::Unknown, TokenEvent::StateUnproven,
@@ -155,31 +154,33 @@ struct TokenTransfer {
  * when its nominal sort is explicitly droppable.  Otherwise equal classes
  * report occupation, while unequal classes also report the contradictory
  * multiplicity. */
-constexpr TokenTransfer transferToken(TokenState Source,
-                                      TokenState Destination,
+constexpr TokenTransfer transferToken(TokenState Source, TokenState Destination,
                                       TokenTransferPolicy Policy) {
   if (Source == TokenState::Unknown || Destination == TokenState::Unknown)
-    return {Source, Destination, TokenState::Unknown, TokenState::Unknown,
-            TokenEvent::StateUnproven, TokenEffect::None};
+    return {Source,
+            Destination,
+            TokenState::Unknown,
+            TokenState::Unknown,
+            TokenEvent::StateUnproven,
+            TokenEffect::None};
   TokenEvent Events = TokenEvent::None;
   if (Source == TokenState::Absent)
     Events = Events | TokenEvent::MissingRequired;
-  if (Destination != TokenState::Absent &&
-      !Policy.DestinationDroppable)
+  if (Destination != TokenState::Absent && !Policy.DestinationDroppable)
     Events = Events | TokenEvent::DestinationOccupied;
   if (Source != TokenState::Absent && Destination != TokenState::Absent &&
       Source != Destination)
     Events = Events | TokenEvent::DuplicationClassMismatch;
   if (Events != TokenEvent::None)
-    return {Source, Destination, TokenState::Unknown, TokenState::Unknown,
+    return {Source, Destination,      TokenState::Unknown, TokenState::Unknown,
             Events, TokenEffect::None};
   if (Source == TokenState::Duplicable)
-    return {Source, Destination, Source, TokenState::Duplicable,
+    return {Source,           Destination,      Source, TokenState::Duplicable,
             TokenEvent::None, TokenEffect::None};
   TokenEffect Effects = Policy.Loans == LinearLoanClass::Strict
                             ? TokenEffect::InvalidateStrictLoans
                             : TokenEffect::None;
-  return {Source, Destination, TokenState::Absent, TokenState::Linear,
+  return {Source,           Destination, TokenState::Absent, TokenState::Linear,
           TokenEvent::None, Effects};
 }
 
@@ -206,6 +207,108 @@ inline bool hasQualifier(const TokenSort *Token, llvm::StringRef Qualifier) {
     if (Attribute->getAnnotation() == Qualifier)
       return true;
   return false;
+}
+
+enum class TokenImplementationStatus : uint8_t {
+  Missing,
+  Valid,
+  Malformed,
+  UnknownFamily,
+  Conflicting,
+  Self,
+  Cyclic,
+  Chained,
+  Unsupported,
+};
+
+struct TokenImplementation {
+  TokenImplementationStatus Status;
+  const TokenSort *External;
+  const TokenSort *Internal;
+
+  bool valid() const { return Status == TokenImplementationStatus::Valid; }
+};
+
+struct RawTokenImplementation {
+  TokenImplementationStatus Status;
+  llvm::StringRef Name;
+};
+
+inline bool isTokenSortName(llvm::StringRef Name) {
+  if (Name.empty() ||
+      !(std::isalpha(static_cast<unsigned char>(Name.front())) ||
+        Name.front() == '_'))
+    return false;
+  for (char Character : Name.drop_front())
+    if (!(std::isalnum(static_cast<unsigned char>(Character)) ||
+          Character == '_'))
+      return false;
+  return true;
+}
+
+inline RawTokenImplementation
+rawTokenImplementation(const TokenSort *External) {
+  if (!External)
+    return {TokenImplementationStatus::Missing, {}};
+  constexpr llvm::StringRef Prefix = "qual:implemented_by=";
+  llvm::StringRef Selected;
+  for (const clang::AnnotateAttr *Attribute :
+       External->specific_attrs<clang::AnnotateAttr>()) {
+    llvm::StringRef Text = Attribute->getAnnotation();
+    if (!Text.consume_front(Prefix))
+      continue;
+    if (!isTokenSortName(Text))
+      return {TokenImplementationStatus::Malformed, {}};
+    if (!Selected.empty() && Selected != Text)
+      return {TokenImplementationStatus::Conflicting, {}};
+    Selected = Text;
+  }
+  return Selected.empty()
+             ? RawTokenImplementation{TokenImplementationStatus::Missing, {}}
+             : RawTokenImplementation{TokenImplementationStatus::Valid,
+                                      Selected};
+}
+
+/* Resolve an exact, one-hop nominal implementation permission.  A mapping is
+ * not an equivalence: it is consumed only by lifecycle producer/freer
+ * boundaries.  The referenced token must be a terminal dynamic-storage sort;
+ * self references, cycles, and otherwise-valid chains are rejected so an
+ * adapter cannot silently compose permissions. */
+inline TokenImplementation tokenImplementation(clang::ASTContext &Context,
+                                               const TokenSort *External) {
+  RawTokenImplementation Raw = rawTokenImplementation(External);
+  if (Raw.Status != TokenImplementationStatus::Valid)
+    return {Raw.Status, External, nullptr};
+  const TokenSort *Internal = findTokenSort(Context, Raw.Name);
+  if (!Internal)
+    return {TokenImplementationStatus::UnknownFamily, External, nullptr};
+  if (Internal == External)
+    return {TokenImplementationStatus::Self, External, Internal};
+  if (!hasQualifier(External, "qual:dynamic_storage") ||
+      !hasQualifier(Internal, "qual:dynamic_storage"))
+    return {TokenImplementationStatus::Unsupported, External, Internal};
+
+  llvm::SmallPtrSet<const TokenSort *, 8> Seen;
+  Seen.insert(External);
+  const TokenSort *Current = Internal;
+  bool Chained = false;
+  for (;;) {
+    if (!Seen.insert(Current).second)
+      return {TokenImplementationStatus::Cyclic, External, Internal};
+    RawTokenImplementation NextRaw = rawTokenImplementation(Current);
+    if (NextRaw.Status == TokenImplementationStatus::Missing)
+      break;
+    Chained = true;
+    if (NextRaw.Status != TokenImplementationStatus::Valid)
+      return {TokenImplementationStatus::Chained, External, Internal};
+    const TokenSort *Next = findTokenSort(Context, NextRaw.Name);
+    if (!Next)
+      return {TokenImplementationStatus::Chained, External, Internal};
+    Current = Next;
+  }
+  if (Chained)
+    return {TokenImplementationStatus::Chained, External, Internal};
+  return {TokenImplementationStatus::Valid, External, Internal};
 }
 
 inline std::optional<int64_t> excludedSentinel(const TokenSort *Token) {

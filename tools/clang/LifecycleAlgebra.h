@@ -83,6 +83,8 @@ enum class LifecycleEvent : uint16_t {
   AlreadyReleased = 1U << 3,
   FamilyMismatch = 1U << 4,
   LiveAtScopeExit = 1U << 5,
+  MorphismMissing = 1U << 6,
+  MorphismMismatch = 1U << 7,
 };
 
 constexpr LifecycleEvent operator|(LifecycleEvent Left, LifecycleEvent Right) {
@@ -232,6 +234,88 @@ replaceLifecycle(LifecycleFact Source, LifecycleFact Result,
   }
   return {Source, Result, SourceAfter, Acquisition.After,
           SourceEvents | Acquisition.Events};
+}
+
+/* A scoped morphism is an explicit permission to implement an externally
+ * named lifecycle family with one internally named family.  Both atoms come
+ * from contracts: for example, a widget producer may retag the live heap
+ * allocation returned by malloc, and the paired widget consumer may
+ * discharge its external obligation by calling the heap-family free.  It is
+ * not a global family equivalence and it is not transitive. */
+struct LifecycleFamilyMorphism {
+  LifecycleFamilyId External;
+  LifecycleFamilyId Internal;
+};
+
+constexpr bool isCanonicalLifecycleMorphism(LifecycleFamilyMorphism Morphism) {
+  return static_cast<bool>(Morphism.External) &&
+         static_cast<bool>(Morphism.Internal);
+}
+
+struct LifecycleMorphismTransition {
+  LifecycleFact Before;
+  LifecycleFact After;
+  LifecycleFamilyMorphism Morphism;
+  LifecycleEvent Events;
+
+  constexpr bool permitted() const { return Events == LifecycleEvent::None; }
+};
+
+constexpr LifecycleEvent lifecycleInputEvents(LifecycleFact Before,
+                                              LifecycleFamilyId Required) {
+  if (!Required || !isCanonicalLifecycle(Before) ||
+      Before.State == LifecycleState::Unknown)
+    return LifecycleEvent::StateUnproven;
+  if (Before.State == LifecycleState::Absent)
+    return LifecycleEvent::MissingLive;
+  LifecycleEvent Events = lifecycleFamilyMismatch(Before, Required);
+  if (Before.State == LifecycleState::Released)
+    Events = Events | LifecycleEvent::AlreadyReleased;
+  return Events;
+}
+
+/* Retag a live internal result at an annotated producer boundary.  A missing
+ * mapping, a target other than its external family, or an input other than
+ * its internal family cannot justify any successor lifecycle fact. */
+constexpr LifecycleMorphismTransition
+retagLifecycle(LifecycleFact Before, LifecycleFamilyId TargetExternal,
+               LifecycleFamilyMorphism Morphism) {
+  if (!isCanonicalLifecycleMorphism(Morphism))
+    return {Before, unknownLifecycle(), Morphism,
+            LifecycleEvent::MorphismMissing};
+  LifecycleEvent Events = lifecycleInputEvents(Before, Morphism.Internal);
+  if (TargetExternal != Morphism.External)
+    Events = Events | LifecycleEvent::MorphismMismatch;
+  if ((Before.State == LifecycleState::Live ||
+       Before.State == LifecycleState::Released) &&
+      Before.Family != Morphism.Internal)
+    Events = Events | LifecycleEvent::MorphismMismatch;
+  if (Events != LifecycleEvent::None)
+    return {Before, unknownLifecycle(), Morphism, Events};
+  return {Before, liveLifecycle(Morphism.External), Morphism,
+          LifecycleEvent::None};
+}
+
+/* Discharge an external obligation through the exact internal release family
+ * named by the scoped morphism.  The external lifecycle remains the tracked
+ * nominal fact, so a later call can still diagnose double release. */
+constexpr LifecycleMorphismTransition
+dischargeLifecycle(LifecycleFact Before, LifecycleFamilyId ReleaseInternal,
+                   LifecycleFamilyMorphism Morphism) {
+  if (!isCanonicalLifecycleMorphism(Morphism))
+    return {Before, unknownLifecycle(), Morphism,
+            LifecycleEvent::MorphismMissing};
+  LifecycleEvent Events = lifecycleInputEvents(Before, Morphism.External);
+  if (ReleaseInternal != Morphism.Internal)
+    Events = Events | LifecycleEvent::MorphismMismatch;
+  if ((Before.State == LifecycleState::Live ||
+       Before.State == LifecycleState::Released) &&
+      Before.Family != Morphism.External)
+    Events = Events | LifecycleEvent::MorphismMismatch;
+  if (Events != LifecycleEvent::None)
+    return {Before, unknownLifecycle(), Morphism, Events};
+  return {Before, releasedLifecycle(Morphism.External), Morphism,
+          LifecycleEvent::None};
 }
 
 struct LifecycleObservation {
