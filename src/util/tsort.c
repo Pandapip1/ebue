@@ -250,19 +250,16 @@ int __util_tsort_main(int argc, char **argv)
 
 	cycle = ready_count < nnodes;
 	if (cycle) {
-		size_t n, node_count = nnodes;
+		size_t n;
 		__util_diagf("tsort: cycle in input; unresolved:");
-		for (n = 0; n < node_count; n++)
+		for (n = 0; n < nnodes; n++)
 			if (!nodes[n].done) __util_diagf(" %s", nodes[n].name);
 		__util_diagf("\n");
 	}
 
-	{
-		size_t node_count = nnodes;
-		for (i = 0; i < node_count; i++) {
-			free(nodes[i].name);
-			free(nodes[i].succ);
-		}
+	for (i = 0; i < nnodes; i++) {
+		free(nodes[i].name);
+		free(nodes[i].succ);
 	}
 	free(nodes);
 
