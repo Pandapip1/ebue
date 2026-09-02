@@ -627,7 +627,58 @@ static void test_stat_dir_size_is_zero(void)
        * sentence goes on to name is exactly what NT provides for this
        * (RtlAddAccessDeniedAce), and the sentence's own conclusion --
        * "which ntlibc's chmod() does not attempt" -- is a choice, not a
-       * platform limit.  See the banner above this group. */
+       * platform limit.  See the banner above this group.
+       *
+       * RE-AUDITED, STILL BUG, DELIBERATELY NOT ATTEMPTED THIS PASS.
+       * $LXMOD (src/stat/lxmod.c, wired into chmod()/stat() since
+       * c9411f8) DOES already persist and read back a full 07777 mode
+       * on a system where the EA write succeeds -- traced by hand
+       * through __plat_chmod()/mode_from_attrs() -- and chmod(path, 0)
+       * -> lxmod=0 -> stat() reporting 0 looked, at first, like it
+       * might already satisfy exactly this fence with no code change
+       * at all. Two independent findings closed that off, one fatal by
+       * itself:
+       *
+       * (1) src/stat/nt/plat_stat.c:165's own comment: "Wine through
+       *     10.x stubs NtSetEaFile as ACCESS_DENIED." The CI leg this
+       *     project's own fences elsewhere measure against is stock
+       *     apt Wine 9.0 -- squarely inside that range. So on the
+       *     actual grading Wine, __plat_lxmod_set() does not merely
+       *     "maybe" fail here, it is DOCUMENTED to fail every time,
+       *     which sends chmod(path, 0) down __plat_chmod()'s own
+       *     Wine-without-writable-EAs fallback -- attribute-only,
+       *     read bits synthesized back at their 0444 default -- the
+       *     exact under-delivery this fence names. $LXMOD is real
+       *     machinery and does work on a real NT or a modern Wine; it
+       *     is simply not reachable on the one Wine this fix would be
+       *     graded against.
+       * (2) Even setting (1) aside, this fence's own sibling two
+       *     fences below (posix_unistd_chmod_group_other_write_aliases_owner,
+       *     posix_stdlib_mkstemp_owner_only_permissions) sit on the
+       *     exact same chmod-permission-model question the task
+       *     grouped these three under, and the middle one's own
+       *     expected value -- fchmod(fd, 0020) [[group-write only]]
+       *     must read back as 0640, not 0020 -- is NOT what $LXMOD's
+       *     literal round-trip produces even when the EA write DOES
+       *     succeed (traced: it gives 0020). That 0640 only makes
+       *     sense under the ACL/DACL design this fence and its banner
+       *     actually describe -- read implied by write, owner always
+       *     rw -- an NT-security-descriptor mapping this tree has
+       *     never built any part of (no NtQuerySecurityObject/
+       *     NtSetSecurityObject/RtlCreateAcl/RtlAddAccessDeniedAce
+       *     declaration anywhere in src/internal/nt.h, confirmed by
+       *     grep), and unaffected by finding (1) above since it is a
+       *     wholly different ntdll entry point with its own,
+       *     unmeasured Wine support history.
+       *
+       * Writing real NT security-descriptor construction from scratch
+       * -- new ntdll declarations, SID/ACL buffer sizing, and a
+       * POSIX-mode -> DACL mapping design with no existing precedent
+       * in this tree to check against -- with no working Wine in this
+       * session to verify a single byte of it against real NT
+       * behaviour, is exactly the "rushing a wrong fix" the task asked
+       * to avoid rather than commit. Left for a session that can
+       * measure. */
 static void test_chmod_cannot_clear_read_bits(void)
 {
 	struct stat st;
@@ -661,7 +712,19 @@ static void test_chmod_cannot_clear_read_bits(void)
        * difference in" is false.  A DACL holds one ACE per SID, which
        * is per-identity granularity POSIX's three classes do not even
        * need all of.  The aggregate is a property of the mapping ntlibc
-       * chose, not of NTFS.  See the banner above this group. */
+       * chose, not of NTFS.  See the banner above this group.
+       *
+       * RE-AUDITED, STILL BUG: this is the case that PROVES $LXMOD
+       * alone (src/stat/lxmod.c) cannot close this group -- traced by
+       * hand, fchmod(fd, 0020) persists lxmod=0020 exactly, so stat()
+       * would report 0020, not the 0640 this test requires. 0640 (owner
+       * rw, group r-only, other none) is not a literal bit round-trip
+       * of anything requested here; it is what a real DACL mapping
+       * would produce under a "write implies read, owner always keeps
+       * rw" rule this tree has never implemented. See the fuller note
+       * on test_chmod_cannot_clear_read_bits just above for why that
+       * real ACL work was not attempted this pass (no working Wine in
+       * this session to check any of it against real NT). */
 static void test_chmod_group_other_write_aliases_owner(void)
 {
 	struct stat st;

@@ -489,7 +489,33 @@ static void test_mkstemp_permission_bits(void)
        * security descriptor does provide.  Retagged, not reopened: the
        * decision to do no ACL work may well be right, and it would need
        * measuring on real Windows rather than Wine, whose DACL
-       * emulation over a Unix filesystem is not NT's. */
+       * emulation over a Unix filesystem is not NT's.
+       *
+       * RE-AUDITED, STILL BUG.  This fence's own "$LXMOD is consumed
+       * only for execute/search bits" is now factually wrong and worth
+       * flagging as such rather than quietly leaving stale: since
+       * c9411f8, $LXMOD stores and mode_from_attrs() reads back a full
+       * 07777 mode, not merely execute bits (checked directly against
+       * src/stat/nt/plat_stat.c). mkstemp's own open(..., 0600) call
+       * would, on that mechanism alone, persist lxmod=0600 exactly and
+       * satisfy this fence's literal assertion with no ACL work at
+       * all -- unlike its sibling
+       * posix_unistd_chmod_group_other_write_aliases_owner, whose
+       * required 0640 genuinely cannot come from a literal $LXMOD
+       * round-trip. That distinction does not save this one, though:
+       * src/stat/nt/plat_stat.c:165 documents "Wine through 10.x stubs
+       * NtSetEaFile as ACCESS_DENIED", and the CI leg this project
+       * measures against elsewhere is stock apt Wine 9.0 -- inside
+       * that range. So the EA write mkstemp's open() attempts at
+       * creation is expected to fail on the actual grading Wine,
+       * leaving the file with no $LXMOD record and its read-back mode
+       * synthesized at the ordinary 0644 default -- not the 0600 this
+       * fence requires. Same blocker as its two siblings in
+       * test/posix-unistd.c, see the fuller note on
+       * test_chmod_cannot_clear_read_bits there. Not attempted this
+       * pass for the same reason: no working Wine in this session to
+       * verify either the EA-write failure or a real ACL alternative
+       * against actual NT/Wine behaviour. */
 	char t[] = "mkperm-XXXXXX";
 	int fd = mkstemp(t);
 	struct stat st;
