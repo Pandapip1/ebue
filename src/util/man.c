@@ -1792,8 +1792,11 @@ static void man_apropos_name_description(const char *text, size_t tlen, struct m
 	const char *namehit = 0;
 	const char *line, *lineend;
 	struct man_buf decoded;
+	struct man_regtab no_regs;
 	const char *desc;
 	size_t desclen, i;
+
+	memset(&no_regs, 0, sizeof no_regs);
 
 	while (p < end) {
 		const char *nl = memchr(p, '\n', (size_t)(end - p));
@@ -1809,7 +1812,7 @@ static void man_apropos_name_description(const char *text, size_t tlen, struct m
 	if (!lineend) lineend = end;
 
 	memset(&decoded, 0, sizeof decoded);
-	if (!decode_text(&decoded, line, (size_t)(lineend - line))) { mbuf_free(&decoded); return; }
+	if (!decode_text(&no_regs, &decoded, line, (size_t)(lineend - line))) { mbuf_free(&decoded); return; }
 
 	man_apropos_split_description(decoded.data ? decoded.data : "", decoded.len, &desc, &desclen);
 
