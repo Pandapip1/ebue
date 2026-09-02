@@ -220,19 +220,18 @@ int __util_tsort_main(int argc, char **argv)
 	free(buf);
 
 	{
-		size_t node_count = nnodes;
-		int *queue = __util_mallocarray(node_count ? node_count : 1, sizeof *queue);
+		int *queue = __util_mallocarray(nnodes ? nnodes : 1, sizeof *queue);
 		size_t qtail = 0;
 		size_t n, remaining;
 
-		if (!queue && node_count) { __util_diagf("tsort: out of memory\n"); return 1; }
+		if (!queue && nnodes) { __util_diagf("tsort: out of memory\n"); return 1; }
 
-		for (n = 0; n < node_count; n++)
+		for (n = 0; n < nnodes; n++)
 			if (nodes[n].indeg == 0) queue[qtail++] = (int)n;
 
 		queue_head = 0;
 		ready_count = 0;
-		for (remaining = node_count;
+		for (remaining = nnodes;
 		     remaining > 0 && queue_head < qtail; remaining--) {
 			int cur = queue[queue_head++];
 			size_t s, succ_count = nodes[cur].nsucc;
