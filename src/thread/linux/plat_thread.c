@@ -143,6 +143,7 @@
  * so hosted include ownership and unused-include advice do not apply. */
 // NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
+#include <poll.h>
 #include <stddef.h>
 #include "plat_thread.h"
 #include "linux/sync.h"
@@ -639,8 +640,90 @@ void __plat_fast_unlock(void)
  * between passes. Every caller in this tree (src/thread/aio.c) waits
  * on a small, fixed handful of handles for a relatively coarse aio
  * deadline, not a hot low-latency path, so a millisecond poll interval
- * is a real, disclosed tradeoff, not a correctness gap. */
+ * is a real, disclosed tradeoff, not a correctness gap.
+ *
+ * A second, genuinely different __plat_handle_t domain also has to be
+ * handled here, and this is where a real, confirmed SIGSEGV lived: this
+ * function's own declaration (src/internal/plat_thread.h) says its one
+ * real caller is aio.c's aio_suspend(), via its own on-stack handles[2].
+ * That is true, but incomplete -- handles[0] is always this file's own
+ * __plat_event_create() result (a `struct ntlibc_linux_sync *`, an
+ * mmap()'d page this file allocated), while handles[1], when present, is
+ * aio_suspend()'s own `signal_event = __sig_delivery_event()`, which on
+ * THIS backend (src/signal/linux/plat_signal.c's __plat_sigevent_create())
+ * is a completely different encoding: a raw Linux eventfd(2) descriptor
+ * boxed as (fd + 1), the identical small-integer convention src/unistd/
+ * linux/plat_fd.c and this backend's own select() port
+ * (src/select/linux/plat_select.c) already use for fd-shaped handles.
+ * Blindly casting handles[1] to `struct ntlibc_linux_sync *` and reading
+ * obj->kind, as this loop always did, dereferences that small boxed
+ * integer as a pointer -- almost certainly an unmapped low address, so a
+ * guaranteed SIGSEGV whenever the loop actually needs to look past
+ * handles[0] (i.e. whenever aio_write()'s request has not yet completed
+ * by the time aio_suspend() reaches this wait).
+ *
+ * This is what a real fork()-then-AIO-in-the-child reproduction crashed
+ * on (a minimal aio_write()+aio_suspend() in the parent to start the
+ * worker, fork(), then the same pair again in the child): confirmed by
+ * instrumenting aio_suspend() and observing the crash land inside this
+ * exact __plat_wait_any() call, and confirmed as the root cause by
+ * rebuilding with handles[1] unconditionally omitted -- the identical
+ * fork()+AIO reproduction then passed reliably. It is not intrinsically
+ * a fork() bug (src/thread/aio.c's own __aio_reset_after_fork(), wired
+ * into src/process/fork.c's child path, already gives the child a fresh
+ * worker correctly): fork() just makes it reliable, because the child's
+ * worker is started cold by the very aio_write() call under test, and
+ * loses the race to complete the request before aio_suspend() reaches
+ * this wait far more often than a long-running warm worker does (200/200
+ * single-process, no-fork repro runs in the same sandbox never hit it).
+ *
+ * The fix distinguishes the two domains by a real structural fact rather
+ * than a magnitude guess: alloc_sync() above hands out raw mmap(2)
+ * results, and mmap(2) is guaranteed by the kernel to return page-aligned
+ * addresses (and, via mmap_min_addr, never anything in the first page) --
+ * every `struct ntlibc_linux_sync *` this file ever produces therefore
+ * has its low 12 bits all zero. A boxed eventfd (fd + 1) lands on that
+ * same alignment only if fd is exactly 4095, 8191, ... -- a process would
+ * need thousands of descriptors already open, nothing this tree's own
+ * fd table (FD_MAX, src/internal/libc.h) or any real caller approaches.
+ * So "not page-aligned" is treated as "this is a boxed fd, not one of my
+ * own sync objects" and read the same way src/select/linux/plat_select.c
+ * already does for that exact encoding: a zero-timeout ppoll(POLLIN),
+ * peeking readiness without consuming it -- matching the EVENT-kind
+ * branch below, which also only peeks (aio_suspend()'s own
+ * __sig_drain_pending() call, right after this wait returns, is what
+ * actually consumes a pending signal). */
 #define SYS_nanosleep_wa 101
+#define SYS_ppoll_wa     73
+
+/* See this function's own banner just above: a `struct ntlibc_linux_sync *`
+ * this file's own alloc_sync() produced is always mmap(2)-page-aligned;
+ * a boxed eventfd (fd + 1) essentially never is. */
+static int handle_is_boxed_fd(__plat_handle_t h)
+{
+	return ((unsigned long)h & 4095UL) != 0;
+}
+
+/* Zero-timeout POLLIN peek on a boxed-fd handle (the same ppoll(2) idiom
+ * src/select/linux/plat_select.c's own probes already use), via this
+ * file's own raw_syscall() rather than that file's `extern long
+ * syscall(...)` -- see this file's banner for why a host-glibc-satisfied
+ * syscall() is the wrong primitive here. Peeks only, same as the
+ * NTLIBC_LX_SYNC_EVENT branch below: never consumes. */
+static int fd_handle_ready(__plat_handle_t h)
+{
+	struct pollfd pfd;
+	struct linux_timespec zero;
+	long ret;
+
+	pfd.fd = (int)((long)h - 1);
+	pfd.events = POLLIN;
+	pfd.revents = 0;
+	zero.tv_sec = 0; zero.tv_nsec = 0;
+	ret = raw_syscall(SYS_ppoll_wa, (long)&pfd, 1L, (long)&zero, 0L, 0L, 0L);
+	if (is_sys_error(ret)) return 0;
+	return (pfd.revents & POLLIN) != 0;
+}
 
 int __plat_wait_any(__plat_handle_t *handles, unsigned count, int alertable, // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; count and alert flag have distinct roles
                     int has_timeout, long long relative_ticks)
@@ -655,7 +738,12 @@ int __plat_wait_any(__plat_handle_t *handles, unsigned count, int alertable, // 
 	for (;;) {
 		unsigned i;
 		for (i = 0; i < count; i++) {
-			struct ntlibc_linux_sync *obj = (struct ntlibc_linux_sync *)handles[i];
+			struct ntlibc_linux_sync *obj;
+			if (handle_is_boxed_fd(handles[i])) {
+				if (fd_handle_ready(handles[i])) return __PLAT_WAIT_OK;
+				continue;
+			}
+			obj = (struct ntlibc_linux_sync *)handles[i];
 			if (obj->kind == NTLIBC_LX_SYNC_EVENT) {
 				if (__atomic_load_n(&obj->futex, __ATOMIC_ACQUIRE) != 0)
 					return __PLAT_WAIT_OK;
