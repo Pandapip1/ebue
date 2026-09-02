@@ -317,7 +317,11 @@ int main(int argc, char **argv)
 		rmdir(PATHDIR);
 		return 77;
 	}
+#if defined(__linux__)
+	snprintf(pathdir, sizeof pathdir, "%s/" PATHDIR, cwd);
+#else
 	snprintf(pathdir, sizeof pathdir, "%s\\" PATHDIR, cwd);
+#endif
 
 	/* The two decoys.  One beside the calling image (the cwd, where the
 	 * CHILD copy runs from), one in the only PATH entry -- the two
