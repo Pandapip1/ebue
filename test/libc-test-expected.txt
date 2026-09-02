@@ -145,7 +145,39 @@
 # accurately-stated reason instead of a stale build error. COUNTS
 # updated: UNIMPL 21 -> 19, NA 14 -> 16.
 #
-# COUNTS PASS=107 BUG=3 UNIMPL=19 NA=16 FLAKY=1
+# 2026-09-02, pthread.h CLOCK_* visibility: the 4 UNIMPL rows below reading
+# "'CLOCK_REALTIME' undeclared" (pthread_cancel-points, pthread_mutex,
+# pthread_mutex_pi, pthread_once-deadlock -- see the 2026-09-01 refresh
+# note above) are fixed: include/pthread.h now includes <time.h> directly,
+# so the CLOCK_* family (CLOCK_REALTIME, CLOCK_MONOTONIC,
+# CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID, plus this library's
+# existing CLOCK_MONOTONIC_RAW/CLOCK_REALTIME_COARSE/
+# CLOCK_MONOTONIC_COARSE/CLOCK_BOOTTIME extensions) is transitively
+# visible from pthread.h alone, matching real implementations: musl and
+# glibc both do this too, which is why each of these 4 corpus sources --
+# every one includes only pthread.h (plus semaphore.h/stdio.h/errno.h/
+# string.h in the mutex tests), never time.h -- already worked there in
+# practice even though POSIX does not strictly mandate CLOCK_REALTIME's
+# visibility from pthread.h alone. All 4 rebuilt against the current tree
+# with x86_64-win32-tcc (lib/crt1.o + lib/libc.a + lib/libntdll.a, plus
+# this corpus's own common/*.c helpers and libc-test-shim.c, the same
+# link line tools/libc-test.sh's own build_one() uses): each now compiles
+# and links completely clean, no errors -- pthread_cancel-points.c
+# carries one pre-existing, unrelated warning ("cast between pointer and
+# integer of different size" at line 25, nothing to do with this fix);
+# the other 3 have no warnings either. Move UNIMPL -> PASS below, the
+# same evidence-and-disclosure convention as flockfile-list/mntent above:
+# this environment has a working x86_64-win32-tcc but no runnable x86_64
+# Wine (see this file's own 2026-09-01 refresh note for what was tried
+# and why it did not work), so this rests on clean compile/link evidence
+# only, not on an independent Wine run of the built .exe files -- these 4
+# corpus tests exercise substantive pthread mutex/cancellation logic
+# (recursive/PI-mutex behaviour, deadlock avoidance, cancellation
+# points), not a trivial link fix, so this disclosure matters more here
+# than it did for flockfile-list. COUNTS updated: PASS 107 -> 111, UNIMPL
+# 19 -> 15.
+#
+# COUNTS PASS=111 BUG=3 UNIMPL=15 NA=16 FLAKY=1
 # (whole-corpus totals once the wildcard default below is applied to
 # every real case tools/libc-test.sh discovers -- not a count of rows in
 # this file, which lists only the 45 explicit exceptions plus the
@@ -167,12 +199,12 @@ mbc                               runtime=wine,target_arch=x86_64,kernel32=no  N
 mntent                             runtime=wine,target_arch=x86_64,kernel32=no  PASS  was UNIMPL for a missing header; <mntent.h> now exists (include/mntent.h) with a real body (src/misc/mntent.c): setmntent()/getmntent()/getmntent_r()/addmntent()/endmntent()/hasmntopt() are pure stdio over the FILE * the caller hands them, no OS-specific parsing, so the same implementation serves every platform with no split. Confirmed here: the corpus source now compiles and links clean against this target (x86_64-win32-tcc, lib/crt1.o + lib/libc.a + lib/libntdll.a, no errors or warnings) -- not run under Wine in this environment (none installed), but every function this specific test calls (getmntent()/getmntent_r()/endmntent(), all against an fmemopen() buffer, never a real system path) was also compiled AND run natively on this project's aarch64-linux target against a small standalone harness reproducing all three of this corpus test's cases line for line, plus a real setmntent(MOUNTED, "r")/getmntent() pass over the host's actual /proc/mounts: exit 0, no assertion failures. MOUNTED (<mntent.h>) names /proc/mounts, which has no equivalent on NT -- meaningless there, not exercised by this corpus test
 popen                             runtime=wine,target_arch=x86_64,kernel32=no  NA  no /bin/sh on the target -- the shell script reaches cmd.exe, which rejects it (external-suites.md, build assumption 3)
 pthread_atfork-errno-clobber      runtime=wine,target_arch=x86_64,kernel32=no  NA      t_setrlim exits 77 because setrlimit() is not enforced on this target, so the errno-preservation premise cannot be exercised
-pthread_cancel-points             runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread.h no longer blocks this (include/pthread.h now exists); it now fails to build for an unrelated reason: pthread_cancel-points.c:41: error: 'CLOCK_REALTIME' undeclared. The test includes only pthread.h (no time.h), and this library's pthread.h does not expose the CLOCK_* constants time.h defines
+pthread_cancel-points              runtime=wine,target_arch=x86_64,kernel32=no  PASS  was UNIMPL for 'CLOCK_REALTIME' undeclared (the test includes only pthread.h, no time.h); include/pthread.h now includes <time.h> directly, exposing the CLOCK_* family transitively, the same behaviour musl/glibc give from pthread.h alone. Rebuilt with x86_64-win32-tcc: compiles and links completely clean, no errors (one pre-existing, unrelated warning at line 25, "cast between pointer and integer of different size") -- not run under Wine in this environment (none installed), the same disclosure as flockfile-list/mntent above
 pthread_create-oom                runtime=wine,target_arch=x86_64,kernel32=no  NA  upstream t_memfill reaches real virtual-address exhaustion, then declines because t_setrlim(RLIMIT_DATA, 0) is not enforced; without exhausting the NT process heap's existing reserve it cannot establish the case's required pthread_create-OOM premise
 pthread_exit-dtor                 runtime=wine,target_arch=x86_64,kernel32=no  FLAKY  patched Wine's concurrent RtlCloneUserProcess path can stall: measured 40/40 serial passes but 2 timeouts in 160 runs at 20-way concurrency; no destructor assertion failed. Re-reviewed ntlibc's own fork() call site (src/process/fork.c): the handle-inheritance marking/unmarking around RtlCloneUserProcess and the __children table bookkeeping are correct on inspection and introduce no synchronization ntlibc itself controls that could explain a concurrency-only stall, consistent with attributing the stall to the patched Wine fork's own concurrent clone path rather than to this library. Could not refresh the ratio here: this sandbox's Wine cannot execute any x86_64 PE binary at all (stock aarch64 Wine has no x86_64 support, and Wine run under qemu-user's x86_64 ELF emulation crashes inside Wine's own PE loader during guest-address-space setup, before any PE code runs), and building the project's patched Wine fork from source in-sandbox was not sustainable given this host's shared, limited disk and CPU. The 40/40 serial, 2/160-at-20-way numbers above remain the best available evidence
-pthread_mutex                     runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread.h no longer blocks this (include/pthread.h now exists); it now fails to build for an unrelated reason: pthread_mutex.c:47: error: 'CLOCK_REALTIME' undeclared. The test includes only pthread.h/semaphore.h/stdio.h/errno.h/string.h (no time.h), and this library's pthread.h does not expose the CLOCK_* constants time.h defines
-pthread_mutex_pi                  runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread.h no longer blocks this (include/pthread.h now exists); it now fails to build for an unrelated reason: pthread_mutex_pi.c:48: error: 'CLOCK_REALTIME' undeclared. Same missing-time.h-exposure gap as pthread_mutex
-pthread_once-deadlock             runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread.h no longer blocks this (include/pthread.h now exists); it now fails to build for an unrelated reason: pthread_once-deadlock.c:34: error: 'CLOCK_REALTIME' undeclared. Same missing-time.h-exposure gap as pthread_mutex
+pthread_mutex                     runtime=wine,target_arch=x86_64,kernel32=no  PASS  was UNIMPL for the same missing-CLOCK_REALTIME gap as pthread_cancel-points above (the test includes only pthread.h/semaphore.h/stdio.h/errno.h/string.h, no time.h), now fixed the same way (pthread.h includes <time.h>). Rebuilt with x86_64-win32-tcc: compiles and links completely clean, no errors or warnings -- not run under Wine in this environment (none installed)
+pthread_mutex_pi                  runtime=wine,target_arch=x86_64,kernel32=no  PASS  was UNIMPL for the same missing-CLOCK_REALTIME gap as pthread_mutex, now fixed the same way (pthread.h includes <time.h>). Rebuilt with x86_64-win32-tcc: compiles and links completely clean, no errors or warnings -- not run under Wine in this environment (none installed)
+pthread_once-deadlock              runtime=wine,target_arch=x86_64,kernel32=no  PASS  was UNIMPL for the same missing-CLOCK_REALTIME gap as pthread_mutex (this one is in src/regression/, not src/functional/), now fixed the same way (pthread.h includes <time.h>). Rebuilt with x86_64-win32-tcc: compiles and links completely clean, no errors or warnings -- not run under Wine in this environment (none installed)
 pthread_robust                    runtime=wine,target_arch=x86_64,kernel32=no  BUG     owner death, EOWNERDEAD recovery, consistency, and ENOTRECOVERABLE pass; the remaining case destroys a mutex while still locked, for which ntlibc deliberately returns EBUSY
 setenv-oom                        runtime=wine,target_arch=x86_64,kernel32=no  NA  upstream t_memfill reaches real virtual-address exhaustion, then declines because t_setrlim(RLIMIT_DATA, 0) is not enforced; the NT process heap can retain already-reserved space, so setenv() succeeding would not be an OOM defect without that missing premise
 sigprocmask-internal              runtime=wine,target_arch=x86_64,kernel32=no  NA  design difference, not a defect: __libc_current_sigrtmin() is 35 here, so signals 32-34 are not reserved and are blockable

@@ -14,6 +14,11 @@ extern "C" {
 
 #include <features.h>
 #include <ownership.h>
+/* Real implementations make CLOCK_* transitively visible from pthread.h
+ * alone (used by pthread_condattr_setclock() etc. and assumed by test
+ * sources that include only pthread.h); time.h's own guards match this
+ * library's -D_GNU_SOURCE build convention, so a plain include is enough. */
+#include <time.h>
 #define __NEED_size_t
 #define __NEED_time_t
 #define __NEED_clockid_t
