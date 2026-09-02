@@ -1,0 +1,161 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * __nsswitch_order() -- src/netdb/linux/nsswitch.c's real
+ * /etc/nsswitch.conf(5) parser, shared by src/netdb/linux/
+ * hosts_resolve.c and src/misc/linux/{pwd,grp}.c (src/internal/
+ * nsswitch.h has the full contract).
+ *
+ * WHY A BESPOKE COMPILE RULE, NOT THE ORDINARY LIBRARY.
+ * src/netdb/linux/ is not part of the library ../tools/asan-build.sh
+ * builds for every other harness in this directory: that script's own
+ * comment above its `linux)` case says this native harness exercises
+ * the NT backend through ntstubs.c, and every OTHER platform-split
+ * module has an nt/ counterpart standing in for the linux/ one it
+ * skips. src/netdb/linux/ has no such counterpart -- src/netdb/nt/
+ * plat_netdb.c is a self-contained NT implementation that never calls
+ * __nsswitch_order() at all -- so this function is simply absent from
+ * that library today, not present under different behaviour.
+ *
+ * __nsswitch_order() itself has no NT dependency at all: fopen(),
+ * fgets(), fclose(), strchr(), strncmp(), tolower(), nothing else,
+ * every one of them already in the general library this harness links
+ * (fopen() reaches ntstubs.c's own simulated in-memory volume the same
+ * way every other native fuzz/test binary's file I/O already does). So
+ * rather than widen asan-build.sh's file selection for every harness --
+ * a bigger, separate decision -- ../fuzz/Makefile compiles the real
+ * nsswitch.c once, on its own (see the $(OUT)/nsswitch.o rule), and
+ * links the result into this harness alone, exactly the shape
+ * ntstubs.o/host_oracle.o already use for something that is not part of
+ * $(LIBDIR). Nothing in nsswitch.c was changed to make this possible:
+ * __nsswitch_order() was already non-static and already declared in
+ * src/internal/nsswitch.h, unlike resolv.c's parse_response() (see
+ * fuzz_resolv.c's own banner for that one).
+ *
+ * THE FILE-PATH SEAM.  __nsswitch_order() does not take a buffer --
+ * fopen(__NSS_NSSWITCH_PATH(), "r") is baked into it, and there is no
+ * lower buffer-taking entry point underneath: the whole function is one
+ * fopen()+fgets() loop. src/internal/nss_paths.h's own banner describes
+ * the seam that already exists for exactly this: __NSS_NSSWITCH_PATH()
+ * expands to __nss_path("NTLIBC_TEST_NSSWITCH_PATH", "/etc/nsswitch.conf"),
+ * an UNDOCUMENTED env-var override this library's own test fixtures use,
+ * with TZ and HOSTALIASES as precedent for "an env var is the sanctioned
+ * way to redirect a libc database lookup". This harness uses that same
+ * seam: it fwrite()s the fuzz input into a path inside ntstubs.c's own
+ * simulated volume (the in-memory filesystem every fopen() in this build
+ * already goes through -- nothing here is a real host file, and
+ * NTLIBC_FUZZ_MIRROR plays no part), then setenv()s
+ * NTLIBC_TEST_NSSWITCH_PATH to that path before calling
+ * __nsswitch_order(). This is the "existing seam/injection point for
+ * feeding synthetic file content" the task asked to prefer over
+ * filesystem mocking -- nss_paths.h's override IS that seam, already
+ * built for this.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "nsswitch.h"
+
+extern void oracle_mismatch_i(const char *, const char *, long long, long long);
+
+/* Bigger than NSS_LINE_MAX (512, nsswitch.c's own fgets() buffer): a
+ * fuzzer-sized file exercises both ordinary lines and the "one real
+ * line split across more than one fgets() call" case nsswitch.c's own
+ * comment above its main loop documents as deliberately tolerated. */
+#define CAP 2048
+#define GUARD 0xC7
+#define NCAP 8    /* out[]'s capacity; __nsswitch_order's real callers use 4 */
+
+int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
+{
+	static const char *const dbs[4] = { "hosts", "passwd", "group", "shadow" };
+	unsigned char ctl;
+	int max, dbidx, r, r2;
+	const char *db;
+	char content[CAP];
+	size_t n, i;
+	FILE *f;
+	struct {
+		unsigned char pre[16];
+		enum __nss_service arr[NCAP];
+		unsigned char post[16];
+	} buf;
+	unsigned char *raw = (unsigned char *)&buf;
+
+	if (size < 1) return 0;
+	ctl = data[0];
+	data++; size--;
+
+	max = ctl % NCAP;                  /* 0..7: always leaves >=1 guard slot */
+	dbidx = (ctl >> 3) & 0x03;
+	db = dbs[dbidx];
+
+	n = size < CAP ? size : CAP;
+	memcpy(content, data, n);
+
+	/* A path inside ntstubs.c's own simulated volume -- not a real host
+	 * file, and independent of NTLIBC_FUZZ_MIRROR (see this file's own
+	 * banner). "w" truncates, so each call starts the fixture fresh. */
+	f = fopen("/fuzz_nsswitch.conf", "w");
+	if (!f) return 0;
+	if (n && fwrite(content, 1, n, f) != n) { fclose(f); return 0; }
+	if (fclose(f) != 0) return 0;
+
+	if (setenv("NTLIBC_TEST_NSSWITCH_PATH", "/fuzz_nsswitch.conf", 1) != 0)
+		return 0;
+
+	memset(&buf, GUARD, sizeof buf);
+	r = __nsswitch_order(db, buf.arr, max);
+
+	if (r < 0 || r > max)
+		oracle_mismatch_i("__nsswitch_order returned outside [0, max]",
+		                  db, (long long)r, (long long)max);
+
+	/* Every entry actually written must be one of the two services this
+	 * library implements -- the enum's only two members -- never some
+	 * other value a corrupted write could produce. */
+	for (i = 0; i < (size_t)(r < max ? r : max); i++)
+		if (buf.arr[i] != __NSS_SVC_FILES && buf.arr[i] != __NSS_SVC_DNS)
+			oracle_mismatch_i("__nsswitch_order wrote an unrecognized service value",
+			                  db, (long long)buf.arr[i], (long long)i);
+
+	/* Guard bytes on both sides, plus the unused tail of arr[] itself
+	 * (indices [max, NCAP)) -- the same "bring your own guard" discipline
+	 * fuzz/Makefile's SAN_MODE comment asks for, since ubsan mode has no
+	 * shadow memory to catch an out-of-bounds write on its own. */
+	for (i = 0; i < sizeof buf.pre; i++)
+		if (raw[i] != GUARD)
+			oracle_mismatch_i("__nsswitch_order wrote before its output array",
+			                  db, (long long)i, GUARD);
+	for (i = (size_t)max; i < NCAP; i++) {
+		unsigned char *slot = (unsigned char *)&buf.arr[i];
+		size_t j;
+		for (j = 0; j < sizeof buf.arr[i]; j++)
+			if (slot[j] != GUARD) {
+				oracle_mismatch_i("__nsswitch_order wrote past its declared max",
+				                  db, (long long)i, (long long)max);
+				break;
+			}
+	}
+	for (i = 0; i < sizeof buf.post; i++)
+		if (raw[16 + NCAP * sizeof(enum __nss_service) + i] != GUARD)
+			oracle_mismatch_i("__nsswitch_order wrote after its output array",
+			                  db, (long long)i, GUARD);
+
+	/* Determinism: __nsswitch_order carries no state between calls (it
+	 * reopens and re-reads the file fresh every time), so parsing the
+	 * same fixture twice must agree, both on the count and on the order. */
+	{
+		enum __nss_service again[NCAP];
+		memset(again, GUARD, sizeof again);
+		r2 = __nsswitch_order(db, again, max);
+		if (r2 != r)
+			oracle_mismatch_i("__nsswitch_order is not deterministic (count)",
+			                  db, (long long)r2, (long long)r);
+		else if (r > 0 && memcmp(again, buf.arr, (size_t)r * sizeof again[0]) != 0)
+			oracle_mismatch_i("__nsswitch_order is not deterministic (order)",
+			                  db, 0, 0);
+	}
+
+	return 0;
+}
