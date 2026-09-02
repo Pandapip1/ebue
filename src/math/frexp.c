@@ -117,7 +117,10 @@ long double frexpl(long double x, int *e)
 		u.i.se |= 0x3ffe;
 		return u.f;
 	}
-	if (ee == 0x7fff) return x;
+	if (ee == 0x7fff) {
+		*e = 0;
+		return x;
+	}
 	*e = ee - 0x3ffe;
 	u.i.se &= 0x8000;
 	u.i.se |= 0x3ffe;
