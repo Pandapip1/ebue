@@ -221,7 +221,7 @@ int __util_timeout_main(int argc, char **argv)
 	int have_k = 0, sent_kill = 0;
 	double duration = 0, kduration = 0;
 	char *resolved;
-	int pid, status;
+	int pid, status, spawn_errno;
 	struct timespec deadline;
 
 	for (; i < argc; i++) {
@@ -274,10 +274,15 @@ int __util_timeout_main(int argc, char **argv)
 	}
 
 	pid = __spawn(resolved, &argv[i], environ);
+	/* Captured before free(): see src/util/util_time.c's identical
+	 * check for why the ENOENT-vs-everything-else distinction has to
+	 * come from __spawn()'s own errno, read right away, rather than
+	 * from __find_program() having already succeeded. */
+	spawn_errno = errno;
 	free(resolved);
 	if (pid < 0) {
-		__util_diagf("timeout: %s: %s\n", argv[i], strerror(errno));
-		return 126;
+		__util_diagf("timeout: %s: %s\n", argv[i], strerror(spawn_errno));
+		return spawn_errno == ENOENT ? 127 : 126;
 	}
 
 	if (duration == 0) {
