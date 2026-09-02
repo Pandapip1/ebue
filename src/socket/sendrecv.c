@@ -58,6 +58,7 @@
 #include "libc.h"
 #include "afd.h"
 #include "plat_socket.h"
+#include "ownership_stubs.h"
 
 ssize_t recv(int fd, void *buf withtok(writable_span(len)), size_t len,
 	int flags)
@@ -132,9 +133,9 @@ ssize_t recvfrom(int fd, void *buf withtok(writable_span(len)), size_t len,
 	if (src_addr && addrlen) {
 		socklen_t n2 = *addrlen < (socklen_t)f->peer_len ?
 			*addrlen : (socklen_t)f->peer_len;
-		for (socklen_t i = 0; i < n2; i++)
-			((unsigned char *)src_addr)[i] =
-			    ((const unsigned char *)f->peer)[i];
+		__ownership_writable_span(src_addr, n2);
+		__ownership_readable_span(f->peer, n2);
+		memcpy(src_addr, f->peer, n2);
 		*addrlen = f->peer_len;
 	}
 	return n;

@@ -139,11 +139,8 @@ ssize_t __file_write(FILE *f, const void *buf withtok(readable_span(n)), size_t 
 		}
 		f->mem_pos += n;
 		if (f->mem_pos > f->mem_len) f->mem_len = f->mem_pos;
-		if (f->mem_len <= f->mem_size && term <= f->mem_size - f->mem_len) {
-			unsigned char *term_dst = f->mem_buf + f->mem_len;
-			size_t i;
-			for (i = 0; i < term; i++) term_dst[i] = 0;
-		}
+		if (f->mem_len <= f->mem_size && term <= f->mem_size - f->mem_len)
+			memset(f->mem_buf + f->mem_len, 0, term);
 		mem_publish(f);
 		return (ssize_t)n;
 	}

@@ -228,6 +228,20 @@ static void pad(struct sink *sk, char c, size_t n) // NOLINT(bugprone-easily-swa
 	if (!sk->bad) sk->count += (long)skipped;
 }
 
+/* The integer/pointer conversions below accumulate their digits
+ * least-significant-first (successive `% base` remainders), so what
+ * they have on hand is the reverse of what belongs on the stream.
+ * n is always small: the widest case this is ever called with is a
+ * 64-bit value in octal, 22 digits, well under 32. */
+static void out_reversed(struct sink *sk, const char *digits, int n) __attribute__((nonnull(1, 2)));
+static void out_reversed(struct sink *sk, const char *digits, int n)
+{
+	char rev[32];
+	int i;
+	for (i = 0; i < n; i++) rev[i] = digits[n - 1 - i];
+	out(sk, rev, (size_t)n);
+}
+
 /* Emit n wide characters that came from a CALLER (%ls, %lc, or a %s
  * converted up into a wide sink).  Unlike out(), these can be anything,
  * so the ASCII shortcut it takes is not available here.
@@ -1385,17 +1399,17 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 					if (flags & 4) {
 						out(sk, prefix, (size_t)pn);
 						pad(sk, '0', (size_t)zpad);
-						{ char rev[sizeof digbuf]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(sk, rev, (size_t)dn); }
+						out_reversed(sk, digbuf, dn);
 						pad(sk, ' ', (size_t)padn);
 					} else if (zero) {
 						out(sk, prefix, (size_t)pn);
 						pad(sk, '0', (size_t)padn);
-						{ char rev[sizeof digbuf]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(sk, rev, (size_t)dn); }
+						out_reversed(sk, digbuf, dn);
 					} else {
 						pad(sk, ' ', (size_t)padn);
 						out(sk, prefix, (size_t)pn);
 						pad(sk, '0', (size_t)zpad);
-						{ char rev[sizeof digbuf]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(sk, rev, (size_t)dn); }
+						out_reversed(sk, digbuf, dn);
 					}
 				}
 				break;
@@ -1471,12 +1485,12 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 						int padn = width - (dn + rn); if (padn < 0) padn = 0;
 						if (flags & 4) {
 							out(sk, "0x", 2);
-							{ char b2[sizeof(uintptr_t)*2]; int i; for (i=0;i<rn;i++) b2[i]=rev[rn-1-i]; out(sk,b2,(size_t)rn); }
+							out_reversed(sk, rev, rn);
 							pad(sk, ' ', (size_t)padn);
 						} else {
 							pad(sk, ' ', (size_t)padn);
 							out(sk, "0x", 2);
-							{ char b2[sizeof(uintptr_t)*2]; int i; for (i=0;i<rn;i++) b2[i]=rev[rn-1-i]; out(sk,b2,(size_t)rn); }
+							out_reversed(sk, rev, rn);
 						}
 					}
 				}

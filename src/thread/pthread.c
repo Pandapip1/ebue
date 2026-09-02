@@ -482,6 +482,17 @@ int pthread_getattr_np(pthread_t thread, pthread_attr_t *attr)
 	return 0;
 }
 
+/* True if `thread` still names a live control block one of the
+ * scheduling accessors below may act on: not a stale/foreign pointer,
+ * not already join()ed away, and not a fully reclaimed (joined-in-
+ * spirit, handle closed) exited thread. Every accessor below opens with
+ * this same gate before touching `thread`'s fields. */
+static int thread_usable(pthread_t thread)
+{
+	return thread && thread->magic == PTHREAD_MAGIC && !thread->joined &&
+	       (thread->handle || !thread->exited);
+}
+
 static int valid_policy(int policy)
 {
 	return policy == SCHED_OTHER || policy == SCHED_FIFO ||
@@ -499,8 +510,7 @@ static int valid_priority(int policy, int priority) // NOLINT(bugprone-easily-sw
 int pthread_getschedparam(pthread_t thread, int *__restrict policy,
 	struct sched_param *__restrict parameter)
 {
-	if (!thread || thread->magic != PTHREAD_MAGIC || thread->joined ||
-	    (!thread->handle && thread->exited)) return ESRCH;
+	if (!thread_usable(thread)) return ESRCH;
 	if (!policy || !parameter) return EINVAL;
 	__plat_fast_lock();
 	*policy = thread->sched_policy;
@@ -512,8 +522,7 @@ int pthread_getschedparam(pthread_t thread, int *__restrict policy,
 int pthread_setschedparam(pthread_t thread, int policy,
 	const struct sched_param *parameter)
 {
-	if (!thread || thread->magic != PTHREAD_MAGIC || thread->joined ||
-	    (!thread->handle && thread->exited)) return ESRCH;
+	if (!thread_usable(thread)) return ESRCH;
 	if (!parameter || !valid_policy(policy) ||
 	    !valid_priority(policy, parameter->sched_priority)) return EINVAL;
 	__plat_fast_lock();
@@ -526,8 +535,7 @@ int pthread_setschedparam(pthread_t thread, int policy,
 int pthread_setschedprio(pthread_t thread, int priority)
 {
 	int policy;
-	if (!thread || thread->magic != PTHREAD_MAGIC || thread->joined ||
-	    (!thread->handle && thread->exited)) return ESRCH;
+	if (!thread_usable(thread)) return ESRCH;
 	policy = thread->sched_policy;
 	if (!valid_priority(policy, priority)) return EINVAL;
 	__plat_fast_lock();
@@ -538,8 +546,7 @@ int pthread_setschedprio(pthread_t thread, int priority)
 
 int pthread_getcpuclockid(pthread_t thread, clockid_t *clock)
 {
-	if (!thread || thread->magic != PTHREAD_MAGIC || thread->joined ||
-	    (!thread->handle && thread->exited)) return ESRCH;
+	if (!thread_usable(thread)) return ESRCH;
 	if (!clock) return EINVAL;
 	/* clock_gettime() maps this ID to NT CPU-time accounting.  The clock
 	 * implementation currently reports process aggregate time for it, but
