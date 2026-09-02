@@ -1117,6 +1117,41 @@ static int bi_write(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== at(1p)/batch(1p)/crontab(1p): deferred and scheduled jobs =========
+ *
+ * Same "also a real standalone obj/bin/<name>.exe, registered here so
+ * it works with no __find_program()/__spawn() dependency" reasoning
+ * as every other entry in this table -- see src/util/at.c,
+ * src/util/batch.c and src/util/crontab.c's own header comments for
+ * the real at(1p)/batch(1p)/crontab(1p) semantics each implements.
+ *
+ * atd and crond -- the daemons that actually run a submitted job or a
+ * crontab entry once it is due -- are deliberately NOT registered
+ * here at all: src/util/atd.c's and src/util/crond.c's own header
+ * comments explain why a long-lived background process is the one
+ * shape in this whole project that a shell builtin cannot honestly
+ * be. bin/atd.c and bin/crond.c are their only callers. */
+static int bi_at(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_at(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_at_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_batch(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_batch(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_batch_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_crontab(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_crontab(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_crontab_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* ==== the dispatcher ==================================================== */
 
 /* `special` is XCU 2.14's distinction, recorded because 2.8.1 hangs
@@ -1217,6 +1252,9 @@ static const struct sh_builtin builtins[] = {
 	{ "get",     0, 0, bi_get },
 	{ "mesg",    0, 0, bi_mesg },
 	{ "write",   0, 0, bi_write },
+	{ "at",      0, 0, bi_at },
+	{ "batch",   0, 0, bi_batch },
+	{ "crontab", 0, 0, bi_crontab },
 	{ 0, 0, 0, 0 }
 };
 

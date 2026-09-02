@@ -478,6 +478,30 @@ unsigned __util_sccs_checksum(const char *buf, size_t len) __attribute__((nonnul
 int __util_mesg_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_write_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* at(1p)/batch(1p)/crontab(1p), plus the two standalone-only daemons
+ * behind them (atd, crond -- not POSIX utilities themselves, no XCU
+ * page for either, the same "real infrastructure, no spec page to
+ * cite" status src/util/timeout.c already has). This is the one place
+ * in this header where two of the five entries below have no bi_*()
+ * twin in src/sh/builtin.c at all: __util_atd_main() and
+ * __util_crond_main() are each called only from their own
+ * bin/atd.c/bin/crond.c, never registered as a shell builtin --
+ * src/util/atd.c's and src/util/crond.c's own header comments explain
+ * why a long-lived daemon is a deliberate exception to this header's
+ * usual "shared by two callers" shape. at(1p)/batch(1p)/crontab(1p)
+ * themselves keep the ordinary two-caller shape: they only ever
+ * submit/list/edit a job and return immediately, so they are exactly
+ * as builtin-shaped as every other entry above.
+ *
+ * None of the five are __pure__: all five read and write real files
+ * in the job spool (src/util/spool.h), and the two daemons spawn and
+ * wait on real child processes besides. */
+int __util_at_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_batch_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_crontab_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_atd_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_crond_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 #endif
 
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

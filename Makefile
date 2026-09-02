@@ -741,6 +741,16 @@ obj/test/util-sccs.exe: obj/bin/admin.exe obj/bin/get.exe $(SH_EXE)
 # obj/sh/sh.exe -c, so both .exes plus the shell need to exist first.
 obj/test/util-mesg.exe: obj/bin/mesg.exe obj/bin/write.exe $(SH_EXE)
 
+# test/util-atcron.c: at(1p)/batch(1p)/crontab(1p) plus their two
+# scheduling daemons, atd and crond (src/util/atd.c, src/util/crond.c --
+# not shell builtins, see those files' own headers, so obj/bin/atd.exe
+# and obj/bin/crond.exe are this pair's *only* callers). This test
+# spawns obj/sh/sh.exe indirectly too (atd/crond both resolve `sh` via
+# PATH to run a job/crontab command -- see their own headers), so it
+# is a prerequisite here for the same reason it is everywhere else in
+# this file, even though no argv here ever names sh.exe directly.
+obj/test/util-atcron.exe: obj/bin/at.exe obj/bin/batch.exe obj/bin/crontab.exe obj/bin/atd.exe obj/bin/crond.exe $(SH_EXE)
+
 # test/delayall.c and its plugin DLL: proof that an *unmodified* program
 # (plain extern, ordinary call, no ntlibc-specific macro at the call
 # site) gets $ORIGIN delay loading through -Wl,--delay-all and
