@@ -46,6 +46,7 @@
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <sys/select.h>
 #include <sys/time.h>
@@ -121,6 +122,67 @@ static int child_self_stop(void)
 	raise(SIGUSR1);
 	/* Reached only after SIGCONT lets the handler return. */
 	for (;;) sleep_ms(1000);
+}
+
+/* Deliberately installs no handler for anything: this is the plain,
+ * default-disposition child exit.html's clause describes. SIGHUP's real
+ * kernel default action (Term) is exactly what proves a genuine SIGHUP
+ * was delivered -- src/signal/linux/sigdelivery.c's own stub means a
+ * real CAUGHT handler can only ever run for a signal that arrived
+ * through the named-pipe listener this platform does not implement yet
+ * (see signal.c's kill(), last-resort-arm comment), so testing the
+ * default action, not a handler, is the only observation this platform
+ * can actually make today -- and it is a faithful one: the kernel's own
+ * pidfd_send_signal(2) delivery (src/signal/linux/plat_signal.c's
+ * __plat_kill_terminate()) is real either way. Never reaps itself off
+ * this test's process tree on purpose: this process is deliberately
+ * orphaned by its own parent below, exactly the scenario under test. */
+static int child_hup_target(void)
+{
+	for (;;) sleep_ms(1000);
+}
+
+/* The middle process of the three-process chain
+ * test_orphaned_stop_gets_real_sighup() below drives: spawns
+ * child_hup_target() as ITS OWN child (recorded in this process's own
+ * src/process/children.c table), stops it for real with kill(...,
+ * SIGSTOP), and then exits without ever resuming it itself -- the exact
+ * "orphaning a stopped child" moment exit.html's clause and
+ * src/process/children.c's clear_stops() describe.  `self` is this
+ * process's own argv[0], forwarded so it can re-exec itself for the
+ * grandchild the same way spawn_child() does at the top level.
+ *
+ * The grandchild is never this process's own parent's child either, so
+ * the top-level test cannot waitpid() it directly; its pid is reported
+ * back over this process's own stdout instead (redirected to a file by
+ * the top-level test before this process was ever spawned -- the same
+ * dup2()-around-__spawn() technique test/sh-main.c's run_sh() uses for
+ * real redirection, and __spawn() inheriting the fd table as-is, same
+ * file's own comment, is what makes that redirection visible here). */
+static int child_stop_and_orphan(const char *self)
+{
+	char *argv[3];
+	pid_t pid;
+	char buf[16];
+	int n;
+
+	argv[0] = (char *)self;
+	argv[1] = (char *)"--child-hup-target";
+	argv[2] = NULL;
+	pid = __spawn(self, argv, environ);
+	if (pid <= 0) return 95;
+	n = snprintf(buf, sizeof buf, "%d\n", (int)pid);
+	if (n > 0) write(STDOUT_FILENO, buf, (size_t)n);
+	sleep_ms(STARTUP_GRACE_MS);
+	if (kill(pid, SIGSTOP) != 0) return 96;
+	/* Let the real kernel-level stop actually land before this process
+	 * exits -- __child_resume_stopped() only acts on a child this
+	 * process's own table already records as stopped. */
+	sleep_ms(200);
+	return 0;
+	/* __nt_exit(), reached from the return above through exit(), sends
+	 * SIGHUP (where deliverable) then SIGCONT to the still-stopped
+	 * child on the way out -- see src/process/children.c. */
 }
 
 /* The positive case: a real handler, installed with sigaction(), must
@@ -562,6 +624,108 @@ static void test_no_listener_does_not_hang(const char *self)
 	describe("post-race child", status);
 }
 
+#ifdef __linux__
+/* /proc/pid/stat's state field: 'Z' once a process has actually
+ * terminated but not yet been reaped (its new parent, after
+ * reparenting off the process that orphaned it, may take a while to
+ * get around to that -- unlike kill(pid, 0), which a lingering zombie
+ * still answers success for, this tells "genuinely dead" apart from
+ * "still running" without waiting on that). A pid /proc no longer has
+ * an entry for at all counts the same as 'Z': reaped is also dead. The
+ * comm field is skipped past its own closing ')' rather than assumed
+ * to start at a fixed column, because it can itself contain spaces or
+ * parentheses (proc(5)). */
+static int pid_is_dead(pid_t pid)
+{
+	char path[64], buf[256], *p;
+	FILE *f;
+
+	snprintf(path, sizeof path, "/proc/%d/stat", (int)pid);
+	f = fopen(path, "r");
+	if (!f) return 1;
+	if (!fgets(buf, sizeof buf, f)) { fclose(f); return 1; }
+	fclose(f);
+	p = strrchr(buf, ')');
+	if (!p) return 0;
+	p++;
+	while (*p == ' ') p++;
+	return *p == 'Z';
+}
+
+/* exit.html CONSEQUENCES OF PROCESS TERMINATION: a stopped child left
+ * behind by an exiting process must get SIGHUP before SIGCONT.  Only
+ * Linux delivers that SIGHUP as a real signal, applying the child's own
+ * kernel-level disposition, instead of being forced through the
+ * destroy-the-child NT fallback -- see src/process/children.c's own
+ * comment and __plat_sig_deliverable_to_other_process() (src/internal/
+ * plat_signal.h) -- so this only means anything, and only runs, here.
+ *
+ * Three processes deep, all via __spawn(): this process spawns
+ * child_stop_and_orphan() (M), which spawns and stops
+ * child_hup_target() (G) and then exits without resuming it, orphaning
+ * a stopped G exactly as the clause describes. G is never this
+ * process's own child (M's is the pid table __child_resume_stopped()
+ * acts on), so it cannot be waitpid()'d here: it reports its own pid
+ * back over M's stdout instead (redirected to a file before M was
+ * spawned -- see child_stop_and_orphan()'s own comment), and the
+ * assertion below is pid_is_dead() on that pid rather than a wait
+ * status. G installs no handler for anything (see child_hup_target()'s
+ * own comment on why that, not a caught signal, is what this platform
+ * can actually prove today): a real SIGHUP's default action (Term) is
+ * what should end it. Before this fix, only SIGCONT ever reached a
+ * stopped child on the way out, and G would still be sitting in its own
+ * sleep_ms() loop, never stopped from running by anything. */
+#define SIGHUP_MARKER_FILE "posix-signal-crossproc-sighup.txt"
+static void test_orphaned_stop_gets_real_sighup(const char *self)
+{
+	char *argv[3];
+	pid_t pid;
+	pid_t gpid = 0;
+	int status, out, saved_out;
+	FILE *f;
+
+	unlink(SIGHUP_MARKER_FILE);
+	out = open(SIGHUP_MARKER_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (out < 0) { CHECK(0 && "marker file open failed"); return; }
+	saved_out = dup(STDOUT_FILENO);
+	dup2(out, STDOUT_FILENO);
+	close(out);
+
+	argv[0] = (char *)self;
+	argv[1] = (char *)"--child-stop-and-orphan";
+	argv[2] = NULL;
+	pid = __spawn(self, argv, environ);
+
+	dup2(saved_out, STDOUT_FILENO);
+	close(saved_out);
+
+	if (pid <= 0) { CHECK(0 && "spawn failed"); return; }
+	CHECK(waitpid(pid, &status, 0) == pid);
+	describe("stop-and-orphan middle process", status);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+	f = fopen(SIGHUP_MARKER_FILE, "r");
+	if (f) { if (fscanf(f, "%d", &gpid) != 1) gpid = 0; fclose(f); }
+	unlink(SIGHUP_MARKER_FILE);
+	CHECK(gpid > 0);
+	if (gpid <= 0) return;
+
+	/* Real SIGHUP delivery races this process's own scheduling, same as
+	 * every other STARTUP_GRACE_MS wait in this file -- it happens only
+	 * after M has already exited and been reaped above, not before. */
+	sleep_ms(500);
+
+	CHECK(pid_is_dead(gpid));
+
+	/* Best-effort cleanup for the case just above that failed: leave
+	 * nothing running past this test either way. Not this process's own
+	 * child, so there is no corresponding waitpid() to reap it with;
+	 * the same tolerance test/posix-realtime-linux.c's own banner
+	 * documents for a leaked, reparented process. */
+	kill(gpid, SIGKILL);
+}
+#endif
+
 int main(int argc, char **argv)
 {
 	if (argc > 1) {
@@ -574,6 +738,8 @@ int main(int argc, char **argv)
 		if (!strcmp(argv[1], "--child-sigttin")) return child_job_signal_eintr(SIGTTIN);
 		if (!strcmp(argv[1], "--child-sigttou")) return child_job_signal_eintr(SIGTTOU);
 		if (!strcmp(argv[1], "--child-self-stop")) return child_self_stop();
+		if (!strcmp(argv[1], "--child-hup-target")) return child_hup_target();
+		if (!strcmp(argv[1], "--child-stop-and-orphan")) return child_stop_and_orphan(argv[0]);
 		if (!strcmp(argv[1], "--child-sigsuspend")) return child_sigsuspend();
 		if (!strcmp(argv[1], "--child-sigwait")) return child_sigwait();
 		if (!strcmp(argv[1], "--child-nanosleep")) return child_nanosleep();
@@ -601,6 +767,9 @@ int main(int argc, char **argv)
 	test_remote_wait_interface(argv[0], "--child-clock-nanosleep", SIGABRT,
 	                           "remote clock_nanosleep EINTR");
 	test_no_listener_does_not_hang(argv[0]);
+#ifdef __linux__
+	test_orphaned_stop_gets_real_sighup(argv[0]);
+#endif
 
 	if (fails) printf("posix-signal-crossproc: %d failure(s)\n", fails);
 	else printf("posix-signal-crossproc: ok\n");

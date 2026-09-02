@@ -278,6 +278,35 @@ void __plat_sig_sync_kernel(int sig, int ignore);
  * as before this function existed. */
 void __plat_sig_default_terminate(int sig);
 
+/* ---- children.c -------------------------------------------------------- */
+
+/* Can kill(pid, SIGHUP) to some OTHER process actually deliver a real
+ * SIGHUP there -- applying THAT process's own real disposition for it --
+ * instead of being forced through __plat_kill_terminate()'s
+ * unconditional-destroy fallback (NT's only option -- see kill()'s own
+ * comment in src/signal/signal.c)?  The one caller is children.c's
+ * clear_stops(): exit.html's orphaned-stopped-process-group clause wants
+ * SIGHUP before SIGCONT, but only where sending it is not itself the
+ * strictly-worse outcome the clause is trying to avoid -- see the big
+ * comment above __child_resume_stopped() for the full reasoning on both
+ * platforms.
+ *
+ * True on Linux: kill()'s own last-resort arm reaches
+ * __plat_kill_terminate(), which sends a genuine pidfd_send_signal(2) of
+ * the real signal number, applying whatever real KERNEL-level
+ * disposition the TARGET process itself last synced for it
+ * (__plat_sig_sync_kernel(), this header's own comment) -- SIG_IGN is a
+ * real no-op, SIG_DFL runs the real default action (Term, for SIGHUP).
+ * A process-level function-pointer handler is not one of those two
+ * synced dispositions, so it does not run this way -- catching a signal
+ * sent by ANOTHER process needs the named-pipe listener signal.c's
+ * kill() tries first, not yet implemented on Linux (see that function's
+ * own last-resort-arm comment) -- so a target that caught SIGHUP itself
+ * but never told the kernel still only ever sees SIG_DFL here. False on
+ * NT, where that same fallback is NtTerminateProcess unconditionally
+ * regardless of disposition. */
+int __plat_sig_deliverable_to_other_process(void);
+
 #endif
 
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

@@ -272,4 +272,15 @@ void __plat_sig_default_terminate(int sig)
 	(void)sig;
 }
 
+/* No catchable cross-process signal exists on NT -- kill()'s own
+ * last-resort arm (src/signal/signal.c) reaches __plat_kill_terminate()
+ * above, which is NtTerminateProcess unconditionally, not a real signal
+ * delivery.  See this function's plat_signal.h comment: children.c's
+ * clear_stops() uses this to skip SIGHUP rather than destroy a child
+ * that may have caught it. */
+int __plat_sig_deliverable_to_other_process(void)
+{
+	return 0;
+}
+
 // NOLINTEND(misc-include-cleaner)
