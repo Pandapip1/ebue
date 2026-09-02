@@ -214,6 +214,38 @@ int __plat_kill_terminate(__plat_handle_t h, int exitcode);
  * MEM_COMMIT/Protect reasoning. */
 int __plat_segv_code(void *addr);
 
+/* Synchronize `sig`'s disposition with the real, kernel-level signal
+ * disposition, for the two dispositions the kernel already implements
+ * entirely on its own with no userspace callback at all: SIG_IGN
+ * (`ignore` nonzero) and SIG_DFL (`ignore` zero). signal()/sigaction()
+ * (src/signal/signal.c) call this on every disposition change, so that a
+ * signal the KERNEL itself can raise synchronously out of a syscall --
+ * SIGPIPE from write() to a reader-less pipe is the motivating case, see
+ * src/unistd/linux/plat_fd.c's own banner -- is actually ignored/restored
+ * to default at the point the kernel decides whether to act, rather than
+ * always running the kernel's inherited-at-exec disposition regardless of
+ * what this library's own handlers[] table says.
+ *
+ * Deliberately narrower than "make signal() work on Linux": a real
+ * user-defined handler is NOT installed at the kernel level by this call
+ * (or by anything else yet) -- doing that needs a real
+ * rt_sigaction(2)-installed entry point with its own sigreturn trampoline,
+ * disclosed and left for later exactly where src/signal/linux/
+ * sigdelivery.c's own banner already discloses the identical gap on the
+ * delivery side. A signal caught by a real ntlibc handler still only
+ * fires for what this library synthesizes itself -- raise(), abort(), a
+ * hardware fault turned into a signal, kill() to self (see signal.c's own
+ * header comment) -- exactly as before this function existed; this call
+ * only ever asks the kernel for SIG_IGN or SIG_DFL, never a function
+ * pointer, so no trampoline is ever needed.
+ *
+ * No-op where there is no real kernel signal delivery to synchronize
+ * with in the first place (the NT backend, which already gets this
+ * right by construction: every signal reaching __raise_internal() on NT
+ * was synthesized by this library, which always consults handlers[]
+ * itself -- see src/signal/nt/plat_signal.c's own definition). */
+void __plat_sig_sync_kernel(int sig, int ignore);
+
 #endif
 
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

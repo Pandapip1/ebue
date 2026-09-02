@@ -251,4 +251,16 @@ int __plat_segv_code(void *addr)
 	return mbi.State == MEM_COMMIT ? SEGV_ACCERR : SEGV_MAPERR;
 }
 
+/* No real kernel-level signal disposition exists to synchronize with on
+ * NT -- see this header's own comment on this function: every signal
+ * reaching __raise_internal() here was already synthesized by this
+ * library (an NT exception turned into one by exception_handler(), or
+ * a direct raise()/kill()-to-self/plat_fd.c SIGPIPE call), and every one
+ * of those call sites already reads handlers[] itself before deciding
+ * anything. */
+void __plat_sig_sync_kernel(int sig, int ignore)
+{
+	(void)sig; (void)ignore;
+}
+
 // NOLINTEND(misc-include-cleaner)
