@@ -146,10 +146,18 @@
  *    statement, instead lets any *later* argument of that same
  *    statement still evaluate before the statement bails).
  *  - Allocation failure anywhere in the parser or interpreter is
- *    treated as fatal (a diagnostic plus exit(2)) rather than threaded
- *    back through every one of this utility's many mutually-recursive
- *    functions as a real error return -- see awk_parse.c's and
- *    awk_run.c's own headers.
+ *    treated as fatal (a diagnostic plus an unwind back to here --
+ *    NOT a raw exit(2): see this file's own __util_awk_main() and
+ *    awk_priv.h's "fatal-error unwind" header comment for why bi_awk()
+ *    running as a no-fork shell built-in makes that distinction load-
+ *    bearing) rather than threaded back through every one of this
+ *    utility's many mutually-recursive functions as a real error
+ *    return -- see awk_parse.c's and awk_run.c's own headers.  The
+ *    same unwind now also catches every OTHER fatal runtime condition
+ *    awk_run.c's fatal()/oom() cover (division by zero, a scalar/array
+ *    type clash, an undefined function call, an invalid dynamic ERE, a
+ *    failed output redirect open) -- none of them exit()s the process
+ *    either, for the same reason.
  *
  * tolower()/toupper() ARE implemented -- they are XCU awk(1p)'s own
  * mandatory string functions, not an extension, despite the task
@@ -167,13 +175,33 @@
 
 struct vassign { char *name, *val; };
 
+/* The one definition of the fatal-error unwind target awk_priv.h
+ * declares extern -- see that header's own long comment for the full
+ * design. Defined here because __util_awk_main() below is the only
+ * function that ever calls setjmp() on it. */
+jmp_buf awk_fatal_env;
+static int awk_fatal_armed;
+
+void awk_unwind_fatal(void)
+{
+	if (awk_fatal_armed) longjmp(awk_fatal_env, 1);
+	/* No __util_awk_main() call is on the stack to catch this (e.g. a
+	 * direct awk_parse_program() call, the way fuzz/fuzz_awk.c's own
+	 * harness makes one to pre-check a program before deciding whether
+	 * to run it) -- see awk_priv.h's own comment on awk_fatal_armed.
+	 * Falling back to the historical diagnostic-plus-exit(2) behavior
+	 * is still correct for that caller; only __util_awk_main() itself
+	 * needs (and gets) the non-exiting path. */
+	exit(2);
+}
+
 static void buf_grow_append(char **buf, size_t *len, size_t *cap, const char *s, size_t n)
 {
 	if (*len + n + 1 > *cap) {
 		size_t newcap = *cap ? *cap * 2 : 256;
 		while (newcap < *len + n + 1) newcap *= 2;
 		*buf = realloc(*buf, newcap);
-		if (!*buf) { __util_diagf("awk: out of memory\n"); exit(2); }
+		if (!*buf) { __util_diagf("awk: out of memory\n"); awk_unwind_fatal(); }
 		*cap = newcap;
 	}
 	memcpy(*buf + *len, s, n);
@@ -289,17 +317,32 @@ int __util_awk_main(int argc, char **argv)
 		}
 	}
 
+	/* ---- fatal-error unwind: armed once here, covers every phase below
+	 * (loading -f progfiles, parsing, running) without separate per-
+	 * phase machinery -- see awk_priv.h's own long comment on
+	 * awk_fatal_env/awk_unwind_fatal() for the full design, including
+	 * why the catching branch below deliberately touches nothing but
+	 * awk_fatal_armed and a hardcoded status (ip/prog/progtext are
+	 * ordinary, non-volatile locals modified after this setjmp(), so
+	 * touching them from here would itself be undefined behavior --
+	 * see that same comment's point 3). */
+	if (setjmp(awk_fatal_env)) {
+		awk_fatal_armed = 0;
+		return 2;
+	}
+	awk_fatal_armed = 1;
+
 	if (have_f) {
 		progtext = load_progfiles(progfiles, nprogfiles);
-		if (!progtext) return 2;
+		if (!progtext) { awk_fatal_armed = 0; return 2; }
 	} else {
-		if (i >= argc) { __util_diagf("awk: missing program text\n"); return 2; }
+		if (i >= argc) { __util_diagf("awk: missing program text\n"); awk_fatal_armed = 0; return 2; }
 		progtext = argv[i];
 		i++;
 	}
 
 	prog = awk_parse_program(progtext);
-	if (!prog) return 2;
+	if (!prog) { awk_fatal_armed = 0; return 2; }
 
 	awk_interp_init(&ip, prog);
 	awk_interp_setup_environ(&ip, environ);
@@ -324,5 +367,6 @@ int __util_awk_main(int argc, char **argv)
 	 * src/util/sort.c's own free_lines() -- sort frees because it may
 	 * run again in the same process's loop in principle; awk's own
 	 * program is parsed exactly once per process). */
+	awk_fatal_armed = 0;
 	return status;
 }

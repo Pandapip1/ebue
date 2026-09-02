@@ -23,6 +23,135 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <regex.h>
+#include <setjmp.h>
+
+/* ==== fatal-error unwind (never exit()/_exit() as a shell builtin) ======
+ *
+ * src/internal/util.h's own header states the contract every
+ * __util_<name>_main() must meet to be safe as a no-fork src/sh/
+ * builtin.c built-in: bi_awk() calls __util_awk_main() directly,
+ * in-process, so an exit()/_exit() reached anywhere underneath it would
+ * tear down the WHOLE interactive shell over one bad awk program, not
+ * just the one command -- exactly the failure mode src/util/dd.c's own
+ * header describes for its SIGINT handler and src/internal/util.h
+ * documents by name for ed(1p)/m4(1p) ("neither ever calls exit()/
+ * _exit() internally ... unwinds back to an ordinary return ... instead").
+ *
+ * ed and m4 get away with a cooperative flag (their own exit_pending-
+ * style state, checked after every statement) because their "exit" is
+ * an in-language construct with a natural place to check it on the way
+ * back up -- exactly the shape awk's OWN next/exit already has via
+ * ip->unwind (see this header's struct awk_interp comment and
+ * awk_run.c's header). A C-level FATAL condition is a different
+ * problem: it can originate from allocation failure inside any one of
+ * awk_parse.c's ~40 mutually-recursive parse_*() functions -- before
+ * any struct awk_interp even exists to hold a cooperative flag -- or
+ * from awk_run.c's tree-walking eval()/exec_stmt(), which is exactly
+ * as deeply, mutually recursively nested. Threading a real error return
+ * through either call graph is the alternative src/util/awk.c's and
+ * awk_parse.c's own headers already declined for allocation failure
+ * specifically (see "ALLOCATION FAILURE" in each), for the same
+ * reason: ~40+ call sites, no natural per-frame owner for a half-built
+ * AST or a half-evaluated expression tree. setjmp/longjmp is the
+ * pragmatic middle ground used here instead: it gets the "never exit()"
+ * safety property these other conditions now also need (division by
+ * zero, an undefined function call, an invalid dynamic regex, a failed
+ * output redirect open -- see awk_run.c's own fatal()/oom() call sites)
+ * without rewriting either call graph to thread error returns.
+ *
+ * WHERE THE jmp_buf LIVES: a single file-scope jmp_buf, defined once in
+ * awk.c (which owns __util_awk_main(), the only function that ever
+ * calls setjmp() on it) and declared extern here so awk_parse.c and
+ * awk_run.c's own oom()/fatal() helpers can reach the same target via
+ * awk_unwind_fatal() below. A per-struct-awk_interp jmp_buf (a field on
+ * awk_priv.h's own struct awk_interp) was considered and rejected: the
+ * parser's own oom() can fire before awk_interp_init() has even run
+ * (see __util_awk_main()'s own body), so an interp-scoped jmp_buf
+ * simply would not exist yet for exactly the failure this exists to
+ * catch. Threading a jmp_buf pointer down through every parse_*()/
+ * eval()/exec_stmt() call as an extra parameter was the other
+ * alternative and was rejected for the same "~40+ call sites, no
+ * natural place to add a parameter" reason allocation failure's own
+ * threaded-return alternative was rejected above -- this tree has no
+ * other "shared unwind target across translation units" precedent to
+ * follow (grep confirms: every other setjmp/longjmp in this tree is
+ * either this libc's OWN setjmp()/longjmp() implementation under
+ * src/setjmp/, or an unrelated register-capture use in src/process/
+ * fork.c), so this is a new pattern, recorded here rather than left
+ * undocumented.
+ *
+ * awk_fatal_armed guards against the one caller this fix does NOT cover
+ * by design: something that calls awk_parse_program() (or, in
+ * principle, any other awk_priv.h entry point) directly, WITHOUT going
+ * through __util_awk_main()'s own setjmp() -- fuzz/fuzz_awk.c's own
+ * harness does exactly this, parsing once up front to decide whether a
+ * program is safe to run at all, before __util_awk_main() parses the
+ * same text a second time. Calling longjmp() on a jmp_buf nothing has
+ * armed is undefined behavior (there is no matching stack frame to
+ * resume), strictly worse than the plain exit(2) this project already
+ * used to do -- so awk_unwind_fatal() checks the flag and falls back to
+ * the OLD diagnostic-plus-exit(2) behavior whenever no __util_awk_main()
+ * call is currently on the stack, and only longjmp()s when one is.
+ * __util_awk_main() itself is therefore unaffected either way; every
+ * OTHER caller keeps exactly the pre-existing contract.
+ *
+ * MEMORY (AND FILE DESCRIPTORS) ACROSS THE LONGJMP: deliberately NOT
+ * unwound. A longjmp out of the middle of parsing or running one awk
+ * program abandons whatever that one invocation had allocated so far
+ * (cells, AST nodes, hash table storage) -- and, if the program had
+ * already reached a `print > "file"`/`print | cmd` before the fatal
+ * condition, any FILE* it opened into ip->streams too, unclosed. Three
+ * things make this an acceptable, disclosed scope line rather than a
+ * hidden defect, matching this project's own house style of disclosing
+ * a real tradeoff instead of hiding it (src/util/dd.c's SIGINT header,
+ * src/util/awk.c's own "deliberately never freed" note on the parsed
+ * program):
+ *
+ *   1. src/util/awk.c's __util_awk_main() ALREADY never frees the
+ *      parsed program (AST, compiled literal EREs) even on its normal,
+ *      successful return path -- see that file's own comment there.
+ *      The longjmp path leaking the SAME category of memory, plus
+ *      (only on this path) the struct awk_interp built so far, is
+ *      strictly more of the same already-accepted shape, not a new one.
+ *   2. What leaks is bounded BY ONE AWK PROGRAM's worth of state, not
+ *      by input size or iteration count: a fatal condition stops that
+ *      program immediately (no partial loop can keep allocating after
+ *      it), so one bi_awk() call that hits a fatal condition leaks a
+ *      bounded amount once, not an amount proportional to how long the
+ *      program would otherwise have run.
+ *   3. The alternative -- attempting real cleanup (free the interp's
+ *      hash tables, close its open streams) from the setjmp()-catching
+ *      branch -- runs into the C standard's own automatic-storage-
+ *      across-longjmp rule (C11 6.8.6.1p1's non-volatile-locals-are-
+ *      indeterminate clause): __util_awk_main()'s own `ip` is modified
+ *      between the setjmp() call and any later longjmp(), so touching
+ *      it from the catching branch at all is undefined behavior unless
+ *      it is declared volatile -- and a struct this large and this
+ *      pointer-heavy, accessed through a volatile qualifier, would
+ *      infect every awk_interp_*() call site that ever touches it with
+ *      the same qualifier. Given (1) and (2) already bound the actual
+ *      cost, that infrastructure was judged not worth it; the
+ *      setjmp()-catching branch below touches NOTHING but the
+ *      awk_fatal_armed flag and a hardcoded status, specifically so it
+ *      never needs to.
+ *
+ * This is a real, disclosed tradeoff, not an oversight: an awk program
+ * that repeatedly triggers a fatal condition as a shell built-in, in a
+ * long-running interactive shell, does accumulate leaked memory (and,
+ * rarely, file descriptors) over the session -- but bounded per
+ * occurrence, not unbounded per occurrence, and a fatal condition here
+ * (division by zero, an undefined function, a bad dynamic regex, a
+ * failed output redirect, out-of-memory) is by construction a
+ * programming mistake in the awk source, not a routine outcome of
+ * ordinary use.
+ */
+extern jmp_buf awk_fatal_env;
+/* Ends whichever awk phase called it, without exit()/_exit(), by
+ * unwinding to __util_awk_main()'s own setjmp(awk_fatal_env) -- see this
+ * header's own comment above. The caller is expected to have already
+ * printed its own "awk: ..." diagnostic (matching every existing oom()/
+ * fatal() helper's own behavior) before calling this. Never returns. */
+void awk_unwind_fatal(void) __attribute__((noreturn));
 
 /* ==== string-keyed hash table ===========================================
  *

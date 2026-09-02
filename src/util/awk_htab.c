@@ -11,10 +11,18 @@
  */
 #include <stdlib.h>
 #include <string.h>
+#include <features.h>
 #include "awk_priv.h"
 #include "util.h"
 
-static size_t fnv1a(const char *s)
+/* `h *= 16777619u` is an intentional, correct multiplicative overflow
+ * (wraparound) -- FNV-1a's whole definition is modular arithmetic over
+ * size_t's own range, the same "this specific arithmetic wraparound is
+ * intentional" case src/search/hsearch.c's own hash_str() and
+ * src/stdlib/rand48.c's step() both mark __wraps for, so this is too
+ * (this project's INTSAN lint policy would otherwise flag the multiply
+ * as an unannotated, and therefore suspicious, overflow). */
+__wraps static size_t fnv1a(const char *s)
 {
 	size_t h = 2166136261u;
 	while (*s) { h ^= (unsigned char)*s++; h *= 16777619u; }
