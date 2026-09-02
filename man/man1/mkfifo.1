@@ -1,0 +1,69 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH MKFIFO 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+mkfifo \- make FIFO special files
+.SH SYNOPSIS
+.B mkfifo
+.RB [ \-m
+.IR mode ]
+.I file
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B mkfifo
+creates a FIFO special file (a named pipe) for each
+.I file
+operand named on the command line. Multiple operands are processed in
+turn; an error on one operand does not stop the rest from being
+attempted.
+.PP
+On a native Linux build, this creates a real FIFO. On a Windows build,
+creating a FIFO always fails: the underlying platform provides no
+filesystem object that FIFO semantics can be mapped onto, so every
+.I file
+operand fails with a "not implemented" diagnostic. This applies even
+when
+.B \-m
+is given; the mode argument is still fully parsed and validated before
+any operand is attempted, so a malformed
+.B \-m
+argument is still reported as a usage error rather than being masked
+by the platform failure.
+.SH OPTIONS
+.TP
+.BI \-m " mode"
+Set the file permission bits of each newly-created FIFO to
+.IR mode ,
+using the same
+.I mode
+grammar as
+.BR chmod (1).
+In symbolic-mode strings, the
+.B +
+and
+.B \-
+operators are interpreted relative to an assumed initial mode of
+.B a=rw
+(not
+.BR a=rwx :
+a FIFO is not given execute permission by default).
+.SH OPERANDS
+.TP
+.I file
+A pathname of a FIFO special file to be created.
+.SH EXIT STATUS
+.TP
+.B 0
+All the specified FIFO special files were created successfully.
+.TP
+.B >0
+An error occurred: an invalid option, a missing operand, a missing
+.B \-m
+argument, an invalid
+.I mode
+operand, or a failure creating one or more of the named FIFOs (which,
+on a Windows build, is every named FIFO). Processing continues with
+the next operand after a creation failure.
+.SH SEE ALSO
+.BR chmod (1),
+.BR mkdir (1)

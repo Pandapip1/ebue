@@ -1,0 +1,110 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH MV 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+mv \- move files
+.SH SYNOPSIS
+.B mv
+.RB [ \-f ]
+.I source target
+.br
+.B mv
+.RB [ \-f ]
+.I source
+.RI [ source ]\ .\|.\|.
+.I target_dir
+.SH DESCRIPTION
+.B mv
+moves
+.I source
+to
+.IR target ,
+or, if more than one
+.I source
+is given (or a single
+.I source
+is given together with a
+.I target
+that already exists as a directory), moves each
+.I source
+into
+.I target_dir
+under its own final pathname component. It is an error for more than
+one
+.I source
+to be given when the last operand does not name an existing directory.
+.PP
+Each move is attempted first as an atomic rename. If that fails
+because the source and destination are on different filesystems or
+volumes,
+.B mv
+falls back to copying
+.I source
+to
+.I target
+and then removing
+.IR source .
+Any other rename failure is reported as-is, with no fallback attempted.
+.PP
+When the cross-filesystem fallback is used and the source is a
+directory, the whole tree is copied and then removed; if the copy
+succeeds but the original tree cannot be fully removed afterward, this
+is reported as a distinct condition (the destination now holds a
+complete copy, but the source was left partially in place) rather than
+as an ordinary copy or removal failure. When the fallback is used and
+the source is a symbolic link, the move is refused with a diagnostic:
+recreating a symbolic link's own target correctly across a
+cross-filesystem move is not implemented, and copying the link's
+referent instead would silently change what is being moved. This
+limitation applies only to the cross-filesystem fallback; within a
+single filesystem the atomic rename step, which is always tried first,
+moves a symbolic link correctly.
+.SH OPTIONS
+.TP
+.B \-f
+Accepted, but is a genuine no-op in this build:
+.B \-f
+'s standard meaning is "do not prompt for confirmation before
+overwriting", and this build never prompts (see
+.B \-i
+below), so there is nothing left for
+.B \-f
+to suppress.
+.TP
+.B \-i
+Not implemented.
+.B mv
+prints a diagnostic and exits immediately with status 2 rather than
+move a file without ever having prompted for confirmation.
+.SH OPERANDS
+.TP
+.I source
+A pathname of a file or directory to move.
+.TP
+.I target
+A pathname for the destination, used in the exactly-one-source form.
+.TP
+.I target_dir
+A pathname of an existing directory, used when moving one or more
+source operands into it under their own basenames.
+.SH EXIT STATUS
+.TP
+.B 0
+Every operand was moved successfully.
+.TP
+.B 1
+An error occurred while moving one or more operands; the rest of the
+operands were still attempted.
+.TP
+.B 2
+A usage error occurred: an invalid option, a missing operand, a
+missing destination operand, or more than one
+.I source
+given with a
+.I target
+that is not an existing directory. No moving is attempted in this
+case.
+.SH SEE ALSO
+.BR cp (1),
+.BR rm (1),
+.BR ln (1)

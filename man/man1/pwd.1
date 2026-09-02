@@ -1,0 +1,47 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH PWD 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+pwd \- return working directory name
+.SH SYNOPSIS
+.B pwd
+.RB [ \-L | \-P ]
+.SH DESCRIPTION
+.B pwd
+writes an absolute pathname of the current working directory to
+standard output, followed by a newline.
+.PP
+.B pwd
+takes no operands; giving it any operand at all is an error.
+.SH OPTIONS
+.TP
+.B \-L
+Accepted. Has the same effect as no option at all (see
+.B \-P
+below).
+.TP
+.B \-P
+Accepted. The pathname written contains no components that refer to
+symbolic links, because it is obtained directly from the operating
+system rather than from any shell-tracked notion of the current
+directory; this is also what happens with no option, and with
+.B \-L
+, so all three cases behave identically.
+.SH EXIT STATUS
+.TP
+.B 0
+The pathname of the current working directory was written
+successfully.
+.TP
+.B 1
+The current working directory could not be determined, or writing the
+pathname to standard output failed.
+.TP
+.B 2
+An operand, or an option other than
+.B \-L
+or
+.BR \-P ,
+was given.
+.SH SEE ALSO
+.BR realpath (1)

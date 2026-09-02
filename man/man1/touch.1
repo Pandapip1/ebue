@@ -1,0 +1,160 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH TOUCH 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+touch \- change file access and modification times
+.SH SYNOPSIS
+.B touch
+.RB [ \-acm ]
+.RB [ \-r
+.I ref_file
+.RB | \-t
+.IR time ]
+.I file
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B touch
+updates the access and/or modification times of each
+.I file
+operand, to the current time unless
+.B \-r
+or
+.B \-t
+is given. Multiple operands are processed in turn; an error on one
+operand does not stop the rest from being attempted.
+.PP
+If a
+.I file
+operand does not name an existing file, it is created (as an empty,
+ordinary file with the platform's default permissions) unless
+.B \-c
+is given, in which case that operand is skipped entirely, with no
+diagnostic and no effect on the exit status.
+.SH OPTIONS
+.TP
+.B \-a
+Change the access time of
+.IR file .
+Do not change the modification time unless
+.B \-m
+is also given.
+.TP
+.B \-m
+Change the modification time of
+.IR file .
+Do not change the access time unless
+.B \-a
+is also given.
+.IP
+If neither
+.B \-a
+nor
+.B \-m
+is given, or both are given, both times are changed.
+.TP
+.B \-c
+Do not create a
+.I file
+operand that does not already exist, and do not write a diagnostic or
+count it as a failure when this happens.
+.TP
+.BI \-r " ref_file"
+Use
+.IR ref_file 's
+own access and modification times instead of the current time.
+Mutually exclusive with
+.BR \-t .
+.TP
+.BI \-t " time"
+Use the explicit
+.I time
+instead of the current time, given as
+\fI[[CC]YY]MMDDhhmm[.SS]\fR
+\(em all-numeric fields, each exactly two digits except the optional
+leading century/year prefix. Mutually exclusive with
+.BR \-r .
+.RS
+.TP
+.I MM
+Month, 01\-12.
+.TP
+.I DD
+Day of month, 01\-31.
+.I DD
+is only range-checked against 01\-31; it is not validated against
+the number of days in
+.IR MM 's
+month.
+.TP
+.I hh
+Hour, 00\-23.
+.TP
+.I mm
+Minute, 00\-59.
+.TP
+.I SS
+Seconds, 00\-60, if the optional
+.B .
+.I SS
+suffix is given; 00 otherwise.
+.TP
+.I YY
+Year within century, if given without
+.IR CC .
+A
+.I YY
+of 69\-99 means 1900+\c
+.IR YY ;
+a
+.I YY
+of 00\-68 means 2000+\c
+.IR YY .
+.TP
+.I CC
+Century, if given. Combined with
+.I YY
+as
+.RI ( CC " times 100) + " YY .
+.PP
+If neither
+.I CC
+nor
+.I YY
+is given (a bare
+.IR MMDDhhmm ),
+the current year is used.
+.RE
+.TP
+.B \-d
+Not implemented.
+.B touch
+prints a diagnostic and exits immediately with status 1 rather than
+parse only part of the ISO\ 8601 date/time grammar this option is
+conventionally given.
+.SH OPERANDS
+.TP
+.I file
+A pathname of a file whose access and/or modification time is to be
+changed (and, ordinarily, created if missing).
+.SH EXIT STATUS
+.TP
+.B 0
+The utility executed successfully and all requested changes were made.
+.TP
+.B >0
+An error occurred: an invalid option, a missing operand, a missing
+.B \-r
+or
+.B \-t
+argument, both
+.B \-r
+and
+.B \-t
+given together, an invalid
+.B \-t
+.IR time ,
+or a failure creating or updating the times of one or more of the
+named files.
+.SH SEE ALSO
+.BR cp (1),
+.BR ln (1)

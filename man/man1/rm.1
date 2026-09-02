@@ -1,0 +1,98 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH RM 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+rm \- remove directory entries
+.SH SYNOPSIS
+.B rm
+.RB [ \-f ]
+.RB [ \-r | \-R ]
+.I file
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B rm
+removes the directory entry named by each
+.I file
+operand. Multiple operands are processed in turn; an error on one
+operand does not stop the rest from being attempted.
+.PP
+A
+.I file
+operand that names a directory is refused with a diagnostic unless
+.B \-r
+or
+.B \-R
+is also given, in which case the whole tree rooted at that directory
+is removed, deepest entries first. The tree walk never follows
+symbolic links found inside it: a symbolic link encountered during the
+walk is removed as itself, not the file it refers to.
+.PP
+.B rm
+refuses to remove a
+.I file
+operand whose final pathname component is exactly
+.B .
+or
+.BR .. ,
+by name, before touching the filesystem at all; this refusal applies
+even when
+.B \-f
+is given. It does not otherwise attempt to recognize a pathname that
+names a filesystem root; an attempt to remove an actual root is left
+to fail on its own through the same removal call any other directory
+would use, and is diagnosed like any other removal failure.
+.SH OPTIONS
+.TP
+.B \-f
+Do not write a diagnostic message, and do not affect the exit status,
+for a
+.I file
+operand that does not exist. This is the only thing
+.B \-f
+suppresses: it does not apply to a
+.I file
+operand that names a directory when
+.BR \-r / \-R
+was not given, and it does not apply to any other removal failure
+(such as a permission error, or a non-empty directory that cannot be
+removed). It also does not apply to the complete absence of any
+.I file
+operand; invoking
+.B rm
+with no operands at all is always an error, with or without
+.BR \-f .
+.TP
+.BR \-r ", " \-R
+Remove file hierarchies: if a
+.I file
+operand names a directory, remove its entire contents before removing
+the directory itself, instead of refusing the operand. The two forms
+are exact synonyms.
+.TP
+.B \-i
+Not implemented.
+.B rm
+prints a diagnostic and exits immediately with status 2 rather than
+delete anything without ever having prompted for confirmation.
+.SH OPERANDS
+.TP
+.I file
+A pathname of a directory entry to remove.
+.SH EXIT STATUS
+.TP
+.B 0
+Every operand was removed successfully (or did not exist, under
+.BR \-f ).
+.TP
+.B 1
+An error occurred while removing one or more operands; the rest of the
+operands were still attempted.
+.TP
+.B 2
+A usage error occurred: an invalid option, or no
+.I file
+operand at all. No removal is attempted in this case.
+.SH SEE ALSO
+.BR rmdir (1),
+.BR cp (1),
+.BR mv (1)

@@ -1,0 +1,61 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH RMDIR 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+rmdir \- remove empty directories
+.SH SYNOPSIS
+.B rmdir
+.RB [ \-p ]
+.I dir
+.RI [ dir ]\ .\|.\|.
+.SH DESCRIPTION
+.B rmdir
+removes each empty directory named by a
+.I dir
+operand. Multiple operands are processed in turn; an error on one
+operand does not stop the rest from being attempted.
+.SH OPTIONS
+.TP
+.B \-p
+After removing
+.IR dir ,
+also remove each ancestor directory named by the leading components of
+.IR dir 's
+pathname, working upward one component at a time. Ascent stops
+quietly, without an error, as soon as an ancestor is found to be
+non-empty or no further ancestor remains to strip \(em removing
+.I dir
+itself must still succeed regardless. Any other failure encountered
+while removing an ancestor (for example, a permission error) is
+reported as a diagnostic and does count as an error for that operand.
+.PP
+.B \-p
+is recognized only as a literal, unadorned argument; it cannot be
+combined with other letters in the same argument. Any other argument
+beginning with
+.B \-
+(other than
+.BR \-\- ,
+which ends option parsing) is rejected as an invalid option.
+.SH OPERANDS
+.TP
+.I dir
+A pathname of an empty directory to remove.
+.SH EXIT STATUS
+.TP
+.B 0
+Every
+.I dir
+operand was removed successfully.
+.TP
+.B >0
+An error occurred: an invalid option, no
+.I dir
+operand at all, or a failure removing one or more of the named
+directories (or, under
+.BR \-p ,
+one of their ancestors). Exactly one nonzero status is used for all of
+these cases.
+.SH SEE ALSO
+.BR mkdir (1),
+.BR rm (1)

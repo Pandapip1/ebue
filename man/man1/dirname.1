@@ -1,0 +1,63 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH DIRNAME 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+dirname \- return the directory portion of a pathname
+.SH SYNOPSIS
+.B dirname
+.I string
+.SH DESCRIPTION
+.B dirname
+writes all but the final pathname component of
+.IR string \|,
+followed by a newline, to standard output.
+.PP
+Exactly one operand is accepted; no options are recognized.
+.SH OPERANDS
+.TP
+.I string
+A pathname.
+.RS
+.IP \(bu 2
+An empty
+.I string
+produces a single
+.BR . \|.
+.IP \(bu 2
+A
+.I string
+that names the root directory (one or more
+.B /
+characters, or a drive letter followed by
+.B :
+and one or more separators) produces that root unchanged, with any
+repeated trailing separators collapsed to one.
+.IP \(bu 2
+A
+.I string
+with no directory component at all (no separator, and, for a
+drive-qualified pathname, no separator after the drive letter and
+colon) produces
+.B .
+for a plain pathname, or the bare drive prefix (such as
+.BR C: )
+for a drive-qualified one.
+.IP \(bu 2
+Otherwise, the result is
+.I string
+with its final pathname component, and the separator(s) immediately
+before it, removed.
+.RE
+.SH EXIT STATUS
+.TP
+.B 0
+Successful completion.
+.TP
+.B 1
+Writing the result to standard output failed.
+.TP
+.B 2
+An operand count other than exactly one was given.
+.SH SEE ALSO
+.BR basename (1),
+.BR pathchk (1)
