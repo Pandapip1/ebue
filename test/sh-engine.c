@@ -2898,6 +2898,23 @@ static int child_role(int argc, char **argv)
 		return fcntl(fd, F_GETFD) < 0 ? 0 : 1;
 	}
 
+	/* Reads NAME (argv[2]) from this process's own real environ and
+	 * writes its value to stdout -- test/sh-main.c's own --print-env
+	 * role, needed here too for the same reason it exists there: what a
+	 * spawned child's envp actually contained (as opposed to what this
+	 * same process's environ holds, which a bare getenv() here already
+	 * answers for every other case in this file) is only observable by
+	 * asking a real separate process. readonly(1p)'s "NAME=value cmd"
+	 * prefix-assignment case is the one enforcement point where the two
+	 * can disagree (build_child_envp() builds a private envp rather than
+	 * calling setenv() on this process's own environ), so it is the one
+	 * case in this file that needs it. */
+	if (!strcmp(role, "--print-env") && argc > 2) {
+		const char *v = getenv(argv[2]);
+		if (v) fputs(v, stdout);
+		return v ? 0 : 1;
+	}
+
 	return -1;
 }
 
@@ -3388,6 +3405,45 @@ static void test_builtin_readonly(const char *self)
 			free(tmp);
 		}
 	}
+
+	/* `NAME=value cmd`: the command-prefix form (2.9.1) is a real
+	 * assignment too, so a read-only NAME is rejected there exactly as
+	 * it is in the plain form -- but there is a real command here, and
+	 * it still runs (build_child_envp()'s own header comment, src/sh/
+	 * execute.c): only that one override is dropped, not the whole
+	 * command. This process's own getenv() cannot tell the difference,
+	 * since build_child_envp() never touches this process's real
+	 * environ either way (that is the property
+	 * test_exec_assignment_prefix_does_not_leak() above already checks)
+	 * -- what a spawned child's envp actually contained is only
+	 * observable by asking a real separate process, hence --print-env. */
+	if (file_redir_supported(self)) {
+		char src[512], *tmp = make_tmp(), *got;
+		if (tmp) {
+			unsetenv("SHT_RO_I");
+			CHECK(run("readonly SHT_RO_I=bar", &status) == 0 && status == 0);
+			snprintf(src, sizeof src, "SHT_RO_I=baz '%s' --print-env SHT_RO_I > %s", self, tmp);
+			CHECK(run(src, &status) == 0 && status == 0);
+			got = slurp(tmp);
+			CHECK(got != 0);
+			if (got) { CHECK(strcmp(got, "bar") == 0); free(got); }
+			remove(tmp);
+			free(tmp);
+		}
+	}
+
+	/* `for NAME in ...`: the loop variable is (re)assigned every
+	 * iteration, and it is the *same* name each time, so a read-only
+	 * NAME is rejected before the very first iteration -- diagnosed,
+	 * nonzero status, and the body never runs at all (SHT_RO_LOOP_HIT
+	 * stays unset), matching bash/dash's "the whole for aborts" rather
+	 * than skipping just that one iteration and continuing with the
+	 * rest. */
+	unsetenv("SHT_RO_LOOP");
+	unsetenv("SHT_RO_LOOP_HIT");
+	CHECK(run("readonly SHT_RO_LOOP", &status) == 0 && status == 0);
+	CHECK(run("for SHT_RO_LOOP in a b c; do SHT_RO_LOOP_HIT=1; done", &status) == 0 && status != 0);
+	CHECK(getenv("SHT_RO_LOOP_HIT") == 0);
 }
 
 /* shift(1p): "Positional parameter 1 shall be assigned the value of

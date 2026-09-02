@@ -852,6 +852,32 @@ static void test_readonly(void)
 	 * already checks for `export`, applied here to bi_readonly(). */
 	CHECK(run_c("readonly SHT_RO_H=x | true; SHT_RO_H=y; "
 	            "test \"$SHT_RO_H\" = y", 0) == 0);
+
+	/* `NAME=value cmd`: the command-prefix form is a real assignment too
+	 * (2.9.1), so a read-only NAME is rejected there exactly as it is in
+	 * the plain form -- diagnosed, and the value that reaches the
+	 * command is whatever readonly already set, not the rejected
+	 * override. Unlike the plain form, there *is* a command here, and it
+	 * still runs (build_child_envp()'s own header comment): only that
+	 * one override is dropped, not the whole command -- proven by
+	 * --print-env actually producing output at all. */
+	sprintf(cmd, "readonly SHT_RO_I=bar; SHT_RO_I=baz '%s' --print-env SHT_RO_I", self);
+	CHECK(run_c(cmd, 0) == 0);
+	CHECK(err_contains("SHT_RO_I"));
+	slurp_into(OUTFILE, buf, sizeof buf);
+	CHECK(strcmp(buf, "bar") == 0);
+
+	/* `for NAME in ...`: setting the loop variable each iteration is a
+	 * real assignment too, and it is the *same* name every time, so a
+	 * read-only NAME is rejected before the very first iteration --
+	 * diagnosed, nonzero status, and the body never runs at all (proven
+	 * by no captured output), matching bash/dash rather than skipping
+	 * just the one iteration and continuing with the rest. */
+	sprintf(cmd, "readonly SHT_RO_LOOP; for SHT_RO_LOOP in a b c; do "
+	             "'%s' --produce X; done", self);
+	CHECK(run_c(cmd, 0) != 0);
+	CHECK(err_contains("SHT_RO_LOOP"));
+	CHECK(out_is_empty());
 }
 
 /* Every fixture and capture file this suite creates, removed on the way
