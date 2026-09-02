@@ -2497,7 +2497,17 @@ static void test_regex_subexpression_capture(void)
 	regex_t re;
 	regmatch_t m[3];
 
-	CHECK(regcomp(&re, "\\(a+\\)\\(b+\\)", 0) == 0);
+	/* "\{1,\}" (strict POSIX BRE), not bare '+': a bare '+' is an
+	 * ordinary character in BRE (regcomp.html's ERE grammar is the
+	 * only place '+' means one-or-more) -- see src/regex/regex.c's
+	 * apply_repeat() comment on is_plus/is_quest. This test used to
+	 * read "\\(a+\\)\\(b+\\)" and pass only because this library's
+	 * own BRE parser wrongly let that ERE meaning leak into BRE mode;
+	 * fixed together with that bug (found via test/util-grep.c's
+	 * test_grep_bre_basic), pattern updated here so this test still
+	 * exercises the same thing (subexpression capture around a
+	 * one-or-more repeat) without depending on the bug. */
+	CHECK(regcomp(&re, "\\(a\\{1,\\}\\)\\(b\\{1,\\}\\)", 0) == 0);
 	CHECK(re.re_nsub == 2);
 	CHECK(regexec(&re, "xxaaabbbyy", 3, m, 0) == 0);
 	CHECK(m[0].rm_so == 2 && m[0].rm_eo == 8);	/* whole match: "aaabbb" */

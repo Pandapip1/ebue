@@ -423,16 +423,23 @@ static void apply_repeat(struct parser *ps, int start, int had_atom) // NOLINT(b
 	for (;;) {
 		char c = *ps->p;
 		int is_star = (c == '*');
-		/* Strict POSIX BRE has no bare '+'/'?' repeat operator (only
-		 * '*' and "\{m,n\}"; '+'/'?' are ordinary characters) -- but
-		 * test/posix-glob.c's own un-fenced acceptance test
-		 * (test_regex_subexpression_capture) compiles "\(a+\)\(b+\)"
-		 * with cflags 0 (BRE) and expects '+' to mean one-or-more.
-		 * Recognizing bare '+'/'?' as repeat operators in BRE too
-		 * (the common "GNU BRE" leniency) is what that test needs,
-		 * so it is deliberate here, not an oversight. */
-		int is_plus = c == '+';
-		int is_quest = c == '?';
+		/* POSIX BRE has no bare '+'/'?' repeat operator: only '*'
+		 * and "\{m,n\}" are BRE repeat operators, and regcomp.html's
+		 * ERE grammar is where '+'/'?' get their one-or-more/
+		 * zero-or-one meaning -- in BRE proper a bare '+' or '?' is
+		 * an ordinary character (regcomp.html DESCRIPTION, BRE
+		 * "Ordinary Characters": "A <circumflex> ('^') ... and a
+		 * <dollar-sign> ('$') ... are special ... All other
+		 * characters ... are ordinary"; '+'/'?' are not given
+		 * special meaning anywhere in the BRE grammar). Gating these
+		 * on ps->ere, like is_brace already does two lines down, is
+		 * the fix for that: an unguarded `c == '+'`/`c == '?'` here
+		 * let ERE's quantifier meaning leak into BRE mode, so e.g.
+		 * "a+b" under cflags 0 (BRE) wrongly matched "aaab"/"ab"
+		 * instead of matching only the literal three characters
+		 * "a+b". Found via test/util-grep.c's test_grep_bre_basic. */
+		int is_plus = ps->ere && c == '+';
+		int is_quest = ps->ere && c == '?';
 		int is_brace = (ps->ere && c == '{') || (!ps->ere && c == '\\' && ps->p[1] == '{');
 		int len = ps->rx->nprog - start;
 		struct inst *restrict saved;
