@@ -46,8 +46,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 #include <errno.h>
 #include <unistd.h>
+#include <stdio.h>
 #include "internal.h"
 #include "libc.h"
 #include "ownership_stubs.h"
@@ -371,11 +373,15 @@ static int expand_param_word(const char *start, size_t input_len, int flags, // 
 	 * recursive scanner cannot otherwise see those outer quotes, so
 	 * protect a leading tilde exactly as an input backslash would. */
 	if (quoted && input_len && *start == '~') prefix = 1;
+	if (input_len > INT_MAX) return WRDE_NOSPACE;
 	text = __malloc(input_len + prefix + 1);
 	if (!text) return WRDE_NOSPACE;
 	if (prefix) text[0] = '\\';
-	memcpy(text + prefix, start, input_len);
-	text[input_len + prefix] = 0;
+	if (snprintf(text + prefix, input_len + 1, "%.*s",
+	    (int)input_len, start) != (int)input_len) {
+		__free(text);
+		return WRDE_NOSPACE;
+	}
 	memset(&we, 0, sizeof we);
 	rc = expand_impl(text, &we, flags & (WRDE_NOCMD | WRDE_SHOWERR | WRDE_UNDEF), sh, ctx);
 	__free(text);
@@ -395,9 +401,12 @@ static int expand_param_word(const char *start, size_t input_len, int flags, // 
 	for (i = 0; i < we.we_wordc; i++) {
 		size_t z = strlen(we.we_wordv[i]);
 		if (i && *ifs) s[n++] = *ifs;
-		__ownership_writable_span(s + n, z);
-		__ownership_readable_span(we.we_wordv[i], z);
-		memcpy(s + n, we.we_wordv[i], z);
+		if (z > INT_MAX ||
+		    snprintf(s + n, z + 1, "%s", we.we_wordv[i]) != (int)z) {
+			__free(s);
+			wordfree(&we);
+			return WRDE_NOSPACE;
+		}
 		n += z;
 	}
 	if (!quoted && input_len && is_split_char(start[input_len - 1])) s[n++] = start[input_len - 1];
@@ -456,10 +465,9 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
 		while (is_namechar(*p)) p++;
 		len = (size_t)(p - start);
 		if (*p != '}' || len >= sizeof name) return WRDE_SYNTAX;
-		__ownership_writable_span(name, len);
-		__ownership_readable_span(start, len);
-		memcpy(name, start, len);
-		name[len] = 0;
+		if (snprintf(name, sizeof name, "%.*s", (int)len, start) !=
+		    (int)len)
+			return WRDE_SYNTAX;
 		*pp = p + 1;
 		val = getenv(name);
 		if (!val && (flags & WRDE_UNDEF)) return WRDE_BADVAL;
@@ -530,10 +538,8 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
 	while (is_namechar(*p)) p++;
 	len = (size_t)(p - start);
 	if (len >= sizeof name) return WRDE_SYNTAX;
-	__ownership_writable_span(name, len);
-	__ownership_readable_span(start, len);
-	memcpy(name, start, len);
-	name[len] = 0;
+	if (snprintf(name, sizeof name, "%.*s", (int)len, start) != (int)len)
+		return WRDE_SYNTAX;
 	val = getenv(name);
 	if (braced && *p != '}') {
 		const char *word, *end;
@@ -882,10 +888,13 @@ static int expand_arith(const char **pp, struct fbuf *b, int flags, int sh,
 	}
 
 	len = (size_t)(end - start);
+	if (len > INT_MAX) return WRDE_NOSPACE;
 	expr = __malloc(len + 1);
 	if (!expr) return WRDE_NOSPACE;
-	memcpy(expr, start, len);
-	expr[len] = 0;
+	if (snprintf(expr, len + 1, "%.*s", (int)len, start) != (int)len) {
+		__free(expr);
+		return WRDE_NOSPACE;
+	}
 
 	/* XBD 2.6.4 performs parameter expansion and nested arithmetic
 	 * expansion on the expression before evaluating it. */
@@ -1001,10 +1010,13 @@ static char *cmdsub_dollar_text(const char **pp, int *syntax)
 		p++;
 	}
 	len = (size_t)(p - start);
+	if (len > INT_MAX) return 0;
 	r = __malloc(len + 1);
 	if (!r) return 0;
-	memcpy(r, start, len);
-	r[len] = 0;
+	if (snprintf(r, len + 1, "%.*s", (int)len, start) != (int)len) {
+		__free(r);
+		return 0;
+	}
 	*pp = p + 1;	/* past the ')' */
 	return r;
 }
