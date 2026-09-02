@@ -78,9 +78,41 @@ FILES="
 	src/unistd/linux/plat_fd.c
 	src/string/memcpy.c
 	src/internal/errno.c
+	src/malloc/crt_alloc.c
+	src/malloc/linux/plat_malloc.c
+	src/thread/linux/plat_thread.c
 	fuzz/linux_pilot_harness_fs.c
 	fuzz/linux_pilot_test_fs.c
 "
+# src/malloc/crt_alloc.c + src/malloc/linux/plat_malloc.c were missing
+# until this same gap that tools/linux-build-crt.sh already hit
+# (__malloc()/__free(), see that script's own comment) surfaced here
+# too, for real: src/stat/chmod.c's fchmod() calls __free(path) on its
+# EACCES retry path (compiled in unconditionally, even though this
+# pilot's harness stub for __handle_path() always returns NULL, so the
+# call is never actually reached at runtime -- see fuzz/
+# linux_pilot_harness_fs.c's own banner on __handle_path()). Traced by
+# reading chmod.c's real call, confirmed there is no other __malloc/
+# __free/malloc/realloc reference anywhere else in this FILES list, and
+# verified by actually compiling, linking and running. src/malloc/
+# malloc.c (the public POSIX allocator, needed elsewhere for realloc())
+# is NOT needed here: nothing in this FILES list calls malloc()/
+# calloc()/realloc()/free(), only crt_alloc.c's own separate __malloc/
+# __free token domain (see that file's own banner on why the two are
+# deliberately not the same translation unit).
+#
+# src/thread/linux/plat_thread.c was the next gap this same chain
+# uncovered: src/internal/plat_malloc_generic.h's ntlibc_malloc_lock(),
+# called for real (not a dead branch) by __plat_alloc()/__plat_dealloc()
+# on every allocation/free, calls __plat_thread_alertable_yield() to
+# spin-wait for the allocator's lock. Only this one function of
+# plat_thread.c's many is ever reached here: __plat_thread_spawn() (the
+# only other function in this file that references anything else
+# unresolved, __ntlibc_linux_clone() in src/thread/linux/
+# clone_aarch64.S) is never called by anything in this FILES list, so
+# --gc-sections drops that whole function's own section, and its own
+# unresolved reference, before the link ever needs to satisfy it --
+# confirmed by linking successfully without clone_aarch64.S at all.
 
 echo "$TAG: compiling ($CC, native ELF)..."
 objs=""
