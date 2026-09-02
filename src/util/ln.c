@@ -60,7 +60,8 @@ static int link_one(const char *src, const char *dst, int opt_s, int opt_f)
 	return link(src, dst);
 }
 
-int __util_ln_main(int argc, char **argv)
+int __util_ln_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int i, opt_s = 0, opt_f = 0, fail = 0;
 	int nsrc, di;

@@ -51,6 +51,20 @@ void element_relation_survives_local_alias(
 		dialect_use_string(alias[i]);
 }
 
+int element_relation_captures_entry_extent(
+	int count,
+	char **values elements_withtok(dialect_terminated, count))
+	__attribute__((nonnull(2)))
+{
+	int entry_count = count;
+	int i;
+
+	count = 0;
+	for (i = 0; i < entry_count; i++)
+		dialect_use_string(values[i]);
+	return count;
+}
+
 void immutable_string_literal_table_creates_evidence(unsigned i)
 {
 	static const char *const table[] = { "first", "second" };

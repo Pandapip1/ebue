@@ -35,7 +35,8 @@
 #include <unistd.h>
 #include "util.h"
 
-int __util_pwd_main(int argc, char **argv)
+int __util_pwd_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int i;
 	char *cwd;

@@ -75,7 +75,8 @@ static int rmdir_ascend(const char *dir)
 	}
 }
 
-int __util_rmdir_main(int argc, char **argv)
+int __util_rmdir_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int i, opt_p = 0, fail = 0;
 

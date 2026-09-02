@@ -122,7 +122,8 @@ static int parse_touch_t(const char *spec, struct timespec *out)
 	return 0;
 }
 
-int __util_touch_main(int argc, char **argv)
+int __util_touch_main(
+	int argc, char **argv elements_withtok(null_terminated, argc))
 {
 	int i, fail = 0;
 	int opt_a = 0, opt_m = 0, opt_c = 0;
