@@ -45,22 +45,23 @@ static char obj_root[1024];
 static int find_obj_root(const char *argv0)
 {
 	size_t n;
-	char *p;
+	size_t i;
 
 	if (!argv0 || !*argv0) return -1;
 	n = strlen(argv0);
 	if (n >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-fsops.exe" */
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/util-fsops.exe" */
 
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	n = strlen(obj_root);
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/test" */
 
 	return 0;
 }
@@ -68,12 +69,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -122,6 +125,14 @@ static int err_contains(const char *needle)
 	return strstr(buf, needle) != 0;
 }
 
+/* Checks a run was refused outright: nonzero exit, with a diagnostic
+ * containing `needle` -- the shape shared by most error-path tests below. */
+static void check_refused(int status, const char *needle)
+{
+	CHECK(status != 0);
+	CHECK(err_contains(needle));
+}
+
 static char mkdir_path[1024], rmdir_path[1024], mkfifo_path[1024];
 static char ln_path[1024], chmod_path[1024], touch_path[1024], sh_path[1024];
 
@@ -150,8 +161,7 @@ static void test_mkdir_basic_and_default_mode(void)
 static void test_mkdir_eexist_without_p_is_an_error(void)
 {
 	char *argv[] = { (char *)"mkdir", (char *)"scratch/d1", 0 };
-	CHECK(run(mkdir_path, argv) != 0);
-	CHECK(err_contains("mkdir:"));
+	check_refused(run(mkdir_path, argv), "mkdir:");
 }
 
 static void test_mkdir_dash_p(void)
@@ -178,8 +188,7 @@ static void test_mkdir_dash_m_octal(void)
 static void test_mkdir_missing_operand(void)
 {
 	char *argv[] = { (char *)"mkdir", 0 };
-	CHECK(run(mkdir_path, argv) != 0);
-	CHECK(err_contains("missing operand"));
+	check_refused(run(mkdir_path, argv), "missing operand");
 }
 
 /* ==== rmdir(1p) ========================================================= */
@@ -196,8 +205,7 @@ static void test_rmdir_basic(void)
 static void test_rmdir_nonexistent_is_an_error(void)
 {
 	char *argv[] = { (char *)"rmdir", (char *)"scratch/does-not-exist", 0 };
-	CHECK(run(rmdir_path, argv) != 0);
-	CHECK(err_contains("rmdir:"));
+	check_refused(run(rmdir_path, argv), "rmdir:");
 }
 
 static void test_rmdir_not_empty_is_an_error(void)
@@ -260,15 +268,13 @@ static void test_mkfifo_reports_the_real_enosys_stub(void)
 static void test_mkfifo_validates_mode_before_the_enosys_call(void)
 {
 	char *argv[] = { (char *)"mkfifo", (char *)"-m", (char *)"not-a-mode", (char *)"scratch/fifo2", 0 };
-	CHECK(run(mkfifo_path, argv) != 0);
-	CHECK(err_contains("invalid mode"));
+	check_refused(run(mkfifo_path, argv), "invalid mode");
 }
 
 static void test_mkfifo_missing_operand(void)
 {
 	char *argv[] = { (char *)"mkfifo", 0 };
-	CHECK(run(mkfifo_path, argv) != 0);
-	CHECK(err_contains("missing operand"));
+	check_refused(run(mkfifo_path, argv), "missing operand");
 }
 
 /* ==== ln(1p) ============================================================= */
@@ -297,8 +303,7 @@ static void test_ln_hardlink(void)
 static void test_ln_existing_target_without_f_is_an_error(void)
 {
 	char *argv[] = { (char *)"ln", (char *)"scratch/src1", (char *)"scratch/hard1", 0 };
-	CHECK(run(ln_path, argv) != 0);
-	CHECK(err_contains("ln:"));
+	check_refused(run(ln_path, argv), "ln:");
 }
 
 static void test_ln_dash_f_overwrites(void)
@@ -337,8 +342,7 @@ static void test_ln_directory_target_form(void)
 static void test_ln_missing_operand(void)
 {
 	char *argv[] = { (char *)"ln", (char *)"scratch/src1", 0 };
-	CHECK(run(ln_path, argv) != 0);
-	CHECK(err_contains("missing operand"));
+	check_refused(run(ln_path, argv), "missing operand");
 }
 
 /* ==== chmod(1p) =========================================================== */
@@ -369,22 +373,19 @@ static void test_chmod_symbolic_relative_to_current_mode(void)
 static void test_chmod_invalid_mode_is_an_error(void)
 {
 	char *argv[] = { (char *)"chmod", (char *)"999", (char *)"scratch/c1", 0 };
-	CHECK(run(chmod_path, argv) != 0);
-	CHECK(err_contains("invalid mode"));
+	check_refused(run(chmod_path, argv), "invalid mode");
 }
 
 static void test_chmod_nonexistent_file_is_an_error(void)
 {
 	char *argv[] = { (char *)"chmod", (char *)"600", (char *)"scratch/does-not-exist", 0 };
-	CHECK(run(chmod_path, argv) != 0);
-	CHECK(err_contains("chmod:"));
+	check_refused(run(chmod_path, argv), "chmod:");
 }
 
 static void test_chmod_missing_operand(void)
 {
 	char *argv[] = { (char *)"chmod", 0 };
-	CHECK(run(chmod_path, argv) != 0);
-	CHECK(err_contains("missing operand"));
+	check_refused(run(chmod_path, argv), "missing operand");
 }
 
 /* ==== touch(1p) =========================================================== */
@@ -467,22 +468,19 @@ static void test_touch_dash_c_skips_missing_silently(void)
 static void test_touch_dash_d_is_refused(void)
 {
 	char *argv[] = { (char *)"touch", (char *)"-d", (char *)"2020-01-01", (char *)"scratch/t1", 0 };
-	CHECK(run(touch_path, argv) != 0);
-	CHECK(err_contains("not implemented"));
+	check_refused(run(touch_path, argv), "not implemented");
 }
 
 static void test_touch_bad_dash_t_is_an_error(void)
 {
 	char *argv[] = { (char *)"touch", (char *)"-t", (char *)"not-a-time", (char *)"scratch/t1", 0 };
-	CHECK(run(touch_path, argv) != 0);
-	CHECK(err_contains("invalid time"));
+	check_refused(run(touch_path, argv), "invalid time");
 }
 
 static void test_touch_missing_operand(void)
 {
 	char *argv[] = { (char *)"touch", 0 };
-	CHECK(run(touch_path, argv) != 0);
-	CHECK(err_contains("missing operand"));
+	check_refused(run(touch_path, argv), "missing operand");
 }
 
 /* ==== the shell built-ins agree with the standalone executables ========== */

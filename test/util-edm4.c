@@ -42,22 +42,23 @@ static char obj_root[1024];
 static int find_obj_root(const char *argv0)
 {
 	size_t n;
-	char *p;
+	size_t i;
 
 	if (!argv0 || !*argv0) return -1;
 	n = strlen(argv0);
 	if (n >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0;                       /* strip "/util-edm4.exe" */
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0;                       /* strip "/util-edm4.exe" */
 
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0;                       /* strip "/test" */
+	n = strlen(obj_root);
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0;                       /* strip "/test" */
 
 	return 0;
 }
@@ -65,12 +66,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -179,6 +182,14 @@ static int out_contains(const char *needle)
 	return strstr(buf, needle) != 0;
 }
 
+/* Checks a run's exit status was 0 (success) and its stdout was exactly
+ * `expect` -- the shape shared by nearly every ed/m4 test below. */
+static void check_ok_output(int status, const char *expect)
+{
+	CHECK(status == 0);
+	CHECK(out_is(expect));
+}
+
 static void write_file(const char *path, const char *text)
 {
 	FILE *f = fopen(path, "wb");
@@ -203,8 +214,7 @@ static void test_ed_append_and_print(void)
 	char *argv[] = { (char *)"ed", (char *)"-s", 0 };
 	mkpath(p1, "ed-script1.txt");
 	write_file(p1, "a\nhello\nworld\n.\n1,$p\nq\n");
-	CHECK(run(ed_path, argv, p1) == 0);
-	CHECK(out_is("hello\nworld\n"));
+	check_ok_output(run(ed_path, argv, p1), "hello\nworld\n");
 }
 
 /* i inserts BEFORE the addressed line; d deletes; = reports the line
@@ -214,8 +224,7 @@ static void test_ed_insert_delete_linenum(void)
 	char *argv[] = { (char *)"ed", (char *)"-s", 0 };
 	mkpath(p1, "ed-script2.txt");
 	write_file(p1, "a\nBBB\nCCC\n.\n1i\nAAA\n.\n$=\n1,$p\nq\n");
-	CHECK(run(ed_path, argv, p1) == 0);
-	CHECK(out_is("3\nAAA\nBBB\nCCC\n"));
+	check_ok_output(run(ed_path, argv, p1), "3\nAAA\nBBB\nCCC\n");
 }
 
 /* s/// with a numeric line range, plus the trailing `p` suffix to print
@@ -225,8 +234,7 @@ static void test_ed_substitute(void)
 	char *argv[] = { (char *)"ed", (char *)"-s", 0 };
 	mkpath(p1, "ed-script3.txt");
 	write_file(p1, "a\nfoo bar foo\n.\n1s/foo/baz/g p\nq\n");
-	CHECK(run(ed_path, argv, p1) == 0);
-	CHECK(out_is("baz bar baz\n"));
+	check_ok_output(run(ed_path, argv, p1), "baz bar baz\n");
 }
 
 /* g/RE/command-list applies `p` to every line matching "b", in address
@@ -237,8 +245,7 @@ static void test_ed_global_command(void)
 	char *argv[] = { (char *)"ed", (char *)"-s", 0 };
 	mkpath(p1, "ed-script4.txt");
 	write_file(p1, "a\napple\nbanana\ncherry\nblueberry\n.\ng/b/p\nq\n");
-	CHECK(run(ed_path, argv, p1) == 0);
-	CHECK(out_is("banana\nblueberry\n"));
+	check_ok_output(run(ed_path, argv, p1), "banana\nblueberry\n");
 }
 
 /* w writes the buffer to a real file; a fresh `ed -s realfile` then r
@@ -292,8 +299,7 @@ static void test_ed_builtin_matches_standalone(void)
 	mkpath(p1, "ed-script7.txt");
 	write_file(p1, "a\nx\ny\nz\n.\n1,$p\nq\n");
 	snprintf(cmd, sizeof cmd, "ed -s < %s", p1);
-	CHECK(run_sh_c(cmd, 0) == 0);
-	CHECK(out_is("x\ny\nz\n"));
+	check_ok_output(run_sh_c(cmd, 0), "x\ny\nz\n");
 }
 
 /* ==== m4(1p) ================================================================ */
@@ -305,8 +311,7 @@ static void test_m4_define_basic(void)
 	char *argv[] = { (char *)"m4", 0 };
 	mkpath(p1, "m4-1.m4");
 	write_file(p1, "define(`GREETING', `hello, world')GREETING\n");
-	CHECK(run(m4_path, argv, p1) == 0);
-	CHECK(out_is("hello, world\n"));
+	check_ok_output(run(m4_path, argv, p1), "hello, world\n");
 }
 
 /* $1/$2 positional-parameter substitution in a macro's own defining
@@ -316,8 +321,7 @@ static void test_m4_define_with_args(void)
 	char *argv[] = { (char *)"m4", 0 };
 	mkpath(p1, "m4-2.m4");
 	write_file(p1, "define(`ADD2', `$1 and $2')ADD2(`x', `y')\n");
-	CHECK(run(m4_path, argv, p1) == 0);
-	CHECK(out_is("x and y\n"));
+	check_ok_output(run(m4_path, argv, p1), "x and y\n");
 }
 
 /* ifdef()/ifelse(): both branches of ifdef, and ifelse's true/false
@@ -332,8 +336,7 @@ static void test_m4_ifdef_ifelse(void)
 		"ifdef(`NOPE',`defined',`undefined')\n"
 		"ifelse(`a',`a',`same',`different')\n"
 		"ifelse(`a',`b',`same',`different')\n");
-	CHECK(run(m4_path, argv, p1) == 0);
-	CHECK(out_is("defined\nundefined\nsame\ndifferent\n"));
+	check_ok_output(run(m4_path, argv, p1), "defined\nundefined\nsame\ndifferent\n");
 }
 
 /* shift(): drops the first argument and re-quotes each remaining one;
@@ -344,8 +347,7 @@ static void test_m4_shift(void)
 	char *argv[] = { (char *)"m4", 0 };
 	mkpath(p1, "m4-4.m4");
 	write_file(p1, "define(`REST', `shift($@)')REST(`a',`b',`c')\n");
-	CHECK(run(m4_path, argv, p1) == 0);
-	CHECK(out_is("b,c\n"));
+	check_ok_output(run(m4_path, argv, p1), "b,c\n");
 }
 
 /* dnl discards through (and including) the next newline, and nothing
@@ -355,8 +357,7 @@ static void test_m4_dnl(void)
 	char *argv[] = { (char *)"m4", 0 };
 	mkpath(p1, "m4-5.m4");
 	write_file(p1, "before dnl this is gone\nafter\n");
-	CHECK(run(m4_path, argv, p1) == 0);
-	CHECK(out_is("before after\n"));
+	check_ok_output(run(m4_path, argv, p1), "before after\n");
 }
 
 /* changequote() switches the active quote characters; text quoted with
@@ -367,8 +368,7 @@ static void test_m4_changequote(void)
 	char *argv[] = { (char *)"m4", 0 };
 	mkpath(p1, "m4-6.m4");
 	write_file(p1, "changequote([,])define([X],[1])X [X]\n");
-	CHECK(run(m4_path, argv, p1) == 0);
-	CHECK(out_is("1 X\n"));
+	check_ok_output(run(m4_path, argv, p1), "1 X\n");
 }
 
 /* include() splices a whole file's contents into the input stream,
@@ -384,8 +384,7 @@ static void test_m4_include(void)
 		fprintf(f, "include(`%s')INC\n", p2);
 		fclose(f);
 	}
-	CHECK(run(m4_path, argv, p1) == 0);
-	CHECK(out_is("\nincluded-value\n"));
+	check_ok_output(run(m4_path, argv, p1), "\nincluded-value\n");
 }
 
 /* divert(1) redirects output into buffer 1 instead of the normal
@@ -398,8 +397,7 @@ static void test_m4_divert(void)
 	char *argv[] = { (char *)"m4", 0 };
 	mkpath(p1, "m4-8.m4");
 	write_file(p1, "divert(1)second\ndivert(0)first\n");
-	CHECK(run(m4_path, argv, p1) == 0);
-	CHECK(out_is("first\nsecond\n"));
+	check_ok_output(run(m4_path, argv, p1), "first\nsecond\n");
 }
 
 /* len/index/substr/translit: the string builtins, each checked against
@@ -414,8 +412,7 @@ static void test_m4_string_builtins(void)
 		"substr(`hello world', 6)\n"
 		"substr(`hello world', 0, 5)\n"
 		"translit(`hello', `el', `ip')\n");
-	CHECK(run(m4_path, argv, p1) == 0);
-	CHECK(out_is("5\n6\nworld\nhello\nhippo\n"));
+	check_ok_output(run(m4_path, argv, p1), "5\n6\nworld\nhello\nhippo\n");
 }
 
 /* eval(): real arithmetic, including operator precedence (`*` before
@@ -425,8 +422,7 @@ static void test_m4_eval(void)
 	char *argv[] = { (char *)"m4", 0 };
 	mkpath(p1, "m4-10.m4");
 	write_file(p1, "eval(1+2*3)\nincr(41)\ndecr(1)\neval(255,16)\n");
-	CHECK(run(m4_path, argv, p1) == 0);
-	CHECK(out_is("7\n42\n0\nff\n"));
+	check_ok_output(run(m4_path, argv, p1), "7\n42\n0\nff\n");
 }
 
 /* m4wrap(): its text is deferred until true end-of-input, not expanded
@@ -436,8 +432,7 @@ static void test_m4_wrap(void)
 	char *argv[] = { (char *)"m4", 0 };
 	mkpath(p1, "m4-11.m4");
 	write_file(p1, "m4wrap(`at the end')main text\n");
-	CHECK(run(m4_path, argv, p1) == 0);
-	CHECK(out_is("main text\nat the end"));
+	check_ok_output(run(m4_path, argv, p1), "main text\nat the end");
 }
 
 /* An unreadable include() is a real, diagnosed error (nonzero exit);
@@ -452,8 +447,7 @@ static void test_m4_include_error_vs_sinclude(void)
 
 	mkpath(p2, "m4-13.m4");
 	write_file(p2, "sinclude(`does-not-exist-anywhere.m4')ok\n");
-	CHECK(run(m4_path, argv2, p2) == 0);
-	CHECK(out_is("ok\n"));
+	check_ok_output(run(m4_path, argv2, p2), "ok\n");
 }
 
 /* The shell builtin must agree exactly with the standalone binary. */
@@ -463,8 +457,7 @@ static void test_m4_builtin_matches_standalone(void)
 	mkpath(p1, "m4-14.m4");
 	write_file(p1, "define(`N', `42')N squared is eval(N*N)\n");
 	snprintf(cmd, sizeof cmd, "m4 < %s", p1);
-	CHECK(run_sh_c(cmd, 0) == 0);
-	CHECK(out_is("42 squared is 1764\n"));
+	check_ok_output(run_sh_c(cmd, 0), "42 squared is 1764\n");
 }
 
 /* ==== main =============================================================== */
