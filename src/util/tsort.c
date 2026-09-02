@@ -234,11 +234,11 @@ int __util_tsort_main(int argc, char **argv)
 		for (remaining = nnodes;
 		     remaining > 0 && queue_head < qtail; remaining--) {
 			int cur = queue[queue_head++];
-			size_t s, succ_count = nodes[cur].nsucc;
+			size_t s;
 			ready_count++;
 			nodes[cur].done = 1;
 			printf("%s\n", nodes[cur].name);
-			for (s = 0; s < succ_count; s++) {
+			for (s = 0; s < nodes[cur].nsucc; s++) {
 				int nb = nodes[cur].succ[s];
 				/* Each node's indegree reaches exactly zero at most
 				 * once, so it is pushed onto queue[] at most once --
