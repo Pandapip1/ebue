@@ -60,7 +60,9 @@
  * so hosted include ownership and unused-include advice do not apply. */
 // NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
+#include <string.h>
 #include <sys/resource.h>
+#include <sys/utsname.h>
 #include "plat_misc.h"
 #include "plat_fd.h"
 
@@ -68,6 +70,7 @@
  * printing the SYS_* macros from <sys/syscall.h>, the same oracle
  * technique src/mman/linux/plat_mem.c's banner describes). */
 #if defined(__aarch64__)
+#define SYS_uname                   160
 #define SYS_sched_yield             124
 #define SYS_kill                    129
 #define SYS_setpriority             140
@@ -83,6 +86,10 @@
 #define SYS_sched_getparam          121
 #define SYS_sched_rr_get_interval   127
 #elif defined(__x86_64__)
+/* 63: the same well-established, stable x86_64 syscall table this
+ * block's own banner (below) already cites for the sched_* numbers --
+ * uname(2) has been syscall 63 since the very first x86_64 table. */
+#define SYS_uname                   63
 #define SYS_sched_yield             24
 #define SYS_kill                    62
 #define SYS_setpriority             141
@@ -543,6 +550,67 @@ int __plat_sched_rr_get_interval(pid_t pid, struct timespec *interval)
 {
 	long ret = syscall(SYS_sched_rr_get_interval, (long)pid, interval);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
+/* ======================================================================
+ * uname.c: Linux's own real uname(2) already answers every field of the
+ * POSIX contract directly -- sysname "Linux", the real running kernel
+ * release/version, the real hostname, the real hardware architecture --
+ * unlike NT (src/misc/nt/plat_misc.c's own __plat_uname(), which has to
+ * reconstruct each field by hand: a registry lookup for nodename, a
+ * separate RtlGetVersion() call for release/version, a compile-time
+ * check for machine). One syscall answers the whole struct, so this
+ * backend is simpler than the NT one, not equivalently complex.
+ * ====================================================================== */
+
+/* The raw kernel ABI's own struct new_utsname (uapi/linux/utsname.h):
+ * six 65-byte NUL-terminated fields, always laid out this way regardless
+ * of architecture -- confirmed against this host's own <sys/utsname.h>
+ * struct utsname, which is the identical shape under glibc. ntlibc's own
+ * struct utsname (include/sys/utsname.h) is a different, wider shape
+ * (256-byte fields, no domainname: utsname.h.html gives no required
+ * size, and this library's own version was sized generously rather than
+ * matched to Linux's), so the raw syscall cannot write directly into the
+ * caller's own `u` and needs this local buffer as an intermediate. */
+struct linux_new_utsname {
+	char sysname[65];
+	char nodename[65];
+	char release[65];
+	char version[65];
+	char machine[65];
+	char domainname[65];
+};
+
+static void copy_field(char *dst, size_t dstsz, const char *src, size_t srcsz)
+{
+	size_t n = strnlen(src, srcsz);
+	if (n >= dstsz) n = dstsz - 1;
+	memcpy(dst, src, n);
+	dst[n] = '\0';
+}
+
+int __plat_uname(struct utsname *u)
+{
+	struct linux_new_utsname raw;
+	long ret = syscall(SYS_uname, &raw);
+	/* uname(2)'s only failure is EFAULT for a bad buffer, already ruled
+	 * out by the front door's own NULL check on `u` before this is ever
+	 * reached, and `&raw` here is always a valid local -- so in practice
+	 * this never actually fails, but the real -errno is still surfaced
+	 * rather than assumed away, matching every other function in this
+	 * file. */
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	copy_field(u->sysname, sizeof u->sysname, raw.sysname, sizeof raw.sysname);
+	copy_field(u->nodename, sizeof u->nodename, raw.nodename, sizeof raw.nodename);
+	copy_field(u->release, sizeof u->release, raw.release, sizeof raw.release);
+	copy_field(u->version, sizeof u->version, raw.version, sizeof raw.version);
+	copy_field(u->machine, sizeof u->machine, raw.machine, sizeof raw.machine);
+	/* ntlibc's own struct utsname (include/sys/utsname.h) has no
+	 * domainname member at all -- utsname.h.html does not require one --
+	 * so raw.domainname is read by the syscall but has nowhere to go
+	 * here, same as every other backend in this tree that gets handed
+	 * more from the kernel than this library's own ABI has room to keep. */
 	return 0;
 }
 

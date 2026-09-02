@@ -6,25 +6,29 @@
  * so hosted include ownership and unused-include advice do not apply. */
 // NOLINTBEGIN(misc-include-cleaner)
 
-/* getcwd returns the DOS form, C:\dir, with backslashes turned into
- * forward slashes so that programs that split paths on '/' (which is
- * most of them) keep working.  A trailing slash is removed except at a
- * drive root. */
+/* This front door's own job is only what plat_unistd.h's __plat_getcwd()
+ * comment says a backend should NOT have to know: the __VFS_ROOT/
+ * __VFS_DEV overlay special cases (portable bookkeeping, same as
+ * chdir.c's own __vfs_cwd_set() split), and getcwd.html's buf/size
+ * contract -- NULL buf means "malloc exactly what's needed", size 0
+ * with a non-NULL buf is [EINVAL], and a result that would not fit is
+ * [ERANGE].  What a "current directory" even means on this backend --
+ * NT's DOS-form UTF-16 RtlGetCurrentDirectory_U, Linux's byte-for-byte
+ * getcwd(2) -- is entirely __plat_getcwd()'s job now (src/unistd/{nt,
+ * linux}/plat_unistd.c), not this file's. */
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_unistd.h"
 
 withtok(heap_allocated)
 char *getcwd(char *buf withtok(heap_allocated), size_t size)
 {
-	WCHAR w[4096];
 	char tmp[4096 * 3];
-	ULONG n;
-	size_t i, len;
-	int r;
+	size_t len;
+	ssize_t r;
 	int vfs = __vfs_cwd_get();
 	if (vfs == __VFS_ROOT || vfs == __VFS_DEV) {
 		const char *path = vfs == __VFS_ROOT ? "/" : "/dev";
@@ -40,12 +44,7 @@ char *getcwd(char *buf withtok(heap_allocated), size_t size)
 		return buf;
 	}
 
-	n = RtlGetCurrentDirectory_U(sizeof w, w);
-	if (!n || n > sizeof w) { errno = ERANGE; return 0; }
-	n /= sizeof(WCHAR);
-	for (i = 0; i < n; i++) if (w[i] == '\\') w[i] = '/';
-	if (n > 3 && w[n-1] == '/') n--;
-	r = __utf16_to_utf8_buf(w, n, tmp, sizeof tmp);
+	r = __plat_getcwd(tmp, sizeof tmp);
 	if (r < 0) return 0;
 	len = (size_t)r;
 	if (!buf) {
@@ -58,10 +57,7 @@ char *getcwd(char *buf withtok(heap_allocated), size_t size)
 	} else if (len + 1 > size) {
 		errno = ERANGE; return 0;
 	}
-	if (snprintf(buf, size, "%s", tmp) != (int)len) {
-		errno = ERANGE;
-		return 0;
-	}
+	memcpy(buf, tmp, len + 1);
 	return buf;
 }
 

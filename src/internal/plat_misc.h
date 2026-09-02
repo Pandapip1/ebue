@@ -31,11 +31,25 @@
 
 #include <sys/types.h>
 #include <sys/resource.h>
+#include <sys/utsname.h>
 #if defined(__linux__)
 #include <sched.h>
 #include <time.h>
 #endif
 #include "plat_handle.h"
+
+/* ---- src/misc/uname.c ---------------------------------------------------- */
+
+/* uname(): fill every field of `u` (already checked non-NULL by the
+ * front door, uname.html's only shall-fail clause) the way this backend
+ * actually knows how -- NT's RtlGetVersion()/registry-nodename dance
+ * (src/misc/nt/plat_misc.c), or Linux's own real uname(2) syscall
+ * (src/misc/linux/plat_misc.c), which already answers every field
+ * correctly in one call and needs no per-field NT-style reconstruction
+ * at all. 0 on success, -1 with errno set on failure (this library's own
+ * [EOVERFLOW] if a field NT computed does not fit `u`'s buffer; Linux's
+ * real uname(2) cannot fail once `u` is known non-NULL). */
+int __plat_uname(struct utsname *u);
 
 /* sched_yield(): relinquish the processor.  No return value -- see
  * sched.c's own banner on why NtYieldExecution's "did I actually switch

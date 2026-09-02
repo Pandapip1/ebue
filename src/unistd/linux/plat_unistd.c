@@ -92,6 +92,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <string.h>
 #include <unistd.h>   /* syscall()'s own public prototype (-Wmissing-prototypes) */
 #include "libc.h"
 #include "plat_unistd.h"
@@ -100,6 +101,8 @@
  * via the generic modern ABI's asm-generic/unistd.h) -- confirmed
  * against this host's own <sys/syscall.h>, the same oracle src/mman/
  * linux/plat_mem.c's banner describes, rather than assumed. */
+#define SYS_getcwd              17
+#define SYS_uname              160
 #define SYS_chdir              49
 #define SYS_unlinkat           35
 #define SYS_linkat             37
@@ -439,6 +442,65 @@ int __plat_unlink(int dirfd, const char *path, int isdir)
 	ret = raw_syscall(SYS_unlinkat, (long)rd, (long)path, (long)(isdir ? AT_REMOVEDIR : 0), 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
+}
+
+/* ======================================================================
+ * getcwd.c: Linux's own getcwd(2) already answers exactly the plat_
+ * unistd.h contract wants -- a NUL-terminated, forward-slash, absolute
+ * path with no drive letter, DOS backslash, or UTF-16 anywhere in the
+ * picture, since a Linux pathname is just bytes -- so this backend is
+ * far simpler than the NT one (src/unistd/nt/plat_unistd.c's own
+ * __plat_getcwd(), which has to fetch a UTF-16 DOS-form path first and
+ * convert it) rather than equivalently complex: no RtlGetCurrentDirectory_U,
+ * no __utf16_to_utf8_buf(), just the syscall.
+ *
+ * getcwd(2)'s own return is the number of bytes written INCLUDING the
+ * terminating NUL (unlike this file's raw_syscall() siblings, which
+ * return a byte/entry count with no NUL of their own to count) -- one
+ * less than that is the length plat_unistd.h's own contract asks for.
+ * ERANGE (buffer too small) and EACCES (a path component not readable)
+ * both already arrive as the correct -errno from the kernel, so nothing
+ * here needs to remap either. */
+ssize_t __plat_getcwd(char *buf, size_t bufsz)
+{
+	long ret = raw_syscall(SYS_getcwd, (long)buf, (long)bufsz, 0L, 0L, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return (ssize_t)(ret - 1);
+}
+
+/* ======================================================================
+ * gethostname.c: Linux has no standalone gethostname(2) syscall on the
+ * modern generic ABI at all (glibc's own gethostname() is itself
+ * implemented on top of uname(2) for exactly this reason) -- so this
+ * backend answers the same real, kernel-known hostname __plat_uname()
+ * (src/misc/linux/plat_misc.c) already reports as struct utsname's
+ * nodename field, via the identical raw uname(2) call, rather than NT's
+ * environment-variable indirection (src/unistd/nt/plat_unistd.c's own
+ * __plat_hostname()). test/posix-tail.c's own uname()/gethostname()
+ * cross-check ("nodename is the same thing gethostname() reports")
+ * depends on this: the two calls must agree on this platform too, not
+ * only on NT.
+ * ====================================================================== */
+
+void __plat_hostname(char *buf, size_t bufsz)
+{
+	/* Raw kernel struct new_utsname (uapi/linux/utsname.h): six 65-byte
+	 * NUL-terminated fields, nodename second -- see src/misc/linux/
+	 * plat_misc.c's own __plat_uname() comment for the fuller layout
+	 * account; duplicated here rather than shared, matching every other
+	 * Linux backend's own per-file syscall-number/raw-struct copies in
+	 * this tree (this file's own banner). */
+	struct { char sysname[65]; char nodename[65]; char release[65];
+	         char version[65]; char machine[65]; char domainname[65]; } raw;
+	const char *h;
+	size_t n;
+	long ret = raw_syscall(SYS_uname, (long)&raw, 0L, 0L, 0L, 0L, 0L);
+	h = is_sys_error(ret) ? "localhost" : raw.nodename;
+	n = strlen(h);
+	if (!bufsz) return;
+	if (n >= bufsz) n = bufsz - 1;
+	memcpy(buf, h, n);
+	buf[n] = '\0';
 }
 
 /* ======================================================================
