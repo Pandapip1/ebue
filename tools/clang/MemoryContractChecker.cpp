@@ -13,6 +13,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
+#include "TokenAlgebra.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 
@@ -69,26 +70,8 @@ REGISTER_SET_WITH_PROGRAMSTATE(ProvenLessThan, SymbolRelation)
 
 namespace {
 
-static const TypedefNameDecl *dialectToken(ASTContext &Context,
-                                           StringRef Name) {
-  IdentifierInfo &Identifier = Context.Idents.get(Name);
-  DeclarationName Declaration(&Identifier);
-  for (NamedDecl *Candidate :
-       Context.getTranslationUnitDecl()->lookup(Declaration))
-    if (const auto *Token = dyn_cast<TypedefNameDecl>(Candidate))
-      return Token;
-  return nullptr;
-}
-
-static bool hasDialectQualifier(const TypedefNameDecl *Token,
-                                StringRef Qualifier) {
-  if (!Token)
-    return false;
-  for (const AnnotateAttr *Attribute : Token->specific_attrs<AnnotateAttr>())
-    if (Attribute->getAnnotation() == Qualifier)
-      return true;
-  return false;
-}
+using ntlibc::algebra::findTokenSort;
+using ntlibc::algebra::hasQualifier;
 
 enum class MemoryTokenOperation : unsigned char { Require, Grant };
 
@@ -180,9 +163,9 @@ static void tokenContracts(const FunctionDecl *Function,
                               Operation, Family, Arguments))
           continue;
         const TypedefNameDecl *Token =
-            dialectToken(Function->getASTContext(), Family);
-        bool ByteExtent = hasDialectQualifier(Token, "qual:extent_at_least");
-        bool ElementExtent = hasDialectQualifier(Token, "qual:element_extent");
+            findTokenSort(Function->getASTContext(), Family);
+        bool ByteExtent = hasQualifier(Token, "qual:extent_at_least");
+        bool ElementExtent = hasQualifier(Token, "qual:element_extent");
         if ((ByteExtent || ElementExtent) &&
             (Arguments.size() == 1 || Arguments.size() == 2)) {
           uint64_t Scale = 1;
@@ -203,7 +186,7 @@ static void tokenContracts(const FunctionDecl *Function,
           if (llvm::find(Spans, Contract) == Spans.end())
             Spans.push_back(Contract);
         }
-        if (hasDialectQualifier(Token, "qual:disjoint_extent") &&
+        if (hasQualifier(Token, "qual:disjoint_extent") &&
             Arguments.size() == 2) {
           DisjointContract Contract{
               Operation, Pointer, Arguments[0], Arguments[1]};
@@ -270,9 +253,9 @@ fieldSpanContract(const Expr *Expression, ASTContext &Context) {
     if (Open == StringRef::npos)
       continue;
     StringRef Family = Annotation.take_front(Open).trim();
-    const TypedefNameDecl *Token = dialectToken(Context, Family);
-    bool ByteExtent = hasDialectQualifier(Token, "qual:extent_at_least");
-    bool ElementExtent = hasDialectQualifier(Token, "qual:element_extent");
+    const TypedefNameDecl *Token = findTokenSort(Context, Family);
+    bool ByteExtent = hasQualifier(Token, "qual:extent_at_least");
+    bool ElementExtent = hasQualifier(Token, "qual:element_extent");
     if (!ByteExtent && !ElementExtent)
       continue;
     StringRef LengthName =
@@ -492,8 +475,8 @@ class MemoryContractChecker
           continue;
         StringRef Family = Annotation.take_front(Open).trim();
         const TypedefNameDecl *Token =
-            dialectToken(Function->getASTContext(), Family);
-        if (!hasDialectQualifier(Token, "qual:extent_at_least"))
+            findTokenSort(Function->getASTContext(), Family);
+        if (!hasQualifier(Token, "qual:extent_at_least"))
           continue;
         StringRef Expression =
             Annotation.slice(Open + 1, Annotation.size() - 1).trim();
@@ -526,8 +509,8 @@ class MemoryContractChecker
           continue;
         StringRef Family = Annotation.split('(').first.trim();
         const TypedefNameDecl *Token =
-            dialectToken(Function->getASTContext(), Family);
-        if (hasDialectQualifier(Token, "qual:dynamic_storage"))
+            findTokenSort(Function->getASTContext(), Family);
+        if (hasQualifier(Token, "qual:dynamic_storage"))
           return true;
       }
     return false;

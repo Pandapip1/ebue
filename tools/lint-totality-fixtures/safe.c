@@ -323,6 +323,96 @@ unsigned transition_ir_marks_opaque_effect_unsupported(unsigned n)
 	return n;
 }
 
+unsigned _BitInt(3) literal_finite_nonmonotonic(unsigned _BitInt(3) value)
+{
+	while (value != 0) {
+		if (value == 1)
+			value = 2;
+		else if (value == 2)
+			value = 3;
+		else
+			value = 0;
+	}
+	return value;
+}
+
+signed _BitInt(8) literal_signed_ub_terminal(signed _BitInt(8) value)
+{
+	for (;;)
+		value += (signed _BitInt(8))1;
+}
+
+unsigned char literal_multiple_backedges(unsigned char value)
+{
+	while (value != 0) {
+		if (value == 1) {
+			value = 2;
+			continue;
+		}
+		value = 0;
+	}
+	return value;
+}
+
+signed char literal_signed_widening_boundary(signed char value)
+{
+	while (value < 0)
+		value++;
+	return value;
+}
+
+unsigned char literal_unsigned_widening_boundary(unsigned char value)
+{
+	while (value == 255)
+		value = 0;
+	return value;
+}
+
+__UINT32_TYPE__ spacer_finite_nonmonotonic_u32(__UINT32_TYPE__ value)
+{
+	while (value != 0) {
+		if (value == 1)
+			value = 2;
+		else if (value == 2)
+			value = 3;
+		else
+			value = 0;
+	}
+	return value;
+}
+
+__UINT32_TYPE__ spacer_wide_terminating(__UINT32_TYPE__ value)
+{
+	while (value != 0) {
+		if (value == 1)
+			value = 0;
+		else
+			value--;
+	}
+	return value;
+}
+
+int spacer_wide_defined_descent(int value)
+{
+	for (;;) {
+		if (value == 0)
+			return value;
+		value -= 2;
+	}
+}
+
+__UINT32_TYPE__ spacer_multiple_backedges_u32(__UINT32_TYPE__ value)
+{
+	while (value != 0) {
+		if (value == 1) {
+			value = 2;
+			continue;
+		}
+		value = 0;
+	}
+	return value;
+}
+
 int guarded_dynamic_countdown(int n)
 {
 	while (n > 0) {

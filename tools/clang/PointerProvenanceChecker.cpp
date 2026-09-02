@@ -3,6 +3,8 @@
 
 #include "clang/AST/Expr.h"
 #include "clang/AST/ParentMap.h"
+#include "clang/AST/ASTTypeTraits.h"
+#include "clang/AST/ParentMapContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Analysis/AnalysisDeclContext.h"
 #include "clang/Lex/Lexer.h"
@@ -12,6 +14,10 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
+#include "RelationContracts.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
 
@@ -39,13 +45,19 @@ using namespace ento;
 // own -- an anonymous namespace does not enclose clang::ento, only sits
 // beside it.
 REGISTER_MAP_WITH_PROGRAMSTATE(NeedleAlias, SymbolRef, const MemRegion *)
+REGISTER_MAP_WITH_PROGRAMSTATE(RegistryElement, SymbolRef, const MemRegion *)
 
 namespace {
 
 class PointerProvenanceChecker
     : public Checker<check::PreStmt<BinaryOperator>, check::PreStmt<CastExpr>,
-                      check::PostCall> {
+                      check::PreStmt<ReturnStmt>, check::PreCall,
+                      check::PostCall, check::BeginFunction, check::Bind> {
   mutable std::unique_ptr<BugType> BT;
+  mutable llvm::DenseMap<const FunctionDecl *, bool> RelationEligibility;
+  mutable llvm::DenseMap<const VarDecl *, bool> RegistryEligibility;
+  mutable llvm::SmallVector<const VarDecl *, 4> ContractRegistries;
+  mutable bool ContractRegistriesInitialized = false;
 
   // Transitive: `p = strstr(...); p2 = strstr(p + 2, ...);` (fnmatch.c's
   // bracket_match(), walking from one "[:class:]" delimiter to the
@@ -106,6 +118,242 @@ class PointerProvenanceChecker
     if (const auto *Named = dyn_cast_or_null<NamedDecl>(Current))
       return Named->getQualifiedNameAsString();
     return Current ? Current->getDeclKindName() : "unknown";
+  }
+
+  using RelationContract = ntlibc::ElementRelationContract;
+
+  static std::optional<RelationContract>
+  relationContract(const FunctionDecl *FD, ntlibc::ElementRelationKind Kind,
+                   std::optional<unsigned> Parameter = std::nullopt) {
+    if (!FD)
+      return std::nullopt;
+    for (const FunctionDecl *Redeclaration : FD->redecls()) {
+      for (const auto *Attribute : Redeclaration->specific_attrs<AnnotateAttr>()) {
+        std::optional<RelationContract> Contract =
+            ntlibc::parseElementRelation(Attribute->getAnnotation());
+        if (!Contract || Contract->Kind != Kind)
+          continue;
+        if (Kind == ntlibc::ElementRelationKind::Return || !Parameter ||
+            *Parameter == Contract->Parameter)
+          return Contract;
+      }
+    }
+    return std::nullopt;
+  }
+
+  static const VarDecl *registryDecl(StringRef Name, ASTContext &Ctx) {
+    const VarDecl *Result = nullptr;
+    for (const Decl *Declaration : Ctx.getTranslationUnitDecl()->decls()) {
+      const auto *Variable = dyn_cast<VarDecl>(Declaration);
+      if (!Variable || Variable->getName() != Name ||
+          !Variable->getType()->isPointerType() ||
+          !Variable->hasGlobalStorage())
+        continue;
+      if (Result && Result->getCanonicalDecl() != Variable->getCanonicalDecl())
+        return nullptr;
+      Result = Variable;
+    }
+    return Result ? Result->getCanonicalDecl() : nullptr;
+  }
+
+  const llvm::SmallVectorImpl<const VarDecl *> &
+  contractRegistries(ASTContext &Ctx) const {
+    if (ContractRegistriesInitialized)
+      return ContractRegistries;
+    ContractRegistriesInitialized = true;
+    for (const Decl *Declaration : Ctx.getTranslationUnitDecl()->decls()) {
+      const auto *FD = dyn_cast<FunctionDecl>(Declaration);
+      if (!FD)
+        continue;
+      for (const auto *Attribute : FD->specific_attrs<AnnotateAttr>()) {
+        std::optional<RelationContract> Contract =
+            ntlibc::parseElementRelation(Attribute->getAnnotation());
+        StringRef Name = Contract ? Contract->Registry : StringRef();
+        const VarDecl *Registry =
+            Name.empty() ? nullptr : registryDecl(Name, Ctx);
+        if (Registry && llvm::find(ContractRegistries, Registry) ==
+                            ContractRegistries.end())
+          ContractRegistries.push_back(Registry);
+      }
+    }
+    return ContractRegistries;
+  }
+
+  class RegistryExposureVisitor
+      : public RecursiveASTVisitor<RegistryExposureVisitor> {
+    const VarDecl *Registry;
+
+    bool mentionsRegistry(const Stmt *Statement) const {
+      if (!Statement)
+        return false;
+      if (const auto *Reference = dyn_cast<DeclRefExpr>(Statement))
+        return Reference->getDecl()->getCanonicalDecl() == Registry;
+      for (const Stmt *Child : Statement->children())
+        if (mentionsRegistry(Child))
+          return true;
+      return false;
+    }
+
+  public:
+    bool Exposed = false;
+    explicit RegistryExposureVisitor(const VarDecl *Registry)
+        : Registry(Registry->getCanonicalDecl()) {}
+
+    bool VisitUnaryOperator(UnaryOperator *Operation) {
+      if (Operation->getOpcode() != UO_AddrOf)
+        return true;
+      const auto *Reference = dyn_cast<DeclRefExpr>(
+          Operation->getSubExpr()->IgnoreParenImpCasts());
+      if (Reference &&
+          Reference->getDecl()->getCanonicalDecl() == Registry)
+        Exposed = true;
+      return true;
+    }
+
+    bool VisitGCCAsmStmt(GCCAsmStmt *Assembly) {
+      if (mentionsRegistry(Assembly))
+        Exposed = true;
+      return true;
+    }
+
+    bool VisitMSAsmStmt(MSAsmStmt *Assembly) {
+      if (mentionsRegistry(Assembly))
+        Exposed = true;
+      return true;
+    }
+  };
+
+  bool registryEligible(const VarDecl *Registry, ASTContext &Ctx) const {
+    if (!Registry || Registry->getFormalLinkage() != Linkage::Internal ||
+        Registry->getType().isVolatileQualified())
+      return false;
+    Registry = Registry->getCanonicalDecl();
+    if (auto Existing = RegistryEligibility.find(Registry);
+        Existing != RegistryEligibility.end())
+      return Existing->second;
+    bool Eligible = true;
+    for (const VarDecl *Redeclaration : Registry->redecls())
+      if (Redeclaration->hasAttr<AliasAttr>() ||
+          Redeclaration->hasAttr<WeakRefAttr>() ||
+          Redeclaration->hasAttr<UsedAttr>() ||
+          Redeclaration->hasAttr<RetainAttr>())
+        Eligible = false;
+    RegistryExposureVisitor Visitor(Registry);
+    if (Eligible)
+      Visitor.TraverseDecl(Ctx.getTranslationUnitDecl());
+    Eligible = Eligible && !Visitor.Exposed;
+    RegistryEligibility[Registry] = Eligible;
+    return Eligible;
+  }
+
+  static bool directCallReference(const DeclRefExpr *Reference,
+                                  const FunctionDecl *FD,
+                                  ASTContext &Ctx) {
+    DynTypedNode Current = DynTypedNode::create(*Reference);
+    for (unsigned Depth = 0; Depth < 8; ++Depth) {
+      auto Parents = Ctx.getParents(Current);
+      if (Parents.size() != 1)
+        return false;
+      const DynTypedNode &Parent = Parents[0];
+      if (const auto *Call = Parent.get<CallExpr>())
+        return Call->getDirectCallee() &&
+               Call->getDirectCallee()->getCanonicalDecl() ==
+                   FD->getCanonicalDecl();
+      const Stmt *Statement = Parent.get<Stmt>();
+      if (!Statement ||
+          (!isa<ParenExpr>(Statement) && !isa<CastExpr>(Statement)))
+        return false;
+      Current = Parent;
+    }
+    return false;
+  }
+
+  class FunctionReferenceVisitor
+      : public RecursiveASTVisitor<FunctionReferenceVisitor> {
+    const FunctionDecl *FD;
+    ASTContext &Ctx;
+
+  public:
+    bool AddressTaken = false;
+    unsigned DirectCalls = 0;
+    FunctionReferenceVisitor(const FunctionDecl *FD, ASTContext &Ctx)
+        : FD(FD->getCanonicalDecl()), Ctx(Ctx) {}
+
+    bool VisitDeclRefExpr(DeclRefExpr *Reference) {
+      const auto *Referenced = dyn_cast<FunctionDecl>(Reference->getDecl());
+      if (!Referenced || Referenced->getCanonicalDecl() != FD)
+        return true;
+      if (directCallReference(Reference, FD, Ctx))
+        ++DirectCalls;
+      else
+        AddressTaken = true;
+      return true;
+    }
+  };
+
+  bool relationEligible(const FunctionDecl *FD, ASTContext &Ctx) const {
+    if (!FD || FD->getStorageClass() != SC_Static)
+      return false;
+    FD = FD->getCanonicalDecl();
+    if (auto Existing = RelationEligibility.find(FD);
+        Existing != RelationEligibility.end())
+      return Existing->second;
+    bool Eligible = true;
+    for (const FunctionDecl *Redeclaration : FD->redecls())
+      if (Redeclaration->hasAttr<AliasAttr>() ||
+          Redeclaration->hasAttr<WeakRefAttr>() ||
+          Redeclaration->hasAttr<IFuncAttr>() ||
+          Redeclaration->hasAttr<UsedAttr>() ||
+          Redeclaration->hasAttr<RetainAttr>())
+        Eligible = false;
+    FunctionReferenceVisitor Visitor(FD, Ctx);
+    if (Eligible)
+      Visitor.TraverseDecl(Ctx.getTranslationUnitDecl());
+    Eligible = Eligible && !Visitor.AddressTaken && Visitor.DirectCalls > 0;
+    RelationEligibility[FD] = Eligible;
+    return Eligible;
+  }
+
+  static const MemRegion *registryBase(const VarDecl *Registry,
+                                       CheckerContext &C) {
+    if (!Registry)
+      return nullptr;
+    ProgramStateRef State = C.getState();
+    Loc Location = State->getLValue(Registry, C.getLocationContext());
+    return baseRegion(State->getSVal(Location), State);
+  }
+
+  static const MemRegion *registryStorage(const VarDecl *Registry,
+                                          CheckerContext &C) {
+    if (!Registry)
+      return nullptr;
+    return C.getState()
+        ->getLValue(Registry, C.getLocationContext())
+        .getAsRegion();
+  }
+
+  static const MemRegion *elementRegistry(SVal Value,
+                                          ProgramStateRef State) {
+    const MemRegion *Region = Value.getAsRegion();
+    const auto *Symbol =
+        Region ? dyn_cast<SymbolicRegion>(Region->getBaseRegion()) : nullptr;
+    if (!Symbol)
+      return nullptr;
+    const MemRegion *const *Registry =
+        State->get<RegistryElement>(Symbol->getSymbol());
+    return Registry ? *Registry : nullptr;
+  }
+
+  static const VarDecl *directRegistryExpression(const Expr *Expression,
+                                                 ASTContext &Ctx) {
+    Expression = Expression ? Expression->IgnoreParenImpCasts() : nullptr;
+    const auto *Reference = dyn_cast_or_null<DeclRefExpr>(Expression);
+    const auto *Variable =
+        Reference ? dyn_cast<VarDecl>(Reference->getDecl()) : nullptr;
+    if (!Variable || !Variable->getType()->isPointerType() ||
+        !Variable->hasGlobalStorage())
+      return nullptr;
+    return registryDecl(Variable->getName(), Ctx);
   }
 
   // The standard strto* family writes either its input pointer or a pointer
@@ -607,6 +855,20 @@ public:
         baseRegion(State->getSVal(Operation->getRHS(), LC), State);
     if (Left && Right && Left == Right)
       return;
+    const MemRegion *LeftRegistry =
+        elementRegistry(State->getSVal(Operation->getLHS(), LC), State);
+    const MemRegion *RightRegistry =
+        elementRegistry(State->getSVal(Operation->getRHS(), LC), State);
+    if (const VarDecl *Registry = directRegistryExpression(
+            Operation->getLHS(), C.getASTContext()))
+      if (registryEligible(Registry, C.getASTContext()))
+        LeftRegistry = registryStorage(Registry, C);
+    if (const VarDecl *Registry = directRegistryExpression(
+            Operation->getRHS(), C.getASTContext()))
+      if (registryEligible(Registry, C.getASTContext()))
+        RightRegistry = registryStorage(Registry, C);
+    if (LeftRegistry && LeftRegistry == RightRegistry)
+      return;
     if (isNamedException(C))
       return;
     report(
@@ -635,10 +897,156 @@ public:
         Cast, C);
   }
 
+  void checkPreStmt(const ReturnStmt *Return, CheckerContext &C) const {
+    const auto *FD = dyn_cast_or_null<FunctionDecl>(
+        C.getLocationContext()->getDecl());
+    std::optional<RelationContract> Contract = relationContract(
+        FD, ntlibc::ElementRelationKind::Return);
+    const Expr *Value = Return->getRetValue();
+    if (!Contract || !Value ||
+        Value->isNullPointerConstant(C.getASTContext(),
+                                     Expr::NPC_ValueDependentIsNotNull) ||
+        !relationEligible(FD, C.getASTContext()))
+      return;
+    const VarDecl *Registry =
+        registryDecl(Contract->Registry, C.getASTContext());
+    if (!registryEligible(Registry, C.getASTContext()))
+      return;
+    ProgramStateRef State = C.getState();
+    const MemRegion *Returned = baseRegion(C.getSVal(Value), State);
+    const MemRegion *RegistryBase = registryBase(Registry, C);
+    const MemRegion *Relation = elementRegistry(C.getSVal(Value), State);
+    const MemRegion *Storage = registryStorage(Registry, C);
+    if ((!Returned || !RegistryBase || Returned != RegistryBase) &&
+        (!Relation || Relation != Storage))
+      report("element relation contract is not proven", Return, C);
+  }
+
+  void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
+    const auto *FD = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    const auto *OriginCall = dyn_cast_or_null<CallExpr>(Call.getOriginExpr());
+    if (!FD || !OriginCall || OriginCall->getDirectCallee() != FD ||
+        !relationEligible(FD, C.getASTContext()))
+      return;
+    for (unsigned Index = 0; Index < Call.getNumArgs(); ++Index) {
+      std::optional<RelationContract> Contract = relationContract(
+          FD, ntlibc::ElementRelationKind::Parameter, Index);
+      if (!Contract)
+        continue;
+      const VarDecl *Registry =
+          registryDecl(Contract->Registry, C.getASTContext());
+      if (!registryEligible(Registry, C.getASTContext()))
+        continue;
+      ProgramStateRef State = C.getState();
+      const MemRegion *Argument = baseRegion(Call.getArgSVal(Index), State);
+      const MemRegion *RegistryBase = registryBase(Registry, C);
+      const MemRegion *Relation =
+          elementRegistry(Call.getArgSVal(Index), State);
+      const MemRegion *Storage = registryStorage(Registry, C);
+      if ((!Argument || !RegistryBase || Argument != RegistryBase) &&
+          (!Relation || Relation != Storage)) {
+        report("element relation contract is not proven", OriginCall, C);
+        return;
+      }
+    }
+  }
+
+  void checkBeginFunction(CheckerContext &C) const {
+    const auto *FD = dyn_cast_or_null<FunctionDecl>(
+        C.getLocationContext()->getDecl());
+    if (!FD || !relationEligible(FD, C.getASTContext()))
+      return;
+    ProgramStateRef State = C.getState();
+    bool Changed = false;
+    for (unsigned Index = 0; Index < FD->getNumParams(); ++Index) {
+      std::optional<RelationContract> Contract = relationContract(
+          FD, ntlibc::ElementRelationKind::Parameter, Index);
+      if (!Contract)
+        continue;
+      const VarDecl *Registry =
+          registryDecl(Contract->Registry, C.getASTContext());
+      if (!registryEligible(Registry, C.getASTContext()))
+        continue;
+      const MemRegion *Storage = registryStorage(Registry, C);
+      Loc ParameterLocation =
+          State->getLValue(FD->getParamDecl(Index), C.getLocationContext());
+      const MemRegion *ParameterValue =
+          State->getSVal(ParameterLocation).getAsRegion();
+      const auto *ParameterSymbol =
+          ParameterValue
+              ? dyn_cast<SymbolicRegion>(ParameterValue->getBaseRegion())
+              : nullptr;
+      if (!Storage || !ParameterSymbol)
+        continue;
+      State = State->set<RegistryElement>(ParameterSymbol->getSymbol(),
+                                          Storage);
+      Changed = true;
+    }
+    if (Changed)
+      C.addTransition(State);
+  }
+
+  void checkBind(SVal Location, SVal Value, const Stmt *,
+                 CheckerContext &C) const {
+    const MemRegion *Written = Location.getAsRegion();
+    if (!Written)
+      return;
+    Written = Written->getBaseRegion();
+    ProgramStateRef Original = C.getState();
+    ProgramStateRef State = Original;
+    for (const auto &Entry : Original->get<RegistryElement>())
+      if (Entry.second == Written)
+        State = State->remove<RegistryElement>(Entry.first);
+    const MemRegion *ValueRegion = Value.getAsRegion();
+    const auto *ValueSymbol =
+        ValueRegion
+            ? dyn_cast<SymbolicRegion>(ValueRegion->getBaseRegion())
+            : nullptr;
+    if (ValueSymbol) {
+      for (const VarDecl *Registry : contractRegistries(C.getASTContext())) {
+        if (!registryEligible(Registry, C.getASTContext()))
+          continue;
+        const MemRegion *CurrentBase = registryBase(Registry, C);
+        if (CurrentBase && CurrentBase == ValueRegion->getBaseRegion()) {
+          const MemRegion *Storage = registryStorage(Registry, C);
+          if (Storage)
+            State = State->set<RegistryElement>(ValueSymbol->getSymbol(),
+                                                Storage);
+        }
+      }
+    }
+    if (State != Original)
+      C.addTransition(State);
+  }
+
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
     const auto *FD = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
     if (!FD || !FD->getIdentifier())
       return;
+    if (const auto *OriginCall =
+            dyn_cast_or_null<CallExpr>(Call.getOriginExpr())) {
+      std::optional<RelationContract> Contract = relationContract(
+          FD, ntlibc::ElementRelationKind::Return);
+      if (Contract && OriginCall->getDirectCallee() == FD &&
+          relationEligible(FD, C.getASTContext())) {
+        ProgramStateRef State = C.getState();
+        const VarDecl *Registry =
+            registryDecl(Contract->Registry, C.getASTContext());
+        if (!registryEligible(Registry, C.getASTContext()))
+          return;
+        const MemRegion *Storage = registryStorage(Registry, C);
+        const MemRegion *Return = Call.getReturnValue().getAsRegion();
+        const auto *ReturnSymbol =
+            Return ? dyn_cast<SymbolicRegion>(Return->getBaseRegion())
+                   : nullptr;
+        if (Storage && ReturnSymbol) {
+          State = State->set<RegistryElement>(ReturnSymbol->getSymbol(),
+                                              Storage);
+          C.addTransition(State);
+          return;
+        }
+      }
+    }
     if (isStringConversionFunction(FD) && Call.getNumArgs() > 1) {
       ProgramStateRef State = C.getState();
       const MemRegion *Haystack = Call.getArgSVal(0).getAsRegion();

@@ -646,7 +646,9 @@ unsigned member_guard_without_progress(struct vec *p, int skip)
 
 int signed_nonunit_after_zero_guard(int n)
 {
-	for (;;) { /* totality-expect */
+	/* Even values reach zero.  Odd values have only a finite defined prefix
+	 * before signed UB; Spacer proves that no defined backedge cycle exists. */
+	for (;;) {
 		if (n == 0) return n;
 		n -= 2;
 	}
@@ -897,6 +899,118 @@ int transition_ir_havoc_can_bypass_progress(int n)
 			n--;
 	}
 	return n;
+}
+
+unsigned char literal_promoted_uint8_cycle(unsigned char value)
+{
+	for (;;) { /* totality-expect */
+		value++;
+	}
+}
+
+unsigned char literal_toggle_cycle(unsigned char value)
+{
+	while (value < 2) { /* totality-expect */
+		value = 1 - value;
+	}
+	return value;
+}
+
+unsigned char literal_havoc_cycle(unsigned char value)
+{
+	while (value != 0) { /* totality-expect */
+		if (opaque_predicate())
+			value = 0;
+	}
+	return value;
+}
+
+int literal_const_choice(void) __attribute__((const));
+
+unsigned char literal_havoced_return(unsigned char value)
+{
+	while (value != 0) { /* totality-expect */
+		value = (unsigned char)literal_const_choice();
+	}
+	return value;
+}
+
+unsigned _BitInt(2)
+literal_nondeterministic_cycle(unsigned _BitInt(2) value,
+	unsigned _BitInt(1) stay)
+{
+	while (value != 3) { /* totality-expect */
+		if (stay)
+			continue;
+		value++;
+	}
+	return value;
+}
+
+unsigned short literal_cap_rejection(unsigned short value)
+{
+	while (value != 0) { /* totality-expect */
+		if (value == 1)
+			value = 2;
+		else if (value == 2)
+			value = 3;
+		else
+			value = 0;
+	}
+	return value;
+}
+
+signed char literal_signed_narrowing_cycle(signed char value)
+{
+	while (value != 0) { /* totality-expect */
+		value = (signed char)(value + 128);
+	}
+	return value;
+}
+
+__UINT32_TYPE__ spacer_toggle_cycle_u32(__UINT32_TYPE__ value)
+{
+	while (value < 2) { /* totality-expect */
+		value = 1 - value;
+	}
+	return value;
+}
+
+__UINT32_TYPE__ spacer_modular_cycle_u32(__UINT32_TYPE__ value)
+{
+	for (;;) { /* totality-expect */
+		value++;
+	}
+}
+
+__UINT32_TYPE__ spacer_nondeterministic_cycle_u32(
+	__UINT32_TYPE__ value, unsigned _BitInt(1) stay)
+{
+	while (value != 0) { /* totality-expect */
+		if (stay)
+			continue;
+		value = 0;
+	}
+	return value;
+}
+
+__UINT32_TYPE__ spacer_projected_memory_state_rejected(
+	__UINT32_TYPE__ value, const unsigned *choice)
+{
+	while (value != 0) { /* totality-expect */
+		if (*choice)
+			value = 0;
+	}
+	return value;
+}
+
+unsigned spacer_unsupported_call_rejected(unsigned value)
+{
+	while (value != 0) { /* totality-expect */
+		if (opaque_predicate())
+			value = 0;
+	}
+	return value;
 }
 
 int dynamic_countdown_escaped_rank(int n)

@@ -12,6 +12,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
+#include "TokenAlgebra.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -33,6 +34,10 @@ REGISTER_MAP_WITH_PROGRAMSTATE(ReplacedBy, SymbolRef, SymbolRef)
 
 namespace {
 
+using ntlibc::algebra::excludedSentinel;
+using ntlibc::algebra::findTokenSort;
+using ntlibc::algebra::hasQualifier;
+
 struct TokenContract {
   const IdentifierInfo *Family;
   const Attr *Attribute;
@@ -42,48 +47,8 @@ static const FunctionDecl *functionOf(const CallEvent &Call) {
   return dyn_cast_or_null<FunctionDecl>(Call.getDecl());
 }
 
-static const TypedefNameDecl *dialectToken(ASTContext &Context,
-                                           StringRef Name) {
-  IdentifierInfo &Identifier = Context.Idents.get(Name);
-  DeclarationName Declaration(&Identifier);
-  for (NamedDecl *Candidate :
-       Context.getTranslationUnitDecl()->lookup(Declaration))
-    if (const auto *Token = dyn_cast<TypedefNameDecl>(Candidate))
-      return Token;
-  return nullptr;
-}
-
 static bool isDynamicStorageToken(ASTContext &Context, StringRef Name) {
-  const TypedefNameDecl *Token = dialectToken(Context, Name);
-  if (!Token)
-    return false;
-  for (const AnnotateAttr *Attribute :
-       Token->specific_attrs<AnnotateAttr>())
-    if (Attribute->getAnnotation() == "qual:dynamic_storage")
-      return true;
-  return false;
-}
-
-static std::optional<int64_t>
-excludedSentinel(const IdentifierInfo *Family, ASTContext &Context) {
-  if (!Family)
-    return std::nullopt;
-  const TypedefNameDecl *Token = dialectToken(Context, Family->getName());
-  if (!Token)
-    return std::nullopt;
-  constexpr StringRef Prefix = "qual:sentinel_exclude=";
-  for (const AnnotateAttr *Attribute :
-       Token->specific_attrs<AnnotateAttr>()) {
-    StringRef Text = Attribute->getAnnotation();
-    if (!Text.consume_front(Prefix))
-      continue;
-    if (Text == "NULL")
-      return 0;
-    int64_t Value = 0;
-    if (!Text.getAsInteger(10, Value))
-      return Value;
-  }
-  return std::nullopt;
+  return hasQualifier(findTokenSort(Context, Name), "qual:dynamic_storage");
 }
 
 static const IdentifierInfo *annotationFamily(const Decl *Declaration,
@@ -384,7 +349,8 @@ public:
         }
         ProgramStateRef ValueState = State;
         if (std::optional<int64_t> Sentinel =
-                excludedSentinel(Family, Function->getASTContext())) {
+                excludedSentinel(findTokenSort(Function->getASTContext(),
+                                               Family->getName()))) {
           DefinedSVal SentinelValue = C.getSValBuilder().makeIntVal(
               static_cast<uint64_t>(*Sentinel), Parameter->getType());
           DefinedOrUnknownSVal IsSentinel =
@@ -472,7 +438,8 @@ public:
     if (!Defined)
       return;
     if (std::optional<int64_t> Sentinel =
-            excludedSentinel(Returns->Family, Function->getASTContext())) {
+            excludedSentinel(findTokenSort(Function->getASTContext(),
+                                           Returns->Family->getName()))) {
       DefinedSVal SentinelValue = C.getSValBuilder().makeIntVal(
           static_cast<uint64_t>(*Sentinel), Function->getReturnType());
       DefinedOrUnknownSVal IsSentinel =
