@@ -2680,6 +2680,111 @@ unsigned scalar_dynamic_then_unit_wrap(unsigned i, unsigned step,
 	return i;
 }
 
+const char *unguarded_unsigned_pointer_step(const char *p, unsigned step,
+	int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		unsigned used = step;
+		p += used;
+	}
+	return p;
+}
+
+const char *late_guarded_unsigned_pointer_step(const char *p, unsigned step,
+	int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		unsigned used = step;
+		p += used;
+		if (!used) break;
+	}
+	return p;
+}
+
+const char *continuing_zero_unsigned_pointer_step(const char *p,
+	unsigned step, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		unsigned used = step;
+		if (!used) continue;
+		p += used;
+	}
+	return p;
+}
+
+const char *mutated_guarded_unsigned_pointer_step(const char *p,
+	unsigned step, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		unsigned used = step;
+		if (!used) break;
+		used = 0;
+		p += used;
+	}
+	return p;
+}
+
+extern void mutate_guarded_step(unsigned *);
+
+const char *aliased_guarded_unsigned_pointer_step(const char *p,
+	unsigned step, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		unsigned used = step;
+		if (!used) break;
+		mutate_guarded_step(&used);
+		p += used;
+	}
+	return p;
+}
+
+const char *bypassed_guarded_unsigned_pointer_step(const char *p,
+	unsigned step, int keep_running, int skip)
+{
+	while (keep_running) { /* totality-expect */
+		unsigned used = step;
+		if (skip) continue;
+		if (!used) break;
+		p += used;
+	}
+	return p;
+}
+
+const char *cancelled_guarded_unsigned_pointer_ascent(const char *p,
+	unsigned step, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		unsigned used = step;
+		if (!used) break;
+		p += used;
+		p -= used;
+	}
+	return p;
+}
+
+const char *cancelled_guarded_unsigned_pointer_descent(const char *p,
+	unsigned step, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		unsigned used = step;
+		if (!used) break;
+		p -= used;
+		p += used;
+	}
+	return p;
+}
+
+const char *signed_guarded_pointer_step(const char *p, int step,
+	int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		int used = step;
+		if (!used) break;
+		p += used;
+	}
+	return p;
+}
+
 const char *local_pointer_copied_dynamic_cancellation(const char *p,
 	int step, int keep_running)
 {

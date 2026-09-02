@@ -983,6 +983,17 @@ const char *local_pointer_before_unsigned_span(const char *p, unsigned span,
 	return p;
 }
 
+const char *guarded_unsigned_pointer_step(const char *p, unsigned step,
+	int keep_running)
+{
+	while (keep_running) {
+		unsigned used = step;
+		if (!used) break;
+		p += used;
+	}
+	return p;
+}
+
 const char *switch_pointer_progress(const char *p, int arm)
 {
 	while (*p) {

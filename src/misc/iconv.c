@@ -241,6 +241,7 @@ size_t iconv(iconv_t cd, char **restrict inbuf, size_t *restrict inbytesleft,
 	struct __iconv_state *st = (struct __iconv_state *)cd;
 	unsigned char *ip, *op;
 	size_t il, ol;
+	int err = 0;
 
 	if (!st || cd == (iconv_t)-1) { errno = EBADF; return (size_t)-1; }
 
@@ -266,40 +267,30 @@ size_t iconv(iconv_t cd, char **restrict inbuf, size_t *restrict inbytesleft,
 	 * all of ol -- deriving ol from op instead would truncate that. */
 	ol = op && outbytesleft ? *outbytesleft : 0;
 
-	/* Every successful conversion consumes at least one input byte. */
-	for (size_t steps_left = il; il > 0 && steps_left > 0;
-	     steps_left--) {
+	while (il > 0) {
 		uint32_t cp;
-		size_t used, need;
-		int err = 0;
+		size_t used = st->from == CS_UTF8
+		    ? decode_utf8(ip, il, &cp, &err)
+		    : decode_utf16le(ip, il, &cp, &err);
+		size_t need;
 
-		used = st->from == CS_UTF8 ? decode_utf8(ip, il, &cp, &err)
-		                           : decode_utf16le(ip, il, &cp, &err);
-		if (!used) goto stop_err;
+		if (!used) break;
 
 		need = st->to == CS_UTF8 ? encode_utf8(cp, op, ol)
 		                         : encode_utf16le(cp, op, ol);
-		if (need > ol) { err = E2BIG; goto stop_err; }
+		if (need > ol) { err = E2BIG; break; }
 
 		ip += used; il -= used;
 		op += need; ol -= need;
-		continue;
-
-	stop_err:
-		/* Commit what was converted and leave the pointers at the
-		 * character that was not.  The counts written back are the
-		 * whole of what a resuming caller has to go on. */
-		*inbuf = (char *)ip;
-		if (inbytesleft) *inbytesleft = il;
-		if (outbuf) *outbuf = (char *)op;
-		if (outbytesleft) *outbytesleft = ol;
-		errno = err;
-		return (size_t)-1;
 	}
 
+	/* Commit what was converted and leave the pointers at the character
+	 * that was not.  The counts written back are the whole of what a
+	 * resuming caller has to go on. */
 	*inbuf = (char *)ip;
 	if (inbytesleft) *inbytesleft = il;
 	if (outbuf) *outbuf = (char *)op;
 	if (outbytesleft) *outbytesleft = ol;
+	if (err) { errno = err; return (size_t)-1; }
 	return 0;
 }

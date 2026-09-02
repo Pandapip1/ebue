@@ -3998,6 +3998,57 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return false;
   }
 
+  bool bodyHasGuardedDynamicPointerProgress(const Stmt *Body,
+                                            const Progress &Rank) const {
+    const auto *Step = dyn_cast_or_null<VarDecl>(Rank.DynamicStep);
+    const auto *RankVariable = dyn_cast_or_null<VarDecl>(Rank.Variable);
+    const auto *Compound = dyn_cast_or_null<CompoundStmt>(Body);
+    if (!Step || !RankVariable || !Compound ||
+        !RankVariable->getType()->isPointerType() ||
+        !Step->getType()->isUnsignedIntegerType() ||
+        Step->getType().isVolatileQualified() ||
+        !(isa<ParmVarDecl>(Step) || Step->hasLocalStorage()) ||
+        !(isa<ParmVarDecl>(RankVariable) || RankVariable->hasLocalStorage()) ||
+        addressTaken(Current->getBody(), Step) ||
+        addressTaken(Current->getBody(), RankVariable) ||
+        writesVariable(Body, Step) || aliasedWrite(Step, Body) ||
+        !Rank.GuardedStep ||
+        !preservesPositiveValue(Rank.GuardedStep, Step))
+      return false;
+    bool Defined = false;
+    unsigned Facts = 0;
+    for (const Stmt *Child : Compound->body()) {
+      if (const auto *Declaration = dyn_cast<DeclStmt>(Child)) {
+        for (const Decl *Item : Declaration->decls())
+          if (Item == Step) {
+            if (!Step->getInit())
+              return false;
+            Defined = true;
+            Facts = 0;
+          }
+        continue;
+      }
+      if (!Defined)
+        continue;
+      if (const auto *Guard = dyn_cast<IfStmt>(Child)) {
+        if (Guard->getInit() || Guard->getConditionVariableDeclStmt() ||
+            containsCall(Guard->getCond()))
+          return false;
+        if (exitsBeforeBackedge(Guard->getThen()))
+          Facts |= descentFacts(Guard->getCond(), false, Rank, Step);
+        else if (Guard->getElse() && exitsBeforeBackedge(Guard->getElse()))
+          Facts |= descentFacts(Guard->getCond(), true, Rank, Step);
+      }
+      if (const auto *Expression = dyn_cast<Expr>(Child)) {
+        std::optional<Progress> Change = progress(Expression);
+        if (Change && sameRank(*Change, Rank) &&
+            Change->Kind == Rank.Kind && Change->DynamicStep == Step)
+          return (Facts & StepNonzero) != 0;
+      }
+    }
+    return false;
+  }
+
   bool bodyHasDominatingNonzeroGuard(const Stmt *Body,
                                      const Progress &Rank) const {
     const auto *Compound = dyn_cast_or_null<CompoundStmt>(Body);
@@ -4230,7 +4281,10 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     std::vector<Progress> Candidates;
     collectProgress(Body, Candidates);
     for (const Progress &Change : Candidates) {
-      if (!admissibleProgress(Change) ||
+      bool GuardedPointerProgress =
+          Change.DynamicStep && Change.Variable->getType()->isPointerType() &&
+          bodyHasGuardedDynamicPointerProgress(Body, Change);
+      if ((!admissibleProgress(Change) && !GuardedPointerProgress) ||
           !validRankVariable(Change, Body, Increment) ||
           !bodyGuaranteesProgress(Body, Change, Condition))
         continue;
