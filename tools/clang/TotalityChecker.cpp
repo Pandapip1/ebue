@@ -956,8 +956,19 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
            * specifically requires a unit step must likewise not be
            * satisfied by a wider signed update on another path. */
           if ((Change->GuardedStep || Expected.GuardedStep) &&
-              Change->GuardedStep != Expected.GuardedStep)
-            return Mutation::Bad;
+              Change->GuardedStep != Expected.GuardedStep) {
+            /* A mandatory unit pointer rank may be accompanied by another
+             * same-direction unsigned offset.  The latter cannot reverse
+             * the rank; if it leaves the array object, pointer arithmetic
+             * is already undefined rather than wrapping into a cycle. */
+            bool NonnegativePointerExtra =
+                Expected.Variable->getType()->isPointerType() &&
+                Expected.UnitStep && !Expected.GuardedStep &&
+                Change->DynamicStep && Change->GuardedStep &&
+                Change->GuardedStep->getType()->isUnsignedIntegerType();
+            if (!NonnegativePointerExtra)
+              return Mutation::Bad;
+          }
           if (Change->RequiresNonzeroCondition !=
               Expected.RequiresNonzeroCondition)
             return Mutation::Bad;
@@ -2148,9 +2159,16 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     if (const auto *Expression = dyn_cast<Expr>(Statement))
       if (std::optional<Progress> Change = progress(Expression)) {
         bool Seen = false;
-        for (const Progress &Existing : Result)
-          Seen |= sameRank(Existing, *Change) &&
-                  Existing.Kind == Change->Kind;
+        for (Progress &Existing : Result)
+          if (sameRank(Existing, *Change) &&
+              Existing.Kind == Change->Kind) {
+            /* Prefer the context-free unit update as the candidate rank.
+             * mutation() and the pointer-direction audit still validate
+             * every additional update on each reachable backedge. */
+            if (!Existing.UnitStep && Change->UnitStep)
+              Existing = *Change;
+            Seen = true;
+          }
         if (!Seen)
           Result.push_back(*Change);
         return;

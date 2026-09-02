@@ -294,8 +294,7 @@ nl_catd catopen(const char *name withtok(null_terminated), int oflag)
 	 * spell the template twice. */
 	static const char dflt[] = "%N";
 	char buf[PATH_MAX];
-	const char *path, *lang, *p, *z;
-	size_t components_left;
+	const char *path, *lang, *p;
 	nl_catd cd;
 
 	if (!name || !*name) { errno = ENOENT; return (nl_catd)-1; }
@@ -327,16 +326,11 @@ nl_catd catopen(const char *name withtok(null_terminated), int oflag)
 	path = getenv("NLSPATH");
 	if (!path || !*path) path = "%N:%N.cat";
 
-	/* A path of n bytes has at most n+1 colon-delimited templates,
-	 * including leading, adjacent, and trailing empty components. */
-	components_left = strlen(path) + 1;
 	p = path;
-	while (components_left > 0) {
+	for (;;) {
 		size_t n, template_len;
 
-		components_left--;
 		template_len = strcspn(p, ":");
-		z = p + template_len;
 
 		/* "A leading or two adjacent <colon> characters ( "::" ) is
 		 * equivalent to specifying %N." */
@@ -348,8 +342,9 @@ nl_catd catopen(const char *name withtok(null_terminated), int oflag)
 			cd = read_catalog(buf);
 			if (cd != (nl_catd)-1) return cd;
 		}
-		if (!*z) break;
-		p = z + 1;
+		p += template_len;
+		if (!*p) break;
+		p++;
 	}
 
 	errno = ENOENT;

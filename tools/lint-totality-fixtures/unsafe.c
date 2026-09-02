@@ -2670,6 +2670,16 @@ const char *local_pointer_dynamic_cancellation(const char *p, int step,
 	return p;
 }
 
+unsigned scalar_dynamic_then_unit_wrap(unsigned i, unsigned step,
+	int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		i += step;
+		i++;
+	}
+	return i;
+}
+
 const char *local_pointer_copied_dynamic_cancellation(const char *p,
 	int step, int keep_running)
 {

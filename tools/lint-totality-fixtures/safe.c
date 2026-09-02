@@ -963,6 +963,26 @@ const char *local_pointer_without_sentinel(const char *p, int keep_running)
 	return p;
 }
 
+const char *local_pointer_after_unsigned_span(const char *p, unsigned span,
+	int keep_running)
+{
+	while (keep_running) {
+		p += span;
+		p++;
+	}
+	return p;
+}
+
+const char *local_pointer_before_unsigned_span(const char *p, unsigned span,
+	int keep_running)
+{
+	while (keep_running) {
+		p++;
+		p += span;
+	}
+	return p;
+}
+
 const char *switch_pointer_progress(const char *p, int arm)
 {
 	while (*p) {
