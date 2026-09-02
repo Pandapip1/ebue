@@ -2360,7 +2360,9 @@ unsigned positive_unsigned_skip_root(unsigned limit)
 static const char *positive_stride_without_sentinel_leaf(const char *p,
 	unsigned stride, int keep_running)
 {
-	while (keep_running) { /* totality-expect */
+	/* Pointer arithmetic itself exhausts the finite source object before it
+	 * can cycle, even without a sentinel load. */
+	while (keep_running) {
 		p += stride;
 	}
 	return p;
@@ -2522,6 +2524,312 @@ unsigned inferred_indirect_condition(unsigned n)
 	unsigned i = 0;
 	while (i < n && inferred_indirect_reader(i)) { /* totality-expect */
 		i++;
+	}
+	return i;
+}
+
+struct unsafe_pointer_member_cursor {
+	const char *p;
+};
+
+extern void mutate_pointer_member(void);
+
+const char *pointer_member_unknown_call(
+	struct unsafe_pointer_member_cursor *cursor, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		cursor->p++;
+		mutate_pointer_member();
+	}
+	return cursor->p;
+}
+
+static void (*pointer_member_callback)(void);
+
+const char *pointer_member_indirect_call(
+	struct unsafe_pointer_member_cursor *cursor, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		cursor->p++;
+		pointer_member_callback();
+	}
+	return cursor->p;
+}
+
+const char *pointer_member_copied_base_backtrack(
+	struct unsafe_pointer_member_cursor *cursor, int keep_running)
+{
+	struct unsafe_pointer_member_cursor *alias = cursor;
+	while (keep_running) { /* totality-expect */
+		cursor->p++;
+		alias->p--;
+	}
+	return cursor->p;
+}
+
+const char *pointer_member_copied_base_reset(
+	struct unsafe_pointer_member_cursor *cursor, const char *start,
+	int keep_running)
+{
+	struct unsafe_pointer_member_cursor *alias = cursor;
+	while (keep_running) { /* totality-expect */
+		cursor->p++;
+		alias->p = start;
+	}
+	return cursor->p;
+}
+
+const char *pointer_member_direct_backtrack(
+	struct unsafe_pointer_member_cursor *cursor, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		cursor->p++;
+		cursor->p--;
+	}
+	return cursor->p;
+}
+
+const char *pointer_member_base_switch(
+	struct unsafe_pointer_member_cursor *cursor,
+	struct unsafe_pointer_member_cursor *other, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		cursor->p++;
+		cursor = other;
+	}
+	return cursor->p;
+}
+
+const char *pointer_member_early_continue(
+	struct unsafe_pointer_member_cursor *cursor, int keep_running, int skip)
+{
+	while (keep_running) { /* totality-expect */
+		if (skip) continue;
+		cursor->p++;
+	}
+	return cursor->p;
+}
+
+const char *pointer_member_alternating_backedges(
+	struct unsafe_pointer_member_cursor *cursor, int keep_running, int reverse)
+{
+	while (keep_running) { /* totality-expect */
+		if (reverse) cursor->p--;
+		else cursor->p++;
+	}
+	return cursor->p;
+}
+
+const char *pointer_member_asm_mutation(
+	struct unsafe_pointer_member_cursor *cursor, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		cursor->p++;
+		__asm__ volatile("" : "+r"(cursor->p));
+	}
+	return cursor->p;
+}
+
+struct volatile_pointer_member_cursor {
+	const char *volatile p;
+};
+
+const char *pointer_member_volatile(
+	struct volatile_pointer_member_cursor *cursor, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		cursor->p++;
+	}
+	return cursor->p;
+}
+
+const char *integer_reconstituted_pointer(const char *p, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		p = (const char *)((__UINTPTR_TYPE__)p + 1);
+	}
+	return p;
+}
+
+const char *local_pointer_net_zero(const char *p, int keep_running)
+{
+	while (keep_running) { /* totality-expect */
+		p++;
+		p--;
+	}
+	return p;
+}
+
+const char *local_pointer_alternating(const char *p, int keep_running,
+	int reverse)
+{
+	while (keep_running) { /* totality-expect */
+		if (reverse) p--;
+		else p++;
+	}
+	return p;
+}
+
+const char *local_pointer_object_switch(const char *p, const char *other,
+	int keep_running, int switch_object)
+{
+	while (keep_running) { /* totality-expect */
+		p++;
+		if (switch_object) p = other;
+	}
+	return p;
+}
+
+const char *pointer_member_condition_alias_reset(
+	struct unsafe_pointer_member_cursor *cursor, const char *start)
+{
+	struct unsafe_pointer_member_cursor *alias = cursor;
+	while ((alias->p = start), *cursor->p) { /* totality-expect */
+		cursor->p++;
+	}
+	return cursor->p;
+}
+
+const char *local_pointer_condition_reset(const char *p, const char *start,
+	int keep_running)
+{
+	while ((p = start), keep_running) { /* totality-expect */
+		p++;
+	}
+	return p;
+}
+
+const char *switch_case_without_progress(const char *p, int arm)
+{
+	while (*p) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			p++;
+			break;
+		case 1:
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_continue_without_progress(const char *p, int arm)
+{
+	while (*p) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			p++;
+			break;
+		case 1:
+			continue;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_fallthrough_bypasses_progress(const char *p, int arm)
+{
+	while (*p) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			p++;
+		case 1:
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_empty_sentinel_then_reset(const char *p,
+	const char *start, int arm)
+{
+	while (*p) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			p++;
+			break;
+		case 1:
+			p = (const char *)"";
+			p = start;
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_empty_not_terminating_or(const char *p, int keep,
+	int arm)
+{
+	while (*p || keep) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			p++;
+			break;
+		case 1:
+			p = (const char *)"";
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_empty_wrong_polarity(const char *p, int arm)
+{
+	while (!*p) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			p++;
+			break;
+		case 1:
+			p = (const char *)"";
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_nested_case_bypass(const char *p, int arm, int guard)
+{
+	while (*p) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			if (guard) {
+				p++;
+		case 1:
+				break;
+			}
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+unsigned switch_repeated_unsigned_progress(unsigned i, unsigned limit,
+	int arm)
+{
+	while (i < limit) { /* totality-expect */
+		switch (arm) {
+		case 0:
+			i++;
+			i++;
+			break;
+		default:
+			return i;
+		}
 	}
 	return i;
 }

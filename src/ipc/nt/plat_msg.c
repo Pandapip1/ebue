@@ -111,8 +111,7 @@ static char *dir_path(void)
 	total = dirlen + sizeof suffix;
 	path = malloc(total);
 	if (!path) return NULL;
-	memcpy(path, dir, dirlen);
-	memcpy(path + dirlen, suffix, sizeof suffix);
+	snprintf(path, total, "%s%s", dir, suffix);
 	return path;
 }
 
@@ -278,7 +277,8 @@ int msgget(key_t key, int msgflg)
 	{
 		size_t dirlen = strlen(dir);
 		ctrpath = malloc(dirlen + sizeof "/next");
-		if (ctrpath) { memcpy(ctrpath, dir, dirlen); memcpy(ctrpath + dirlen, "/next", sizeof "/next"); }
+		if (ctrpath) snprintf(ctrpath, dirlen + sizeof "/next",
+		    "%s/next", dir);
 	}
 	free(dir);
 	if (!ctrpath) { __plat_named_mutant_release(lock); return -1; }
@@ -296,8 +296,9 @@ int msgget(key_t key, int msgflg)
 		char buf[16];
 		int n = snprintf(buf, sizeof buf, "%d", id + 1);
 		lseek(ctrfd, 0, SEEK_SET);
-		if (n > 0) write(ctrfd, buf, (size_t)n);
-		ftruncate(ctrfd, n > 0 ? n : 0);
+		if (n > 0 && (size_t)n < sizeof buf)
+			write(ctrfd, buf, (size_t)n);
+		ftruncate(ctrfd, n > 0 && (size_t)n < sizeof buf ? n : 0);
 	}
 	close(ctrfd);
 	free(ctrpath);

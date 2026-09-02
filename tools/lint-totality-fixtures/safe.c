@@ -920,3 +920,125 @@ unsigned inferred_readonly_pointer_bound(const unsigned char *p, unsigned n)
 		i++;
 	return i;
 }
+
+struct safe_pointer_member_cursor {
+	const char *p;
+};
+
+static int pointer_member_readonly(
+	const struct safe_pointer_member_cursor *cursor)
+{
+	return *cursor->p != 0;
+}
+
+const char *pointer_member_body_exit(
+	struct safe_pointer_member_cursor *cursor)
+{
+	for (;;) {
+		if (!pointer_member_readonly(cursor)) return cursor->p;
+		cursor->p++;
+	}
+}
+
+const char *pointer_member_positive_skip(
+	struct safe_pointer_member_cursor *cursor, int keep_running)
+{
+	while (keep_running)
+		cursor->p += 2;
+	return cursor->p;
+}
+
+const char *pointer_member_descent(
+	struct safe_pointer_member_cursor *cursor, int keep_running)
+{
+	while (keep_running)
+		cursor->p--;
+	return cursor->p;
+}
+
+const char *local_pointer_without_sentinel(const char *p, int keep_running)
+{
+	while (keep_running)
+		p++;
+	return p;
+}
+
+const char *switch_pointer_progress(const char *p, int arm)
+{
+	while (*p) {
+		switch (arm) {
+		case 0:
+			p++;
+			break;
+		case 1:
+		case 2:
+			p += 2;
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_pointer_fallthrough(const char *p, int arm)
+{
+	while (*p) {
+		switch (arm) {
+		case 0:
+			arm = 1;
+			/* fall through */
+		case 1:
+			p++;
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_pointer_continue(const char *p, int arm)
+{
+	while (*p) {
+		switch (arm) {
+		case 0:
+			p++;
+			continue;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+const char *switch_empty_sentinel_exit(const char *p, int arm)
+{
+	while (*p) {
+		switch (arm) {
+		case 0:
+			p++;
+			break;
+		case 1:
+			p = (const char *)"";
+			break;
+		default:
+			return p;
+		}
+	}
+	return p;
+}
+
+unsigned switch_scalar_progress(unsigned i, unsigned limit, int arm)
+{
+	while (i < limit) {
+		switch (arm) {
+		case 0:
+			i++;
+			break;
+		default:
+			return i;
+		}
+	}
+	return i;
+}

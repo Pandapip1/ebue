@@ -382,9 +382,8 @@ static char *join_path(const char *dir, const char *name)
 	int need_slash = dl > 0 && dir[dl - 1] != '/';
 	char *p = malloc(dl + (size_t)need_slash + nl + 1);
 	if (!p) return NULL;
-	memcpy(p, dir, dl);
-	if (need_slash) p[dl] = '/';
-	memcpy(p + dl + (size_t)need_slash, name, nl + 1);
+	snprintf(p, dl + (size_t)need_slash + nl + 1, "%s%s%s",
+	    dir, need_slash ? "/" : "", name);
 	return p;
 }
 

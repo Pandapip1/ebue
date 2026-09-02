@@ -130,10 +130,7 @@ static const char *resolve(struct walkstate *ws, const char *path, char **tmp)
 	l1 = strlen(path);
 	full = malloc(l0 + 1 + l1 + 1);
 	if (!full) { errno = ENOMEM; return NULL; }
-	memcpy(full, cwd, l0);
-	full[l0] = '/';
-	__ownership_writable_span(full + l0 + 1, l1 + 1);
-	memcpy(full + l0 + 1, path, l1 + 1);
+	snprintf(full, l0 + 1 + l1 + 1, "%s/%s", cwd, path);
 	*tmp = full;
 	return full;
 }
@@ -410,10 +407,8 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 			clen++;
 			child = malloc(clen);
 			if (!child) { r = -1; errno = ENOMEM; break; }
-			memcpy(child, path, plen);
-			if (separator) child[plen] = '/';
-			memcpy(child + off, name, namelen);
-			child[off + namelen] = 0;
+			snprintf(child, clen, "%s%s%s", path,
+			    separator ? "/" : "", name);
 
 			/* level_open() may have closed lv.dp to make room for a
 			 * descendant's own directory; reopen (and replay via

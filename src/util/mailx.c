@@ -326,7 +326,7 @@ static int secondary_mailbox_path(const struct passwd *pw, char *out, size_t out
  * line" once ensure_blank_terminated() adds the separating blank line
  * -- see that function). Returns 0/-1 (malloc failure only). */
 static int append_escaped_body(char **out, size_t *outlen, size_t *outcap,
-	const char *body, size_t bodylen)
+	const char *restrict body, size_t bodylen)
 {
 	size_t i = 0;
 	while (i < bodylen) {

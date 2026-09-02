@@ -104,8 +104,8 @@ FILE *tmpfile(void)
 	if (n > (size_t)-1 - sizeof "/ntlibcXXXXXX") { errno = ENOMEM; return 0; }
 	tmpl = malloc(n + sizeof "/ntlibcXXXXXX");
 	if (!tmpl) return 0;
-	memcpy(tmpl, dir, n);
-	memcpy(tmpl + n, "/ntlibcXXXXXX", sizeof "/ntlibcXXXXXX");
+	snprintf(tmpl, n + sizeof "/ntlibcXXXXXX",
+	    "%s/ntlibcXXXXXX", dir);
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return 0; }
 	/* POSIX semantics: unlinked at once, gone the moment it is closed. */
@@ -205,16 +205,8 @@ char *tempnam(const char *dir, const char *pfx) // NOLINT(bugprone-easily-swappa
 	char *tmpl = malloc(n + 1 + pn + sizeof "XXXXXX");
 	int fd;
 	if (!tmpl) return 0;
-	{
-		char *dst = tmpl;
-		const char *src = d;
-		memcpy(dst, src, n); // NOLINT(bugprone-not-null-terminated-result) -- built up piece by piece, terminated below
-	}
-	tmpl[n] = '/';
-	if (pn) {
-		memcpy(tmpl + n + 1, pfx, pn); // NOLINT(bugprone-not-null-terminated-result) -- ditto
-	}
-	memcpy(tmpl + n + 1 + pn, "XXXXXX", sizeof "XXXXXX");
+	snprintf(tmpl, n + 1 + pn + sizeof "XXXXXX", "%s/%sXXXXXX",
+	    d, pfx ? pfx : "");
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return 0; }
 	if (close(fd) < 0 || unlink(tmpl) < 0) {

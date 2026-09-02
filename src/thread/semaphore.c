@@ -97,10 +97,7 @@ static char *sem_path(const char *name)
 	total = d + prefix + n + 1;
 	path = malloc(total);
 	if (!path) return NULL;
-	memcpy(path, dir, d);
-	memcpy(path + d, "/ntlibc-sem/", prefix);
-	memcpy(path + d + prefix, component, n);
-	path[total - 1] = 0;
+	snprintf(path, total, "%s/ntlibc-sem/%s", dir, component);
 	return path;
 }
 

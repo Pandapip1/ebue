@@ -299,7 +299,8 @@
 
 struct man_buf { char *data; size_t len, cap; };
 
-static int mbuf_append(struct man_buf *b, const char *data, size_t n)
+static int mbuf_append(struct man_buf *restrict b,
+	const char *restrict data, size_t n)
 {
 	if (!n) {
 		if (!b->data) {
@@ -1309,8 +1310,8 @@ static int man_run_external_pager(const char *pager, const char *styled, size_t 
 
 	tmpl = malloc(dn + sizeof "/ntlibc-manXXXXXX");
 	if (!tmpl) return -1;
-	memcpy(tmpl, dir, dn);
-	memcpy(tmpl + dn, "/ntlibc-manXXXXXX", sizeof "/ntlibc-manXXXXXX");
+	snprintf(tmpl, dn + sizeof "/ntlibc-manXXXXXX",
+	    "%s/ntlibc-manXXXXXX", dir);
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return -1; }
 	f = fdopen(fd, "wb");

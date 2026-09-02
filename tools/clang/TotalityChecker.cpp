@@ -914,11 +914,17 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     BackWithoutProgress = 4,
     BackWithProgress = 8,
     ExitsLoop = 16,
+    BreakWithoutProgress = 32,
+    BreakWithProgress = 64,
+    FallAtTerminatingSentinel = 128,
+    BreakAtTerminatingSentinel = 256,
   };
 
   struct Flow {
     unsigned Outcomes;
     bool Invalid;
+    /* Multiple upward unsigned steps can skip a strict bound and wrap. */
+    bool RepeatedProgress = false;
   };
 
   enum class Mutation { None, Good, Bad };
@@ -976,66 +982,156 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   static Flow sequence(Flow First, Flow Second) {
     if (First.Invalid || Second.Invalid)
       return {0, true};
-    unsigned Result =
-        First.Outcomes & (BackWithoutProgress | BackWithProgress | ExitsLoop);
+    unsigned Result = First.Outcomes &
+        (BackWithoutProgress | BackWithProgress | ExitsLoop |
+         BreakWithoutProgress | BreakWithProgress);
+    unsigned RepeatedOnPath = 0;
     if (First.Outcomes & FallWithoutProgress)
       Result |= Second.Outcomes;
     if (First.Outcomes & FallWithProgress) {
+      RepeatedOnPath = Second.Outcomes &
+          (FallWithProgress | BackWithProgress | BreakWithProgress);
       if (Second.Outcomes & (FallWithoutProgress | FallWithProgress))
         Result |= FallWithProgress;
       if (Second.Outcomes & (BackWithoutProgress | BackWithProgress))
         Result |= BackWithProgress;
       if (Second.Outcomes & ExitsLoop)
         Result |= ExitsLoop;
+      if (Second.Outcomes &
+          (BreakWithoutProgress | BreakWithProgress))
+        Result |= BreakWithProgress;
+      if (Second.Outcomes & FallAtTerminatingSentinel)
+        Result |= FallAtTerminatingSentinel;
+      if (Second.Outcomes & BreakAtTerminatingSentinel)
+        Result |= BreakAtTerminatingSentinel;
     }
-    return {Result, false};
+    if (First.Outcomes & FallAtTerminatingSentinel) {
+      unsigned UnsafeContinuation = Second.Outcomes &
+          (FallWithProgress | BackWithProgress | BreakWithProgress);
+      if (UnsafeContinuation)
+        return {0, true};
+      if (Second.Outcomes &
+          (FallWithoutProgress | FallAtTerminatingSentinel))
+        Result |= FallAtTerminatingSentinel;
+      if (Second.Outcomes & BackWithoutProgress)
+        Result |= ExitsLoop;
+      if (Second.Outcomes & ExitsLoop)
+        Result |= ExitsLoop;
+      if (Second.Outcomes & BreakWithoutProgress)
+        Result |= BreakAtTerminatingSentinel;
+      if (Second.Outcomes & BreakAtTerminatingSentinel)
+        Result |= BreakAtTerminatingSentinel;
+    }
+    bool Repeated = First.RepeatedProgress || Second.RepeatedProgress ||
+                    ((First.Outcomes & FallWithProgress) && RepeatedOnPath);
+    return {Result, false, Repeated};
   }
 
-  static Flow flow(const Stmt *Statement, const Progress &Expected) {
+  static bool sentinelLoad(const Expr *Expression, const Progress &Rank) {
+    const auto *Unary = dyn_cast_or_null<UnaryOperator>(ignore(Expression));
+    return Unary && Unary->getOpcode() == UO_Deref &&
+           basedOn(Unary->getSubExpr(), Rank);
+  }
+
+  static bool zeroSentinelMakesConditionFalse(const Expr *Condition,
+                                              const Progress &Rank) {
+    Condition = ignore(Condition);
+    if (sentinelLoad(Condition, Rank))
+      return true;
+    const auto *Binary = dyn_cast_or_null<BinaryOperator>(Condition);
+    if (!Binary)
+      return false;
+    if (Binary->getOpcode() == BO_LAnd)
+      return zeroSentinelMakesConditionFalse(Binary->getLHS(), Rank) ||
+             zeroSentinelMakesConditionFalse(Binary->getRHS(), Rank);
+    if (Binary->getOpcode() == BO_LOr)
+      return zeroSentinelMakesConditionFalse(Binary->getLHS(), Rank) &&
+             zeroSentinelMakesConditionFalse(Binary->getRHS(), Rank);
+    bool LoadLeft = sentinelLoad(Binary->getLHS(), Rank) &&
+                    zeroInteger(Binary->getRHS());
+    bool LoadRight = sentinelLoad(Binary->getRHS(), Rank) &&
+                     zeroInteger(Binary->getLHS());
+    if (!LoadLeft && !LoadRight)
+      return false;
+    return Binary->getOpcode() == BO_NE ||
+           (LoadLeft && Binary->getOpcode() == BO_GT) ||
+           (LoadRight && Binary->getOpcode() == BO_LT);
+  }
+
+  static bool assignsEmptyStringSentinel(const Expr *Expression,
+                                         const Progress &Rank,
+                                         const Expr *LoopCondition) {
+    const auto *Assignment =
+        dyn_cast_or_null<BinaryOperator>(ignore(Expression));
+    if (!Assignment || Assignment->getOpcode() != BO_Assign ||
+        !rankAccess(Assignment->getLHS(), Rank) ||
+        !zeroSentinelMakesConditionFalse(LoopCondition, Rank))
+      return false;
+    const Expr *Right = Assignment->getRHS()->IgnoreParens();
+    while (const auto *Cast = dyn_cast<CastExpr>(Right))
+      Right = Cast->getSubExpr()->IgnoreParens();
+    const auto *Literal = dyn_cast<StringLiteral>(Right);
+    return Literal && Literal->getLength() == 0;
+  }
+
+  static Flow flow(const Stmt *Statement, const Progress &Expected,
+                   const Expr *LoopCondition = nullptr) {
     if (!Statement)
       return {FallWithoutProgress, false};
     if (const auto *Expression = dyn_cast<Expr>(Statement)) {
       const Expr *Plain = ignore(Expression);
       if (const auto *Binary = dyn_cast_or_null<BinaryOperator>(Plain)) {
         if (Binary->getOpcode() == BO_Comma)
-          return sequence(flow(Binary->getLHS(), Expected),
-                          flow(Binary->getRHS(), Expected));
+          return sequence(flow(Binary->getLHS(), Expected, LoopCondition),
+                          flow(Binary->getRHS(), Expected, LoopCondition));
         if (Binary->getOpcode() == BO_LAnd || Binary->getOpcode() == BO_LOr) {
-          Flow Left = flow(Binary->getLHS(), Expected);
-          Flow WithRight = sequence(Left, flow(Binary->getRHS(), Expected));
+          Flow Left = flow(Binary->getLHS(), Expected, LoopCondition);
+          Flow WithRight = sequence(
+              Left, flow(Binary->getRHS(), Expected, LoopCondition));
           return {Left.Outcomes | WithRight.Outcomes,
-                  Left.Invalid || WithRight.Invalid};
+                  Left.Invalid || WithRight.Invalid,
+                  Left.RepeatedProgress || WithRight.RepeatedProgress};
         }
       }
       if (const auto *Conditional =
               dyn_cast_or_null<ConditionalOperator>(Plain)) {
-        Flow Condition = flow(Conditional->getCond(), Expected);
-        Flow True = flow(Conditional->getTrueExpr(), Expected);
-        Flow False = flow(Conditional->getFalseExpr(), Expected);
+        Flow Condition = flow(Conditional->getCond(), Expected, LoopCondition);
+        Flow True = flow(Conditional->getTrueExpr(), Expected, LoopCondition);
+        Flow False = flow(Conditional->getFalseExpr(), Expected, LoopCondition);
         Flow Arms{True.Outcomes | False.Outcomes,
-                  True.Invalid || False.Invalid};
+                  True.Invalid || False.Invalid,
+                  True.RepeatedProgress || False.RepeatedProgress};
         return sequence(Condition, Arms);
       }
+      if (assignsEmptyStringSentinel(Expression, Expected, LoopCondition))
+        return {FallAtTerminatingSentinel, false};
     }
     if (const auto *Compound = dyn_cast<CompoundStmt>(Statement)) {
       Flow Result{FallWithoutProgress, false};
       for (const Stmt *Child : Compound->body())
-        Result = sequence(Result, flow(Child, Expected));
+        Result = sequence(Result, flow(Child, Expected, LoopCondition));
       return Result;
     }
     if (const auto *If = dyn_cast<IfStmt>(Statement)) {
-      Flow Condition = flow(If->getCond(), Expected);
-      Flow Then = flow(If->getThen(), Expected);
-      Flow Else = flow(If->getElse(), Expected);
+      Flow Condition = flow(If->getCond(), Expected, LoopCondition);
+      Flow Then = flow(If->getThen(), Expected, LoopCondition);
+      Flow Else = flow(If->getElse(), Expected, LoopCondition);
       Flow Branches{Then.Outcomes | Else.Outcomes,
-                    Then.Invalid || Else.Invalid};
+                    Then.Invalid || Else.Invalid,
+                    Then.RepeatedProgress || Else.RepeatedProgress};
       return sequence(Condition, Branches);
     }
     if (const auto *Label = dyn_cast<LabelStmt>(Statement))
-      return flow(Label->getSubStmt(), Expected);
+      return flow(Label->getSubStmt(), Expected, LoopCondition);
+    if (const auto *Case = dyn_cast<CaseStmt>(Statement))
+      return flow(Case->getSubStmt(), Expected, LoopCondition);
+    if (const auto *Default = dyn_cast<DefaultStmt>(Statement))
+      return flow(Default->getSubStmt(), Expected, LoopCondition);
     if (isa<ContinueStmt>(Statement))
       return {BackWithoutProgress, false};
-    if (isa<BreakStmt>(Statement) || isa<ReturnStmt>(Statement))
+    if (isa<BreakStmt>(Statement))
+      return {BreakWithoutProgress, false};
+    if (isa<ReturnStmt>(Statement))
       return {ExitsLoop, false};
     if (isa<ForStmt>(Statement) || isa<WhileStmt>(Statement) ||
         isa<DoStmt>(Statement)) {
@@ -1048,8 +1144,82 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
                  ? Flow{FallWithoutProgress, false}
                  : Flow{0, true};
     }
-    if (isa<GotoStmt>(Statement) || isa<SwitchStmt>(Statement))
+    if (isa<GotoStmt>(Statement))
       return {0, true};
+    if (const auto *Switch = dyn_cast<SwitchStmt>(Statement)) {
+      const auto *Body = dyn_cast_or_null<CompoundStmt>(Switch->getBody());
+      if (!Body)
+        return {0, true};
+      auto LabelCount = [](const Stmt *Root) {
+        unsigned Count = 0;
+        std::vector<const Stmt *> Pending{Root};
+        while (!Pending.empty()) {
+          const Stmt *Item = Pending.back();
+          Pending.pop_back();
+          if (!Item)
+            continue;
+          if (Item != Root && isa<SwitchStmt>(Item))
+            continue;
+          if (isa<CaseStmt>(Item) || isa<DefaultStmt>(Item))
+            ++Count;
+          for (const Stmt *Child : Item->children())
+            Pending.push_back(Child);
+        }
+        return Count;
+      };
+      unsigned AllLabels = LabelCount(Body);
+      unsigned EntryLabels = 0;
+      bool HasDefault = false;
+      Flow Entries{0, false};
+      auto CountLabelChain = [&](const Stmt *Root) {
+        unsigned Count = 0;
+        const Stmt *Item = Root;
+        while (const auto *Case = dyn_cast_or_null<CaseStmt>(Item)) {
+          ++Count;
+          Item = Case->getSubStmt();
+        }
+        if (const auto *Default = dyn_cast_or_null<DefaultStmt>(Item)) {
+          ++Count;
+          HasDefault = true;
+        }
+        return Count;
+      };
+      std::vector<const Stmt *> Statements(Body->body_begin(),
+                                           Body->body_end());
+      for (size_t I = 0; I < Statements.size(); ++I) {
+        const Stmt *Entry = Statements[I];
+        if (!isa<CaseStmt>(Entry) && !isa<DefaultStmt>(Entry))
+          continue;
+        EntryLabels += CountLabelChain(Entry);
+        Flow Path{FallWithoutProgress, false};
+        for (size_t J = I; J < Statements.size(); ++J)
+          Path = sequence(Path, flow(Statements[J], Expected, LoopCondition));
+        Entries.Outcomes |= Path.Outcomes;
+        Entries.Invalid |= Path.Invalid;
+        Entries.RepeatedProgress |= Path.RepeatedProgress;
+      }
+      /* Labels nested beneath ordinary control flow can jump past guards or
+       * rank updates.  Supporting them needs a real CFG; direct labels and
+       * chains of adjacent labels cover ordinary C switches. */
+      if (EntryLabels != AllLabels)
+        return {0, true};
+      if (!HasDefault)
+        Entries.Outcomes |= FallWithoutProgress;
+      if (Entries.Outcomes & BreakWithoutProgress)
+        Entries.Outcomes |= FallWithoutProgress;
+      if (Entries.Outcomes & BreakWithProgress)
+        Entries.Outcomes |= FallWithProgress;
+      if (Entries.Outcomes & BreakAtTerminatingSentinel)
+        Entries.Outcomes |= FallAtTerminatingSentinel;
+      Entries.Outcomes &= ~(BreakWithoutProgress | BreakWithProgress |
+                            BreakAtTerminatingSentinel);
+      Flow Prefix = sequence(flow(Switch->getInit(), Expected, LoopCondition),
+                             flow(Switch->getConditionVariableDeclStmt(),
+                                  Expected, LoopCondition));
+      Prefix = sequence(Prefix,
+                        flow(Switch->getCond(), Expected, LoopCondition));
+      return sequence(Prefix, Entries);
+    }
     switch (mutation(Statement, Expected)) {
     case Mutation::None:
       return {FallWithoutProgress, false};
@@ -1062,9 +1232,13 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   }
 
   static bool bodyGuaranteesProgress(const Stmt *Body,
-                                     const Progress &Expected) {
-    Flow Result = flow(Body, Expected);
+                                     const Progress &Expected,
+                                     const Expr *LoopCondition = nullptr) {
+    Flow Result = flow(Body, Expected, LoopCondition);
     return !Result.Invalid && Result.Outcomes != 0 &&
+           (!(Expected.Variable->getType()->isUnsignedIntegerType() &&
+              Expected.Kind == ProgressKind::Up) ||
+            !Result.RepeatedProgress) &&
            !(Result.Outcomes & (FallWithoutProgress | BackWithoutProgress));
   }
 
@@ -2053,7 +2227,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
            (Callee->getName() == "free" || Callee->getName() == "__free");
   }
 
-  static bool containsMemberInvalidatingCall(const Stmt *Statement) {
+  bool containsMemberInvalidatingCall(const Stmt *Statement) const {
     if (!Statement)
       return false;
     /* A successful free cannot mutate a live object which carries a member
@@ -2061,9 +2235,14 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
      * use after lifetime and the execution has already left defined C.  Keep
      * every other call conservative, including realloc-like calls, and still
      * inspect a known deallocator's argument for nested unknown calls. */
-    if (const auto *Call = dyn_cast<CallExpr>(Statement))
-      if (!knownDeallocator(Call))
+    if (const auto *Call = dyn_cast<CallExpr>(Statement)) {
+      const FunctionDecl *Callee = Call->getDirectCallee();
+      if (!knownDeallocator(Call) &&
+          (!Callee ||
+           (!Callee->hasAttr<PureAttr>() && !Callee->hasAttr<ConstAttr>() &&
+            !ReadonlyFunctions.contains(Callee))))
         return true;
+    }
     for (const Stmt *Child : Statement->children())
       if (containsMemberInvalidatingCall(Child))
         return true;
@@ -2307,10 +2486,10 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return false;
     /* A call need not receive BaseVar to mutate the same object: a parameter
      * may alias globally reachable storage, and a local object's address may
-     * have escaped before the loop.  Without an interprocedural no-write
-     * summary, every call except the lifetime-only deallocators above
-     * invalidates a member bound. */
-    if (containsMemberInvalidatingCall(Body) ||
+     * have escaped before the loop.  Only the separately checked read-only
+     * summary (and lifetime-only deallocators) closes that route. */
+    if (containsAsm(Body) || containsAsm(Increment) ||
+        containsMemberInvalidatingCall(Body) ||
         containsMemberInvalidatingCall(Increment))
       return false;
     if (writesVariable(Body, BaseVar) || writesVariable(Increment, BaseVar) ||
@@ -2398,11 +2577,16 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       bool ClosedRestrictedBase = restrictedMemberBaseIsClosed(Base);
       return !Change.VolatileAccess && !Field->getType().isVolatileQualified() &&
              Base && !Base->getType().isVolatileQualified() && Current &&
+             !containsAsm(Body) && !containsAsm(Increment) &&
              (!Base->getType().isRestrictQualified() ||
               ClosedRestrictedBase) &&
              ((!callCanReachBackedge(Body) && !containsCall(Increment)) ||
+              (!containsImpureCall(Body) &&
+               !containsImpureCall(Increment)) ||
               ClosedRestrictedBase) &&
              !writesVariable(Body, Base) && !aliasedWrite(Base, Body) &&
+             !mentionsFieldThroughOtherBase(Body, Change) &&
+             !mentionsFieldThroughOtherBase(Increment, Change) &&
              (!Base->getType()->isPointerType() ||
               !writesThroughAlias(Body, Base, false));
     }
@@ -2418,6 +2602,40 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return false;
     }
     return !aliasedWrite(Variable, Body);
+  }
+
+  static bool mentionsFieldThroughOtherBase(const Stmt *Statement,
+                                            const Progress &Rank) {
+    if (!Statement)
+      return false;
+    if (const auto *Member = dyn_cast<MemberExpr>(Statement))
+      if (Member->getMemberDecl() == Rank.Variable &&
+          value(Member->getBase()) != Rank.Base)
+        return true;
+    for (const Stmt *Child : Statement->children())
+      if (mentionsFieldThroughOtherBase(Child, Rank))
+        return true;
+    return false;
+  }
+
+  bool pointerObjectDistanceRank(const Progress &Rank,
+                                 const Expr *Condition,
+                                 const Stmt *Body,
+                                 const Expr *Increment) const {
+    if (!Rank.Variable->getType()->isPointerType() ||
+        containsAsm(Condition) || containsAsm(Body) || containsAsm(Increment) ||
+        mutation(Condition, Rank) != Mutation::None)
+      return false;
+    if (!isa<FieldDecl>(Rank.Variable))
+      return true;
+    /* A member cursor may have aliases established before the loop.  Trust
+     * calls only when their read-only contract closes that route, and reject
+     * even a conservative mention of this field through another base: it
+     * could cancel, reset, or backtrack the candidate cursor. */
+    return !containsImpureCall(Body) && !containsImpureCall(Increment) &&
+           !mentionsFieldThroughOtherBase(Condition, Rank) &&
+           !mentionsFieldThroughOtherBase(Body, Rank) &&
+           !mentionsFieldThroughOtherBase(Increment, Rank);
   }
 
   bool stableBound(const Expr *Expression, const Stmt *Body,
@@ -3729,6 +3947,10 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
 
   bool sentinelCondition(const Expr *Condition, const Progress &Change) const {
     Condition = ignore(Condition);
+    if (mutation(Condition, Change) != Mutation::None ||
+        (isa<FieldDecl>(Change.Variable) &&
+         mentionsFieldThroughOtherBase(Condition, Change)))
+      return false;
     if (Change.RequiresNonzeroCondition)
       return rankNonzeroWhen(Condition, Change, true);
     if (const auto *Logical = dyn_cast_or_null<BinaryOperator>(Condition)) {
@@ -3870,6 +4092,12 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         return "unproved";
       if (strictComparison(Condition, *Change, Body, Increment))
         return "strict-scalar-rank";
+      /* Defined C pointer arithmetic is confined to an array object and its
+       * one-past position.  A pointer which advances on every backedge
+       * therefore has a finite object-distance rank even when the loop's
+       * exit test is spelled in the body rather than in its condition. */
+      if (pointerObjectDistanceRank(*Change, Condition, Body, Increment))
+        return "sentinel-distance-rank";
       if (sentinelCondition(Condition, *Change))
         return "sentinel-distance-rank";
       return "unproved";
@@ -3908,6 +4136,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         continue;
       if (strictComparison(Condition, Change, Body, Increment))
         return "strict-scalar-rank";
+      if (pointerObjectDistanceRank(Change, Condition, Body, Increment))
+        return "sentinel-distance-rank";
       if (sentinelCondition(Condition, Change))
         return "sentinel-distance-rank";
     }
@@ -3921,7 +4151,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     for (const Progress &Change : Candidates) {
       if (!admissibleProgress(Change) ||
           !validRankVariable(Change, Body, Increment) ||
-          !bodyGuaranteesProgress(Body, Change))
+          !bodyGuaranteesProgress(Body, Change, Condition))
         continue;
       if (strictComparison(Condition, Change, Body, Increment))
         return "strict-scalar-rank";
@@ -3931,12 +4161,14 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       if (Change.DynamicStep && Change.Kind == ProgressKind::Up &&
           bodyHasGuardedDynamicAscent(Condition, Body, Increment, Change))
         return "strict-scalar-rank";
+      if (pointerObjectDistanceRank(Change, Condition, Body, Increment))
+        return "sentinel-distance-rank";
       if (!Condition && Change.UnitStep &&
           Change.Kind == ProgressKind::Down &&
           Change.Variable->getType()->isIntegerType()) {
         Progress UnitChange = Change;
         UnitChange.UnitOnly = true;
-        if (bodyGuaranteesProgress(Body, UnitChange) &&
+        if (bodyGuaranteesProgress(Body, UnitChange, Condition) &&
             bodyHasDominatingNonzeroGuard(Body, UnitChange))
           return "strict-scalar-rank";
       }

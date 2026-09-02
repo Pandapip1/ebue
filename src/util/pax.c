@@ -218,23 +218,24 @@ static enum pax_type ustar_flag_to_pax_type(char f)
  * place) is reported to the caller as -1, which write_ustar_header()
  * turns into the loud, documented refusal this file's header
  * describes rather than an extended-header fallback. */
-static int ustar_split_name(const char *restrict path, char *restrict prefix, char *restrict name)
+static int ustar_split_name(const char *restrict path,
+	char *restrict prefix withtok(writable_span(prefixcap)), size_t prefixcap,
+	char *restrict name withtok(writable_span(namecap)), size_t namecap)
 {
 	size_t len = strlen(path);
 	size_t i;
 
-	if (len == 0 || len > 100 + 155) return -1;
-	if (len <= 100) { strcpy(name, path); prefix[0] = 0; return 0; }
+	if (prefixcap == 0 || namecap == 0 || len == 0 ||
+	    len > (namecap - 1) + (prefixcap - 1)) return -1;
+	if (len < namecap) { strcpy(name, path); prefix[0] = 0; return 0; }
 
 	for (i = len; i > 0; i--) {
 		if (path[i - 1] != '/') continue;
 		{
 			size_t plen = i - 1;
 			size_t nlen = len - i;
-			if (plen <= 155 && nlen > 0 && nlen <= 100) {
-				__ownership_writable_span(prefix, plen);
+			if (plen < prefixcap && nlen > 0 && nlen < namecap) {
 				memcpy(prefix, path, plen); prefix[plen] = 0;
-				__ownership_writable_span(name, nlen);
 				__ownership_readable_span(path + i, nlen);
 				memcpy(name, path + i, nlen); name[nlen] = 0;
 				return 0;
@@ -274,7 +275,8 @@ static int write_ustar_header(FILE *out, const struct pax_member *m)
 			use_name = namebuf;
 		}
 	}
-	if (ustar_split_name(use_name, prefix, name) < 0) {
+	if (ustar_split_name(use_name, prefix, sizeof prefix,
+	    name, sizeof name) < 0) {
 		__util_diagf("pax: %s: pathname too long for ustar format -- this build "
 		                "does not implement pax extended-header long names "
 		                "(see src/util/pax.c's header)\n", use_name);

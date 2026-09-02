@@ -1131,7 +1131,9 @@ static const struct errmsg errmsgs[NERRMSGS] = {
 
 #undef ERRMSG
 
-size_t regerror(int errcode, const regex_t *__restrict preg, char *__restrict errbuf, size_t errbuf_size)
+size_t regerror(int errcode, const regex_t *__restrict preg,
+	char *__restrict errbuf withtok(writable_span(errbuf_size)),
+	size_t errbuf_size)
 {
 	const struct errmsg *msg = &errmsgs[0];
 	(void)preg;

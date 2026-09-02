@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "ownership_stubs.h"
 
 /* netinet_in.h.html: "extern const struct in6_addr in6addr_any" / "...
  * in6addr_loopback".  Real storage, not a stand-in for a socket
@@ -236,7 +237,8 @@ static int pton6(const char *src, unsigned char out[16])
 
 /* inet_ntop.html: AF_INET and AF_INET6; ENOSPC when size is too small,
  * and EAFNOSUPPORT for any other family. */
-const char *inet_ntop(int af, const void *__restrict src, char *__restrict dst, socklen_t size)
+const char *inet_ntop(int af, const void *__restrict src,
+	char *__restrict dst withtok(writable_span(size)), socklen_t size)
 {
 	char buf[INET6_ADDRSTRLEN];
 	const unsigned char *b;
@@ -244,8 +246,10 @@ const char *inet_ntop(int af, const void *__restrict src, char *__restrict dst, 
 
 	b = (const unsigned char *)src;
 	if (af == AF_INET) {
+		__ownership_readable_span(src, 4);
 		n = snprintf(buf, sizeof buf, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
 	} else if (af == AF_INET6) {
+		__ownership_readable_span(src, 16);
 		unsigned words[8];
 		int i, steps, best = -1, bestlen = 0;
 		char *q = buf;
@@ -289,7 +293,8 @@ const char *inet_ntop(int af, const void *__restrict src, char *__restrict dst, 
 		errno = EAFNOSUPPORT;
 		return 0;
 	}
-	if (n < 0 || (size_t)n + 1 > (size_t)size) { errno = ENOSPC; return 0; }
+	if (n < 0 || (size_t)n + 1 > sizeof buf ||
+	    (size_t)n + 1 > (size_t)size) { errno = ENOSPC; return 0; }
 	memcpy(dst, buf, (size_t)n + 1);
 	return dst;
 }
@@ -307,10 +312,12 @@ int inet_pton(int af, const char *__restrict src, void *__restrict dst)
 	if (!src) return 0;
 	if (af == AF_INET) {
 		if (!pton4(src, tmp)) return 0;
+		__ownership_writable_span(dst, 4);
 		memcpy(dst, tmp, 4);
 		return 1;
 	}
 	if (!pton6(src, tmp)) return 0;
+	__ownership_writable_span(dst, 16);
 	memcpy(dst, tmp, 16);
 	return 1;
 }

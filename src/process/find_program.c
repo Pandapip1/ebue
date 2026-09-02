@@ -72,6 +72,8 @@
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <stdio.h>
 #include "libc.h"
 #include "plat_process.h"
 
@@ -113,21 +115,21 @@ static char *try_dir(const char *dir, size_t dlen, const char *name)
 	size_t nlen = strlen(name);
 	size_t total;
 	char *p;
+	int need_separator;
 
-	if (!__size_add_checked(dlen, nlen, &total) ||
+	if (dlen > INT_MAX || !__size_add_checked(dlen, nlen, &total) ||
 	    !__size_add_checked(total, 6, &total)) {
 		errno = ENOMEM;
 		return 0;
 	}
 	p = malloc(total); // NOLINT(clang-analyzer-optin.taint.TaintedAlloc)
 	if (!p) return 0;
-	if (dlen) {
-		memcpy(p, dir, dlen);
-		if (p[dlen-1] != '/' && p[dlen-1] != '\\') p[dlen++] = '\\'; // NOLINT(clang-analyzer-security.ArrayBound)
-	}
-	memcpy(p + dlen, name, nlen + 1);
+	need_separator = dlen && dir[dlen - 1] != '/' && dir[dlen - 1] != '\\';
+	snprintf(p, total, "%.*s%s%s", (int)dlen, dir,
+	    need_separator ? "\\" : "", name);
+	dlen += (size_t)need_separator;
 	if (access(p, X_OK) == 0 && __is_program(p)) return p;
-	memcpy(p + dlen + nlen, ".exe", 5);
+	snprintf(p + dlen + nlen, 5, ".exe");
 	if (access(p, X_OK) == 0 && __is_program(p)) return p;
 	free(p);
 	return 0;

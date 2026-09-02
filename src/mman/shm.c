@@ -88,10 +88,7 @@ static char *shm_path(const char *name)
 	pathlen = dirlen + prefix + namelen + 1;
 	path = malloc(pathlen);
 	if (!path) return NULL;
-	memcpy(path, dir, dirlen);
-	memcpy(path + dirlen, "/ntlibc-shm/", prefix);
-	memcpy(path + dirlen + prefix, component, namelen);
-	path[pathlen - 1] = 0;
+	snprintf(path, pathlen, "%s/ntlibc-shm/%s", dir, component);
 	return path;
 }
 
@@ -317,13 +314,13 @@ static int rename_mapped_away(const char *path)
 	unsigned attempt;
 
 	if (!dead) return -1;
-	memcpy(dead, path, dirlen);
+	if (dirlen > INT_MAX) { free(dead); errno = ENAMETOOLONG; return -1; }
 	for (attempt = 0; attempt < 32; attempt++) {
 		unsigned serial = ++tombstone_serial;
-		int n = snprintf(dead + dirlen, size - dirlen,
-		         "%s%08x-%08x-%08x", stem, (unsigned)getpid(),
+		int n = snprintf(dead, size, "%.*s%s%08x-%08x-%08x",
+		         (int)dirlen, path, stem, (unsigned)getpid(),
 		         (unsigned)gettid(), serial);
-		if (n < 0 || (size_t)n >= size - dirlen) {
+		if (n < 0 || (size_t)n >= size) {
 			int e = n < 0 ? errno : ENAMETOOLONG;
 			free(dead);
 			errno = e;
