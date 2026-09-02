@@ -15,57 +15,58 @@ man \- find and display a manual page
 .RI [ name ]\ .\|.\|.
 .SH DESCRIPTION
 .B man
-writes information about each
+finds and formats the manual page for each
 .I name
-operand: for a standard utility, its synopsis, options, and operands
-at minimum.
-.PP
-This is a real parser and formatter for the
-.B man
-troff macro package subset (not full troff/groff) \(em see this
-project's own
-.B src/util/man.c
-for the exact, cited boundary of what is and is not implemented.
+operand and writes it to standard output, or through a pager (see
+.B PAGER
+below) when standard output is a terminal.
 .SH OPTIONS
 .TP
 .B \-k
-Interpret
+Interpret every
 .I name
-operands as keywords: search every page's NAME line under
+operand as a keyword instead of a page name: search each page's NAME
+line under
 .B $MANPATH
-and print each match as
+and print every match as
 .IR name (section)
-\- description.
+\- description. Mutually exclusive with a leading
+.I section
+operand.
+.TP
+.B \-\-
+Marks the end of options; every remaining argument is treated as a
+.I section
+or
+.I name
+operand, even one that begins with
+.BR \- .
 .SH OPERANDS
 .TP
 .I section
-A manual section, restricting the search (e.g.
+A manual section, restricting the search to that section only (e.g.
 .B man 3 printf
 looks only in section 3). A common, near-universal extension; not
 part of the base POSIX synopsis, which is only
 .BR "man [\-k] name..." .
+Recognized only when at least one
+.I name
+operand follows it and
+.B \-k
+was not given.
 .TP
 .I name
 A keyword (with
 .BR \-k )
-or standard utility name.
+or manual page name.
 .SH ENVIRONMENT
 .TP
 .B MANPATH
 Colon-separated list of directories to search, each containing
 .BR man1 / ,
 .BR man2 / ,
-and so on. Two special cases are worth calling out:
-.RS
-.IP \(bu 2
-If unset or empty, the fallback is
+and so on. If unset or empty, the fallback is
 .BR /usr/share/man:/usr/local/share/man .
-.IP \(bu 2
-Harmless on a platform with no such convention (this project's own
-NT target): the search simply finds nothing there, the same clean
-"no manual entry" a fresh, unconfigured Linux machine would also
-give.
-.RE
 .TP
 .B MANSECT
 Colon-separated default section search order, used when no
@@ -74,17 +75,60 @@ operand is given. Default:
 .BR 1:2:3:4:5:6:7:8:9 .
 .TP
 .B PAGER
-The pager program to page output through, when standard output is a
-terminal. If unset, a minimal built-in
+The pager program to run, with the formatted page as its last
+argument, when standard output is a terminal. Split on whitespace only
+\(em no shell quoting is understood, so a
+.B PAGER
+value containing a quoted or escaped space will not work as expected.
+If unset, or if it fails to run, a minimal built-in
 .B \-\-More\-\-
-pager is used instead.
+pager is used instead, prompting once per screenful.
+.TP
+.B COLUMNS
+Output width to wrap text to, used only when the terminal size cannot
+otherwise be determined. Ignored unless it parses as a positive
+integer.
+.TP
+.B LINES
+Number of screen rows per page for the built-in pager, used only when
+the terminal size cannot otherwise be determined. Ignored unless it
+parses as a positive integer.
+.SH APPLICATION USAGE
+When standard output is not a terminal (redirected to a file, or
+piped), the formatted page is written straight through with no
+paging, and bold and underlined text is rendered using classic
+backspace-overstrike sequences rather than color, matching the
+traditional
+.B \-Tascii
+convention \(em pipe the output through
+.BR col (1)
+with its
+.B \-b
+option to strip the overstrike sequences back to plain text.
+.PP
+A page found only in gzip-compressed form is reported by name rather
+than silently treated as missing; compressed pages are not
+decompressed or displayed.
+.PP
+Table
+.RB ( .TS / .TE )
+and equation
+.RB ( .EQ / .EN )
+markup is not rendered: the table or equation's own content is
+omitted, but the rest of the page still renders normally.
 .SH EXIT STATUS
 .TP
 .B 0
-Successful completion.
+Every requested page was found and displayed (or, with
+.BR \-k ,
+at least one keyword match was found).
 .TP
 .B >0
-An error occurred (no such page, or \-k found nothing).
+No manual entry was found for one or more
+.I name
+operands (or, with
+.BR \-k ,
+no keyword matched anything).
 .SH SEE ALSO
 .BR true (1),
 .BR sh (1)

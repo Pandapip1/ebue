@@ -1,0 +1,119 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH GET 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+get \- retrieve a version of an SCCS file
+.SH SYNOPSIS
+.B get
+.RB [ \-p ]
+.RB [ \-r
+.IR SID ]
+.I s.file
+.RI [ s.file ]\ .\|.\|.
+.SH DESCRIPTION
+.B get
+retrieves the text of the delta named by
+.B \-r
+(or, if
+.B \-r
+is not given, the file's own sole delta) from each
+.I s.file
+operand.
+.PP
+This implementation only ever reads a single-delta SCCS file: one
+created by
+.BR admin (1)
+and never modified since, whose one delta always has the SCCS ID
+(SID)
+.BR 1.1 .
+There is no counterpart to
+.BR delta (1)
+in this project to have ever committed a second delta, so a
+.I s.file
+with more than one delta is not something this implementation can
+produce or has ever been tested against.
+.PP
+Without
+.BR \-p ,
+the retrieved text is written to a new file (the "g-file") named by
+dropping the \(dqs.\(dq prefix from
+.IR s.file 's
+own basename, in the same directory, and a two-line status message
+.RI ( SID ,
+then the line count) is written to standard output.
+.SH OPTIONS
+.TP
+.B \-p
+Write the retrieved text to standard output instead of creating a
+g-file. The two-line status message that would otherwise go to
+standard output is written to standard error instead, so \(dqget \-p
+s.file\(dq can be piped without also piping the status message.
+.TP
+.BI \-r " SID"
+Retrieve the delta named
+.IR SID .
+Since every
+.I s.file
+this implementation can read has exactly one delta,
+.I SID
+must name that file's own delta (always
+.BR 1.1 )
+or this is a diagnosed error. May also be written attached, as
+.BI \-r SID
+with no intervening space.
+.PP
+Every other
+.B get
+option (including
+.BR \-a ,
+.BR \-b ,
+.BR \-c ,
+.BR \-e ,
+.BR \-g ,
+.BR \-i ,
+.BR \-k ,
+.BR \-l ,
+.BR \-L ,
+.BR \-m ,
+.BR \-n ,
+.BR \-s ,
+and
+.BR \-x ,
+all of which a real
+.B get
+uses to select among or edit a multi-delta history) is refused with a
+diagnostic; none of them is implemented. Reading a \(dq\-\(dq operand
+as a list of filenames on standard input is likewise not implemented.
+.SH OPERANDS
+.TP
+.I s.file
+The pathname of an SCCS file to retrieve from. Its basename must begin
+with the literal two characters \(dqs.\(dq.
+.SH EXIT STATUS
+.TP
+.B 0
+Every
+.I s.file
+operand was retrieved successfully.
+.TP
+.B >0
+An operand was skipped (missing, not a valid SCCS file, wrong
+basename, or the requested SID did not match the file's own delta);
+processing continues with any remaining operands. Also returned for a
+usage error (no operand given, or an unimplemented option used).
+.SH EXAMPLES
+Retrieve the checked-in text of
+.B s.hello.c
+straight to standard output:
+.nf
+get \-p s.hello.c
+.fi
+.PP
+Retrieve it into a g-file named
+.B hello.c
+instead:
+.nf
+get s.hello.c
+.fi
+.SH SEE ALSO
+.BR admin (1)

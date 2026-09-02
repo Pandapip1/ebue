@@ -36,6 +36,12 @@ Create any missing intermediate pathname components. It is not an
 error for a named directory to already exist when
 .B \-p
 is given.
+.TP
+.B \-\-
+Marks the end of options; every remaining argument is treated as a
+.I dir
+operand, even one that begins with
+.BR \- .
 .SH OPERANDS
 .TP
 .I dir

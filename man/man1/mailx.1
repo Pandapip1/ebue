@@ -1,0 +1,238 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH MAILX 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+mailx \- send and receive local mail
+.SH SYNOPSIS
+.B mailx
+.RB [ \-eHiNn ]
+.RB [ \-s
+.IR subject ]
+.I recipient
+.RI [ recipient ]\ .\|.\|.
+.br
+.B mailx
+.RB [ \-eHiNn ]
+.RB [ \-u
+.IR user ]
+.br
+.B mailx
+.B \-f
+.RB [ \-eHiNn ]
+.RI [ file ]
+.SH DESCRIPTION
+.B mailx
+sends mail (Send Mode, the first
+.B SYNOPSIS
+form above, chosen whenever at least one
+.I recipient
+operand is given) or reads mail (Receive Mode, the other two forms).
+.PP
+This implementation performs real local delivery only: it appends
+composed messages directly onto a real mbox-format file on this same
+machine, and there is no mail-transfer agent for it to hand a message
+to for network relay. There is also exactly one local user this
+process can ever run as; every
+.I recipient
+must name that user (any \(dq@host\(dq suffix is accepted but
+ignored, since there is no host to resolve against). Any other
+recipient is refused with a \(dquser unknown\(dq diagnostic, the same
+way a real mail-transfer agent bounces mail addressed to a name it
+does not know, rather than silently discarding it.
+.SS Send Mode
+The message body is read verbatim from standard input up to
+end-of-file; there is no in-body command language (no \(dq~.\(dq-style
+escapes) to end a message early. If
+.B \-s
+is not given and standard input is a terminal, a \(dqSubject:\ \(dq
+prompt is read interactively; if standard input is not a terminal,
+the message is sent with no Subject header at all.
+.SS Receive Mode
+Opens a mailbox (the system mailbox by default, the file named by
+.B \-f
+with
+.BR \-f ,
+or the mailbox named indirectly through
+.B \-u
+otherwise), prints a one-line summary of every message unless
+.B \-N
+was given, and, unless
+.B \-H
+was given or the mailbox could only be opened read-only, enters an
+interactive command loop reading commands from standard input. Each
+prompt is \(dq&\ \(dq. A
+.I msglist
+argument to a command below is a bare message number,
+.B *
+(every message),
+.B $
+(the last message), or empty (meaning the current message); message
+ranges and arithmetic
+.RI ( n\-m ,
+.BR + ,
+.BR \- ,
+.BR ^ )
+are not implemented.
+.TP
+.BR p " [msglist], " t " [msglist]"
+Print the given message(s) (or the current message, if
+.I msglist
+is empty), then advance the current message. This is also what a bare
+message number, or an empty input line, does.
+.TP
+.BR n " [msglist]"
+Print the next message after the current one.
+.TP
+.BR d " [msglist]"
+Mark the given message(s) deleted.
+.TP
+.BR u " [msglist]"
+Unmark the given message(s) as deleted.
+.TP
+.B h
+Redisplay the header summary.
+.TP
+.B q
+Rewrite the mailbox in place, keeping every message not marked
+deleted, and exit.
+.TP
+.BR x ", " ex ", " exit
+Exit without rewriting the mailbox; any pending deletions are
+discarded.
+.TP
+.B =
+Print the current message number.
+.TP
+.B ?
+Print a short command summary.
+.TP
+.BR # " comment"
+A comment; the rest of the line is ignored.
+.SH OPTIONS
+.TP
+.B \-e
+Test for the presence of new mail in the system mailbox and exit;
+nothing is printed. See
+.B EXIT STATUS
+below.
+.TP
+.B \-f
+Enter Receive Mode reading
+.I file
+if given, or the secondary mailbox
+.RB ( $MBOX ,
+see
+.BR ENVIRONMENT )
+otherwise, instead of the system mailbox.
+.TP
+.B \-H
+In Receive Mode, print only the header summary and exit; do not enter
+the interactive command loop.
+.TP
+.B \-i
+Ignore the
+.B SIGINT
+signal for the duration of the run.
+.TP
+.B \-N
+Suppress the header summary that Receive Mode would otherwise print
+before the command loop starts.
+.TP
+.B \-n
+Accepted as a documented no-op. On systems that read a start-up file
+of user mail defaults,
+.B \-n
+suppresses that read; this implementation never reads such a file
+regardless of this flag, so there is nothing left for it to disable.
+.TP
+.BI \-s " subject"
+Set the message's Subject header in Send Mode. With no
+.BR \-s ,
+see
+.B "Send Mode"
+above for how the Subject header (if any) is determined.
+.TP
+.BI \-u " user"
+In Receive Mode, read
+.IR user 's
+mailbox instead of the caller's own. Refused unless
+.I user
+names the one real local user (there being no other mailbox this
+implementation could ever read).
+.TP
+.B \-F
+Recognized but always refused: a real
+.B mailx
+uses
+.B \-F
+to additionally record outgoing mail into a file named after the
+first recipient, which this implementation does not do.
+.SH OPERANDS
+.TP
+.I recipient
+The name of the mail recipient, in Send Mode. Must name the one real
+local user this process runs as.
+.TP
+.I file
+In Receive Mode with
+.BR \-f ,
+the mailbox file to read. If omitted, the secondary mailbox is used
+instead.
+.SH ENVIRONMENT
+.TP
+.B MAIL
+Pathname of the system mailbox (Send Mode's delivery target, and
+Receive Mode's default source). If unset or empty, defaults to
+.BR mailbox
+in the current user's home directory.
+.TP
+.B MBOX
+Pathname of the secondary mailbox that
+.B \-f
+with no
+.I file
+operand reads. If unset or empty, defaults to
+.BR mbox
+in the current user's home directory.
+.SH APPLICATION USAGE
+A message body line that itself begins with the literal text
+\(dqFrom\ \(dq (as a sender might type it) is escaped on write by
+prefixing a
+.BR > ,
+matching mbox format's own rule for keeping such lines from being
+mistaken for a message boundary; this escaping is not reversed on
+read, so a line that was really typed as \(dq>From\ \(dq and one
+produced by this escaping are indistinguishable afterward.
+This is a known, long-standing limitation of the traditional mbox
+format, not specific to this implementation.
+.PP
+Concurrent delivery is safe: every append and every mailbox rewrite
+holds an exclusive lock on the mailbox file for its whole duration, so
+two
+.B mailx
+processes acting on the same mailbox at once cannot interleave their
+writes.
+.PP
+Quitting out of the system mailbox with
+.B q
+does not migrate read-but-kept messages into the secondary mailbox
+the way some historical implementations do; it always rewrites
+whichever mailbox file was actually opened, in place, dropping only
+the messages marked deleted.
+.SH EXIT STATUS
+.TP
+.B 0
+The message was sent successfully (Send Mode); the command loop was
+exited normally, or the header summary was printed successfully
+(Receive Mode); or, with
+.BR \-e ,
+new mail is present in the system mailbox.
+.TP
+.B >0
+An error occurred (a recipient other than the one real local user, a
+mailbox that could not be opened or is not a valid mbox file, and so
+on); or, with
+.BR \-e ,
+no new mail is present.
+.SH SEE ALSO
+.BR cat (1)

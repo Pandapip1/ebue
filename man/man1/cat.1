@@ -30,11 +30,18 @@ a mixed operand list and is honored positionally.
 .B \-u
 Write bytes to standard output without delay as each is read. Accepted
 as a real no-op: this implementation already writes every block it
-reads immediately, with no buffering layer above the raw
-.BR read(2)/write(2)
-pair
+reads immediately with no additional buffering, so there is nothing
+for
 .B \-u
-could disable.
+to disable.
+.B \-u
+is only recognized while it appears before every
+.I file
+operand; once the first non-\c
+.B \-u
+argument is seen, option scanning stops, and a later
+.B \-u
+in the argument list is treated as a filename operand instead.
 .SH OPERANDS
 .TP
 .I file
