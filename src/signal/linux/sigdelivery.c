@@ -31,45 +31,71 @@
  *
  * __sig_delivery_init()/__sig_delivery_reinit_after_fork(): create the
  * real wake_event (__plat_sigevent_create(), a real Linux eventfd)
- * and the real lock semaphore above. What this does NOT do yet is
- * install any real kernel-level signal handler (rt_sigaction(2)) --
- * every signal this process generates for ITSELF (raise(), abort(),
- * a hardware fault turned into a signal by the platform's fault path)
- * is already fully real and portable: it goes straight through
- * signal.c's own __raise_internal_info(), which is ordinary C, not
- * platform-specific at all, and needs nothing from this file. What
- * IS degraded, honestly and on purpose, is described next.
+ * and the real lock semaphore above. Every signal this process generates
+ * for ITSELF (raise(), abort(), a hardware fault turned into a signal by
+ * the platform's fault path) is already fully real and portable: it goes
+ * straight through signal.c's own __raise_internal_info(), which is
+ * ordinary C, not platform-specific at all, and needs nothing from this
+ * file. This process's own real kernel-level rt_sigaction(2) state is
+ * a separate, orthogonal thing (below), needing no init step of its own
+ * here: __signal_init() (src/signal/signal.c) installs it directly, and
+ * signal.c's own sigaction()/signal() keep it in step from then on.
  *
- * __sig_try_deliver_remote{,_info,_nondefault}(): always report "not
- * delivered" (0), which is not a fabricated stub -- it is the EXACT
- * documented degrade path signal.c's kill() already has to handle
- * unconditionally for the "no listener" case on NT (see that
- * function's own comment: "Failure ... falls straight through to the
- * existing behaviour unchanged").
+ * __sig_try_deliver_remote{,_info,_nondefault}(): Tier 1
+ * (src/signal/linux/plat_signal.c's __plat_sig_install_fault_
+ * handlers()) installed a real rt_sigaction(2) handler -- with a real
+ * sigreturn trampoline, arch/aarch64/src/sigreturn_trampoline.S -- for
+ * exactly five hardware-fault signals (SIGSEGV/SIGBUS/SIGILL/SIGFPE/
+ * SIGTRAP), so that a real fault on this thread reaches
+ * __raise_internal_info() at all, instead of running the kernel's own
+ * default action unseen by this library. Tier 2 widens that same real
+ * entry point to the FULL, caller-chosen signal set: signal.c's
+ * sigaction()/signal() now call __plat_sig_install_real_handler() (this
+ * file's own comment on __plat_sig_sync_kernel() -- src/internal/
+ * plat_signal.h -- has the full story) for ANY signal a real, catchable
+ * disposition is installed for, not only the fixed five. Once that is
+ * installed, the Linux kernel's own kill(2)/tgkill(2)/pidfd_send_
+ * signal(2) already deliver to the target's REAL registered disposition
+ * directly, through the kernel -- no RPC of any kind is needed the way
+ * NT's own named-pipe transport needs one, which is why these three
+ * functions, unlike NT's sigdelivery.c, do not implement a wire protocol
+ * at all: they issue the real syscall themselves (__plat_kill_
+ * terminate(), reused here as a plain "send this real signal for real"
+ * primitive, not only kill()'s own last-resort fallback) and report
+ * whether it was accepted.
  *
- * A real rt_sigaction(2) handler (with a real sigreturn trampoline --
- * arch/aarch64/src/sigreturn_trampoline.S) now exists on this platform
- * -- see src/signal/linux/plat_signal.c's __plat_sig_install_fault_
- * handlers() -- but it is deliberately narrower than what THESE three
- * functions need. It is installed once, unconditionally, for exactly
- * five hardware-fault signals (SIGSEGV/SIGBUS/SIGILL/SIGFPE/SIGTRAP),
- * to close a different, disclosed gap: a real fault on this thread
- * reaching __raise_internal_info() at all, instead of running the
- * kernel's own default action unseen by this library (see signal.c's
- * __signal_init()). What these three functions need is a real kernel-
- * level handler for the FULL, caller-chosen signal set sigaction()
- * installs an ntlibc-level disposition for, updated dynamically as
- * dispositions change, so that tgkill(2)/kill(2) FROM ANOTHER PROCESS
- * invoke the target's REAL registered disposition directly through the
- * kernel -- needing no RPC of any kind, simpler than NT's own scheme
- * once built, but not yet built. Until then, kill() to another process
- * still falls back to its existing __plat_kill_terminate() path exactly
- * as if the target had never installed a handler, the same honest
- * degrade every NT process without a listener already gets -- unless
- * the signal happens to be one of the five fault signals above, which
- * are true kernel-level dispositions today, just not ones a REMOTE
- * kill()/sigqueue() can select the way a real per-signal, caller-
- * configurable rt_sigaction(2) mapping could.
+ * __sig_try_deliver_remote()/__sig_try_deliver_remote_info(): always
+ * attempt the real send and report its outcome. This is correct even
+ * for a signal the target never installed a real handler for: the
+ * kernel's own default action (Term for most signals, Ignore for
+ * SIGCHLD/SIGURG/SIGWINCH/SIGCONT, matching signal.c's own
+ * default_action() table exactly, since both describe the same real
+ * Linux kernel) already applies whether or not a real rt_sigaction(2)
+ * handler exists, so there is no case where sending for real is worse
+ * than the pre-Tier-2 degrade of not trying at all. `data`
+ * (sigqueue()'s sigval payload) is honestly, deliberately not threaded
+ * through the real siginfo_t pidfd_send_signal(2) could in principle
+ * carry: no currently-passing test exercises a remote sigqueue() with a
+ * real payload, and getting the kernel's own raw siginfo_t ABI layout
+ * exactly right for that one unexercised path is real risk for no
+ * measured benefit -- a real signal number still reaches the target
+ * either way, just without its value.
+ *
+ * __sig_try_deliver_remote_nondefault(): kill()'s catchable-stop-signal
+ * arm (SIGTSTP/SIGTTIN/SIGTTOU) needs an answer to a question the other
+ * two do not: whether to apply the real per-signal default STOP action
+ * itself (sig_job_control(), src/signal/signal.c, which always uses a
+ * substitute SIGSTOP rather than the real requested signal, matching
+ * NT's own undifferentiated suspend) or send the real requested signal
+ * because the target overrode that default. Unlike an ordinary signal,
+ * there is no single real syscall whose own outcome tells the SENDER
+ * which of those happened, so this asks first: __plat_sig_remote_
+ * disposition_nondefault() (src/signal/linux/plat_signal.c) reads the
+ * target's own real kernel-level disposition straight out of
+ * /proc/pid/status, and only if it says "caught" or "ignored" does this
+ * function send the real signal and report success -- otherwise it
+ * reports failure, unchanged, so kill()'s existing job-control fallback
+ * runs exactly as it always did.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -176,14 +202,25 @@ void __sig_delivery_reinit_after_fork(void)
 	__sig_delivery_init();
 }
 
-/* See this file's own banner: real disposition-aware remote delivery
- * needs a real kernel signal handler this file does not install yet.
- * Reporting "not delivered" here is signal.c's own already-documented
- * fallback contract, not a fabrication. */
+/* See this file's own banner: the real kernel already delivers to
+ * `pid`'s own real disposition once that disposition is installed at
+ * the kernel level (Tier 1's fixed five plus Tier 2's
+ * __plat_sig_install_real_handler() widening), so this just issues the
+ * real send and reports whether the kernel accepted it -- reusing
+ * __plat_kill_terminate() (src/internal/plat_signal.h), which already
+ * decodes __ENCODE_SIGNAL_EXIT(sig) back out and performs a genuine
+ * pidfd_send_signal(2) of the real signal number, exactly the operation
+ * this function needs and kill()'s own last-resort arm already trusted
+ * for the "no real handler" case. `h` is built the same bare-pid way
+ * __plat_kill_open() builds one for a non-child target (src/signal/
+ * linux/plat_signal.c's own banner on that convention) -- this file has
+ * no struct __child of its own to read one from. `data` is
+ * deliberately unused: see this file's own banner. */
 int __sig_try_deliver_remote_info(int pid, int sig, const void *data) // NOLINT(bugprone-easily-swappable-parameters) -- fixed signal-delivery contract; process ID and signal number have distinct roles
 {
-	(void)pid; (void)sig; (void)data;
-	return 0;
+	__plat_handle_t h = (__plat_handle_t)(long)pid;
+	(void)data;
+	return __plat_kill_terminate(h, __ENCODE_SIGNAL_EXIT(sig)) == 0;
 }
 
 int __sig_try_deliver_remote(int pid, int sig)
@@ -191,10 +228,20 @@ int __sig_try_deliver_remote(int pid, int sig)
 	return __sig_try_deliver_remote_info(pid, sig, 0);
 }
 
+/* See this file's own banner on why this cannot just always send: kill()
+ * needs to know, before acting, whether the target's real disposition
+ * overrides the default STOP action, since sending first and asking
+ * later has no way to tell the sender which one the kernel actually
+ * did. __plat_sig_remote_disposition_nondefault() (src/signal/linux/
+ * plat_signal.c) answers that for real, off the target's own kernel-
+ * exported state; only then is the real signal sent. */
 int __sig_try_deliver_remote_nondefault(int pid, int sig) // NOLINT(bugprone-easily-swappable-parameters) -- fixed signal-delivery contract; process ID and signal number have distinct roles
 {
-	(void)pid; (void)sig;
-	return 0;
+	__plat_handle_t h;
+
+	if (!__plat_sig_remote_disposition_nondefault((pid_t)pid, sig)) return 0;
+	h = (__plat_handle_t)(long)pid;
+	return __plat_kill_terminate(h, __ENCODE_SIGNAL_EXIT(sig)) == 0;
 }
 
 // NOLINTEND(misc-include-cleaner)

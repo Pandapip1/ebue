@@ -491,17 +491,20 @@ static void test_job_signal_handler(const char *self, const char *mode,
 	}
 	sleep_ms(STARTUP_GRACE_MS);
 	CHECK(kill(pid, sig) == 0);
-	/* SIGTSTP/SIGTTIN/SIGTTOU specifically: src/signal/linux/sigdelivery.c's
-	 * own banner discloses that this platform's cross-process delivery
-	 * does not install a real rt_sigaction(2) handler yet, so kill()'s
-	 * sig_stops() branch (src/signal/signal.c) falls back to
-	 * sig_job_control()'s real pidfd_send_signal(SIGSTOP) -- a genuine
-	 * kernel suspend of the target, confirmed against /proc/PID/status,
-	 * not a simulation of one -- instead of ever running the child's
-	 * installed handler. A plain waitpid(pid, &status, 0) never wakes
-	 * for that (only exit/termination do), and nothing else here would
-	 * ever send the SIGCONT a real stop needs, so this used to hang
-	 * forever. WUNTRACED converts the same known gap into an observable,
+	/* SIGTSTP/SIGTTIN/SIGTTOU specifically: on Linux, kill()'s sig_stops()
+	 * branch (src/signal/signal.c) now asks src/signal/linux/sigdelivery.c's
+	 * __sig_try_deliver_remote_nondefault() whether the target's real
+	 * kernel-level disposition is non-default (a real rt_sigaction(2)
+	 * dispatch installed by that child's own sigaction() call below --
+	 * see plat_signal.h's __plat_sig_install_real_handler() comment) and,
+	 * when it is, delivers the real signal instead of stopping the
+	 * target -- so the WIFSTOPPED branch below is not expected to trigger
+	 * there. NT has no such mechanism (see kill()'s own comment): its
+	 * cross-process delivery still falls back unconditionally to
+	 * sig_job_control()'s real suspend, so a plain waitpid(pid, &status, 0)
+	 * would never wake for that stop there (only exit/termination do), and
+	 * nothing else here would ever send the SIGCONT a real stop needs.
+	 * WUNTRACED converts that still-real NT gap into an observable,
 	 * non-hanging outcome: catch the stop, wake the child back up, and
 	 * let the CHECK below fail normally -- the same "known limitation
 	 * reported as an honest failure, not a hang" contract
@@ -509,9 +512,9 @@ static void test_job_signal_handler(const char *self, const char *mode,
 	 * sibling no-listener gap. */
 	CHECK(waitpid(pid, &status, WUNTRACED) == pid);
 	if (WIFSTOPPED(status)) {
-		printf("    %s: really stopped by signal %d (known "
+		printf("    %s: really stopped by signal %d (known NT "
 		       "sigdelivery.c gap -- no real handler installed on "
-		       "this platform), sending SIGCONT and reaping\n",
+		       "that platform), sending SIGCONT and reaping\n",
 		       description, WSTOPSIG(status));
 		CHECK(kill(pid, SIGCONT) == 0);
 		CHECK(waitpid(pid, &status, 0) == pid);

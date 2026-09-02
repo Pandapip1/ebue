@@ -329,6 +329,64 @@ void __plat_sig_default_terminate(int sig);
  * like every other function here, matching this header's own convention. */
 void __plat_sig_install_fault_handlers(void);
 
+/* Install the SAME real rt_sigaction(2) dispatch __plat_sig_install_
+ * fault_handlers() above installs for its fixed five, but for exactly
+ * one caller-chosen `sig` -- signal()/sigaction()'s own Linux widening
+ * (src/signal/signal.c), called whenever either one installs a REAL,
+ * catchable disposition (sa_handler/h neither SIG_IGN nor SIG_DFL) for
+ * ANY signal, not only the hardware-fault five. This is what makes
+ * src/signal/linux/sigdelivery.c's cross-process delivery real: once
+ * installed, tgkill(2)/kill(2)/pidfd_send_signal(2) FROM ANOTHER PROCESS
+ * invoke this dispatch directly through the kernel, which then re-reads
+ * handlers[sig] itself (via __raise_internal_info()) and does whatever
+ * that table currently says -- so a later signal()/sigaction() call that
+ * changes the disposition back to SIG_IGN/SIG_DFL needs no matching
+ * "uninstall" here: __plat_sig_sync_kernel() above already keeps the
+ * kernel's own SIG_IGN/SIG_DFL state in step for the *decision* dispatch
+ * makes, and this function's own installed entry point is safe to leave
+ * in place regardless, exactly as it already is for the fixed five
+ * fault signals once installed once at __signal_init() time. Idempotent
+ * (a second call for the same `sig` just repeats the identical
+ * rt_sigaction(2)), so callers never need to track whether they already
+ * called it. No return value, for the same reason
+ * __plat_sig_install_fault_handlers() has none: nothing a caller holding
+ * signal.c's own lock could usefully do differently on a failure here
+ * besides continue with that one signal's remote delivery falling back
+ * to the pre-Tier-2 default-action guess, exactly as it already does
+ * when this is never called at all. */
+void __plat_sig_install_real_handler(int sig);
+
+/* Read the TARGET process `pid`'s own real, kernel-level disposition for
+ * `sig` straight out of /proc/pid/status (proc(5): SigCgt and SigIgn are
+ * both 64-bit hex bitmasks, one bit per signal, matching this project's
+ * own _NSIG(64) exactly -- the same fact src/signal/linux/plat_signal.c's
+ * own struct kernel_sigaction comment already relies on for sigsetsize)
+ * and report whether it is anything other than the default action: a bit
+ * set in SigCgt means a real handler is installed there (this file's own
+ * __plat_sig_install_real_handler() is the only thing that ever sets one,
+ * for a signal outside the fixed hardware-fault five __plat_sig_install_
+ * fault_handlers() covers unconditionally), and a bit set in SigIgn means
+ * SIG_IGN (__plat_sig_sync_kernel()). 1 for either, 0 for SIG_DFL AND for
+ * any failure reading the target's own state at all (a process that has
+ * already exited, one this call raced, or a /proc that for whatever
+ * reason cannot be read) -- the safe default either way, since 0 is
+ * exactly what a caller already does today when this capability plain
+ * does not exist: kill()'s own sig_job_control() fallback (src/signal/
+ * signal.c), unaffected either way. The one real caller is src/signal/
+ * linux/sigdelivery.c's __sig_try_deliver_remote_nondefault(): kill()'s
+ * catchable-stop-signal arm (SIGTSTP/SIGTTIN/SIGTTOU) needs to know
+ * BEFORE acting whether the target's disposition overrides the default
+ * stop action, since unlike every other signal there is no single real
+ * syscall whose own outcome would tell this sending process that
+ * afterwards -- a real SIGTSTP either invokes a caught handler (this
+ * process never sees that happen) or genuinely stops the target (this
+ * process needs to record that transition in its OWN child table for
+ * waitpid() to report, which needs deciding, not discovering, the
+ * outcome). Linux-only in practice (the one caller is Linux's own
+ * sigdelivery.c) but declared unconditionally like every other function
+ * in this header. */
+int __plat_sig_remote_disposition_nondefault(pid_t pid, int sig);
+
 /* ---- children.c -------------------------------------------------------- */
 
 /* Can kill(pid, SIGHUP) to some OTHER process actually deliver a real
@@ -342,20 +400,17 @@ void __plat_sig_install_fault_handlers(void);
  * comment above __child_resume_stopped() for the full reasoning on both
  * platforms.
  *
- * True on Linux: kill()'s own last-resort arm reaches
- * __plat_kill_terminate(), which sends a genuine pidfd_send_signal(2) of
- * the real signal number, applying whatever real KERNEL-level
- * disposition the TARGET process itself last synced for it
- * (__plat_sig_sync_kernel(), this header's own comment) -- SIG_IGN is a
- * real no-op, SIG_DFL runs the real default action (Term, for SIGHUP).
- * A process-level function-pointer handler is not one of those two
- * synced dispositions, so it does not run this way -- catching a signal
- * sent by ANOTHER process needs the named-pipe listener signal.c's
- * kill() tries first, not yet implemented on Linux (see that function's
- * own last-resort-arm comment) -- so a target that caught SIGHUP itself
- * but never told the kernel still only ever sees SIG_DFL here. False on
- * NT, where that same fallback is NtTerminateProcess unconditionally
- * regardless of disposition. */
+ * True on Linux: kill()'s own cross-process arm
+ * (src/signal/linux/sigdelivery.c's __sig_try_deliver_remote()) sends a
+ * genuine pidfd_send_signal(2) of the real signal number, applying
+ * whatever real KERNEL-level disposition the TARGET process itself last
+ * synced for it -- SIG_IGN is a real no-op, SIG_DFL runs the real
+ * default action (Term, for SIGHUP), and, as of this Tier-2 widening
+ * (signal()/sigaction()'s own __plat_sig_install_real_handler() call,
+ * this header's own comment), a real caught handler now genuinely runs
+ * too, if the target installed one. False on NT, where that same
+ * fallback is NtTerminateProcess unconditionally regardless of
+ * disposition. */
 int __plat_sig_deliverable_to_other_process(void);
 
 #endif

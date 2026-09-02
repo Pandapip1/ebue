@@ -264,6 +264,18 @@ void (*signal(int sig, void (*h)(int)))(int)
 	 * what `old`/`h` already say here. */
 	if (h == SIG_IGN) __plat_sig_sync_kernel(sig, 1);
 	else if (old == SIG_IGN) __plat_sig_sync_kernel(sig, 0);
+#ifdef __linux__
+	/* A real, catchable disposition: mirror it into a real kernel-level
+	 * rt_sigaction(2) too, not only the SIG_IGN/SIG_DFL sync above, so
+	 * that tgkill(2)/kill(2)/pidfd_send_signal(2) FROM ANOTHER PROCESS
+	 * reach it -- see plat_signal.h's own comment on
+	 * __plat_sig_install_real_handler() and src/signal/linux/
+	 * sigdelivery.c's banner for the whole Tier-2 mechanism this
+	 * enables. No matching call is needed when `h` is SIG_IGN or
+	 * SIG_DFL: that function's own comment explains why a previously
+	 * installed real dispatch is safe to leave in place regardless. */
+	if (h != SIG_IGN && h != SIG_DFL) __plat_sig_install_real_handler(sig);
+#endif
 	if (h == SIG_IGN || (h == SIG_DFL && !default_action(sig))) {
 		sigdelset(&process_pending.set, sig);
 		sigdelset(&thread_pending.set, sig);
@@ -294,6 +306,12 @@ int sigaction(int sig, const struct sigaction *act, struct sigaction *old)
 		 * comment on __plat_sig_sync_kernel(). */
 		if (act->sa_handler == SIG_IGN) __plat_sig_sync_kernel(sig, 1);
 		else if (prev == SIG_IGN) __plat_sig_sync_kernel(sig, 0);
+#ifdef __linux__
+		/* signal()'s own matching call above -- see plat_signal.h's
+		 * comment on __plat_sig_install_real_handler(). */
+		if (act->sa_handler != SIG_IGN && act->sa_handler != SIG_DFL)
+			__plat_sig_install_real_handler(sig);
+#endif
 		if (act->sa_handler == SIG_IGN ||
 		    (act->sa_handler == SIG_DFL && !default_action(sig))) {
 			sigdelset(&process_pending.set, sig);
@@ -938,10 +956,13 @@ int kill(pid_t pid, int sig)
 		if (!c) __plat_close(h);
 		return 0;
 	}
-	/* SIGTSTP, SIGTTIN and SIGTTOU are catchable.  Ask the target to
-	 * accept the packet only when its disposition is non-default.  If it
-	 * declines, retain the NT suspend/resume fallback which implements the
-	 * default job-control action. */
+	/* SIGTSTP, SIGTTIN and SIGTTOU are catchable.  Ask the target
+	 * (sigdelivery.c's own mechanism, NT's named-pipe listener or, as of
+	 * Tier 2, Linux's real kernel-level disposition -- see src/signal/
+	 * linux/sigdelivery.c's own comment on __sig_try_deliver_remote_
+	 * nondefault()) to accept it only when its disposition is
+	 * non-default.  If it declines, retain the NT suspend/resume
+	 * fallback which implements the default job-control action. */
 	if (sig_stops(sig) && __sig_try_deliver_remote_nondefault((int)pid, sig)) {
 		if (!c) __plat_close(h);
 		return 0;
@@ -952,19 +973,23 @@ int kill(pid_t pid, int sig)
 		if (!c) __plat_close(h);
 		return changed < 0 ? -1 : 0;
 	}
-	/* Try the target's own listener before falling back to this
+	/* Try the target's own real disposition before falling back to this
 	 * process's blind default-action guess. src/signal/sigdelivery.c's
-	 * __sig_try_deliver_remote() hands the packet to `pid`'s own
-	 * delivery thread, which applies THAT process's real disposition
+	 * __sig_try_deliver_remote() applies THAT process's real disposition
 	 * (sa_handler/SIG_IGN, not just whatever default_action() would
-	 * assume here) through the same __raise_internal() raise() uses --
-	 * so success here is strictly more correct than the
-	 * termination path below, and this function is done: no
-	 * fallthrough on success. Failure (no listener -- no such process
-	 * under this name, a non-ntlibc process, or one still inside
-	 * __signal_init() -- or any other reason the packet did not land)
-	 * falls straight through to the existing behaviour unchanged; see
-	 * that function's own comment for why it does not try to
+	 * assume here) -- on NT, via its own named-pipe delivery thread and
+	 * __raise_internal(), the same portable entry point raise() uses; on
+	 * Linux, as of Tier 2, via a real kernel-level rt_sigaction(2)
+	 * dispatch installed by sigaction()/signal() (this file's own
+	 * __plat_sig_install_real_handler() calls above) that the kernel's
+	 * own kill(2)/tgkill(2)/pidfd_send_signal(2) already invoke directly,
+	 * no RPC needed -- so success here is strictly more correct than the
+	 * termination path below, and this function is done: no fallthrough
+	 * on success. Failure (NT: no listener -- no such process under this
+	 * name, a non-ntlibc process, or one still inside __signal_init();
+	 * Linux: the real send itself failed, e.g. a target that has since
+	 * exited) falls straight through to the existing behaviour unchanged;
+	 * see that function's own comment for why it does not try to
 	 * distinguish those cases.  The catchable job-control signals already
 	 * took their acknowledgement-based disposition path above. */
 	if (__sig_try_deliver_remote((int)pid, sig)) {
@@ -1187,6 +1212,31 @@ int sigqueue(pid_t pid, int sig, union sigval value)
  * forever, which is what POSIX specifies for a thread that asks for a
  * signal nothing will ever send; inventing an EINTR or an EAGAIN to
  * escape would be reporting an event that did not happen. */
+#ifdef __linux__
+/* sigwait()/sigwaitinfo()/sigtimedwait() ask this library to catch and
+ * queue a signal in `set` regardless of its ntlibc-level disposition --
+ * sigwait.html's whole contract is built on the signal being "blocked"
+ * in exactly the sense wait_active/waiting_set implement below -- even
+ * when the caller never separately called sigaction()/signal() for it.
+ * signal()/sigaction()'s own __plat_sig_install_real_handler() widening
+ * (plat_signal.h's own comment on that function) only ever runs on a
+ * REAL disposition change, so a signal awaited here whose disposition
+ * is still the untouched SIG_DFL default would otherwise still reach
+ * the kernel's OWN default action (Term, for most) on a REAL
+ * cross-process delivery, instead of being queued for this call to
+ * find -- confirmed as a real, reproduced failure (not a hypothetical
+ * one): test/posix-signal-crossproc.c's test_remote_wait_interface(...,
+ * "--child-sigwait", ...) had a remote SIGUSR1 kill the waiting child
+ * outright before this existed, never reaching sigwait() at all. */
+static void install_real_for_set(const sigset_t *set)
+{
+	int sig;
+	for (sig = 1; sig < _NSIG; sig++)
+		if (sig != SIGKILL && sig != SIGSTOP && sigismember(set, sig))
+			__plat_sig_install_real_handler(sig);
+}
+#endif
+
 int sigwait(const sigset_t *s, int *sig)
 {
 	int saved_errno = errno;
@@ -1195,6 +1245,9 @@ int sigwait(const sigset_t *s, int *sig)
 	__sig_lock();
 	waiting_set = *s;
 	wait_active = 1;
+#ifdef __linux__
+	install_real_for_set(s);
+#endif
 	__sig_unlock();
 	for (;;) {
 		__sig_lock();
@@ -1217,6 +1270,9 @@ int sigwaitinfo(const sigset_t *set, siginfo_t *info)
 	__sig_lock();
 	waiting_set = *set;
 	wait_active = 1;
+#ifdef __linux__
+	install_real_for_set(set);
+#endif
 	__sig_unlock();
 	for (;;) {
 		__sig_lock();
@@ -1247,6 +1303,9 @@ int sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *ti
 	__sig_lock();
 	waiting_set = *set;
 	wait_active = 1;
+#ifdef __linux__
+	install_real_for_set(set);
+#endif
 	__sig_unlock();
 	for (;;) {
 		__sig_lock();

@@ -159,28 +159,23 @@ static void clear_stops(int resume)
  * __plat_sig_deliverable_to_other_process() (src/internal/plat_signal.h)
  * is that per-platform capability check, done once per stopped child,
  * before the SIGCONT for that same child.  On Linux, kill(child, SIGHUP)
- * IS the real thing: signal.c's kill() reaches its own last-resort arm,
- * and src/signal/linux/plat_signal.c's __plat_kill_terminate() turns
- * that into a genuine pidfd_send_signal(2) of SIGHUP, decoded back out
- * of the __ENCODE_SIGNAL_EXIT() encoding kill() built, applying whatever
- * real kernel-level disposition the child itself last synced
- * (__plat_sig_sync_kernel(), plat_signal.h) -- an ignored disposition is
- * a genuine no-op, and SIG_DFL runs the real default action (Term),
- * exactly what the clause asks for when nothing more specific is known.
- * A process-level function-pointer handler is not one of the two
- * dispositions ever synced to the kernel (plat_signal.h's own comment on
- * __plat_sig_sync_kernel()), so it does not run from a SIGHUP delivered
- * this way -- that would need the named-pipe listener kill() tries
- * first and Linux does not implement yet (src/signal/linux/
- * sigdelivery.c) -- but SIG_DFL is still the right fallback answer, not
- * a wrong one: a target that never told the kernel otherwise has no
- * disposition more specific for this to honor. On NT there is no
- * kernel-signal path at all: this library cannot deliver a real signal
- * to another process there (see kill()'s own comment), so
- * kill(child, SIGHUP) is NtTerminateProcess -- it would unconditionally
- * destroy a child whose real disposition might well have survived it,
- * which is a strictly worse answer than the one the clause is trying to
- * buy, so NT skips it and sends only the SIGCONT half.
+ * IS the real thing: signal.c's kill() reaches its own cross-process arm
+ * (src/signal/linux/sigdelivery.c's __sig_try_deliver_remote()), which
+ * turns that into a genuine pidfd_send_signal(2) of SIGHUP, applying
+ * whatever real kernel-level disposition the child itself last synced --
+ * an ignored disposition is a genuine no-op, SIG_DFL runs the real
+ * default action (Term), and, as of that file's own Tier-2 widening
+ * (signal()/sigaction()'s __plat_sig_install_real_handler() calls,
+ * src/signal/signal.c), a real process-level function-pointer handler
+ * the child installed with sigaction()/signal() genuinely runs too,
+ * exactly the clause's own "signal ... sent" -- the child's own
+ * disposition decides what that means, same as for any other signal.
+ * On NT there is no kernel-signal path at all: this library cannot
+ * deliver a real signal to another process there (see kill()'s own
+ * comment), so kill(child, SIGHUP) is NtTerminateProcess -- it would
+ * unconditionally destroy a child whose real disposition might well have
+ * survived it, which is a strictly worse answer than the one the clause
+ * is trying to buy, so NT skips it and sends only the SIGCONT half.
  *
  * The coverage is wider than exit() because everything funnels through
  * __exit_internal(): _exit() and _Exit(), abort(), the default "terminate"

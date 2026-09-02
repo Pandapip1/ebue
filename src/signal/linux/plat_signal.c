@@ -645,18 +645,22 @@ void __plat_sig_default_terminate(int sig)
 }
 
 /* arch/aarch64/src/sigreturn_trampoline.S -- see that file's own banner
- * for the real ABI contract (SA_RESTORER, why the kernel calls fault_
+ * for the real ABI contract (SA_RESTORER, why the kernel calls real_
  * dispatch() below directly rather than this trampoline, and why LR
- * already points here by the time fault_dispatch() returns). Declared
+ * already points here by the time real_dispatch() returns). Declared
  * the same way src/thread/pthread_cancel.c declares its own trampoline
  * symbol: a plain function declaration, so `act.k_restorer =
  * __ntlibc_sigreturn_trampoline` below needs no cast -- the types
  * already match. */
 void __ntlibc_sigreturn_trampoline(void); // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
-/* Real hardware-fault delivery: SIGSEGV/SIGBUS/SIGILL/SIGFPE/SIGTRAP,
- * installed below with THIS function as k_handler and the trampoline
- * above as k_restorer, so the kernel invokes it exactly as it would any
+/* The one real kernel-level entry point installed below, for BOTH real
+ * hardware faults (the fixed five __plat_sig_install_fault_handlers()
+ * installs unconditionally at startup) and, as of Tier 2, any OTHER
+ * signal a caller's own sigaction()/signal() call installed a real
+ * catchable disposition for (__plat_sig_install_real_handler() below) --
+ * installed with THIS function as k_handler and the trampoline above as
+ * k_restorer, so the kernel invokes it exactly as it would any
  * SA_SIGINFO handler -- x0/x1/x2 = (sig, &info, &ucontext), with x30
  * already pointing at the trampoline (see that file's banner).  `info`
  * is the kernel's OWN siginfo_t, not one this library synthesizes the
@@ -702,6 +706,25 @@ void __ntlibc_sigreturn_trampoline(void); // NOLINT(bugprone-reserved-identifier
  * handler this library dispatches to (the non-default-disposition
  * branch) inherits the same async-signal-safety obligation any POSIX
  * signal handler already has -- not a new risk this wiring introduces.
+ * Widening this same entry point to arbitrary signals (Tier 2) adds no
+ * new async-signal-safety exposure: it is still the identical function,
+ * still reached only via a real kernel signal, still doing nothing more
+ * than __sig_lock()/__raise_internal_info()/__sig_unlock() regardless of
+ * which signal number the kernel happened to invoke it for.
+ *
+ * A signal whose disposition changes back to SIG_IGN or SIG_DFL after
+ * this was installed for it needs no matching "uninstall" here:
+ * __raise_internal_info() re-reads handlers[sig] itself on every call,
+ * so it already does the right thing (ignore, or the default action --
+ * including, for SIGABRT and friends, routing back through
+ * __plat_sig_default_terminate() to force the real kernel-level
+ * disposition to SIG_DFL and re-raise for a genuine WIFSIGNALED/
+ * WTERMSIG, exactly the mechanism that function's own comment already
+ * documents for the fixed five) whether or not this dispatch function is
+ * still the one the kernel would call. Leaving it installed is simply
+ * the honest state: this process DID once ask the kernel to route `sig`
+ * through this library, and __raise_internal_info() is still the correct
+ * place for that to land.
  *
  * SA_ONSTACK: honored the same way NT's own exception_handler() ->
  * __raise_internal() -> sig_dispatch() path already is -- signal.c's
@@ -709,7 +732,7 @@ void __ntlibc_sigreturn_trampoline(void); // NOLINT(bugprone-reserved-identifier
  * __sig_call_on_altstack() (src/signal/aarch64/altstack.S, already built
  * for this arch, just never wired to a non-_WIN32 caller before now) on
  * real Linux too, not only NT. */
-static void fault_dispatch(int sig, siginfo_t *info, void *ucontext)
+static void real_dispatch(int sig, siginfo_t *info, void *ucontext)
 {
 	(void)ucontext;
 	__sig_lock();
@@ -718,37 +741,48 @@ static void fault_dispatch(int sig, siginfo_t *info, void *ucontext)
 }
 
 /* SA_NODEFER is deliberately NOT set below: leaving the kernel's own
- * default auto-block of `sig` in place for the duration of fault_
- * dispatch() means a SECOND fault of the SAME signal, raised by a bug in
- * this delivery path itself rather than by whatever disposition it ends
- * up calling (an application handler's own async-signal-safety is its
- * own problem, like any POSIX handler), forces the kernel's own default
- * action -- process death -- instead of recursing into fault_dispatch()
- * again on a stack that, for a stack-overflow SIGSEGV specifically, is
- * already exhausted. A hard kill is the safe failure mode to pick here,
- * not a softer one to engineer around. */
-void __plat_sig_install_fault_handlers(void)
+ * default auto-block of `sig` in place for the duration of real_
+ * dispatch() means a SECOND real delivery of the SAME signal, raised by
+ * a bug in this delivery path itself rather than by whatever disposition
+ * it ends up calling (an application handler's own async-signal-safety
+ * is its own problem, like any POSIX handler), forces the kernel's own
+ * default action -- process death -- instead of recursing into real_
+ * dispatch() again on a stack that, for a stack-overflow SIGSEGV
+ * specifically, is already exhausted. A hard kill is the safe failure
+ * mode to pick here, not a softer one to engineer around; this reasoning
+ * is not specific to hardware faults, so it applies unchanged to every
+ * signal this function installs real_dispatch() for, not only the fixed
+ * five. */
+void __plat_sig_install_real_handler(int sig)
 {
-	static const int fault_sigs[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP };
 	struct kernel_sigaction act;
-	int i, n = (int)(sizeof fault_sigs / sizeof fault_sigs[0]);
 
-	act.k_handler = (void (*)(int))(void *)fault_dispatch; // NOLINT(bugprone-casting-through-void) -- same sigaction union-slot recovery signal.c's own SA_SIGINFO cast documents
+	act.k_handler = (void (*)(int))(void *)real_dispatch; // NOLINT(bugprone-casting-through-void) -- same sigaction union-slot recovery signal.c's own SA_SIGINFO cast documents
 	act.k_flags = SA_SIGINFO | SA_RESTORER;
 	act.k_restorer = __ntlibc_sigreturn_trampoline;
 	act.k_mask = 0;
-	for (i = 0; i < n; i++)
-		syscall(SYS_rt_sigaction, (long)fault_sigs[i], &act, 0L, (long)sizeof(unsigned long));
+	syscall(SYS_rt_sigaction, (long)sig, &act, 0L, (long)sizeof(unsigned long));
+}
+
+void __plat_sig_install_fault_handlers(void)
+{
+	static const int fault_sigs[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP };
+	int i, n = (int)(sizeof fault_sigs / sizeof fault_sigs[0]);
+
+	for (i = 0; i < n; i++) __plat_sig_install_real_handler(fault_sigs[i]);
 }
 
 /* Linux has a real per-signal kernel default action and a real
- * pidfd_send_signal(2): kill()'s own last-resort arm (src/signal/
- * signal.c) reaches __plat_kill_terminate() above, which decodes the
- * real signal back out of the __ENCODE_SIGNAL_EXIT() encoding and delivers
- * it for real, applying whatever the TARGET process itself last synced
- * as its own real kernel-level disposition -- SIG_IGN is a genuine
- * no-op, SIG_DFL runs the kernel's own default action.  See this
- * function's plat_signal.h comment. */
+ * pidfd_send_signal(2): kill()'s own cross-process arm
+ * (src/signal/linux/sigdelivery.c's __sig_try_deliver_remote()) reaches
+ * __plat_kill_terminate() above, which decodes the real signal back out
+ * of the __ENCODE_SIGNAL_EXIT() encoding and delivers it for real,
+ * applying whatever the TARGET process itself last synced as its own
+ * real kernel-level disposition -- SIG_IGN is a genuine no-op, SIG_DFL
+ * runs the kernel's own default action, and, as of Tier 2's widening
+ * (__plat_sig_install_real_handler() above, called from signal.c's
+ * sigaction()/signal()), a real caught handler genuinely runs too.  See
+ * this function's plat_signal.h comment. */
 int __plat_sig_deliverable_to_other_process(void)
 {
 	return 1;
@@ -838,6 +872,103 @@ int __plat_stop_event_probe(const struct _UNICODE_STRING *name, __plat_handle_t 
 	*out = (__plat_handle_t)obj;
 	*already_existed = !created;
 	return 0;
+}
+
+/* ---- remote-disposition probe -----------------------------------------
+ * See __plat_sig_remote_disposition_nondefault()'s own plat_signal.h
+ * comment for why sigdelivery.c's __sig_try_deliver_remote_nondefault()
+ * needs to ask this question at all. Reuses SYS_openat_ps/AT_FDCWD_PS
+ * from the stop-event section just above rather than redefining them a
+ * second time under a different name. */
+
+/* Builds "/proc/<pid>/status" into buf, hand-rolled the same way
+ * stop_event_path() above builds its own path rather than reaching for
+ * a formatting function. pid is always a real, positive pid_t by the
+ * time this is called -- kill()'s own pid<=0 arms (self, process group,
+ * "every process") are all handled long before __sig_try_deliver_
+ * remote_nondefault() is ever reached -- so no sign handling is needed. */
+static void proc_status_path(pid_t pid, char *buf, size_t bufsz)
+{
+	static const char prefix[] = "/proc/";
+	static const char suffix[] = "/status";
+	size_t plen = sizeof prefix - 1, slen = sizeof suffix - 1;
+	unsigned long v = (unsigned long)pid;
+	char digits[20];
+	size_t nd = 0, i, j = 0;
+
+	if (v == 0) digits[nd++] = '0';
+	while (v > 0 && nd < sizeof digits) {
+		digits[nd++] = (char)('0' + (v % 10));
+		v /= 10;
+	}
+	for (i = 0; i < plen && j < bufsz - 1; i++) buf[j++] = prefix[i];
+	for (i = 0; i < nd && j < bufsz - 1; i++) buf[j++] = digits[nd - 1 - i];
+	for (i = 0; i < slen && j < bufsz - 1; i++) buf[j++] = suffix[i];
+	buf[j] = 0;
+}
+
+/* Scans the first `n` bytes actually read from /proc/pid/status (`buf`)
+ * for a line beginning with `field` ("SigCgt:" or "SigIgn:", proc(5))
+ * and reports bit (sig-1) of the 64-bit hex bitmask that follows it --
+ * see __plat_sig_remote_disposition_nondefault()'s own plat_signal.h
+ * comment for why that bit means what it means. 0 if `field` never
+ * appears at all: a /proc/pid/status this never expects to see the
+ * shape of for real, but "not proven nondefault" is the same safe
+ * default this function returns for every other failure below. */
+static int status_field_bit(const char *buf, long n, const char *field, int sig)
+{
+	long flen = 0, i;
+
+	while (field[flen]) flen++;
+
+	for (i = 0; i + flen <= n; i++) {
+		int match = 1, k;
+		long j;
+		unsigned long long mask = 0;
+
+		if (i != 0 && buf[i - 1] != '\n') continue;
+		for (k = 0; k < flen; k++)
+			if (buf[i + k] != field[k]) { match = 0; break; }
+		if (!match) continue;
+
+		j = i + flen;
+		while (j < n && (buf[j] == ' ' || buf[j] == '\t')) j++;
+		while (j < n && buf[j] != '\n') {
+			char c = buf[j];
+			int digit;
+			if (c >= '0' && c <= '9') digit = c - '0';
+			else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
+			else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10;
+			else break;
+			mask = (mask << 4) | (unsigned long long)digit;
+			j++;
+		}
+		return (int)((mask >> (sig - 1)) & 1ULL);
+	}
+	return 0;
+}
+
+int __plat_sig_remote_disposition_nondefault(pid_t pid, int sig)
+{
+	char path[40];
+	char buf[4096];
+	long fd, got = 0, r;
+
+	if (pid <= 0 || sig < 1 || sig > 64) return 0;
+
+	proc_status_path(pid, path, sizeof path);
+	fd = syscall(SYS_openat_ps, (long)AT_FDCWD_PS, (long)path, 0L, 0L, 0L, 0L);
+	if (is_sys_error(fd)) return 0;
+
+	while (got < (long)sizeof buf) {
+		r = syscall(SYS_read, fd, (long)&buf[got], (long)(sizeof buf - (size_t)got), 0L, 0L, 0L);
+		if (is_sys_error(r) || r == 0) break;
+		got += r;
+	}
+	syscall(SYS_close, fd, 0L, 0L, 0L, 0L, 0L);
+
+	if (status_field_bit(buf, got, "SigCgt:", sig)) return 1;
+	return status_field_bit(buf, got, "SigIgn:", sig);
 }
 
 // NOLINTEND(misc-include-cleaner)
