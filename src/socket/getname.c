@@ -104,13 +104,11 @@ int getsockname(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict 
 		 * too. */
 		struct sockaddr_in wild;
 		socklen_t n;
-		socklen_t i;
 
 		memset(&wild, 0, sizeof(wild));
 		wild.sin_family = AF_INET;
 		n = *len < (socklen_t)sizeof(wild) ? *len : (socklen_t)sizeof(wild);
-		for (i = 0; i < n; i++)
-			((unsigned char *)addr)[i] = ((const unsigned char *)&wild)[i];
+		memcpy(addr, &wild, n);
 		*len = sizeof(wild);
 		return 0;
 	}

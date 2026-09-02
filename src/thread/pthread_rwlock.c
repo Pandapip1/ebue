@@ -155,6 +155,21 @@ static void unlink_waiter(struct rw_waiter *waiter)
 	waiter->linked = 0;
 }
 
+/* True, with the acquisition already recorded, if the lock was
+ * immediately free for `write`'s mode.  Both call sites below run this
+ * with data's lock held and, on a true result, always take the identical
+ * next step ("mark self as the new owner"); folding that step in here
+ * keeps the two from being able to drift out of step. */
+static int rwlock_try_immediate(struct rwlock_data *data, pthread_t self, int write)
+{
+	int available = write ? (!data->writer && !data->readers)
+	                      : (!data->writer && !data->waiting_writers);
+	if (!available) return 0;
+	if (write) data->writer = self;
+	else data->readers++;
+	return 1;
+}
+
 static void wake_waiters(struct rwlock_data *data)
 {
 	struct rw_waiter *waiter, *next;
@@ -212,10 +227,7 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 	if (data->pshared == PTHREAD_PROCESS_SHARED)
 		return shared_acquire(data, absolute, try_only, write);
 	__plat_fast_lock();
-	if (write ? (!data->writer && !data->readers) :
-	    (!data->writer && !data->waiting_writers)) {
-		if (write) data->writer = self;
-		else data->readers++;
+	if (rwlock_try_immediate(data, self, write)) {
 		__plat_fast_unlock();
 		return 0;
 	}
@@ -249,10 +261,7 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 	}
 	pthread_cleanup_push(wait_cleanup, waiter);
 	__plat_fast_lock();
-	if (write ? (!data->writer && !data->readers) :
-	    (!data->writer && !data->waiting_writers)) {
-		if (write) data->writer = self;
-		else data->readers++;
+	if (rwlock_try_immediate(data, self, write)) {
 		__plat_fast_unlock();
 		pthread_setcancelstate(old_state, 0);
 		goto done;
