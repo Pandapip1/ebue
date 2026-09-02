@@ -16,6 +16,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
+#include "TokenAlgebra.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -54,6 +55,10 @@ REGISTER_SET_WITH_PROGRAMSTATE(ExpiredStrictLoanSet, const MemRegion *)
 REGISTER_MAP_WITH_PROGRAMSTATE(ResourceMap, SymbolRef, unsigned)
 
 namespace {
+
+using ntlibc::algebra::excludedSentinel;
+using ntlibc::algebra::findTokenSort;
+using ntlibc::algebra::hasQualifier;
 
 struct CapabilityPresence {
   bool Known;
@@ -143,41 +148,20 @@ static CapabilityPresence capabilityFor(ProgramStateRef State,
   return {false, std::nullopt};
 }
 
-static const TypedefNameDecl *dialectToken(ASTContext &Context,
-                                           StringRef Name) {
-  IdentifierInfo &Identifier = Context.Idents.get(Name);
-  DeclarationName Declaration(&Identifier);
-  for (NamedDecl *Candidate :
-       Context.getTranslationUnitDecl()->lookup(Declaration))
-    if (const auto *Token = dyn_cast<TypedefNameDecl>(Candidate))
-      return Token;
-  return nullptr;
-}
-
-static bool hasDialectQualifier(const TypedefNameDecl *Token,
-                                StringRef Qualifier) {
-  if (!Token)
-    return false;
-  for (const AnnotateAttr *Attr : Token->specific_attrs<AnnotateAttr>())
-    if (Attr->getAnnotation() == Qualifier)
-      return true;
-  return false;
-}
-
 static std::optional<CapabilityKind> dialectTokenKind(ASTContext &Context,
                                                        StringRef Name) {
-  const TypedefNameDecl *Token = dialectToken(Context, Name);
+  const TypedefNameDecl *Token = findTokenSort(Context, Name);
   if (!Token)
     return std::nullopt;
-  return hasDialectQualifier(Token, "qual:l_unlimited")
+  return hasQualifier(Token, "qual:l_unlimited")
              ? CapabilityKind::Duplicable
              : CapabilityKind::Linear;
 }
 
 static bool dialectTokenPermitsCarrierCopy(const TypedefNameDecl *Token) {
-  return Token && hasDialectQualifier(Token, "qual:l_permissive") &&
-         !hasDialectQualifier(Token, "qual:l_strict") &&
-         !hasDialectQualifier(Token, "qual:l_unlimited");
+  return Token && hasQualifier(Token, "qual:l_permissive") &&
+         !hasQualifier(Token, "qual:l_strict") &&
+         !hasQualifier(Token, "qual:l_unlimited");
 }
 
 static bool initializedByStringLiteral(const ValueDecl *Declaration) {
@@ -198,8 +182,8 @@ static bool expressionProvidesStringLiteralToken(
   if (!Expression || !Family)
     return false;
   const TypedefNameDecl *Token =
-      dialectToken(Context, Family->getName());
-  if (!hasDialectQualifier(Token, "qual:string_literal"))
+      findTokenSort(Context, Family->getName());
+  if (!hasQualifier(Token, "qual:string_literal"))
     return false;
   const Expr *Core = Expression->IgnoreParenImpCasts();
   if (isa<StringLiteral>(Core))
@@ -209,31 +193,13 @@ static bool expressionProvidesStringLiteralToken(
   return false;
 }
 
-static std::optional<int64_t> dialectExcludedSentinel(
-    const TypedefNameDecl *Token) {
-  if (!Token)
-    return std::nullopt;
-  constexpr StringRef Prefix = "qual:sentinel_exclude=";
-  for (const AnnotateAttr *Attr : Token->specific_attrs<AnnotateAttr>()) {
-    StringRef Text = Attr->getAnnotation();
-    if (!Text.consume_front(Prefix))
-      continue;
-    if (Text == "NULL")
-      return 0;
-    int64_t Value = 0;
-    if (!Text.getAsInteger(10, Value))
-      return Value;
-  }
-  return std::nullopt;
-}
-
 static bool dialectTokenExcludes(const IdentifierInfo *Family,
                                  const Expr *Expression,
                                  ASTContext &Context) {
   if (!Family || !Expression)
     return false;
-  std::optional<int64_t> Sentinel = dialectExcludedSentinel(
-      dialectToken(Context, Family->getName()));
+  std::optional<int64_t> Sentinel = excludedSentinel(
+      findTokenSort(Context, Family->getName()));
   if (!Sentinel)
     return false;
   std::optional<llvm::APSInt> Value =
@@ -371,8 +337,8 @@ static bool insideDynamicStorageConsumer(CheckerContext &C) {
       }
       if (Consumer && !Text.empty() &&
           !Text.contains(':') &&
-          hasDialectQualifier(dialectToken(Function->getASTContext(), Text),
-                              "qual:dynamic_storage"))
+          hasQualifier(findTokenSort(Function->getASTContext(), Text),
+                       "qual:dynamic_storage"))
         return true;
     }
   return false;
@@ -396,8 +362,8 @@ class OwnershipChecker
       if (Text.consume_front("withtok:") && !Text.empty() &&
           !Text.contains(':')) {
         const TypedefNameDecl *Token =
-            dialectToken(Function->getASTContext(), Text);
-        if (hasDialectQualifier(Token, "qual:dynamic_storage"))
+            findTokenSort(Function->getASTContext(), Text);
+        if (hasQualifier(Token, "qual:dynamic_storage"))
           return true;
       }
     }
@@ -415,9 +381,8 @@ class OwnershipChecker
         StringRef Text = Attribute->getAnnotation();
         if (Text.consume_front("consume_if_nonnull_return:") &&
             !Text.empty() && !Text.contains(':') &&
-            hasDialectQualifier(
-                dialectToken(Function->getASTContext(), Text),
-                "qual:dynamic_storage"))
+            hasQualifier(findTokenSort(Function->getASTContext(), Text),
+                         "qual:dynamic_storage"))
           return Argument;
       }
       ++Argument;
@@ -465,9 +430,8 @@ class OwnershipChecker
         StringRef Text = Attribute->getAnnotation();
         if (Text.consume_front("consume:") && !Text.empty() &&
             !Text.contains(':') &&
-            hasDialectQualifier(
-                dialectToken(Function->getASTContext(), Text),
-                "qual:dynamic_storage"))
+            hasQualifier(findTokenSort(Function->getASTContext(), Text),
+                         "qual:dynamic_storage"))
           return Argument;
       }
       ++Argument;
@@ -1426,14 +1390,13 @@ class CapabilityTokenChecker
             if (parameterAnnotation(Function, Attr, Candidate.Prefix, Family,
                                     Parameters)) {
               const TypedefNameDecl *Token =
-                  dialectToken(Function->getASTContext(), Family->getName());
-              if (hasDialectQualifier(Token, "qual:extent_at_least") ||
-                  hasDialectQualifier(Token, "qual:disjoint_extent"))
+                  findTokenSort(Function->getASTContext(), Family->getName());
+              if (hasQualifier(Token, "qual:extent_at_least") ||
+                  hasQualifier(Token, "qual:disjoint_extent"))
                 continue;
               if ((Candidate.Operation == CapabilityOperation::Require ||
                    Candidate.Operation == CapabilityOperation::Consume) &&
-                  hasDialectQualifier(
-                      Token, "qual:dynamic_storage"))
+                  hasQualifier(Token, "qual:dynamic_storage"))
                 continue;
               CapabilityOperation Operation = Candidate.Operation;
               if (Candidate.Prefix == "grant:") {
@@ -1897,9 +1860,8 @@ class OwnershipTypeChecker
           dialectTokenKind(Declaration->getASTContext(), Text);
       if (!Kind)
         continue;
-      if (hasDialectQualifier(
-              dialectToken(Declaration->getASTContext(), Text),
-              "qual:dynamic_storage"))
+      if (hasQualifier(findTokenSort(Declaration->getASTContext(), Text),
+                       "qual:dynamic_storage"))
         continue;
       Bundle.push_back(
           {&Declaration->getASTContext().Idents.get(Text),
@@ -1945,8 +1907,8 @@ class OwnershipTypeChecker
       if (Entry.Member == OwnershipTypeMember::Handle)
         continue;
       const TypedefNameDecl *Token =
-          dialectToken(Declaration->getASTContext(), Entry.Family->getName());
-      if (std::optional<int64_t> Sentinel = dialectExcludedSentinel(Token))
+          findTokenSort(Declaration->getASTContext(), Entry.Family->getName());
+      if (std::optional<int64_t> Sentinel = excludedSentinel(Token))
         Traits.push_back({Entry.Family, *Sentinel});
     }
     return Traits;
@@ -2081,8 +2043,8 @@ class OwnershipTypeChecker
       if (Entry.Member == OwnershipTypeMember::Handle)
         continue;
       const TypedefNameDecl *Token =
-          dialectToken(C.getASTContext(), Entry.Family->getName());
-      if (hasDialectQualifier(Token, "qual:blocks_dereference") &&
+          findTokenSort(C.getASTContext(), Entry.Family->getName());
+      if (hasQualifier(Token, "qual:blocks_dereference") &&
           capabilityFor(State, Carrier, Value, Entry.Family).Kind) {
         report("pointer operation is blocked while unchecked ownership token "
                "is held",
@@ -2113,7 +2075,7 @@ class OwnershipTypeChecker
           !DestinationCarrier || SourceCarrier == DestinationCarrier)
         continue;
       const TypedefNameDecl *Token =
-          dialectToken(C.getASTContext(), Entry.Family->getName());
+          findTokenSort(C.getASTContext(), Entry.Family->getName());
       if (!dialectTokenPermitsCarrierCopy(Token))
         State = State->set<StrictLoanMap>(
             {DestinationCarrier, Entry.Family}, SourceCarrier);
@@ -2160,7 +2122,7 @@ class OwnershipTypeChecker
       if (Required == CapabilityKind::Linear && SourceCarrier &&
           SourceCarrier != DestinationCarrier) {
         const TypedefNameDecl *Token =
-            dialectToken(C.getASTContext(), Entry.Family->getName());
+            findTokenSort(C.getASTContext(), Entry.Family->getName());
         if (!dialectTokenPermitsCarrierCopy(Token))
           State = expireStrictLoans(State, SourceCarrier, Entry.Family);
         State = removeCarrierToken(State, SourceCarrier, Entry.Family);
@@ -2375,7 +2337,7 @@ public:
             Text.contains(':'))
           continue;
         const TypedefNameDecl *Token =
-            dialectToken(C.getASTContext(), Text);
+            findTokenSort(C.getASTContext(), Text);
         if (!dialectTokenPermitsCarrierCopy(Token))
           State = expireStrictLoans(
               State, carrierRegion(Call.getArgExpr(Argument), C),
@@ -2426,8 +2388,8 @@ public:
       if (isa<ParmVarDecl>(Variable->getDecl()))
         continue;
       const TypedefNameDecl *Token =
-          dialectToken(C.getASTContext(), Family->getName());
-      if (!Token || hasDialectQualifier(Token, "qual:implicit_drop"))
+          findTokenSort(C.getASTContext(), Family->getName());
+      if (!Token || hasQualifier(Token, "qual:implicit_drop"))
         continue;
       const auto *Function = dyn_cast_or_null<FunctionDecl>(
           C.getLocationContext()->getDecl());

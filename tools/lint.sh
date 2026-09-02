@@ -1166,6 +1166,14 @@ stage_ownership() {
 		return $missing
 	fi
 
+	token_test=$builddir/token-algebra-test
+	# llvm-config deliberately returns shell words, not one argument.
+	# shellcheck disable=SC2046
+	clang++-18 $(llvm-config-18 --cxxflags) \
+		tools/clang/TokenAlgebraTest.cpp -o "$token_test" "$clang_cpp" \
+		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
+	"$token_test" || return 1
+
 	plugin=$builddir/ntlibc-ownership-checker.so
 	# llvm-config deliberately returns shell words, not one argument.
 	# shellcheck disable=SC2046
