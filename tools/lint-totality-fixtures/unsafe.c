@@ -646,6 +646,8 @@ unsigned member_guard_without_progress(struct vec *p, int skip)
 
 int signed_nonunit_after_zero_guard(int n)
 {
+	/* Even values reach zero.  Odd values terminate only at signed UB, but the
+	 * 32-bit slice exceeds the literal engine's conservative completeness cap. */
 	for (;;) { /* totality-expect */
 		if (n == 0) return n;
 		n -= 2;
@@ -897,6 +899,73 @@ int transition_ir_havoc_can_bypass_progress(int n)
 			n--;
 	}
 	return n;
+}
+
+unsigned char literal_promoted_uint8_cycle(unsigned char value)
+{
+	for (;;) { /* totality-expect */
+		value++;
+	}
+}
+
+unsigned char literal_toggle_cycle(unsigned char value)
+{
+	while (value < 2) { /* totality-expect */
+		value = 1 - value;
+	}
+	return value;
+}
+
+unsigned char literal_havoc_cycle(unsigned char value)
+{
+	while (value != 0) { /* totality-expect */
+		if (opaque_predicate())
+			value = 0;
+	}
+	return value;
+}
+
+int literal_const_choice(void) __attribute__((const));
+
+unsigned char literal_havoced_return(unsigned char value)
+{
+	while (value != 0) { /* totality-expect */
+		value = (unsigned char)literal_const_choice();
+	}
+	return value;
+}
+
+unsigned _BitInt(2)
+literal_nondeterministic_cycle(unsigned _BitInt(2) value,
+	unsigned _BitInt(1) stay)
+{
+	while (value != 3) { /* totality-expect */
+		if (stay)
+			continue;
+		value++;
+	}
+	return value;
+}
+
+unsigned short literal_cap_rejection(unsigned short value)
+{
+	while (value != 0) { /* totality-expect */
+		if (value == 1)
+			value = 2;
+		else if (value == 2)
+			value = 3;
+		else
+			value = 0;
+	}
+	return value;
+}
+
+signed char literal_signed_narrowing_cycle(signed char value)
+{
+	while (value != 0) { /* totality-expect */
+		value = (signed char)(value + 128);
+	}
+	return value;
 }
 
 int dynamic_countdown_escaped_rank(int n)
