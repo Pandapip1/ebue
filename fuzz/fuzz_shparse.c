@@ -55,113 +55,15 @@ extern void oracle_mismatch_i(const char *, const char *, long long, long long);
 
 #define CAP 1024
 
-/* BUG: the printer writes a here-document's terminator line as the
- * delimiter word was WRITTEN, but the parser matches terminator
- * lines against the delimiter with quote removal APPLIED, so a
- * quoted delimiter's printed terminator does not terminate.
- *
- * print.c:41 drain_heredocs() emits fputs(r->word) -- the raw
- * source text of the delimiter.  parse.c:273 drain_heredocs()
- * compares each line against strip_delim(r->word), which removes
- * the quotes.  The two agree only when the delimiter has none.
- *
- * Measured with a probe that prints the AST between the stages,
- * so this is the mechanism and not a guess about it:
- *
- *     src    "a<<\"\""
- *     parse1  r->word = "\"\"", r->heredoc = "" (empty body)
- *     print1  "a << \"\"\n\"\"\n"
- *     parse2  r->word = "\"\"", r->heredoc = "\"\"\n"  <-- the
- *             terminator line was swallowed as BODY, because the
- *             delimiter is the empty string and the printed line
- *             "\"\"" is not an empty line
- *     print2  "a << \"\"\n\"\"\n\"\"\n"   -- a line longer
- *
- * Each round trip therefore grows the program by one line, which
- * is the fixed point failing in the worst direction: not a
- * disagreement that settles, but one that diverges.
- *
- * The empty delimiter is the case that bites in a one-line
- * program, because it is the only quoted delimiter for which the
- * here-document can terminate at all without a body: "a<<X" and
- * "a<<\"X\"" both fail to parse outright, having no terminator.
- * "a<<''" fails identically.  Fenced in test/sh-engine.c.
- *
- * The filter suppresses only the comparison, and only for a
- * source with both "<<" and a quoting byte, so an UNQUOTED
- * here-document delimiter -- the ordinary case, and the one the
- * printer gets right -- stays under the fixed-point check.
- *
- * When the fence is lifted, delete hdquote_fence() and its
- * caller. */
-/* BUG: the printer does not quote a word that is literally "!" when it
- * lands where a pipeline's negation operator would be, so its output
- * does not reparse to the same tree.  2.9.2 makes "!" a reserved word
- * as the first word of a pipeline, and 2.4 lists it among the words
- * that must be quoted to be used literally; src/sh/print.c writes the
- * word out bare.
- *
- * Minimal reproducer, found by this harness and reduced by hand:
- *
- *     ">! !"   parses as { redirect > to the word "!" ; word "!" }
- *              prints as "!  > !"
- *              which REparses as { negation ; redirect > to "!" }
- *              and prints as   "! > !"
- *
- * -- the word became an operator on the way through the printer's own
- * output, which is exactly the property src/sh/print.c's banner claims
- * and test/sh-engine.c's check_roundtrip() checks by hand for a fixed
- * set of programs.  Fenced in test/sh-engine.c, not fixed.
- *
- * Only the comparison is suppressed, and only for a source containing
- * '!': the parse, the print, the reparse and the second print all
- * still run on those inputs, so every line of parse.c and print.c the
- * negation path touches stays under test and under ASan.  The filter
- * is an over-approximation ('!' anywhere, not just at a pipeline
- * head), for the reason the other filters here give -- deciding
- * precisely would mean reimplementing the lexer in the harness.
- *
- * When the fence is lifted, delete bang_fence() and its caller. */
-/* BUG, fenced in test/sh-engine.c as
- * test_funcdef_before_list_operator_roundtrip(): a function definition
- * followed by a list operator does not reach a fixed point, and does not
- * merely fail to -- it diverges, one <blank> further apart every round
- * trip.
- *
- * src/sh/parse.c:885-896 parse_funcdef() captures the body as the text
- * up to the START of the token that follows it, and the lexer has
- * already skipped the <blank>s in between, so they are captured as part
- * of the body.  src/sh/print.c:148 writes that back verbatim and then
- * writes the operator with a leading space of its own.
- *
- * Minimal reproducer, found by this harness and reduced by hand:
- *
- *     "a()()&"   prints as   "a() () &"
- *                REprints as "a() ()  &"
- *                then        "a() ()   &"
- *
- * Only a list operator exposes it: a redirection is consumed into the
- * body's own redirection list and lands inside the captured text, and
- * ';'/<newline> are printed as a bare '\n' with no leading blank.
- * Fenced in test/sh-engine.c, not fixed.
- *
- * Only the comparison is suppressed: the parse, the print, the reparse
- * and the second print all still run, so parse_funcdef() and the
- * FUNCDEF arm of print_command() stay under test and under ASan.  The
- * filter is an over-approximation, like the other two here: a name
- * character immediately before '(' is where a function definition can
- * start, which is deliberately narrow enough to leave "$(" and "(("
- * alone, and '&' or '|' is what the printer needs in order to emit the
- * leading space that makes the extra blank visible.  Deciding precisely
- * would mean reimplementing the lexer here.
- *
- * Measured rather than assumed, over 3044 accumulated corpus units from
- * three runs: this filter matches 27 of them, 0.9%.  bang_fence()'s
- * matches 248, 8.1%.  Requiring the '(' to be preceded by a name
- * character is what keeps it there -- "$(" and "((" are far commoner in
- * this corpus than a function definition is, and neither is matched.
- *
- * When the fence is lifted, delete funcdef_fence() and its caller. */
+/* This harness previously carried three fence functions (hdquote_fence,
+ * bang_fence, funcdef_fence) that suppressed the fixed-point comparison
+ * below for source shapes that hit real parse/print round-trip bugs: a
+ * quoted here-document delimiter, a bare "!" landing where the negation
+ * operator would, and a function definition immediately before a list
+ * operator. All three were fixed at the src/sh/parse.c and
+ * src/sh/print.c level in 9fc8f65a, which also deleted the fences; see
+ * that commit and test/sh-engine.c's test_roundtrip()/test_funcdef_*
+ * cases for the reproducers. */
 /* Reprint `l` into a fresh heap string, or NULL if the memstream could
  * not be created.  The caller frees. */
 static char *reprint(const struct sh_list *l)

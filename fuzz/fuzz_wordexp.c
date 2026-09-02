@@ -5,8 +5,7 @@
  * evaluator in src/wordexp/arith.c.  Between them they are a small
  * shell word expander: quote-state tracking, backslash escapes,
  * "$VAR", "${VAR}", "${VAR:-word}" and friends, $((expr)), field
- * splitting on IFS, and pathname expansion through glob().  Four
- * `BUG:` fences in test/posix-wordexp.c indict this module.
+ * splitting on IFS, and pathname expansion through glob().
  *
  * WRDE_NOCMD IS ALWAYS SET, and that is not a limitation of the
  * harness, it is the only way it can exist.  Without it a '$(' or a
@@ -68,22 +67,15 @@ extern void oracle_mismatch_i(const char *, const char *, long long, long long);
 
 #define CAP 256
 
-/* The shift operators are held back, and this is the same kind of
- * exclusion as fuzz_regex.c's safe_to_exec(): an input class that is
- * already a known, fenced defect and that a fuzzer rediscovers in
- * seconds, leaving a permanently red harness that reports nothing else.
- *
- * test/posix-glob.c's test_wordexp_arith_shift_bounds fence records it:
- * src/wordexp/arith.c:300-301 perform `cur << rhs` and `cur >> rhs` with
- * no bound on rhs, so "1<<-1", "1<<64" and "1<<63" are all undefined
- * behaviour, and tools/asan-build.sh builds with
- * -fsanitize=undefined -fno-sanitize-recover, which turns each of them
- * into an immediate process abort.  This harness found that on its first
- * sixty-second run; the finding is fenced, not fixed, per the standing
- * rule, so the harness has to route around it to stay useful for
- * everything else in 900 lines of expander and evaluator.
- *
- * Delete this when the fence is lifted. */
+/* This harness found src/wordexp/arith.c's shift operators performing
+ * `cur << rhs`/`cur >> rhs` with no bound on rhs (an out-of-range count
+ * is undefined behaviour, and tools/asan-build.sh's
+ * -fsanitize=undefined -fno-sanitize-recover turned that into an
+ * immediate process abort). Fixed in 646292ab, which bounds the count
+ * and reports WRDE_SYNTAX instead (see test_wordexp_arith_shift_bounds
+ * in test/posix-glob.c); this filter predates that fix and has not been
+ * re-verified as removable since, so it is left in place rather than
+ * dropped in a pass that cannot run the fuzz harness to check. */
 static int has_shift(const char *s)
 {
 	size_t i;

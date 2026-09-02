@@ -8,21 +8,16 @@
  * else in this tree.
  *
  * WHAT IS FUZZED, AND HOW.  ed(1p) has no scripted-file operand for its
- * command language at all -- unlike sed's `-f`, __util_ed_main()'s own
+ * command language at all -- unlike sed's `-f`, __util_ed_main()'s
  * top-level loop and its G/V interactive step both call
- * read_line_stdin(stdin) against the literal `stdin` global, never
- * against a caller-supplied FILE*, so the fuzz buffer becomes ed's
- * *command stream* by redirecting the real process stdin, once per
- * call, with freopen() -- exactly the technique this project's own task
- * description for this file anticipated ("freopen() reuses the
- * existing FILE* object rather than replacing the pointer") and the
- * reason `include/stdio.h` declares `stdin`/`stdout`/`stderr` as `FILE
- * *const`.  The one operand ed(1p) DOES take -- `[file]`, the buffer's
+ * read_line_stdin(stdin) against the literal `stdin` global, never a
+ * caller-supplied FILE*, so the fuzz buffer becomes ed's *command
+ * stream* by redirecting the real process stdin, once per call, with
+ * freopen(). The one operand ed(1p) does take -- `[file]`, the buffer's
  * initial content -- is a small fixed six-line fixture, not derived
- * from the fuzz input, for the identical reason fuzz_sed.c's own header
- * comment gives for its `data` file: the grammar under test is the
- * command stream's, not the edited text's, and fuzz_regex.c already
- * owns BRE-against-arbitrary-text coverage.
+ * from the fuzz input: the grammar under test is the command stream's,
+ * not the edited text's, and fuzz_regex.c already owns BRE-against-
+ * arbitrary-text coverage.
  *
  * Byte 0 of the input selects `-s` (bit 0) and `-p '*'` (bit 1); the
  * rest, capped at CMD_CAP, is the command stream.
@@ -30,119 +25,87 @@
  * A SAFETY EXCLUSION, NOT A COVERAGE TRADEOFF: `!`.  ed(1p)'s `!`
  * command, and the "!command" form e/r/w accept in place of a filename,
  * both reach cmd_bang()/popen() -> system()/popen() -> (src/process/
- * spawn.c's) __spawn() -> NT process creation.  fuzz/ntstubs.c's own
+ * spawn.c's) __spawn() -> NT process creation. fuzz/ntstubs.c's
  * RtlCreateUserProcess is not a stub for that call: it really does
- * fork(2) and execve() a real host process (see its own long header
- * comment, and `syscall(SYS_execve, host, argv, ...)` in the body) --
- * confirmed by reading the file, not assumed.  A fuzzer that found a
- * `!`-prefixed line would therefore be a fuzzer that found arbitrary
- * host command execution, unsupervised, for as long as this harness
- * keeps running.  That is exactly the class of risk fuzz/Makefile's own
- * banner comment states in capitals for a different subsystem --
- * "NOTHING IN THIS DIRECTORY MAY INVOKE WINE" -- and the fix here is
- * the same shape: never let the fuzzer reach the call at all, rather
- * than trust ntlibc's simulated environment (empty PATH/ComSpec; see
- * ed_maybe_dangerous() below) to keep failing to resolve a shell
- * forever.  ed_maybe_dangerous() rejects the WHOLE input if a literal
- * '!' byte appears anywhere in it: every one of the four affected
- * forms -- the bare `!` command, and `e`/`E`/`r`/`w` with a leading `!`
- * on their filename argument -- requires that exact byte, so one
- * coarse byte-level check closes off the whole class before any
- * parsing happens, at the cost of the (comparatively small) coverage
- * of cmd_bang()/expand_percent()/the `is_bang` branches inside
- * cmd_edit()/cmd_read()/cmd_write().  That cost is accepted
- * deliberately and is not a close call.
+ * fork(2) and execve() a real host process (see its `syscall(SYS_execve,
+ * host, argv, ...)`). A fuzzer that found a `!`-prefixed line would
+ * therefore find arbitrary host command execution, unsupervised, for as
+ * long as this harness keeps running -- the fix is to never let the
+ * fuzzer reach the call at all, rather than trust ntlibc's simulated
+ * environment (empty PATH/ComSpec) to keep failing to resolve a shell
+ * forever. ed_maybe_dangerous() rejects the whole input if a literal '!'
+ * byte appears anywhere in it: every one of the four affected forms --
+ * the bare `!` command, and `e`/`E`/`r`/`w` with a leading `!` on their
+ * filename argument -- requires that exact byte, so one coarse
+ * byte-level check closes off the whole class before any parsing
+ * happens, at the cost of the (comparatively small) coverage of
+ * cmd_bang()/expand_percent()/the `is_bang` branches inside
+ * cmd_edit()/cmd_read()/cmd_write(). That cost is accepted deliberately.
  *
  * WHAT IS DELIBERATELY NOT FUZZED, beyond `!` and the data file:
+ * SIGINT/SIGHUP delivery. __util_ed_main() installs real sigaction()
+ * handlers and polls `ed_interrupted`/`ed_hup` between logical steps,
+ * and that install/restore dance runs on every call this harness makes,
+ * but nothing here ever raises either signal, so ed_check_interrupt()'s
+ * "yes, interrupted" arm and the SIGHUP-save-and-quit path are never
+ * taken. A harness that sent itself real signals mid-call, from a
+ * second thread or an alarm(), could close this gap; not attempted
+ * here.
  *
- *   - SIGINT/SIGHUP delivery.  __util_ed_main() installs real
- *     sigaction() handlers and polls `ed_interrupted`/`ed_hup` between
- *     logical steps (this file's own header comment on "THE
- *     BUILTIN-SAFETY SIGNAL DISCIPLINE"), and that install/restore
- *     dance runs on every call this harness makes -- but nothing here
- *     ever raises either signal, so ed_check_interrupt()'s "yes,
- *     interrupted" arm and the whole SIGHUP-save-and-quit path in
- *     __util_ed_main()'s own loop are never taken.  A harness that sent
- *     itself real signals mid-call, from a second thread or an
- *     alarm(), could close this gap; not attempted here, since ed(1p)'s
- *     own header comment already documents this exact polling
- *     discipline (matching src/util/dd.c's SIGINT precedent) as
- *     independently reasoned about and unlikely to hide a parser bug
- *     specifically.
+ * BOUNDING RUNAWAY COMPUTATION: not needed here. src/util/ed.c's
+ * g/v/G/V implementation has no way to not terminate:
  *
- * BOUNDING RUNAWAY COMPUTATION: NOT NEEDED HERE, AND WHY.  This file's
- * own task description raised the same concern it raised for sed's b/t
- * -- "ed's g/v global-command application ... a real loop construct" --
- * and the check it asked to make first is whether that concern is real
- * for THIS grammar, not just assumed by analogy.  Read in full,
- * src/util/ed.c's g/v/G/V implementation (the `case 'g': case 'v':
- * case 'G': case 'V':` arm) has no way to not terminate:
- *
- *   - ed's command language has no branch or label construct at all --
- *     no b/t, nothing resembling one.  g/v's own sub-command-list
- *     (non-interactive form) is a fixed, already-parsed array (`list`)
- *     walked once per matched line by a plain for loop bounded by
- *     `nmatched`, itself bounded by `ed->nlines`; nesting a second g/v
- *     inside that list is refused outright (`ctx == CTX_GLIST` at the
- *     top of the same switch arm), so there is no recursive
- *     amplification either.
+ *   - ed's command language has no branch or label construct at all.
+ *     g/v's sub-command-list (non-interactive form) is a fixed,
+ *     already-parsed array (`list`) walked once per matched line by a
+ *     plain for loop bounded by `nmatched`, itself bounded by
+ *     `ed->nlines`; nesting a second g/v inside that list is refused
+ *     outright, so there is no recursive amplification either.
  *   - `ed->nlines` -- the bound on every one of these loops, and on
- *     search_forward()/search_backward()'s own wraparound scan -- can
- *     only grow via a/i/c/r reading from the SAME finite command
- *     stream this harness controls (CMD_CAP-capped below), so it is
- *     itself bounded by the size of one fuzz input.
+ *     search_forward()/search_backward()'s wraparound scan -- can only
+ *     grow via a/i/c/r reading from the same finite command stream this
+ *     harness controls (CMD_CAP-capped below), so it is itself bounded
+ *     by the size of one fuzz input.
  *   - the interactive G/V step reads its next per-match command with
- *     `read_line_stdin(stdin)` -- the real process stdin, which this
- *     harness has freopen()ed onto a finite regular file -- and its own
- *     "real EOF: stop this G/V loop quietly" comment is exactly the
- *     behaviour observed: EOF ends the loop immediately rather than
- *     blocking, because a regular file, unlike a terminal or a pipe
- *     with a live writer, never blocks a read at EOF.
- *   - s///'s own match-scan loop (substitute_line()) advances
- *     search_pos by at least 1 every iteration and stops at
- *     `search_pos > len`, and regexec() itself is bounded the same way
- *     fuzz_regex.c's own long banner on MAX_STEPS describes.
+ *     `read_line_stdin(stdin)`, which this harness has freopen()ed onto
+ *     a finite regular file: EOF ends the loop immediately rather than
+ *     blocking, because a regular file never blocks a read at EOF.
+ *   - s///'s match-scan loop (substitute_line()) advances search_pos by
+ *     at least 1 every iteration and stops at `search_pos > len`, and
+ *     regexec() itself is bounded the way fuzz_regex.c's MAX_STEPS
+ *     describes.
  *
  * So every loop in this file's target is bounded by a quantity this
- * harness itself already caps, and none of them can spin without
- * consuming either buffer lines or stdin bytes this harness controls
- * the supply of.  No safe_to_exec()/sed_may_loop_forever()-style filter
- * is added here for exactly that reason -- adding one anyway would be
- * guarding against a hazard a full read of the target's control flow
- * does not show exists, which is the opposite mistake from skipping
- * the check fuzz_sed.c's own banner makes for sed's b/t.  CMD_CAP still
- * caps the command stream's byte length, which is what keeps the
- * bounded-but-real cost of a worst-case regexec() times worst-case
- * `nlines` small in absolute terms, the same reasoning fuzz_sed.c gives
- * for its own SCRIPT_CAP.
+ * harness already caps, and none can spin without consuming either
+ * buffer lines or stdin bytes this harness controls the supply of. No
+ * filter is added here for that reason. CMD_CAP still caps the command
+ * stream's byte length, which keeps the bounded-but-real cost of a
+ * worst-case regexec() times worst-case `nlines` small in absolute
+ * terms.
  *
- * STDOUT/STDERR REDIRECTION: see fuzz_sed.c's own header comment for
- * the freopen()-not-fopen() reasoning; the same applies here verbatim
+ * STDOUT/STDERR REDIRECTION: see fuzz_sed.c's header comment for the
+ * freopen()-not-fopen() reasoning; the same applies here verbatim
  * (ed's p/n/l/=/f, every `?` and file-error diagnostic, and the
  * default null-command print all write to the real process stdout).
  *
- * NO ORACLE.  Same reasoning as fuzz_sed.c: no reference ed(1p) this
- * project could differentially compare against without every one of
- * this file's own documented SCOPE NARROWINGS (no `W`, no `#`, no `%`
- * address, single-level undo, ...) reading as a mismatch.  What is
- * checked is the same contract fuzz_sed.c checks:
+ * NO ORACLE: no reference ed(1p) this project could differentially
+ * compare against without this file's own documented scope narrowings
+ * (no `W`, no `#`, no `%` address, single-level undo, ...) reading as a
+ * mismatch. What is checked:
  *
- *   - src/internal/util.h's banner: a real process exit status, never
- *     a raw errno or a boolean.  Unlike sed (0 or 1 on every path),
- *     ed(1p)'s own argv-parsing usage errors return 2 (`-p` with no
- *     argument, an unrecognised option, an extra operand) -- this
- *     harness's own argv is always well-formed, so those three arms
- *     are not expected to fire, but the assertion checks the real
- *     contract (0, 1, or 2), not the narrower range this harness
- *     happens to exercise;
- *   - the same banner's other half, and this file's own header
- *     comment's "THE BUILTIN-SAFETY SIGNAL DISCIPLINE" section, both
- *     independently state __util_ed_main() never calls exit()/_exit()
- *     -- bi_ed() (src/sh/builtin.c) runs it in-process, no fork, the
- *     same as bi_sed().  Relied on here exactly the way fuzz_sed.c
- *     relies on it: libFuzzer's own atexit-based defence against a
- *     target calling exit() mid-run is the thing that would surface a
- *     violation, not a bespoke check in this file.
+ *   - src/internal/util.h's contract that __util_<name>_main() returns
+ *     a real process exit status, never a raw errno or boolean. Unlike
+ *     sed (0 or 1 on every path), ed(1p)'s own argv-parsing usage
+ *     errors return 2 (`-p` with no argument, an unrecognised option,
+ *     an extra operand) -- this harness's own argv is always
+ *     well-formed, so those arms are not expected to fire, but the
+ *     assertion checks the real contract (0, 1, or 2), not just the
+ *     range this harness happens to exercise;
+ *   - __util_ed_main() never calls exit()/_exit() -- bi_ed()
+ *     (src/sh/builtin.c) runs it in-process, no fork, same as bi_sed().
+ *     libFuzzer's own atexit-based defence against a target calling
+ *     exit() mid-run is what would surface a violation, not a bespoke
+ *     check in this file.
  */
 #include <stdio.h>
 #include <stdlib.h>

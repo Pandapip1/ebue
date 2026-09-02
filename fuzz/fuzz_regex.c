@@ -3,9 +3,7 @@
  *
  * regcomp()/regexec()/regerror()/regfree() -- src/regex/regex.c, 732
  * lines of hand-written parser, bytecode emitter and backtracking VM,
- * with no OS dependency.  It carries six `BUG:` fences in
- * test/posix-glob.c, more than any other module in the tree, and until
- * now has never seen an input it did not choose for itself.
+ * with no OS dependency.
  *
  * WHAT IS FUZZED, AND WHAT DELIBERATELY IS NOT
  *
@@ -100,7 +98,8 @@ extern void oracle_mismatch_i(const char *, const char *, long long, long long);
 
 /* True if no repeat operator in `p` applies to something that might
  * match the empty string.  See the file banner: this exists solely to
- * keep the harness off test/posix-glob.c:1925's fenced process kill.
+ * keep the harness off the process-kill class test_regex_nullable_
+ * repeat_does_not_crash() in test/posix-glob.c now covers.
  *
  * Every uncertainty is resolved as "not safe", and that rule was earned:
  * the first version answered "safe" for a pattern whose bracket
