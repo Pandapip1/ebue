@@ -135,6 +135,21 @@ static struct field *fields_grow(
 	return g;
 }
 
+/* Ensures `*out` has room for field index `n`, growing it via
+ * fields_grow() first if not; on failure `*out` is freed and cleared so
+ * every caller can propagate a single false return without repeating
+ * fields_grow()'s own free-on-failure contract at each call site. */
+static int field_reserve(struct field **out, size_t *cap, size_t n)
+{
+	struct field *g;
+
+	if (n < *cap) return 1;
+	g = fields_grow(*out, cap);
+	if (!g) { free(*out); *out = 0; return 0; }
+	*out = g;
+	return 1;
+}
+
 static struct field *split_fields(const char *line, size_t len, const struct sort_opts *o, size_t *nout)
 {
 	struct field *out;
@@ -147,11 +162,7 @@ static struct field *split_fields(const char *line, size_t len, const struct sor
 		size_t start = 0, i;
 		for (i = 0; i < len + 1; i++) {
 			if (i == len || line[i] == o->delim) {
-				if (n >= cap) {
-					struct field *g = fields_grow(out, &cap);
-					if (!g) { free(out); *nout = 0; return 0; }
-					out = g;
-				}
+				if (!field_reserve(&out, &cap, n)) { *nout = 0; return 0; }
 				out[n].start = start; out[n].end = i; n++;
 				start = i + 1;
 			}
@@ -164,11 +175,7 @@ static struct field *split_fields(const char *line, size_t len, const struct sor
 				if (seen_nb) {
 					size_t sep_start = i;
 					while (i < len && isblank((unsigned char)line[i])) i++;
-					if (n >= cap) {
-						struct field *g = fields_grow(out, &cap);
-						if (!g) { free(out); *nout = 0; return 0; }
-						out = g;
-					}
+					if (!field_reserve(&out, &cap, n)) { *nout = 0; return 0; }
 					out[n].start = field_start; out[n].end = sep_start; n++;
 					field_start = i;
 					seen_nb = 0;
@@ -180,11 +187,7 @@ static struct field *split_fields(const char *line, size_t len, const struct sor
 				i++;
 			}
 		}
-		if (n >= cap) {
-			struct field *g = fields_grow(out, &cap);
-			if (!g) { free(out); *nout = 0; return 0; }
-			out = g;
-		}
+		if (!field_reserve(&out, &cap, n)) { *nout = 0; return 0; }
 		out[n].start = field_start; out[n].end = len; n++;
 	}
 	*nout = n;

@@ -99,6 +99,21 @@ static struct field *fields_grow(
 	return g;
 }
 
+/* Ensures `*out` has room for field index `n`, growing it via
+ * fields_grow() first if not; on failure `*out` is freed and cleared so
+ * every caller can propagate a single false return without repeating
+ * fields_grow()'s own free-on-failure contract at each call site. */
+static int field_reserve(struct field **out, size_t *cap, size_t n)
+{
+	struct field *g;
+
+	if (n < *cap) return 1;
+	g = fields_grow(*out, cap);
+	if (!g) { free(*out); *out = 0; return 0; }
+	*out = g;
+	return 1;
+}
+
 static struct field *split_fields(const char *line, size_t len, int have_delim, char delim, size_t *nout) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct field *out;
@@ -111,11 +126,7 @@ static struct field *split_fields(const char *line, size_t len, int have_delim, 
 		size_t start = 0, i;
 		for (i = 0; i < len + 1; i++) {
 			if (i == len || line[i] == delim) {
-				if (n >= cap) {
-					struct field *g = fields_grow(out, &cap);
-					if (!g) { free(out); *nout = 0; return 0; }
-					out = g;
-				}
+				if (!field_reserve(&out, &cap, n)) { *nout = 0; return 0; }
 				out[n].start = start; out[n].end = i; n++;
 				start = i + 1;
 			}
@@ -128,11 +139,7 @@ static struct field *split_fields(const char *line, size_t len, int have_delim, 
 			if (i >= len) break;
 			start = i;
 			while (i < len && !isblank((unsigned char)line[i])) i++;
-			if (n >= cap) {
-				struct field *g = fields_grow(out, &cap);
-				if (!g) { free(out); *nout = 0; return 0; }
-				out = g;
-			}
+			if (!field_reserve(&out, &cap, n)) { *nout = 0; return 0; }
 			out[n].start = start; out[n].end = i; n++;
 		}
 	}
@@ -328,11 +335,14 @@ static void print_o(const struct outspec *specs, size_t nspecs, const struct jli
 		size_t len; const char *p;
 		if (i) join_putc(outsep);
 		if (specs[i].file == 0) {
-			p = l1 ? field_ptr(l1, jf1, &len) : field_ptr(l2, jf2, &len);
+			if (l1) p = field_ptr(l1, jf1, &len);
+			else p = field_ptr(l2, jf2, &len);
 		} else if (specs[i].file == 1) {
-			p = l1 ? field_ptr(l1, specs[i].field, &len) : (len = 0, "");
+			if (l1) { p = field_ptr(l1, specs[i].field, &len); }
+			else { p = ""; len = 0; }
 		} else {
-			p = l2 ? field_ptr(l2, specs[i].field, &len) : (len = 0, "");
+			if (l2) { p = field_ptr(l2, specs[i].field, &len); }
+			else { p = ""; len = 0; }
 		}
 		put_field_raw(p, len, empty_repl);
 	}
