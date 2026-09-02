@@ -1,0 +1,393 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH STTY 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+stty \- set or report terminal I/O characteristics
+.SH SYNOPSIS
+.B stty
+.RB [ \-a | \-g ]
+.br
+.B stty
+.I operand
+.RI [ operand ]\ .\|.\|.
+.SH DESCRIPTION
+.B stty
+sets, or reports, the I/O characteristics of the terminal open as
+standard input. There is no operand naming a different device;
+standard input is always the terminal affected.
+.PP
+With no operands at all, a subset of the current settings is reported:
+the line speed, every special control character whose value differs
+from a fixed set of conventional defaults, and every mode operand
+whose current state differs from that same conventional default set.
+.B \-a
+reports the same three groups in full, not only the entries that
+differ from the defaults.
+.B \-g
+reports the complete current settings as a single, machine\-readable
+string: 22 colon\-separated hexadecimal fields (the input, output,
+control, and local mode words, the sixteen special control character
+values, and the input and output speeds), chosen as one shell word
+requiring no further quoting. That same string, given back as the
+.I sole
+operand of a later invocation, is recognized and applied directly (see
+.B "Combination Modes"
+below); combined with any other operand, it is rejected as an
+invalid argument.
+.B \-a
+and
+.B \-g
+may not be combined with each other, or with any other operand.
+.PP
+Every operand below is parsed before anything is actually changed: an
+invocation fails, and applies none of its operands at all, on the
+first operand it does not recognize or that has an invalid value.
+Among a set of operands that are otherwise all valid, a later operand
+always wins over an earlier, conflicting one for the same setting
+(e.g. in
+.RB \` "stty echo \-echo" \' ,
+.B \-echo
+wins); this includes a bare speed number and an explicit
+.BR ispeed / ospeed
+given together, where the explicit
+.BR ispeed / ospeed
+always takes precedence for its own direction over the bare number,
+regardless of the order they appear in.
+.SH OPTIONS
+.TP
+.B \-a
+Report all settings, not only those differing from the defaults.
+Mutually exclusive with every other operand, including
+.BR \-g .
+.TP
+.B \-g
+Report all settings as a single, re\-usable, colon\-separated
+hexadecimal string. Mutually exclusive with every other operand,
+including
+.BR \-a .
+.SH OPERANDS
+Every mode operand below may be prefixed with
+.B \-
+to select the opposite (disabled) state, except where noted. A
+platform's own terminal driver determines whether a given Control Mode
+actually takes effect once set; this implementation always accepts and
+stores every value below, and reports back exactly what is currently
+stored.
+.SS Control Modes
+.TP
+.BR parenb ", " \-parenb
+Enable, or disable, parity generation and detection.
+.TP
+.BR parodd ", " \-parodd
+Select odd, or even, parity, when
+.B parenb
+is enabled.
+.TP
+.BR cs5 ", " cs6 ", " cs7 ", " cs8
+Select 5, 6, 7, or 8 bits per character. These four are mutually
+exclusive; whichever appears last in the operand list wins.
+.TP
+.BR hupcl ", " \-hupcl
+Hang up (or do not hang up) the line when the last process with the
+terminal open closes it.
+.TP
+.BR cstopb ", " \-cstopb
+Use two, or one, stop bits per character.
+.TP
+.BR cread ", " \-cread
+Enable, or disable, the receiver.
+.TP
+.BR clocal ", " \-clocal
+Assume, or do not assume, a connection with no need to monitor a
+carrier signal.
+.TP
+.I number
+A plain decimal number, on its own, sets both the input and output
+speed to that value.
+.TP
+.BI ispeed " number"
+Set only the input speed.
+.TP
+.BI ospeed " number"
+Set only the output speed.
+.SS Input Modes
+.TP
+.BR ignbrk ", " \-ignbrk
+Ignore, or do not ignore, break characters.
+.TP
+.BR brkint ", " \-brkint
+Signal, or do not signal,
+.B INTR
+on break.
+.TP
+.BR ignpar ", " \-ignpar
+Ignore, or do not ignore, characters with parity errors.
+.TP
+.BR parmrk ", " \-parmrk
+Mark, or do not mark, parity errors.
+.TP
+.BR inpck ", " \-inpck
+Enable, or disable, input parity checking.
+.TP
+.BR istrip ", " \-istrip
+Strip, or do not strip, input characters to seven bits.
+.TP
+.BR inlcr ", " \-inlcr
+Translate, or do not translate, newline to carriage return on input.
+.TP
+.BR igncr ", " \-igncr
+Ignore, or do not ignore, carriage return on input.
+.TP
+.BR icrnl ", " \-icrnl
+Translate, or do not translate, carriage return to newline on input.
+.TP
+.BR ixon ", " \-ixon
+Enable, or disable, start/stop output control.
+.TP
+.BR ixany ", " \-ixany
+Allow, or do not allow, any character to restart output (not just the
+.B START
+character).
+.TP
+.BR ixoff ", " \-ixoff
+Enable, or disable, start/stop input control.
+.SS Output Modes
+.TP
+.BR opost ", " \-opost
+Enable, or disable, output processing (post\-processing of output
+characters).
+.TP
+.BR onlcr ", " \-onlcr
+Translate, or do not translate, newline to carriage\-return/newline on
+output.
+.TP
+.BR ocrnl ", " \-ocrnl
+Translate, or do not translate, carriage return to newline on output.
+.TP
+.BR onocr ", " \-onocr
+Do not, or do, output carriage returns at column zero.
+.TP
+.BR onlret ", " \-onlret
+Assume, or do not assume, that newline performs the carriage\-return
+function.
+.TP
+.BR ofill ", " \-ofill
+Use fill characters, or timing, for output delays.
+.TP
+.BR ofdel ", " \-ofdel
+Use
+.B DEL,
+or
+.BR NUL ,
+as fill characters, when
+.B ofill
+is enabled.
+.TP
+.BR cr0 ", " cr1 ", " cr2 ", " cr3
+Select the carriage\-return delay style.
+.TP
+.BR nl0 ", " nl1
+Select the newline delay style.
+.TP
+.BR tab0 ", " tab1 ", " tab2 ", " tab3 ", " tabs ", " \-tabs
+Select the horizontal\-tab delay style.
+.B tabs
+is a synonym for
+.BR tab3 ;
+.B \-tabs
+is a synonym for
+.BR tab0 .
+.TP
+.BR bs0 ", " bs1
+Select the backspace delay style.
+.TP
+.BR ff0 ", " ff1
+Select the form\-feed delay style.
+.TP
+.BR vt0 ", " vt1
+Select the vertical\-tab delay style.
+.SS Local Modes
+.TP
+.BR isig ", " \-isig
+Enable, or disable, the
+.BR INTR ", " QUIT ", and " SUSP
+special characters.
+.TP
+.BR icanon ", " \-icanon
+Enable, or disable, canonical (line\-buffered, editable) input.
+.TP
+.BR iexten ", " \-iexten
+Enable, or disable, implementation\-defined input character
+processing.
+.TP
+.BR echo ", " \-echo
+Echo back, or do not echo back, input characters.
+.TP
+.BR echoe ", " \-echoe
+If
+.B icanon
+is set, visually erase, or do not visually erase, a character on
+.BR ERASE .
+.TP
+.BR echok ", " \-echok
+If
+.B icanon
+is set, echo, or do not echo, a newline after
+.BR KILL .
+.TP
+.BR echonl ", " \-echonl
+If
+.B icanon
+is set, echo, or do not echo, a newline even when
+.B echo
+is disabled.
+.TP
+.BR noflsh ", " \-noflsh
+Disable, or enable, flushing after the
+.BR INTR ", " QUIT ", and " SUSP
+special characters.
+.TP
+.BR tostop ", " \-tostop
+Send, or do not send,
+.B SIGTTOU
+to a background process attempting to write to the terminal.
+.SS Special Control Character Assignments
+.TP
+.BI intr " character"
+.TP
+.BI quit " character"
+.TP
+.BI erase " character"
+.TP
+.BI kill " character"
+.TP
+.BI eof " character"
+.TP
+.BI eol " character"
+.TP
+.BI start " character"
+.TP
+.BI stop " character"
+.TP
+.BI susp " character"
+Set the named special control character. Each
+.I character
+is one of: a single literal character; a
+\`^\fIX\fR\'
+pair, where
+.I X
+is a letter (matched case\-insensitively against the conventional
+control\-character encoding, e.g.
+.RB \` ^C \'
+for
+.BR INTR 's
+usual value) or one of
+.RB \` [ \' ", " \` \e \' ", " \` ] \' ", " \` ^ \' ", " \` _ \' ,
+or
+.RB \` ? \' ;
+or
+.RB \` ^\- \'
+or
+.RB \` undef \'
+to disable that character entirely.
+.TP
+.BI min " number"
+.TP
+.BI time " number"
+Set the
+.B MIN
+or
+.B TIME
+value used in non\-canonical input processing, an integer from 0 to
+255.
+.TP
+.B ek
+Reset the
+.B ERASE
+and
+.B KILL
+characters to their conventional default values, leaving every other
+setting untouched.
+.SS Combination Modes
+.TP
+.BR evenp ", " parity
+Equivalent to
+.BR "parenb cs7 \-parodd" .
+.TP
+.B oddp
+Equivalent to
+.BR "parenb cs7 parodd" .
+.TP
+.BR \-parity ", " \-evenp ", " \-oddp
+Equivalent to
+.BR "\-parenb cs8" .
+.TP
+.B raw
+Set character size to 8 bits; disable the
+.BR ERASE ", " KILL ", " INTR ", " QUIT ", " EOF ", and " EOL
+special characters (as if each were set to
+.BR undef ) ;
+and disable output processing
+.RB ( opost )
+and input parity checking
+.RB ( inpck ) .
+.TP
+.BR \-raw ", " cooked
+Re\-enable output processing and input parity checking. This is a
+narrow, one\-way inverse of
+.B raw
+that touches only those same two settings; it does not attempt to
+restore the character size or the six special characters
+.B raw
+disables, since their prior values were never recorded.
+.TP
+.B nl
+Equivalent to
+.BR \-icrnl .
+.TP
+.B \-nl
+Equivalent to
+.BR "icrnl \-inlcr \-igncr" .
+.TP
+.B sane
+Reset every Control/Input/Output/Local Mode operand and delay style
+listed above, and every special control character, to a fixed set of
+conventional default values \(em the same defaults a freshly
+initialized terminal in this implementation starts with.
+.TP
+.I saved\-settings
+A string of exactly 22 colon\-separated hexadecimal fields, in the
+same form
+.B \-g
+prints, given as the
+.I only
+operand of the invocation. The terminal is set to exactly the state
+the string encodes. This form is not recognized, and is instead
+treated as an ordinary, unrecognized (and therefore invalid) operand,
+if given together with any other operand.
+.SH APPLICATION USAGE
+Every operand mandated by the POSIX specification for
+.BR stty (1p)
+is implemented, including the Output Modes group, which the
+specification marks as an XSI extension. Not implemented: any
+BSD\-only or GNU\-only mode operand that has no corresponding standard
+operand name (for example
+.BR crtscts ) ;
+these are refused as invalid operands rather than silently accepted
+and ignored.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+.B \-a
+or
+.B \-g
+was combined with another operand, an operand was not recognized, an
+operand's value was missing or invalid, or standard input is not a
+terminal (or another failure occurred reading or writing its
+characteristics).
+.SH SEE ALSO
+.BR tty (1),
+.BR tput (1)

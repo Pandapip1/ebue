@@ -1,0 +1,78 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH MESG 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+mesg \- control write access to your terminal
+.SH SYNOPSIS
+.B mesg
+.RB [ y | n ]
+.SH DESCRIPTION
+.B mesg
+reports or changes whether other users are permitted to send messages
+(for example, with
+.BR write (1))
+to the invoking terminal, by way of the terminal device's own
+group\-write permission bit. The terminal affected is found by
+checking, in order, standard input, standard output, and standard
+error, for the first descriptor that is really a terminal.
+.PP
+With no operand, the current state is reported without being changed:
+"\fBis y\fR"
+if messages are currently allowed,
+"\fBis n\fR"
+if not.
+.B y
+allows messages, by setting the group\-write bit on the terminal's
+device node.
+.B n
+denies them, by clearing it.
+.SH REAL BEHAVIOR BY PLATFORM
+On the native\-Linux backend, the affected terminal is a real character
+device with a real device\-node path, and its permission bit is a
+real, checkable, settable filesystem permission:
+.BR y / n
+here do exactly what
+.BR mesg (1)
+has traditionally done, and genuinely gate whether a different process
+can open that device for writing.
+.PP
+On the Windows backend, a console is correctly recognized as a
+terminal, but has no filesystem permission bit this implementation can
+read or change at all: nothing here ever actually blocks another
+process from writing to it. Consistent with that reality, bare
+.B mesg
+and
+.B "mesg y"
+succeed, honestly reporting (or confirming) the only state that has
+ever really applied \(em messages are never blocked \(em while
+.B "mesg n"
+is refused outright, with a diagnostic and a nonzero exit status,
+rather than being accepted and then silently not honored.
+.SH OPERANDS
+.TP
+.B y
+Allow other users to send messages to this terminal.
+.TP
+.B n
+Deny other users permission to send messages to this terminal.
+.SH EXIT STATUS
+.TP
+.B 0
+Receiving messages is allowed.
+.TP
+.B 1
+Receiving messages is not allowed. This is
+.BR "mesg n" 's
+own successful exit status, not a failure.
+.TP
+.B >1
+An error occurred: invalid arguments, no terminal could be found among
+standard input/output/error, a failure reading or changing the
+terminal's permission bit, or
+.B "mesg n"
+was requested on a terminal for which this implementation has no
+mechanism to actually deny messages.
+.SH SEE ALSO
+.BR write (1),
+.BR tty (1),
+.BR stty (1)

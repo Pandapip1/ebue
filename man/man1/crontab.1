@@ -1,0 +1,149 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH CRONTAB 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+crontab \- schedule periodic commands
+.SH SYNOPSIS
+.B crontab
+.RI [ file ]
+.br
+.B crontab
+.B \-e
+.br
+.B crontab
+.B \-l
+.br
+.B crontab
+.B \-r
+.SH DESCRIPTION
+.B crontab
+installs, edits, lists, or removes the invoking user's crontab, a file
+of scheduled commands that
+.BR crond (1)
+runs when it is running. There being exactly one real user identity on
+this system, there is exactly one crontab; there is no way to name, or
+operate on, any other user's crontab, and no
+.B \-u
+option.
+.PP
+With a
+.I file
+operand, the current crontab is replaced with the contents of
+.IR file .
+With no operand at all, the new crontab is read from standard input.
+In both cases, the input is fully validated (see below) before being
+installed; on a validation failure, nothing is installed and the
+previous crontab, if any, is left untouched.
+.PP
+.B \-l
+writes the current crontab to standard output, unmodified.
+.PP
+.B \-r
+removes the current crontab entirely.
+.PP
+.B \-e
+edits the current crontab interactively: its contents (or an empty
+file, if none exists yet) are copied to a temporary file, which is
+then opened in
+.BR $VISUAL ,
+or
+.B $EDITOR
+if
+.B $VISUAL
+is unset, or
+.BR ed (1)
+if neither is set. If the editor exits with status 0, the edited file
+is validated and, if valid, installed as the new crontab. If the
+editor exits with a nonzero status, or the edited file fails
+validation, nothing is installed, and the path of the edited temporary
+file is printed so its contents can be recovered; unlike some
+implementations,
+.B \-e
+does not automatically loop back into the editor on a validation
+failure \(em re\-running
+.B "crontab \-e"
+is required.
+.SH INPUT VALIDATION
+Every line of the input is required to be blank, a comment (beginning
+with
+.BR # ) ,
+or five whitespace\-separated schedule fields \(em minute, hour, day of
+month, month, and day of week, in that order \(em followed by a command
+field. This is checked line by line, eagerly, at install time, not
+deferred until
+.B crond
+happens to reach a given line.
+.PP
+A line that looks like an environment\-variable assignment (an
+identifier followed by
+.BR = ,
+e.g.
+.RB \` MAILTO=user \' )
+is refused with its own specific diagnostic, distinguishing it from an
+ordinary malformed line: this is real crontab(5) syntax, but there is
+no mail subsystem here for
+.B MAILTO
+or any other assignment to affect, so accepting the syntax while doing
+nothing with it is refused rather than silently misrepresented.
+.PP
+Each schedule field accepts:
+.RS
+.IP \(bu 3
+an asterisk, matching every value in that field's range;
+.IP \(bu 3
+a single number;
+.IP \(bu 3
+an inclusive range,
+.IR low \- high ;
+.IP \(bu 3
+a step, written as
+.I field
+.B /
+.I N
+(every Nth value, starting at the field's own minimum) where
+.I field
+is an asterisk or a range;
+.IP \(bu 3
+a comma\-separated list of any of the above.
+.RE
+.PP
+The month field additionally accepts the names
+.BR jan " through " dec ,
+and the day\-of\-week field the names
+.BR sun " through " sat ,
+matched case\-insensitively against their first three letters, in
+place of a number anywhere a number is accepted. Field ranges are:
+minute 0\-59, hour 0\-23, day of month 1\-31, month 1\-12, and day of
+week 0\-7 (both 0 and 7 mean Sunday).
+.PP
+If day of month is given as a literal asterisk but day of week is
+not, the two fields are combined with OR rather than AND: the command
+runs on every day matching the day\-of\-week field, regardless of the
+day of month. In every other combination, a day matches only when
+both the day\-of\-month and day\-of\-week fields match it.
+.PP
+Not implemented:
+.RB \` @reboot \' / \` @daily \'\-style
+nickname shorthands for a fixed schedule pattern.
+.SH OPERANDS
+.TP
+.I file
+A pathname to install as the new crontab, replacing the current one.
+.SH EXIT STATUS
+.TP
+.B 0
+The requested operation completed successfully.
+.TP
+.B 1
+An error occurred: a syntax error in the crontab being installed (the
+offending line number is reported), a missing crontab to list or
+remove,
+.I file
+could not be opened, the editor could not be found or run, or the
+crontab spool could not be accessed.
+.SH SEE ALSO
+.BR crond (1),
+.BR at (1),
+.BR atd (1),
+.BR batch (1),
+.BR ed (1)

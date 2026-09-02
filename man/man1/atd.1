@@ -1,0 +1,100 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH ATD 8 "2026" "ntlibc" "ntlibc System Commands"
+.SH NAME
+atd \- run jobs queued by at and batch
+.SH SYNOPSIS
+.B atd
+.SH DESCRIPTION
+.B atd
+is the background daemon that actually executes jobs submitted with
+.BR at (1)
+or
+.BR batch (1).
+Submitting a job only writes it to a spool directory and returns
+immediately; nothing runs until an instance of
+.B atd
+is running to notice it. Unlike the other utilities in this collection,
+.B atd
+is a standalone program only: it is not available as a shell built\-in,
+since it is meant to run indefinitely as its own long\-lived process
+rather than return control to whatever started it.
+.PP
+Once running,
+.B atd
+repeatedly polls the job spool. On each poll, every job whose scheduled
+time has arrived is started, except that a job submitted to the
+.RB \` b \'
+queue
+.RB ( batch (1)'s
+own queue) is deferred to a later poll whenever the system's one\-minute
+load average is at or above 1.5, approximating
+.BR batch (1p) 's
+"run using algorithms, based on unspecified factors" requirement. On a
+platform where a load average cannot be determined at all, batch\-queue
+jobs are simply run as soon as they are due, since there is no busyness
+signal available to act on.
+.PP
+A due job is run through the shell, with its standard input taken from
+an empty source and its combined standard output and standard error
+captured to a file next to the job in the spool, for the submitting
+user to read afterward \(em there being no mail transport to fulfill
+.BR at (1p)/ batch (1p)'s
+traditional "mail the output" behavior. Multiple jobs due in the same
+poll are all started without waiting for one another, and a
+long\-running job never delays another due job, or the entirely
+separate
+.BR crond (1)
+process, from noticing its own due entries.
+.PP
+On receipt of
+.B SIGTERM
+or
+.BR SIGINT ,
+.B atd
+finishes the poll currently in progress, waits for and reaps any jobs
+it has already started, and exits; it does not kill jobs that are
+still running.
+.PP
+On the native\-Linux backend, if standard input is a terminal when
+.B atd
+starts, it detaches from it (forking, starting a new session, and
+redirecting standard input, output, and error to a null device) so
+that it keeps running after the shell that launched it exits. If
+.B atd
+is already started without a controlling terminal attached, no such
+detachment happens. On the Windows backend there is no controlling\-
+terminal concept to detach from at all; an invocation of
+.B atd
+there is simply an ordinary, long\-running process for as long as
+whatever started it keeps it alive.
+.B atd
+is not registered as a Windows service by this implementation; running
+it as one, if desired, is left to an external service wrapper.
+.SH OPERANDS
+None.
+.SH ENVIRONMENT
+.TP
+.B NTLIBC_ATD_POLL_MS
+Overrides the poll interval, in milliseconds (default 1000). Ignored
+unless it parses as a positive integer. Since
+.BR at (1p)/ batch (1p)
+jobs have no specification\-mandated latency, this exists purely to
+speed up testing; it is not needed for ordinary use.
+.SH EXIT STATUS
+.TP
+.B 0
+.B atd
+ran until it received
+.B SIGTERM
+or
+.B SIGINT
+and shut down normally.
+.TP
+.B 1
+The job spool directory could not be created or accessed.
+.SH SEE ALSO
+.BR at (1),
+.BR batch (1),
+.BR crond (1),
+.BR crontab (1)

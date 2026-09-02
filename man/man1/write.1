@@ -1,0 +1,87 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH WRITE 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+write \- send a message to another user's terminal
+.SH SYNOPSIS
+.B write
+.I user
+.RI [ tty ]
+.SH DESCRIPTION
+.B write
+reads lines from standard input and relays them, preceded by an
+announcing banner, to
+.IR user 's
+terminal, until end of file, at which point a final
+"\fBEOT\fR"
+line is sent. The banner has the form:
+.RS
+.PP
+Message from \fIuser\fR (\fItty\fR) [\fItimestamp\fR]...
+.RE
+.SH REAL BEHAVIOR
+There being exactly one real user identity on this system,
+.I user
+is only ever accepted when it names that same user, as verified
+against the password database; no other name is ever "logged in" here
+to write to. Correspondingly, the only terminal this process can ever
+honestly claim to reach is its own controlling terminal, found by
+checking, in order, standard input, standard output, and standard
+error, for the first descriptor that is really a terminal. So
+.RB \` "write $(whoami)" \'
+degenerately writes right back into the same session it is run from.
+If a
+.I tty
+operand is given, it must name that same terminal (the short form
+.BR tty (1)
+itself would print); any other
+.I tty
+name, or any
+.I user
+other than the current one, is reported as not logged in, matching
+.BR write (1p) 's
+own specified behavior for a session that cannot be found. This is
+intentionally not a permanent restriction: were a multi\-session
+registry ever added to this system, only the search for a target
+terminal would need to widen, not this utility's fundamental
+mechanism of writing straight into the terminal it finds.
+.PP
+Interrupting
+.B write
+while it is relaying standard input does not send an early
+.B EOT
+trailer and exit the way
+.BR write (1p)
+describes; an interrupt during that read behaves the same way it would
+in any other utility blocked reading from a terminal.
+.PP
+.BR mesg (1) 's
+permission bit is deliberately not consulted here: it gates messages
+arriving from other users, and in the self\-write case described
+above, the only real recipient is this same session.
+.SH OPERANDS
+.TP
+.I user
+The user to write to. Only the invoking user's own name is ever
+accepted.
+.TP
+.I tty
+The terminal to write to, disambiguating between a user's several
+open terminals. On this system, this can only ever be the sender's own
+terminal.
+.SH EXIT STATUS
+.TP
+.B 0
+The message was relayed to standard input's end of file.
+.TP
+.B 1
+A usage error (wrong number of operands), the named
+.I user
+is not logged in (any name other than the invoking user, or no
+terminal of the invoking user's own could be found at all), the given
+.I tty
+does not match the invoking user's own terminal, or a failure occurred
+opening or writing to the terminal.
+.SH SEE ALSO
+.BR mesg (1),
+.BR tty (1)
