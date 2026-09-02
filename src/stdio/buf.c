@@ -36,7 +36,7 @@ ssize_t __file_read(FILE *f, void *buf, size_t n)
 		if (n) {
 			const unsigned char *src = f->mem_buf + f->mem_pos;
 			__ownership_readable_span(src, n);
-			memcpy(buf, src, n);
+			memmove(buf, src, n);
 		}
 		f->mem_pos += n;
 		return (ssize_t)n;
@@ -136,7 +136,7 @@ ssize_t __file_write(FILE *f, const void *buf, size_t n)
 			unsigned char *dst = f->mem_buf + f->mem_pos;
 			__ownership_writable_span(dst, n);
 			__ownership_readable_span(buf, n);
-			memcpy(dst, buf, n);
+			memmove(dst, buf, n);
 		}
 		f->mem_pos += n;
 		if (f->mem_pos > f->mem_len) f->mem_len = f->mem_pos;

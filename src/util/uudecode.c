@@ -78,9 +78,8 @@ static int decode_line(const char *prog, const char *line, size_t have,
 		return -1;
 	}
 
-	for (pos = 0; pos < needed / 4; pos++) {
-		size_t offset = 4 * pos;
-		char c1 = line[offset], c2 = line[offset + 1], c3 = line[offset + 2], c4 = line[offset + 3];
+	for (pos = 0; pos < needed; pos += 4) {
+		char c1 = line[pos], c2 = line[pos + 1], c3 = line[pos + 2], c4 = line[pos + 3];
 		unsigned char outbuf[3];
 		size_t take;
 

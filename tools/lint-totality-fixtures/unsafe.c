@@ -1805,3 +1805,200 @@ int geometric_mixed_signed_initializer(int initial, int need)
 	}
 	return cap;
 }
+
+void stride_change(unsigned *value);
+
+unsigned constant_stride_wrap(void)
+{
+	unsigned i;
+	for (i = 0; i < (unsigned)-1; i += 2) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned constant_stride_inclusive(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; i <= bound; i += 3) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned constant_stride_zero(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; i < bound; i += 0) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned constant_stride_negative(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; i < bound; i += -3) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned constant_stride_dynamic(unsigned bound, unsigned stride)
+{
+	unsigned i;
+	for (i = 0; i < bound; i += stride) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned constant_stride_wrong_guard(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; i != bound; i += 3) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned constant_stride_bound_alias(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; i < bound; i += 3) { /* totality-expect */
+		stride_change(&bound);
+	}
+	return i;
+}
+
+unsigned constant_stride_rank_alias(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; i < bound; i += 3) { /* totality-expect */
+		stride_change(&i);
+	}
+	return i;
+}
+
+unsigned constant_stride_bound_reset(unsigned bound, int reset)
+{
+	unsigned i;
+	for (i = 0; i < bound; i += 2) { /* totality-expect */
+		if (reset)
+			bound = (unsigned)-1;
+	}
+	return i;
+}
+
+unsigned constant_stride_continue_bypass(unsigned bound, int skip)
+{
+	unsigned i = 0;
+	while (i < bound) { /* totality-expect */
+		if (skip)
+			continue;
+		i += 3;
+	}
+	return i;
+}
+
+unsigned constant_stride_repeated(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; i < bound; i += 3) { /* totality-expect */
+		i += 3;
+	}
+	return i;
+}
+
+unsigned constant_stride_nonzero_start(void)
+{
+	unsigned i;
+	for (i = 1; i < (unsigned)-1; i += 3) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned constant_stride_nonpower_product(unsigned source)
+{
+	unsigned bound = source * 6;
+	unsigned i;
+	for (i = 0; i < bound; i += 6) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned constant_stride_changed_product(unsigned source, int reset)
+{
+	unsigned bound = source * 4;
+	unsigned i;
+	if (reset)
+		bound = (unsigned)-1;
+	for (i = 0; i < bound; i += 4) { /* totality-expect */
+	}
+	return i;
+}
+
+static unsigned constant_stride_global_bound;
+
+unsigned constant_stride_global_callback(void)
+{
+	unsigned i;
+	for (i = 0; i < constant_stride_global_bound; i += 3) { /* totality-expect */
+		opaque_mutation();
+	}
+	return i;
+}
+
+unsigned constant_stride_mixed_bound(unsigned long long bound)
+{
+	unsigned i;
+	for (i = 0; i < bound; i += 3) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned constant_stride_wide_step(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; i < bound; i += (unsigned long long)3) { /* totality-expect */
+	}
+	return i;
+}
+
+unsigned constant_stride_goto_bypasses_zero(void)
+{
+	unsigned i = 1;
+	goto inside;
+	for (i = 0; i < (unsigned)-1; i += 3) { /* totality-expect */
+inside:
+		;
+	}
+	return i;
+}
+
+unsigned constant_stride_inline_asm(unsigned bound)
+{
+	unsigned i;
+	for (i = 0; i < bound; i += 3) { /* totality-expect */
+		__asm__ volatile("" : "+r"(i));
+	}
+	return i;
+}
+
+unsigned constant_stride_case_bypasses_zero(unsigned select)
+{
+	unsigned i = 1;
+	switch (select) {
+		for (i = 0; i < (unsigned)-1; i += 3) { /* totality-expect */
+		case 1:
+			;
+		}
+	}
+	return i;
+}
+
+unsigned constant_stride_default_bypasses_zero(unsigned select)
+{
+	unsigned i = 1;
+	switch (select) {
+		for (i = 0; i < (unsigned)-1; i += 3) { /* totality-expect */
+		default:
+			;
+		}
+	}
+	return i;
+}
