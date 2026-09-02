@@ -149,6 +149,16 @@ static size_t maps_free = (size_t)-1;
 static size_t maps_recent = (size_t)-1;
 static int lock_future;
 
+#ifdef __clang_analyzer__
+#define returns_element_of(registry) \
+	__attribute__((annotate("ntlibc_relation_returns_element_of:" #registry)))
+#define parameter_element_of(index, registry) \
+	__attribute__((annotate("ntlibc_relation_parameter_element_of:" #index ":" #registry)))
+#else
+#define returns_element_of(registry)
+#define parameter_element_of(index, registry)
+#endif
+
 /* Mapping pointers below are either checked lookup results or entries in
  * `maps`. find_slot() is the only operation which may grow and relocate
  * that array, and callers hold no mapping pointer across a find_slot(). */
@@ -308,6 +318,8 @@ int __mman_range_is_live(const void *p, size_t len)
 }
 
 static struct mapping *find_containing(const void *p, size_t len)
+	returns_element_of(maps);
+static struct mapping *find_containing(const void *p, size_t len)
 {
 	size_t i;
 	const char *a = p;
@@ -319,6 +331,7 @@ static struct mapping *find_containing(const void *p, size_t len)
 	return NULL;
 }
 
+static struct mapping *find_slot(void) returns_element_of(maps);
 static struct mapping *find_slot(void)
 {
 	size_t i, cap;
@@ -345,6 +358,7 @@ static struct mapping *find_slot(void)
 	return &maps[maps_len++];
 }
 
+static void release_slot(struct mapping *m) parameter_element_of(0, maps);
 static void release_slot(struct mapping *m)
 {
 	size_t i = (size_t)(m - maps);
@@ -354,6 +368,7 @@ static void release_slot(struct mapping *m)
 	maps_free = i;
 }
 
+static void mark_recent(struct mapping *m) parameter_element_of(0, maps);
 static void mark_recent(struct mapping *m)
 {
 	maps_recent = (size_t)(m - maps);
@@ -381,7 +396,8 @@ static void init_page_state(struct mapping *m, size_t npages)
  * its own earlier `if (!m) { errno = ENOMEM; return MAP_FAILED; }`) or
  * `&maps[k]`/`&maps[i]`, the address of a registry entry -- never NULL
  * either way. */
-static void drop_if_dead(struct mapping *m) __attribute__((nonnull(1)));
+static void drop_if_dead(struct mapping *m)
+	__attribute__((nonnull(1))) parameter_element_of(0, maps);
 static void drop_if_dead(struct mapping *m)
 {
 	if (m->live_pages) return;

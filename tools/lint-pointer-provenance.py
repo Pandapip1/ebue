@@ -18,7 +18,8 @@ DIAGNOSTIC = re.compile(
     r"^(.*?):(\d+):(\d+): warning: "
     r"(pointer subtraction operands are not proven to share provenance|"
     r"ordered pointer operands are not proven to share provenance|"
-    r"integer-to-pointer conversion is not proven provenance-preserving); "
+    r"integer-to-pointer conversion is not proven provenance-preserving|"
+    r"element relation contract is not proven); "
     r"origin '(.*)'; context '(.*)'; expression '(.*)' "
     r"\[ntlibc\.PointerProvenance\]$"
 )

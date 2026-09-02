@@ -103,3 +103,71 @@ typedef const char *(*cursor_fn)(const char *);
 long indirect_cursor_origin(cursor_fn fn, const char *p) {
   return fn(p) - p; /* pointer-provenance-expect */
 }
+
+#define returns_element_of(registry) \
+  __attribute__((annotate("ntlibc_relation_returns_element_of:" #registry)))
+#define parameter_element_of(index, registry) \
+  __attribute__((annotate("ntlibc_relation_parameter_element_of:" #index ":" #registry)))
+
+static int *contract_registry;
+static int *other_registry;
+
+static int *wrong_registry_return(unsigned i)
+    returns_element_of(contract_registry);
+static int *wrong_registry_return(unsigned i) {
+  return &other_registry[i]; /* pointer-provenance-expect */
+}
+long exercise_wrong_registry_return(unsigned i) {
+  return wrong_registry_return(i) != 0;
+}
+
+static long contract_consumer(int *p)
+    parameter_element_of(0, contract_registry);
+static long contract_consumer(int *p) { return p - contract_registry; }
+
+long wrong_registry_argument(unsigned i) {
+  return contract_consumer(&other_registry[i]); /* pointer-provenance-expect */
+}
+
+static int *contract_lookup(unsigned i) returns_element_of(contract_registry);
+static int *contract_lookup(unsigned i) { return &contract_registry[i]; }
+
+long rebound_registry_argument(unsigned i, int *replacement) {
+  int *p = contract_lookup(i);
+  contract_registry = replacement;
+  return contract_consumer(p); /* pointer-provenance-expect */
+}
+
+static int *reset_registry;
+static long reset_consumer(int *p, int *other)
+    parameter_element_of(0, reset_registry);
+static long reset_consumer(int *p, int *other) {
+  p = other;
+  return p - reset_registry; /* pointer-provenance-expect */
+}
+long exercise_reset_consumer(unsigned i, int *other) {
+  return reset_consumer(&reset_registry[i], other);
+}
+
+static int *escaped_registry;
+static long escaped_consumer(int *p)
+    parameter_element_of(0, escaped_registry);
+static long escaped_consumer(int *p) {
+  return p - escaped_registry; /* pointer-provenance-expect */
+}
+int **escape_registry_storage(void) { return &escaped_registry; }
+long exercise_escaped_consumer(unsigned i) {
+  return escaped_consumer(&other_registry[i]);
+}
+
+static int *address_taken_registry;
+static long address_taken_consumer(int *p)
+    parameter_element_of(0, address_taken_registry);
+static long address_taken_consumer(int *p) {
+  return p - address_taken_registry; /* pointer-provenance-expect */
+}
+typedef long (*registry_consumer_fn)(int *);
+registry_consumer_fn expose_consumer(void) { return address_taken_consumer; }
+long exercise_address_taken_consumer(unsigned i) {
+  return address_taken_consumer(&other_registry[i]);
+}

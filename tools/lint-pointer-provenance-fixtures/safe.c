@@ -62,3 +62,27 @@ long static_cursor_return(const char *s) {
   const char *end = skip_digits(s);
   return end ? end - s : -1;
 }
+
+#define returns_element_of(registry) \
+  __attribute__((annotate("ntlibc_relation_returns_element_of:" #registry)))
+#define parameter_element_of(index, registry) \
+  __attribute__((annotate("ntlibc_relation_parameter_element_of:" #index ":" #registry)))
+
+static int *safe_registry;
+static int *safe_registry_lookup(unsigned i) returns_element_of(safe_registry);
+static int *safe_registry_lookup(unsigned i) {
+  return &safe_registry[i];
+}
+
+static long safe_registry_index(int *p)
+    parameter_element_of(0, safe_registry);
+static long safe_registry_index(int *p) { return p - safe_registry; }
+
+/* An opaque call may change an element's contents, but receives only the
+ * element pointer and cannot rebind the file-static registry pointer. */
+void mutate_element_contents(int *);
+long registry_relation_survives_content_mutation(unsigned i) {
+  int *p = safe_registry_lookup(i);
+  mutate_element_contents(p);
+  return safe_registry_index(p);
+}
