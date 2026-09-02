@@ -67,6 +67,7 @@
 // NOLINTBEGIN(misc-include-cleaner)
 #include <sys/mman.h>
 #include <string.h>
+#include <stdlib.h>
 #include "libc.h"
 #include "plat_exit.h"
 
@@ -632,7 +633,15 @@ _Noreturn void __linux_start_main(long *sp)
 	__fd_init();
 
 	rc = main((int)argc, argv, envp);
-	__plat_terminate(rc);
+	/* exit(rc), not __plat_terminate(rc) directly: exit() flushes
+	 * every open stdio stream and runs atexit()/at_quick_exit()
+	 * handlers before it reaches __plat_terminate() itself (see
+	 * src/exit/exit.c) -- calling the raw platform primitive here
+	 * skipped both, so a real program's own unflushed stdout/stderr
+	 * output was silently lost on normal return from main() on native
+	 * Linux (the NT side, crt/crt1.c, already calls exit() correctly;
+	 * found for real while proving man(1p)'s own pager output). */
+	exit(rc);
 }
 
 // NOLINTEND(misc-include-cleaner)
