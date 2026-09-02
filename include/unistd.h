@@ -43,13 +43,9 @@ extern "C" {
 #include <bits/alltypes.h>
 
 int pipe(int [2]);
-/* fds required: src/unistd/pipe.c's own pipe2() writes `fds[0] = rfd;
- * fds[1] = wfd;` unconditionally on its only success path, with no NULL
- * check anywhere in its body. Every real call site in this tree (this
- * file's own pipe(), src/sh/execute.c, and every pipe2() test) always
- * passes a real 2-element array, never NULL. pipe() itself is NOT
- * marked: it only forwards fds into pipe2() without dereferencing it
- * directly itself. */
+/* fds required: pipe2() writes both descriptors back through it
+ * unconditionally on success. pipe() is not marked: it only forwards
+ * fds into pipe2() without dereferencing it itself. */
 int pipe2(int [2], int) __attribute__((nonnull(1)));
 int close(int);
 int posix_close(int, int);
@@ -129,12 +125,9 @@ uid_t getuid(void);
 uid_t geteuid(void);
 gid_t getgid(void);
 gid_t getegid(void);
-/* the gid_t[] is deliberately NOT required: src/unistd/ids.c's own
- * `if (n != 0) g[0] = getegid();` is real and tested
- * (test/unistd.c's own `CHECK(getgroups(0, 0) >= 1);`) -- gidsetsize 0
- * asks for the count alone and POSIX-conforming callers pass a null
- * pointer for that form, the same "genuinely optional, defensively
- * checked" shape as setenv()/unsetenv()'s own name. */
+/* the gid_t[] is deliberately NOT required: gidsetsize 0 asks for the
+ * count alone, and POSIX-conforming callers pass a null pointer for
+ * that form. */
 int getgroups(int, gid_t []);
 int setuid(uid_t);
 int seteuid(uid_t);
@@ -142,11 +135,8 @@ int setgid(gid_t);
 int setegid(gid_t);
 
 char *getlogin(void);
-/* buf required: src/unistd/ids.c's own getlogin_r() writes `buf[i] = 0;`
- * unconditionally once past the copy loop -- reached even when n == 0
- * or the login name is empty, since neither skips this final write --
- * with no NULL check of buf anywhere. Every real call site
- * (test/posix-unistd.c) passes a real local buffer, never NULL. */
+/* buf required: getlogin_r() always writes a terminating NUL through
+ * it, even when n == 0 or the login name is empty. */
 int getlogin_r(char *, size_t) __attribute__((nonnull(1)));
 int gethostname(char *name withtok(writable_span(len)), size_t len);
 
@@ -159,12 +149,10 @@ extern int optind, opterr, optopt;
 long pathconf(const char *, int);
 long fpathconf(int, int);
 long sysconf(int);
-/* buf is deliberately NOT required: src/unistd/sysconf.c's own confstr()
- * only ever touches buf behind `i + 1 < len`/`if (len)` guards, and
- * confstr(name, NULL, 0) -- query the needed length without writing
- * anything -- is real, POSIX-documented (confstr.html: "If len is 0
- * ... buf may be a null pointer") and tested
- * (test/posix-unistd.c's own `CHECK(confstr(_CS_PATH, NULL, 0) == n);`). */
+/* buf is deliberately NOT required: confstr(name, NULL, 0) -- query the
+ * needed length without writing anything -- is real and
+ * POSIX-documented (confstr.html: "If len is 0 ... buf may be a null
+ * pointer"). */
 size_t confstr(int, char *, size_t);
 
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
@@ -174,43 +162,34 @@ size_t confstr(int, char *, size_t);
 #define F_TEST  3
 int setreuid(uid_t, uid_t);
 int setregid(gid_t, gid_t);
-/* path/fd required: src/unistd/lockf.c's lockf() is a thin wrapper over
- * fcntl(F_SETLK/F_SETLKW/F_GETLK) (src/fcntl/fcntl.c), itself backed by
- * NT byte-range locks; nothing in it needs a NULL check the underlying
- * fcntl() call does not already provide. */
+/* lockf() is a thin wrapper over fcntl(F_SETLK/F_SETLKW/F_GETLK)
+ * (src/fcntl/fcntl.c), itself backed by NT byte-range locks. */
 int lockf(int, int, off_t);
 long gethostid(void);  /* undefined-ok: BSD host-id concept, no NT analogue */
 int nice(int);
 void sync(void);
 pid_t setpgrp(void);
-/* Both required: src/unistd/crypt.c's crypt() indexes salt[0]/salt[1]
- * unconditionally, and encrypt() reads/writes all 64 elements of block
- * unconditionally -- see that file's own banner for the algorithm and
- * its known-answer-test verification. */
+/* Both required: crypt() indexes salt[0]/salt[1] unconditionally, and
+ * encrypt() reads/writes all 64 elements of block unconditionally --
+ * see src/unistd/crypt.c for the algorithm. */
 char *crypt(const char *, const char *) __attribute__((nonnull(1, 2)));
 void encrypt(char *, int) __attribute__((nonnull(1)));
-/* src/dest required: src/unistd/swab.c's own swab() subscripts both
- * (s[i]/s[i+1], d[i]/d[i+1]) whenever nbytes > 0, with no NULL check of
- * either anywhere in its body. Every real call in this tree
- * (test/posix-unistd.c's test_swab(), including its own nbytes == 0 and
- * nbytes < 0 cases) always passes real buffers, never NULL. */
+/* src/dest required: swab() subscripts both unconditionally whenever
+ * nbytes > 0. */
 void swab(const void *__restrict, void *__restrict, ssize_t) __attribute__((nonnull(1, 2)));
 #endif
 
 #if (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE+0 < 700) \
  || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 int usleep(unsigned);
-unsigned ualarm(unsigned, unsigned);  /* undefined-ok: alarm()'s NT timer
-	(src/unistd/sleep.c) would carry a microsecond deadline happily
-	enough, but ualarm()'s second argument makes it a repeating timer,
-	and repeating is the part that cannot be honoured here: SIGALRM is
-	delivered by an APC that only runs while the thread is in an
-	alertable wait, so every expiry a computing thread missed would
-	arrive as one delivery rather than as a series -- the marker stays
-	because it is still true of, and only checked against, the NT build.
-	Linux has a real, genuinely repeating setitimer(ITIMER_REAL, ...)
-	now (src/time/linux/plat_itimer.c), and ualarm() is defined in terms
-	of exactly that -- not a second raw mechanism -- in
+unsigned ualarm(unsigned, unsigned);  /* undefined-ok on NT: alarm()'s NT
+	timer (src/unistd/sleep.c) can carry a microsecond deadline, but
+	ualarm()'s second argument makes it a repeating timer, and repeating
+	cannot be honoured there -- SIGALRM is delivered by an APC that only
+	runs while the thread is in an alertable wait, so a missed expiry
+	arrives as one delivery rather than a series. Linux has a real,
+	repeating setitimer(ITIMER_REAL, ...) (src/time/linux/plat_itimer.c)
+	and ualarm() is defined in terms of it in
 	src/unistd/linux/plat_ualarm.c. */
 #endif
 
@@ -218,14 +197,12 @@ unsigned ualarm(unsigned, unsigned);  /* undefined-ok: alarm()'s NT timer
 #define L_SET 0
 #define L_INCR 1
 #define L_XTND 2
-int brk(void *);  /* undefined-ok: this library's allocator is NT's private
-	heap (RtlAllocateHeap, src/malloc/malloc.c), not a single growable
-	brk-style arena; there is no NT primitive shaped like brk() -- the
-	marker stays because it is still true of, and only checked against,
-	the NT build. Linux has a real brk(2) syscall and a real,
-	independent program-break, separate from whatever this library's own
-	malloc() does internally (src/malloc/linux/plat_malloc.c is entirely
-	mmap(2)-based and never touches it) -- implemented for real in
+int brk(void *);  /* undefined-ok on NT: this library's allocator is NT's
+	private heap (RtlAllocateHeap, src/malloc/malloc.c), not a single
+	growable brk-style arena, and there is no NT primitive shaped like
+	brk(). Linux has a real brk(2) syscall and a real, independent
+	program-break, separate from this library's own mmap(2)-based
+	malloc() there (src/malloc/linux/plat_malloc.c) -- implemented in
 	src/unistd/linux/plat_brk.c, the same way musl and glibc both ship a
 	real brk()/sbrk() alongside their own mmap-based mallocs. */
 void *sbrk(intptr_t);  /* undefined-ok: see brk */
@@ -250,24 +227,20 @@ int daemon(int, int);  /* src/unistd/daemon.c: fork()+setsid(), the same
 	for -- CONTRIBUTING.md's Wine caveat is about *running the test
 	suite for it* under an unpatched Wine, not about whether fork()
 	itself works on real NT (it does) */
-void setusershell(void);  /* undefined-ok: /etc/shells enumeration, no
-	such file or concept on NT -- the marker stays because it is still
-	true of, and only checked against, the NT build. Linux has a real,
-	simple, line-oriented /etc/shells this library just reads, in
+void setusershell(void);  /* undefined-ok on NT: /etc/shells enumeration,
+	no such file or concept there. Linux has a real, simple,
+	line-oriented /etc/shells this library just reads, in
 	src/unistd/linux/plat_shells.c. */
 void endusershell(void);  /* undefined-ok: see setusershell */
 char *getusershell(void);  /* undefined-ok: see setusershell */
-int acct(const char *);  /* undefined-ok: Unix process accounting is a
-	kernel facility NT has no equivalent of -- the marker stays because
-	it is still true of, and only checked against, the NT build. Linux
-	has a real acct(2) syscall and does define this one, in
-	src/unistd/linux/plat_unistd.c. */
-long syscall(long, ...);  /* undefined-ok: NT has no stable, numbered
+int acct(const char *);  /* undefined-ok on NT: Unix process accounting is
+	a kernel facility NT has no equivalent of. Linux has a real acct(2)
+	syscall and does define this one, in src/unistd/linux/plat_unistd.c. */
+long syscall(long, ...);  /* undefined-ok on NT: no stable, numbered
 	raw-syscall ABI exposed to user mode the way this presumes; the Nt*
 	entry points this library calls directly are the closest analogue.
 	Linux has exactly that ABI and does define this one, in
-	src/unistd/linux/plat_unistd.c -- the marker stays because it is
-	still true of, and only checked against, the NT build. */
+	src/unistd/linux/plat_unistd.c. */
 int execvpe(const char *, char *const [], char *const []);
 int issetugid(void);
 /* src/unistd/getentropy.c: real on Linux (src/unistd/linux/plat_unistd.c's
@@ -283,13 +256,12 @@ extern int optreset;
 
 #ifdef _GNU_SOURCE
 extern char **environ;
-int setresuid(uid_t, uid_t, uid_t);  /* undefined-ok: real/effective/saved
-	IDs are a Linux-specific refinement of Unix credentials; this
+int setresuid(uid_t, uid_t, uid_t);  /* undefined-ok on NT: real/effective/
+	saved IDs are a Linux-specific refinement of Unix credentials; this
 	library's getuid()/geteuid() (src/unistd/ids.c) already report a
-	single fixed identity, so there is nothing for the triple to select
-	between -- the marker stays because it is still true of, and only
-	checked against, the NT build. Linux has real setresuid(2)/
-	setresgid(2)/getresuid(2)/getresgid(2) syscalls with real, distinct
+	single fixed identity there, so there is nothing for the triple to
+	select between. Linux has real setresuid(2)/setresgid(2)/
+	getresuid(2)/getresgid(2) syscalls with real, distinct
 	ruid/euid/suid, and does define all four, in
 	src/unistd/linux/plat_ids.c. */
 int setresgid(gid_t, gid_t, gid_t);  /* undefined-ok: see setresuid */
@@ -297,17 +269,14 @@ int getresuid(uid_t *, uid_t *, uid_t *);  /* undefined-ok: see setresuid */
 int getresgid(gid_t *, gid_t *, gid_t *);  /* undefined-ok: see setresuid */
 withtok(heap_allocated)
 char *get_current_dir_name(void);
-int syncfs(int);  /* undefined-ok: syncs an entire filesystem by fd; NT has
-	no per-volume sync primitive this library wires up, and fsync()
-	(src/unistd/fsync.c) already covers the per-descriptor case -- the
-	marker stays because it is still true of, and only checked against,
-	the NT build. Linux has a real syncfs(2) syscall and does define this
-	one, in src/unistd/linux/plat_unistd.c. */
-int euidaccess(const char *, int);  /* undefined-ok: distinguishes real
-	from effective uid the same way access() does not need to here --
-	see setresuid on why this library's uid/euid are not distinct -- the
-	marker stays because it is still true of, and only checked against,
-	the NT build. Linux has a real effective-id access check
+int syncfs(int);  /* undefined-ok on NT: syncs an entire filesystem by fd;
+	NT has no per-volume sync primitive this library wires up, and
+	fsync() (src/unistd/fsync.c) already covers the per-descriptor case.
+	Linux has a real syncfs(2) syscall and does define this one, in
+	src/unistd/linux/plat_unistd.c. */
+int euidaccess(const char *, int);  /* undefined-ok on NT: distinguishes
+	real from effective uid, which this library's uid/euid are not on
+	NT (see setresuid). Linux has a real effective-id access check
 	(faccessat2(2)'s AT_EACCESS), and does define this one, in
 	src/unistd/linux/plat_ids.c. */
 int eaccess(const char *, int);  /* undefined-ok: glibc alias of

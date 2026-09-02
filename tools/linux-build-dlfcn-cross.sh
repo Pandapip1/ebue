@@ -15,9 +15,7 @@
 # (malloc, the dlfcn front door, plat_dlfcn.c). `make lib/libc.a` for
 # x86_64/i386 is not yet possible AT ALL: it would compile all ~20
 # src/*/linux/plat_*.c backends, most of which still contain hand-
-# written AARCH64 inline assembly with no x86_64/i386 port (this pass's
-# own scope is the CRT + dlopen loader specifically, not the entire
-# Linux syscall backend -- see this project's own task brief). A
+# written AARCH64 inline assembly with no x86_64/i386 port. A
 # curated list is not a lesser proof of THIS file's own relocation
 # support -- exactly the same reasoning tools/linux-build-crt.sh's own
 # banner already gives for why ITS curated list was a real, first-time

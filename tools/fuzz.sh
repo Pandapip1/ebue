@@ -15,14 +15,11 @@
 #   $NTLIBC_FUZZ_CORPUS/<h>/corpus    libFuzzer's minimized corpus
 #   $NTLIBC_FUZZ_CORPUS/<h>/crashes   crash-<sha1>, leak-<sha1>, ...
 #
-# It did not, until fuzz/ntstubs.c grew NTLIBC_FUZZ_MIRROR.  The comment
-# that used to be here said a corpus was impossible because libFuzzer's
-# file I/O goes through ntlibc to NtCreateFile, "which a native build does
-# not have (fuzz/ntstubs.c answers STATUS_NOT_IMPLEMENTED)".  That was not
-# true: ntstubs.c implements a whole in-memory volume, and the corpus
-# directory was merely never in it.  See the block comment above
-# mirror_init() in fuzz/ntstubs.c for the two real reasons, both now
-# fixed, and for what is deliberately not mirrored.
+# This works because libFuzzer's file I/O goes through ntlibc to
+# NtCreateFile, and fuzz/ntstubs.c's NTLIBC_FUZZ_MIRROR implements a
+# whole in-memory volume that mirrors the corpus directory into it.
+# See the block comment above mirror_init() in fuzz/ntstubs.c for why
+# the mirror is needed and for what is deliberately not mirrored.
 #
 # Every run therefore starts from what the last one learned.  A crash
 # artefact survives too, as a file -- feed it back with --repro.  A

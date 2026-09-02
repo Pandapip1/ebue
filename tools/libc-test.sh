@@ -382,12 +382,11 @@ fi
 # (see its header for each one's reason). vmfill.c is real: mmap()'s registry
 # grows dynamically, so the helper can run to actual address-space exhaustion.
 #
-# utf8.c used to be on that absent list and no longer is.  It needs
-# <langinfo.h> and nl_langinfo(CODESET), which this library now has
-# (include/langinfo.h, src/misc/langinfo.c), so upstream's own helper
-# compiles and does its real job here: its setlocale() chain finds no
-# named UTF-8 locale, falls through to setlocale(LC_CTYPE, ""), and
-# then nl_langinfo(CODESET) answers "UTF-8" -- which is the truth on
+# utf8.c needs <langinfo.h> and nl_langinfo(CODESET), which this library
+# has (include/langinfo.h, src/misc/langinfo.c), so upstream's own
+# helper compiles and does its real job here: its setlocale() chain
+# finds no named UTF-8 locale, falls through to setlocale(LC_CTYPE, ""),
+# and then nl_langinfo(CODESET) answers "UTF-8" -- which is the truth on
 # this target, UTF-8 being the only encoding this library has.  Running
 # the real helper rather than a stub is what lets the tests behind it
 # be adjudicated on their behaviour instead of parked as unverified.

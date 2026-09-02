@@ -79,9 +79,8 @@
 # --platform exists because arch/ and PLATFORM are independent axes (see
 # the Makefile's own PLAT_GLOBS comment): arch/aarch64 alone backs both
 # PLATFORM=linux (native) and PLATFORM=nt (Windows-on-ARM64). The filename
-# therefore keys on *both* platform and arch, not arch alone -- see
-# boot/kaem: key filenames by platform+arch, not arch alone (the commit
-# that introduced --platform) for the collision this closed.
+# therefore keys on *both* platform and arch, not arch alone -- an
+# arch-only filename would collide between the two.
 #
 # Both "nt" and "linux" get a real kaem bootstrap leg: CONTRIBUTING.md's
 # live-bootstrap rationale (a source-traceable path back to a trusted seed,
@@ -173,9 +172,7 @@ fi
 # exists -- without this guard, an empty arch/<a>/src/ would silently reach
 # `field ARCHCC | ...`, whose `grep` finds nothing and returns 1, which --
 # under this script's own `set -euo pipefail` -- aborts the whole run with
-# NO error message at all. That exact failure mode is how this guard was
-# discovered the first time: a real pre-commit hook failure with empty
-# stderr, not anticipated.
+# NO error message at all.
 #
 # Note this says nothing about *which platforms* an arch's src/ files are
 # for -- ARCH_GLOBS applies them to every PLATFORM build of that arch

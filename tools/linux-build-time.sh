@@ -20,8 +20,8 @@
 # plat_time.c's own __plat_timer_manager_start() comment explains why
 # (real clone(2) thread creation plus a real futex/eventfd-based wake
 # primitive is a materially harder, higher-risk piece of work than the
-# clock-query functions, and this pass prioritized getting those right
-# and thoroughly tested over an unverified attempt at the harder part).
+# clock-query functions, so this script's scope stops at the latter
+# rather than attempting an unverified implementation of the former).
 #
 # Usage: tools/linux-build-time.sh
 # Env:   NTLIBC_CC (default clang), NTLIBC_ARCH (default x86_64 -- see

@@ -16,19 +16,13 @@
  * the observable policy/priority state and validates process IDs while
  * leaving that stronger option macro absent.
  *
- * STRUCT SCHED_PARAM IS THE EXCEPTION, and this banner used to list it
- * among the option-group members above.  Its sentence -- "The <sched.h>
- * header shall define the sched_param structure ... shall include at
- * least the following member: int sched_priority" -- carries NO margin
- * marker on the page, while the sentences either side of it do ([PS] on
- * pid_t, [SS|TSP] on time_t and on the sporadic-server members added to
- * the same struct).  So the struct is POSIX base and unconditional even
- * though every policy and function that USES it is optional.  Read off
- * the rendered page rather than inferred from the company it keeps.
- *
- * That is the shape of the mistake worth remembering: a blanket
- * justification that is right about eight of its nine subjects reads as
- * more authoritative than a list would, and hides the ninth.
+ * struct sched_param is POSIX base and unconditional even though every
+ * policy and function that uses it is optional: "The <sched.h> header
+ * shall define the sched_param structure ... shall include at least
+ * the following member: int sched_priority" carries no margin marker
+ * on the page, unlike the sentences either side of it ([PS] on pid_t,
+ * [SS|TSP] on time_t and on the sporadic-server members of the same
+ * struct).
  *
  * sched_yield() itself is POSIX base, mandatory for conformance, and
  * is *not* part of that option group. */

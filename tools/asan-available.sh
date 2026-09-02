@@ -116,11 +116,10 @@ fi
 
 # A veto needs POSITIVE evidence that overcommit is available -- a value
 # that was read and is not 2.  "unknown" (no /proc, unreadable) is not
-# that, and an earlier version of this file treated it as one: with the
-# path pointing at nothing it vetoed the skip and would have sent every
-# ASan binary in a /proc-less container to a start-up failure.  Caught by
-# the control that NTLIBC_OVERCOMMIT_PATH exists to make possible, which
-# is the whole argument for it being overridable.
+# that: treating it as a veto would send every ASan binary in a
+# /proc-less container to a start-up failure, with the path pointing at
+# nothing.  Caught by the control that NTLIBC_OVERCOMMIT_PATH exists to
+# make possible, which is the whole argument for it being overridable.
 if [ "$sysctl_value" != 2 ] && [ "$sysctl_value" != unknown ]; then
 	echo "asan-available: WARNING -- the profile declares" >&2
 	echo "asan-available: capability.overcommit=no, but vm.overcommit_memory is" >&2
