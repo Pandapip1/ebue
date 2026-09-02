@@ -2053,7 +2053,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
            (Callee->getName() == "free" || Callee->getName() == "__free");
   }
 
-  static bool containsMemberInvalidatingCall(const Stmt *Statement) {
+  bool containsMemberInvalidatingCall(const Stmt *Statement) const {
     if (!Statement)
       return false;
     /* A successful free cannot mutate a live object which carries a member
@@ -2061,9 +2061,14 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
      * use after lifetime and the execution has already left defined C.  Keep
      * every other call conservative, including realloc-like calls, and still
      * inspect a known deallocator's argument for nested unknown calls. */
-    if (const auto *Call = dyn_cast<CallExpr>(Statement))
-      if (!knownDeallocator(Call))
+    if (const auto *Call = dyn_cast<CallExpr>(Statement)) {
+      const FunctionDecl *Callee = Call->getDirectCallee();
+      if (!knownDeallocator(Call) &&
+          (!Callee ||
+           (!Callee->hasAttr<PureAttr>() && !Callee->hasAttr<ConstAttr>() &&
+            !ReadonlyFunctions.contains(Callee))))
         return true;
+    }
     for (const Stmt *Child : Statement->children())
       if (containsMemberInvalidatingCall(Child))
         return true;
@@ -2307,10 +2312,10 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return false;
     /* A call need not receive BaseVar to mutate the same object: a parameter
      * may alias globally reachable storage, and a local object's address may
-     * have escaped before the loop.  Without an interprocedural no-write
-     * summary, every call except the lifetime-only deallocators above
-     * invalidates a member bound. */
-    if (containsMemberInvalidatingCall(Body) ||
+     * have escaped before the loop.  Only the separately checked read-only
+     * summary (and lifetime-only deallocators) closes that route. */
+    if (containsAsm(Body) || containsAsm(Increment) ||
+        containsMemberInvalidatingCall(Body) ||
         containsMemberInvalidatingCall(Increment))
       return false;
     if (writesVariable(Body, BaseVar) || writesVariable(Increment, BaseVar) ||
@@ -2398,11 +2403,16 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       bool ClosedRestrictedBase = restrictedMemberBaseIsClosed(Base);
       return !Change.VolatileAccess && !Field->getType().isVolatileQualified() &&
              Base && !Base->getType().isVolatileQualified() && Current &&
+             !containsAsm(Body) && !containsAsm(Increment) &&
              (!Base->getType().isRestrictQualified() ||
               ClosedRestrictedBase) &&
              ((!callCanReachBackedge(Body) && !containsCall(Increment)) ||
+              (!containsImpureCall(Body) &&
+               !containsImpureCall(Increment)) ||
               ClosedRestrictedBase) &&
              !writesVariable(Body, Base) && !aliasedWrite(Base, Body) &&
+             !mentionsFieldThroughOtherBase(Body, Change) &&
+             !mentionsFieldThroughOtherBase(Increment, Change) &&
              (!Base->getType()->isPointerType() ||
               !writesThroughAlias(Body, Base, false));
     }
@@ -2418,6 +2428,40 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return false;
     }
     return !aliasedWrite(Variable, Body);
+  }
+
+  static bool mentionsFieldThroughOtherBase(const Stmt *Statement,
+                                            const Progress &Rank) {
+    if (!Statement)
+      return false;
+    if (const auto *Member = dyn_cast<MemberExpr>(Statement))
+      if (Member->getMemberDecl() == Rank.Variable &&
+          value(Member->getBase()) != Rank.Base)
+        return true;
+    for (const Stmt *Child : Statement->children())
+      if (mentionsFieldThroughOtherBase(Child, Rank))
+        return true;
+    return false;
+  }
+
+  bool pointerObjectDistanceRank(const Progress &Rank,
+                                 const Expr *Condition,
+                                 const Stmt *Body,
+                                 const Expr *Increment) const {
+    if (!Rank.Variable->getType()->isPointerType() ||
+        containsAsm(Condition) || containsAsm(Body) || containsAsm(Increment) ||
+        mutation(Condition, Rank) != Mutation::None)
+      return false;
+    if (!isa<FieldDecl>(Rank.Variable))
+      return true;
+    /* A member cursor may have aliases established before the loop.  Trust
+     * calls only when their read-only contract closes that route, and reject
+     * even a conservative mention of this field through another base: it
+     * could cancel, reset, or backtrack the candidate cursor. */
+    return !containsImpureCall(Body) && !containsImpureCall(Increment) &&
+           !mentionsFieldThroughOtherBase(Condition, Rank) &&
+           !mentionsFieldThroughOtherBase(Body, Rank) &&
+           !mentionsFieldThroughOtherBase(Increment, Rank);
   }
 
   bool stableBound(const Expr *Expression, const Stmt *Body,
@@ -3729,6 +3773,10 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
 
   bool sentinelCondition(const Expr *Condition, const Progress &Change) const {
     Condition = ignore(Condition);
+    if (mutation(Condition, Change) != Mutation::None ||
+        (isa<FieldDecl>(Change.Variable) &&
+         mentionsFieldThroughOtherBase(Condition, Change)))
+      return false;
     if (Change.RequiresNonzeroCondition)
       return rankNonzeroWhen(Condition, Change, true);
     if (const auto *Logical = dyn_cast_or_null<BinaryOperator>(Condition)) {
@@ -3870,6 +3918,12 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         return "unproved";
       if (strictComparison(Condition, *Change, Body, Increment))
         return "strict-scalar-rank";
+      /* Defined C pointer arithmetic is confined to an array object and its
+       * one-past position.  A pointer which advances on every backedge
+       * therefore has a finite object-distance rank even when the loop's
+       * exit test is spelled in the body rather than in its condition. */
+      if (pointerObjectDistanceRank(*Change, Condition, Body, Increment))
+        return "sentinel-distance-rank";
       if (sentinelCondition(Condition, *Change))
         return "sentinel-distance-rank";
       return "unproved";
@@ -3908,6 +3962,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         continue;
       if (strictComparison(Condition, Change, Body, Increment))
         return "strict-scalar-rank";
+      if (pointerObjectDistanceRank(Change, Condition, Body, Increment))
+        return "sentinel-distance-rank";
       if (sentinelCondition(Condition, Change))
         return "sentinel-distance-rank";
     }
@@ -3931,6 +3987,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       if (Change.DynamicStep && Change.Kind == ProgressKind::Up &&
           bodyHasGuardedDynamicAscent(Condition, Body, Increment, Change))
         return "strict-scalar-rank";
+      if (pointerObjectDistanceRank(Change, Condition, Body, Increment))
+        return "sentinel-distance-rank";
       if (!Condition && Change.UnitStep &&
           Change.Kind == ProgressKind::Down &&
           Change.Variable->getType()->isIntegerType()) {

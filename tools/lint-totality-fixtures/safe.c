@@ -920,3 +920,45 @@ unsigned inferred_readonly_pointer_bound(const unsigned char *p, unsigned n)
 		i++;
 	return i;
 }
+
+struct safe_pointer_member_cursor {
+	const char *p;
+};
+
+static int pointer_member_readonly(
+	const struct safe_pointer_member_cursor *cursor)
+{
+	return *cursor->p != 0;
+}
+
+const char *pointer_member_body_exit(
+	struct safe_pointer_member_cursor *cursor)
+{
+	for (;;) {
+		if (!pointer_member_readonly(cursor)) return cursor->p;
+		cursor->p++;
+	}
+}
+
+const char *pointer_member_positive_skip(
+	struct safe_pointer_member_cursor *cursor, int keep_running)
+{
+	while (keep_running)
+		cursor->p += 2;
+	return cursor->p;
+}
+
+const char *pointer_member_descent(
+	struct safe_pointer_member_cursor *cursor, int keep_running)
+{
+	while (keep_running)
+		cursor->p--;
+	return cursor->p;
+}
+
+const char *local_pointer_without_sentinel(const char *p, int keep_running)
+{
+	while (keep_running)
+		p++;
+	return p;
+}
