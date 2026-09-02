@@ -215,6 +215,19 @@ static void cleanup_created(struct created *c, int keep)
 	free((void *)c->names);
 }
 
+/* Common failure exit for write_piece() below: closes `f` (skipped when
+ * `f` is NULL, meaning it was already closed), unlinks the half-written
+ * piece, restores `saved` as errno for the diagnostic, and always
+ * returns -1 so every call site below can just `return piece_fail(...)`. */
+static int piece_fail(FILE *f, const char *name, int saved)
+{
+	if (f) (void)fclose(f);
+	(void)unlink(name);
+	errno = saved;
+	__util_diagf("csplit: %s: %s\n", name, strerror(saved));
+	return -1;
+}
+
 /* Writes lines[from..to) to a new piece file, records it, and reports
  * its size unless -s. Returns 0 on success, -1 on a real I/O error. */
 static int write_piece(struct lines *L, int from, int to, const char *prefix, int ndigits, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
@@ -239,31 +252,13 @@ static int write_piece(struct lines *L, int from, int to, const char *prefix, in
 	for (i = from; i < to; i++) {
 		size_t next_size;
 		if (!__util_size_add((size_t)size, L->len[i], &next_size) ||
-		    next_size > LONG_MAX) {
-			int saved = EFBIG;
-			(void)fclose(f);
-			(void)unlink(name);
-			errno = saved;
-			__util_diagf("csplit: %s: %s\n", name, strerror(errno));
-			return -1;
-		}
-		if (fwrite(L->text[i], 1, L->len[i], f) != L->len[i]) {
-			int saved = errno;
-			(void)fclose(f);
-			(void)unlink(name);
-			errno = saved;
-			__util_diagf("csplit: %s: %s\n", name, strerror(errno));
-			return -1;
-		}
+		    next_size > LONG_MAX)
+			return piece_fail(f, name, EFBIG);
+		if (fwrite(L->text[i], 1, L->len[i], f) != L->len[i])
+			return piece_fail(f, name, errno);
 		size = (long)next_size;
 	}
-	if (fclose(f) < 0) {
-		int saved = errno;
-		(void)unlink(name);
-		errno = saved;
-		__util_diagf("csplit: %s: %s\n", name, strerror(errno));
-		return -1;
-	}
+	if (fclose(f) < 0) return piece_fail(0, name, errno);
 	if (remember_created(created, name) < 0) {
 		__util_diagf("csplit: out of memory\n");
 		return -1;
