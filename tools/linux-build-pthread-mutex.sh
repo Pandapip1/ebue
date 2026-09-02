@@ -54,12 +54,36 @@ FILES="
 	src/unistd/getpid.c
 	src/unistd/linux/plat_unistd.c
 	src/unistd/linux/plat_fd.c
+	src/internal/fd.c
+	src/internal/linux/plat_fd_init.c
 	src/time/clock_gettime.c
 	src/time/linux/plat_time.c
 	src/internal/errno.c
 	fuzz/linux_pilot_harness_pthread_mutex.c
 	fuzz/linux_pilot_test_pthread_mutex.c
 "
+# src/internal/fd.c + src/internal/linux/plat_fd_init.c were missing:
+# src/unistd/linux/plat_unistd.c's syncfs() calls the real __fd_get(),
+# a real, previously-hidden gap CI never reached (tools/
+# linux-build-crt.sh and tools/linux-build-fs.sh both failed to link
+# first, until this session fixed them). Traced by reading
+# plat_unistd.c's real call; unlike tools/linux-build-fs.sh/-open.sh/
+# -misc.sh's own __free gap, nothing reachable here ever calls
+# __fd_install_at() (only __fd_get(), a read-only accessor), so
+# --gc-sections drops __fd_release_dynamic()'s own __free() call before
+# the link needs it -- confirmed by linking clean with no allocator
+# files added at all.
+#
+# fuzz/linux_pilot_harness_pthread_mutex.c's own calloc() stub also
+# needed a real, independent fix: it declared `unsigned long`
+# nmemb/size parameters, but this tree's size_t (obj/include/bits/
+# alltypes.h's _Addr) is `long long` on both aarch64 and x86_64 --
+# distinct types at this width, so clang rejected it as a conflicting
+# redeclaration against <stdlib.h>'s real `size_t` prototype pulled in
+# transitively. Never caught before for the identical reason as every
+# other gap on this page: nothing has actually compiled this file since
+# it was written. Fixed by matching calloc()'s real declared signature
+# (size_t, not unsigned long).
 
 echo "$TAG: compiling ($CC, native ELF)..."
 objs=""

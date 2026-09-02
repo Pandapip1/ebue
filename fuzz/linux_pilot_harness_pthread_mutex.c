@@ -51,9 +51,9 @@ void __sig_current_mask_copy(sigset_t *mask)
 static unsigned char pool[POOL_SLOTS][256];
 static int pool_next;
 
-void *calloc(unsigned long nmemb, unsigned long size)
+void *calloc(size_t nmemb, size_t size)
 {
-	unsigned long total = nmemb * size;
+	size_t total = nmemb * size;
 	int i, slot;
 	if (total > sizeof pool[0]) return 0;
 	/* Real concurrent callers: every worker thread's first
