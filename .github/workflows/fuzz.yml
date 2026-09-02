@@ -3,19 +3,18 @@
 
 name: Fuzz
 
+# No `push:` trigger: this session pushes to `main` dozens of times per
+# work session (agent worktrees are merged back in quick succession, and
+# each merge lands on `main` -- worktree branches themselves are local-only
+# and never pushed), which made a push-triggered fuzz run fire on nearly
+# every commit. A nightly schedule plus workflow_dispatch below still give
+# this job everywhere it needs to run -- routine coverage without a wasted
+# full fuzz run per merge, and an on-demand button for anyone who wants a
+# run sooner. See the corpus-restore steps' `github.event_name == 'push'`
+# branches below for the read-only fast path a push run used to take;
+# those are dormant now that push cannot fire but are left in place in
+# case push is reintroduced later.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'src/**'
-      - 'fuzz/**'
-      - 'include/**'
-      - 'arch/**'
-      - 'tools/fuzz.sh'
-      - 'tools/afl-fuzz.sh'
-      - 'tools/asan-build.sh'
-      - 'Makefile'
-      - '.github/workflows/fuzz.yml'
   schedule:
     - cron: '17 7 * * *'
   workflow_dispatch:
@@ -37,8 +36,11 @@ permissions:
   contents: read
   issues: write
 
-# Push runs are a short regression net and only read the corpus.  Scheduled
-# and manual runs are the search and are its only writers.
+# Only one active trigger remains (schedule or workflow_dispatch), each its
+# own writer of the corpus cache; the `github.event_name == 'push'` checks
+# throughout this file are dormant leftovers from when push runs were a
+# short, read-only regression net (see the `on:` comment above) and are
+# harmless no-ops now that push cannot fire.
 concurrency:
   group: fuzz-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' }}
