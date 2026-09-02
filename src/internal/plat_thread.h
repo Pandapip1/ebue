@@ -115,9 +115,16 @@ typedef void (__PLAT_APC_CALL *__plat_apc_fn)(void *, void *, void *);
  * backend actually dereferences it (the same precedent as plat_time.h's
  * own __plat_realtime_get()/__plat_timer_manager_start() comments), and
  * no real caller anywhere in this tree ever passes a zero/uninitialized
- * handle -- several (src/signal/linux/sigdelivery.c's own `if
- * (wake_event) __plat_event_set(wake_event);`) explicitly skip the call
- * instead of ever passing a null one through. */
+ * handle -- several (src/signal/signal.c's own `if (__plat_event_set(
+ * self_stop_event) < 0) ...` guard on the ntlibc_linux_sync-pointer
+ * domain this platform's __plat_event_set() really expects; src/signal/
+ * nt/sigdelivery.c's own `if (wake_event) __plat_event_set(wake_event);`
+ * on NT's own single real handle domain) explicitly skip the call instead
+ * of ever passing a null one through. NOT src/signal/linux/sigdelivery.c's
+ * OWN wake_event, which is a genuinely different domain (a real eventfd)
+ * this platform's __plat_event_set() must never be called on at all --
+ * see src/internal/plat_signal.h's __plat_sigevent_set() comment for the
+ * real, confirmed crash that shape of mismatch caused here. */
 int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout,
                     long long relative_ticks) __attribute__((nonnull(1)));
 /* Same, for NtWaitForMultipleObjects' WaitAny mode -- the only mode any

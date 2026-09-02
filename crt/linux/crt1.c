@@ -38,20 +38,18 @@
  * wrapper this program calls that can fail, so __linux_setup_tls()
  * below runs before anything else, including before __fd_init().
  *
- * What crt/crt1.c's __libc_start_main() also does that this file
- * deliberately does NOT yet call, each a real, separate, disclosed
- * gap rather than a silent omission:
+ * __signal_init() (src/signal/signal.c) is now called below too, mirroring
+ * crt/crt1.c's own `__fd_init(); __signal_init(); __fenv_init();` -- it
+ * used to be named here as a real, disclosed gap this file deliberately
+ * did not call at all (RtlAddVectoredExceptionHandler() has no meaning
+ * off NT, and Linux had no plat_* seam of its own yet for real hardware
+ * faults). src/signal/linux/plat_signal.c's __plat_sig_install_fault_
+ * handlers() is that seam now, so the call is real here too. See
+ * __linux_start_main()'s own call site below for the ordering reasoning.
  *
- *   __signal_init()   src/signal/signal.c calls RtlAddVectoredException
- *                      Handler directly, an ntdll import with no Linux
- *                      backend and no plat_* seam yet -- calling it here
- *                      would not even link. A real Linux signal-delivery
- *                      front end (sigaction-based fault/vectored-handler
- *                      equivalent) is separate, larger, future work.
- *
- * None of these block argv/environ/TLS/errno/main()/exit-status working
- * end to end, which is what this file exists to prove -- see
- * tools/linux-build-crt.sh's verification program.
+ * None of the rest of this file blocks argv/environ/TLS/errno/main()/
+ * exit-status working end to end, which is what this file exists to
+ * prove -- see tools/linux-build-crt.sh's verification program.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -707,6 +705,20 @@ _Noreturn void __linux_start_main(long *sp)
 	__progname = slash;
 
 	__fd_init();
+	/* Real hardware faults (SIGSEGV/SIGBUS/SIGILL/SIGFPE/SIGTRAP) and
+	 * this process's own signal-delivery lock/event now have a real
+	 * Linux backend (src/signal/linux/plat_signal.c's
+	 * __plat_sig_install_fault_handlers(), src/signal/linux/
+	 * sigdelivery.c's __sig_delivery_init()) -- see this file's own
+	 * banner, which used to name __signal_init() as deliberately not
+	 * called here at all ("a real Linux signal-delivery front end ...
+	 * is separate, larger, future work"). That work has landed; this
+	 * call is what actually wires it up, mirroring crt/crt1.c's
+	 * identical `__fd_init(); __signal_init(); __fenv_init();` ordering
+	 * on the NT side -- after fd setup (nothing here needs an open
+	 * descriptor), before main(), so a fault anywhere in main() reaches
+	 * real delivery instead of the kernel's unseen default action. */
+	__signal_init();
 
 	/* Establishes FE_DFL_ENV (see src/math/fenv.c's own __fenv_init())
 	 * at genuine process startup, mirroring crt/crt1.c's identical call

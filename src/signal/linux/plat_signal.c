@@ -79,6 +79,7 @@
 #include <signal.h>
 #include <poll.h>
 #include <time.h>
+#include <fcntl.h>
 #include "libc.h"       /* struct _UNICODE_STRING's real definition (nt.h) --
                          * a type-only use, same as every other Linux backend
                          * in this tree that reads an NT-shaped struct passed
@@ -97,6 +98,7 @@
 #define SYS_close             57
 #define SYS_kill              129
 #define SYS_rt_sigaction      134
+#define SYS_rt_sigprocmask    135
 #define SYS_nanosleep         101
 #define SYS_msync             227
 #define SYS_getpid            172
@@ -167,12 +169,57 @@ static int is_sys_error(long ret)
 static int unbox(__plat_handle_t h) { return (int)((long)h - 1); }
 static __plat_handle_t box(int fd) { return (__plat_handle_t)(long)(fd + 1); }
 
+/* This process's __fds[] table (src/internal/fd.c) and the kernel's own
+ * real fd numbering are the SAME numbering on this platform -- open()'s
+ * own Linux path (src/fcntl/open.c) hands __fd_install() the raw fd
+ * openat(2) just returned and trusts __fd_alloc(0) to independently
+ * compute that identical number, which only holds if EVERY real,
+ * long-lived fd this process ever creates is registered there. This
+ * eventfd is real and long-lived (it lives as long as wake_event does,
+ * this process's whole life) but was created via a raw syscall this
+ * file's own banner already explains the need for (glibc's syscall()
+ * would misdecode the error), which bypasses __fd_install() entirely --
+ * so, unregistered, it silently desynchronizes the two numberings from
+ * here on: __fd_alloc(0) can later hand out the SAME number the kernel
+ * already gave this eventfd, and the next real open()/dup()-family call
+ * that lands there closes the real kernel fd out from under wake_event
+ * without this library ever knowing. Confirmed as a real, reproduced
+ * failure (not a hypothetical one): test/posix-signal-crossproc.c's
+ * test_orphaned_stop_gets_real_sighup() opens a marker file, dup()s its
+ * own stdout, and redirects -- ordinary fd traffic that, once this
+ * eventfd was silently taking a number out of turn for the first time
+ * ever (see crt/linux/crt1.c's own history of never calling
+ * __signal_init() at all before this), collided with it and closed the
+ * WRONG real fd, observed directly under strace as a `dup3(1, N, 0)`
+ * silently clobbering this eventfd's own real fd N. __fd_install()
+ * below closes that gap the same way every other permanent fd this
+ * library ever hands out already does. */
 __plat_handle_t __plat_sigevent_create(int initially_signalled)
 {
 	long ret = syscall(SYS_eventfd2, (long)(initially_signalled ? 1 : 0),
 	                   (long)(EFD_SEMAPHORE_LX | EFD_CLOEXEC_LX));
+	int fd;
 	if (is_sys_error(ret)) return __PLAT_HANDLE_NULL;
-	return box((int)ret);
+	fd = __fd_install((HANDLE)(long)ret, O_CLOEXEC, 0);
+	if (fd < 0) { syscall(SYS_close, ret, 0L, 0L, 0L, 0L, 0L); return __PLAT_HANDLE_NULL; }
+	return box(fd);
+}
+
+/* wake_event's own real "post" operation -- see this function's own
+ * plat_signal.h comment for why __plat_event_set() (a completely
+ * different __plat_handle_t domain on this platform) is NOT it. Writing
+ * a real 8-byte counter value to an EFD_SEMAPHORE eventfd both increments
+ * its counter (waking one blocked read(), the same auto-reset-one-waiter
+ * semantics __plat_sigevent_create()'s own comment already claims for
+ * this handle) and never blocks itself: eventfd(2)'s own write(2) surface
+ * only ever fails EAGAIN when the counter would overflow near UINT64_MAX,
+ * never because nothing is currently waiting to read it. */
+int __plat_sigevent_set(__plat_handle_t ev)
+{
+	unsigned long long one = 1;
+	long ret = syscall(SYS_write, (long)unbox(ev), (long)&one, 8L, 0L, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
 }
 
 /* __plat_event_set() is declared in plat_signal.h but NOT defined here
@@ -544,11 +591,44 @@ void __plat_sig_default_terminate(int sig)
 	 * needed a gettid(2) syscall. Same self-signal shape
 	 * __plat_process_suspend_self() above already uses for SIGSTOP.
 	 *
-	 * Neither syscall's result is checked: there is nothing left to do
-	 * with a failure of either but return and let __exit_internal()'s own
-	 * fallback run, which is exactly what happens when this function
-	 * simply falls off its own end. */
+	 * The rt_sigprocmask(2) unblock right before kill(2) is not optional,
+	 * and is not the same case __plat_sig_sync_kernel()'s own comment
+	 * above already covers for a caller with a bare userspace-level
+	 * mask. This function's own contract ("end THIS process exactly as
+	 * if by sig's real default action") needs `sig` to be genuinely
+	 * unblocked at the REAL kernel level at the moment of delivery, and
+	 * this is the one call site that CAN reach here with it genuinely
+	 * blocked there: __plat_sig_install_fault_handlers()'s own
+	 * fault_dispatch() (below) is a real rt_sigaction(2) handler that did
+	 * not request SA_NODEFER, so the kernel auto-blocks `sig` for the
+	 * whole time it runs -- and __raise_internal_info()'s own default-
+	 * terminate branch (src/signal/signal.c) can call all the way through
+	 * __exit_internal() to this function from INSIDE that same handler,
+	 * for the exact signal it is still blocking. A kill(2) of a currently-
+	 * blocked, software-generated signal does not force default action
+	 * the way a genuinely synchronous re-fault would -- it is simply
+	 * queued pending, delivered only once the handler returns -- so
+	 * without this unblock, the kill() below returned immediately having
+	 * done nothing, __exit_internal() fell through to its own simulated-
+	 * termination fallback (__plat_terminate(), an ordinary exit_group(2)
+	 * whose ENCODE_SIGNAL_EXIT() status byte happens to equal `sig`
+	 * itself), and the parent's real wait4(2) reported WIFEXITED with
+	 * that byte instead of the real WIFSIGNALED/WTERMSIG(sig) this
+	 * function exists to guarantee. Confirmed as a real, reproduced
+	 * failure (not a hypothetical one) by test/posix-signal-fault-
+	 * linux.c's own default-disposition cases the first time a real
+	 * hardware fault's default path was ever exercised on this platform.
+	 * Unblocking unconditionally is still correct for every OTHER caller
+	 * (abort(), the exec() stand-in's re-raise) -- none of them can ever
+	 * be running as the real kernel handler for `sig` itself, so `sig`
+	 * is never blocked there for a reason this call needs to preserve.
+	 *
+	 * Neither syscall's result is checked past the unblock: there is
+	 * nothing left to do with a failure of any of the three but return
+	 * and let __exit_internal()'s own fallback run, which is exactly what
+	 * happens when this function simply falls off its own end. */
 	struct kernel_sigaction act;
+	unsigned long mask;
 	long pid;
 
 	act.k_handler = SIG_DFL;
@@ -557,8 +637,108 @@ void __plat_sig_default_terminate(int sig)
 	act.k_mask = 0;
 	syscall(SYS_rt_sigaction, (long)sig, &act, 0L, (long)sizeof(unsigned long));
 
+	mask = 1UL << (sig - 1);
+	syscall(SYS_rt_sigprocmask, (long)SIG_UNBLOCK, (long)&mask, 0L, (long)sizeof mask);
+
 	pid = syscall(SYS_getpid);
 	syscall(SYS_kill, pid, (long)sig);
+}
+
+/* arch/aarch64/src/sigreturn_trampoline.S -- see that file's own banner
+ * for the real ABI contract (SA_RESTORER, why the kernel calls fault_
+ * dispatch() below directly rather than this trampoline, and why LR
+ * already points here by the time fault_dispatch() returns). Declared
+ * the same way src/thread/pthread_cancel.c declares its own trampoline
+ * symbol: a plain function declaration, so `act.k_restorer =
+ * __ntlibc_sigreturn_trampoline` below needs no cast -- the types
+ * already match. */
+void __ntlibc_sigreturn_trampoline(void); // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
+
+/* Real hardware-fault delivery: SIGSEGV/SIGBUS/SIGILL/SIGFPE/SIGTRAP,
+ * installed below with THIS function as k_handler and the trampoline
+ * above as k_restorer, so the kernel invokes it exactly as it would any
+ * SA_SIGINFO handler -- x0/x1/x2 = (sig, &info, &ucontext), with x30
+ * already pointing at the trampoline (see that file's banner).  `info`
+ * is the kernel's OWN siginfo_t, not one this library synthesizes the
+ * way signal.c's make_siginfo() does for a self-raised signal: confirmed
+ * field-for-field against this project's own <signal.h> siginfo_t by the
+ * fault-injection test this change adds (test/posix-signal-fault-linux.c)
+ * -- si_code for a real SIGSEGV/SIGBUS/SIGILL/SIGFPE already arrives as
+ * SEGV_MAPERR/SEGV_ACCERR/BUS_ADRALN/ILL_ILLOPC/FPE_INTDIV directly from
+ * the kernel, needing none of signal.c's NT-side exception_handler()
+ * reverse-engineering (that function exists only because NT hands back a
+ * raw exception code with no POSIX shape at all -- Linux's kernel has
+ * already done that translation before this function is ever called).
+ *
+ * Routes into __raise_internal_info(), the SAME portable entry point
+ * every other signal source already uses (raise(), kill() to self, NT's
+ * own vectored exception handler) -- not a parallel path. Locked exactly
+ * as every other caller of it already is: __sig_lock() is a real
+ * recursive lock keyed by gettid() (sigdelivery.c's own comment on it),
+ * so a fault that interrupts code on THIS thread that already holds it
+ * (a fault inside sigaction() itself, say) re-enters without blocking --
+ * confirmed correct under genuine async re-entrancy, not merely assumed
+ * equivalent to NT's simulated-exception dispatch: gettid() is a plain
+ * syscall, async-signal-safe on its own, and the owner/depth pair it
+ * compares against was last written by this same thread and can only
+ * ever be read back by that same thread here, never torn by a
+ * concurrent writer. A fault on a thread that does NOT already hold the
+ * lock blocks on the semaphore exactly as any other contender would --
+ * the same risk profile signal.c's NT-side exception_handler() already
+ * accepts for the identical lock, not a new one introduced here.
+ *
+ * __raise_internal_info() and everything it can reach from here were
+ * audited for async-signal-safety before this was wired up: no malloc
+ * anywhere on the path a fault with no installed handler takes. The one
+ * real malloc on the wider call graph is src/process/children.c's
+ * child_grow() -- but only past 256 concurrently-unreaped children, and
+ * only from __child_add(), which this path never reaches:
+ * __exit_internal()'s own __child_resume_stopped() (reached via
+ * __raise_internal_info()'s default-terminate branch) only ever walks
+ * and signals the EXISTING child table via clear_stops(), never grows
+ * it. Every other function on that default-disposition path
+ * (__exit_internal(), __plat_sig_default_terminate() above, __plat_kill_
+ * terminate()) is raw syscalls and stack locals throughout. A caught
+ * handler this library dispatches to (the non-default-disposition
+ * branch) inherits the same async-signal-safety obligation any POSIX
+ * signal handler already has -- not a new risk this wiring introduces.
+ *
+ * SA_ONSTACK: honored the same way NT's own exception_handler() ->
+ * __raise_internal() -> sig_dispatch() path already is -- signal.c's
+ * sig_dispatch() is widened by this same change to run
+ * __sig_call_on_altstack() (src/signal/aarch64/altstack.S, already built
+ * for this arch, just never wired to a non-_WIN32 caller before now) on
+ * real Linux too, not only NT. */
+static void fault_dispatch(int sig, siginfo_t *info, void *ucontext)
+{
+	(void)ucontext;
+	__sig_lock();
+	__raise_internal_info(sig, info);
+	__sig_unlock();
+}
+
+/* SA_NODEFER is deliberately NOT set below: leaving the kernel's own
+ * default auto-block of `sig` in place for the duration of fault_
+ * dispatch() means a SECOND fault of the SAME signal, raised by a bug in
+ * this delivery path itself rather than by whatever disposition it ends
+ * up calling (an application handler's own async-signal-safety is its
+ * own problem, like any POSIX handler), forces the kernel's own default
+ * action -- process death -- instead of recursing into fault_dispatch()
+ * again on a stack that, for a stack-overflow SIGSEGV specifically, is
+ * already exhausted. A hard kill is the safe failure mode to pick here,
+ * not a softer one to engineer around. */
+void __plat_sig_install_fault_handlers(void)
+{
+	static const int fault_sigs[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP };
+	struct kernel_sigaction act;
+	int i, n = (int)(sizeof fault_sigs / sizeof fault_sigs[0]);
+
+	act.k_handler = (void (*)(int))(void *)fault_dispatch; // NOLINT(bugprone-casting-through-void) -- same sigaction union-slot recovery signal.c's own SA_SIGINFO cast documents
+	act.k_flags = SA_SIGINFO | SA_RESTORER;
+	act.k_restorer = __ntlibc_sigreturn_trampoline;
+	act.k_mask = 0;
+	for (i = 0; i < n; i++)
+		syscall(SYS_rt_sigaction, (long)fault_sigs[i], &act, 0L, (long)sizeof(unsigned long));
 }
 
 /* Linux has a real per-signal kernel default action and a real

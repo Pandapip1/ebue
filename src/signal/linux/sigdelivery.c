@@ -45,18 +45,31 @@
  * documented degrade path signal.c's kill() already has to handle
  * unconditionally for the "no listener" case on NT (see that
  * function's own comment: "Failure ... falls straight through to the
- * existing behaviour unchanged"). Real disposition-aware cross-process
- * delivery on Linux needs a real kernel signal handler installed via
- * rt_sigaction(2) (with a real sigreturn trampoline -- genuinely
- * assembly-level work, the same class of thing src/thread/linux/
- * clone_aarch64.S already had to be for thread creation) so that
- * tgkill(2)/kill(2) invoke the target's REAL registered disposition
- * directly, through the kernel, needing no RPC of any kind -- simpler
- * than NT's own scheme once built, but not yet built. Until then,
- * kill() to another process falls back to its existing
- * __plat_kill_terminate() path exactly as if the target had never
- * installed a handler, the same honest degrade every NT process
- * without a listener already gets.
+ * existing behaviour unchanged").
+ *
+ * A real rt_sigaction(2) handler (with a real sigreturn trampoline --
+ * arch/aarch64/src/sigreturn_trampoline.S) now exists on this platform
+ * -- see src/signal/linux/plat_signal.c's __plat_sig_install_fault_
+ * handlers() -- but it is deliberately narrower than what THESE three
+ * functions need. It is installed once, unconditionally, for exactly
+ * five hardware-fault signals (SIGSEGV/SIGBUS/SIGILL/SIGFPE/SIGTRAP),
+ * to close a different, disclosed gap: a real fault on this thread
+ * reaching __raise_internal_info() at all, instead of running the
+ * kernel's own default action unseen by this library (see signal.c's
+ * __signal_init()). What these three functions need is a real kernel-
+ * level handler for the FULL, caller-chosen signal set sigaction()
+ * installs an ntlibc-level disposition for, updated dynamically as
+ * dispositions change, so that tgkill(2)/kill(2) FROM ANOTHER PROCESS
+ * invoke the target's REAL registered disposition directly through the
+ * kernel -- needing no RPC of any kind, simpler than NT's own scheme
+ * once built, but not yet built. Until then, kill() to another process
+ * still falls back to its existing __plat_kill_terminate() path exactly
+ * as if the target had never installed a handler, the same honest
+ * degrade every NT process without a listener already gets -- unless
+ * the signal happens to be one of the five fault signals above, which
+ * are true kernel-level dispositions today, just not ones a REMOTE
+ * kill()/sigqueue() can select the way a real per-signal, caller-
+ * configurable rt_sigaction(2) mapping could.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -83,9 +96,15 @@ NTSTATUS __sig_wait_delivery(LARGE_INTEGER *timeout)
 	return STATUS_SUCCESS;
 }
 
+/* __plat_sigevent_set(), not __plat_event_set(): wake_event is a real
+ * eventfd (__plat_sigevent_create() above), a different __plat_handle_t
+ * domain than __plat_event_set()'s ntlibc_linux_sync-pointer one on this
+ * platform -- see that function's own plat_signal.h comment for the real,
+ * confirmed crash this used to cause the first time a real handler was
+ * ever reached from a genuine kernel-delivered signal. */
 void __sig_notify_delivery(void)
 {
-	if (wake_event) __plat_event_set(wake_event);
+	if (wake_event) __plat_sigevent_set(wake_event);
 }
 
 /* NTLIBC_NO_THREAD_SAFETY_ANALYSIS: these four are

@@ -430,15 +430,27 @@ int __sig_consume_child_stop(pid_t pid)
 static __thread stack_t alt_stack;   /* ss_sp == 0 means none is installed */
 static __thread int alt_active;      /* nonzero while a handler runs on it */
 
-/* Defined in src/signal/$ARCH/altstack.S -- PE builds only.
+/* Defined in src/signal/$ARCH/altstack.S -- real platform builds only,
+ * PE and (as of this change) native Linux/ELF alike: this library's
+ * signal delivery is always synchronous, on this library's own call
+ * site rather than a kernel-built sigreturn frame, so SA_ONSTACK is
+ * just a stack switch around that call site on either platform -- see
+ * that file's own banner. aarch64's altstack.S already used AAPCS64's
+ * own x0/x1/x2 argument order (that file's own comment), so this
+ * Linux/aarch64 build needed no new assembly at all to reach here, only
+ * this wider #if.
  *
  * tools/asan-build.sh and tools/fuzz.sh compile the C sources under
  * src/ natively with clang and link no .S at all, so the symbol simply
- * does not exist there.
- * Nor could those files be reused if it did: the x86_64 one takes its
- * arguments in rcx/rdx/r8 per the Windows x64 ABI, which is not where a
- * SysV ELF caller puts them. */
-#ifdef _WIN32
+ * does not exist there -- and both scripts also -U__linux__ every file
+ * they compile (see execve()'s own real-vs-emulated split,
+ * src/process/exec.c, for the identical mechanism and reasoning), which
+ * is what keeps this declaration, and the call below, out of that build
+ * even though it runs on real Linux/ELF.
+ * Nor could the x86_64/i386 files be reused for a native ASan/fuzz build
+ * if the symbol did exist: they take their arguments in rcx/rdx/r8 per
+ * the Windows x64 ABI, which is not where a SysV ELF caller puts them. */
+#if defined(_WIN32) || defined(__linux__)
 void __sig_call_on_altstack(void *sp, void (*fn)(void *), void *arg); // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 #endif
 
@@ -478,7 +490,7 @@ static void sig_deliver(void *p)
  * returns", and SS_ONSTACK is what a handler reads to detect this. */
 static void sig_dispatch(struct sig_delivery *d, int flags)
 {
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
 	if ((flags & SA_ONSTACK) && alt_stack.ss_sp && !alt_active) {
 		void *top = (char *)alt_stack.ss_sp + alt_stack.ss_size;
 		alt_active = 1;
@@ -1675,13 +1687,23 @@ void __signal_init(void)
 #ifdef _WIN32
 	/* NT hardware faults (SIGSEGV/SIGFPE/SIGILL/SIGBUS) arrive as NT
 	 * exceptions and are turned into signals by this vectored handler
-	 * -- see this file's own banner. Linux already delivers these as
-	 * real kernel signals; a real Linux fault path needs its own
-	 * rt_sigaction(2)-installed handler (disclosed follow-up, see
-	 * src/signal/linux/sigdelivery.c's banner for the same class of
-	 * gap on the delivery side), not this NT-only call, which has no
-	 * meaning off NT at all. */
+	 * -- see this file's own banner. */
 	RtlAddVectoredExceptionHandler(1, exception_handler);
+#elif defined(__linux__)
+	/* Linux already delivers these as real kernel signals; what was
+	 * missing was a real rt_sigaction(2)-installed handler to receive
+	 * them (this NT-only vectored-exception path has no meaning off
+	 * NT). __plat_sig_install_fault_handlers() (src/signal/linux/
+	 * plat_signal.c) installs one, for SIGSEGV/SIGBUS/SIGILL/SIGFPE/
+	 * SIGTRAP, that routes into __raise_internal_info() the same way
+	 * the NT call above does -- see that function's own comment for
+	 * the full ABI story (arch/aarch64/src/sigreturn_trampoline.S) and
+	 * the async-signal-safety audit behind calling it from here. Cross-
+	 * process delivery to another process's real handler via kill()/
+	 * tgkill() is a separate, larger piece of work
+	 * (src/signal/linux/sigdelivery.c's own banner) this does not
+	 * attempt. */
+	__plat_sig_install_fault_handlers();
 #endif
 #ifdef NTLIBC_USE_KERNEL32
 	install_ctrl_handler();

@@ -67,6 +67,36 @@ __plat_handle_t __plat_sigevent_create(int initially_signalled);
 /* Signal `ev`.  0/-1(errno) via return. */
 int __plat_event_set(__plat_handle_t ev);
 
+/* Linux only: post one unit to `ev`, an eventfd created by __plat_
+ * sigevent_create() above -- __sig_notify_delivery()'s (sigdelivery.c)
+ * real, correct wake for `wake_event`. NOT the same operation as
+ * __plat_event_set() just above for this platform, and calling that
+ * function on an eventfd handle is a real, confirmed bug, not a
+ * theoretical one: __plat_sigevent_create()'s return value lives in
+ * src/signal/linux/plat_signal.c's own box()/unbox() eventfd domain
+ * (fd+1), but __plat_event_set()'s one Linux implementation
+ * (src/thread/linux/plat_thread.c) casts its argument straight to
+ * `struct ntlibc_linux_sync *` and dereferences it -- a completely
+ * different __plat_handle_t domain that only happens to share this
+ * project's one universal handle typedef, the identical class of
+ * mismatch this header's own __plat_kill_open()/__plat_process_suspend()
+ * banner already discloses for the bare-pid convention. Confirmed by
+ * crashing for real (SIGSEGV inside __plat_event_set(), dereferencing a
+ * small integer as a pointer) the first time __raise_internal_info()
+ * ever reached a real, non-default handler through a genuine kernel-
+ * delivered signal on this platform -- which, before real rt_sigaction(2)
+ * fault delivery existed, had never happened: __signal_init() itself was
+ * never called from Linux's own crt1.c until that same change, so
+ * wake_event was always still 0 (the `if (wake_event) ...` guard this
+ * header used to cite as proof no real caller passes a bad handle
+ * through skipped the call every time, for an unrelated reason -- not
+ * because the domain was ever actually correct). NT needs no such split:
+ * NT's own __plat_sigevent_create() (src/signal/nt/plat_signal.c) returns
+ * a real NT event HANDLE, the one object domain NT's __plat_event_set()
+ * already expects, so this function is Linux-only and NT's sigdelivery.c
+ * keeps calling __plat_event_set() for wake_event exactly as before. */
+int __plat_sigevent_set(__plat_handle_t ev);
+
 /* Wait (alertably, so timer APCs stay deliverable) on `wake_event` if it
  * is not __PLAT_HANDLE_NULL, for up to `ticks` 100ns units (NT's own
  * relative/absolute LARGE_INTEGER encoding, passed through unchanged)
@@ -277,6 +307,27 @@ void __plat_sig_sync_kernel(int sig, int ignore);
  * same paragraph), so __exit_internal()'s fallback is what actually
  * ends the process there, same as before this function existed. */
 void __plat_sig_default_terminate(int sig);
+
+/* Install a REAL rt_sigaction(2) handler for SIGSEGV/SIGBUS/SIGILL/
+ * SIGFPE/SIGTRAP -- unlike __plat_sig_sync_kernel() above, this installs
+ * an actual function, with a real sigreturn trampoline
+ * (arch/aarch64/src/sigreturn_trampoline.S), so a genuine hardware fault
+ * reaches __raise_internal_info() the same way any other signal source
+ * does, instead of running the kernel's own default action unseen by
+ * this library. src/signal/linux/plat_signal.c's own comment on this
+ * function has the full story, including why only these five signals and
+ * not every signal number (that is real cross-process delivery via kill()/
+ * tgkill(), a distinct, larger piece of work left for later). Called once,
+ * from __signal_init()'s Linux path (src/signal/signal.c), which is also
+ * why this returns nothing to check: same as __plat_sig_sync_kernel()'s
+ * own rt_sigaction(2) calls, there is nothing a caller at process startup
+ * could usefully do differently on a failure here besides continue with
+ * hardware faults falling back to the kernel's own default action --
+ * exactly the pre-existing behavior this call is adding to, not replacing
+ * outright. NT-only builds never declare or call this at all (see this
+ * header's own banner on scope); on Linux it is declared unconditionally
+ * like every other function here, matching this header's own convention. */
+void __plat_sig_install_fault_handlers(void);
 
 /* ---- children.c -------------------------------------------------------- */
 
