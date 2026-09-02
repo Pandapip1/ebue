@@ -390,7 +390,7 @@ static void test_find_exec_builtin_matches_standalone(void)
 		slurp_into(OUTFILE, standalone_out, sizeof standalone_out);
 	}
 
-	snprintf(cmd, sizeof cmd, "find scratch/t -name a.txt -exec %s HIT {} ;", echo_path);
+	snprintf(cmd, sizeof cmd, "find scratch/t -name a.txt -exec %s HIT \"{}\" \\;", echo_path);
 	sh_argv[0] = (char *)"sh"; sh_argv[1] = (char *)"-c"; sh_argv[2] = cmd; sh_argv[3] = 0;
 	builtin_status = run(sh_path, sh_argv);
 	slurp_into(OUTFILE, builtin_out, sizeof builtin_out);
