@@ -40,22 +40,23 @@ static char obj_root[1024];
 static int find_obj_root(const char *argv0)
 {
 	size_t n;
-	char *p;
+	size_t i;
 
 	if (!argv0 || !*argv0) return -1;
 	n = strlen(argv0);
 	if (n >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-archive.exe" */
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/util-archive.exe" */
 
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	n = strlen(obj_root);
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/test" */
 
 	return 0;
 }
@@ -63,12 +64,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -143,42 +146,46 @@ static int run_sh_c(const char *cmd)
 
 /* ==== file(1p) ============================================================ */
 
+/* Every case below runs `file` on one operand, then checks both its exit
+ * status and one expected substring of its output -- folded here since
+ * every test in this section follows that exact shape. */
+static void check_file(char *const *argv, int want_status, const char *needle)
+{
+	CHECK(run(file_path_, argv) == want_status);
+	CHECK(out_contains(needle));
+}
+
 static void test_file_empty(void)
 {
 	char *argv[] = { (char *)"file", (char *)"scratch/fa_empty", 0 };
 	make_file("scratch/fa_empty", "");
-	CHECK(run(file_path_, argv) == 0);
-	CHECK(out_contains("scratch/fa_empty: empty"));
+	check_file(argv, 0, "scratch/fa_empty: empty");
 }
 
 static void test_file_text(void)
 {
 	char *argv[] = { (char *)"file", (char *)"scratch/fa_text", 0 };
 	make_file("scratch/fa_text", "hello world\nsecond line\n");
-	CHECK(run(file_path_, argv) == 0);
-	CHECK(out_contains("scratch/fa_text: ASCII text"));
+	check_file(argv, 0, "scratch/fa_text: ASCII text");
 }
 
 static void test_file_shebang(void)
 {
 	char *argv[] = { (char *)"file", (char *)"scratch/fa_script", 0 };
 	make_file("scratch/fa_script", "#!/bin/sh\necho hi\n");
-	CHECK(run(file_path_, argv) == 0);
-	CHECK(out_contains("scratch/fa_script: commands text"));
+	check_file(argv, 0, "scratch/fa_script: commands text");
 }
 
 static void test_file_directory(void)
 {
 	char *argv[] = { (char *)"file", (char *)"scratch", 0 };
-	CHECK(run(file_path_, argv) == 0);
-	CHECK(out_contains("scratch: directory"));
+	check_file(argv, 0, "scratch: directory");
 }
 
 static void test_file_missing(void)
 {
 	char *argv[] = { (char *)"file", (char *)"scratch/fa_missing_xyz", 0 };
-	CHECK(run(file_path_, argv) == 1);
-	CHECK(out_contains("cannot open"));
+	check_file(argv, 1, "cannot open");
 }
 
 static void test_file_symlink(void)
@@ -189,11 +196,8 @@ static void test_file_symlink(void)
 	unlink("scratch/fa_link");
 	if (symlink("fa_text", "scratch/fa_link") != 0) return; /* no symlink support here; skip quietly */
 
-	CHECK(run(file_path_, argv_h) == 0);
-	CHECK(out_contains("scratch/fa_link: symbolic link to fa_text"));
-
-	CHECK(run(file_path_, argv_plain) == 0);
-	CHECK(out_contains("scratch/fa_link: ASCII text"));
+	check_file(argv_h, 0, "scratch/fa_link: symbolic link to fa_text");
+	check_file(argv_plain, 0, "scratch/fa_link: ASCII text");
 }
 
 /* ==== ar(1p) =============================================================== */

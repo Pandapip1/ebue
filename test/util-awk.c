@@ -41,22 +41,23 @@ static char obj_root[1024];
 static int find_obj_root(const char *argv0)
 {
 	size_t n;
-	char *p;
+	size_t i;
 
 	if (!argv0 || !*argv0) return -1;
 	n = strlen(argv0);
 	if (n >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-awk.exe" */
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/util-awk.exe" */
 
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	n = strlen(obj_root);
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/test" */
 
 	return 0;
 }
@@ -64,12 +65,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -152,6 +155,39 @@ static int run_awk(const char *prog, const char *file)
 	}
 }
 
+/* Nearly every test below runs one awk program (via run_awk() or a
+ * custom argv[]) and checks both its exit status and its stdout against
+ * an exact expected string -- folded into these helpers since that
+ * shape repeats across almost the whole file. */
+static void check_awk_out(const char *prog, const char *file, const char *expect)
+{
+	CHECK(run_awk(prog, file) == 0);
+	CHECK(out_equals(expect));
+}
+
+static void check_awk_argv(char *const *argv, const char *expect)
+{
+	CHECK(run(awk_path, argv) == 0);
+	CHECK(out_equals(expect));
+}
+
+/* The fatal-runtime-error cases below all run a program expected to be
+ * rejected with awk's fatal-error status (2) and a specific stderr
+ * diagnostic. */
+static void check_awk_fatal(const char *prog, const char *needle)
+{
+	CHECK(run_awk(prog, 0) == 2);
+	CHECK(err_contains(needle));
+}
+
+/* The shell-builtin cases below all run a command line through sh -c
+ * and check its exit status and stdout. */
+static void check_sh_out(const char *cmd, const char *expect)
+{
+	CHECK(run_sh_c(cmd) == 0);
+	CHECK(out_equals(expect));
+}
+
 /* ==== field splitting, NF ================================================= */
 
 static void test_default_field_splitting(void)
@@ -160,8 +196,7 @@ static void test_default_field_splitting(void)
 	 * blanks are ignored entirely -- not sort(1p)'s own default rule
 	 * (src/util/sort.c's header contrasts the two). */
 	make_file("scratch/fields", "  a  b   c  \nx\ty z\n");
-	CHECK(run_awk("{print NF, $1, $2, $3}", "scratch/fields") == 0);
-	CHECK(out_equals("3 a b c\n3 x y z\n"));
+	check_awk_out("{print NF, $1, $2, $3}", "scratch/fields", "3 a b c\n3 x y z\n");
 }
 
 static void test_dash_F_single_char(void)
@@ -169,17 +204,15 @@ static void test_dash_F_single_char(void)
 	make_file("scratch/colon", "root:x:0:0\nbin:x:1:1\n");
 	{
 		char *argv[] = { (char *)"awk", (char *)"-F:", (char *)"{print $1, $3}", (char *)"scratch/colon", 0 };
-		CHECK(run(awk_path, argv) == 0);
+		check_awk_argv(argv, "root 0\nbin 1\n");
 	}
-	CHECK(out_equals("root 0\nbin 1\n"));
 }
 
 static void test_assign_field_extends_nf_and_rebuilds_record(void)
 {
 	/* Assigning to $(NF+1) extends NF and $0 is recompiled with OFS. */
 	make_file("scratch/ext", "a b\n");
-	CHECK(run_awk("{$4=\"z\"; print NF, $0}", "scratch/ext") == 0);
-	CHECK(out_equals("4 a b  z\n"));
+	check_awk_out("{$4=\"z\"; print NF, $0}", "scratch/ext", "4 a b  z\n");
 }
 
 /* ==== BEGIN/END, NR/FNR across multiple files ============================= */
@@ -187,8 +220,7 @@ static void test_assign_field_extends_nf_and_rebuilds_record(void)
 static void test_begin_end(void)
 {
 	make_file("scratch/lines", "one\ntwo\nthree\n");
-	CHECK(run_awk("BEGIN{print \"start\"} {n++} END{print \"n=\" n}", "scratch/lines") == 0);
-	CHECK(out_equals("start\nn=3\n"));
+	check_awk_out("BEGIN{print \"start\"} {n++} END{print \"n=\" n}", "scratch/lines", "start\nn=3\n");
 }
 
 static void test_nr_fnr_across_files(void)
@@ -198,12 +230,11 @@ static void test_nr_fnr_across_files(void)
 	{
 		char *argv[] = { (char *)"awk", (char *)"{print NR, FNR, FILENAME, $0}",
 			(char *)"scratch/m1", (char *)"scratch/m2", 0 };
-		CHECK(run(awk_path, argv) == 0);
+		check_awk_argv(argv,
+			"1 1 scratch/m1 a\n"
+			"2 2 scratch/m1 b\n"
+			"3 1 scratch/m2 c\n");
 	}
-	CHECK(out_equals(
-		"1 1 scratch/m1 a\n"
-		"2 2 scratch/m1 b\n"
-		"3 1 scratch/m2 c\n"));
 }
 
 /* ==== patterns: expression, regex, range =================================== */
@@ -211,22 +242,19 @@ static void test_nr_fnr_across_files(void)
 static void test_regex_pattern(void)
 {
 	make_file("scratch/pat", "apple\nbanana\napricot\ncherry\n");
-	CHECK(run_awk("/^a/", "scratch/pat") == 0);
-	CHECK(out_equals("apple\napricot\n"));
+	check_awk_out("/^a/", "scratch/pat", "apple\napricot\n");
 }
 
 static void test_expr_pattern(void)
 {
 	make_file("scratch/nums", "1\n5\n10\n2\n");
-	CHECK(run_awk("$1 > 3", "scratch/nums") == 0);
-	CHECK(out_equals("5\n10\n"));
+	check_awk_out("$1 > 3", "scratch/nums", "5\n10\n");
 }
 
 static void test_range_pattern(void)
 {
 	make_file("scratch/range", "a\nSTART\nb\nc\nEND\nd\n");
-	CHECK(run_awk("/START/,/END/", "scratch/range") == 0);
-	CHECK(out_equals("START\nb\nc\nEND\n"));
+	check_awk_out("/START/,/END/", "scratch/range", "START\nb\nc\nEND\n");
 }
 
 /* ==== -v and var=value operand timing ====================================== */
@@ -234,8 +262,7 @@ static void test_range_pattern(void)
 static void test_dash_v(void)
 {
 	char *argv[] = { (char *)"awk", (char *)"-v", (char *)"x=42", (char *)"BEGIN{print x+1}", 0 };
-	CHECK(run(awk_path, argv) == 0);
-	CHECK(out_equals("43\n"));
+	check_awk_argv(argv, "43\n");
 }
 
 /* The specific trap the batch instructions called out: a var=value
@@ -250,17 +277,15 @@ static void test_varvalue_operand_timing(void)
 	{
 		char *argv[] = { (char *)"awk", (char *)"{print $0, \"x=[\" x \"]\"}",
 			(char *)"scratch/v1", (char *)"x=5", (char *)"scratch/v2", 0 };
-		CHECK(run(awk_path, argv) == 0);
+		check_awk_argv(argv, "p x=[]\nq x=[5]\n");
 	}
-	CHECK(out_equals("p x=[]\nq x=[5]\n"));
 }
 
 /* ==== built-in functions ==================================================== */
 
 static void test_length_substr_index(void)
 {
-	CHECK(run_awk("BEGIN{print length(\"hello\"), substr(\"hello\",2,3), index(\"hello\",\"ll\")}", 0) == 0);
-	CHECK(out_equals("5 ell 3\n"));
+	check_awk_out("BEGIN{print length(\"hello\"), substr(\"hello\",2,3), index(\"hello\",\"ll\")}", 0, "5 ell 3\n");
 }
 
 static void test_substr_out_of_range_clamping(void)
@@ -269,40 +294,34 @@ static void test_substr_out_of_range_clamping(void)
 	 * clamping convention this implements: substr("hello",-2,5) asks
 	 * for the 5 characters at positions -2,-1,0,1,2, of which only
 	 * positions 1 and 2 ("h","e") actually exist in the string. */
-	CHECK(run_awk("BEGIN{print \"[\" substr(\"hello\",-2,5) \"]\"}", 0) == 0);
-	CHECK(out_equals("[he]\n"));
+	check_awk_out("BEGIN{print \"[\" substr(\"hello\",-2,5) \"]\"}", 0, "[he]\n");
 }
 
 static void test_split_and_forin(void)
 {
-	CHECK(run_awk(
+	check_awk_out(
 		"BEGIN{n=split(\"a,b,c\",arr,\",\"); s=\"\"; "
-		"for (k=1;k<=n;k++) s = s arr[k]; print n, s}", 0) == 0);
-	CHECK(out_equals("3 abc\n"));
+		"for (k=1;k<=n;k++) s = s arr[k]; print n, s}", 0, "3 abc\n");
 }
 
 static void test_sub_gsub(void)
 {
-	CHECK(run_awk("BEGIN{s=\"hello world\"; n=gsub(/o/,\"0\",s); print n, s}", 0) == 0);
-	CHECK(out_equals("2 hell0 w0rld\n"));
+	check_awk_out("BEGIN{s=\"hello world\"; n=gsub(/o/,\"0\",s); print n, s}", 0, "2 hell0 w0rld\n");
 }
 
 static void test_match_rstart_rlength(void)
 {
-	CHECK(run_awk("BEGIN{print match(\"foobar\",/o+/), RSTART, RLENGTH}", 0) == 0);
-	CHECK(out_equals("2 2 2\n"));
+	check_awk_out("BEGIN{print match(\"foobar\",/o+/), RSTART, RLENGTH}", 0, "2 2 2\n");
 }
 
 static void test_printf(void)
 {
-	CHECK(run_awk("BEGIN{printf \"%5d|%-5s|%.2f\\n\", 3, \"x\", 3.14159}", 0) == 0);
-	CHECK(out_equals("    3|x    |3.14\n"));
+	check_awk_out("BEGIN{printf \"%5d|%-5s|%.2f\\n\", 3, \"x\", 3.14159}", 0, "    3|x    |3.14\n");
 }
 
 static void test_tolower_toupper(void)
 {
-	CHECK(run_awk("BEGIN{print toupper(\"AbC\"), tolower(\"AbC\")}", 0) == 0);
-	CHECK(out_equals("ABC abc\n"));
+	check_awk_out("BEGIN{print toupper(\"AbC\"), tolower(\"AbC\")}", 0, "ABC abc\n");
 }
 
 /* ==== user-defined functions (recursive: exercises call/return and
@@ -310,10 +329,9 @@ static void test_tolower_toupper(void)
 
 static void test_recursive_function(void)
 {
-	CHECK(run_awk(
+	check_awk_out(
 		"function fact(n) { if (n <= 1) return 1; return n * fact(n - 1) } "
-		"BEGIN { print fact(5) }", 0) == 0);
-	CHECK(out_equals("120\n"));
+		"BEGIN { print fact(5) }", 0, "120\n");
 }
 
 /* Extra formal parameters beyond the call's own arguments are XCU
@@ -323,10 +341,9 @@ static void test_recursive_function(void)
  * every call, not retain state across the two calls below. */
 static void test_extra_params_are_locals(void)
 {
-	CHECK(run_awk(
+	check_awk_out(
 		"function sumto(n,   acc, i) { for (i = 1; i <= n; i++) acc += i; return acc } "
-		"BEGIN { print sumto(4), sumto(3) }", 0) == 0);
-	CHECK(out_equals("10 6\n"));
+		"BEGIN { print sumto(4), sumto(3) }", 0, "10 6\n");
 }
 
 /* ==== control flow: for/while/if/break/continue ============================ */
@@ -336,20 +353,18 @@ static void test_control_flow(void)
 	/* s: 1+2+3+4+5 = 15. w: i counts 1..5 via pre-loop increment,
 	 * skipping the w+=i accumulation only on the iteration where i==3
 	 * (continue) -- w = 1+2+4+5 = 12, not 1+2+3+4+5. */
-	CHECK(run_awk(
+	check_awk_out(
 		"BEGIN{"
 		"s=0; for (i=1;i<=5;i++) s+=i; "
 		"w=0; i=0; while (i<5) { i++; if (i==3) continue; w+=i } "
 		"print s, w"
-		"}", 0) == 0);
-	CHECK(out_equals("15 12\n"));
+		"}", 0, "15 12\n");
 }
 
 static void test_next_skips_remaining_rules(void)
 {
 	make_file("scratch/nx", "1\n2\n3\n4\n");
-	CHECK(run_awk("{if ($1 % 2 == 0) next} {print $1}", "scratch/nx") == 0);
-	CHECK(out_equals("1\n3\n"));
+	check_awk_out("{if ($1 % 2 == 0) next} {print $1}", "scratch/nx", "1\n3\n");
 }
 
 /* ==== getline ================================================================ */
@@ -357,9 +372,9 @@ static void test_next_skips_remaining_rules(void)
 static void test_getline_from_file(void)
 {
 	make_file("scratch/gl", "first\nsecond\n");
-	CHECK(run_awk(
-		"BEGIN{while ((getline line < \"scratch/gl\") > 0) print \"got:\" line}", 0) == 0);
-	CHECK(out_equals("got:first\ngot:second\n"));
+	check_awk_out(
+		"BEGIN{while ((getline line < \"scratch/gl\") > 0) print \"got:\" line}", 0,
+		"got:first\ngot:second\n");
 }
 
 /* ==== usage errors are diagnosed, not silently ignored ===================== */
@@ -397,26 +412,22 @@ static void test_syntax_error_is_diagnosed(void)
 
 static void test_huge_field_index_rejected_cleanly(void)
 {
-	CHECK(run_awk("BEGIN{$111111111111111111111=1}", 0) == 2);
-	CHECK(err_contains("field index too large"));
+	check_awk_fatal("BEGIN{$111111111111111111111=1}", "field index too large");
 }
 
 static void test_huge_nf_assignment_rejected_cleanly(void)
 {
-	CHECK(run_awk("BEGIN{NF=111111111111111111111}", 0) == 2);
-	CHECK(err_contains("NF assignment too large"));
+	check_awk_fatal("BEGIN{NF=111111111111111111111}", "NF assignment too large");
 }
 
 static void test_division_by_zero_rejected_cleanly(void)
 {
-	CHECK(run_awk("BEGIN{print 1/0}", 0) == 2);
-	CHECK(err_contains("division by zero"));
+	check_awk_fatal("BEGIN{print 1/0}", "division by zero");
 }
 
 static void test_undefined_function_rejected_cleanly(void)
 {
-	CHECK(run_awk("BEGIN{nosuchfunc()}", 0) == 2);
-	CHECK(err_contains("call to undefined function"));
+	check_awk_fatal("BEGIN{nosuchfunc()}", "call to undefined function");
 }
 
 static void test_invalid_dynamic_regex_rejected_cleanly(void)
@@ -424,26 +435,22 @@ static void test_invalid_dynamic_regex_rejected_cleanly(void)
 	/* "[" is a string, not a /regex/ literal, so it resolves as a
 	 * DYNAMIC ere via resolve_ere() -- an unterminated bracket
 	 * expression, invalid regcomp() input. */
-	CHECK(run_awk("BEGIN{if (\"x\" ~ \"[\") print \"never\"}", 0) == 2);
-	CHECK(err_contains("invalid dynamic regular expression"));
+	check_awk_fatal("BEGIN{if (\"x\" ~ \"[\") print \"never\"}", "invalid dynamic regular expression");
 }
 
 static void test_output_redirect_open_failure_rejected_cleanly(void)
 {
 	/* scratch/ exists (created in main() below); scratch/nosuchdir/
 	 * does not, so fopen()'s underlying open() fails with ENOENT. */
-	CHECK(run_awk("BEGIN{print \"x\" > \"scratch/nosuchdir/nosuchfile\"}", 0) == 2);
-	CHECK(err_contains("can't open output"));
+	check_awk_fatal("BEGIN{print \"x\" > \"scratch/nosuchdir/nosuchfile\"}", "can't open output");
 }
 
 /* ==== the shell built-in agrees with the standalone executable ============= */
 
 static void test_builtin_matches_standalone(void)
 {
-	CHECK(run_sh_c("awk 'BEGIN{print 1+1}'") == 0);
-	CHECK(out_equals("2\n"));
-	CHECK(run_sh_c("awk -F: '{print $2}' scratch/colon") == 0);
-	CHECK(out_equals("x\nx\n"));
+	check_sh_out("awk 'BEGIN{print 1+1}'", "2\n");
+	check_sh_out("awk -F: '{print $2}' scratch/colon", "x\nx\n");
 }
 
 /* ==== the shell built-in survives a fatal awk error (never exit()) ========
@@ -468,32 +475,27 @@ static void test_builtin_matches_standalone(void)
 
 static void test_builtin_survives_division_by_zero(void)
 {
-	CHECK(run_sh_c("awk 'BEGIN{print 1/0}'; echo SURVIVED") == 0);
-	CHECK(out_equals("SURVIVED\n"));
+	check_sh_out("awk 'BEGIN{print 1/0}'; echo SURVIVED", "SURVIVED\n");
 }
 
 static void test_builtin_survives_undefined_function(void)
 {
-	CHECK(run_sh_c("awk 'BEGIN{nosuchfunc()}'; echo SURVIVED") == 0);
-	CHECK(out_equals("SURVIVED\n"));
+	check_sh_out("awk 'BEGIN{nosuchfunc()}'; echo SURVIVED", "SURVIVED\n");
 }
 
 static void test_builtin_survives_invalid_dynamic_regex(void)
 {
-	CHECK(run_sh_c("awk 'BEGIN{if (\"x\" ~ \"[\") print 1}'; echo SURVIVED") == 0);
-	CHECK(out_equals("SURVIVED\n"));
+	check_sh_out("awk 'BEGIN{if (\"x\" ~ \"[\") print 1}'; echo SURVIVED", "SURVIVED\n");
 }
 
 static void test_builtin_survives_output_redirect_failure(void)
 {
-	CHECK(run_sh_c("awk 'BEGIN{print \"x\" > \"scratch/nosuchdir/nosuchfile\"}'; echo SURVIVED") == 0);
-	CHECK(out_equals("SURVIVED\n"));
+	check_sh_out("awk 'BEGIN{print \"x\" > \"scratch/nosuchdir/nosuchfile\"}'; echo SURVIVED", "SURVIVED\n");
 }
 
 static void test_builtin_survives_huge_field_index(void)
 {
-	CHECK(run_sh_c("awk 'BEGIN{$111111111111111111111=1}'; echo SURVIVED") == 0);
-	CHECK(out_equals("SURVIVED\n"));
+	check_sh_out("awk 'BEGIN{$111111111111111111111=1}'; echo SURVIVED", "SURVIVED\n");
 }
 
 static void rmtree_scratch(void)

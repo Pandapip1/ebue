@@ -78,7 +78,7 @@ static char self_exe[1024];
 static int find_obj_root(const char *argv0)
 {
 	size_t n;
-	char *p;
+	size_t i;
 
 	if (!argv0 || !*argv0) return -1;
 	n = strlen(argv0);
@@ -86,15 +86,16 @@ static int find_obj_root(const char *argv0)
 	strcpy(obj_root, argv0);
 	strcpy(self_exe, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-atcron.exe" */
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/util-atcron.exe" */
 
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	n = strlen(obj_root);
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/test" */
 
 	return 0;
 }
@@ -102,12 +103,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
@@ -228,6 +231,12 @@ static char home_dir[1024];
 
 /* ==== at(1p) + atd ======================================================= */
 
+static int at_remove(const char *id)
+{
+	char *argv[] = { (char *)"at", (char *)"-r", (char *)id, 0 };
+	return run(at_path, argv);
+}
+
 static void test_at_dash_t_and_atd_runs_it(void)
 {
 	time_t now = time(0);
@@ -327,88 +336,63 @@ static void test_at_dash_l_and_dash_r(void)
 				CHECK(run(at_path, argv) == 0);
 				CHECK(out_contains(id));
 			}
-			{
-				char *argv[] = { (char *)"at", (char *)"-r", id, 0 };
-				CHECK(run(at_path, argv) == 0);
-			}
-			{
-				char *argv[] = { (char *)"at", (char *)"-r", id, 0 };
-				CHECK(run(at_path, argv) != 0); /* already removed */
-				CHECK(err_contains("no such job"));
-			}
+			CHECK(at_remove(id) == 0);
+			CHECK(at_remove(id) != 0); /* already removed */
+			CHECK(err_contains("no such job"));
 		}
 	}
 }
 
 /* ==== crontab(1p) ========================================================= */
 
+/* Every crontab(1p) invocation below takes exactly one operand -- fold
+ * the repeated "build a 1-operand argv[], run it" shape into one
+ * helper; each call site still does its own exit-status/output checks,
+ * since those differ from one call to the next. */
+static int crontab1(const char *arg)
+{
+	char *argv[] = { (char *)"crontab", (char *)arg, 0 };
+	return run(crontab_path, argv);
+}
+
 static void test_crontab_install_list_remove(void)
 {
 	CHECK(write_file("crontab-src.txt", "0 0 1 1 * echo placeholder\n") == 0);
-	{
-		char *argv[] = { (char *)"crontab", (char *)"crontab-src.txt", 0 };
-		CHECK(run(crontab_path, argv) == 0);
-	}
-	{
-		char *argv[] = { (char *)"crontab", (char *)"-l", 0 };
-		CHECK(run(crontab_path, argv) == 0);
-		CHECK(out_contains("echo placeholder"));
-	}
-	{
-		char *argv[] = { (char *)"crontab", (char *)"-r", 0 };
-		CHECK(run(crontab_path, argv) == 0);
-	}
-	{
-		char *argv[] = { (char *)"crontab", (char *)"-l", 0 };
-		CHECK(run(crontab_path, argv) != 0);
-		CHECK(err_contains("no crontab"));
-	}
+	CHECK(crontab1("crontab-src.txt") == 0);
+	CHECK(crontab1("-l") == 0);
+	CHECK(out_contains("echo placeholder"));
+	CHECK(crontab1("-r") == 0);
+	CHECK(crontab1("-l") != 0);
+	CHECK(err_contains("no crontab"));
 }
 
 static void test_crontab_rejects_bad_entry(void)
 {
 	CHECK(write_file("crontab-bad.txt", "not a real crontab line\n") == 0);
-	{
-		char *argv[] = { (char *)"crontab", (char *)"crontab-bad.txt", 0 };
-		CHECK(run(crontab_path, argv) != 0);
-	}
-	{
-		/* the previous, valid crontab (if any) must be untouched --
-		 * confirmed indirectly: -l still reports "no crontab" since
-		 * test_crontab_install_list_remove() above already removed
-		 * it and this bad install must not have installed anything
-		 * in its place. */
-		char *argv[] = { (char *)"crontab", (char *)"-l", 0 };
-		CHECK(run(crontab_path, argv) != 0);
-	}
+	CHECK(crontab1("crontab-bad.txt") != 0);
+	/* the previous, valid crontab (if any) must be untouched --
+	 * confirmed indirectly: -l still reports "no crontab" since
+	 * test_crontab_install_list_remove() above already removed
+	 * it and this bad install must not have installed anything
+	 * in its place. */
+	CHECK(crontab1("-l") != 0);
 }
 
 static void test_crontab_dash_e(void)
 {
 	CHECK(write_file("crontab-src2.txt", "0 0 1 1 * echo first\n") == 0);
-	{
-		char *argv[] = { (char *)"crontab", (char *)"crontab-src2.txt", 0 };
-		CHECK(run(crontab_path, argv) == 0);
-	}
+	CHECK(crontab1("crontab-src2.txt") == 0);
 
 	setenv("EDITOR", self_exe, 1);
 	setenv("NTLIBC_TEST_AS_EDITOR", "1", 1);
-	{
-		char *argv[] = { (char *)"crontab", (char *)"-e", 0 };
-		CHECK(run(crontab_path, argv) == 0);
-	}
+	CHECK(crontab1("-e") == 0);
 	unsetenv("NTLIBC_TEST_AS_EDITOR");
 
-	{
-		char *argv[] = { (char *)"crontab", (char *)"-l", 0 };
-		CHECK(run(crontab_path, argv) == 0);
-		CHECK(out_contains("echo first"));
-		CHECK(out_contains("echo appended-by-test-editor"));
-	}
-	{
-		char *argv[] = { (char *)"crontab", (char *)"-r", 0 };
-		CHECK(run(crontab_path, argv) == 0);
-	}
+	CHECK(crontab1("-l") == 0);
+	CHECK(out_contains("echo first"));
+	CHECK(out_contains("echo appended-by-test-editor"));
+
+	CHECK(crontab1("-r") == 0);
 }
 
 /* ==== crond =============================================================== */
@@ -434,10 +418,7 @@ static void test_crond_runs_a_due_entry(void)
 	snprintf(entry, sizeof entry, "%d %d * * * echo cronran > '%s'\n",
 		tmv->tm_min, tmv->tm_hour, marker);
 	CHECK(write_file("crontab-timed.txt", entry) == 0);
-	{
-		char *argv[] = { (char *)"crontab", (char *)"crontab-timed.txt", 0 };
-		CHECK(run(crontab_path, argv) == 0);
-	}
+	CHECK(crontab1("crontab-timed.txt") == 0);
 
 	setenv("NTLIBC_CROND_POLL_MS", "500", 1);
 	pid = spawn_daemon(crond_path);
@@ -451,10 +432,7 @@ static void test_crond_runs_a_due_entry(void)
 	}
 
 	stop_daemon(pid);
-	{
-		char *argv[] = { (char *)"crontab", (char *)"-r", 0 };
-		run(crontab_path, argv);
-	}
+	crontab1("-r");
 }
 
 static void cleanup_artifacts(void)

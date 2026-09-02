@@ -54,22 +54,23 @@ static char obj_root[1024];
 static int find_obj_root(const char *argv0)
 {
 	size_t n;
-	char *p;
+	size_t i;
 
 	if (!argv0 || !*argv0) return -1;
 	n = strlen(argv0);
 	if (n >= sizeof obj_root) return -1;
 	strcpy(obj_root, argv0);
 
-	for (p = obj_root + n; p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/util-datacopy.exe" */
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/util-datacopy.exe" */
 
-	for (p = obj_root + strlen(obj_root); p > obj_root; p--)
-		if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == obj_root) return -1;
-	p[-1] = 0; /* strip "/test" */
+	n = strlen(obj_root);
+	for (i = n; i > 0; i--)
+		if (obj_root[i - 1] == '/' || obj_root[i - 1] == '\\') break;
+	if (i == 0) return -1;
+	obj_root[i - 1] = 0; /* strip "/test" */
 
 	return 0;
 }
@@ -77,12 +78,14 @@ static int find_obj_root(const char *argv0)
 static void path_for(char *out, size_t outlen, const char *rel)
 {
 	char sep = strchr(obj_root, '\\') ? '\\' : '/';
-	char relcopy[256], *p;
+	char relcopy[256];
+	size_t i;
 
 	strncpy(relcopy, rel, sizeof relcopy - 1);
 	relcopy[sizeof relcopy - 1] = 0;
 	if (sep == '\\')
-		for (p = relcopy; *p; p++) if (*p == '/') *p = '\\';
+		for (i = 0; relcopy[i]; i++)
+			if (relcopy[i] == '/') relcopy[i] = '\\';
 	snprintf(out, outlen, "%s%c%s", obj_root, sep, relcopy);
 }
 
