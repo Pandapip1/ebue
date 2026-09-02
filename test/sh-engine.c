@@ -4326,6 +4326,6 @@ int main(int argc, char **argv)
 	test_dollar_question();
 
 	if (fails) { printf("sh: failures: %d\n", fails); return 1; }
-	printf("sh: all ok (stage 6b: lexer + parser + execution of simple commands, redirections, pipelines, subshells and brace groups, command substitution, the built-in dispatcher with test/[/:/true/false/exit/cd, and the if/while/until/for compound commands -- see test/sh-design.md)\n");
+	printf("sh: all ok (stage 6b: lexer + parser + execution of simple commands, redirections, pipelines, subshells and brace groups, command substitution, the built-in dispatcher with test/[/:/true/false/exit/cd, and the if/while/until/for compound commands)\n");
 	return 0;
 }

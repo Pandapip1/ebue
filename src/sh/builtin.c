@@ -848,8 +848,8 @@ static int bi_set(struct sh_builtin_ctx *ctx)
 	if (strcmp(ctx->argv[1], "--") == 0) {
 		first = 2;
 	} else if (ctx->argv[1][0] == '-' || ctx->argv[1][0] == '+') {
-		(void)fprintf(stderr, "set: %s: options are not implemented -- see "
-		                "test/sh-design.md\n", ctx->argv[1]);
+		(void)fprintf(stderr, "set: %s: options are not implemented\n",
+		              ctx->argv[1]);
 		ctx->status = 2;
 		return 0;
 	}

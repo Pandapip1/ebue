@@ -144,7 +144,7 @@ static const char *progname = "sh";
 static void diag_bad_param(const char *what, const char *where)
 {
 	diag("%s: this special parameter ($!, $$, $-, ${#NAME}) is not "
-	     "implemented%s -- see test/sh-design.md", what, where);
+	     "implemented%s", what, where);
 }
 
 /* ---- the refusal lists ----------------------------------------------
@@ -378,13 +378,12 @@ static int check_command(const struct sh_command *c)
 	if (!c->words || !c->words->text) return 0;
 	name = c->words->text;
 	if (in_list(reserved, name)) {
-		diag("%s: the `case' construct is not implemented -- see "
-		     "test/sh-design.md", name);
+		diag("%s: the `case' construct is not implemented", name);
 		return -1;
 	}
 	if (in_list(unimplemented_builtins, name)) {
 		diag("%s: this shell has no `%s' built-in yet, and it cannot be an "
-		     "external command -- see test/sh-design.md", name, name);
+		     "external command", name, name);
 		return -1;
 	}
 	return 0;
@@ -415,8 +414,7 @@ static int check_list(const struct sh_list *list)
 			 * which is a silently different meaning -- the caller
 			 * blocks, and the list's status is the command's rather
 			 * than 0 -- not a missing feature it can detect. */
-			diag("asynchronous lists (`&') are not implemented -- see "
-			     "test/sh-design.md");
+			diag("asynchronous lists (`&') are not implemented");
 			return -1;
 		}
 		for (a = it->andor; a; a = a->next)
@@ -590,8 +588,7 @@ int __sh_main(int argc, char **argv)
 		 * which exec.c refuses rather than deadlock without a fork()),
 		 * a command substitution whose own command hits one of these,
 		 * and resource failures. */
-		diag("cannot execute: an unsupported construct -- see "
-		     "test/sh-design.md");
+		diag("cannot execute: an unsupported construct");
 		__sh_list_free(list);
 		free(text);
 		return EX_USAGE;
