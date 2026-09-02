@@ -17,7 +17,8 @@
  * way BUG/N-A/UNIMPL fencing convention (see that file's own header
  * comment for what each fence means): every gap this file tests --
  * DT_NEEDED chasing, DT_INIT_ARRAY constructor execution, per-object
- * TLS (aarch64), PT_GNU_RELRO hardening -- is REAL, LANDED, WORKING
+ * TLS (aarch64), PT_GNU_RELRO hardening, R_AARCH64_IRELATIVE/
+ * R_X86_64_IRELATIVE ("ifunc") dispatch -- is REAL, LANDED, WORKING
  * code as of this pass (see plat_dlfcn.c's own updated banner
  * sections), so every test below runs unfenced, the same as this
  * file's NT sibling's own "what already works" section.
@@ -370,6 +371,41 @@ static void test_pt_tls_per_object(const char *dir)
 }
 #endif
 
+/* ============================================================
+ * R_AARCH64_IRELATIVE / R_X86_64_IRELATIVE (GNU "ifunc" dispatch --
+ * src/dlfcn/linux/plat_dlfcn.c's apply_one_reloc(), see that constant's
+ * own #define comment)
+ * ==============================================================
+ */
+
+/* dlfix_ifunc.so's call_ifunc() only works at all if apply_one_reloc()
+ * actually CALLS the resolver named by an R_AARCH64_IRELATIVE
+ * relocation's own addend and stores its RETURN value -- see that
+ * fixture's own comment for exactly what a loader bug (storing the
+ * resolver's address instead of calling it) would do here instead: not
+ * a crash necessarily, just the wrong answer (or worse, since
+ * pick_target() and ifunc_compute() do not share a signature). 21*2 ==
+ * 42 is the actual, correct dispatch outcome, not merely "did not
+ * crash". */
+static void test_r_irelative_ifunc_dispatch(const char *dir)
+{
+	char path[4096];
+	void *h;
+	int (*call_ifunc)(int);
+
+	fixture_path(path, sizeof path, dir, "dlfix_ifunc.so");
+	h = dlopen(path, RTLD_NOW);
+	if (!h) printf("dlopen dlfix_ifunc.so failed: %s\n", dlerror());
+	CHECK(h != NULL);
+	if (!h) return;
+
+	call_ifunc = (int (*)(int))dlsym(h, "call_ifunc");
+	CHECK(call_ifunc != NULL);
+	CHECK(call_ifunc && call_ifunc(21) == 42);
+
+	CHECK(dlclose(h) == 0);
+}
+
 int main(int argc, char **argv)
 {
 	const char *dir = fixture_dir(argc > 0 ? argv[0] : "posix-dl-linux");
@@ -380,6 +416,7 @@ int main(int argc, char **argv)
 	test_dt_init_array_runs_constructor(dir);
 	test_dt_init_array_runs_once_per_instance(dir);
 	test_pt_tls_per_object(dir);
+	test_r_irelative_ifunc_dispatch(dir);
 	/* Last on purpose -- see this test's own comment for why. */
 	test_pt_gnu_relro_hardening(dir);
 

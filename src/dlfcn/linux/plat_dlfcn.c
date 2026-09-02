@@ -81,14 +81,19 @@
  *     reason), DT_NEEDED (see below), and DT_INIT/DT_INIT_ARRAY (see
  *     below).
  *   - Relocation types: R_AARCH64_RELATIVE, R_AARCH64_ABS64,
- *     R_AARCH64_GLOB_DAT, R_AARCH64_JUMP_SLOT, and (aarch64 only, see
- *     below) R_AARCH64_TLSDESC. Anything else -- including every OTHER
- *     TLS relocation type (R_AARCH64_TLS_TPREL64, R_AARCH64_TLS_
- *     DTPMOD64/DTPREL64 -- the classic __tls_get_addr()-based General-
- *     Dynamic encoding, never emitted by this dev host's own clang for
- *     aarch64 -fPIC code, see R_AARCH64_TLSDESC's own comment below)
- *     -- is a clean, loud dlopen() failure (see apply_one_reloc()'s
- *     `default:` case), never a silent mis-relocation.
+ *     R_AARCH64_GLOB_DAT, R_AARCH64_JUMP_SLOT, R_AARCH64_IRELATIVE
+ *     (GNU ifunc dispatch -- the addend names a resolver FUNCTION this
+ *     loader calls at dlopen() time, storing its return value; see
+ *     R_AARCH64_IRELATIVE's own #define comment further down for the
+ *     empirically-confirmed shape, and R_X86_64_IRELATIVE for its
+ *     x86_64 counterpart), and (aarch64 only, see below) R_AARCH64_
+ *     TLSDESC. Anything else -- including every OTHER TLS relocation
+ *     type (R_AARCH64_TLS_TPREL64, R_AARCH64_TLS_DTPMOD64/DTPREL64 --
+ *     the classic __tls_get_addr()-based General-Dynamic encoding,
+ *     never emitted by this dev host's own clang for aarch64 -fPIC
+ *     code, see R_AARCH64_TLSDESC's own comment below) -- is a clean,
+ *     loud dlopen() failure (see apply_one_reloc()'s `default:` case),
+ *     never a silent mis-relocation.
  *   - PT_TLS: on aarch64, LOADED FOR REAL -- a small integer module id,
  *     a per-object miniature TCB-shaped TLS block, and a real TLSDESC
  *     resolver, all wired into a real DTV on the main thread's own TCB
@@ -777,6 +782,23 @@ typedef struct {
  * and the __ntlibc_tlsdesc_resolver asm block further down for the
  * runtime side of what this relocation type needs. */
 #define R_AARCH64_TLSDESC    1031
+/* GNU indirect-function ("ifunc") relocation -- confirmed empirically
+ * (not assumed) against a real fixture on this exact host/toolchain:
+ * `__attribute__((ifunc("resolver"), visibility("hidden")))` compiled
+ * with this dev host's own clang for aarch64 -fPIC/-shared emits
+ * exactly one R_AARCH64_IRELATIVE entry in .rela.plt, with r_info's
+ * symbol index 0 (no symbol at all -- unlike every other relocation
+ * type this file handles) and r_addend holding the bias-relative vaddr
+ * of the RESOLVER function itself, not of the eventual target. See
+ * apply_one_reloc()'s own R_AARCH64_IRELATIVE case for what a loader
+ * must do with that shape: CALL the resolver and store its return
+ * value, not its address -- musl's dynlink.c (REL_IRELATIVE) takes the
+ * identical approach, and it is the only correct one: the whole point
+ * of an ifunc is that the real target address is not known until
+ * runtime (typically CPU-feature dispatch), so there is no address to
+ * simply relocate to the way R_AARCH64_RELATIVE's addend already names
+ * one directly. */
+#define R_AARCH64_IRELATIVE  1032
 
 /* x86_64 psABI relocation type numbers -- confirmed against the real
  * x86-64 psABI spec, NOT assumed identical to aarch64's despite the
@@ -791,6 +813,16 @@ typedef struct {
 #define R_X86_64_GLOB_DAT    6
 #define R_X86_64_JUMP_SLOT   7
 #define R_X86_64_RELATIVE    8
+/* R_AARCH64_IRELATIVE's own x86_64 counterpart -- same ifunc-dispatch
+ * role, same "addend is the resolver's own vaddr, call it and store
+ * the RETURN value" contract (see that constant's own comment for the
+ * full derivation, confirmed empirically via a real aarch64 fixture on
+ * this dev host). Value taken from the x86-64 psABI spec directly, the
+ * same way this file's other R_X86_64_* values above were (this dev
+ * host's own toolchain has no x86_64 target to cross-check a fixture
+ * against -- see this file's own TLS banner for the identical caveat
+ * already disclosed there for a different feature). */
+#define R_X86_64_IRELATIVE   37
 
 /* ---- sticky error state, single instance for this whole backend ----- */
 static char err_buf[256];
@@ -1353,6 +1385,25 @@ static int apply_one_reloc(struct dlobj *obj, const Elf64_Rela *r,
 		loc[1] = (module_id << 48) | (offset & 0xffffffffffffULL);
 		return 0;
 	}
+	case R_AARCH64_IRELATIVE:
+		/* Deliberately NOT resolved here -- see apply_one_irelative()/
+		 * apply_irelative_table() further down (and load_object()'s
+		 * own new "IRELATIVE resolution" pass, between protection-
+		 * narrowing and PT_GNU_RELRO hardening) for why: this type's
+		 * whole job (see its own #define comment) is to CALL a
+		 * resolver function, and at the point apply_reloc_table()
+		 * runs this object's own PT_LOAD segments are still mapped
+		 * PROT_READ|PROT_WRITE only (see load_object()'s own comment
+		 * on that first mapping pass) -- NOT yet PROT_EXEC, which
+		 * only the later protection-narrowing pass restores.
+		 * Confirmed empirically, not just reasoned: calling the
+		 * resolver at this point genuinely SIGSEGVs (non-executable
+		 * .text), caught by this pass's own dlfix_ifunc.so test
+		 * fixture before this deferral was added. Returning 0 here
+		 * (not an error) leaves the relocated slot untouched for now;
+		 * apply_irelative_table() revisits this exact same table
+		 * later and does the real work once .text is executable. */
+		return 0;
 #elif defined(__x86_64__)
 	case R_X86_64_RELATIVE:
 		*loc = obj->bias + (uint64_t)r->r_addend;
@@ -1379,6 +1430,12 @@ static int apply_one_reloc(struct dlobj *obj, const Elf64_Rela *r,
 		*loc = sym_addr + (uint64_t)r->r_addend;
 		return 0;
 	}
+	case R_X86_64_IRELATIVE:
+		/* R_AARCH64_IRELATIVE's own x86_64 counterpart -- deferred for
+		 * the identical reason (see that case's own comment just
+		 * above, and apply_one_irelative()/apply_irelative_table()
+		 * further down for where this actually gets applied). */
+		return 0;
 #endif
 	default:
 		/* Includes every TLS relocation type -- see this file's own
@@ -1401,6 +1458,60 @@ static int apply_reloc_table(struct dlobj *obj, uint64_t tbl_vaddr, uint64_t tbl
 	count = tbl_size / sizeof(Elf64_Rela);
 	for (i = 0; i < count; i++)
 		if (apply_one_reloc(obj, &relas[i], lo, hi) != 0) return -1;
+	return 0;
+}
+
+/* The second half of R_AARCH64_IRELATIVE/R_X86_64_IRELATIVE handling --
+ * see apply_one_reloc()'s own R_AARCH64_IRELATIVE case (which
+ * deliberately does nothing) for why this has to be a SEPARATE later
+ * pass over the identical relocation tables, not just another case in
+ * that function's own switch: this must run after load_object()'s own
+ * protection-narrowing pass has made this object's .text genuinely
+ * executable (the resolver this calls lives there) and before its
+ * PT_GNU_RELRO hardening pass (the GOT slot this writes into can fall
+ * inside the RELRO-covered range on a real linker's output -- confirmed
+ * against this pass's own dlfix_ifunc.so fixture -- so writing it AFTER
+ * RELRO already locked that range read-only would fault). Every
+ * relocation type other than the platform's own IRELATIVE constant is
+ * silently skipped here (not an error): apply_one_reloc() already
+ * either applied it for real or already failed loudly on it during the
+ * first pass, so a second, unrelated type showing up in the same table
+ * is expected, not a new problem this pass needs to report again. */
+static int apply_one_irelative(struct dlobj *obj, const Elf64_Rela *r,
+                                unsigned long lo, unsigned long hi)
+{
+	uint32_t type = ELF64_R_TYPE(r->r_info);
+	uint64_t *loc;
+	uint64_t (*resolver)(void);
+
+#if defined(__aarch64__)
+	if (type != R_AARCH64_IRELATIVE) return 0;
+#elif defined(__x86_64__)
+	if (type != R_X86_64_IRELATIVE) return 0;
+#else
+	return 0;
+#endif
+	if (r->r_offset < lo || r->r_offset >= hi) {
+		seterr("dlopen: relocation offset 0x%llx outside mapped object",
+		       (unsigned long long)r->r_offset);
+		return -1;
+	}
+	loc = ADDR(obj, r->r_offset);
+	resolver = (uint64_t (*)(void))ADDR(obj, r->r_addend);
+	*loc = resolver();
+	return 0;
+}
+
+static int apply_irelative_table(struct dlobj *obj, uint64_t tbl_vaddr, uint64_t tbl_size, // NOLINT(bugprone-easily-swappable-parameters) -- table address and size have distinct relocation roles
+                                  unsigned long lo, unsigned long hi)
+{
+	Elf64_Rela *relas;
+	size_t count, i;
+	if (!tbl_vaddr || !tbl_size) return 0;
+	relas = ADDR(obj, tbl_vaddr);
+	count = tbl_size / sizeof(Elf64_Rela);
+	for (i = 0; i < count; i++)
+		if (apply_one_irelative(obj, &relas[i], lo, hi) != 0) return -1;
 	return 0;
 }
 
@@ -1559,6 +1670,16 @@ static struct dlobj *load_object(const char *file, int depth)
 	size_t map_len = 0;
 	struct dlobj *obj = NULL;
 	unsigned int i;
+	/* DT_RELA/DT_JMPREL's own location+size, captured here (rather than
+	 * read again later) so the deferred IRELATIVE pass below -- which
+	 * has to run after this function's own dynamic-section-parsing
+	 * block has already gone out of scope, see that pass's own comment
+	 * further down for exactly why -- can re-walk the identical two
+	 * tables apply_reloc_table() already walked once, without a second
+	 * DT_RELA/DT_JMPREL lookup. Zero-initialized: apply_irelative_table()
+	 * already treats a zero vaddr/size as "no table", the same
+	 * convention apply_reloc_table() itself already uses. */
+	uint64_t rela_vaddr = 0, rela_size = 0, jmprel_vaddr = 0, jmprel_size = 0;
 
 	if (depth > 32) {
 		seterr("dlopen: %s: DT_NEEDED dependency chain too deep (>32 levels) -- likely a cycle", file);
@@ -1807,9 +1928,14 @@ static struct dlobj *load_object(const char *file, int depth)
 			}
 		}
 
-		if (apply_reloc_table(obj, d_rela ? d_rela->d_val : 0, d_relasz ? d_relasz->d_val : 0, lo, hi) != 0)
+		rela_vaddr = d_rela ? d_rela->d_val : 0;
+		rela_size = d_relasz ? d_relasz->d_val : 0;
+		jmprel_vaddr = d_jmprel ? d_jmprel->d_val : 0;
+		jmprel_size = d_pltrelsz ? d_pltrelsz->d_val : 0;
+
+		if (apply_reloc_table(obj, rela_vaddr, rela_size, lo, hi) != 0)
 			goto fail;
-		if (apply_reloc_table(obj, d_jmprel ? d_jmprel->d_val : 0, d_pltrelsz ? d_pltrelsz->d_val : 0, lo, hi) != 0)
+		if (apply_reloc_table(obj, jmprel_vaddr, jmprel_size, lo, hi) != 0)
 			goto fail;
 	}
 
@@ -1832,6 +1958,25 @@ static struct dlobj *load_object(const char *file, int depth)
 			goto fail;
 		}
 	}
+
+	/* R_AARCH64_IRELATIVE/R_X86_64_IRELATIVE ("ifunc") resolution -- see
+	 * apply_one_irelative()'s own banner for the full reasoning; run
+	 * exactly here, in exactly this position, for two real reasons at
+	 * once, not one: (1) AFTER the protection-narrowing pass just
+	 * above, because it calls a resolver FUNCTION that lives in this
+	 * object's own .text, which that pass is what makes executable in
+	 * the first place -- calling it any earlier genuinely SIGSEGVs
+	 * (confirmed empirically against this pass's own dlfix_ifunc.so
+	 * fixture, not just reasoned about); (2) BEFORE PT_GNU_RELRO
+	 * hardening just below, because the GOT slot an IRELATIVE
+	 * relocation writes its resolved value into commonly falls inside
+	 * RELRO's own covered range on a real linker's output -- writing it
+	 * after RELRO already locked that range read-only would fault the
+	 * other way instead. */
+	if (apply_irelative_table(obj, rela_vaddr, rela_size, lo, hi) != 0)
+		goto fail;
+	if (apply_irelative_table(obj, jmprel_vaddr, jmprel_size, lo, hi) != 0)
+		goto fail;
 
 	/* PT_GNU_RELRO hardening. Applied LAST, after every relocation and
 	 * after the ordinary protection-narrowing pass just above has

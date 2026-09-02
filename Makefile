@@ -864,7 +864,10 @@ obj/test/dlfix_ctor.so: $(srcdir)/test/dl-linux-fixtures/dlfix_ctor.c | obj/test
 obj/test/dlfix_tls.so: $(srcdir)/test/dl-linux-fixtures/dlfix_tls.c | obj/test
 	$(CC) -shared -fPIC -nostdlib -Wl,--hash-style=sysv -Wl,-soname,dlfix_tls.so -o $@.tmp $< && mv -f $@.tmp $@
 
-obj/test/posix-dl-linux.exe: obj/test/dlfix_dep.so obj/test/dlfix_needs.so obj/test/dlfix_ctor.so obj/test/dlfix_tls.so
+obj/test/dlfix_ifunc.so: $(srcdir)/test/dl-linux-fixtures/dlfix_ifunc.c | obj/test
+	$(CC) -shared -fPIC -nostdlib -Wl,--hash-style=sysv -Wl,-soname,dlfix_ifunc.so -o $@.tmp $< && mv -f $@.tmp $@
+
+obj/test/posix-dl-linux.exe: obj/test/dlfix_dep.so obj/test/dlfix_needs.so obj/test/dlfix_ctor.so obj/test/dlfix_tls.so obj/test/dlfix_ifunc.so
 endif
 
 # test/posix-realtime-linux.c: regression coverage for the AIO
