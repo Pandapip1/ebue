@@ -942,6 +942,102 @@ int dynamic_rank_changed_after_guard(int n)
 	return n;
 }
 
+unsigned clamped_countdown_condition_unrelated(unsigned n, int keep)
+{
+	while (keep) { /* totality-expect */
+		unsigned step = n < 32 ? n : 32;
+		n -= step;
+	}
+	return n;
+}
+
+int signed_clamped_countdown(int n)
+{
+	while (n) { /* totality-expect */
+		int step = n < 32 ? n : 32;
+		n -= step;
+	}
+	return n;
+}
+
+unsigned max_instead_of_min_countdown(unsigned n)
+{
+	while (n) { /* totality-expect */
+		unsigned step = n < 32 ? 32 : n;
+		n -= step;
+	}
+	return n;
+}
+
+unsigned mismatched_clamp_countdown(unsigned n)
+{
+	while (n) { /* totality-expect */
+		unsigned step = n < 32 ? n : 16;
+		n -= step;
+	}
+	return n;
+}
+
+unsigned zero_clamp_countdown(unsigned n)
+{
+	while (n) { /* totality-expect */
+		unsigned step = n < 1 ? n : 0;
+		n -= step;
+	}
+	return n;
+}
+
+unsigned narrowed_clamp_countdown(unsigned n)
+{
+	while (n) { /* totality-expect */
+		unsigned char step = n < 256 ? (unsigned char)n : 255;
+		n -= step;
+	}
+	return n;
+}
+
+unsigned mutated_clamp_countdown(unsigned n, int change)
+{
+	while (n) { /* totality-expect */
+		unsigned step = n < 32 ? n : 32;
+		if (change) step = 0;
+		n -= step;
+	}
+	return n;
+}
+
+unsigned bypassed_clamp_countdown(unsigned n, int skip)
+{
+	while (n) { /* totality-expect */
+		unsigned step = n < 32 ? n : 32;
+		if (skip) continue;
+		n -= step;
+	}
+	return n;
+}
+
+void mutate_unsigned_rank(unsigned *n);
+
+unsigned aliased_clamp_countdown(unsigned n)
+{
+	while (n) { /* totality-expect */
+		unsigned step = n < 32 ? n : 32;
+		mutate_unsigned_rank(&n);
+		n -= step;
+	}
+	return n;
+}
+
+unsigned aliased_clamp_step(unsigned n)
+{
+	while (n) { /* totality-expect */
+		unsigned step = n < 32 ? n : 32;
+		mutate_unsigned_rank(&step);
+		n -= step;
+	}
+	return n;
+}
+
 unsigned member_zero_branch_can_fall_through(struct vec *p, int stop)
 {
 	for (;;) { /* totality-expect */

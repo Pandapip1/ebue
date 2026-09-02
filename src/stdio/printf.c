@@ -172,8 +172,7 @@ static void out(struct sink *sk, const char *s, size_t n)
 	if (sk->bad) return;
 	if (!count_fits(sk, n)) return;
 	if (sk->widemem) {
-		size_t chunks_left = n / 32 + (n % 32 != 0);
-		for (; chunks_left > 0; chunks_left--) {
+		while (n) {
 			wchar_t stage[32];
 			size_t k = n < 32 ? n : 32, i;
 			for (i = 0; i < k; i++) stage[i] = (wchar_t)(unsigned char)s[i];

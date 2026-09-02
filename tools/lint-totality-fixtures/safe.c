@@ -320,6 +320,62 @@ unsigned guarded_mixed_dynamic_countdown(unsigned n)
 	return n;
 }
 
+__SIZE_TYPE__ clamped_dynamic_countdown(__SIZE_TYPE__ n)
+{
+	while (n) {
+		__SIZE_TYPE__ step = n < 32 ? n : 32;
+		n -= step;
+	}
+	return n;
+}
+
+__SIZE_TYPE__ reversed_clamped_dynamic_countdown(__SIZE_TYPE__ n)
+{
+	while (n != 0) {
+		__SIZE_TYPE__ step = 16 > n ? n : 16;
+		n -= step;
+	}
+	return n;
+}
+
+__SIZE_TYPE__ sizeof_clamped_dynamic_countdown(__SIZE_TYPE__ n)
+{
+	while (n > 0) {
+		__SIZE_TYPE__ step = n < sizeof(unsigned long)
+			? n : sizeof(unsigned long);
+		n -= step;
+	}
+	return n;
+}
+
+__SIZE_TYPE__ clamped_countdown_across_condition_call(__SIZE_TYPE__ n)
+{
+	while (n) {
+		__SIZE_TYPE__ step = n < 32 ? n : 32;
+		if (opaque_dynamic_step()) opaque_exit_call();
+		n -= step;
+	}
+	return n;
+}
+
+unsigned clamped_countdown_wider_choice(unsigned n)
+{
+	while (n) {
+		unsigned step = n < (__SIZE_TYPE__)32 ? n : (__SIZE_TYPE__)32;
+		n -= step;
+	}
+	return n;
+}
+
+unsigned inclusive_clamped_countdown(unsigned n)
+{
+	while (n) {
+		unsigned step = n <= 32 ? n : 32;
+		n -= step;
+	}
+	return n;
+}
+
 struct byte_cursor {
 	unsigned char next;
 };
