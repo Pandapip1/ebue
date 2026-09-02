@@ -1,11 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Stage 1: lexer + recursive-descent parser for the Shell Command
- * Language subset test/sh-design.md scopes in (XCU chapter 2). No
- * execution here -- this file only turns source text into the AST
- * declared in sh.h. See sh.h's header comment for the two deliberate
- * lexical simplifications this makes relative to strict POSIX:
+ * Lexer + recursive-descent parser for the Shell Command Language
+ * subset this project implements (XCU chapter 2). No execution here --
+ * this file only turns source text into the AST declared in sh.h. See
+ * sh.h's header comment for the two deliberate lexical simplifications
+ * this makes relative to strict POSIX:
  *
  *  - '|' '&' ';' '<' '>' '(' ')' '{' '}' are always lexed as operator
  *    tokens, never as ordinary word characters, matching
@@ -118,7 +118,7 @@ static char *xstrdup(const char *s)
  * (old-form command substitution): 2.6.3/2.6.2 make the whole
  * delimited region part of the *word*, not a place token scanning
  * stops. These helpers copy such a region verbatim (still raw,
- * unexpanded -- actually running a substituted command is stage 5's
+ * unexpanded -- actually running a substituted command is execute.c's
  * job) into the word buffer, balancing nested delimiters of the same
  * kind and skipping over quoted text inside so an embedded quote
  * containing '(' '{' '`' etc. can't desync the count. Known, accepted
@@ -586,7 +586,7 @@ static void advance(struct parser *p)
 		 * caller that inspects the token before it checks had_error.
 		 * Every current caller does check first, which is why this has
 		 * never fired; that is a property of the callers, not of the
-		 * token, and stage 6b added several new places that ask "is this
+		 * token, and there are now several places that ask "is this
 		 * word a reserved word?" before doing anything else.  Handing
 		 * back T_ERROR keeps the invariant true at the source instead of
 		 * relying on each new caller to remember. */
@@ -756,14 +756,16 @@ static int at_group_stop(struct parser *p, unsigned stops)
  * already walked past -- and XCU 2.10.1 rule 1 says the token
  * identifier for the reserved word results there, i.e. it is a syntax
  * error rather than a command named "fi".  Diagnosing it here is what
- * keeps sh/main.c's refuse-before-anything-runs property intact now
- * that these words have come off its refusal list: without this they
- * would fall through to a simple command, fail PATH lookup, and exit
- * 127 with a true statement about a fiction.
+ * keeps script.c's refuse-before-anything-runs preflight property
+ * intact for these words even though they are implemented and so are
+ * not on its reserved-word refusal list: without this they would fall
+ * through to a simple command, fail PATH lookup, and exit 127 with a
+ * true statement about a fiction.
  *
  * `case`/`esac` are deliberately absent: the `case` construct is not
  * implemented yet, so `case` still lexes as an ordinary WORD and
- * sh/main.c still refuses it by name with a message that says so. */
+ * script.c's preflight still refuses it by name with a message that
+ * says so. */
 static const char *const misplaced_reswords[] = {
 	"then", "else", "elif", "fi", "do", "done", "in", 0
 };
@@ -894,9 +896,9 @@ static struct sh_command *parse_loop(struct parser *p, int until)
  *   For name linebreak in wordlist  sequential_sep do_group
  *
  * The first is 2.9.4's "Omitting: in word ... shall be equivalent to:
- * in "$@"".  It is parsed (so the shape is recorded honestly) and
- * refused at execution, because this shell has no positional
- * parameters to iterate -- see exec_for() and sh/main.c. */
+ * in "$@"".  It is parsed here and executed by iterating this shell's
+ * positional parameters -- see exec_for() in execute.c and
+ * src/sh/param.c. */
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_command *parse_for(struct parser *p)
 {
@@ -964,7 +966,7 @@ static struct sh_command *parse_command(struct parser *p);
  *    1a and functions only at step 1c -- so a `set() { ... }` that was
  *    accepted could never be called, and a definition that silently
  *    never takes effect is precisely the undiagnosable wrongness
- *    sh/main.c's refusal list exists to prevent.  A *regular* built-in
+ *    script.c's refusal preflight exists to prevent.  A *regular* built-in
  *    is fine and is not checked: 1c beats 1d, so `test() { ... }`
  *    legitimately shadows this shell's `test`.
  *  - the body must be a compound command.  2.9.5's grammar admits

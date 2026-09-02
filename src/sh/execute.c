@@ -23,13 +23,13 @@
  * unique-member-name count, and fails the stage naming both colliding
  * sources if it ever does not.)
  *
- * Stage 3 added redirections and multi-command pipelines on top of
- * stage 2's simple-command execution; stage 4 (see exec_group()'s
- * header comment further down) adds subshells "( list )" and brace
- * groups "{ list; }", plus the minimal `cd` builtin needed to exercise
- * them; stage 5 (see __sh_cmdsub()'s header comment further down) adds
- * command substitution, which is what finally lets wordexp() stop
- * refusing "$(...)"/"`...`" with WRDE_CMDSUB. PATH lookup goes through the existing
+ * This file executes redirections and multi-command pipelines on top
+ * of simple-command execution; subshells "( list )" and brace groups
+ * "{ list; }" (see exec_group()'s header comment further down), plus
+ * the minimal `cd` builtin needed to exercise them; and command
+ * substitution (see __sh_cmdsub()'s header comment further down),
+ * which is what lets wordexp() stop refusing "$(...)"/"`...`" with
+ * WRDE_CMDSUB. PATH lookup goes through the existing
  * __find_program() (src/process/find_program.c); starting a process
  * goes through the existing __spawn()/waitpid() (src/process/spawn.c,
  * src/process/wait.c).
@@ -50,8 +50,7 @@
  * back into this file's __sh_cmdsub() (declared in src/internal/libc.h,
  * the only entry point into src/sh/ anything outside it uses), so a
  * substituted command is executed by this same executor, in the same
- * process, with no second interpreter anywhere -- which is the whole
- * point test/sh-design.md's "reuse rule" makes.
+ * process, with no second interpreter anywhere.
  *
  * ---- Redirections (XCU 2.7) -----------------------------------------
  *
@@ -132,19 +131,20 @@
  * of a pre-existing bug. A seekable file has no such limit and no such
  * ordering requirement.
  *
- * ---- Deliberately NOT implemented yet, later stages -------------------
- *   - control-flow reserved words (if/while/for/case), functions and
- *     aliases: no grammar for them exists, parser or executor, so they
- *     never reach this file at all -- a word like "if" is an ordinary
- *     WORD token, looked up on PATH like any other command name
- *     (test/sh-design.md item 2)
+ * ---- Deliberately NOT implemented yet -------------------------------
+ *   - `case` and aliases: no grammar exists for either, parser or
+ *     executor, so they never reach this file at all -- a word like
+ *     "case" is an ordinary WORD token, looked up on PATH like any
+ *     other command name; script.c's preflight refuses both by name
+ *     before a program ever runs.
  *   - '&' actually backgrounding rather than running synchronously
- *     (job control is out of scope for this project entirely -- see
- *     test/sh-design.md -- but *not waiting* for an async list item
- *     is still future work, tracked here rather than silently assumed)
+ *     (job control is out of scope for this project entirely, but
+ *     *not waiting* for an async list item is still future work,
+ *     tracked here rather than silently assumed)
  * __sh_exec_pipeline()/__sh_exec_command() return -1 (with no status
- * written) for any of these; __sh_exec_list()/__sh_exec_andor() stop
- * and propagate that -1 rather than guessing at a status.
+ * written) for a construct that reaches this file despite the above and
+ * still cannot be executed; __sh_exec_list()/__sh_exec_andor() stop and
+ * propagate that -1 rather than guessing at a status.
  */
 #include <string.h>
 #include <stdlib.h>
@@ -371,10 +371,10 @@ static int env_set(char ***vp, size_t *n, size_t *cap, char *entry, size_t namel
 
 /* Builds a private envp for a command with an assignment prefix: a
  * full copy of the current environment (never the shell's own
- * `environ` -- test/sh-design.md is explicit that a substituted/run
- * command must never be able to clobber the caller's environ) with
- * each assignment applied on top. *out_n receives the entry count
- * (excluding the NULL terminator); returns NULL on OOM. */
+ * `environ` directly -- a substituted/run command must never be able
+ * to clobber the caller's environ) with each assignment applied on
+ * top. *out_n receives the entry count (excluding the NULL
+ * terminator); returns NULL on OOM. */
 /* out_n is a required out-parameter: `*out_n = n;` is unconditional on
  * the only path that does not already return 0 (OOM), and no real call
  * site (spawn_stage() below) passes NULL. assigns is deliberately left
@@ -550,7 +550,7 @@ static int default_redir_fd(enum sh_redir_op op)
  * takes wordexp()'s first resulting word and accepts the same
  * documented, rare-in-practice over-permissiveness. Returns NULL and
  * sets *unsupported on a wordexp() failure (WRDE_CMDSUB, most
- * commonly -- stage 5) or OOM; the caller propagates that as this
+ * commonly) or OOM; the caller propagates that as this
  * file's usual -1 "cannot execute this yet". */
 /* unsupported is a required out-parameter: every path that leaves this
  * function without a result writes through it with no NULL check, and
@@ -667,8 +667,8 @@ static int heredoc_open(const char *text)
  * (already save_fd()-protected by the caller before this is called, so
  * every branch here is free to dup2()/close() fd outright). Returns 0
  * on success, -1 with *unsupported set for "cannot execute this yet"
- * (command substitution in the target word or heredoc body -- stage
- * 5), or 1 for a genuine redirection failure (bad path, permission
+ * (command substitution in the target word or heredoc body), or 1 for
+ * a genuine redirection failure (bad path, permission
  * denied, duplicating a closed fd, ...) that the caller reports as the
  * *command's* exit status per 2.8.1, not as this file's -1. */
 /* r is required: `switch (r->op)` dereferences it unconditionally on
@@ -919,25 +919,20 @@ typedef struct stage_variant_result {
 
 /* ==== Built-in utilities: dispatch, not a strcmp chain =================
  *
- * Stage 4's `cd` was matched here with a raw strcmp() on the
- * *unexpanded* first word, and this comment used to say why that was
- * deliberately narrow ("this builtin exists to make stage 4's
- * subshell/brace tests exercisable, not to be a general-purpose builtin
- * dispatcher").  Stage 6a builds the dispatcher: src/sh/builtin.c owns
- * the table (`cd` included) and every implementation, and this file
- * consults it from spawn_stage() below -- after wordexp() has produced
- * the argv, which is the only string XCU 2.9.1 ("Command Search and
- * Execution") ever names as the command name.  So `c=cd; $c /tmp` and
- * `'cd' /tmp` are both a `cd` now, as 2.9.1 requires and as the raw
- * match could not express.
+ * src/sh/builtin.c owns the built-in table (`cd` included) and every
+ * implementation; this file consults it from spawn_stage() below --
+ * after wordexp() has produced the argv, which is the only string XCU
+ * 2.9.1 ("Command Search and Execution") ever names as the command
+ * name.  So `c=cd; $c /tmp` and `'cd' /tmp` are both a `cd`, as 2.9.1
+ * requires and as a raw strcmp() on the unexpanded first word could
+ * not express.
  *
- * `env_mutate` still gates the same thing it always did, just via the
- * table's `env_effect` column instead of a name: a built-in that
- * changes the shell execution environment (XCU 2.12) must not actually
- * do so when this invocation is one stage of a multi-command pipeline,
- * which 2.12 places in a subshell environment.  See run_stage()'s
- * comment below, which already argued this at length for `cd` and now
- * argues it for a column.
+ * `env_mutate` gates the same thing for every built-in, via the
+ * table's `env_effect` column: a built-in that changes the shell
+ * execution environment (XCU 2.12) must not actually do so when this
+ * invocation is one stage of a multi-command pipeline, which 2.12
+ * places in a subshell environment.  See run_stage()'s comment below,
+ * which argues this at length for `cd` and then for the column.
  */
 
 /* Finds and starts the program named by cmd->words (which must be
@@ -946,8 +941,8 @@ typedef struct stage_variant_result {
  * stage spawned before it waits for any of them (see this file's
  * header comment on why), and a lone command's caller waits
  * immediately afterward instead. Returns -1 ("cannot execute this
- * yet") for a word that needs command substitution or on OOM, exactly
- * as stage 2 did; otherwise 0 with *out filled in. */
+ * yet") for a word that needs command substitution or on OOM;
+ * otherwise 0 with *out filled in. */
 /* XCU 2.9.1 Command Search and Execution, the PATH branch: "If the
  * execl() function fails due to an error equivalent to the [ENOEXEC]
  * error defined in the System Interfaces volume of POSIX.1-2017, the
@@ -998,8 +993,9 @@ typedef struct stage_variant_result {
  * argv: { arg0, resolved, args... }.  "any remaining arguments passed
  * to the new shell" is we_wordv[1..], and the operand before them makes
  * $0 the pathname (sh(1p) OPERANDS: `sh [command_file [argument...]]`,
- * and sh/main.c takes command_file as $0).  2.9.1's "may be set to the
- * command name" permits, but does not require, the other choice.
+ * and script.c's __sh_main() takes command_file as $0).  2.9.1's "may
+ * be set to the command name" permits, but does not require, the other
+ * choice.
  *
  * Not taken: "If the executable file is not a text file, the shell may
  * bypass this command execution.  In this case, it shall write an error
@@ -1105,7 +1101,7 @@ static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int en
 	 * regular built-in with no way to undo it.  Refusing to run the
 	 * command at all (the -1 convention) is the honest answer, since
 	 * a silently-unapplied assignment is exactly the class of silent
-	 * wrongness sh/main.c's refusal list exists to prevent. */
+	 * wrongness script.c's refusal preflight exists to prevent. */
 	/* 2.9.1's search order is a *sequence*, and the function step sits
 	 * between the two kinds of built-in rather than before or after
 	 * both: 1a special built-in, 1c function, 1d the regular built-ins
@@ -1348,10 +1344,8 @@ static int exec_simple(const struct sh_command *cmd, int *status)
  * a brace group's changes *are* supposed to remain in effect.
  *
  * A standalone subshell needs the same redirection bracketing, plus
- * genuine isolation of variables and cwd. The obvious tool is fork():
- * this file's own header comment used to say exactly that ("needs the
- * fork() this file's header comment says a plain simple command does
- * not"). It is deliberately not used here. Two things earn that:
+ * genuine isolation of variables and cwd. The obvious tool is fork().
+ * It is deliberately not used here. Two things earn that:
  *
  *  1. Nothing about this shell's supported subset needs the *process*
  *     boundary a fork() buys, only the *state* isolation 2.12 actually
@@ -1365,16 +1359,15 @@ static int exec_simple(const struct sh_command *cmd, int *status)
  *     nothing else in this process ever needs to run *while* the
  *     subshell's body runs, which is the one thing save-and-restore
  *     cannot give you and a real child process can.
- *  2. fork()'s cost on this platform is real and recent: src/process/
- *     fork.c's RtlCloneUserProcess wrapper is the exact machinery
- *     4a37d08 ("fork: keep every open descriptor's handle valid across
- *     the clone...") had to fix days ago -- a cloexec descriptor's
- *     handle surviving the clone while its *fd-table entry* did not,
- *     which froze a handle number NT then silently reissued to the next
- *     thing that asked, corrupting an unrelated process handle two
- *     frames away. That bug is fixed, but it is exactly the class of
- *     platform-specific sharp edge this file's stage-3 header comment
- *     already chose to avoid entirely for redirections and pipelines
+ *  2. fork()'s cost on this platform is real, and not just Wine's:
+ *     src/process/fork.c's RtlCloneUserProcess wrapper has already
+ *     needed a fix for a cloexec descriptor's handle surviving the
+ *     clone while its *fd-table entry* did not, which froze a handle
+ *     number NT then silently reissued to the next thing that asked,
+ *     corrupting an unrelated process handle two frames away. That
+ *     specific bug is fixed, but it is exactly the class of
+ *     platform-specific sharp edge this file's header comment already
+ *     chose to avoid entirely for redirections and pipelines
  *     ("Redirections never need a fork()") rather than merely work
  *     around. A save/restore subshell here keeps that same discipline:
  *     one fewer path through RtlCloneUserProcess to keep correct.
@@ -1415,31 +1408,28 @@ static int exec_simple(const struct sh_command *cmd, int *status)
  *
  * ---- As one stage of a multi-command pipeline: still no fork() ---------
  *
- * An earlier version of this file forked here: every other stage in a
- * multi-command pipeline is a real concurrently-running OS process
- * connected through a real (64KiB-buffered) pipe, precisely so that no
- * stage's output has to fit in memory and no stage can stall another,
- * and running a compound-command stage's body *in this process* while
- * the rest of the pipeline is still being wired up risked exactly the
- * self-inflicted hang this file's header comment already warns a
- * heredoc-via-pipe would risk. fork() sidestepped that -- but on this
- * platform fork() means src/process/fork.c's RtlCloneUserProcess
- * wrapper, which stock Wine (the interpreter CI's `test` legs actually
- * run under -- see .github/workflows/ci.yml) does not implement at
- * all: it is not a slow path or a missing edge case, it is `wine: Call
- * to unimplemented function ntdll.dll.RtlCloneUserProcess, aborting`,
- * which takes the whole process down. sh.exe is not one of this
- * project's `*-win.c` tests (the ones the Makefile's TEST_RUN already
- * excludes from every Wine leg for exactly this reason -- see
- * test/fork-win.c) precisely because it was never expected to fork;
- * stage 4's fork_group_stage() broke that quietly, and every `test`
- * leg in CI run 32700969420 failed as a result.
+ * Every other stage in a multi-command pipeline is a real
+ * concurrently-running OS process connected through a real
+ * (64KiB-buffered) pipe, precisely so that no stage's output has to fit
+ * in memory and no stage can stall another. Running a compound-command
+ * stage's body *in this process* while the rest of the pipeline is
+ * still being wired up would risk exactly the self-inflicted hang this
+ * file's header comment already warns a heredoc-via-pipe would risk,
+ * and fork() would sidestep that -- but on this platform fork() means
+ * src/process/fork.c's RtlCloneUserProcess wrapper, which stock Wine
+ * (the interpreter CI's `test` legs actually run under -- see
+ * .github/workflows/ci.yml) does not implement at all: not a slow path
+ * or a missing edge case, but `wine: Call to unimplemented function
+ * ntdll.dll.RtlCloneUserProcess, aborting`, which takes the whole
+ * process down. sh.exe is not one of this project's `*-win.c` tests
+ * (the ones the Makefile's TEST_RUN already excludes from every Wine
+ * leg for exactly this reason -- see test/fork-win.c) precisely
+ * because it is never expected to fork.
  *
- * The fix is to never fork here either, by not running a
- * compound-command stage's body *while the rest of the pipeline is
- * still being wired up* in the first place. __sh_exec_pipeline() below
- * now spawns every real (SH_CMD_SIMPLE) stage first, exactly as stage
- * 3 already did, and only *afterward* -- once every real process in
+ * So a compound-command stage's body never runs *while the rest of the
+ * pipeline is still being wired up* in the first place.
+ * __sh_exec_pipeline() below spawns every real (SH_CMD_SIMPLE) stage
+ * first, and only *afterward* -- once every real process in
  * the pipeline already exists and is concurrently draining/filling its
  * own pipe ends -- runs each compound-command stage's body in this
  * process, left to right, via exec_group_stage_inline() below. By the
@@ -1479,9 +1469,9 @@ static int exec_simple(const struct sh_command *cmd, int *status)
  * brace-group pipeline stage still needs the same environ/cwd
  * save-and-restore this file's standalone-subshell case above uses --
  * exec_group_stage_inline() applies it unconditionally (unlike
- * exec_group()'s is_subshell-gated version), same as the fork() this
- * replaces used to give every pipeline stage for free by virtue of
- * being a different process. See test_exec_group_pipeline_stage() in
+ * exec_group()'s is_subshell-gated version), same as a fork()-based
+ * design would give every pipeline stage for free by virtue of being a
+ * different process. See test_exec_group_pipeline_stage() in
  * test/sh-engine.c, which checks specifically that a brace group's assignment
  * does not leak out when used as a pipeline stage even though a
  * standalone brace group's does.
@@ -1650,10 +1640,11 @@ static void env_snapshot_restore(const struct env_snapshot *es)
 
 /* ==== Compound commands (XCU 2.9.4) ====================================
  *
- * Stage 6b.  `if`, `while`, `until` and `for` are the constructs
- * test/sh-design.md's item 2 names; `case` and function definitions are
- * not here yet and still lex as ordinary WORDs, so sh/main.c still
- * refuses them by name.
+ * `if`, `while`, `until`, `for` and function definitions are all
+ * implemented below (exec_if()/exec_loop()/exec_for()/exec_funcdef()).
+ * `case` alone is not: it still lexes as an ordinary WORD, so
+ * script.c's preflight refuses it by name before this file ever sees
+ * it.
  *
  * Three properties are shared by all four and are the reason they live
  * next to each other rather than in the executor's simple-command path:
@@ -1770,16 +1761,16 @@ static int exec_loop(const struct sh_command *cmd, int *status)
  * identical answer, and a `for` that disagreed with a simple command
  * about what a word expands to would be a worse defect than one
  * consistent documented gap.  test/sh-engine.c pins it, so it inverts
- * visibly when wordexp() grows the behaviour -- which is exactly what
- * happened to the *other* gap this comment used to list: an empty field
- * is deleted now (2.6), so "for f in $UNSET" runs the body zero times
- * rather than once with an empty item.
+ * visibly if wordexp() grows the behaviour.  (Empty-field deletion per
+ * 2.6 already works here, though: "for f in $UNSET" runs the body zero
+ * times, not once with an empty item.)
  *
  * Setting `name` is setenv(), which is what every assignment in this
  * shell already is: the only variable store any expansion here can see
- * is the real `environ` (test/sh-design.md, sh/main.c's header).  The
- * loop variable is therefore *exported* to children, where a real shell
- * would leave it unexported unless something exported it.  That is the
+ * is the real `environ` -- there is no separate unexported-variable
+ * table in this shell.  The loop variable is therefore *exported* to
+ * children, where a real shell would leave it unexported unless
+ * something exported it.  That is the
  * pre-existing deviation the whole variable story has, not a new one
  * this construct introduces -- `X=1; cmd` already behaves the same way
  * -- and it is stated here rather than left for someone to find. */
@@ -1797,9 +1788,8 @@ static int exec_for(const struct sh_command *cmd, int *status)
 	*status = 0;
 
 	/* 2.9.4: "Omitting: in word ... shall be equivalent to: in "$@"".
-	 * Stage 7 gives this shell positional parameters (XCU 2.5.1), so
-	 * the equivalence is now something it can actually deliver, and
-	 * this used to be the -1 "cannot execute this node" refusal.
+	 * This shell has positional parameters (XCU 2.5.1, src/sh/param.c),
+	 * so the equivalence is delivered directly here.
 	 *
 	 * It reads src/sh/param.c's list directly rather than expanding
 	 * the literal text "\"$@\"" through __wordexp_sh().  The two agree
@@ -1841,12 +1831,11 @@ static int exec_for(const struct sh_command *cmd, int *status)
 
 /* The body of any compound command, run in this process.  Both callers
  * -- exec_group() for a standalone "(...)"/"{...}"/if/while/for, and
- * exec_group_stage_inline() for one as a pipeline stage -- used to read
- * cmd->body directly, which was right when the only two compound kinds
- * stored their whole body there.  Routing through one dispatcher
- * instead means a kind added later cannot be wired into one of those
- * two paths and silently forgotten in the other; the default arm makes
- * that a reported -1 rather than a silent "ran an empty list, exit 0". */
+ * exec_group_stage_inline() for one as a pipeline stage -- route
+ * through one dispatcher rather than reading cmd->body directly, so a
+ * kind added later cannot be wired into one of those two paths and
+ * silently forgotten in the other; the default arm makes that a
+ * reported -1 rather than a silent "ran an empty list, exit 0". */
 /* 2.9.5 Exit Status: "The exit status of a function definition shall be
  * zero if the function was declared successfully; otherwise, it shall be
  * greater than zero."  Nothing is expanded here -- 2.9.5: "When the
@@ -1996,9 +1985,10 @@ static int exec_group(const struct sh_command *cmd, int *status)
  * A substitution producing more than one pipe buffer (65536 bytes --
  * src/unistd/pipe.c) would wedge this process against itself forever,
  * silently. Draining it concurrently needs a second thread or a fork(),
- * and this file's stage-4 header comment records at length why fork()
- * is deliberately not used anywhere in this executor (stock Wine, which
- * CI's `test` legs run under, aborts on ntdll.RtlCloneUserProcess).
+ * and this file's "still no fork()" discussion above records at length
+ * why fork() is deliberately not used anywhere in this executor (stock
+ * Wine, which CI's `test` legs run under, aborts on
+ * ntdll.RtlCloneUserProcess).
  *
  * tmpfile() (src/stdio/misc.c) has neither problem: it is seekable, so
  * the writers finish first and the read happens after, with no ordering
@@ -2313,8 +2303,8 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 
 	if (n == 1) {
 		/* Routes back through __sh_exec_command so a lone subshell or
-		 * brace group ("(echo hi)", "{ echo hi; }") still reports
-		 * stage 4's -1 rather than this file assuming SH_CMD_SIMPLE. */
+		 * brace group ("(echo hi)", "{ echo hi; }") still reports its
+		 * own -1 rather than this file assuming SH_CMD_SIMPLE. */
 		rc = __sh_exec_command(&pl->commands[0], status);
 		if (rc) return rc;
 		if (pl->bang) *status = (*status == 0);
@@ -2500,9 +2490,9 @@ int __sh_exec_andor(const struct sh_andor *a, int *status)
 	int rc = __sh_exec_pipeline(&a->pipeline, status);
 	if (rc) return rc;
 	for (a = a->next; a; a = a->next) {
-		/* An `exit` -- or, since stage 7b, a `return` -- anywhere in
-		 * the and-or list ends it, whatever the status would have
-		 * selected next; see sh.h's control-flow comment.  Checked
+		/* An `exit` -- or a `return` -- anywhere in the and-or list
+		 * ends it, whatever the status would have selected next; see
+		 * sh.h's control-flow comment.  Checked
 		 * before the short-circuit tests so that "exit 0 && cmd" runs
 		 * no cmd.  Through __sh_flow_pending() rather than reading
 		 * flow_exit_pending directly: this loop and the one in

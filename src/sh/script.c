@@ -66,23 +66,21 @@
  *     `case x in y) ;; esac` parses as simple commands and would run a
  *     program called "case". PATH lookup then fails and the shell
  *     reports "case: command not found" with status 127 -- a true
- *     statement about a fiction, and precisely the "cannot tell"
- *     failure test/sh-design.md's "Placement and gates" warns about.
- *     `export X=1` is worse: it fails with 127 while the variable is
- *     silently *not* exported.
+ *     statement about a fiction. `export X=1` is worse: it fails with
+ *     127 while the variable is silently *not* exported.
  *
- *     Function definitions are no longer in this class either: stage 7b
- *     gave them a grammar (XCU 2.9.5), so `f() { ... }` is parsed and
- *     `f` really is called.  A definition's body is checked *here*, at
- *     the definition, by re-parsing it -- see check_command() below --
- *     so a function whose body uses something on these lists is refused
+ *     Function definitions are not in this class: XCU 2.9.5 gives them
+ *     a real grammar, so `f() { ... }` is parsed and `f` really is
+ *     called.  A definition's body is checked *here*, at the
+ *     definition, by re-parsing it -- see check_command() below -- so
+ *     a function whose body uses something on these lists is refused
  *     before any of the program runs, not on the call.
  *
- *     `if`/`while`/`until`/`for` are no longer in this class: stage 6b
- *     gave them a real grammar, and a misplaced `fi`/`do`/`done` is now
- *     a parse error rather than a command name. `for name` with no `in`
- *     list -- XCU 2.9.4's `in "$@"` -- came off too in stage 7, which
- *     gave this shell a "$@" to iterate.
+ *     `if`/`while`/`until`/`for` are not in this class either: they
+ *     have a real grammar, and a misplaced `fi`/`do`/`done` is a parse
+ *     error rather than a command name. `for name` with no `in` list
+ *     -- XCU 2.9.4's `in "$@"` -- is likewise supported, since this
+ *     shell has a "$@" to iterate (src/sh/param.c).
  *   - The special parameters that are still not implemented.
  *     src/wordexp/wordexp.c expands $NAME/${NAME} and, through
  *     __wordexp_sh(), XCU 2.5.1's positional parameters plus 2.5.2's
@@ -154,8 +152,8 @@ static void diag_bad_param(const char *what, const char *where)
  * Reserved words (XCU 2.4) that the grammar does not implement.
  *
  * Down to two.  `if`/`then`/`else`/`elif`/`fi`, `while`/`until`,
- * `for`/`do`/`done` and `in` all came off with stage 6b: src/sh/parse.c
- * builds those constructs now, and a *misplaced* one of them -- a bare
+ * `for`/`do`/`done` and `in` are gone: src/sh/parse.c builds those
+ * constructs now, and a *misplaced* one of them -- a bare
  * `fi`, a stray `do` -- is a syntax error raised there (XCU 2.10.1
  * rule 1) rather than a command named "fi".  The property this list
  * exists to preserve is that no such word is ever silently executed as
@@ -182,12 +180,12 @@ static const char *const reserved[] = {
  *
  * A name comes off this list exactly when src/sh/builtin.c grows a real
  * implementation of it, never before. `cd`, `:` and `exit` are already
- * gone (stage 6a's dispatcher); `test`, `[`, `true` and `false` were
- * never on it, because on a POSIX system they are genuine external
+ * gone (src/sh/builtin.c's dispatcher); `test`, `[`, `true` and `false`
+ * were never on it, because on a POSIX system they are genuine external
  * utilities and letting PATH lookup fail honestly was the right answer
- * -- except that this platform has no /bin at all, which is why stage
- * 6a built them in too (see src/sh/builtin.c's header).  Anything still
- * on this list is refused, up front, by name. */
+ * -- except that this platform has no /bin at all, which is why
+ * src/sh/builtin.c builds them in too (see its own header).  Anything
+ * still on this list is refused, up front, by name. */
 static const char *const unimplemented_builtins[] = {
 	".", "break", "continue", "eval", "exec", "export",
 	"readonly", "times", "trap", "unset",
@@ -258,8 +256,7 @@ static int bad_expansion(const char *text, char *what)
 				}
 			} else if (c == '!' || c == '-' || c == '$') {
 				/* The special parameters of 2.5.2 that are still not
-				 * implemented.  $0..$9, $@, $* and $# came off this
-				 * list in stage 7a and $? in stage 7b; all are
+				 * implemented.  $0..$9, $@, $*, $# and $? are all
 				 * expanded for real. */
 				bad = p;
 			}
@@ -326,8 +323,8 @@ static int check_command(const struct sh_command *c)
 	if (check_redirs(c->redirs)) return -1;
 
 	/* Switched on the kind rather than on "does it have a body?": the
-	 * compound commands stage 6b added keep their parts in several
-	 * different fields (an if's arms, a loop's condition, a for's word
+	 * compound commands keep their parts in several different fields
+	 * (an if's arms, a loop's condition, a for's word
 	 * list), and a `for` in particular has *both* a word list to scan
 	 * for unsupported expansions and a body to recurse into.  The old
 	 * `if (c->body) return check_list(c->body);` would have walked a
@@ -366,11 +363,10 @@ static int check_command(const struct sh_command *c)
 		}
 	case SH_CMD_FOR:
 		/* `for name` with no `in` list -- XCU 2.9.4's "Omitting: in
-		 * word ... shall be equivalent to: in "$@"" -- used to be
-		 * refused here, because there was no "$@" to iterate.  Stage 7
-		 * gives this shell positional parameters, so it runs; there is
-		 * nothing left for this arm to refuse beyond what the word
-		 * list and body already get. */
+		 * word ... shall be equivalent to: in "$@"" -- runs fine: this
+		 * shell has positional parameters to iterate (src/sh/param.c),
+		 * so there is nothing left for this arm to refuse beyond what
+		 * the word list and body already get. */
 		if (check_words(c->words)) return -1;
 		return check_list(c->body);
 	default:
@@ -522,11 +518,9 @@ int __sh_main(int argc, char **argv)
 	if (i < argc && strcmp(argv[i], "-") == 0) i++;   /* historical "-" */
 
 	/* sh(1p) OPERANDS, and XCU 2.5.1's "[p]ositional parameters are
-	 * initially assigned when the shell is invoked (see sh)".  This
-	 * used to be a comment explaining that there was nowhere to put
-	 * them and that any program referencing one was refused; stage 7
-	 * gives the engine a real list (src/sh/param.c), so the operands
-	 * are installed for real here.
+	 * initially assigned when the shell is invoked (see sh)".  The
+	 * engine keeps a real list for them (src/sh/param.c), so the
+	 * operands are installed for real here.
 	 *
 	 * Which operand is $0 differs by form, and 2.5.2 is emphatic that
 	 * $0 is not one of the positional parameters, so it is set
@@ -590,14 +584,12 @@ int __sh_main(int argc, char **argv)
 	}
 	if (__sh_exec_list(list, &status)) {
 		/* src/sh/sh.h: -1 is "cannot execute this AST node at all",
-		 * with no status written. This used to say the commonest cause
-		 * was a word containing a command substitution; stage 5
-		 * implements those, so what is left is narrower and not worth
-		 * guessing at in the message -- two directly adjacent compound
-		 * commands in one pipeline ("( a ) | { b; }", which exec.c
-		 * refuses rather than deadlock without a fork()), a command
-		 * substitution whose own command hits one of these, and
-		 * resource failures. */
+		 * with no status written. What can actually cause it is narrow
+		 * and not worth guessing at in the message -- two directly
+		 * adjacent compound commands in one pipeline ("( a ) | { b; }",
+		 * which exec.c refuses rather than deadlock without a fork()),
+		 * a command substitution whose own command hits one of these,
+		 * and resource failures. */
 		diag("cannot execute: an unsupported construct -- see "
 		     "test/sh-design.md");
 		__sh_list_free(list);
