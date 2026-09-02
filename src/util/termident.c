@@ -17,7 +17,7 @@ static void set_shortname(struct term_ident *out, const char *s)
 	if (strncmp(base, "/dev/", 5) == 0) base += 5;
 	n = strlen(base);
 	if (n >= sizeof out->shortname) n = sizeof out->shortname - 1;
-	memcpy(out->shortname, base, n);
+	memmove(out->shortname, base, n);
 	out->shortname[n] = 0;
 }
 
