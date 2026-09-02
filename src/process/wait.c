@@ -22,7 +22,22 @@
  * Every reap, whether or not the caller asked for it, is also folded
  * into a running total so getrusage(RUSAGE_CHILDREN) has something to
  * report even when the caller only ever called wait()/waitpid().
- */
+ *
+ * That per-child ProcessTimes query only ever sees the reaped child's
+ * OWN CPU time, never CPU time the child had already collected from ITS
+ * OWN children before it exited -- and times.html's tms_cutime/
+ * tms_cstime clause (RATIONALE: "The inclusion of times of child
+ * processes is recursive, so that a parent process may collect the
+ * total times of all of its descendants") requires exactly that.
+ * fill_child_rusage() below gets it from a job object instead when one
+ * is available (struct __child.job, libc.h): __plat_process_spawn()/
+ * __plat_process_fork() place every new child in a job of its own
+ * before its first instruction runs, and ordinary job-membership
+ * inheritance -- not anything arranged per generation -- carries that
+ * same membership down to whatever the child spawns too, so the job's
+ * own accounting already covers the whole subtree by the time this
+ * process reaps the child at its own root.  See
+ * __plat_process_times()'s comment (plat_process.h) for the rest. */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
  * public-header contract; transitive ABI declarations are intentional,
@@ -134,14 +149,28 @@ void __rusage_children_reset(void)
  * valid here, since nothing has closed it yet) just leaves *ru zeroed
  * rather than failing the whole wait: the pid was already reaped
  * successfully, and losing the accounting detail is not worth losing
- * that. */
-static void fill_child_rusage(__plat_handle_t h, struct rusage *ru)
+ * that.
+ *
+ * `job` is c->job -- the job this child was placed in at creation time,
+ * or __PLAT_HANDLE_NULL -- and is what makes the total below the
+ * RECURSIVE figure times.html's tms_cutime/tms_cstime clause (and its
+ * RATIONALE: "the times of a child are only added to those of its
+ * parent when its parent successfully waits on the child") asks for,
+ * rather than just this one child's own CPU time: see
+ * __plat_process_times()'s own comment (src/internal/plat_process.h)
+ * for how the job accounts for grandchildren this child already reaped
+ * before it exited, which this process has no other way to learn --
+ * that figure lives only in the child's own now-closing address space,
+ * in ITS OWN children_ktime100ns/children_utime100ns below, and NT
+ * offers no ReadProcessMemory-shaped primitive this library uses
+ * anywhere else. */
+static void fill_child_rusage(__plat_handle_t h, __plat_handle_t job, struct rusage *ru)
 {
 	unsigned long long ktime = 0, utime = 0;
 
 	memset(ru, 0, sizeof *ru);
 	if (!h) return;
-	if (__plat_process_times(h, &ktime, &utime) < 0) return;
+	if (__plat_process_times(h, job, &ktime, &utime) < 0) return;
 	ticks_to_timeval(ktime, &ru->ru_stime);
 	ticks_to_timeval(utime, &ru->ru_utime);
 	children_ktime100ns += ktime;
@@ -370,8 +399,8 @@ reap:
 	c->done = 1;
 	if (status) *status = c->status;
 	pid = c->pid;
-	if (ru) fill_child_rusage(c->h, ru);
-	else { struct rusage tmp; fill_child_rusage(c->h, &tmp); }
+	if (ru) fill_child_rusage(c->h, c->job, ru);
+	else { struct rusage tmp; fill_child_rusage(c->h, c->job, &tmp); }
 	/* fill_child_rusage() has already folded this child's times into the
 	 * RUSAGE_CHILDREN running total, so a WNOWAIT call must not leave the
 	 * entry in a state where a later real reap folds them in a second

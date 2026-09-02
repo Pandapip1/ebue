@@ -464,6 +464,19 @@ void __fd_wait_or_delay(__plat_handle_t *console_handles, int ncons, long long w
 struct __child {
 	int pid;
 	__plat_handle_t h;
+	/* The NT job object this child (and, transitively, anything it goes
+	 * on to spawn itself) was placed in at creation time, before its
+	 * first instruction ever ran -- __PLAT_HANDLE_NULL if job creation/
+	 * assignment failed (best-effort, same tolerance as
+	 * src/misc/resource.c's own job for RLIMIT_NPROC/CPU/AS/DATA) or on
+	 * a backend that has no such concept (Linux: always
+	 * __PLAT_HANDLE_NULL).  wait.c's fill_child_rusage() reads this
+	 * job's JobObjectBasicAccountingInformation instead of a bare
+	 * NtQueryInformationProcess(ProcessTimes) so that a grandchild this
+	 * child already reaped -- CPU time this process has no other way to
+	 * read out of the child's own address space -- is folded in too;
+	 * see that function's own comment. */
+	__plat_handle_t job;
 	int done;               /* reaped status is available */
 	int status;
 	/* Job control.  A stop sent by this parent is recorded by kill(); a
@@ -488,7 +501,7 @@ struct __child {
 #define __W_CONTINUED    0xffff
 extern struct __child *__children;   /* __child_cap entries, pid==0 is free */
 extern int __child_cap;
-int __child_add(int pid, __plat_handle_t);
+int __child_add(int pid, __plat_handle_t, __plat_handle_t job);
 struct __child *__child_find(int pid);
 /* c required: src/process/children.c's own __child_remove() dereferences
  * c->h unconditionally at entry, with no NULL check anywhere in its
@@ -924,6 +937,47 @@ struct __sigset_t;
  * in either body. */
 void __sig_current_mask_copy(struct __sigset_t *) __attribute__((nonnull(1)));
 void __sig_current_mask_install(const struct __sigset_t *) __attribute__((nonnull(1)));
+/* posix_spawn()'s POSIX_SPAWN_SETSIGMASK, for a non-empty mask: the one
+ * piece of state src/process/posix_spawn.c has that __spawn() itself
+ * (src/process/spawn.c) takes no parameter for.  spawn_common() sets
+ * this immediately before calling __spawn() and clears it immediately
+ * after, success or failure, so it can never leak onto an unrelated
+ * spawn.  The NT __fd_runtime_data()/__fd_init() pair
+ * (src/internal/nt/plat_fd_init.c) is the only consumer: it rides the
+ * mask to the child in a trailer appended to the same RuntimeData blob
+ * that already carries the inherited-descriptor table, and __fd_init()
+ * installs it (__sig_current_mask_install(), above) before main() ever
+ * runs. Defined in src/internal/fd.c, the portable file, so
+ * posix_spawn.c needs no NT-specific include -- Linux's own
+ * __fd_runtime_data() (src/internal/linux/plat_fd_init.c) simply never
+ * calls the getter, the same "set but never consulted" shape
+ * struct __plat_fork_result.job (plat_process.h) uses on that backend. */
+void __spawn_set_pending_sigmask(const struct __sigset_t *) __attribute__((nonnull(1)));
+void __spawn_clear_pending_sigmask(void);
+const struct __sigset_t *__spawn_pending_sigmask(void);
+/* posix_spawn()'s POSIX_SPAWN_SETSCHEDPARAM/POSIX_SPAWN_SETSCHEDULER:
+ * the nice-scale priority hint (see setpriority()'s own [-NZERO,
+ * NZERO-1] clamp, src/misc/resource.c, reused verbatim here) to apply
+ * to a freshly spawned child, set by spawn_common() immediately before
+ * __spawn() and cleared immediately after, exactly like
+ * __spawn_set_pending_sigmask() above (same lifetime, same reason).
+ * Unlike the sigmask, no cross-process channel is needed: NT's
+ * __plat_process_spawn() (src/process/nt/plat_process.c) already has
+ * the suspended child's own process handle in hand at the point it
+ * would call this, in the very same window create_child_job() uses, so
+ * it applies the priority itself, directly, with
+ * __plat_priority_set() (plat_misc.h) -- the identical call
+ * src/misc/resource.c's own setpriority() makes for a non-self target.
+ * Linux's __plat_process_spawn() never calls the getter, the same
+ * "declared, only the NT backend consults it" shape as the sigmask
+ * pair. */
+void __spawn_set_pending_priority(int nice_value);
+void __spawn_clear_pending_priority(void);
+/* 1 with *out set if a priority is pending, 0 otherwise. out required:
+ * the one real call site (src/process/nt/plat_process.c) only ever
+ * passes the address of its own local, never NULL, and this always
+ * writes through it before returning 1. */
+int __spawn_pending_priority(int *out) __attribute__((nonnull(1)));
 int __raise_thread_internal(int) NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 /* Nonzero if SIGCHLD's installed sa_flags has SA_NOCLDWAIT set -- see the
  * comment on __sigchld_nocldwait() in src/signal/signal.c. */

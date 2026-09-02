@@ -58,6 +58,13 @@ int __plat_is_program(const char *path);
 struct __plat_fork_result {
 	__plat_handle_t process;   /* parent only: the child's process handle */
 	__plat_handle_t thread;    /* parent only: the child's (suspended) thread */
+	/* parent only: the job the child was placed in before its thread was
+	 * ever resumed, or __PLAT_HANDLE_NULL if none (best-effort, see
+	 * struct __child's own comment in src/internal/libc.h -- this is the
+	 * same field, just not yet filed into the child table). Always
+	 * __PLAT_HANDLE_NULL on a backend with no job-object concept
+	 * (Linux). */
+	__plat_handle_t job;
 	int pid;                   /* parent only */
 };
 #define __PLAT_FORK_CHILD  0   /* this call is returning in the new process */
@@ -67,9 +74,9 @@ struct __plat_fork_result {
  * caller-side handle marking are the front door's job before and after
  * this call either way (src/process/fork.c), not this interface's. */
 /* out required: both real implementations (linux/plat_process.c,
- * nt/plat_process.c) write `out->process = ...;`/`out->pid = ...;` on
- * their parent-success return path, with no NULL check of out itself
- * anywhere in either body. */
+ * nt/plat_process.c) write `out->process = ...;`/`out->pid = ...;`/
+ * `out->job = ...;` on their parent-success return path, with no NULL
+ * check of out itself anywhere in either body. */
 int __plat_process_fork(struct __plat_fork_result *out) __attribute__((nonnull(1)));
 
 /* Resume a thread this backend handed back suspended -- fork()'s cloned
@@ -110,12 +117,30 @@ int __plat_process_exit_code(__plat_handle_t h, int *code) __attribute__((nonnul
  * src/misc/resource.c both already convert from/to a timeval themselves.
  * 0/-1(errno); the outputs are left untouched on failure so a best-
  * effort caller can leave an already-zeroed struct rusage alone (see
- * wait.c's fill_child_rusage()). */
+ * wait.c's fill_child_rusage()).
+ *
+ * `job` is the job `h` was placed in at creation time
+ * (__plat_process_fork()/__plat_process_spawn()'s own job output,
+ * carried in struct __child -- see libc.h), or __PLAT_HANDLE_NULL. When
+ * it names a real job, the NT backend reads
+ * JobObjectBasicAccountingInformation from IT instead of querying `h`
+ * directly: that total already includes every process ever assigned to
+ * the job, which -- ordinary job-membership inheritance, not anything
+ * this library sets up per generation -- is `h` itself and everything
+ * `h` went on to spawn before it exited, i.e. exactly the "recursive"
+ * half of times.html's tms_cutime/tms_cstime clause that a bare
+ * ProcessTimes query on `h` alone cannot see. __PLAT_HANDLE_NULL falls
+ * back to that bare query, same as before this parameter existed
+ * (job creation is best-effort, src/misc/resource.c's own job for
+ * setrlimit() being the precedent) -- and is what a caller with no `h`
+ * to have jobbed in the first place (Linux, which ignores `job`
+ * entirely, see this file's own banner) always passes. */
 /* ktime100ns/utime100ns required, same "written only on success, but
  * with no NULL check" shape as __plat_process_exit_code()'s own code
  * argument just above. */
-int __plat_process_times(__plat_handle_t h, unsigned long long *ktime100ns, unsigned long long *utime100ns)
-    __attribute__((nonnull(2, 3)));
+int __plat_process_times(__plat_handle_t h, __plat_handle_t job,
+                          unsigned long long *ktime100ns, unsigned long long *utime100ns)
+    __attribute__((nonnull(3, 4)));
 
 /* Resume a process this library previously suspended through kill()'s
  * job-control path (src/signal/signal.c, out of this interface's
@@ -145,26 +170,32 @@ int __plat_process_resume(__plat_handle_t h);
  * *out_process receives the new process's handle on success -- NOT yet
  * added to the pid/child table, since that bookkeeping is the front
  * door's, same as __plat_mem_map_file() leaves mman.c's reservation
- * table alone.  Returns the new pid, or -1 with errno set.
+ * table alone.  *out_job receives the job the new process was placed in
+ * before its first instruction ran, or __PLAT_HANDLE_NULL (best-effort,
+ * same tolerance as the fork side -- see struct __plat_fork_result's own
+ * job field just above and __plat_process_times()'s comment on why this
+ * exists).  Returns the new pid, or -1 with errno set.
  *
- * std/out_process required: both real implementations
+ * std/out_process/out_job required: both real implementations
  * (linux/plat_process.c, nt/plat_process.c) subscript std[0..2]
  * unconditionally (the child-side fd-redirect loop / the
- * StandardInput/Output/Error assignments) and write `*out_process = ...`
- * unconditionally on their success path, with no NULL check of either
- * pointer anywhere. spawn.c's __spawn() is the one real call site: std
- * is always `__plat_handle_t std[3];`, the address of its own local
- * array, and out_process is always `&process`, the address of its own
- * local -- neither is ever NULL. path/argv/envp are NOT marked here:
- * this function never dereferences any of them directly itself, only
- * forwards them into functions that already carry their own contracts
+ * StandardInput/Output/Error assignments) and write `*out_process = ...`/
+ * `*out_job = ...` unconditionally on their success path, with no NULL
+ * check of either output pointer anywhere. spawn.c's __spawn() is the
+ * one real call site: std is always `__plat_handle_t std[3];`, the
+ * address of its own local array, and out_process/out_job are always
+ * `&process`/`&job`, the address of their own locals -- none of the
+ * three is ever NULL. path/argv/envp are NOT marked here: this function
+ * never dereferences any of them directly itself, only forwards them
+ * into functions that already carry their own contracts
  * (build_cmdline()'s own argv, __utf8_to_utf16()'s own path, both
  * required there; build_env_block()'s own envp, deliberately optional
  * there via its own `for (i = 0; envp && envp[i]; ...)` check, matching
  * __spawn()'s own `envp ? envp : __environ` one level up). */
 int __plat_process_spawn(const char *path, char *const argv[], char *const envp[],
-                          const __plat_handle_t std[3], __plat_handle_t *out_process)
-    __attribute__((nonnull(4, 5)));
+                          const __plat_handle_t std[3], __plat_handle_t *out_process,
+                          __plat_handle_t *out_job)
+    __attribute__((nonnull(4, 5, 6)));
 
 /* execve(2), for src/process/exec.c's own execve() ONLY on the one
  * backend that has a real image-replacement primitive to call: Linux.

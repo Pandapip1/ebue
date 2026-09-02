@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include "libc.h"
 #include "plat_process.h"
+#include "plat_misc.h"
 
 /* ---- find_program.c: is this file something NT's loader can start? --- */
 
@@ -68,6 +69,43 @@ int __plat_is_program(const char *path)
 	return 0;
 }
 
+/* A fresh job for one newly-created (still-suspended) child, with that
+ * child as its sole initial member -- src/internal/libc.h's struct
+ * __child.job and __plat_process_times()'s own comment explain what
+ * this buys src/process/wait.c's fill_child_rusage(): ordinary job-
+ * membership inheritance (not nesting, not anything this function has
+ * to arrange itself) means every process this child goes on to spawn,
+ * at any depth, automatically becomes a member of the very same job,
+ * because each of them is created by a process that is already a
+ * member of it. So this one job, queried after the child has been
+ * reaped, already accounts for the child's own CPU time AND everything
+ * it spawned before exiting -- exactly the recursive half of
+ * times.html's tms_cutime/tms_cstime clause.
+ *
+ * Best-effort, like src/misc/resource.c's own job for setrlimit():
+ * __PLAT_HANDLE_NULL on any failure (job creation, or assignment
+ * failing because `process` is somehow already a member of a job of
+ * its own -- RTL_CLONE_PROCESS_FLAGS_CREATE_SUSPENDED/
+ * RtlCreateUserProcess hand back a brand new process with no job of its
+ * own, so this is not expected, but nothing here depends on it never
+ * happening).  A NULL result degrades __plat_process_times() back to
+ * the bare per-process ProcessTimes query this whole mechanism exists
+ * to improve on, never a spawn/fork failure. */
+static HANDLE create_child_job(HANDLE process)
+{
+	OBJECT_ATTRIBUTES oa;
+	HANDLE job;
+
+	InitializeObjectAttributes(&oa, 0, 0, 0, 0);
+	if (!NT_SUCCESS(NtCreateJobObject(&job, JOB_OBJECT_ALL_ACCESS, &oa)))
+		return 0;
+	if (!NT_SUCCESS(NtAssignProcessToJobObject(job, process))) {
+		NtClose(job);
+		return 0;
+	}
+	return job;
+}
+
 /* ---- fork.c: RtlCloneUserProcess and NtResumeThread ------------------- */
 
 int __plat_process_fork(struct __plat_fork_result *out)
@@ -92,6 +130,10 @@ int __plat_process_fork(struct __plat_fork_result *out)
 
 	out->process = info.Process;
 	out->thread = info.Thread;
+	/* Still suspended (CREATE_SUSPENDED above): this is the window
+	 * create_child_job()'s own comment describes, before fork.c ever
+	 * calls __plat_thread_resume() on out->thread. */
+	out->job = create_child_job(info.Process);
 	out->pid = (int)(ULONG_PTR)info.ClientId.UniqueProcess;
 	return __PLAT_FORK_PARENT;
 }
@@ -134,10 +176,32 @@ int __plat_process_exit_code(__plat_handle_t h, int *code)
 	return 0;
 }
 
-int __plat_process_times(__plat_handle_t h, unsigned long long *ktime100ns, unsigned long long *utime100ns)
+int __plat_process_times(__plat_handle_t h, __plat_handle_t job,
+                          unsigned long long *ktime100ns, unsigned long long *utime100ns)
 {
 	KERNEL_USER_TIMES kt;
-	NTSTATUS st = NtQueryInformationProcess(h, ProcessTimes, &kt, sizeof kt, 0);
+	NTSTATUS st;
+
+	/* job's own comment (plat_process.h) and create_child_job()'s
+	 * (above) explain why this total already includes `h`'s own CPU
+	 * time -- `h` is itself a member of `job` -- plus everything `h`
+	 * spawned before it exited, which a bare ProcessTimes query on `h`
+	 * alone cannot see at all. Tried first, not merged with the
+	 * ProcessTimes query below: the job's own accounting already
+	 * subsumes `h`'s, so adding both would double-count `h`'s own
+	 * share. */
+	if (job) {
+		JOBOBJECT_BASIC_ACCOUNTING_INFORMATION jai;
+		st = NtQueryInformationJobObject(job, JobObjectBasicAccountingInformation,
+		                                 &jai, sizeof jai, 0);
+		if (NT_SUCCESS(st)) {
+			*ktime100ns = (unsigned long long)jai.TotalKernelTime;
+			*utime100ns = (unsigned long long)jai.TotalUserTime;
+			return 0;
+		}
+	}
+
+	st = NtQueryInformationProcess(h, ProcessTimes, &kt, sizeof kt, 0);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	*ktime100ns = (unsigned long long)kt.KernelTime;
 	*utime100ns = (unsigned long long)kt.UserTime;
@@ -344,7 +408,8 @@ static HANDLE closed_placeholder(HANDLE *out)
 }
 
 int __plat_process_spawn(const char *path, char *const argv[], char *const envp[], // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
-                         const __plat_handle_t std[3], __plat_handle_t *out_process)
+                         const __plat_handle_t std[3], __plat_handle_t *out_process,
+                         __plat_handle_t *out_job)
 {
 	struct __ntpath np;
 	__plat_handle_t inherited_std[3] = { std[0], std[1], std[2] };
@@ -455,6 +520,26 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 		goto out;
 	}
 
+	/* Still suspended (RtlCreateUserProcess always hands the initial
+	 * thread back that way): create_child_job()'s own comment explains
+	 * why this has to happen in this window, before the resume just
+	 * below ever lets the child run an instruction. */
+	*out_job = create_child_job(info.Process);
+	/* src/process/posix_spawn.c's POSIX_SPAWN_SETSCHEDPARAM/
+	 * POSIX_SPAWN_SETSCHEDULER, same window, same reason: this is the
+	 * last point this library ever has a handle to the child before it
+	 * runs its own first instruction. __spawn_pending_priority()'s own
+	 * comment (libc.h) explains why this call needs no cross-process
+	 * channel the way the sigmask trailer just below does -- best-
+	 * effort, like every other caller of __plat_priority_set()
+	 * (src/misc/resource.c's own setpriority()): a target this process
+	 * has no privilege to raise simply keeps its default priority, and
+	 * that failure is not this spawn's to report. */
+	{
+		int nice_value;
+		if (__spawn_pending_priority(&nice_value))
+			__plat_priority_set(info.Process, 0, nice_value);
+	}
 	NtResumeThread(info.Thread, 0);
 	NtClose(info.Thread);
 	pid = (int)(ULONG_PTR)info.ClientId.UniqueProcess;

@@ -764,7 +764,38 @@ static void test_times_cpu_agrees_with_clock_gettime(void)
 	The whole apparatus is fenced together: the two child roles
 	below exist only to drive this assertion, so leaving them live
 	would put an unreachable re-exec path into every run of this
-	binary. */
+	binary.
+
+	UPDATE: the "Ask NT" route above is now implemented, not just
+	scoped -- src/process/nt/plat_process.c's create_child_job()
+	places every spawned/forked child in its own job before its
+	first instruction runs (ordinary job-membership inheritance
+	carries that down to whatever the child itself goes on to
+	spawn, so one job ends up covering the whole reaped subtree with
+	no per-generation bookkeeping needed); src/process/wait.c's
+	fill_child_rusage() and src/internal/nt/plat_process.c's
+	__plat_process_times() now read
+	JobObjectBasicAccountingInformation from that job instead of a
+	bare ProcessTimes query when one is available, falling back to
+	the old per-process-only answer otherwise. NtQueryInformationJobObject
+	is declared (src/internal/nt.h) and imported (tools/ntdll.def).
+
+	STILL BUG, NOT RE-MEASURED.  This comment's own ACCEPTANCE
+	CRITERION said to re-measure rather than inherit a dated "this
+	platform cannot" -- the same discipline applies in the other
+	direction to a fresh "this now works": Wine was confirmed broken
+	in the sandbox that built the above, so the assertion below has
+	never actually run, on Wine or real Windows, against this code.
+	The specific worry this comment already names for the
+	neighbouring API -- stock Wine's NtQueryInformationProcess()
+	historically answered ProcessTimes for the wrong handle
+	entirely -- has no confirmed answer here for
+	NtQueryInformationJobObject, which no code in this tree had ever
+	called before now.  Left BUG rather than flipped to PASS for
+	exactly that reason: believed correct by code inspection (the
+	job-membership-inheritance argument above, and NT's own
+	documented, decades-stable job-accounting semantics, not
+	anything Wine-specific), not confirmed by running it. */
 #include <sys/wait.h>
 
 int __spawn(const char *path, char *const argv[], char *const envp[]);

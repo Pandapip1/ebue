@@ -65,7 +65,7 @@ static int child_grow(void)
 	return 0;
 }
 
-int __child_add(int pid, __plat_handle_t h)
+int __child_add(int pid, __plat_handle_t h, __plat_handle_t job)
 {
 	int i;
 	/* SA_NOCLDWAIT: this child must never be something wait()/waitpid()
@@ -79,6 +79,7 @@ int __child_add(int pid, __plat_handle_t h)
 			if (!__children[i].pid) {
 				__children[i].pid = pid;
 				__children[i].h = h;
+				__children[i].job = job;
 				__children[i].done = 0;
 				__children[i].status = 0;
 				__children[i].stopsig = 0;
@@ -100,8 +101,10 @@ struct __child *__child_find(int pid)
 void __child_remove(struct __child *c)
 {
 	if (c->h) __plat_close(c->h);
+	if (c->job) __plat_close(c->job);
 	c->pid = 0;
 	c->h = __PLAT_HANDLE_NULL;
+	c->job = __PLAT_HANDLE_NULL;
 }
 
 static void clear_stops(int resume)

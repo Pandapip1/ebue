@@ -30,11 +30,37 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
+#include <signal.h>
 #include "libc.h"
 #include "ownership_stubs.h"
 
 struct __fd __fds[FD_MAX];
 int __fd_limit = FD_MAX;
+
+/* posix_spawn()'s POSIX_SPAWN_SETSIGMASK for a non-empty mask -- see
+ * this pair's own declaration in libc.h for the full story.  Lives here
+ * (portable) rather than in src/process/posix_spawn.c because its
+ * consumer is the NT __fd_runtime_data()/__fd_init() pair
+ * (src/internal/nt/plat_fd_init.c), which already owns the RuntimeData
+ * blob this mask rides in as a trailer. */
+static sigset_t pending_sigmask;
+static int pending_sigmask_set;
+
+void __spawn_set_pending_sigmask(const sigset_t *mask)
+{
+	pending_sigmask = *mask;
+	pending_sigmask_set = 1;
+}
+
+void __spawn_clear_pending_sigmask(void)
+{
+	pending_sigmask_set = 0;
+}
+
+const sigset_t *__spawn_pending_sigmask(void)
+{
+	return pending_sigmask_set ? &pending_sigmask : 0;
+}
 
 int __fd_alloc(int lowest)
 {

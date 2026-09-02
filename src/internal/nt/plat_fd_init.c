@@ -25,6 +25,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
+#include <signal.h>
 #include "libc.h"
 
 /* msvcrt's _osfile bits */
@@ -39,6 +40,20 @@
 
 #define VFS_RUNTIME_MAGIC 0x32534656u /* "VFS2", little-endian */
 #define VFS_RUNTIME_CWD_NATIVE 0x80
+
+/* An ntlibc-specific trailer riding the same RuntimeData blob, past
+ * both the fixed osfile/osfhnd table and the optional VFS trailer --
+ * see __fd_runtime_data()/__fd_init() below for where each piece is
+ * built and read.  Carries POSIX_SPAWN_SETSIGMASK's non-empty mask
+ * (src/process/posix_spawn.c) to a child that has not run its own
+ * first instruction yet, and so cannot be handed one any way this
+ * library hands data to an *already running* process (there is no
+ * "already running" to write into).  Independent of the VFS trailer's
+ * own presence/absence -- its own magic+length make it self-describing
+ * regardless of what came before it in the blob -- because a caller
+ * with no descriptors worth inheriting and no VFS mount can still have
+ * a mask worth delivering. */
+#define SIG_RUNTIME_MAGIC 0x4D474953u /* "SIGM", little-endian */
 
 int __handle_type(HANDLE h)
 {
@@ -197,6 +212,22 @@ void __fd_init(void)
 					__vfs_cwd_set(cwd);
 				}
 			}
+			/* The sigmask trailer, if any, rides immediately after
+			 * whichever of the two trailers above did or did not appear --
+			 * its own magic makes it self-describing regardless, see this
+			 * file's own comment on SIG_RUNTIME_MAGIC above. */
+			{
+				size_t sig_pos = base + (vfs ? (size_t)(9 + 4 * count) : 0);
+				if ((size_t)pp->RuntimeData.Length >= sig_pos + 4 + sizeof(sigset_t)) {
+					unsigned smagic;
+					memcpy(&smagic, p + sig_pos, sizeof smagic);
+					if (smagic == SIG_RUNTIME_MAGIC) {
+						sigset_t mask;
+						memcpy(&mask, p + sig_pos + 4, sizeof mask);
+						__sig_current_mask_install(&mask);
+					}
+				}
+			}
 			for (i = 0; i < count; i++) {
 				HANDLE h;
 				int vk = vfs ? vfs[i] : __VFS_NONE;
@@ -245,6 +276,7 @@ void __fd_init(void)
 void *__fd_runtime_data(size_t *len, __plat_handle_t std[3])
 {
 	int count = 0, i, have_vfs = __vfs_cwd_get() != __VFS_NONE;
+	const sigset_t *sigmask = __spawn_pending_sigmask();
 	unsigned char *blk, *osfile, *osfhnd;
 
 	for (i = 0; i < FD_MAX; i++) {
@@ -253,9 +285,13 @@ void *__fd_runtime_data(size_t *len, __plat_handle_t std[3])
 			if (__fds[i].vfs) have_vfs = 1;
 		}
 	}
-	if (count <= 3 && !have_vfs) { *len = 0; return 0; }
+	/* A pending sigmask is worth a block of its own even when nothing
+	 * else here is: a caller with no inheritable descriptors and no VFS
+	 * mount can still have asked for POSIX_SPAWN_SETSIGMASK. */
+	if (count <= 3 && !have_vfs && !sigmask) { *len = 0; return 0; }
 
-	*len = sizeof(int) + count * (1 + sizeof(HANDLE)) + (have_vfs ? 9 + 4 * count : 0);
+	*len = sizeof(int) + count * (1 + sizeof(HANDLE)) + (have_vfs ? 9 + 4 * count : 0) +
+	       (sigmask ? 4 + sizeof(sigset_t) : 0);
 	blk = __malloc(*len);
 	if (!blk) { *len = 0; return 0; }
 	memcpy(blk, &count, sizeof count);
@@ -300,6 +336,12 @@ void *__fd_runtime_data(size_t *len, __plat_handle_t std[3])
 		for (i = 0; i < count; i++) trailer[8 + 3 * count + i] = __fds[i].vnext;
 		trailer[8 + 4 * count] = (unsigned char)(__VFS_KIND(cwd) |
 			((cwd & __VFS_NATIVE) ? VFS_RUNTIME_CWD_NATIVE : 0));
+	}
+	if (sigmask) {
+		unsigned magic = SIG_RUNTIME_MAGIC;
+		unsigned char *trailer = osfhnd + count * sizeof(HANDLE) + (have_vfs ? 9 + 4 * (size_t)count : 0);
+		memcpy(trailer, &magic, sizeof magic);
+		memcpy(trailer + 4, sigmask, sizeof *sigmask);
 	}
 	return blk;
 }
