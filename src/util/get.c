@@ -193,9 +193,14 @@ static int find_body(const char *rest, size_t restlen, struct line_ref **out, si
 		size_t linelen = nl ? (size_t)(nl - p) : (size_t)(end - p);
 
 		if (!in_body) {
-			if (linelen == 4 && memcmp(p, "\001I 1", 4) == 0) in_body = 1;
+		if (linelen == 4 && p[0] == '\001' && p[1] == 'I' &&
+		    p[2] == ' ' && p[3] == '1') in_body = 1;
 		} else {
-			if (linelen == 4 && memcmp(p, "\001E 1", 4) == 0) { p = nl ? nl + 1 : end; goto done; }
+		if (linelen == 4 && p[0] == '\001' && p[1] == 'E' &&
+		    p[2] == ' ' && p[3] == '1') {
+			p = nl ? nl + 1 : end;
+			goto done;
+		}
 			if (n >= cap) {
 				size_t newcap;
 				struct line_ref *g;

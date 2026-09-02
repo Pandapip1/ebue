@@ -300,9 +300,7 @@ static int write_ustar_header(FILE *out, const struct pax_member *m)
 	memset(block, 0, sizeof block);
 	{
 		size_t name_len = strlen(name);
-		__ownership_writable_span(block, name_len);
-		__ownership_readable_span(name, name_len);
-		memcpy(block, name, name_len);
+		for (size_t j = 0; j < name_len; j++) block[j] = name[j];
 	}
 	ustar_put_oct(block + 100, 8, m->mode & 07777);
 	ustar_put_oct(block + 108, 8, 0); /* uid */
@@ -317,9 +315,8 @@ static int write_ustar_header(FILE *out, const struct pax_member *m)
 	memcpy(block + 263, "00", 2);
 	{
 		size_t prefix_len = strlen(prefix);
-		__ownership_writable_span(block + 345, prefix_len);
-		__ownership_readable_span(prefix, prefix_len);
-		memcpy(block + 345, prefix, prefix_len);
+		for (size_t j = 0; j < prefix_len; j++)
+			block[345 + j] = prefix[j];
 	}
 
 	sum = 0;
@@ -406,7 +403,7 @@ static int cpio_put_field(char *field, int width __arith_range(6, 11),
 	}
 	snprintf(tmp, sizeof tmp, "%0*lo", width, value);
 	__ownership_writable_span(field, (size_t)width);
-	memcpy(field, tmp, width);
+	for (size_t i = 0; i < width; i++) field[i] = tmp[i];
 	return 0;
 }
 

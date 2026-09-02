@@ -140,7 +140,7 @@ static int write_header(FILE *out, const struct ar_member *m)
 	size_t nl = strlen(m->name);
 
 	memset(hdr, ' ', sizeof hdr);
-	memcpy(hdr, m->name, nl);
+	for (size_t i = 0; i < nl; i++) hdr[i] = m->name[i];
 	hdr[nl] = '/';
 	put_field(hdr + 16, 12, "%ld", m->mtime);
 	put_field(hdr + 28, 6, "%ld", 0); /* uid: this platform has none real */
