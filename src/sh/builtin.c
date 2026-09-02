@@ -1092,6 +1092,31 @@ static int bi_get(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== Tier 6: terminal messaging =========================================
+ *
+ * write(1p)/mesg(1p): the plan's own "explicitly deferred / out of
+ * scope" tier, revisited -- see src/util/mesg.c and
+ * src/util/util_write.c's own header comments for what is real here
+ * given ntlibc's one-real-user model. Registered here for the same
+ * reason every other tier is: a builtin runs in this process,
+ * unconditionally, without depending on __find_program()/__spawn()
+ * succeeding. Neither has any effect on the shell execution
+ * environment itself, so `env_effect` is 0 for both, same as the rest
+ * of this table; neither is a 2.14 special built-in. */
+static int bi_mesg(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_mesg(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_mesg_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_write(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_write(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_write_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* ==== the dispatcher ==================================================== */
 
 /* `special` is XCU 2.14's distinction, recorded because 2.8.1 hangs
@@ -1190,6 +1215,8 @@ static const struct sh_builtin builtins[] = {
 	{ "tput",    0, 0, bi_tput },
 	{ "admin",   0, 0, bi_admin },
 	{ "get",     0, 0, bi_get },
+	{ "mesg",    0, 0, bi_mesg },
+	{ "write",   0, 0, bi_write },
 	{ 0, 0, 0, 0 }
 };
 
