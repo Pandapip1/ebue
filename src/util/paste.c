@@ -77,27 +77,47 @@ static void merge_parallel(FILE **files, int nfiles, const char *delims, size_t 
 {
 	char **linebuf = calloc((size_t)nfiles, sizeof *linebuf);
 	size_t *linecap = calloc((size_t)nfiles, sizeof *linecap);
+	ssize_t *linelen = calloc((size_t)nfiles, sizeof *linelen);
 	int *eof = calloc((size_t)nfiles, sizeof *eof);
 	int j;
 
-	if (!linebuf || !linecap || !eof) { free(linebuf); free(linecap); free(eof); return; }
+	if (!linebuf || !linecap || !linelen || !eof) {
+		free(linebuf); free(linecap); free(linelen); free(eof); return;
+	}
 	for (j = 0; j < nfiles; j++) if (!files[j]) eof[j] = 1;
 
 	for (;;) {
-		int any_active = 0;
-		for (j = 0; j < nfiles; j++) if (!eof[j]) any_active = 1;
-		if (!any_active) break;
+		/* Read this row's line from every file that isn't eof yet
+		 * *before* printing anything. A file going eof mid-row still
+		 * has to leave its column empty for this row (POSIX: a
+		 * shorter file contributes an empty field, not a dropped
+		 * row, until every file is exhausted) -- but the row after
+		 * the true last line of the longest file must not be
+		 * printed at all, since by then no file has anything left.
+		 * any_data below is what tells those two cases apart: it is
+		 * only set when some file actually produced a line this
+		 * round, so a round where every file is already eof (or
+		 * goes eof on this very read) breaks out before writing a
+		 * spurious all-empty row of bare delimiters. */
+		int any_data = 0;
 
 		for (j = 0; j < nfiles; j++) {
-			ssize_t len = -1;
-
+			linelen[j] = -1;
 			if (!eof[j]) {
-				len = getline(&linebuf[j], &linecap[j], files[j]);
-				if (len < 0) eof[j] = 1;
-				else if (len > 0 && linebuf[j][len - 1] == '\n') linebuf[j][--len] = 0;
+				linelen[j] = getline(&linebuf[j], &linecap[j], files[j]);
+				if (linelen[j] < 0) {
+					eof[j] = 1;
+				} else {
+					if (linelen[j] > 0 && linebuf[j][linelen[j] - 1] == '\n')
+						linebuf[j][--linelen[j]] = 0;
+					any_data = 1;
+				}
 			}
-			if (len >= 0) fwrite(linebuf[j], 1, (size_t)len, stdout);
+		}
+		if (!any_data) break;
 
+		for (j = 0; j < nfiles; j++) {
+			if (linelen[j] >= 0) fwrite(linebuf[j], 1, (size_t)linelen[j], stdout);
 			if (j < nfiles - 1) fputc(delims[(size_t)j % ndelim], stdout);
 			else fputc('\n', stdout);
 		}
@@ -106,6 +126,7 @@ static void merge_parallel(FILE **files, int nfiles, const char *delims, size_t 
 	for (j = 0; j < nfiles; j++) free(linebuf[j]);
 	free(linebuf);
 	free(linecap);
+	free(linelen);
 	free(eof);
 }
 
