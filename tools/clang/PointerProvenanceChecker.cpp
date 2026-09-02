@@ -342,8 +342,11 @@ class PointerProvenanceChecker
   //     register.  The conversion from that ABI word to a pointer is the
   //     operation these functions exist to perform; no C pointer exists
   //     before the kernel creates the mapping from which provenance could
-  //     be derived.  The same applies to the initial stack/TLS/ELF image
-  //     addresses supplied by the kernel in crt1.c.
+  //     be derived.  shmat(2) creates a System V shared-memory attachment
+  //     through the same signed syscall-return register, and brk(2) returns
+  //     the kernel's resulting break through it.  The same applies to the
+  //     initial stack/TLS/ELF image addresses supplied by the kernel in
+  //     crt1.c.
   //   Linux box()/install/open/pipe/process functions listed below
   //     __plat_handle_t is deliberately an opaque one-word carrier shared
   //     with the NT backend.  Linux file descriptors, pids, and tids are
@@ -380,6 +383,11 @@ class PointerProvenanceChecker
         {"src/dlfcn/linux/plat_dlfcn.c", "apply_reloc_table"},
         {"src/dlfcn/linux/plat_dlfcn.c", "__plat_dlopen"},
         {"src/dlfcn/linux/plat_dlfcn.c", "__plat_dlsym"},
+        {"src/dlfcn/linux/plat_dlfcn.c", "resolve_export"},
+        {"src/dlfcn/linux/plat_dlfcn.c", "setup_object_tls"},
+        {"src/dlfcn/linux/plat_dlfcn.c", "run_ctors"},
+        {"src/dlfcn/linux/plat_dlfcn.c", "load_object"},
+        {"src/ipc/linux/plat_sysvipc.c", "shmat"},
         {"src/fcntl/linux/plat_fcntl.c", "__plat_open"},
         {"src/internal/linux/plat_fd_init.c", "install_std"},
         {"src/malloc/linux/plat_malloc.c", "__plat_pages_alloc"},
@@ -398,6 +406,7 @@ class PointerProvenanceChecker
         {"src/thread/linux/plat_thread.c", "__plat_thread_duplicate_self"},
         {"src/thread/linux/plat_thread.c", "__plat_named_mutant_acquire"},
         {"src/unistd/linux/plat_fd.c", "__plat_dup"},
+        {"src/unistd/linux/plat_brk.c", "raw_brk"},
         {"src/unistd/linux/plat_unistd.c", "__plat_pipe"},
     };
     std::string Fn = context(C);

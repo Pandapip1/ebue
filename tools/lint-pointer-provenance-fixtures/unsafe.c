@@ -47,3 +47,15 @@ long untrusted_end_output(const char *s) {
   parse_number(s, &end);
   return end - s; /* pointer-provenance-expect */
 }
+
+/* Named kernel/loader ABI exceptions require both their audited source file
+ * and function name; merely reusing a name elsewhere grants nothing. */
+void *shmat(unsigned long address) {
+  return (void *)address; /* pointer-provenance-expect */
+}
+void *raw_brk(unsigned long address) {
+  return (void *)address; /* pointer-provenance-expect */
+}
+void *load_object(unsigned long address) {
+  return (void *)address; /* pointer-provenance-expect */
+}
