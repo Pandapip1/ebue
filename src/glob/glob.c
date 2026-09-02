@@ -492,6 +492,341 @@ nospace:
 	return GLOB_NOSPACE;
 }
 
+/* --------------------------------------------------------------------
+ * Pattern-level ".." collapsing -- see also GLOB_STEP_LIMIT above.
+ *
+ * GLOB_STEP_LIMIT is a defensive CAP: it stops a pathological pattern
+ * from running forever, but it does so by giving up (GLOB_NOSPACE) on
+ * exactly the patterns a real caller is most likely to write by hand --
+ * "* /../* /../* /../foo" (without the spaces the pattern needs to stop
+ * that from also ending THIS comment) is not an exotic adversarial
+ * input, it looks
+ * like the kind of thing a generated or templated path ends up as. The
+ * cap alone still does all the wasted enumeration work up to the
+ * ceiling before giving up.
+ *
+ * collapse_dotdot(), below, removes the waste at its source: BEFORE
+ * do_glob() is ever called, it rewrites the PATTERN TEXT itself,
+ * canceling "component/../" pairs the same way a shell's logical
+ * ("cd -L" / $PWD-tracking) pathname handling does -- algebraically, by
+ * inspecting the pattern's own component list, never by asking the
+ * filesystem what "component" resolves to. But glob() is not a shell's
+ * $PWD bookkeeping: it exists specifically to report which pathnames
+ * are REAL, and XBD 4.13 "Pathname Resolution" is explicit that a real
+ * ".." names the parent of its predecessor DIRECTORY and that
+ * "[p]athname resolution shall fail" if a predecessor cannot itself be
+ * located -- so a purely textual rewrite that never checked anything
+ * would be able to turn glob("nonexistent/../foo", ...) into a match
+ * for "foo" even though "nonexistent" does not exist, which is wrong.
+ * This rewrite therefore treats two shapes of "component" differently:
+ *
+ * - A WILDCARD component (an unescaped '*', '?' or '[' in it) is
+ *   collapsed against a following ".." UNCONDITIONALLY, with no
+ *   filesystem check at all. This is what actually matters for
+ *   GLOB_STEP_LIMIT's own reproducer: do_glob()'s wildcard branch only
+ *   ever recurses past a matched entry after confirming, via readdir()
+ *   + stat(), that the entry is a real, existing directory, so by the
+ *   time do_glob() would reach the ".." that follows a wildcard match,
+ *   the thing being canceled was ALREADY guaranteed to exist -- the
+ *   existence check this rewrite skips was never in question. What IS
+ *   given up is exact multiplicity: do_glob(), uncollapsed, produces
+ *   one textually distinct result PER matching entry ("wxab-1/.." and
+ *   "wxab-2/.." are two separate results for glob("wxab-?/.."), not
+ *   one -- confirmed directly against bash's own glob()), and a pattern
+ *   with N repeats of a wildcard matching K entries genuinely has K**N
+ *   distinct such spellings, every one naming the exact same file.
+ *   Enumerating that entire set is what was exponential, not any
+ *   accidental inefficiency in how do_glob() walked it -- glibc's own
+ *   GLOB_LIMIT exists for the identical reason. Collapsing intentionally
+ *   reports each such family of same-target, differently-spelled matches
+ *   ONCE rather than K**N times, which is what turns an inherently
+ *   exponential expansion into O(pattern length) work.
+ *
+ * - A LITERAL (meta-free) component is collapsed against a following
+ *   ".." only when this rewrite can ITSELF confirm, with one stat(),
+ *   that the component names a real, accessible directory -- exactly
+ *   the check do_glob()'s own literal branch would have performed
+ *   anyway, just performed here, once, up front, instead of once per
+ *   occurrence during the recursion. This is never the exponential
+ *   shape (a literal component costs one stat() and never fans out --
+ *   see GLOB_STEP_LIMIT's own comment above), so there is no
+ *   performance reason to skip the check the way the wildcard case
+ *   does, and skipping it would be a real correctness bug (the
+ *   "nonexistent/../foo" case above). That verification is only
+ *   possible while the accumulated path up to and including the
+ *   candidate is itself made of nothing but literal/"."/survived-".."
+ *   components with no unresolved wildcard anywhere in it (a
+ *   wildcard's real location is not knowable without a filesystem walk,
+ *   which is exactly the per-repeat cost this pass exists to avoid);
+ *   once any wildcard appears, every literal component after it is left
+ *   completely alone and falls through to do_glob()'s own unmodified,
+ *   already-correct per-component handling.
+ *
+ * Either way, a leading ".." (nothing precedes it) and a "." component
+ * are never cancelable AGAINST: ".." cannot cancel another ".."
+ * ("../../" must stay exactly two levels), and "./.." is NOT the same
+ * as "..", either -- entering "." changes nothing, so "./.." must still
+ * walk up one real level, and collapsing "./../" straight to nothing
+ * would be wrong (it would turn "./../x" into "x" instead of "../x").
+ * Both are simply pushed onto the surviving component stack like any
+ * other component that fails to cancel.
+ *
+ * The single left-to-right stack pass below reaches the same fixed
+ * point a repeated linear-scan-until-no-change approach would ("a/b/
+ * ../../c" needs two cancellations to reach "c", and the stack performs
+ * both in the one pass: "b" cancels against the first "..", then "a" --
+ * now the new top of stack -- cancels against the second).
+ *
+ * GLOB_STEP_LIMIT remains in place after this pass purely as
+ * belt-and-suspenders: it is no longer the primary defense against the
+ * "* /../" repeat shape (this rewrite removes that shape's fan-out
+ * before do_glob() ever sees it), but it still protects every OTHER
+ * pattern shape that is exponential in do_glob()'s recursion without
+ * matching this pass's narrow "component immediately undone by '..'"
+ * trigger -- e.g. plain nested wildcards several levels deep against a
+ * wide tree, which cost real, unavoidable enumeration work this pass
+ * has no opinion about.
+ * -------------------------------------------------------------------- */
+
+enum comp_kind { CK_LIT, CK_WILD, CK_DOT, CK_DOTDOT };
+
+struct comp {
+	const char *start;
+	size_t len;
+	enum comp_kind kind;
+};
+
+struct comp_list {
+	struct comp *v;
+	size_t n, cap;
+	int trailing_slash;
+};
+
+static int comp_push(struct comp_list *cl, const char *start, size_t len,
+                      enum comp_kind kind) __attribute__((nonnull(1)));
+static int comp_push(struct comp_list *cl, const char *start, size_t len,
+                      enum comp_kind kind)
+{
+	if (cl->n == cl->cap) {
+		size_t nc;
+		struct comp *nv;
+		if (!__array_next_capacity(cl->cap, cl->n, 1, 16, sizeof *cl->v, &nc)) {
+			errno = ENOMEM;
+			return -1;
+		}
+		nv = (struct comp *)__malloc(nc * sizeof *nv);
+		if (!nv) return -1;
+		if (cl->v) memcpy((void *)nv, (const void *)cl->v, cl->n * sizeof *nv);
+		__free((void *)cl->v);
+		cl->v = nv;
+		cl->cap = nc;
+	}
+	cl->v[cl->n].start = start;
+	cl->v[cl->n].len = len;
+	cl->v[cl->n].kind = kind;
+	cl->n++;
+	return 0;
+}
+
+/* Classifies one already-bounded component (start, len bytes, no '/' in
+ * it -- the caller already split on find_slash()'s own escape-aware
+ * boundaries). A component containing any unescaped wildcard
+ * metacharacter is CK_WILD without needing to unescape it at all: it
+ * can never BE "." or ".." textually once matched, since do_glob()'s
+ * own dirent-skip check (its wildcard branch) refuses "." and ".." as
+ * readdir() results before fnmatch() ever runs on them. Otherwise the
+ * component is unescaped (GLOB_NOESCAPE-aware, the same as do_glob()'s
+ * own literal branch) and compared against the real strings "." and
+ * ".." -- so an ESCAPED dot (e.g. "\." under ordinary escaping rules)
+ * is judged by what it actually names once unescaped, not by its raw
+ * spelling, while GLOB_NOESCAPE correctly turns "\.\." into four
+ * ordinary literal bytes that are neither. */
+static int classify(const char *s, size_t len, int flags, enum comp_kind *kind)
+    __attribute__((nonnull(1, 4)));
+static int classify(const char *s, size_t len, int flags, enum comp_kind *kind)
+{
+	char *u;
+
+	if (has_meta(s, len, flags)) {
+		*kind = CK_WILD;
+		return 0;
+	}
+	u = unescape(s, len, flags);
+	if (!u) return -1;
+	if (u[0] == '.' && u[1] == 0) *kind = CK_DOT;
+	else if (u[0] == '.' && u[1] == '.' && u[2] == 0) *kind = CK_DOTDOT;
+	else *kind = CK_LIT;
+	__free(u);
+	return 0;
+}
+
+/* Splits pat into its '/'-delimited components, mirroring do_glob()'s
+ * own "while (*pat == '/') pat++" run-of-slashes skip at the top of its
+ * loop -- so, exactly as do_glob() already treats them, a run of two or
+ * more '/' never produces an empty component here either. pat is
+ * guaranteed not to start with '/' by glob()'s own leading-slash
+ * handling before this is ever called, so there is no leading empty
+ * component to represent either. */
+static int split_components(const char *pat, int flags, struct comp_list *cl)
+    __attribute__((nonnull(1, 3)));
+static int split_components(const char *pat, int flags, struct comp_list *cl)
+{
+	const char *p = pat;
+
+	cl->v = 0;
+	cl->n = cl->cap = 0;
+	cl->trailing_slash = 0;
+
+	for (;;) {
+		const char *slash;
+		size_t seglen;
+		enum comp_kind kind;
+
+		while (*p == '/') p++;
+		if (!*p) break;
+
+		slash = find_slash(p, flags);
+		seglen = slash ? (size_t)(slash - p) : strlen(p);
+		if (classify(p, seglen, flags, &kind) || comp_push(cl, p, seglen, kind)) {
+			__free((void *)cl->v);
+			return -1;
+		}
+		if (!slash) break;
+		p = slash + 1;
+		if (!*p) { cl->trailing_slash = 1; break; }
+	}
+	return 0;
+}
+
+/* Confirms, with exactly one stat(), that the LITERAL path named by
+ * joining base_prefix with every currently-kept component in stk (in
+ * order, unescaped) is a real, existing, accessible directory -- i.e.
+ * that canceling stk's own top entry against a following ".." is
+ * something do_glob() itself would also have confirmed, had it walked
+ * there the slow way. Returns 1 (confirmed, safe to cancel), 0 (not
+ * confirmed -- either a CK_WILD entry anywhere in stk makes the real
+ * location unknowable without a filesystem walk this pass is not
+ * willing to perform, or the stat() itself failed), or -1 on allocation
+ * failure. */
+static int literal_prefix_exists(const struct comp_list *stk, int flags,
+                                  const char *base_prefix, size_t base_preflen)
+    __attribute__((nonnull(1, 3)));
+static int literal_prefix_exists(const struct comp_list *stk, int flags,
+                                  const char *base_prefix, size_t base_preflen)
+{
+	char path[PATH_MAX];
+	size_t len, i;
+	struct stat st;
+
+	if (base_preflen >= sizeof path) return 0;
+	memcpy(path, base_prefix, base_preflen);
+	len = base_preflen;
+
+	for (i = 0; i < stk->n; i++) {
+		const struct comp *c = &stk->v[i];
+		char *name;
+		size_t namelen;
+
+		if (c->kind == CK_WILD) return 0;
+		name = unescape(c->start, c->len, flags);
+		if (!name) return -1;
+		namelen = strlen(name);
+		if (namelen >= sizeof path - len) { __free(name); return 0; }
+		memcpy(path + len, name, namelen);
+		len += namelen;
+		__free(name);
+		if (len >= sizeof path - 1) return 0;
+		path[len++] = '/';
+	}
+	path[len] = 0;
+
+	return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+/* The rewrite pass itself -- see the banner comment above. pat is the
+ * pattern with any leading '/' already stripped and stored in
+ * base_prefix/base_preflen by glob() (see glob()'s own call site).
+ * Returns a newly heap-allocated replacement for pat, or NULL on
+ * allocation failure. */
+withtok(internal_heap_allocated)
+static char *collapse_dotdot(const char *pat, int flags,
+                              const char *base_prefix, size_t base_preflen)
+    __attribute__((nonnull(1, 3)));
+withtok(internal_heap_allocated)
+static char *collapse_dotdot(const char *pat, int flags,
+                              const char *base_prefix, size_t base_preflen)
+{
+	struct comp_list src, stk;
+	size_t i, total, pos;
+	char *out;
+	int ok = 1;
+
+	/* A fast, deliberately conservative pre-filter: if the byte pair
+	 * ".." does not appear ANYWHERE in the raw pattern text, no
+	 * component can unescape to the special ".." token either --
+	 * unescaping only ever REMOVES backslash bytes, it never
+	 * manufactures two adjacent literal dots out of bytes that were
+	 * not already adjacent -- except for the one case where an escape
+	 * backslash sits BETWEEN the two dots (e.g. ".\." unescaping to
+	 * ".."), which this heuristic deliberately does not chase down.
+	 * Skipping the pass there is always SAFE, never wrong: do_glob()'s
+	 * own unmodified per-component recursion still produces the
+	 * correct result either way, just without this pass's speedup, and
+	 * GLOB_STEP_LIMIT remains the backstop against any pattern shaped
+	 * to specifically dodge this prefilter. */
+	if (!strstr(pat, "..")) return xstrdup(pat);
+
+	if (split_components(pat, flags, &src)) return 0;
+
+	stk.v = 0;
+	stk.n = stk.cap = 0;
+	stk.trailing_slash = src.trailing_slash;
+
+	for (i = 0; i < src.n && ok; i++) {
+		struct comp c = src.v[i];
+		int canceled = 0;
+
+		if (c.kind == CK_DOTDOT && stk.n > 0) {
+			struct comp *top = &stk.v[stk.n - 1];
+			if (top->kind == CK_WILD) {
+				stk.n--;
+				canceled = 1;
+			} else if (top->kind == CK_LIT) {
+				int r = literal_prefix_exists(&stk, flags, base_prefix, base_preflen);
+				if (r < 0) { ok = 0; break; }
+				if (r) { stk.n--; canceled = 1; }
+			}
+		}
+		if (!canceled && comp_push(&stk, c.start, c.len, c.kind)) ok = 0;
+	}
+	__free((void *)src.v);
+	if (!ok) { __free((void *)stk.v); return 0; }
+
+	if (stk.n == 0) {
+		/* Every real component canceled away: what remains names
+		 * exactly base_prefix itself (e.g. "a/.." with "a" confirmed
+		 * a real directory collapses to "", which do_glob()'s own
+		 * pattern-exhausted branch already turns into the correct
+		 * pathname for an empty remaining pattern -- see its own
+		 * comment on that branch). */
+		__free((void *)stk.v);
+		return xstrdup("");
+	}
+
+	for (i = 0, total = 1; i < stk.n; i++) total += stk.v[i].len + 1;
+	out = __malloc(total);
+	if (!out) { __free((void *)stk.v); return 0; }
+	for (i = 0, pos = 0; i < stk.n; i++) {
+		memcpy(out + pos, stk.v[i].start, stk.v[i].len);
+		pos += stk.v[i].len;
+		if (i + 1 < stk.n) out[pos++] = '/';
+	}
+	if (stk.trailing_slash) out[pos++] = '/';
+	out[pos] = 0;
+	__free((void *)stk.v);
+	return out;
+}
+
 int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob_t *pglob)
 {
 	struct pv out;
@@ -544,8 +879,23 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
 	 * by this point, leaving preflen == 1 and an empty pat, which is the
 	 * legitimate exhausted case naming the root.  So the test is on the
 	 * caller's original pattern, not on pat. */
-	rc = *pattern ? do_glob(prefix, sizeof prefix, preflen, pat, flags,
-	                        errfunc, &out, &steps) : 0;
+	if (*pattern) {
+		/* collapse_dotdot() rewrites pat into an equivalent, shorter
+		 * pattern with "component/../" pairs already canceled -- see
+		 * its own banner comment above -- BEFORE do_glob() ever
+		 * starts recursing, so the recursion below never has to
+		 * redo the same directory listing once per repeat of a
+		 * "wildcard undone by '..'" pattern. A NULL result here is
+		 * an allocation failure, handled by falling into the exact
+		 * same GLOB_NOSPACE path an out-of-memory do_glob() return
+		 * already takes below, rather than duplicating that cleanup. */
+		char *collapsed = collapse_dotdot(pat, flags, prefix, preflen);
+		rc = collapsed ? do_glob(prefix, sizeof prefix, preflen, collapsed, flags,
+		                         errfunc, &out, &steps) : -1;
+		__free(collapsed);
+	} else {
+		rc = 0;
+	}
 
 	if (rc == -1) {
 		/* Frees everything in out, including any entries kept alive
