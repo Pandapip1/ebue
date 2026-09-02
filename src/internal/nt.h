@@ -1058,11 +1058,13 @@ typedef struct _RTL_USER_PROCESS_INFORMATION {
 #define PROCESS_ALL_ACCESS          (STANDARD_RIGHTS_REQUIRED|SYNCHRONIZE|0xFFFF)
 
 /* ---- job objects (src/misc/resource.c: setrlimit()'s NT analogue for
- * RLIMIT_NPROC/RLIMIT_CPU/RLIMIT_AS/RLIMIT_DATA) --------------------------
+ * RLIMIT_NPROC/RLIMIT_CPU/RLIMIT_AS/RLIMIT_DATA; src/process/wait.c's
+ * recursive-descendant CPU-time rollup for times()/wait3()/wait4(), see
+ * JOBOBJECT_BASIC_ACCOUNTING_INFORMATION below) ----------------------------
  * Field/flag layout and JOBOBJECTINFOCLASS ordinals per winnt.h; this
- * library only ever uses JobObjectBasicLimitInformation and
- * JobObjectExtendedLimitInformation, so nothing past those two is
- * declared here. */
+ * library only ever uses JobObjectBasicAccountingInformation,
+ * JobObjectBasicLimitInformation and JobObjectExtendedLimitInformation,
+ * so nothing past those three is declared here. */
 #define JOB_OBJECT_ASSIGN_PROCESS   0x0001
 #define JOB_OBJECT_SET_ATTRIBUTES   0x0002
 #define JOB_OBJECT_QUERY            0x0004
@@ -1104,6 +1106,31 @@ typedef struct _JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
 	SIZE_T PeakProcessMemoryUsed;
 	SIZE_T PeakJobMemoryUsed;
 } JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
+
+/* JobObjectBasicAccountingInformation (class 1): the kernel's own
+ * running total of CPU time for every process ever assigned to a job,
+ * including ones that have since terminated -- it survives past the
+ * member process's own death for as long as this process keeps the job
+ * handle open. src/process/wait.c's fill_child_rusage() reads
+ * TotalUserTime/TotalKernelTime here instead of a bare
+ * NtQueryInformationProcess(ProcessTimes) precisely because a spawned
+ * child's own descendants (this process's grandchildren) automatically
+ * become members of the same job their creator belongs to -- ordinary,
+ * non-nested job membership inheritance, not a new mechanism -- so this
+ * one query already folds in CPU time this library's own per-process
+ * children_ktime100ns/children_utime100ns accumulator (src/process/
+ * wait.c) has no way to read out of another process's address space.
+ * No pointer-sized members, so this is 48 bytes on every arch. */
+typedef struct _JOBOBJECT_BASIC_ACCOUNTING_INFORMATION {
+	LARGE_INTEGER TotalUserTime;
+	LARGE_INTEGER TotalKernelTime;
+	LARGE_INTEGER ThisPeriodTotalUserTime;
+	LARGE_INTEGER ThisPeriodTotalKernelTime;
+	ULONG TotalPageFaultCount;
+	ULONG TotalProcesses;
+	ULONG ActiveProcesses;
+	ULONG TotalTerminatedProcesses;
+} JOBOBJECT_BASIC_ACCOUNTING_INFORMATION;
 
 #define JOB_OBJECT_LIMIT_PROCESS_TIME    0x00000002
 #define JOB_OBJECT_LIMIT_ACTIVE_PROCESS  0x00000008
@@ -1545,6 +1572,7 @@ NTSTATUS NTAPI NtRaiseHardError(NTSTATUS, ULONG, ULONG, ULONG_PTR *, ULONG, PULO
 NTSTATUS NTAPI NtCreateJobObject(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
 NTSTATUS NTAPI NtAssignProcessToJobObject(HANDLE, HANDLE);
 NTSTATUS NTAPI NtSetInformationJobObject(HANDLE, JOBOBJECTINFOCLASS, PVOID, ULONG);
+NTSTATUS NTAPI NtQueryInformationJobObject(HANDLE, JOBOBJECTINFOCLASS, PVOID, ULONG, PULONG);
 NTSTATUS NTAPI NtWow64QueryInformationProcess64(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
 NTSTATUS NTAPI NtWow64ReadVirtualMemory64(HANDLE, ULONGLONG, PVOID, ULONGLONG, ULONGLONG *);
 
@@ -2125,6 +2153,18 @@ NT_LAYOUT_OFFSET(IO_COUNTERS, OtherOperationCount, 16);
 NT_LAYOUT_OFFSET(IO_COUNTERS, ReadTransferCount, 24);
 NT_LAYOUT_OFFSET(IO_COUNTERS, WriteTransferCount, 32);
 NT_LAYOUT_OFFSET(IO_COUNTERS, OtherTransferCount, 40);
+
+/* JOBOBJECT_BASIC_ACCOUNTING_INFORMATION -- no pointer-sized members,
+ * so the size is the same 48 bytes on every arch. */
+NT_LAYOUT_SIZE(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, 48);
+NT_LAYOUT_OFFSET(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, TotalUserTime, 0);
+NT_LAYOUT_OFFSET(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, TotalKernelTime, 8);
+NT_LAYOUT_OFFSET(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, ThisPeriodTotalUserTime, 16);
+NT_LAYOUT_OFFSET(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, ThisPeriodTotalKernelTime, 24);
+NT_LAYOUT_OFFSET(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, TotalPageFaultCount, 32);
+NT_LAYOUT_OFFSET(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, TotalProcesses, 36);
+NT_LAYOUT_OFFSET(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, ActiveProcesses, 40);
+NT_LAYOUT_OFFSET(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, TotalTerminatedProcesses, 44);
 
 /* JOBOBJECT_BASIC_LIMIT_INFORMATION */
 NT_LAYOUT_SIZE(JOBOBJECT_BASIC_LIMIT_INFORMATION, 32 + 4*NT_PTR);

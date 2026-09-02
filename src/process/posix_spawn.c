@@ -82,24 +82,32 @@
  *     child is already SIG_DFL, whatever subset the caller names.
  *     Nothing to do, and nothing being faked -- the postcondition holds.
  *
- *   POSIX_SPAWN_SETSIGMASK -- honoured only for an empty mask, which
- *     is likewise true by construction (`blocked` in signal.c is a
- *     static, so a fresh child's mask is empty).  A non-empty mask is
- *     refused with EINVAL, ERRORS' "[EINVAL] The value specified by
- *     file_actions or attrp is invalid" being the only channel POSIX
- *     offers for this flag at all.  This is the case a caller most
- *     often does *not* hit: GNU make, the consumer this header was
- *     written for, calls sigemptyset() and then
- *     posix_spawnattr_setsigmask() with that empty set (src/job.c
- *     child_execute_job), precisely to unblock everything in the child.
+ *   POSIX_SPAWN_SETSIGMASK -- honoured, on NT.  An empty mask is true
+ *     by construction (`blocked` in signal.c is a static, so a fresh
+ *     child's mask already starts empty).  A non-empty mask rides an
+ *     ntlibc-specific trailer on the same RuntimeData blob that already
+ *     carries the inherited-descriptor table (src/internal/nt/
+ *     plat_fd_init.c's SIG_RUNTIME_MAGIC), set by
+ *     __spawn_set_pending_sigmask() (libc.h) immediately before
+ *     __spawn() and read back by __fd_init() before the child's main()
+ *     -- in fact before anything of the child's own runs at all -- so
+ *     the mask is in place before the very first instruction that could
+ *     observe it. This is the case GNU make, the consumer this header
+ *     was written for, hits least often: it calls sigemptyset() and
+ *     then posix_spawnattr_setsigmask() with that empty set (src/job.c
+ *     child_execute_job), precisely to unblock everything in the child
+ *     -- the already-true-by-construction case above -- but a caller
+ *     that wants the opposite, a specific signal held blocked across
+ *     exec, is now delivered it for real rather than told EINVAL.
  *
- *     Whether a non-empty mask could be delivered is a live question
- *     rather than a settled impossibility -- RuntimeData is a real
- *     parent-to-child channel that already carries the descriptor
- *     table -- but nothing reads a mask out of it today, and a mask
- *     sent that way would reach an ntlibc-built child only, silently
- *     doing nothing for any other image.  See test/posix-spawn.c's
- *     fence, which records the mechanism.
+ *     Not equivalent to POSIX's promise in one respect: on POSIX the
+ *     kernel carries the mask across exec, so it applies to *any*
+ *     image; this trailer reaches an ntlibc-built child only, and does
+ *     nothing for cmd.exe or any other program exec'd this way (there
+ *     is no other program this library's own __fd_init() runs inside
+ *     of to read it). Refused with EINVAL on Linux, unchanged: the
+ *     mechanism above is NT-specific and nothing here has built or
+ *     verified an equivalent there. See test/posix-spawn.c's fence.
  *
  *   POSIX_SPAWN_RESETIDS -- honoured, and inapplicable.  "reset the
  *     effective user ID ... to the real user ID".  An NT access token
@@ -135,18 +143,42 @@
  *     "[EINVAL] The value of the pgid argument ... is not a value
  *     supported by the implementation" is exactly this).
  *
- *   POSIX_SPAWN_SETSCHEDPARAM / POSIX_SPAWN_SETSCHEDULER -- refused,
- *     always, with EINVAL.  ERRORS sends these to sched_setparam() and
- *     sched_setscheduler(), whose "[EINVAL] The value of the policy
- *     parameter is invalid" is the accurate answer on a platform with
- *     no POSIX scheduling policies at all: NT thread scheduling has
- *     priorities but no SCHED_FIFO/SCHED_RR/SCHED_OTHER distinction, so
- *     there is no policy value that could be valid.  (Issue 6 removed
- *     [ENOSYS] from sched_setscheduler() on the grounds that stubs need
- *     not be provided at all, so EINVAL, not ENOSYS, is the specified
- *     shape.)  Note this is a rejection of *acting* on the flag; the
- *     accessors in spawnattr.c store and return the value faithfully,
- *     because storage is a promise that can be kept.
+ *   POSIX_SPAWN_SETSCHEDPARAM / POSIX_SPAWN_SETSCHEDULER -- honoured,
+ *     on NT, using the same suspended-process window
+ *     __spawn_set_pending_priority()'s own comment (libc.h) and
+ *     src/process/nt/plat_process.c describe: __plat_priority_set() is
+ *     called on the child's own process handle before its first
+ *     instruction ever runs, the identical call src/misc/resource.c's
+ *     own setpriority() makes for a non-self target.
+ *
+ *     The POSIX shape does not survive the translation, and that has
+ *     not changed: NT has priorities but no SCHED_FIFO/SCHED_RR/
+ *     SCHED_OTHER policy distinction, so sched_setscheduler()'s policy
+ *     argument has no valid value here and <sched.h> deliberately does
+ *     not claim the _POSIX_PRIORITY_SCHEDULING option group at all
+ *     (Issue 6 removed [ENOSYS] from sched_setscheduler() on the
+ *     grounds that stubs need not be provided at all -- not that this
+ *     matters here, since this platform accepts rather than stubs).
+ *     `policy` is therefore accepted unconditionally, whatever value it
+ *     holds, and only `sched_priority` is applied, run through
+ *     nice_from_sched_priority()'s own comment (below) for the mapping
+ *     used and why it is an admitted invention rather than a specified
+ *     one. Best-effort past that point, like every other caller of
+ *     __plat_priority_set(): a target this process has no privilege to
+ *     raise simply keeps its default priority, silently, which is not
+ *     this flag's failure to report -- posix_spawn() itself still
+ *     succeeds, the same way setpriority() already tolerates the NT
+ *     call it wraps failing without failing itself.
+ *
+ *     Refused with EINVAL on Linux, unchanged: real POSIX scheduling
+ *     policies exist there, so nothing here has invented a substitute
+ *     for lacking one the way NT genuinely lacks one, and nothing here
+ *     has built or verified applying `sched_priority` for real through
+ *     that backend's own __plat_process_spawn(). Note this used to be a
+ *     rejection of *acting* on the flag while spawnattr.c's own
+ *     accessors stored and returned the value faithfully regardless;
+ *     that storage is unconditional and unaffected by whether this
+ *     function goes on to act on it.
  *
  *   POSIX_SPAWN_USEVFORK -- not POSIX; accepted, and satisfied by
  *     construction.  __spawn() never copies the parent's address space,
@@ -182,6 +214,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <signal.h>
+#include <limits.h>
 #include "libc.h"
 #include "spawn_internal.h"
 #include "plat_fd.h"
@@ -323,7 +356,22 @@ static int do_action(const struct __spawn_action *a, struct saved_slot *sv, int 
 
 /* Everything posix_spawn() must decide *before* it starts editing the
  * descriptor table, so that a rejected attribute costs no undo.
- * Returns 0 or the error number. */
+ * Returns 0 or the error number.
+ *
+ * POSIX_SPAWN_SETSIGMASK (non-empty mask) and POSIX_SPAWN_SETSCHEDPARAM/
+ * POSIX_SPAWN_SETSCHEDULER are accepted here on NT, not refused: the
+ * mechanism this file's own banner used to say did not exist -- a real
+ * window before the child's first instruction, and (for the mask) a
+ * real parent-to-child channel to use inside it -- is now built (see
+ * __spawn_set_pending_sigmask()/__spawn_set_pending_priority(),
+ * libc.h, and src/process/nt/plat_process.c/src/internal/nt/
+ * plat_fd_init.c for where each is actually consumed). Left refused on
+ * Linux: this file is portable, but the mechanism each flag now rides
+ * is NT-specific, and nothing here has built or verified a Linux
+ * equivalent -- see test/posix-spawn.c's own two BUG fences, which
+ * spawn_with_flags() only ever drives through __spawn() ->
+ * __plat_process_spawn(), and only the NT implementation of that
+ * function does anything with either flag. */
 static int check_attr(const posix_spawnattr_t *at)
 {
 	short f;
@@ -333,10 +381,30 @@ static int check_attr(const posix_spawnattr_t *at)
 	                 | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSCHEDPARAM
 	                 | POSIX_SPAWN_SETSCHEDULER | POSIX_SPAWN_USEVFORK))
 		return EINVAL;
+#if defined(__linux__)
 	if (f & (POSIX_SPAWN_SETSCHEDPARAM | POSIX_SPAWN_SETSCHEDULER)) return EINVAL;
 	if ((f & POSIX_SPAWN_SETSIGMASK) && !sigisemptyset(&at->__sigmask)) return EINVAL;
+#endif
 	if ((f & POSIX_SPAWN_SETPGROUP) && at->__pgroup != getpgrp()) return EINVAL;
 	return 0;
+}
+
+/* nice_from_sched_priority(): sched_priority has no POSIX scheduling
+ * policy behind it on this platform to interpret it against (this
+ * file's own banner, POSIX_SPAWN_SETSCHEDPARAM/SETSCHEDULER) -- so
+ * there is no specified mapping onto NT's own priority classes, only
+ * an invented one.  The one used here is the least invention
+ * available: treat the number as if it already were a nice value and
+ * clamp it exactly the way setpriority() clamps a caller-supplied one
+ * for a target this process has no elevated privilege over
+ * (src/misc/resource.c: never below 0), so applying it can only ever
+ * lower or hold the child's priority, never silently fail to raise one
+ * the caller thought it had. */
+static int nice_from_sched_priority(int sched_priority)
+{
+	if (sched_priority < 0) return 0;
+	if (sched_priority > NZERO - 1) return NZERO - 1;
+	return sched_priority;
 }
 
 static int spawn_common(pid_t *pid, const char *path,
@@ -386,8 +454,21 @@ static int spawn_common(pid_t *pid, const char *path,
 		}
 	}
 
+	/* Set immediately before __spawn() and cleared immediately after,
+	 * success or failure either way, so neither ever leaks onto a
+	 * later, unrelated spawn -- see __spawn_set_pending_sigmask()'s own
+	 * comment (libc.h) for why this is the only channel either
+	 * attribute has left to ride. */
+	if (at && (at->__flags & POSIX_SPAWN_SETSIGMASK) && !sigisemptyset(&at->__sigmask))
+		__spawn_set_pending_sigmask(&at->__sigmask);
+	if (at && (at->__flags & (POSIX_SPAWN_SETSCHEDPARAM | POSIX_SPAWN_SETSCHEDULER)))
+		__spawn_set_pending_priority(nice_from_sched_priority(at->__param.sched_priority));
+
 	child = __spawn(full, argv, envp);
 	if (child < 0) rc = errno;
+
+	__spawn_clear_pending_sigmask();
+	__spawn_clear_pending_priority();
 
 out:
 	restore_slots(sv, nsv);

@@ -243,6 +243,15 @@ int __plat_process_fork(struct __plat_fork_result *out)
 	 * __plat_thread_resume() below precisely because that function
 	 * never looks at it. */
 	out->thread = __PLAT_HANDLE_NULL;
+	/* No job-object concept on Linux -- the kernel already folds a
+	 * reaped child's own recursively-accumulated cutime/cstime into
+	 * this process's accounting at wait4() time, natively, which is
+	 * exactly what the NT backend's own job field exists to
+	 * reconstruct (see plat_process.h and src/internal/libc.h's struct
+	 * __child.job).  Always NULL here; __plat_process_times() below
+	 * ignores it unconditionally, so this is documentation, not a
+	 * functional requirement. */
+	out->job = __PLAT_HANDLE_NULL;
 	out->pid = (int)pid;
 	return __PLAT_FORK_PARENT;
 }
@@ -383,9 +392,16 @@ int __plat_process_exit_code(__plat_handle_t h, int *code)
 	return 0;
 }
 
-int __plat_process_times(__plat_handle_t h, unsigned long long *ktime100ns, unsigned long long *utime100ns)
+int __plat_process_times(__plat_handle_t h, __plat_handle_t job,
+                          unsigned long long *ktime100ns, unsigned long long *utime100ns)
 {
 	struct reap_entry *e = reap_find(unbox_pid(h));
+	/* job is always __PLAT_HANDLE_NULL on this backend (see
+	 * __plat_process_fork()'s own comment) and never consulted: the
+	 * wait4(2) rusage this file already captured into *e (this file's
+	 * banner, "the resource usage ... already recursively folds in
+	 * grandchildren") is the complete answer on its own. */
+	(void)job;
 	if (!e) { errno = ECHILD; return -1; }
 	*ktime100ns = e->ktime100ns;
 	*utime100ns = e->utime100ns;
@@ -415,7 +431,8 @@ int __plat_process_resume(__plat_handle_t h)
 /* ---- spawn.c: fork + dup the standard descriptors + execve ----------- */
 
 int __plat_process_spawn(const char *path, char *const argv[], char *const envp[],
-                         const __plat_handle_t std[3], __plat_handle_t *out_process)
+                         const __plat_handle_t std[3], __plat_handle_t *out_process,
+                         __plat_handle_t *out_job)
 {
 	long pfd_ret;
 	int pipefd[2];
@@ -559,6 +576,9 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 	}
 
 	*out_process = (__plat_handle_t)(long)box_pid((int)pid);
+	/* No job-object concept on Linux -- see __plat_process_fork()'s own
+	 * comment just above, which applies here identically. */
+	*out_job = __PLAT_HANDLE_NULL;
 	return (int)pid;
 }
 

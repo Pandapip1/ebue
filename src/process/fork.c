@@ -275,13 +275,14 @@ static pid_t fork_impl(int run_handlers)
 	/* The parent.  The child exists, suspended; track it like any other
 	 * child and let it run. */
 	pid = r.pid;
-	if (__child_add(pid, r.process) < 0) {
+	if (__child_add(pid, r.process, r.job) < 0) {
 		/* The table grows on demand, so this only happens when it could
 		 * not be grown -- the heap is exhausted.  Degrade rather than
 		 * fail the fork: the child still runs, but it is unwaitable --
 		 * waitpid() only ever consults the table (src/process/wait.c) --
 		 * the same tradeoff __spawn makes. */
 		__plat_close(r.process);
+		if (r.job) __plat_close(r.job);
 	}
 	/* Still suspended: repair the WOW64-specific clone damage, if any,
 	 * before the child ever runs a single instruction of it.

@@ -60,6 +60,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 
 extern char **environ;
 
@@ -105,6 +106,22 @@ static int child_main(int argc, char **argv)
 	if (!strcmp(cmd, "argv")) {
 		int i;
 		for (i = 2; i < argc; i++) { wr(1, argv[i]); wr(1, "|"); }
+		return 0;
+	}
+	if (!strcmp(cmd, "sigmask")) {
+		/* test_setsigmask_nonempty_is_delivered()'s own child: reports
+		 * whether SIGINT is blocked from *inside* the process the mask
+		 * was supposedly delivered to, rather than only inferring
+		 * delivery from posix_spawn()'s own return value.  CHECK()
+		 * would be pointless here -- this process's own `fails` is
+		 * never read by anything, and child_main()'s return value,
+		 * not `fails`, becomes the exit status the parent inspects
+		 * (this file's own banner comment on child_main) -- so a
+		 * query failure is reported the same way every other child
+		 * failure here is, through that exit status. */
+		sigset_t got;
+		if (sigprocmask(SIG_BLOCK, 0, &got) != 0) return 1;
+		wr(1, sigismember(&got, SIGINT) ? "blocked" : "unblocked");
 		return 0;
 	}
 	wr(2, "child: unknown command\n");
@@ -778,20 +795,43 @@ static void test_attr_flags_acted_on(void)
 	 * address space, which is the whole of what it asks for. */
 	CHECK(spawn_with_flags(POSIX_SPAWN_USEVFORK, 0, 0) == 0);
 
-	/* A mask that is not empty cannot be delivered to a child that has
-	 * not run yet, so it is refused rather than dropped.  ERRORS:
+	/* A mask that is not empty: delivered for real on NT, through the
+	 * RuntimeData trailer __spawn_set_pending_sigmask()'s own comment
+	 * (src/internal/libc.h) describes -- test_setsigmask_nonempty_is_
+	 * delivered() below exercises the same flag/mask pair and is the
+	 * fence for that mechanism, not this baseline. Still refused on
+	 * Linux, where nothing has built or verified an equivalent: ERRORS'
 	 * "[EINVAL] The value specified by file_actions or attrp is
-	 * invalid" is the only channel POSIX gives this flag. */
+	 * invalid" is the only channel POSIX gives this flag to refuse
+	 * through. */
+#if defined(__linux__)
 	CHECK(spawn_with_flags(POSIX_SPAWN_SETSIGMASK, &one, 0) == EINVAL);
+#else
+	CHECK(spawn_with_flags(POSIX_SPAWN_SETSIGMASK, &one, 0) == 0);
+#endif
 
-	/* SETSCHEDPARAM/SETSCHEDULER: ERRORS routes these to
-	 * sched_setparam()/sched_setscheduler(), whose "[EINVAL] The value
-	 * of the policy parameter is invalid" is the honest answer where no
-	 * POSIX scheduling policy exists.  (Issue 6 deleted [ENOSYS] from
-	 * sched_setscheduler(), so EINVAL is the specified shape.) */
+	/* SETSCHEDPARAM/SETSCHEDULER: applied on NT (best-effort, via the
+	 * same suspended-process window, see
+	 * __spawn_set_pending_priority()'s own comment) since NT's own
+	 * lack of a POSIX scheduling policy no longer means nothing can be
+	 * done with sched_priority, only that nothing has a specified
+	 * mapping onto it -- see nice_from_sched_priority() (posix_spawn.c)
+	 * for the one used.  Still refused on Linux with ERRORS' "[EINVAL]
+	 * The value of the policy parameter is invalid", which -- unlike
+	 * NT -- is not an honest answer to a real POSIX scheduling policy
+	 * existing there; it just is not one this platform's own posix_
+	 * spawn() has built or verified applying yet.  (Issue 6 deleted
+	 * [ENOSYS] from sched_setscheduler(), so EINVAL is the specified
+	 * shape where refused at all.) */
+#if defined(__linux__)
 	CHECK(spawn_with_flags(POSIX_SPAWN_SETSCHEDPARAM, 0, 0) == EINVAL);
 	CHECK(spawn_with_flags(POSIX_SPAWN_SETSCHEDULER, 0, 0) == EINVAL);
 	CHECK(spawn_with_flags(POSIX_SPAWN_SETSCHEDPARAM | POSIX_SPAWN_SETSCHEDULER, 0, 0) == EINVAL);
+#else
+	CHECK(spawn_with_flags(POSIX_SPAWN_SETSCHEDPARAM, 0, 0) == 0);
+	CHECK(spawn_with_flags(POSIX_SPAWN_SETSCHEDULER, 0, 0) == 0);
+	CHECK(spawn_with_flags(POSIX_SPAWN_SETSCHEDPARAM | POSIX_SPAWN_SETSCHEDULER, 0, 0) == 0);
+#endif
 
 	/* SETPGROUP: the only process group this platform can put a child
 	 * in is the one every process is born into (src/unistd/ids.c's
@@ -939,52 +979,86 @@ static void test_null_actions_and_argv(void)
 
 /* ---------------------------------------------------------------- */
 
-#if NTLIBC_TEST(BUG, posix_spawn_setsigmask_nonempty_is_delivered) /* BUG (compiles and links; formerly UNIMPL):: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_SETSIGMASK
-	with a *non-empty* mask, and POSIX_SPAWN_SETSIGDEF's converse
-	(leaving a signal at a non-default disposition the parent chose).
-	Both need the parent to hand initial signal state to a child that
-	has not executed an instruction yet.
+#if NTLIBC_TEST(PASS, posix_spawn_setsigmask_nonempty_is_delivered) /* was BUG (formerly UNIMPL): posix_spawn.html DESCRIPTION -- POSIX_SPAWN_SETSIGMASK
+	with a *non-empty* mask.  Needs the parent to hand initial signal
+	state to a child that has not executed an instruction yet.
 
-	test/posix-dl.c's fence for this pair says there is "no channel to
-	hand a chosen initial mask/disposition to a child".  That half of
-	it has expired: RTL_USER_PROCESS_PARAMETERS' RuntimeData *is* such
-	a channel, it is packed into the parameters block by
-	RtlCreateProcessParametersEx (src/process/spawn.c) and read back by
-	__fd_init (src/internal/fd.c) before main(), and
+	test/posix-dl.c's fence for this pair used to say there was "no
+	channel to hand a chosen initial mask/disposition to a child".
+	That was already half wrong when this fence was still UNIMPL:
+	RTL_USER_PROCESS_PARAMETERS' RuntimeData *is* such a channel, it is
+	packed into the parameters block by RtlCreateProcessParametersEx
+	(src/process/spawn.c) and read back by __fd_init before main(), and
 	test/spawn-runtimedata-stress.c exercises it hard enough to have
-	caught a dangling-pointer bug in it.  So the mechanism exists.
+	caught a dangling-pointer bug in it.
 
-	What is missing is a format and a reader.  The block's layout today
-	is msvcrt's inherited-descriptor table (count, then osfile[], then
-	osfhnd[]) precisely so an ntlibc child and an msvcrt child can each
-	read the other's; a signal mask would have to be an ntlibc-specific
-	trailer past the count msvcrt stops at, with __fd_init or a sibling
-	initialiser picking it up.  That is real work, not a wrapper.
+	What was missing was a format and a reader -- now built:
+	src/internal/nt/plat_fd_init.c appends an ntlibc-specific trailer
+	(SIG_RUNTIME_MAGIC) past the msvcrt-compatible osfile/osfhnd table
+	and its own optional VFS trailer, carrying the mask
+	src/process/posix_spawn.c's spawn_common() staged through
+	__spawn_set_pending_sigmask() (src/internal/libc.h) immediately
+	before calling __spawn().  __fd_init() decodes it and calls
+	__sig_current_mask_install() before __signal_init() or main() ever
+	run, so the mask is live before the child's first instruction that
+	could observe it.
 
-	It also would not be equivalent to POSIX's promise even then: on
-	POSIX the kernel carries the mask across exec, so it applies to
-	*any* image; a RuntimeData trailer reaches an ntlibc-built child
-	only, and would silently do nothing for cmd.exe or any other
-	program.  Hence UNIMPL with the mechanism named, rather than N/A --
-	"the channel is missing" is no longer true, and "I chose not to" is
-	not N/A.  posix_spawn() refuses the flag with EINVAL meanwhile
-	(test_attr_flags_acted_on above asserts that), so no caller is told
-	a mask was installed that was not. */
+	Still not equivalent to POSIX's promise in the one respect
+	src/process/posix_spawn.c's own banner records: on POSIX the kernel
+	carries the mask across exec, so it applies to *any* image; this
+	trailer reaches an ntlibc-built child only.  That does not matter
+	to this fence -- self is always ntlibc-built -- but is why
+	POSIX_SPAWN_SETSIGMASK is still refused with EINVAL on the Linux
+	backend rather than given a from-scratch equivalent nothing here
+	has verified (test_attr_flags_acted_on's own #if defined(__linux__)
+	split, above).
+
+	VERIFICATION: code-reviewed, not run.  This project's Wine is
+	broken in the sandbox that produced this fix, so the NT test binary
+	this fence lives in could not be executed; the trailer's byte
+	offsets were hand-traced against __fd_runtime_data()'s writer and
+	__fd_init()'s reader (src/internal/nt/plat_fd_init.c) rather than
+	confirmed by running either. */
 static void test_setsigmask_nonempty_is_delivered(void)
 {
 	posix_spawnattr_t at;
+	posix_spawn_file_actions_t fa;
 	sigset_t m;
 	pid_t pid;
-	char *argv[3];
-	sigemptyset(&m);
-	sigaddset(&m, SIGINT);
-	posix_spawnattr_init(&at);
-	posix_spawnattr_setsigmask(&at, &m);
-	posix_spawnattr_setflags(&at, POSIX_SPAWN_SETSIGMASK);
-	argv[0] = (char *)self; argv[1] = (char *)"sigmask"; argv[2] = 0;
-	CHECK(posix_spawn(&pid, self, 0, &at, argv, environ) == 0);
-	/* the child would report sigprocmask(SIG_BLOCK, 0, &got) showing
-	 * SIGINT blocked */
+	int p[2], status;
+	char buf[16];
+	size_t got = 0;
+	ssize_t r;
+
+	CHECK(sigemptyset(&m) == 0);
+	CHECK(sigaddset(&m, SIGINT) == 0);
+	CHECK(pipe(p) == 0);
+	CHECK(posix_spawnattr_init(&at) == 0);
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, p[1], 1) == 0);
+	CHECK(posix_spawnattr_setsigmask(&at, &m) == 0);
+	CHECK(posix_spawnattr_setflags(&at, POSIX_SPAWN_SETSIGMASK) == 0);
+
+	{
+		char *argv[3];
+		argv[0] = (char *)self; argv[1] = (char *)"sigmask"; argv[2] = 0;
+		CHECK(posix_spawn(&pid, self, &fa, &at, argv, environ) == 0);
+	}
+	close(p[1]);
+	buf[0] = 0;
+	while (got + 1 < sizeof buf && (r = read(p[0], buf + got, sizeof buf - 1 - got)) > 0)
+		got += (size_t)r;
+	buf[got] = 0;
+	close(p[0]);
+	CHECK(waitpid(pid, &status, 0) == pid);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	/* The mechanism this fence is about: a mask observed from *inside*
+	 * the child itself, not merely inferred from posix_spawn()'s own
+	 * success. */
+	CHECK(!strcmp(buf, "blocked"));
+
+	posix_spawn_file_actions_destroy(&fa);
+	posix_spawnattr_destroy(&at);
 }
 #endif
 
@@ -1042,38 +1116,69 @@ static void test_setpgroup_other_group(void)
 }
 #endif
 
-#if NTLIBC_TEST(BUG, posix_spawn_setschedparam_applied) /* BUG (compiles and links; formerly UNIMPL):: posix_spawn.html DESCRIPTION --
+#if NTLIBC_TEST(PASS, posix_spawn_setschedparam_applied) /* was BUG (formerly UNIMPL): posix_spawn.html DESCRIPTION --
 	POSIX_SPAWN_SETSCHEDULER/POSIX_SPAWN_SETSCHEDPARAM actually being
 	applied.  NT mechanism, already half-built by accident: __spawn()
 	creates the process *suspended* (RtlCreateUserProcess followed by a
-	separate NtResumeThread, src/process/spawn.c), so there is a real
-	window before the child's first instruction in which
-	NtSetInformationProcess/NtSetInformationThread could set a priority
-	on info.Process/info.Thread -- no kernel32 needed.
+	separate NtResumeThread, src/process/nt/plat_process.c), so there
+	was already a real window before the child's first instruction in
+	which a priority could be set on info.Process -- no kernel32
+	needed.  Now used: __plat_priority_set(info.Process, 0, nice_value)
+	in that window, the identical call src/misc/resource.c's own
+	setpriority() makes for a non-self target, driven by a value
+	spawn_common() stages through __spawn_set_pending_priority()
+	(src/internal/libc.h) immediately before __spawn().
 
-	It is fenced UNIMPL rather than implemented because the POSIX shape
-	does not survive the translation: NT has priorities but no
-	SCHED_FIFO/SCHED_RR/SCHED_OTHER policy distinction, so
+	The POSIX shape still does not survive the translation, and that
+	part of the old UNIMPL reasoning was never wrong: NT has priorities
+	but no SCHED_FIFO/SCHED_RR/SCHED_OTHER policy distinction, so
 	sched_setscheduler()'s policy argument has no valid value here and
 	<sched.h> deliberately does not claim the
 	_POSIX_PRIORITY_SCHEDULING option group at all.  Mapping
-	sched_priority onto an NT priority class would be an invention with
-	a POSIX name on it.  posix_spawn() therefore refuses both flags
-	with EINVAL (asserted above) while the accessors keep storing the
-	values, which is the split the header comment argues for. */
+	sched_priority onto an NT priority class is still an invention with
+	a POSIX name on it -- nice_from_sched_priority() (posix_spawn.c)
+	admits as much -- but an admitted, applied invention is what this
+	fence asks for now (test-policy.py's own compiles-and-fails-vs-
+	does-not-compile split leaves no UNIMPL disposition for a present,
+	acted-on interface), not a rejection.  `policy` itself is still
+	accepted unconditionally, whatever value it holds; only
+	sched_priority is mapped and applied.
+
+	VERIFICATION: code-reviewed, not run -- this project's Wine is
+	broken in the sandbox that produced this fix, so this fence's NT
+	test binary could not be executed.  Checked by reading
+	src/process/nt/plat_process.c's suspended-window ordering (the
+	priority is set before NtResumeThread, never after) and
+	src/misc/resource.c's own __plat_priority_get() path for a non-self
+	pid, which this test's own assertion below reuses to observe the
+	real NT priority class rather than the self_nice cache
+	getpriority(PRIO_PROCESS, 0) would report for a target that is not
+	self. */
 static void test_setschedparam_applied(void)
 {
 	posix_spawnattr_t at;
 	struct sched_param par;
 	pid_t pid;
+	int status;
 	char *argv[2];
+
 	par.sched_priority = 5;
-	posix_spawnattr_init(&at);
-	posix_spawnattr_setschedparam(&at, &par);
-	posix_spawnattr_setschedpolicy(&at, 0);
-	posix_spawnattr_setflags(&at, POSIX_SPAWN_SETSCHEDULER);
+	CHECK(posix_spawnattr_init(&at) == 0);
+	CHECK(posix_spawnattr_setschedparam(&at, &par) == 0);
+	CHECK(posix_spawnattr_setschedpolicy(&at, 0) == 0);
+	CHECK(posix_spawnattr_setflags(&at, POSIX_SPAWN_SETSCHEDULER) == 0);
 	argv[0] = (char *)self; argv[1] = 0;
 	CHECK(posix_spawn(&pid, self, 0, &at, argv, environ) == 0);
+	/* getpriority() for a pid that is not self queries the child's
+	 * real NT priority class directly (src/misc/resource.c); read
+	 * before waitpid() reaps it, since __child_remove() closes the
+	 * handle that query needs.  5 is within setpriority()'s own
+	 * always-allowed [0, NZERO-1] range (src/misc/resource.c), so
+	 * this is not expected to need any privilege this process lacks. */
+	CHECK(getpriority(PRIO_PROCESS, (id_t)pid) == 5);
+	CHECK(waitpid(pid, &status, 0) == pid);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	posix_spawnattr_destroy(&at);
 }
 #endif
 

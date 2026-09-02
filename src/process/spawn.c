@@ -155,6 +155,34 @@
 #include "plat_fd.h"
 #include "plat_process.h"
 
+/* posix_spawn()'s POSIX_SPAWN_SETSCHEDPARAM/POSIX_SPAWN_SETSCHEDULER --
+ * see this pair's own declaration in libc.h for the full story.  Lives
+ * here (portable) because its one real consumer, NT's
+ * __plat_process_spawn() (src/process/nt/plat_process.c), and its one
+ * real producer, src/process/posix_spawn.c's spawn_common(), are both
+ * already reaching this file's own __spawn() for everything else a
+ * spawn needs. */
+static int pending_priority;
+static int pending_priority_set;
+
+void __spawn_set_pending_priority(int nice_value)
+{
+	pending_priority = nice_value;
+	pending_priority_set = 1;
+}
+
+void __spawn_clear_pending_priority(void)
+{
+	pending_priority_set = 0;
+}
+
+int __spawn_pending_priority(int *out)
+{
+	if (!pending_priority_set) return 0;
+	*out = pending_priority;
+	return 1;
+}
+
 /* Everything this file used to do inline -- building the UTF-16 command
  * line and environment block (see this file's own banner, above, for the
  * quoting rules and the measurements behind the standard-handle
@@ -172,6 +200,7 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 	struct __fd *f0 = __fd_get(0), *f1 = __fd_get(1), *f2 = __fd_get(2);
 	__plat_handle_t std[3];
 	__plat_handle_t process = __PLAT_HANDLE_NULL;
+	__plat_handle_t job = __PLAT_HANDLE_NULL;
 	int pid;
 
 	/* A close-on-exec standard descriptor is not the child's to have,
@@ -187,13 +216,13 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 	std[1] = f1 ? f1->h : __PLAT_HANDLE_NULL;
 	std[2] = f2 ? f2->h : __PLAT_HANDLE_NULL;
 
-	pid = __plat_process_spawn(path, argv, envp ? envp : __environ, std, &process);
+	pid = __plat_process_spawn(path, argv, envp ? envp : __environ, std, &process, &job);
 	if (pid < 0) return -1;
 
 	/* The process exists, running (the backend already resumed its
 	 * initial thread); track it like any other child so waitpid() can
 	 * find it. */
-	if (__child_add(pid, process) < 0) {
+	if (__child_add(pid, process, job) < 0) {
 		/* The table grows on demand (src/process/children.c), so this
 		 * only happens when the heap is exhausted.  Degrade rather than
 		 * fail the spawn: the process still runs, but it is unwaitable
@@ -201,6 +230,7 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 		 * used to reopen the pid instead, which was wrong; see the
 		 * comment there). */
 		__plat_close(process);
+		if (job) __plat_close(job);
 	}
 	return pid;
 }

@@ -88,6 +88,7 @@ NtQueryDirectoryFile                    ; 3.51
 NtQueryEaFile                           ; 3.51
 NtQueryFullAttributesFile               ; 4.0
 NtQueryInformationFile                  ; 3.51
+NtQueryInformationJobObject             ; 5.0
 NtQueryInformationProcess               ; 3.51
 NtQueryInformationThread                ; 3.51
 NtQueryInformationToken                 ; 3.51
