@@ -13,6 +13,39 @@ int unchecked_division_overflow(int value, int divisor)
 	return value / divisor; /* arithmetic-ub-expect */
 }
 
+int unchecked_remainder_overflow(int value, int divisor)
+{
+	if (divisor == 0)
+		return 0;
+	return value % divisor; /* arithmetic-ub-expect */
+}
+
+int selected_division_overflow(int value, int divisor)
+{
+	if (value != (-2147483647 - 1) || divisor != -1)
+		return 0;
+	return value / divisor; /* arithmetic-ub-expect */
+}
+
+int selected_remainder_assignment_overflow(int value, int divisor)
+{
+	if (value != (-2147483647 - 1) || divisor != -1)
+		return 0;
+	value %= divisor; /* arithmetic-ub-expect */
+	return value;
+}
+
+extern void mutate_division_operands(int *, int *);
+
+int stale_division_guard(int value, int divisor)
+{
+	if (divisor == 0 ||
+	    (value == (-2147483647 - 1) && divisor == -1))
+		return 0;
+	mutate_division_operands(&value, &divisor);
+	return value / divisor; /* arithmetic-ub-expect */
+}
+
 unsigned unchecked_remainder(unsigned value, unsigned divisor)
 {
 	value %= divisor; /* arithmetic-ub-expect */
@@ -104,6 +137,13 @@ int overflowing_negative_multiplication(int left)
 
 int unchecked_negation(int value)
 {
+	return -value; /* arithmetic-ub-expect */
+}
+
+int selected_negation_overflow(int value)
+{
+	if (value != (-2147483647 - 1))
+		return 0;
 	return -value; /* arithmetic-ub-expect */
 }
 

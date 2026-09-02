@@ -31,13 +31,16 @@ struct SemanticEvents {
   z3::expr UnsignedWrap;
   z3::expr NarrowingLoss;
   z3::expr InvalidShift;
+  z3::expr DivisionByZero;
 
   SemanticEvents(z3::expr SignedOverflow, z3::expr UnsignedWrap,
-                 z3::expr NarrowingLoss, z3::expr InvalidShift)
+                 z3::expr NarrowingLoss, z3::expr InvalidShift,
+                 z3::expr DivisionByZero)
       : SignedOverflow(std::move(SignedOverflow)),
         UnsignedWrap(std::move(UnsignedWrap)),
         NarrowingLoss(std::move(NarrowingLoss)),
-        InvalidShift(std::move(InvalidShift)) {}
+        InvalidShift(std::move(InvalidShift)),
+        DivisionByZero(std::move(DivisionByZero)) {}
 };
 
 // Value is always the target bit pattern, including on an undefined path.  A
@@ -57,6 +60,13 @@ struct SemanticResult {
         Events(std::move(Events)) {}
 };
 
+// The common trust boundary for side-solver consumers: only an UNSAT answer
+// proves that the forbidden semantic event is unreachable.  SAT, timeout,
+// resource exhaustion, and every other unknown result remain obligations.
+inline bool provesUnsatisfiable(z3::solver &Solver) {
+  return Solver.check() == z3::unsat;
+}
+
 // Scalar is the integer-value module of ntlibc's common semantic algebra.
 // Future path propositions and token/resource modules can bind these immutable
 // results to their own versioned identities without duplicating C conversions
@@ -69,7 +79,7 @@ class ScalarSMT {
   z3::expr noEvent() const { return Z.bool_val(false); }
 
   SemanticEvents noEvents() const {
-    return {noEvent(), noEvent(), noEvent(), noEvent()};
+    return {noEvent(), noEvent(), noEvent(), noEvent(), noEvent()};
   }
 
   SemanticEvents combine(const SemanticEvents &Left,
@@ -77,7 +87,8 @@ class ScalarSMT {
     return {Left.SignedOverflow || Right.SignedOverflow,
             Left.UnsignedWrap || Right.UnsignedWrap,
             Left.NarrowingLoss || Right.NarrowingLoss,
-            Left.InvalidShift || Right.InvalidShift};
+            Left.InvalidShift || Right.InvalidShift,
+            Left.DivisionByZero || Right.DivisionByZero};
   }
 
   static bool canRepresentAll(CType Destination, CType Source) {
@@ -134,8 +145,8 @@ class ScalarSMT {
     z3::expr Value = BuildValue(L.Value, R.Value);
     SemanticEvents Local = BuildLocalEvents(L.Value, R.Value, L.Type);
     SemanticEvents Events = combine(combine(L.Events, R.Events), Local);
-    z3::expr Defined =
-        L.Defined && R.Defined && !Local.SignedOverflow && !Local.InvalidShift;
+    z3::expr Defined = L.Defined && R.Defined && !Local.SignedOverflow &&
+                       !Local.InvalidShift && !Local.DivisionByZero;
     return SemanticResult(L.Type, std::move(Value), std::move(Defined),
                           std::move(Events));
   }
@@ -230,10 +241,11 @@ public:
           if (Type.Unsigned)
             return SemanticEvents(noEvent(),
                                   !z3::bvadd_no_overflow(L, R, false),
-                                  noEvent(), noEvent());
+                                  noEvent(), noEvent(), noEvent());
           z3::expr Overflow = !(z3::bvadd_no_overflow(L, R, true) &&
                                 z3::bvadd_no_underflow(L, R));
-          return SemanticEvents(Overflow, noEvent(), noEvent(), noEvent());
+          return SemanticEvents(Overflow, noEvent(), noEvent(), noEvent(),
+                                noEvent());
         });
   }
 
@@ -254,10 +266,11 @@ public:
           if (Type.Unsigned)
             return SemanticEvents(noEvent(),
                                   !z3::bvsub_no_underflow(L, R, false),
-                                  noEvent(), noEvent());
+                                  noEvent(), noEvent(), noEvent());
           z3::expr Overflow = !(z3::bvsub_no_overflow(L, R) &&
                                 z3::bvsub_no_underflow(L, R, true));
-          return SemanticEvents(Overflow, noEvent(), noEvent(), noEvent());
+          return SemanticEvents(Overflow, noEvent(), noEvent(), noEvent(),
+                                noEvent());
         });
   }
 
@@ -278,11 +291,70 @@ public:
           if (Type.Unsigned)
             return SemanticEvents(noEvent(),
                                   !z3::bvmul_no_overflow(L, R, false),
-                                  noEvent(), noEvent());
+                                  noEvent(), noEvent(), noEvent());
           z3::expr Overflow = !(z3::bvmul_no_overflow(L, R, true) &&
                                 z3::bvmul_no_underflow(L, R));
-          return SemanticEvents(Overflow, noEvent(), noEvent(), noEvent());
+          return SemanticEvents(Overflow, noEvent(), noEvent(), noEvent(),
+                                noEvent());
         });
+  }
+
+  std::optional<SemanticResult> divide(const SemanticResult &Left,
+                                       const SemanticResult &Right) const {
+    return sourceArithmetic(
+        Left, Right, [&](const SemanticResult &L, const SemanticResult &R) {
+          return divideConverted(L, R);
+        });
+  }
+
+  std::optional<SemanticResult>
+  divideConverted(const SemanticResult &Left,
+                  const SemanticResult &Right) const {
+    if (!Left.Type.sameDomain(Right.Type) ||
+        !wellTyped(Left.Value, Left.Type) ||
+        !wellTyped(Right.Value, Right.Type))
+      return std::nullopt;
+    CType Type = Left.Type;
+    z3::expr Value = Type.Unsigned ? z3::udiv(Left.Value, Right.Value)
+                                   : Left.Value / Right.Value;
+    z3::expr Zero = Right.Value == Z.bv_val(0, Type.Width);
+    z3::expr Overflow = Type.Unsigned
+                            ? noEvent()
+                            : !z3::bvsdiv_no_overflow(Left.Value, Right.Value);
+    SemanticEvents Local(Overflow, noEvent(), noEvent(), noEvent(), Zero);
+    SemanticEvents Events = combine(combine(Left.Events, Right.Events), Local);
+    return SemanticResult(Type, std::move(Value),
+                          Left.Defined && Right.Defined && !Overflow && !Zero,
+                          std::move(Events));
+  }
+
+  std::optional<SemanticResult> remainder(const SemanticResult &Left,
+                                          const SemanticResult &Right) const {
+    return sourceArithmetic(
+        Left, Right, [&](const SemanticResult &L, const SemanticResult &R) {
+          return remainderConverted(L, R);
+        });
+  }
+
+  std::optional<SemanticResult>
+  remainderConverted(const SemanticResult &Left,
+                     const SemanticResult &Right) const {
+    if (!Left.Type.sameDomain(Right.Type) ||
+        !wellTyped(Left.Value, Left.Type) ||
+        !wellTyped(Right.Value, Right.Type))
+      return std::nullopt;
+    CType Type = Left.Type;
+    z3::expr Value = Type.Unsigned ? z3::urem(Left.Value, Right.Value)
+                                   : z3::srem(Left.Value, Right.Value);
+    z3::expr Zero = Right.Value == Z.bv_val(0, Type.Width);
+    z3::expr Overflow = Type.Unsigned
+                            ? noEvent()
+                            : !z3::bvsdiv_no_overflow(Left.Value, Right.Value);
+    SemanticEvents Local(Overflow, noEvent(), noEvent(), noEvent(), Zero);
+    SemanticEvents Events = combine(combine(Left.Events, Right.Events), Local);
+    return SemanticResult(Type, std::move(Value),
+                          Left.Defined && Right.Defined && !Overflow && !Zero,
+                          std::move(Events));
   }
 
   std::optional<SemanticResult> unitStep(const SemanticResult &Input,
@@ -305,7 +377,8 @@ public:
         Promoted->Type.Unsigned
             ? Promoted->Value == (Increasing ? AllOnes : Zero)
             : noEvent();
-    SemanticEvents Local(SignedOverflow, UnsignedWrap, noEvent(), noEvent());
+    SemanticEvents Local(SignedOverflow, UnsignedWrap, noEvent(), noEvent(),
+                         noEvent());
     SemanticEvents Events = combine(Promoted->Events, Local);
     return SemanticResult(Promoted->Type, std::move(Value),
                           Promoted->Defined && !SignedOverflow,
@@ -324,7 +397,8 @@ public:
         Promoted->Type.Unsigned
             ? Promoted->Value != Z.bv_val(0, Promoted->Type.Width)
             : noEvent();
-    SemanticEvents Local(SignedOverflow, UnsignedWrap, noEvent(), noEvent());
+    SemanticEvents Local(SignedOverflow, UnsignedWrap, noEvent(), noEvent(),
+                         noEvent());
     SemanticEvents Events = combine(Promoted->Events, Local);
     return SemanticResult(Promoted->Type, std::move(Value),
                           Promoted->Defined && !SignedOverflow,
@@ -355,7 +429,8 @@ public:
         !L->Type.Unsigned && !Invalid &&
         (mathematicalValue(L->Value, L->Type) < 0 || Recover != L->Value);
     z3::expr UnsignedWrap = L->Type.Unsigned && !Invalid && Recover != L->Value;
-    SemanticEvents Local(SignedOverflow, UnsignedWrap, noEvent(), Invalid);
+    SemanticEvents Local(SignedOverflow, UnsignedWrap, noEvent(), Invalid,
+                         noEvent());
     SemanticEvents Events = combine(combine(L->Events, R->Events), Local);
     return SemanticResult(L->Type, std::move(Value),
                           L->Defined && R->Defined && !Invalid &&

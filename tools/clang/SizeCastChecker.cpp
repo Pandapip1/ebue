@@ -865,11 +865,13 @@ public:
 
   ArithmeticZ3Engine() : Solver(Context) {
     z3::params Parameters(Context);
-    // Whole-tree analyzer processes run concurrently.  A 10 ms budget made
-    // otherwise identical UNSAT queries depend on scheduler pressure after
-    // the shared algebra added a small wrapper expression.  Keep a hard bound,
-    // but leave enough room for stable proof across the supported ABI sweeps.
-    Parameters.set("timeout", 50u);
+    // Z3's deterministic resource counter is the primary query budget.  In
+    // 4.8.12 the reported counter is context-cumulative, but rlimit applies to
+    // each check independently even when this solver is reset and reused.  A
+    // generous wall limit remains only as a pathological safety stop; it must
+    // not make ordinary proof results depend on concurrent analyzer load.
+    Parameters.set("rlimit", 1000000u);
+    Parameters.set("timeout", 2000u);
     Solver.set(Parameters);
   }
 };
@@ -1154,7 +1156,7 @@ public:
     Solver.add(Violation);
     // Only an UNSAT answer discharges the source obligation.  Timeout,
     // unknown, and an explicit counterexample all preserve the finding.
-    return Solver.check() == z3::unsat;
+    return ntlibc::algebra::provesUnsatisfiable(Solver);
   }
 
   bool provesNoSignedUnitOverflow(NonLoc Value, const Expr *Source,
@@ -1189,16 +1191,67 @@ public:
     if (!Violation.is_bool())
       return false;
     Solver.add(Violation);
-    return Solver.check() == z3::unsat;
+    return ntlibc::algebra::provesUnsatisfiable(Solver);
   }
 
+  bool provesNoSignedNegationOverflow(NonLoc Value, const Expr *Source,
+                                      QualType Type) {
+    if (!isExactQueryValue(Value, Source, Type))
+      return false;
+    std::optional<z3::expr> Operand = translate(Value, Type);
+    if (!Operand)
+      return false;
+    std::optional<ntlibc::algebra::SemanticResult> Input =
+        Algebra.input(*Operand, cType(Type));
+    std::optional<ntlibc::algebra::SemanticResult> Result =
+        Input ? Algebra.negate(*Input) : std::nullopt;
+    if (!Result)
+      return false;
+    z3::expr Violation = Result->Events.SignedOverflow.simplify();
+    if (!Violation.is_bool())
+      return false;
+    Solver.add(Violation);
+    return ntlibc::algebra::provesUnsatisfiable(Solver);
+  }
+
+  bool provesNoSignedDivisionOverflow(NonLoc LeftValue, const Expr *LeftSource,
+                                      NonLoc RightValue,
+                                      const Expr *RightSource, QualType Type,
+                                      bool Remainder) {
+    if (!isExactQueryValue(LeftValue, LeftSource, Type) ||
+        !isExactQueryValue(RightValue, RightSource, Type))
+      return false;
+    std::optional<z3::expr> Left = translate(LeftValue, Type);
+    std::optional<z3::expr> Right = translate(RightValue, Type);
+    if (!Left || !Right)
+      return false;
+    ntlibc::algebra::CType Domain = cType(Type);
+    std::optional<ntlibc::algebra::SemanticResult> L =
+        Algebra.input(*Left, Domain);
+    std::optional<ntlibc::algebra::SemanticResult> R =
+        Algebra.input(*Right, Domain);
+    if (!L || !R)
+      return false;
+    std::optional<ntlibc::algebra::SemanticResult> Result =
+        Remainder ? Algebra.remainderConverted(*L, *R)
+                  : Algebra.divideConverted(*L, *R);
+    if (!Result)
+      return false;
+    // DivisorChecker separately consumes DivisionByZero.  This checker asks
+    // only whether the signed MIN/-1 result is representable.
+    z3::expr Violation = Result->Events.SignedOverflow.simplify();
+    if (!Violation.is_bool())
+      return false;
+    Solver.add(Violation);
+    return ntlibc::algebra::provesUnsatisfiable(Solver);
+  }
 };
 
 static ArithmeticZ3Engine &arithmeticZ3Engine() {
   // Static-analyzer callbacks are serial within one translation-unit process;
   // lint.sh provides process parallelism across translation units.  Reusing
   // both context and solver avoids repeated Z3 initialization.  reset() gives
-  // each proof an independent assertion set while preserving the hard timeout.
+  // each proof an independent assertion set while preserving both budgets.
   static thread_local ArithmeticZ3Engine Engine;
   return Engine;
 }
@@ -1327,6 +1380,33 @@ class SignedArithmeticChecker
     bool Proved = Z3.provesNoSignedUnitOverflow(
         *Value, Operation->getSubExpr(), Operation->getType(), Increasing);
     return !Proved;
+  }
+
+  static bool negationOverflowFeasible(const UnaryOperator *Operation,
+                                       CheckerContext &C) {
+    ProgramStateRef State = C.getState();
+    std::optional<NonLoc> Value =
+        integerValue(Operation->getSubExpr(), State, C);
+    if (!Value)
+      return true;
+    ArithmeticZ3Proof Z3(arithmeticZ3Engine(), State, C.getASTContext());
+    return !Z3.provesNoSignedNegationOverflow(*Value, Operation->getSubExpr(),
+                                              Operation->getType());
+  }
+
+  static bool divisionOverflowFeasible(const BinaryOperator *Operation,
+                                       CheckerContext &C) {
+    ProgramStateRef State = C.getState();
+    std::optional<NonLoc> Left = integerValue(Operation->getLHS(), State, C);
+    std::optional<NonLoc> Right = integerValue(Operation->getRHS(), State, C);
+    if (!Left || !Right)
+      return true;
+    BinaryOperatorKind Opcode = Operation->getOpcode();
+    bool Remainder = Opcode == BO_Rem || Opcode == BO_RemAssign;
+    ArithmeticZ3Proof Z3(arithmeticZ3Engine(), State, C.getASTContext());
+    return !Z3.provesNoSignedDivisionOverflow(*Left, Operation->getLHS(),
+                                              *Right, Operation->getRHS(),
+                                              Operation->getType(), Remainder);
   }
 #endif
 
@@ -1577,7 +1657,11 @@ public:
       llvm::APSInt MinusOne(llvm::APInt(SizeCastChecker::MathBits, 1), false);
       MinusOne = -MinusOne;
       if (Left.Min <= Bounds.Min && Left.Max >= Bounds.Min &&
-          Right.Min <= MinusOne && Right.Max >= MinusOne)
+          Right.Min <= MinusOne && Right.Max >= MinusOne
+#ifdef NTLIBC_ARITHMETIC_Z3
+          && divisionOverflowFeasible(Operation, C)
+#endif
+      )
         report(Operation, C);
       return;
     }
@@ -1605,9 +1689,10 @@ public:
                       : Operand.Min <= Bounds.Min;
     if (Unsafe
 #ifdef NTLIBC_ARITHMETIC_Z3
-        && (Opcode == UO_Minus || unitOverflowFeasible(Operation, C))
+        && (Opcode == UO_Minus ? negationOverflowFeasible(Operation, C)
+                               : unitOverflowFeasible(Operation, C))
 #endif
-        )
+    )
       report(Operation, C);
   }
 };

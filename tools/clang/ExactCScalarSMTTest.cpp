@@ -7,6 +7,7 @@
 #include <iostream>
 
 using ntlibc::algebra::CType;
+using ntlibc::algebra::provesUnsatisfiable;
 using ntlibc::algebra::ScalarSMT;
 
 static bool always(z3::context &Z, const z3::expr &Property) {
@@ -30,6 +31,18 @@ int main() {
   const CType UInt{32, 4, true};
   ScalarSMT C(Z, Int, UInt);
   bool Okay = true;
+
+  {
+    z3::solver Limited(Z);
+    z3::params Parameters(Z);
+    Parameters.set("rlimit", 1u);
+    Limited.set(Parameters);
+    z3::expr X = Z.bv_const("resource_limited_x", 32);
+    Limited.add(X == Z.bv_val(0, 32));
+    Limited.add(X == Z.bv_val(1, 32));
+    Okay &= test(Z, !provesUnsatisfiable(Limited),
+                 "resource exhaustion never discharges a proof");
+  }
 
   auto UMax = C.input(Z.bv_val(255, 8), UChar);
   auto UOne = C.input(Z.bv_val(1, 8), UChar);
@@ -59,6 +72,7 @@ int main() {
                "defined unsigned wrap preserves modular value and event");
 
   auto IntMax = C.input(Z.bv_val("2147483647", 32), Int);
+  auto IntMin = C.input(Z.bv_val("2147483648", 32), Int);
   auto IntOne = C.input(Z.bv_val(1, 32), Int);
   auto IntOverflow = C.add(*IntMax, *IntOne);
   Okay &= test(Z,
@@ -67,6 +81,68 @@ int main() {
                    always(Z, !IntOverflow->Events.UnsignedWrap) &&
                    always(Z, IntOverflow->Value == Z.bv_val("2147483648", 32)),
                "signed overflow is undefined with an exact bit witness");
+
+  auto NegatedMinimum = C.negate(*IntMin);
+  Okay &= test(Z,
+               NegatedMinimum && always(Z, !NegatedMinimum->Defined) &&
+                   always(Z, NegatedMinimum->Events.SignedOverflow),
+               "negating the signed minimum is undefined");
+
+  auto NarrowMinimum = C.input(Z.bv_val(128, 8), SChar);
+  auto PromotedNegation = C.negate(*NarrowMinimum);
+  Okay &= test(Z,
+               PromotedNegation && PromotedNegation->Type.sameDomain(Int) &&
+                   always(Z, PromotedNegation->Defined) &&
+                   always(Z, !PromotedNegation->Events.SignedOverflow) &&
+                   always(Z, PromotedNegation->Value == Z.bv_val(128, 32)),
+               "narrow signed negation is safe after integer promotion");
+
+  auto MinusOne = C.input(Z.bv_val("4294967295", 32), Int);
+  auto DivisionOverflow = C.divide(*IntMin, *MinusOne);
+  Okay &= test(Z,
+               DivisionOverflow && always(Z, !DivisionOverflow->Defined) &&
+                   always(Z, DivisionOverflow->Events.SignedOverflow) &&
+                   always(Z, !DivisionOverflow->Events.DivisionByZero),
+               "signed minimum divided by minus one is undefined");
+
+  auto RemainderOverflow = C.remainder(*IntMin, *MinusOne);
+  Okay &= test(Z,
+               RemainderOverflow && always(Z, !RemainderOverflow->Defined) &&
+                   always(Z, RemainderOverflow->Events.SignedOverflow) &&
+                   always(Z, !RemainderOverflow->Events.DivisionByZero),
+               "signed minimum remainder minus one is undefined");
+
+  auto IntZero = C.input(Z.bv_val(0, 32), Int);
+  auto DivisionByZero = C.divide(*IntOne, *IntZero);
+  Okay &= test(Z,
+               DivisionByZero && always(Z, !DivisionByZero->Defined) &&
+                   always(Z, DivisionByZero->Events.DivisionByZero) &&
+                   always(Z, !DivisionByZero->Events.SignedOverflow),
+               "division by zero is an independent undefined event");
+
+  auto SafeMinimumDivision = C.divide(*IntMin, *IntOne);
+  Okay &= test(Z,
+               SafeMinimumDivision && always(Z, SafeMinimumDivision->Defined) &&
+                   always(Z, !SafeMinimumDivision->Events.SignedOverflow) &&
+                   always(Z, !SafeMinimumDivision->Events.DivisionByZero),
+               "signed minimum divided by one remains defined");
+
+  auto WideDivision = C.divide(*IntMax, *IntOne);
+  auto NarrowedDivision = C.convert(*WideDivision, SChar);
+  Okay &= test(Z,
+               NarrowedDivision && always(Z, NarrowedDivision->Defined) &&
+                   always(Z, NarrowedDivision->Events.NarrowingLoss) &&
+                   always(Z, !NarrowedDivision->Events.SignedOverflow),
+               "division narrowing is a separate defined conversion event");
+
+  auto MinusFive = C.input(Z.bv_val("4294967291", 32), Int);
+  auto IntTwoForDivision = C.input(Z.bv_val(2, 32), Int);
+  auto NegativeRemainder = C.remainder(*MinusFive, *IntTwoForDivision);
+  Okay &= test(
+      Z,
+      NegativeRemainder && always(Z, NegativeRemainder->Defined) &&
+          always(Z, NegativeRemainder->Value == Z.bv_val("4294967295", 32)),
+      "signed remainder truncates toward zero rather than modulo");
 
   auto Wide = C.input(Z.bv_val(256, 32), UInt);
   auto Narrowed = C.convert(*Wide, UChar);

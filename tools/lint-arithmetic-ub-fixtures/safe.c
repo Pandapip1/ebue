@@ -8,6 +8,38 @@ int checked_division(int value, int divisor)
 	return value / divisor;
 }
 
+int checked_signed_division_overflow(int value, int divisor)
+{
+	if (divisor == 0 ||
+	    (value == (-2147483647 - 1) && divisor == -1))
+		return 0;
+	return value / divisor;
+}
+
+int checked_signed_remainder_overflow(int value, int divisor)
+{
+	if (divisor == 0 ||
+	    (value == (-2147483647 - 1) && divisor == -1))
+		return 0;
+	return value % divisor;
+}
+
+int checked_signed_division_assignment(int value, int divisor)
+{
+	if (divisor == 0 ||
+	    (value == (-2147483647 - 1) && divisor == -1))
+		return 0;
+	value /= divisor;
+	return value;
+}
+
+int promoted_short_division(short value, short divisor)
+{
+	if (!divisor)
+		return 0;
+	return value / divisor;
+}
+
 unsigned checked_remainder(unsigned value, unsigned divisor)
 {
 	if (!divisor)
@@ -100,6 +132,11 @@ int checked_negation(int value)
 {
 	if (value == (-2147483647 - 1))
 		return 0;
+	return -value;
+}
+
+int promoted_signed_char_negation(signed char value)
+{
 	return -value;
 }
 
