@@ -34,7 +34,7 @@
  * THE ASSERTION THAT MATTERS IS THE EXIT STATUS, NOT THE DEATH.  Both
  * the broken and the fixed library end the process here; a test that
  * only checked "the child died" passes on the broken build.  What the
- * overflow destroyed was the __NT_SIGNAL_EXIT(SIGPIPE) the child should
+ * overflow destroyed was the __ENCODE_SIGNAL_EXIT(SIGPIPE) the child should
  * have exited with, so the parent saw a *clean exit 0* -- a crashed
  * program reporting success to whatever built it.  So every case below
  * asserts the decoded status exactly, and the two failure shapes that

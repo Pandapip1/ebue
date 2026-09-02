@@ -571,12 +571,12 @@ int __plat_fstat(__plat_handle_t h, int type, struct stat *st)
 	st->st_size = S_ISDIR(st->st_mode) ? 0 : si.EndOfFile;
 	st->st_blksize = 4096;
 	st->st_blocks = (blkcnt_t)blocks;
-	st->st_atim.tv_sec = __nt_to_unix_sec(bi.LastAccessTime);
-	st->st_atim.tv_nsec = __nt_to_unix_nsec(bi.LastAccessTime);
-	st->st_mtim.tv_sec = __nt_to_unix_sec(bi.LastWriteTime);
-	st->st_mtim.tv_nsec = __nt_to_unix_nsec(bi.LastWriteTime);
-	st->st_ctim.tv_sec = __nt_to_unix_sec(bi.ChangeTime);
-	st->st_ctim.tv_nsec = __nt_to_unix_nsec(bi.ChangeTime);
+	st->st_atim.tv_sec = __ticks_to_unix_sec(bi.LastAccessTime);
+	st->st_atim.tv_nsec = __ticks_to_unix_nsec(bi.LastAccessTime);
+	st->st_mtim.tv_sec = __ticks_to_unix_sec(bi.LastWriteTime);
+	st->st_mtim.tv_nsec = __ticks_to_unix_nsec(bi.LastWriteTime);
+	st->st_ctim.tv_sec = __ticks_to_unix_sec(bi.ChangeTime);
+	st->st_ctim.tv_nsec = __ticks_to_unix_nsec(bi.ChangeTime);
 	return 0;
 }
 
@@ -743,7 +743,7 @@ int __plat_set_times(__plat_handle_t h, const struct timespec ts[2])
 				errno = EINVAL;
 				return -1;
 			}
-			if (!__unix_to_nt(ts[i].tv_sec, ts[i].tv_nsec,
+			if (!__unix_to_ticks(ts[i].tv_sec, ts[i].tv_nsec,
 			    &converted[i])) {
 				errno = EOVERFLOW;
 				return -1;

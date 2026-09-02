@@ -17,7 +17,7 @@ _Noreturn void abort(void)
 	__sig_unlock();
 	/* If a handler returned, or SIGABRT was ignored, die anyway -- with
 	 * the status a Unix process killed by SIGABRT would have. */
-	__nt_exit(__NT_SIGNAL_EXIT(SIGABRT));
+	__exit_internal(__ENCODE_SIGNAL_EXIT(SIGABRT));
 }
 
 // NOLINTEND(misc-include-cleaner)

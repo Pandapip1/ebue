@@ -9,7 +9,7 @@
  * survive intact.  A death by signal comes from one of exactly two
  * places, neither of which a plain exit() can imitate:
  *
- *   - __NT_SIGNAL_EXIT(sig) (see libc.h), the out-of-range status this
+ *   - __ENCODE_SIGNAL_EXIT(sig) (see libc.h), the out-of-range status this
  *     library's kill()/abort()/raise() end a process with;
  *   - an NT exception code the kernel itself terminated the process
  *     with, which is an 0xC0000xxx/0x8000xxxx NTSTATUS.
@@ -80,7 +80,7 @@ int __wait_encode_status(int exitcode)
 	unsigned code = (unsigned)exitcode;
 
 	/* Ended by this library on behalf of a signal. */
-	if (__NT_IS_SIGNAL_EXIT(code) && (code & 0x7f))
+	if (__IS_SIGNAL_EXIT(code) && (code & 0x7f))
 		return sig_status((int)(code & 0x7f));
 
 	/* Ended by NT itself with an exception code. */

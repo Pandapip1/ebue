@@ -32,7 +32,7 @@
  *
  * If this exits 6 rather than 0 or 1, it never reached any of the
  * CHECKs below: 6 is 0xE0DE0006 truncated to a POSIX exit status, i.e.
- * __NT_SIGNAL_EXIT(SIGABRT) from abort() in ntlibc_rpath_fail() -- the
+ * __ENCODE_SIGNAL_EXIT(SIGABRT) from abort() in ntlibc_rpath_fail() -- the
  * very first rpath_plugin_answer() call could not delay-load
  * rpath-plugin.dll at all.  Nothing in this file prints on that path,
  * so read the stderr line the failure does leave, which names the

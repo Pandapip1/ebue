@@ -58,10 +58,10 @@ int __spawn(const char *path, char *const argv[], char *const envp[]);
  * boundary cases directly instead of only through a spawned process.
  * test/ is not on the -I path for src/internal/, so it is declared
  * locally here, the same way test/posix-errno.c declares
- * __errno_from_status(). __NT_SIGNAL_EXIT's formula is copied by hand
+ * __errno_from_status(). __ENCODE_SIGNAL_EXIT's formula is copied by hand
  * from src/internal/libc.h for the same reason. */
 int __wait_encode_status(int);
-#define NT_SIGNAL_EXIT(sig) ((int)(0xE0DE0000u | ((unsigned)(sig) & 0x7fu)))
+#define ENCODE_SIGNAL_EXIT(sig) ((int)(0xE0DE0000u | ((unsigned)(sig) & 0x7fu)))
 
 /* NtAllocateVirtualMemory()/NtProtectVirtualMemory(), used below to
  * provoke a SIGSEGV on a page that genuinely exists (MEM_COMMIT) but is
@@ -214,9 +214,9 @@ static void test_kill(void)
 	 * above pass.  The remote-pid arm never calls sig_valid() at all.
 	 * It opens the target and goes straight to
 	 *
-	 *     NtTerminateProcess(h, __NT_SIGNAL_EXIT(sig));
+	 *     NtTerminateProcess(h, __ENCODE_SIGNAL_EXIT(sig));
 	 *
-	 * and __NT_SIGNAL_EXIT (src/internal/libc.h) is
+	 * and __ENCODE_SIGNAL_EXIT (src/internal/libc.h) is
 	 * `0xE0DE0000 | ((unsigned)sig & 0x7f)` -- it *masks* the number
 	 * rather than rejecting it.  So an invalid signal number does not
 	 * merely fail to be rejected: the process dies, and the exit status
@@ -1384,7 +1384,7 @@ static void test_sa_nocldwait(void)
 }
 
 /* __wait_encode_status(): the exit-code -> wait-status mapping.
- * A signal death is encoded as 0xE0DE00xx (__NT_SIGNAL_EXIT in
+ * A signal death is encoded as 0xE0DE00xx (__ENCODE_SIGNAL_EXIT in
  * src/internal/libc.h), chosen precisely so it cannot collide with any
  * of the 256 real exit codes -- unlike the shell-style 128+signo
  * scheme, which conflates exit codes 129..192 with a signal death. */
@@ -1404,13 +1404,13 @@ static void test_wait_encode_status(void)
 		                           * so WIFSTOPPED must never fire here */
 	}
 
-	/* A signal death: __NT_SIGNAL_EXIT(sig) decodes as WIFSIGNALED with
+	/* A signal death: __ENCODE_SIGNAL_EXIT(sig) decodes as WIFSIGNALED with
 	 * that exact WTERMSIG, never WIFEXITED. */
 	{
 		static const int sigs[] = { SIGHUP, SIGINT, SIGTERM, SIGABRT, SIGSEGV, SIGKILL, _NSIG - 1 };
 		size_t n = sizeof sigs / sizeof sigs[0], j;
 		for (j = 0; j < n; j++) {
-			st = __wait_encode_status(NT_SIGNAL_EXIT(sigs[j]));
+			st = __wait_encode_status(ENCODE_SIGNAL_EXIT(sigs[j]));
 			CHECK(WIFSIGNALED(st) && WTERMSIG(st) == sigs[j]);
 			CHECK(!WIFEXITED(st));
 			CHECK(!WIFSTOPPED(st));
@@ -1422,11 +1422,11 @@ static void test_wait_encode_status(void)
 	 * signals, clear otherwise. Unit-level version of what
 	 * test/waitpid-overflow.c already checks end-to-end through real
 	 * processes for SIGTERM/SIGABRT. */
-	st = __wait_encode_status(NT_SIGNAL_EXIT(SIGABRT));
+	st = __wait_encode_status(ENCODE_SIGNAL_EXIT(SIGABRT));
 	CHECK(WCOREDUMP(st));
-	st = __wait_encode_status(NT_SIGNAL_EXIT(SIGTERM));
+	st = __wait_encode_status(ENCODE_SIGNAL_EXIT(SIGTERM));
 	CHECK(!WCOREDUMP(st));
-	st = __wait_encode_status(NT_SIGNAL_EXIT(SIGKILL));
+	st = __wait_encode_status(ENCODE_SIGNAL_EXIT(SIGKILL));
 	CHECK(!WCOREDUMP(st));
 
 	/* The collision case: under a 128+signo scheme, exit codes 129..192

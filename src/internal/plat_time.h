@@ -19,8 +19,8 @@
  * LARGE_INTEGER for the front door to interpret.  The epoch conversion
  * (NT ticks <-> unix-epoch seconds/nanoseconds) and the QPC-to-timespec
  * scaling are portable arithmetic, not NT-specific, so they stay exactly
- * where they already were -- src/internal/libc.h's __nt_to_unix_sec()/
- * __unix_to_nt()/__clock_qpc_to_timespec()/__clock_combine_cpu_ticks()
+ * where they already were -- src/internal/libc.h's __ticks_to_unix_sec()/
+ * __unix_to_ticks()/__clock_qpc_to_timespec()/__clock_combine_cpu_ticks()
  * and friends -- and are NOT part of this interface.
  */
 #ifndef _NTLIBC_PLAT_TIME_H
@@ -36,7 +36,7 @@
  *
  * nt_ticks is required: the NT backend (src/time/nt/plat_time.c) writes
  * `*nt_ticks = now;` unconditionally, and the Linux backend (src/time/
- * linux/plat_time.c) forwards it into __unix_to_nt() the same way, with
+ * linux/plat_time.c) forwards it into __unix_to_ticks() the same way, with
  * no NULL check in either -- this one declaration covers both backends
  * (see src/process/find_program.c's __plat_process_fork()/_exit_code()/
  * _times() for the established precedent of one nonnull contract shared

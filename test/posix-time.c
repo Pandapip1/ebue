@@ -311,13 +311,13 @@ static void test_clock_nanosleep_relative(void)
  * monotonic instant.
  *
  * BUG: src/time/clock_nanosleep.c's TIMER_ABSTIME branch always builds
- * the absolute LARGE_INTEGER via __unix_to_nt(req->tv_sec,
+ * the absolute LARGE_INTEGER via __unix_to_ticks(req->tv_sec,
  * req->tv_nsec), which assumes req is seconds-since-1970 (an NT
  * FILETIME conversion) regardless of clock_id. For CLOCK_MONOTONIC,
  * req is actually seconds-since-an-arbitrary-epoch (the performance
  * counter's start, typically near boot -- see monotonic_get() in
  * src/time/clock_gettime.c), a far smaller number: fed through
- * __unix_to_nt it produces an absolute NT time in the distant past
+ * __unix_to_ticks it produces an absolute NT time in the distant past
  * (near 1601), so NtDelayExecution returns immediately. Confirmed
  * live: requesting CLOCK_MONOTONIC/TIMER_ABSTIME for "now + 2s"
  * returned in about 3 microseconds instead of sleeping ~2 seconds. */
@@ -342,7 +342,7 @@ static void test_clock_nanosleep_monotonic_abstime(void)
  * time value specified by rqtp is less than or equal to the current
  * value of the clock ... then clock_nanosleep() shall return
  * immediately". CLOCK_REALTIME's TIMER_ABSTIME path does go through
- * __unix_to_nt correctly (REALTIME's own readings *are* unix-epoch
+ * __unix_to_ticks correctly (REALTIME's own readings *are* unix-epoch
  * seconds), so this should behave correctly -- sanity-check it, since
  * the CLOCK_MONOTONIC case above is fenced as broken. */
 static void test_clock_nanosleep_realtime_abstime_past(void)

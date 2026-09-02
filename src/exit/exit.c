@@ -43,7 +43,7 @@ void __funcs_on_exit(void)
 	while (nhandlers > 0) handlers[--nhandlers]();
 }
 
-_Noreturn void __nt_exit(int code)
+_Noreturn void __exit_internal(int code)
 {
 	/* Before the process goes: continue any child kill(pid, SIGSTOP)
 	 * left suspended, preceded by a SIGHUP where the platform can
@@ -51,12 +51,12 @@ _Noreturn void __nt_exit(int code)
 	 * orphaned stopped process group, and every child of ours becomes
 	 * one the moment this process ends; src/process/children.c has the
 	 * full reasoning, including why the SIGHUP half is per-platform.
-	 * Placed in __nt_exit() rather than in exit() so that _exit() and
+	 * Placed in __exit_internal() rather than in exit() so that _exit() and
 	 * _Exit() -- and the exec() stand-in, which ends through here --
 	 * cannot skip it. */
 	__child_resume_stopped();
 	/* code encodes "end this process exactly as if by sig's default
-	 * action" (__NT_SIGNAL_EXIT(), libc.h) at every call site that
+	 * action" (__ENCODE_SIGNAL_EXIT(), libc.h) at every call site that
 	 * passes one. __plat_sig_default_terminate() raises the real signal
 	 * where the platform has one of its own to raise (Linux); see its
 	 * plat_signal.h comment for why __plat_terminate() below -- an
@@ -64,25 +64,25 @@ _Noreturn void __nt_exit(int code)
 	 * -- is the wrong way to end such a process there. A no-op, and
 	 * always falls through to __plat_terminate() below, on NT (same
 	 * comment), same as before this call existed. */
-	if (__NT_IS_SIGNAL_EXIT(code) && (code & 0x7f))
+	if (__IS_SIGNAL_EXIT(code) && (code & 0x7f))
 		__plat_sig_default_terminate(code & 0x7f);
 	__plat_terminate(code);
 }
 
-_Noreturn void _Exit(int code) { __nt_exit(code); }
-_Noreturn void _exit(int code) { __nt_exit(code); }
+_Noreturn void _Exit(int code) { __exit_internal(code); }
+_Noreturn void _exit(int code) { __exit_internal(code); }
 
 _Noreturn void exit(int code)
 {
 	__funcs_on_exit();
 	__stdio_exit();
-	__nt_exit(code);
+	__exit_internal(code);
 }
 
 _Noreturn void quick_exit(int code)
 {
 	while (nqhandlers > 0) qhandlers[--nqhandlers]();
-	__nt_exit(code);
+	__exit_internal(code);
 }
 
 // NOLINTEND(misc-include-cleaner)

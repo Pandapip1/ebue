@@ -180,7 +180,7 @@ static int child_stop_and_orphan(const char *self)
 	 * process's own table already records as stopped. */
 	sleep_ms(200);
 	return 0;
-	/* __nt_exit(), reached from the return above through exit(), sends
+	/* __exit_internal(), reached from the return above through exit(), sends
 	 * SIGHUP (where deliverable) then SIGCONT to the still-stopped
 	 * child on the way out -- see src/process/children.c. */
 }

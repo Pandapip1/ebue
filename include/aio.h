@@ -36,7 +36,7 @@ struct aiocb {
 	 * and must not alter it while an operation is outstanding, so keeping
 	 * the identity here makes aio_error()/aio_return() an exact lookup
 	 * without imposing a second, pointer-keyed allocation. */
-	void *__nt_request;
+	void *__opaque;
 };
 
 #define AIO_CANCELED    0

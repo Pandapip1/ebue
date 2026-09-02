@@ -10,7 +10,7 @@ time_t time(time_t *tp)
 	time_t t;
 
 	__plat_realtime_get(&now);
-	t = (time_t)__nt_to_unix_sec(now);
+	t = (time_t)__ticks_to_unix_sec(now);
 	if (tp) *tp = t;
 	return t;
 }

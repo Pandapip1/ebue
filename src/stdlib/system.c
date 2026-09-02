@@ -33,7 +33,7 @@
  *     on it exactly as POSIX requires, and this library's own
  *     src/process/wait.c encode_status is what defines what that status
  *     means (an ordinary exit is (code<<8); a death this library staged
- *     via __NT_SIGNAL_EXIT, or an NT exception with a signal-shaped
+ *     via __ENCODE_SIGNAL_EXIT, or an NT exception with a signal-shaped
  *     meaning, decodes as WIFSIGNALED).
  *
  *   - SIGINT/SIGQUIT are ignored in the caller and SIGCHLD is blocked

@@ -10,7 +10,7 @@ int timespec_get(struct timespec *ts, int base)
 
 	if (base != TIME_UTC) return 0;
 	__plat_realtime_get(&now);
-	ts->tv_sec = (time_t)__nt_to_unix_sec(now);
-	ts->tv_nsec = __nt_to_unix_nsec(now);
+	ts->tv_sec = (time_t)__ticks_to_unix_sec(now);
+	ts->tv_nsec = __ticks_to_unix_nsec(now);
 	return TIME_UTC;
 }

@@ -36,8 +36,8 @@ static int realtime_get(struct timespec *ts)
 {
 	long long now;
 	__plat_realtime_get(&now);
-	ts->tv_sec = (time_t)__nt_to_unix_sec(now);
-	ts->tv_nsec = __nt_to_unix_nsec(now);
+	ts->tv_sec = (time_t)__ticks_to_unix_sec(now);
+	ts->tv_nsec = __ticks_to_unix_nsec(now);
 	return 0;
 }
 
@@ -91,7 +91,7 @@ int clock_settime(clockid_t id, const struct timespec *ts)
 
 	if (id != CLOCK_REALTIME) { errno = EINVAL; return -1; }
 	if (ts->tv_nsec < 0 || ts->tv_nsec >= 1000000000L) { errno = EINVAL; return -1; }
-	if (!__unix_to_nt(ts->tv_sec, ts->tv_nsec, &nt)) {
+	if (!__unix_to_ticks(ts->tv_sec, ts->tv_nsec, &nt)) {
 		errno = EINVAL;
 		return -1;
 	}

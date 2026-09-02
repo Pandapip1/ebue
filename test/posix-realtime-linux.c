@@ -38,7 +38,7 @@
  * worker_done_event/aio_worker_atexit()): a real shutdown flag
  * aio_worker()'s idle branch checks instead of blocking forever once
  * the queue is empty, and an atexit() hook (portable -- runs before
- * __nt_exit()/__plat_terminate() on every platform, not just this one)
+ * __exit_internal()/__plat_terminate() on every platform, not just this one)
  * that sets the flag, wakes an idle worker, and then genuinely BLOCKS
  * on a second, dedicated event the worker signals right before it
  * actually returns -- so exit() cannot proceed, and exit_group(2)

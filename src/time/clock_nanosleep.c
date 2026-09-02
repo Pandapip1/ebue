@@ -25,7 +25,7 @@
  * units from now" and positive for "absolute, N 100ns units since the
  * 1601 epoch" -- exactly the TIMER_ABSTIME distinction, so a
  * CLOCK_REALTIME absolute request converts straight through
- * __unix_to_nt (its readings *are* unix-epoch seconds, see
+ * __unix_to_ticks (its readings *are* unix-epoch seconds, see
  * realtime_get() in clock_gettime.c).  __alertable_delay only takes a
  * relative tick count, though, so an absolute request is turned into
  * one before the call in every case -- CLOCK_REALTIME included, via a

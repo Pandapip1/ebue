@@ -663,7 +663,7 @@ void __free(void * consume(internal_heap_allocated));
 /* ---- time -------------------------------------------------------------- */
 #define __TICKS_PER_SEC 10000000LL
 #define __TICKS_1601_TO_1970 116444736000000000LL
-static inline long long __nt_to_unix_sec(long long t)
+static inline long long __ticks_to_unix_sec(long long t)
 {
 	unsigned long long delta;
 	if (t >= __TICKS_1601_TO_1970)
@@ -671,7 +671,7 @@ static inline long long __nt_to_unix_sec(long long t)
 	delta = (unsigned long long)__TICKS_1601_TO_1970 - (unsigned long long)t;
 	return -(long long)(delta / __TICKS_PER_SEC);
 }
-static inline long __nt_to_unix_nsec(long long t)
+static inline long __ticks_to_unix_nsec(long long t)
 {
 	unsigned long long delta;
 	if (t >= __TICKS_1601_TO_1970)
@@ -679,7 +679,7 @@ static inline long __nt_to_unix_nsec(long long t)
 	delta = (unsigned long long)__TICKS_1601_TO_1970 - (unsigned long long)t;
 	return -(long)(delta % __TICKS_PER_SEC) * 100;
 }
-static inline int __unix_to_nt(long long sec, long nsec, long long *result)
+static inline int __unix_to_ticks(long long sec, long nsec, long long *result)
 {
 	long long ticks, subsecond = nsec / 100;
 	if (sec > INT64_MAX / __TICKS_PER_SEC ||
@@ -910,7 +910,7 @@ void __stdio_exit(void);                     /* flush everything at exit */
 #define ATEXIT_CAP_ 128
 void __funcs_on_exit(void);
 void __libc_exit_fini(void);
-_Noreturn void __nt_exit(int);
+_Noreturn void __exit_internal(int);
 
 /* Keep the unnamed semaphore limit reported by sysconf() coupled to the
  * implementation that enforces it. */
@@ -921,7 +921,7 @@ _Noreturn void __nt_exit(int);
  * one 32-bit DWORD, and waitpid() has nothing else to look at.  A process
  * this library ends on behalf of a signal (kill(), abort(), the default
  * action in __raise_internal(), the vectored exception handler) therefore
- * exits with __NT_SIGNAL_EXIT(sig) and waitpid() decodes exactly that.
+ * exits with __ENCODE_SIGNAL_EXIT(sig) and waitpid() decodes exactly that.
  *
  * 0xE0DE0000 is an NTSTATUS with severity error (bits 31-30) and the
  * customer-defined bit (bit 29) set, so it can never be an NT status code
@@ -929,9 +929,9 @@ _Noreturn void __nt_exit(int);
  * return -- the two spaces cannot collide.  (The old scheme, 128 + signo,
  * is a *shell* convention; using it here stole exit codes 129..192 from
  * exit() and made e.g. exit(130) look like death by SIGABRT.) */
-#define __NT_SIGNAL_EXIT_BASE 0xE0DE0000u
-#define __NT_SIGNAL_EXIT(sig) ((int)(__NT_SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu)))
-#define __NT_IS_SIGNAL_EXIT(code) (((unsigned)(code) & ~0x7fu) == __NT_SIGNAL_EXIT_BASE)
+#define __SIGNAL_EXIT_BASE 0xE0DE0000u
+#define __ENCODE_SIGNAL_EXIT(sig) ((int)(__SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu)))
+#define __IS_SIGNAL_EXIT(code) (((unsigned)(code) & ~0x7fu) == __SIGNAL_EXIT_BASE)
 
 void __signal_init(void);
 /* Capture the startup floating-point environment for FE_DFL_ENV

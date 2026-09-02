@@ -18,7 +18,7 @@
 int stime(const time_t *tp)
 {
 	long long nt;
-	if (!__unix_to_nt(*tp, 0, &nt)) { errno = EOVERFLOW; return -1; }
+	if (!__unix_to_ticks(*tp, 0, &nt)) { errno = EOVERFLOW; return -1; }
 	return __plat_realtime_set(nt);
 }
 

@@ -215,7 +215,7 @@ static int vfs_snapshot_fd = -1;
 /*
  * The exit code a host wait4() reports is 8 bits (WEXITSTATUS); the exit
  * code this file's own NtTerminateProcess is asked for can be a full NT
- * status -- in particular __NT_SIGNAL_EXIT(sig) = 0xE0DE0000 | sig, which
+ * status -- in particular __ENCODE_SIGNAL_EXIT(sig) = 0xE0DE0000 | sig, which
  * a plain _exit(status) low-byte-truncates down to just `sig`, indistin-
  * guishable on the host from a process that legitimately called
  * exit(sig).  That is the whole reason waitpid-overflow and posix-signal
@@ -3364,7 +3364,7 @@ NTSTATUS NTAPI NtYieldExecution(void)
  *     child cannot see a file its parent created elsewhere, or a
  *     descriptor its parent opened onto one.  No test needs it to.
  *   - A child killed by a host signal is reported with the exit code this
- *     library itself uses for a signal death, __NT_SIGNAL_EXIT(sig), so
+ *     library itself uses for a signal death, __ENCODE_SIGNAL_EXIT(sig), so
  *     that waitpid() decodes it the way it would on NT.
  */
 
@@ -3810,7 +3810,7 @@ static int proc_poll(struct ofile *f, int nohang)
 			xstatus_tab[(unsigned)f->pid % XSTATUS_N].pid = 0;   /* consumed; shrink the pid-reuse window */
 		}
 		else if ((status & 0x7f) == 0) f->exitcode = (status >> 8) & 0xff;
-		else f->exitcode = __NT_SIGNAL_EXIT(status & 0x7f);   /* killed by a real host signal */
+		else f->exitcode = __ENCODE_SIGNAL_EXIT(status & 0x7f);   /* killed by a real host signal */
 		return 1;
 	}
 	if (r < 0) return -1;
@@ -3956,7 +3956,7 @@ NTSTATUS NTAPI NtTerminateProcess(HANDLE h, NTSTATUS code)
 	if (f && f->kind == OF_PROC) {
 		/* Record the code *this process* asked to end f->pid with before
 		 * actually killing it: proc_poll()'s reaper wants the real code
-		 * (e.g. kill()'s __NT_SIGNAL_EXIT(sig)), not just "SIGKILL",
+		 * (e.g. kill()'s __ENCODE_SIGNAL_EXIT(sig)), not just "SIGKILL",
 		 * which is the only signal a raw host kill can reliably promise
 		 * delivery of.  See xstatus_record()'s comment. */
 		xstatus_record(f->pid, (int)code);

@@ -344,7 +344,7 @@ static unsigned __PLAT_APC_CALL aio_worker(void *unused)
  * a real background worker -- as opposed to the worker_synchronous
  * fallback, which has no thread/process to clean up -- actually spawns.
  * exit()'s __funcs_on_exit() runs every atexit() handler, this one
- * included, before __nt_exit()/__plat_terminate() (exit_group(2) on
+ * included, before __exit_internal()/__plat_terminate() (exit_group(2) on
  * Linux) tears the process down -- see that syscall's own comment in
  * src/exit/linux/plat_exit.c for why it does NOT reach a worker spawned
  * via __plat_thread_spawn() on this backend (a separate tgid, not a
@@ -448,7 +448,7 @@ static int submit(struct aiocb *cb, int op, struct aio_group *group)
 	}
 
 	__sig_lock();
-	if (cb->__nt_request) {
+	if (cb->__opaque) {
 		__sig_unlock();
 		errno = EINVAL;
 		return -1;
@@ -467,7 +467,7 @@ static int submit(struct aiocb *cb, int op, struct aio_group *group)
 	request->sequence = ++next_sequence;
 	request->cb = cb;
 	request->group = group;
-	cb->__nt_request = request;
+	cb->__opaque = request;
 	if (worker_synchronous) {
 		request->state = REQ_RUNNING;
 		__sig_unlock();
@@ -503,8 +503,8 @@ static struct aio_request *lookup(const struct aiocb *cb)
 static struct aio_request *lookup(const struct aiocb *cb)
 {
 	struct aio_request *request;
-	if (!cb || !cb->__nt_request) return 0;
-	request = cb->__nt_request;
+	if (!cb || !cb->__opaque) return 0;
+	request = cb->__opaque;
 	if (request < requests || request >= requests + AIO_MAX ||
 	    request->state == REQ_FREE || request->cb != cb) return 0;
 	return request;
@@ -537,7 +537,7 @@ ssize_t aio_return(struct aiocb *cb)
 	}
 	result = request->result;
 	error = request->error;
-	cb->__nt_request = 0;
+	cb->__opaque = 0;
 	memset(request, 0, sizeof *request);
 	__sig_unlock();
 	if (result < 0) errno = error;
@@ -815,7 +815,7 @@ void __aio_reset_after_fork(void)
 	int i;
 	for (i = 0; i < AIO_MAX; i++)
 		if (requests[i].state != REQ_FREE && requests[i].cb)
-			requests[i].cb->__nt_request = 0;
+			requests[i].cb->__opaque = 0;
 	memset(requests, 0, sizeof requests);
 	memset(groups, 0, sizeof groups);
 	worker_wake = 0;

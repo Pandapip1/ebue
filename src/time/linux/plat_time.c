@@ -13,7 +13,7 @@
  * and [is] NOT part of this interface"). That is not NT leaking into a
  * platform-neutral seam by accident: every front door under src/time/
  * already calls the shared, portable src/internal/libc.h helpers
- * (__nt_to_unix_sec/__nt_to_unix_nsec/__unix_to_nt) to cross between
+ * (__ticks_to_unix_sec/__ticks_to_unix_nsec/__unix_to_ticks) to cross between
  * that unit and a POSIX timespec, so this backend reuses those same
  * helpers rather than inventing a second, parallel conversion -- the
  * NT-tick representation is just this seam's chosen wire format, the
@@ -115,19 +115,19 @@ void __plat_realtime_get(long long *nt_ticks)
 	 * plat_time.h's own comment describes for this function. */
 	struct timespec ts = {0, 0};
 	raw_syscall(SYS_clock_gettime, (long)CLOCK_REALTIME, (long)&ts, 0L, 0L, 0L, 0L);
-	/* __unix_to_nt() can only reject an out-of-range input (a `sec` many
+	/* __unix_to_ticks() can only reject an out-of-range input (a `sec` many
 	 * millennia from now); *nt_ticks is left at whatever it already held
 	 * in that unreachable case, matching this function's own "never
 	 * checked" contract -- there is no error channel to report through. */
-	__unix_to_nt(ts.tv_sec, ts.tv_nsec, nt_ticks);
+	__unix_to_ticks(ts.tv_sec, ts.tv_nsec, nt_ticks);
 }
 
 int __plat_realtime_set(long long nt_ticks)
 {
 	struct timespec ts;
 	long ret;
-	ts.tv_sec = (time_t)__nt_to_unix_sec(nt_ticks);
-	ts.tv_nsec = __nt_to_unix_nsec(nt_ticks);
+	ts.tv_sec = (time_t)__ticks_to_unix_sec(nt_ticks);
+	ts.tv_nsec = __ticks_to_unix_nsec(nt_ticks);
 	ret = raw_syscall(SYS_clock_settime, (long)CLOCK_REALTIME, (long)&ts, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;

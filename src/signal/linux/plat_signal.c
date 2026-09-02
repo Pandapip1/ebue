@@ -418,7 +418,7 @@ int __plat_kill_terminate(__plat_handle_t h, int exitcode)
 	 * (signal.c's kill(), the last-resort arm after
 	 * __sig_try_deliver_remote() -- src/signal/linux/sigdelivery.c's
 	 * own stub, always reporting "no listener" on this platform today
-	 * -- has already declined) always passes __NT_SIGNAL_EXIT(sig), so
+	 * -- has already declined) always passes __ENCODE_SIGNAL_EXIT(sig), so
 	 * the originally-requested signal number survives inside exitcode
 	 * and is decoded back out below rather than discarded. Sending THAT
 	 * signal, not an unconditional SIGKILL, matters because a raw
@@ -428,7 +428,7 @@ int __plat_kill_terminate(__plat_handle_t h, int exitcode)
 	 * but Ignore for others (SIGCHLD, SIGWINCH, SIGURG): forcing
 	 * SIGKILL for those turned a delivery that should have been a
 	 * silent no-op into an unconditional kill. A pre-encoded exitcode
-	 * that ISN'T __NT_SIGNAL_EXIT()-shaped never reaches this function
+	 * that ISN'T __ENCODE_SIGNAL_EXIT()-shaped never reaches this function
 	 * today (this is its one call site), but SIGKILL is kept as the
 	 * defensive fallback for that case, matching the old unconditional
 	 * behaviour rather than sending signal 0.
@@ -449,7 +449,7 @@ int __plat_kill_terminate(__plat_handle_t h, int exitcode)
 	long pid = (long)(int)(long)h;
 	long fd = syscall(SYS_pidfd_open, pid, 0L);
 	long ret;
-	int sig = __NT_IS_SIGNAL_EXIT(exitcode) ? (exitcode & 0x7f) : SIGKILL;
+	int sig = __IS_SIGNAL_EXIT(exitcode) ? (exitcode & 0x7f) : SIGKILL;
 	if (is_sys_error(fd)) { errno = (int)-fd; return -1; }
 	ret = syscall(SYS_pidfd_send_signal, fd, (long)sig, 0L, 0L);
 	syscall(SYS_close, fd, 0L, 0L, 0L, 0L, 0L);
@@ -545,7 +545,7 @@ void __plat_sig_default_terminate(int sig)
 	 * __plat_process_suspend_self() above already uses for SIGSTOP.
 	 *
 	 * Neither syscall's result is checked: there is nothing left to do
-	 * with a failure of either but return and let __nt_exit()'s own
+	 * with a failure of either but return and let __exit_internal()'s own
 	 * fallback run, which is exactly what happens when this function
 	 * simply falls off its own end. */
 	struct kernel_sigaction act;
@@ -564,7 +564,7 @@ void __plat_sig_default_terminate(int sig)
 /* Linux has a real per-signal kernel default action and a real
  * pidfd_send_signal(2): kill()'s own last-resort arm (src/signal/
  * signal.c) reaches __plat_kill_terminate() above, which decodes the
- * real signal back out of the __NT_SIGNAL_EXIT() encoding and delivers
+ * real signal back out of the __ENCODE_SIGNAL_EXIT() encoding and delivers
  * it for real, applying whatever the TARGET process itself last synced
  * as its own real kernel-level disposition -- SIG_IGN is a genuine
  * no-op, SIG_DFL runs the kernel's own default action.  See this

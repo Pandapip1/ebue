@@ -331,8 +331,8 @@ _Noreturn void __plat_thread_terminate_self(void)
 
 /* The write deliberately bypasses stdio and the fd table: the suspended
  * target may own either one's locks.  Termination likewise goes straight
- * to NT instead of abort()/__nt_exit(), whose signal and child bookkeeping
- * are not async-cancel-safe themselves. */
+ * to NT instead of abort()/__exit_internal(), whose signal and child
+ * bookkeeping are not async-cancel-safe themselves. */
 _Noreturn void __plat_cancel_unsafe_abort(const char *region)
 {
 	static const char prefix[] =
@@ -353,9 +353,9 @@ _Noreturn void __plat_cancel_unsafe_abort(const char *region)
 		NtWriteFile(error, 0, 0, 0, &io, suffix,
 			sizeof suffix - 1, 0, 0);
 	}
-	NtTerminateProcess(NtCurrentProcess(), __NT_SIGNAL_EXIT(SIGABRT));
+	NtTerminateProcess(NtCurrentProcess(), __ENCODE_SIGNAL_EXIT(SIGABRT));
 	for (;;) NtTerminateProcess(NtCurrentProcess(),
-		__NT_SIGNAL_EXIT(SIGABRT));
+		__ENCODE_SIGNAL_EXIT(SIGABRT));
 }
 
 void __plat_thread_alertable_yield(void)

@@ -264,8 +264,8 @@ void __plat_sig_sync_kernel(int sig, int ignore)
 }
 
 /* Same reasoning as __plat_sig_sync_kernel() just above: NT has no real
- * kernel signal of its own to raise, so __nt_exit() (src/exit/exit.c)
- * always falls through to its own __NT_SIGNAL_EXIT() simulation
+ * kernel signal of its own to raise, so __exit_internal() (src/exit/exit.c)
+ * always falls through to its own __ENCODE_SIGNAL_EXIT() simulation
  * unconditionally, exactly as before this function existed. */
 void __plat_sig_default_terminate(int sig)
 {

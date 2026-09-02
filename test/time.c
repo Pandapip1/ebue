@@ -77,14 +77,14 @@ static void test_nt_tick_extremes(void)
 	 * are the trust boundary for raw signed LARGE_INTEGER values.  Both
 	 * endpoints used to overflow while subtracting the NT epoch before
 	 * division made the result small again. */
-	CHECK(__nt_to_unix_sec(LLONG_MIN) == -933981677285LL);
-	CHECK(__nt_to_unix_nsec(LLONG_MIN) == -477580800L);
-	CHECK(__nt_to_unix_sec(LLONG_MAX) == 910692730085LL);
-	CHECK(__nt_to_unix_nsec(LLONG_MAX) == 477580700L);
-	CHECK(__nt_to_unix_sec(__TICKS_1601_TO_1970 - 1) == 0);
-	CHECK(__nt_to_unix_nsec(__TICKS_1601_TO_1970 - 1) == -100L);
-	CHECK(__nt_to_unix_sec(__TICKS_1601_TO_1970 + 1) == 0);
-	CHECK(__nt_to_unix_nsec(__TICKS_1601_TO_1970 + 1) == 100L);
+	CHECK(__ticks_to_unix_sec(LLONG_MIN) == -933981677285LL);
+	CHECK(__ticks_to_unix_nsec(LLONG_MIN) == -477580800L);
+	CHECK(__ticks_to_unix_sec(LLONG_MAX) == 910692730085LL);
+	CHECK(__ticks_to_unix_nsec(LLONG_MAX) == 477580700L);
+	CHECK(__ticks_to_unix_sec(__TICKS_1601_TO_1970 - 1) == 0);
+	CHECK(__ticks_to_unix_nsec(__TICKS_1601_TO_1970 - 1) == -100L);
+	CHECK(__ticks_to_unix_sec(__TICKS_1601_TO_1970 + 1) == 0);
+	CHECK(__ticks_to_unix_nsec(__TICKS_1601_TO_1970 + 1) == 100L);
 
 	/* Process times and performance counters are signed NT fields.  A
 	 * successful but malformed kernel response must be rejected without

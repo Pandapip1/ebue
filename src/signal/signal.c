@@ -565,10 +565,10 @@ int __raise_internal_info(int sig, const void *data)
 		 * regardless of this, since the failure mode was a stack
 		 * overflow that reported success. */
 		if (sig == SIGABRT) __stdio_exit();
-		__nt_exit(__NT_SIGNAL_EXIT(sig));
+		__exit_internal(__ENCODE_SIGNAL_EXIT(sig));
 	}
 	/* else: h is a real handler.  Written as an else rather than a
-	 * fallthrough because __nt_exit is _Noreturn (libc.h) but cppcheck
+	 * fallthrough because __exit_internal is _Noreturn (libc.h) but cppcheck
 	 * does not track that, and so reads the fallthrough as h(sig) being
 	 * reachable with h == SIG_DFL, which is NULL.
 	 *
@@ -960,7 +960,7 @@ int kill(pid_t pid, int sig)
 		return 0;
 	}
 	{
-		int r = __plat_kill_terminate(h, __NT_SIGNAL_EXIT(sig));
+		int r = __plat_kill_terminate(h, __ENCODE_SIGNAL_EXIT(sig));
 		if (!c) __plat_close(h);
 		return r;
 	}
@@ -1573,11 +1573,11 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 		 * FILE calling fflush().  Flushing was how the handler for a
 		 * stack overflow used to re-enter the very cycle that caused
 		 * it -- see src/stdio/file.c. */
-		__nt_exit(__NT_SIGNAL_EXIT(sig));
+		__exit_internal(__ENCODE_SIGNAL_EXIT(sig));
 	}
 	if (handlers[sig] == SIG_IGN) {
 		/* Ignoring a fault would loop forever; POSIX says undefined. Die. */
-		if (sig != SIGINT && sig != SIGTRAP) __nt_exit(__NT_SIGNAL_EXIT(sig));
+		if (sig != SIGINT && sig != SIGTRAP) __exit_internal(__ENCODE_SIGNAL_EXIT(sig));
 		__sig_unlock();
 		return EXCEPTION_CONTINUE_EXECUTION;
 	}

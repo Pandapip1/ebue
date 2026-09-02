@@ -6,7 +6,7 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The platform-termination interface src/exit/exit.c's __nt_exit() calls
+ * The platform-termination interface src/exit/exit.c's __exit_internal() calls
  * into instead of a raw NtTerminateProcess call.  See src/exit/nt/
  * plat_exit.c for the implementation this declares.
  *
@@ -21,7 +21,7 @@
 /* End this process immediately with exit status `code`.  Never returns
  * -- retries forever on the vanishingly unlikely chance the first
  * attempt does not immediately end the process, the same defensive loop
- * __nt_exit() had before this call existed. */
+ * __exit_internal() had before this call existed. */
 _Noreturn void __plat_terminate(int code);
 
 #endif

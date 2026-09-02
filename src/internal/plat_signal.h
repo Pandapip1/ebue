@@ -247,17 +247,17 @@ int __plat_segv_code(void *addr);
 void __plat_sig_sync_kernel(int sig, int ignore);
 
 /* End THIS process exactly as if by sig's real default action -- the
- * meaning every __NT_SIGNAL_EXIT(sig)-encoded code passed to __nt_exit()
- * (src/exit/exit.c, libc.h) carries: kill()/raise()'s own default-
- * terminate path in src/signal/signal.c, abort()'s guaranteed-
- * termination fallback (which reaches here even with sig blocked,
- * ignored, or caught by a handler that returned -- abort.html requires
- * overriding all three), the exec() stand-in re-raising a child's own
- * termination signal, the vectored exception handler.
+ * meaning every __ENCODE_SIGNAL_EXIT(sig)-encoded code passed to
+ * __exit_internal() (src/exit/exit.c, libc.h) carries: kill()/raise()'s
+ * own default-terminate path in src/signal/signal.c, abort()'s
+ * guaranteed-termination fallback (which reaches here even with sig
+ * blocked, ignored, or caught by a handler that returned -- abort.html
+ * requires overriding all three), the exec() stand-in re-raising a
+ * child's own termination signal, the vectored exception handler.
  *
- * __nt_exit() calls this FIRST for such a code, before falling back to
- * its own NT-shaped simulation of one (an ordinary process exit whose
- * status ENCODES the signal number, decoded back out by
+ * __exit_internal() calls this FIRST for such a code, before falling
+ * back to its own NT-shaped simulation of one (an ordinary process exit
+ * whose status ENCODES the signal number, decoded back out by
  * src/process/wait.c's __wait_encode_status()). That simulation is the
  * only option NT has, and is exactly right there -- see this header's
  * own __plat_sig_sync_kernel comment: every signal reaching this point
@@ -270,12 +270,12 @@ void __plat_sig_sync_kernel(int sig, int ignore);
  * reported WIFEXITED to this process's own parent, not WIFSIGNALED.
  *
  * Returns, instead of ending the process, when raising sig for real did
- * not end it -- __nt_exit() falls back to its own simulated termination
- * in that case, same as if this function had never been called. Always
- * simply returns on NT, which has no kernel signal of its own to raise
- * (this header's own __plat_sig_sync_kernel comment, same paragraph), so
- * __nt_exit()'s fallback is what actually ends the process there, same
- * as before this function existed. */
+ * not end it -- __exit_internal() falls back to its own simulated
+ * termination in that case, same as if this function had never been
+ * called. Always simply returns on NT, which has no kernel signal of
+ * its own to raise (this header's own __plat_sig_sync_kernel comment,
+ * same paragraph), so __exit_internal()'s fallback is what actually
+ * ends the process there, same as before this function existed. */
 void __plat_sig_default_terminate(int sig);
 
 /* ---- children.c -------------------------------------------------------- */

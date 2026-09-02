@@ -52,7 +52,7 @@
  * the split the header's contract expects, implemented on this side of
  * the interface instead of trusted to the kernel object a second time.
  * The exit code stashed is deliberately encoded the same way the NT
- * backend's is (a plain 0-255 value, or __NT_SIGNAL_EXIT(sig) for a
+ * backend's is (a plain 0-255 value, or __ENCODE_SIGNAL_EXIT(sig) for a
  * signal death -- see libc.h), so src/process/wait.c's
  * __wait_encode_status(), written once and shared by every backend,
  * reconstructs the identical POSIX wait status Linux's own wait4()

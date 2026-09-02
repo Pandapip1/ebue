@@ -224,7 +224,7 @@ void funlockfile(FILE *f) { (void)f; }
  * closed: roughly 1 MB of stack consumed, then EXCEPTION_STACK_OVERFLOW
  * (0xC00000FD).  Worse than the fault itself, the process then died
  * reporting exit code 0 -- the overflow destroys the
- * __NT_SIGNAL_EXIT(SIGPIPE) that should have been reported -- so a
+ * __ENCODE_SIGNAL_EXIT(SIGPIPE) that should have been reported -- so a
  * crashed program looked to its parent like a successful one.  (A plain
  * unbuffered SIGPIPE death from the same library exits 13, correctly.)
  *
@@ -264,7 +264,7 @@ void __stdio_exit(void)
 	 * is the only observable effect that matters. */
 
 	/* Deliberately NOT cleared.  There is no "after" for this function:
-	 * every caller is on its way to __nt_exit().  Clearing it would only
+	 * every caller is on its way to __exit_internal().  Clearing it would only
 	 * re-arm the recursion for a second fatal signal arriving during the
 	 * same shutdown. */
 }

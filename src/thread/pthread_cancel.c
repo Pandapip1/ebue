@@ -83,8 +83,8 @@ static int atomic_load(volatile int *address)
  *
  * The write deliberately bypasses stdio and the fd table: the suspended
  * target may own either one's locks.  Termination likewise goes straight
- * to NT instead of abort()/__nt_exit(), whose signal and child bookkeeping
- * are not async-cancel-safe themselves. */
+ * to NT instead of abort()/__exit_internal(), whose signal and child
+ * bookkeeping are not async-cancel-safe themselves. */
 static _Noreturn void cancel_unsafe_abort(const char *region)
 {
 	__plat_cancel_unsafe_abort(region);

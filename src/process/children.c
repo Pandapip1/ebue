@@ -162,7 +162,7 @@ static void clear_stops(int resume)
  * IS the real thing: signal.c's kill() reaches its own last-resort arm,
  * and src/signal/linux/plat_signal.c's __plat_kill_terminate() turns
  * that into a genuine pidfd_send_signal(2) of SIGHUP, decoded back out
- * of the __NT_SIGNAL_EXIT() encoding kill() built, applying whatever
+ * of the __ENCODE_SIGNAL_EXIT() encoding kill() built, applying whatever
  * real kernel-level disposition the child itself last synced
  * (__plat_sig_sync_kernel(), plat_signal.h) -- an ignored disposition is
  * a genuine no-op, and SIG_DFL runs the real default action (Term),
@@ -183,7 +183,7 @@ static void clear_stops(int resume)
  * buy, so NT skips it and sends only the SIGCONT half.
  *
  * The coverage is wider than exit() because everything funnels through
- * __nt_exit(): _exit() and _Exit(), abort(), the default "terminate"
+ * __exit_internal(): _exit() and _Exit(), abort(), the default "terminate"
  * action __raise_internal() takes for an uncaught signal, and -- since
  * exception_handler() turns a mapped NT exception into exactly that --
  * a parent that dies of a SIGSEGV too.  What does not reach it is a

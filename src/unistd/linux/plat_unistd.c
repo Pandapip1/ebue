@@ -291,11 +291,11 @@ long long __plat_time_now(void)
 	long long nt;
 	long ret = raw_syscall(SYS_clock_gettime, 0L /* CLOCK_REALTIME */, (long)&ts, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) return __TICKS_1601_TO_1970; /* the epoch: never actually fails on Linux */
-	/* __unix_to_nt() (src/internal/libc.h) is the same NT-epoch/100ns-
+	/* __unix_to_ticks() (src/internal/libc.h) is the same NT-epoch/100ns-
 	 * tick conversion src/time/clock_gettime.c and every other clock
 	 * reader in this library already shares -- reused rather than
 	 * reinvented so this backend's answer cannot drift from theirs. */
-	if (!__unix_to_nt(ts.tv_sec, ts.tv_nsec, &nt)) return __TICKS_1601_TO_1970;
+	if (!__unix_to_ticks(ts.tv_sec, ts.tv_nsec, &nt)) return __TICKS_1601_TO_1970;
 	return nt;
 }
 

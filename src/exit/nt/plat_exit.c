@@ -3,7 +3,7 @@
  *
  * NT implementation of src/internal/plat_exit.h -- see that header for
  * the contract.  Was, until this file existed, inline inside
- * src/exit/exit.c's __nt_exit(); nothing changed in substance, only
+ * src/exit/exit.c's __exit_internal(); nothing changed in substance, only
  * location.
  */
 

@@ -8,7 +8,7 @@
  *
  * Exercises:
  *   - src/exit/linux/plat_exit.c's __plat_terminate(), directly (see
- *     "exit-test" mode below: exit.c's own front door, __nt_exit(),
+ *     "exit-test" mode below: exit.c's own front door, __exit_internal(),
  *     pulls in __child_resume_stopped() (src/process/children.c) and
  *     __stdio_exit(), both from subsystems no Linux backend exists for
  *     yet in this tree, so this calls the platform function itself --
