@@ -23,6 +23,7 @@
 #include "libc.h"
 #include "plat_fd.h"
 #include "plat_stdio.h"
+#include "plat_unistd.h"
 
 /* POSIX classifies a symbolic link as a non-directory file whatever it
  * points at; NT gives a directory symlink FILE_ATTRIBUTE_DIRECTORY on
@@ -255,6 +256,69 @@ int __plat_rename(int olddirfd, const char *old, int newdirfd, const char *new)
 	 * the way FILE_RENAME_INFORMATION's own RootDirectory field expects. */
 	{
 		int r = rename_set(h, &np, old_isdir, new_isdir);
+
+		/* rename.html DESCRIPTION, the directory case: "If the
+		 * directory named by the new argument exists, it shall be
+		 * removed and old renamed to new... The new argument shall
+		 * not name any directory other than an empty directory."
+		 * NT's FileRenameInformation[Ex] refuses outright to replace
+		 * an existing directory, empty or not -- measured,
+		 * FILE_RENAME_REPLACE_IF_EXISTS|FILE_RENAME_POSIX_SEMANTICS
+		 * included -- always STATUS_ACCESS_DENIED, which rename_set()
+		 * above already turned into ENOTEMPTY via its old_isdir &&
+		 * new_isdir disambiguation.  That disambiguation answers
+		 * "which type mismatch is this", not "is new empty", so it
+		 * cannot by itself tell a genuinely non-empty new (which
+		 * really must fail ENOTEMPTY) from an empty one (which must
+		 * succeed) -- both reach it as the identical status.
+		 *
+		 * The two ARE distinguishable, just not from the status NT
+		 * handed back for the rename itself: NT's own directory-
+		 * delete path (FILE_DISPOSITION_INFORMATION[Ex], the same
+		 * mechanism rmdir()/__plat_unlink() already use) independently
+		 * refuses a non-empty directory with
+		 * STATUS_DIRECTORY_NOT_EMPTY.  Asking it is exactly the
+		 * emptiness test this clause needs, and reuses the existing,
+		 * already-correct rmdir() logic rather than hand-rolling a
+		 * second one here.
+		 *
+		 * So: if the rename failed as ENOTEMPTY *and* both sides are
+		 * really directories (the only case rename_set() maps to
+		 * ENOTEMPTY this way), try to remove new exactly as rmdir()
+		 * would.  If new was genuinely empty, that succeeds, new is
+		 * gone, and old's rename -- freshly resolved, since
+		 * rename_set() always closes the handle it was given, even on
+		 * failure -- lands on a name that no longer exists: an
+		 * ordinary, unqualified rename.  If new was not empty, the
+		 * delete attempt fails with the same ENOTEMPTY rename_set()
+		 * already reported, and that is restored explicitly below
+		 * rather than trusted to survive incidentally, in case the
+		 * delete attempt failed for some unrelated reason instead
+		 * (e.g. a permission problem on new itself) and left a
+		 * different errno behind. */
+		if (r == -1 && errno == ENOTEMPTY && old_isdir && new_isdir) {
+			if (__plat_unlink(newdirfd, new, 1) == 0) {
+				struct __ntpath op2;
+				__plat_handle_t h2 = 0;
+				unsigned long oa2 = 0, ot2 = 0;
+
+				if (__ntpath_at(olddirfd, old, &op2, OBJ_CASE_INSENSITIVE) < 0) {
+					__ntpath_free(&np);
+					return -1;
+				}
+				if (rename_open_old(&op2, &h2, &oa2, &ot2) < 0) {
+					__ntpath_free(&op2);
+					__ntpath_free(&np);
+					return -1;
+				}
+				__ntpath_free(&op2);
+				r = rename_set(h2, &np, old_isdir, 0);
+				__ntpath_free(&np);
+				return r;
+			}
+			errno = ENOTEMPTY;
+		}
+
 		__ntpath_free(&np);
 		return r;
 	}

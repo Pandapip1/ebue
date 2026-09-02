@@ -852,18 +852,33 @@ static void test_renameat_success(void)
  * new... The new argument shall not name any directory other than an
  * empty directory." -- an EMPTY directory at new must be removed and
  * replaced, not refused. */
-#if NTLIBC_TEST(BUG, posix_unreferenced_renameat_dir_over_empty_dir) /* BUG, on two counts.  NT's FileRenameInformation[Ex] will not
+#if NTLIBC_TEST(PASS, posix_unreferenced_renameat_dir_over_empty_dir) /* FIXED.  NT's FileRenameInformation[Ex] will not
        * replace an existing directory even with
        * FILE_RENAME_REPLACE_IF_EXISTS, so the call comes back
-       * STATUS_ACCESS_DENIED; src/stdio/misc.c then reaches its
-       * EISDIR/ENOTEMPTY disambiguation, sees that new is a directory
-       * and that old is one too, and reports ENOTEMPTY -- without ever
-       * asking whether new is in fact empty.  So (a) the rename fails
-       * where rename.html requires it to succeed, and (b) the errno it
-       * fails with names a condition ("that is not an empty directory")
-       * that is not the one present.  Observed: -1 / ENOTEMPTY against
-       * a freshly created, empty ren.d/h.  Implementable: enumerate new
-       * and, if it is empty, remove it and retry the rename. */
+       * STATUS_ACCESS_DENIED; src/stdio/misc.c's disambiguation (moved
+       * to src/stdio/nt/plat_stdio.c's rename_set()) then sees that new
+       * is a directory and that old is one too, and reports ENOTEMPTY
+       * -- without asking whether new is in fact empty.  So (a) the
+       * rename failed where rename.html requires it to succeed, and (b)
+       * the errno it failed with named a condition ("that is not an
+       * empty directory") that was not the one present.  Observed: -1 /
+       * ENOTEMPTY against a freshly created, empty ren.d/h.
+       *
+       * Fixed in __plat_rename() (src/stdio/nt/plat_stdio.c): on that
+       * exact signature (rename_set() failed ENOTEMPTY, and both old
+       * and new really are directories -- the only way rename_set()
+       * produces ENOTEMPTY), remove new exactly as rmdir() would
+       * (__plat_unlink(), which already asks NT's own directory-delete
+       * path and gets STATUS_DIRECTORY_NOT_EMPTY back for a genuinely
+       * non-empty directory).  If new was empty, the delete succeeds,
+       * new is gone, and old's rename -- freshly resolved, since
+       * rename_set() always closes the handle it was given -- lands on
+       * a name that no longer exists: an ordinary, unqualified rename.
+       * If new was not empty, the delete attempt fails with the same
+       * ENOTEMPTY rename_set() already reported, which is what a
+       * genuinely non-empty new must still report (see
+       * test_renameat_errors()'s unfenced ENOTEMPTY/EEXIST assertion
+       * just below, which this fix does not touch). */
 static void test_renameat_dir_over_empty_dir(void)
 {
 	CHECK(mkdir("ren.d/g", 0755) == 0);
@@ -1099,7 +1114,17 @@ static void test_renameat_einval(void)
        * conditionally on directory ownership.
        *
        * [EROFS] -- N/A, environment: mounting a read-only volume is not
-       * something the test suite can arrange. */
+       * something the test suite can arrange.
+       *
+       * RE-AUDITED, STILL BUG, NOT ATTEMPTED THIS PASS: same missing
+       * ACL/DACL infrastructure as the three chmod fences in
+       * test/posix-unistd.c (see the fuller writeup on
+       * test_chmod_cannot_clear_read_bits there) -- this one needs it
+       * for a directory-level deny ACE rather than a file-permission
+       * one, but it is the identical gap: no NtSetSecurityObject/
+       * RtlAddAccessDeniedAce declared anywhere in src/internal/nt.h,
+       * and no working Wine in this session to write and verify that
+       * code against real NT behaviour. */
 static void test_renameat_eacces(void)
 {
 	CHECK(mkdir("ren.d/ro", 0755) == 0);
@@ -1397,7 +1422,25 @@ static void test_fchmodat_empty_at_dirfd(void)
        * was deliberately made lexical TO MATCH THIS ONE (see
        * src/internal/path.c's normalize_rel), so if this is ever
        * changed, both must change together or the two branches will
-       * disagree. */
+       * disagree.
+       *
+       * RE-CHECKED THIS PASS, PER THE TASK'S OWN INSTRUCTION TO LOOK AT
+       * WHAT ELSE USES THIS SHARED CODE BEFORE TOUCHING IT: `grep -rl
+       * "__ntpath_at\|__ntpath(" src/` finds 17 files -- stat, chmod,
+       * mkdir, unlink/rmdir, rename, open, statvfs, utimensat, link
+       * and more, i.e. essentially every filesystem-path-taking
+       * function this library has. That confirms rather than merely
+       * repeats the fence's own claim: a component-by-component rewrite
+       * of __ntpath()/__ntpath_at() to satisfy XBD 4.13 here would be a
+       * change to the path-resolution semantics of the entire library,
+       * not a scoped fix to this one clause -- exactly the kind of
+       * "smuggled-in" scope change this fence already argues against,
+       * and exactly the kind of thing that cannot be verified correct
+       * across 17 call sites without a working Wine in this session to
+       * run the existing suite against afterward. Left as recorded, not
+       * fixed, per the fence's own standing decision -- this pass found
+       * no reason to overturn it, only confirmation that it still
+       * holds. */
 static void test_pathres_dotdot_over_nondir(void)
 {
 	struct stat st;
@@ -1538,7 +1581,21 @@ static void test_fchmodat_dot_component(void)
        * a reason the clause cannot apply.
        *
        * [EROFS] -- N/A, environment: a read-only volume is not
-       * arrangeable from the suite. */
+       * arrangeable from the suite.
+       *
+       * RE-AUDITED, STILL BUG, NOT ATTEMPTED THIS PASS: same missing
+       * ACL/DACL infrastructure as the three chmod fences in
+       * test/posix-unistd.c and test_renameat_eacces() above (see the
+       * fuller writeup on test_chmod_cannot_clear_read_bits) -- no
+       * NtSetSecurityObject/RtlAddAccessDeniedAce declared anywhere in
+       * src/internal/nt.h, and no working Wine in this session to
+       * write and verify that code against real NT behaviour. This
+       * fixture also depends on chmod("chm.d/noexec", 0000) actually
+       * denying search on the directory, which is the exact chmod
+       * gap those other fences already document; fixing this one
+       * without fixing that would just move the failure from "the
+       * denial can't be created" to "chmod silently reports the
+       * denial applied and it did not". */
 static void test_fchmodat_eperm(void)
 {
 	CHECK(mkdir("chm.d/noexec", 0755) == 0);
@@ -2235,6 +2292,9 @@ int main(void)
 	test_psignal(name);
 
 	test_renameat_success();
+#if NTLIBC_TEST(PASS, posix_unreferenced_renameat_dir_over_empty_dir) /* see the definition fence above */
+	test_renameat_dir_over_empty_dir();
+#endif
 	test_renameat_errors();
 	test_renameat_enotdir_dir_over_file();
 	test_renameat_new_relative_to_dirfd();

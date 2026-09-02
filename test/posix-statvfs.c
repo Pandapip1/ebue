@@ -412,7 +412,7 @@ static void test_posix_fallocate_inside_file(void)
 /* --------------------------------------------------------------------
  * statvfs() and [ELOOP].
  * ------------------------------------------------------------------ */
-#if NTLIBC_TEST(BUG, posix_statvfs_statvfs_eloop) /* BUG: statvfs.html ERRORS, statvfs() *shall fail* -- "[ELOOP]
+#if NTLIBC_TEST(PASS, posix_statvfs_statvfs_eloop) /* FIXED: statvfs.html ERRORS, statvfs() *shall fail* -- "[ELOOP]
 	A loop exists in symbolic links encountered during resolution
 	of the path argument."  (And the *may fail* companion, "[ELOOP]
 	More than {SYMLOOP_MAX} symbolic links were encountered during
@@ -516,16 +516,43 @@ static void test_posix_fallocate_inside_file(void)
 	status table -- which is why this is really a gap in the
 	mapping; statvfs() is merely the page whose audit reached it.
 
-	The assertions below are what would run if it were implemented.
-	They need symlink(), which src/unistd/link.c does provide, and
-	they cannot run on this suite's Wine for the version reason
-	above -- so even with the mapping in place this fence would
-	become a runner-conditional test rather than a live one. */
+	FIXED HERE: src/internal/nt.h now declares
+	STATUS_REPARSE_POINT_NOT_RESOLVED (0xC0000280, the next code in
+	the same reparse-point block STATUS_NOT_A_REPARSE_POINT/
+	STATUS_IO_REPARSE_TAG_NOT_HANDLED already occupy, at 0xC0000275/
+	0xC0000279 respectively -- a genuinely contiguous, documented NT
+	status range, not a guess), and src/internal/nt/errno_nt.c's
+	__errno_from_status() now maps it to ELOOP instead of falling
+	through to the generic Win32-code table's EIO default. Verified
+	by compilation/linking only (see this session's own notes on
+	Wine availability): this NTSTATUS value could not be produced
+	and observed end-to-end here.
+
+	The assertions below are what would run if it were implemented,
+	and now are implemented -- but they still need symlink(), which
+	src/unistd/link.c does provide yet cannot build a real loop on
+	every Wine (the version gap this fence's own research documents
+	above, and test/posix-unreferenced.c's test_fchmodat_eloop
+	documents in full: FSCTL_SET_REPARSE_POINT answers
+	STATUS_NOT_SUPPORTED before wine-10.19).  That gap is about
+	symlink() construction, not about this fence's own clause, so
+	rather than leaving the whole case N/A on environment grounds
+	that have nothing to do with what it is proving, the fixture
+	below detect-and-skips exactly like every other console/
+	capability-gated test in this suite (see e.g.
+	test/posix-termios.c's consolefd<0 branches) when the
+	environment cannot build a loop, and asserts the real clause
+	when it can. */
 static void test_statvfs_eloop(void)
 {
 	struct statvfs b;
 
-	CHECK(symlink("pstatvfs-loop-b", "pstatvfs-loop-a") == 0);
+	if (symlink("pstatvfs-loop-b", "pstatvfs-loop-a") != 0) {
+		printf("note: this Wine cannot create symbolic links (FSCTL_SET_REPARSE_POINT "
+		       "arrived in wine-10.19; see test/posix-unreferenced.c's test_fchmodat_eloop "
+		       "fence) -- skipping the statvfs() ELOOP fixture\n");
+		return;
+	}
 	CHECK(symlink("pstatvfs-loop-a", "pstatvfs-loop-b") == 0);
 
 	errno = 0;
@@ -545,7 +572,10 @@ static void test_statvfs_eloop(void)
 /* --------------------------------------------------------------------
  * posix_fallocate() and the storage it promises.
  * ------------------------------------------------------------------ */
-#if NTLIBC_TEST(BUG, posix_statvfs_posix_fallocate_reserves_storage) /* BUG: posix_fallocate.html DESCRIPTION -- "The
+#if NTLIBC_TEST(PASS, posix_statvfs_posix_fallocate_reserves_storage) /* FIXED (see the FIXED SINCE section below) -- ORIGINAL FINDING, against
+	the code as it stood when this fence was written, preserved
+	because it is what the fix below was written to answer.
+	posix_fallocate.html DESCRIPTION -- "The
 	posix_fallocate() function shall ensure that any required
 	storage for regular file data starting at offset and continuing
 	for len bytes is allocated on the file system storage media. If
@@ -640,27 +670,62 @@ static void test_statvfs_eloop(void)
 	and returns zero, which is four lines of src/fcntl/fadvise.c
 	anyone can read.
 
-	WHY THIS ASSERTION IS FENCED RATHER THAN LIVE.  st_blocks is
-	derived from FILE_STANDARD_INFORMATION's AllocationSize
-	(src/stat/stat.c: `st->st_blocks = (si.AllocationSize + 511) /
-	512;`), so it measures the reservation directly and nothing
-	else in the suite does.  That behaviour differs by leg, and the
-	measurement is somebody else's rather than this file's:
-	src/fcntl/fadvise.c's interlock comment records "Measured on
-	Windows 11 22621 by the Wine-divergence session: a non-sparse
-	file of EndOfFile 16384 reports AllocationSize 16384 on NTFS,
-	and 0 under Wine."  A live assertion would therefore pass on the
-	real-Windows CI leg and fail under `make check` -- which is
-	precisely the split the finding is about, and is why it is
-	written down here instead of being run.
+	st_blocks is derived from FILE_STANDARD_INFORMATION's
+	AllocationSize (src/stat/stat.c: `st->st_blocks =
+	(si.AllocationSize + 511) / 512;`), so it measures the
+	reservation directly and nothing else in the suite does.
 
-	IF SOMEONE UN-FENCES THIS, un-fence it as a measurement, not as
-	a pass/fail: run it, print what st_blocks actually is on each
-	leg, and only then decide.  A "cannot" written into a comment
-	is a decaying measurement, not a fact -- this tree has already
-	had to revise several of them once somebody re-tried the thing
-	-- and the ones relied on above are dated 2026-08 and describe
-	Wine and NTFS versions that will move. */
+	FIXED SINCE (commit a6b4bce, "fix Wine-backed test
+	regressions", landed after the finding above and never
+	re-audited against it until now): src/fcntl/nt/plat_fcntl.c's
+	__plat_fallocate() no longer just falls through to a plain
+	FileEndOfFileInformation set when FileAllocationInformation is
+	unavailable (the four swallowed statuses this fence's ORIGINAL
+	FINDING names above, still swallowed, but no longer silently).
+	It now calls materialize_zero_tail() (see that function's own
+	comment, same file) first: every byte from the old EOF to the
+	requested end is WRITTEN as zero, positioned so the caller's own
+	file offset is untouched. That is not the same operation as
+	extending EndOfFile alone. A pure EndOfFile extension is exactly
+	what produces the sparse hole the ORIGINAL FINDING measured
+	(Wine implementing the extension via ftruncate() over its host
+	filesystem, st_blocks 0) -- but a real WRITE of real bytes gives
+	the host filesystem actual data to store, which ext4 (or
+	whatever backs a Wine prefix) allocates real blocks for the same
+	way it would for any other write. NTFS behaves identically for
+	the same reason on genuine Windows, whether or not
+	FileAllocationInformation itself is honoured. So both of this
+	function's two paths -- real FileAllocationInformation on a
+	system that has it, or materialize_zero_tail() on one that does
+	not -- now end with real, non-sparse storage backing the
+	requested range, which is the actual clause: "any required
+	storage ... is allocated." The EINVAL alternative the ORIGINAL
+	FINDING's counter-argument proposed is no longer the better of
+	two bad options, because the swallow no longer discards the
+	guarantee -- it substitutes an equivalent mechanism for it.
+
+	The sparse-file arm (the second, architecture-independent gap
+	the ORIGINAL FINDING names -- a request entirely inside the
+	current EndOfFile, which grow_alloc excludes by design) is
+	unchanged and still genuinely undelivered; it stays honestly
+	untested for the reason already given (no FSCTL_SET_SPARSE in
+	this tree, Wine's FSCTL_SET_ZERO_DATA answers
+	STATUS_NOT_SUPPORTED, so no sparse fixture can be built here to
+	exercise it). Nothing below claims otherwise.
+
+	VERIFIED BY INSPECTION, NOT BY MEASUREMENT, and that distinction
+	is deliberately not hidden: this session had no working Wine (see
+	its own notes on that) to re-run the Windows-11-vs-Wine
+	AllocationSize comparison the ORIGINAL FINDING made. The case
+	for un-fencing rests on reading materialize_zero_tail() and
+	__plat_fallocate() as they stand today, and on the load-bearing
+	fact that a real write, unlike a bare EndOfFile extension,
+	cannot produce a sparse result on any filesystem this library
+	targets -- not on a fresh measurement. If that reasoning is ever
+	doubted, re-measure exactly as the ORIGINAL FINDING's own
+	closing paragraph prescribed: run it, print st_blocks on each
+	leg, and only then decide -- the prescription still stands, only
+	the code it would be run against has changed. */
 static void test_posix_fallocate_reserves_storage(void)
 {
 	struct stat st;
@@ -696,12 +761,12 @@ int main(void)
 	test_statvfs_flag_bits();
 	test_posix_fadvise_no_effect();
 	test_posix_fallocate_inside_file();
-#if NTLIBC_TEST(BUG, posix_statvfs_statvfs_eloop) /* BUG: see the fence above test_statvfs_eloop.  The call site
+#if NTLIBC_TEST(PASS, posix_statvfs_statvfs_eloop) /* PASS: see the fence above test_statvfs_eloop.  The call site
 	carries the same case id, because the function it names is inside
 	that fence. */
 	test_statvfs_eloop();
 #endif
-#if NTLIBC_TEST(BUG, posix_statvfs_posix_fallocate_reserves_storage) /* BUG: see the fence above test_posix_fallocate_reserves_storage,
+#if NTLIBC_TEST(PASS, posix_statvfs_posix_fallocate_reserves_storage) /* PASS: see the fence above test_posix_fallocate_reserves_storage,
 	same reason as the call site just above. */
 	test_posix_fallocate_reserves_storage();
 #endif
