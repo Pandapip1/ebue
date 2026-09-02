@@ -125,8 +125,9 @@ static int put(struct out *o, const char *t, size_t l)
 static int putc_n(struct out *o, char c, size_t n) __attribute__((nonnull(1)));
 static int putc_n(struct out *o, char c, size_t n)
 {
+	size_t i;
 	if (n > o->left) return -1;
-	memset(o->p, c, n);
+	for (i = 0; i < n; i++) o->p[i] = c;
 	o->p += n;
 	o->left -= n;
 	o->written += n;
@@ -142,8 +143,9 @@ static int fappend(char *restrict f, size_t *fl, const char *restrict t, size_t 
     __attribute__((nonnull(1, 2, 3)));
 static int fappend(char *restrict f, size_t *fl, const char *restrict t, size_t l)
 {
+	size_t i;
 	if (l > FIELD_MAX - *fl) return -1;
-	memcpy(f + *fl, t, l);
+	for (i = 0; i < l; i++) f[*fl + i] = t[i];
 	*fl += l;
 	return 0;
 }

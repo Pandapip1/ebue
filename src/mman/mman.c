@@ -337,7 +337,8 @@ static struct mapping *find_slot(void)
 		}
 		grown = realloc(maps, cap * sizeof *maps);
 		if (!grown) return NULL;
-		memset(grown + maps_cap, 0, (cap - maps_cap) * sizeof *maps);
+		for (i = maps_cap; i < cap; i++)
+			grown[i] = (struct mapping){0};
 		maps = grown;
 		maps_cap = cap;
 	}

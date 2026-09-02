@@ -332,8 +332,9 @@ int __plat_mem_map_file(__plat_handle_t fh, int prot, int flags, off_t off, // N
 	    (unsigned long long)(eof - off) < viewbytes) {
 		size_t tail = (size_t)(eof - off);
 		size_t end = pground(tail);
+		size_t i;
 		if (end > viewbytes) end = viewbytes;
-		memset((char *)base + tail, 0, end - tail);
+		for (i = tail; i < end; i++) ((char *)base)[i] = 0;
 	}
 	*base_inout = base;
 	return 0;
