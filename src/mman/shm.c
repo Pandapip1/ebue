@@ -88,10 +88,7 @@ static char *shm_path(const char *name)
 	pathlen = dirlen + prefix + namelen + 1;
 	path = malloc(pathlen);
 	if (!path) return NULL;
-	memcpy(path, dir, dirlen);
-	memcpy(path + dirlen, "/ntlibc-shm/", prefix);
-	memcpy(path + dirlen + prefix, component, namelen);
-	path[pathlen - 1] = 0;
+	snprintf(path, pathlen, "%s/ntlibc-shm/%s", dir, component);
 	return path;
 }
 

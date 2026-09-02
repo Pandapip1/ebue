@@ -137,10 +137,7 @@ static char *mq_path(const char *name)
 	total = d + prefix + n + 1;
 	path = malloc(total);
 	if (!path) return NULL;
-	memcpy(path, dir, d);
-	memcpy(path + d, "/ntlibc-mq/", prefix);
-	memcpy(path + d + prefix, component, n);
-	path[total - 1] = 0;
+	snprintf(path, total, "%s/ntlibc-mq/%s", dir, component);
 	return path;
 }
 
