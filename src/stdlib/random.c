@@ -27,18 +27,18 @@ __wraps static uint64_t lcg64(uint64_t v) { return 6364136223846793005ULL * v + 
 
 static void seed_state(unsigned s)
 {
-	int k, count = n;
+	int k;
 	if (n == 0) { x[0] = s; return; }
 	i = n == 31 || n == 7 ? 3 : 1;
 	j = 0;
 	if (n == 31 || n == 7) {
 		uint32_t v = s ? s : 1;
-		for (k = 0; k < count; k++) { x[k] = v; v = lcg31(v); }
+		for (k = 0; k < n; k++) { x[k] = v; v = lcg31(v); }
 	} else {
 		uint64_t v = s ? s : 1;
-		for (k = 0; k < count; k++) { x[k] = (uint32_t)(v >> 32); v = lcg64(v); }
+		for (k = 0; k < n; k++) { x[k] = (uint32_t)(v >> 32); v = lcg64(v); }
 	}
-	for (k = 0; k < count; k++) {
+	for (k = 0; k < n; k++) {
 		int round;
 		for (round = 0; round < 10; round++) (void)random_step();
 	}
