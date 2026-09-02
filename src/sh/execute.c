@@ -432,25 +432,40 @@ static char **build_child_envp(const struct sh_word *assigns, size_t *out_n)
 /* 2.9.1: a simple command with no cmd_word at all -- only variable
  * assignments -- is still valid, and those assignments affect the
  * *current* execution environment (this process's real environment),
- * not a child's. Always "succeeds" (status 0) as far as this function
- * is concerned: 2.9.1 gives no failure mode for a bare assignment. Its
- * caller may still overwrite that with the status of a command
- * substitution performed while expanding one of the values -- see
- * cmdsub_status_rule() below, which is where 2.9.1's "no command name,
- * but the command contained a command substitution" rule lives. */
+ * not a child's. "Succeeds" (status 0) as far as this function is
+ * concerned unless one of the names is marked read-only -- 2.9.1 itself
+ * gives a bare assignment no failure mode, but readonly(1p) does
+ * ("[i]t shall be an error for [a read-only name] to appear as a name
+ * in a subsequent ... assignment"), and this is the one place a plain
+ * "NAME=value" command's assignment is actually performed, so it is
+ * the enforcement point bi_readonly()'s own header comment (src/sh/
+ * builtin.c) names. Its caller may still overwrite a 0 here with the
+ * status of a command substitution performed while expanding one of
+ * the values -- see cmdsub_status_rule() below, which is where 2.9.1's
+ * "no command name, but the command contained a command substitution"
+ * rule lives; a read-only rejection takes priority over that the same
+ * way it takes priority over the "always succeeds" default, since both
+ * are just this function's own choice of *status, not something an
+ * outer caller can tell apart from a run that never encountered either. */
 static int exec_assignment_only(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
 static int exec_assignment_only(const struct sh_command *cmd, int *status)
 {
 	const struct sh_word *a;
+	int ok = 1;
 	for (a = cmd->assigns; a; a = a->next) {
 		char *name, *val;
 		if (split_assignment(a->text, &name, &val)) continue;
-		setenv(name, val, 1);
+		if (__sh_readonly_is(name)) {
+			(void)fprintf(stderr, "%s: readonly variable\n", name);
+			ok = 0;
+		} else {
+			setenv(name, val, 1);
+		}
 		__free(name);
 		__free(val);
 	}
-	*status = 0;
+	*status = ok ? 0 : 1;
 	return 0;
 }
 

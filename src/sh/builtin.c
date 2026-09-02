@@ -1118,6 +1118,133 @@ static int bi_export(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== readonly (XCU 2.14 special built-in, readonly(1p)) ===============
+ *
+ * Unlike export, this one is not a semantic no-op waiting to be made
+ * official: export(1p)'s three forms all turned out to already be true
+ * of every assignment this shell performs (bi_export()'s header comment
+ * just above), but readonly(1p) asks for something no assignment here
+ * does on its own -- "[i]t shall be an error for [a read-only name] to
+ * appear as a name in a subsequent ... assignment". That is real
+ * enforcement, not bookkeeping, and it needs a real place to check: a
+ * name's read-only mark lives in src/sh/readonly.c's small side-table
+ * (see that file's header for why `environ` cannot hold it), and every
+ * place an assignment actually happens has to consult it. For a plain
+ * "NAME=value" command that is exec_assignment_only() (src/sh/
+ * execute.c), which now refuses and diagnoses rather than calling
+ * setenv() when the name is marked.
+ *
+ * Two forms follow directly from that side-table:
+ *
+ *  - `readonly NAME=value` sets NAME (rejected if it is already marked
+ *    -- readonly(1p) does not exempt re-declaring the same name from
+ *    its own "shall be an error" sentence, and neither does this) and
+ *    marks it.
+ *  - `readonly NAME` with no '=' marks an existing -- or not yet
+ *    existing -- NAME read-only without touching any value. Marking a
+ *    name that has never been assigned is deliberately supported rather
+ *    than noted as a gap: __sh_readonly_mark() (src/sh/readonly.c)
+ *    tracks names, not environ entries, so there is nothing that needs
+ *    NAME to already be set first, and the first real assignment
+ *    afterwards is exactly what exec_assignment_only()'s new check is
+ *    for.
+ *
+ * What is a stated gap, matching bi_export()'s own header comment on
+ * the deviations it chose to state rather than hide: only a bare
+ * "NAME=value" command goes through the enforcement point above. An
+ * assignment *prefix* on another command ("NAME=value cmd") builds a
+ * private child environment (build_child_envp(), execute.c) that never
+ * touches this shell's own `environ`, and a `for NAME in ...` loop
+ * variable (exec_for(), execute.c) is a third, separate setenv() call
+ * site. Neither consults __sh_readonly_is(); a read-only NAME can still
+ * be shadowed for one child's environment or driven by a `for` loop
+ * without either being refused. Threading the same check through both
+ * would mean giving spawn_stage() and exec_for() a way to report a
+ * variable-assignment error back up through paths that today only ever
+ * return "ran" or "OOM" -- a real change to those two functions' own
+ * contracts, not a readonly-specific fix, so it is named here rather
+ * than done as a side effect of this builtin.
+ *
+ * `special` is 1 in the table below: readonly is XCU 2.14's own list.
+ * `env_effect` is 0, same as export's and for the same reason -- the
+ * no-operand/-p listing form must still run and print in a pipeline
+ * stage, so the mutating half (setting a value, marking a name) checks
+ * ctx->env_mutate itself instead of the whole built-in being skipped
+ * the way `cd` is. */
+static int list_readonly_variables(void)
+{
+	size_t i, n = __sh_readonly_count();
+
+	for (i = 0; i < n; i++) {
+		const char *name = __sh_readonly_name(i);
+		const char *val = getenv(name);
+		if (fputs("readonly ", stdout) < 0 || fputs(name, stdout) < 0) return -1;
+		if (val && (fputc('=', stdout) == EOF || write_quoted(val) < 0)) return -1;
+		if (fputc('\n', stdout) == EOF) return -1;
+	}
+	return fflush(stdout) == 0 ? 0 : -1;
+}
+
+static int bi_readonly(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_readonly(struct sh_builtin_ctx *ctx)
+{
+	int i;
+	int status = 0;
+
+	if (ctx->argc == 1 || strcmp(ctx->argv[1], "-p") == 0) {
+		if (ctx->argc > 2) {
+			(void)fprintf(stderr, "readonly: -p: too many operands\n");
+			ctx->status = 2;
+			return 0;
+		}
+		ctx->status = list_readonly_variables() == 0 ? 0 : 1;
+		return 0;
+	}
+
+	/* Same subshell reasoning as bi_set()/bi_export() above. */
+	if (!ctx->env_mutate) { ctx->status = 0; return 0; }
+
+	for (i = 1; i < ctx->argc; i++) {
+		const char *arg = ctx->argv[i];
+		size_t namelen = strcspn(arg, "=");
+		char *name = __malloc(namelen + 1);
+
+		if (!name) {
+			(void)fprintf(stderr, "readonly: out of memory\n");
+			ctx->status = 2;
+			return 0;
+		}
+		__ownership_writable_span(name, namelen);
+		__ownership_readable_span(arg, namelen);
+		memcpy(name, arg, namelen);
+		name[namelen] = 0;
+		if (!is_valid_name(name)) {
+			(void)fprintf(stderr, "readonly: %s: not a valid identifier\n", name);
+			status = 1;
+			__free(name);
+			continue;
+		}
+		if (arg[namelen] == '=') {
+			if (__sh_readonly_is(name)) {
+				(void)fprintf(stderr, "readonly: %s: readonly variable\n", name);
+				status = 1;
+				__free(name);
+				continue;
+			}
+			setenv(name, arg + namelen + 1, 1);
+		}
+		if (__sh_readonly_mark(name) < 0) {
+			(void)fprintf(stderr, "readonly: out of memory\n");
+			ctx->status = 2;
+			__free(name);
+			return 0;
+		}
+		__free(name);
+	}
+	ctx->status = status;
+	return 0;
+}
+
 /* ==== return (XCU 2.9.5, return(1p)) =================================== */
 
 /* return(1p): "The return utility shall cause the shell to stop
@@ -1426,6 +1553,9 @@ static const struct sh_builtin builtins[] = {
 	/* env_effect 0, same as `set`/`shift` just above and for the same
 	 * reason: see bi_export()'s own header comment. */
 	{ "export", 1, 0, bi_export },
+	/* env_effect 0, same as `export` just above and for the same
+	 * reason: see bi_readonly()'s own header comment. */
+	{ "readonly", 1, 0, bi_readonly },
 	/* `return`'s env_effect is 0 for the same reason `exit`'s is: its
 	 * effect in a subshell environment *is* the exit status, which
 	 * bi_return() produces either way, and it consults ctx->env_mutate

@@ -401,6 +401,21 @@ void __sh_params_install(struct sh_params *in)    /* move in, freeing current */
 void __sh_params_free(struct sh_params *p)
     __attribute__((nonnull(1)));
 
+/* ---- the read-only attribute (XCU 2.14 readonly special built-in) ---
+ *
+ * src/sh/readonly.c owns the set; see that file's header for why a
+ * name's read-only mark needs a store of its own rather than living in
+ * `environ` alongside its value. name is required on all three: the
+ * only real callers (src/sh/builtin.c's bi_readonly(),
+ * src/sh/execute.c's exec_assignment_only()) always pass a NUL-terminated
+ * name they already have in hand, never NULL. */
+int __sh_readonly_is(const char *name)   /* 1 if name is marked, else 0 */
+    __attribute__((nonnull(1)));
+int __sh_readonly_mark(const char *name) /* idempotent; -1 only on OOM */
+    __attribute__((nonnull(1)));
+size_t __sh_readonly_count(void);
+const char *__sh_readonly_name(size_t i); /* NULL if i is out of range */
+
 /* ---- shell-wide control flow ----------------------------------------
  *
  * `exit` (XCU 2.14) has to unwind out of however many nested lists,

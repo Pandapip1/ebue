@@ -3284,6 +3284,112 @@ static void test_builtin_export(const char *self)
 	}
 }
 
+/* readonly(1p): "It shall be an error for [a name given the read-only
+ * attribute] to appear as a name in a subsequent readonly command, or
+ * to appear as one of the names in a variable assignment." Unlike
+ * export, this really is enforcement rather than bookkeeping --
+ * bi_readonly()'s own header comment (src/sh/builtin.c) points at
+ * exec_assignment_only() (src/sh/execute.c) as the one place it is
+ * checked. run() executes the engine in this same process, so a bare
+ * getenv() after a rejected assignment is the ground truth that the
+ * value never changed, the same way test_builtin_export() uses it to
+ * confirm a value did.
+ *
+ * Every name here is unique to this function and never reused
+ * elsewhere in this file: src/sh/readonly.c's side-table has no
+ * unmark (this shell has no `unset` yet -- see that file's own header),
+ * so a name marked read-only here would stay unassignable for the rest
+ * of this process if some other test picked the same name. */
+static void test_builtin_readonly(const char *self)
+{
+	int status;
+	char *v;
+
+	/* `readonly NAME=value` sets it and marks it; a later plain
+	 * assignment is rejected and the value is left untouched. */
+	unsetenv("SHT_RO_A");
+	CHECK(run("readonly SHT_RO_A=bar", &status) == 0 && status == 0);
+	v = getenv("SHT_RO_A");
+	CHECK(v && strcmp(v, "bar") == 0);
+	CHECK(run("SHT_RO_A=baz", &status) == 0 && status != 0);
+	v = getenv("SHT_RO_A");
+	CHECK(v && strcmp(v, "bar") == 0);
+
+	/* `readonly NAME` on an already-set variable marks it without
+	 * touching the value, and a later assignment is rejected exactly as
+	 * if the value had been given to `readonly` itself. */
+	setenv("SHT_RO_B", "baz", 1);
+	CHECK(run("readonly SHT_RO_B", &status) == 0 && status == 0);
+	CHECK(run("SHT_RO_B=qux", &status) == 0 && status != 0);
+	v = getenv("SHT_RO_B");
+	CHECK(v && strcmp(v, "baz") == 0);
+
+	/* Re-declaring an already read-only name through `readonly` itself
+	 * is rejected too, even when the value matches; the bare, valueless
+	 * form re-marking an already-marked name is the genuine no-op
+	 * bi_export()'s own bare-NAME form is. */
+	unsetenv("SHT_RO_C");
+	CHECK(run("readonly SHT_RO_C=x", &status) == 0 && status == 0);
+	CHECK(run("readonly SHT_RO_C=x", &status) == 0 && status != 0);
+	CHECK(run("readonly SHT_RO_C", &status) == 0 && status == 0);
+
+	/* A name marked read-only before it is ever assigned a value is
+	 * still enforced on the first real assignment -- src/sh/readonly.c
+	 * tracks names, not environ entries, so there is nothing that needs
+	 * SHT_RO_D to already be set first. */
+	unsetenv("SHT_RO_D");
+	CHECK(run("readonly SHT_RO_D", &status) == 0 && status == 0);
+	CHECK(run("SHT_RO_D=nope", &status) == 0 && status != 0);
+	CHECK(getenv("SHT_RO_D") == 0);
+
+	/* -p takes no further operands, matching export -p's own SYNOPSIS
+	 * shape (bi_export()'s own check, mirrored here). */
+	CHECK(run("readonly -p x", &status) == 0 && status > 0);
+
+	/* An invalid identifier is a real, diagnosed error, and an operand
+	 * that follows a bad one is still processed. */
+	unsetenv("SHT_RO_E");
+	CHECK(run("readonly 1BAD=x SHT_RO_E=ok", &status) == 0 && status != 0);
+	v = getenv("SHT_RO_E");
+	CHECK(v && strcmp(v, "ok") == 0);
+
+	/* A pipeline stage is a subshell environment (XCU 2.12): a
+	 * `readonly` there must not leave the name marked once that stage's
+	 * subshell environment is discarded -- the same rule
+	 * test_builtin_export() already checks, applied here. */
+	unsetenv("SHT_RO_F");
+	CHECK(run("readonly SHT_RO_F=x | true", &status) == 0 && status == 0);
+	CHECK(run("SHT_RO_F=y", &status) == 0 && status == 0);
+	v = getenv("SHT_RO_F");
+	CHECK(v && strcmp(v, "y") == 0);
+	unsetenv("SHT_RO_F");
+
+	/* No operands, and -p: readonly(1p)'s own "readonly name=value"
+	 * format, and a name with no value at all listing with no '=' --
+	 * both checked on the bytes for the same reason
+	 * test_builtin_export()'s own listing check is. */
+	if (file_redir_supported(self)) {
+		char src[512], *tmp = make_tmp(), *got;
+		if (tmp) {
+			unsetenv("SHT_RO_G");
+			unsetenv("SHT_RO_H");
+			CHECK(run("readonly SHT_RO_G='has space'", &status) == 0 && status == 0);
+			CHECK(run("readonly SHT_RO_H", &status) == 0 && status == 0);
+			snprintf(src, sizeof src, "readonly > %s", tmp);
+			CHECK(run(src, &status) == 0 && status == 0);
+			got = slurp(tmp);
+			CHECK(got != 0);
+			if (got) {
+				CHECK(strstr(got, "readonly SHT_RO_G='has space'\n") != 0);
+				CHECK(strstr(got, "readonly SHT_RO_H\n") != 0);
+				free(got);
+			}
+			remove(tmp);
+			free(tmp);
+		}
+	}
+}
+
 /* shift(1p): "Positional parameter 1 shall be assigned the value of
  * parameter (1+n) ... If n is not given, it shall be assumed to be 1.
  * If n is 0, the positional and special parameters are not changed."
@@ -4399,6 +4505,7 @@ int main(int argc, char **argv)
 	test_empty_field_deletion(argv[0]);
 	test_builtin_set(argv[0]);
 	test_builtin_export(argv[0]);
+	test_builtin_readonly(argv[0]);
 	test_builtin_shift();
 	test_params_are_subshell_scoped();
 	test_params_are_not_environment_variables();
