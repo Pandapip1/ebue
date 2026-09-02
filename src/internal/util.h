@@ -410,6 +410,20 @@ int __util_awk_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_time_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_timeout_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* mailx(1p): originally listed in this project's own POSIX-utilities
+ * plan as needing "infrastructure this plan doesn't build" (an MTA, a
+ * mail spool) and deferred -- since built for real: a genuine
+ * mbox-format reader/writer plus flock()-based advisory locking for
+ * concurrent-append safety, with delivery deliberately scoped to
+ * *local* delivery only (this platform has no MTA, and this library's
+ * own single-real-uid model per src/misc/pwd.c means there is exactly
+ * one real local user to deliver to/from anyway -- see
+ * src/util/mailx.c's own header for the full scope writeup, including
+ * exactly which of mailx.html's interactive commands are implemented
+ * and which are deliberately deferred). Not __pure__: reads real
+ * mailbox files, writes/appends to them, and reads stdin/a terminal. */
+int __util_mailx_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 #endif
 
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
