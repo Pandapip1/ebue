@@ -62,9 +62,10 @@ static int gbuf_push(struct gbuf *b, char c)
 		char *old = b->d;
 		size_t nc = b->cap ? b->cap * 2 : 32;
 		char *nd = __malloc(nc);
+		size_t i;
 		if (!nd) return -1;
 		if (old) {
-			memcpy(nd, old, b->n);
+			for (i = 0; i < b->n; i++) nd[i] = old[i];
 		}
 		__free(old);
 		b->d = nd;

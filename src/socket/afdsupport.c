@@ -187,6 +187,9 @@ void __afd_build_open_ea(void *buf)
  * RtlCopyMemory of sockaddr.sa_data, which is the identical image. */
 int __afd_addr_from_sockaddr(const struct sockaddr *restrict addr, socklen_t len, TRANSPORT_ADDRESS *restrict out)
 {
+	const unsigned char *port;
+	const unsigned char *ip;
+	size_t i;
 	if (!addr || len < (socklen_t)sizeof(struct sockaddr_in)) { errno = EINVAL; return -1; }
 	if (addr->sa_family != AF_INET) { errno = EAFNOSUPPORT; return -1; }
 
@@ -197,12 +200,12 @@ int __afd_addr_from_sockaddr(const struct sockaddr *restrict addr, socklen_t len
 	/* AddressType overlays sa_family, and AF_INET == TDI_ADDRESS_TYPE_IP == 2. */
 	out->Address[0].AddressType = TDI_ADDRESS_TYPE_IP;
 	memset(out->Address[0].Address, 0, TDI_ADDRESS_LENGTH_IP);
-	memcpy(out->Address[0].Address + TDI_IP_OFF_PORT,
-	       &((const struct sockaddr_in *)addr)->sin_port,
-	       sizeof(((const struct sockaddr_in *)addr)->sin_port));
-	memcpy(out->Address[0].Address + TDI_IP_OFF_ADDR,
-	       &((const struct sockaddr_in *)addr)->sin_addr.s_addr,
-	       sizeof(((const struct sockaddr_in *)addr)->sin_addr.s_addr));
+	port = (const unsigned char *)&((const struct sockaddr_in *)addr)->sin_port;
+	for (i = 0; i < sizeof(((const struct sockaddr_in *)addr)->sin_port); i++)
+		out->Address[0].Address[TDI_IP_OFF_PORT + i] = port[i];
+	ip = (const unsigned char *)&((const struct sockaddr_in *)addr)->sin_addr.s_addr;
+	for (i = 0; i < sizeof(((const struct sockaddr_in *)addr)->sin_addr.s_addr); i++)
+		out->Address[0].Address[TDI_IP_OFF_ADDR + i] = ip[i];
 	/* sin_zero is already zeroed by the memset above. */
 	return 0;
 }

@@ -157,6 +157,7 @@ static int rename_set(__plat_handle_t h, struct __ntpath *np, int old_isdir, int
 	FILE_RENAME_INFORMATION *ri;
 	NTSTATUS st;
 	size_t bufsz = sizeof(FILE_RENAME_INFORMATION) + np->nt.Length;
+	size_t i;
 
 	ri = __malloc(bufsz);
 	if (!ri) { NtClose(h); errno = ENOMEM; return -1; }
@@ -168,7 +169,8 @@ static int rename_set(__plat_handle_t h, struct __ntpath *np, int old_isdir, int
 	 * AT_FDCWD, where np->nt is already a full NT path. */
 	ri->RootDirectory = np->oa.RootDirectory;
 	ri->FileNameLength = np->nt.Length;
-	memcpy(ri->FileName, np->nt.Buffer, np->nt.Length);
+	for (i = 0; i < np->nt.Length / sizeof(WCHAR); i++)
+		ri->FileName[i] = np->nt.Buffer[i];
 
 	st = NtSetInformationFile(h, &io, ri, (ULONG)bufsz, FileRenameInformationEx);
 	if (st == STATUS_INVALID_PARAMETER || st == STATUS_INVALID_INFO_CLASS ||

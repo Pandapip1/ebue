@@ -681,11 +681,12 @@ int __plat_symlink(const char *target, int newdirfd, const char *linkpath)
 	r->SymbolicLinkReparseBuffer.Flags = relative ? SYMLINK_FLAG_RELATIVE : 0;
 	{
 		WCHAR *pb = r->SymbolicLinkReparseBuffer.PathBuffer;
+		size_t i;
 		if (!relative) { pb[0] = '\\'; pb[1] = '?'; pb[2] = '?'; pb[3] = '\\'; }
-		memcpy(pb + off, wt, tl * sizeof(WCHAR));
+		for (i = 0; i < tl; i++) pb[off + i] = wt[i];
 		r->SymbolicLinkReparseBuffer.SubstituteNameOffset = 0;
 		r->SymbolicLinkReparseBuffer.SubstituteNameLength = (USHORT)((off + tl) * sizeof(WCHAR));
-		memcpy(pb + off + tl, wt, tl * sizeof(WCHAR));
+		for (i = 0; i < tl; i++) pb[off + tl + i] = wt[i];
 		r->SymbolicLinkReparseBuffer.PrintNameOffset = (USHORT)((off + tl) * sizeof(WCHAR));
 		r->SymbolicLinkReparseBuffer.PrintNameLength = (USHORT)(tl * sizeof(WCHAR));
 		r->ReparseDataLength = (USHORT)(SL_HDR + (off + 2 * tl) * sizeof(WCHAR));

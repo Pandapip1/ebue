@@ -24,11 +24,13 @@ void *lsearch(const void *key, void *base, size_t *nelp, size_t width,
 {
 	void *found = lfind(key, base, nelp, width, compar);
 	char *slot;
+	const char *source = key;
+	size_t i;
 
 	if (found) return found;
 
 	slot = (char *)base + *nelp * width;
-	memmove(slot, key, width);
+	for (i = 0; i < width; i++) slot[i] = source[i];
 	(*nelp)++;
 	return slot;
 }
