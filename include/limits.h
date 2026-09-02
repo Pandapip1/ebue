@@ -16,8 +16,20 @@
 #define SCHAR_MIN (-128)
 #define SCHAR_MAX 127
 #define UCHAR_MAX 255
+/* Plain `char`'s signedness is implementation-defined, not fixed by the
+ * standard -- and this project's own aarch64 target is a real case where
+ * it differs from the x86/tcc default: __CHAR_UNSIGNED__ is the GCC/Clang
+ * predefined macro that reports it (verified: clang defines it for
+ * aarch64 targets and leaves it undefined for x86_64; tcc, used only for
+ * the genuinely-signed-char i386/x86_64 win32 targets, never defines it
+ * either way, which still lands on the correct #else branch below). */
+#ifdef __CHAR_UNSIGNED__
+#define CHAR_MIN 0
+#define CHAR_MAX UCHAR_MAX
+#else
 #define CHAR_MIN (-128)
 #define CHAR_MAX 127
+#endif
 #define SHRT_MIN  (-1-0x7fff)
 #define SHRT_MAX  0x7fff
 #define USHRT_MAX 0xffff
