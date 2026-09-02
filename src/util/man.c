@@ -1310,8 +1310,8 @@ static int man_run_external_pager(const char *pager, const char *styled, size_t 
 
 	tmpl = malloc(dn + sizeof "/ntlibc-manXXXXXX");
 	if (!tmpl) return -1;
-	memcpy(tmpl, dir, dn);
-	memcpy(tmpl + dn, "/ntlibc-manXXXXXX", sizeof "/ntlibc-manXXXXXX");
+	snprintf(tmpl, dn + sizeof "/ntlibc-manXXXXXX",
+	    "%s/ntlibc-manXXXXXX", dir);
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return -1; }
 	f = fdopen(fd, "wb");
