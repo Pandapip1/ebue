@@ -276,6 +276,7 @@ static int take_slot(struct saved_slot *sv, int *nsv, int cap, int fd) // NOLINT
 	for (i = 0; i < *nsv; i++) {
 		if (sv[i].fd != fd) continue;
 		if (__fds[fd].h) __plat_close(__fds[fd].h);
+		__fd_release_dynamic(&__fds[fd]);
 		memset(&__fds[fd], 0, sizeof __fds[fd]);
 		return 0;
 	}
@@ -284,6 +285,10 @@ static int take_slot(struct saved_slot *sv, int *nsv, int cap, int fd) // NOLINT
 	sv[*nsv].slot = __fds[fd];
 	(*nsv)++;
 	if (__fds[fd].h) __plat_set_cloexec(__fds[fd].h, 1);
+	/* The live slot's dbuf, if any, has already been handed off to
+	 * sv[*nsv-1].slot above (a plain struct copy) -- restore_slots()
+	 * gives it back to __fds[fd] later, so this memset must not free
+	 * it, only clear the live slot's own copy of the pointer. */
 	memset(&__fds[fd], 0, sizeof __fds[fd]);
 	return 0;
 }
@@ -297,6 +302,7 @@ static void restore_slots(struct saved_slot *sv, int nsv)
 	for (i = nsv - 1; i >= 0; i--) {
 		int fd = sv[i].fd;
 		if (__fds[fd].h) __plat_close(__fds[fd].h);
+		__fd_release_dynamic(&__fds[fd]);
 		__fds[fd] = sv[i].slot;
 		/* Undo take_slot()'s own close-on-exec marking -- back to
 		 * whatever the saved slot's own flags actually say, almost

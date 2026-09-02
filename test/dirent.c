@@ -163,24 +163,31 @@ int main(void)
 
 	/* getdents: raw read off a directory fd; every real name shows up,
 	 * and so do "." and ".." (NT hands them back like any other
-	 * record -- see dirent_internal.h). */
+	 * record -- see dirent_internal.h). A single call only fills as
+	 * much of one backend read as fits in `buf` (see the doc comment
+	 * atop src/dirent/getdents.c) and entry order is whatever the
+	 * backend's own enumeration order is, so this loops calling
+	 * getdents() until it returns 0 rather than assuming one call
+	 * or a particular order gets everything. */
 	fd = open(dir, O_RDONLY | O_DIRECTORY);
 	CHECK(fd >= 0);
 	if (fd >= 0) {
 		char buf[4096];
-		int r = getdents(fd, (struct dirent *)buf, sizeof buf);
-		CHECK(r > 0);
-		if (r > 0) {
-			int off = 0, got_alpha = 0, got_dot = 0;
+		int got_alpha = 0, got_dot = 0, got_any = 0, r;
+		while ((r = getdents(fd, (struct dirent *)buf, sizeof buf)) > 0) {
+			int off = 0;
+			got_any = 1;
 			while (off < r) {
 				struct dirent *gd = (struct dirent *)(buf + off);
 				if (!strcmp(gd->d_name, "alpha")) got_alpha = 1;
 				if (!strcmp(gd->d_name, ".") || !strcmp(gd->d_name, "..")) got_dot = 1;
 				off += gd->d_reclen;
 			}
-			CHECK(got_alpha);
-			CHECK(got_dot);
 		}
+		CHECK(r == 0);
+		CHECK(got_any);
+		CHECK(got_alpha);
+		CHECK(got_dot);
 		close(fd);
 	}
 

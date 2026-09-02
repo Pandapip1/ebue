@@ -52,9 +52,18 @@ int __fd_alloc(int lowest)
 	return -1;
 }
 
+/* Real fd.c's own version (src/internal/fd.c) frees getdents()'s
+ * lazily-allocated continuation buffer here; this pilot never links
+ * src/dirent/getdents.c, so f->dbuf can never be anything but NULL --
+ * a no-op stand-in, only present to satisfy src/unistd/close.c's own
+ * call to it, same shape as this file's other reimplemented fd-table
+ * primitives. */
+void __fd_release_dynamic(struct __fd *f) { (void)f; }
+
 int __fd_install_at(int fd, HANDLE h, unsigned flags, int type)
 {
 	struct __fd *f = &__fds[fd];
+	__fd_release_dynamic(f);
 	memset(f, 0, sizeof *f);
 	f->h = h;
 	f->flags = flags;
