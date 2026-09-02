@@ -16,8 +16,8 @@ char *asctime_r(const struct tm *tm, char *buf)
 	const char *wd = (unsigned)tm->tm_wday < 7 ? __ntlibc_day_name_abbr[tm->tm_wday] : "???";
 	const char *mo = (unsigned)tm->tm_mon < 12 ? __ntlibc_month_name_abbr[tm->tm_mon] : "???";
 
-	memcpy(p, wd, 3); p += 3; *p++ = ' ';
-	memcpy(p, mo, 3); p += 3; *p++ = ' ';
+	*p++ = wd[0]; *p++ = wd[1]; *p++ = wd[2]; *p++ = ' ';
+	*p++ = mo[0]; *p++ = mo[1]; *p++ = mo[2]; *p++ = ' ';
 	n = __num_digits(p, 2, (unsigned)tm->tm_mday, 2, ' '); p += n; *p++ = ' ';
 	n = __num_digits(p, 2, (unsigned)tm->tm_hour, 2, '0'); p += n; *p++ = ':';
 	n = __num_digits(p, 2, (unsigned)tm->tm_min, 2, '0'); p += n; *p++ = ':';

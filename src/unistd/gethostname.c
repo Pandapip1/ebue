@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <errno.h>
 
 int gethostname(char *name withtok(writable_span(len)), size_t len)
@@ -21,7 +22,7 @@ int gethostname(char *name withtok(writable_span(len)), size_t len)
 		if (len) memmove(name, h, len);
 		return 0;
 	}
-	memmove(name, h, n + 1);
+	if (snprintf(name, len, "%s", h) != (int)n) return -1;
 	return 0;
 }
 
