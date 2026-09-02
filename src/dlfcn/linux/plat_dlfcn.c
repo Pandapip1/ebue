@@ -3,485 +3,195 @@
  *
  * src/internal/plat_dlfcn.h's Linux backend: a real, from-scratch
  * ELF64 dynamic loader for dlopen()/dlsym()/dlclose()/dlerror(),
- * linked directly into libc.a/the static binary -- no separate ld.so,
- * no PT_INTERP dance, nothing mmap'd off disk and spliced in via hook
- * functions the way glibc's "static dlopen" retrofit works. This file
- * IS the loader.
+ * linked directly into libc.a -- no separate ld.so, no PT_INTERP, no
+ * mmap'd-off-disk loader spliced in later the way glibc's "static
+ * dlopen" retrofit works (which is also the cause of glibc bug 20802,
+ * getauxval() breaking after static dlopen). ntlibc's Linux port has
+ * no PT_INTERP to begin with and no existing ld.so to reuse, so this
+ * file just IS the loader: ordinary code in libc.a that mmaps a
+ * caller-named .so, parses it, relocates it, and hands back an opaque
+ * handle, using open()/pread()/close()/malloc() through the normal
+ * public API (safe here since this file runs well after __fd_init()/
+ * malloc init) -- except for its own raw mmap()/munmap()/mprotect()
+ * syscall wrappers; see that section below for why the public
+ * <sys/mman.h> front door doesn't fit this loader's needs.
  *
  * ============================================================
- * WHY THIS SHAPE, NOT GLIBC'S
+ * SCOPE: WHAT THIS LOADER SUPPORTS
  * ============================================================
  *
- * glibc's static-dlopen support (see this project's own research notes
- * this pass was briefed with) is not a self-contained static loader:
- * on first dlopen() it mmaps glibc's own separately-built ld.so off
- * disk and splices its relocation/symbol logic into the process via
- * __libc_register_dl_open_hook() and friends. That shape exists
- * because reusing an already-written, separately-linked ld.so was
- * cheaper than writing a second permanent copy of the same logic --
- * not because the ELF/OS model requires a separate image. It is also
- * the direct cause of glibc bug 20802 (getauxval() broken after static
- * dlopen) and long-standing NSS-loading pain: the spliced-in ld.so
- * never goes through a normal, fully-initialized startup.
+ * See test/posix-dl-linux.c for running proof of every "yes" below.
  *
- * ntlibc's Linux port has no PT_INTERP to begin with -- crt/linux/
- * crt1.c/aarch64/start.S already own process startup from scratch, and
- * the main binary is non-PIE with no PT_DYNAMIC at all (tools/linux-
- * build-crt.sh's own comment). There is no existing ld.so to reuse and
- * nothing gained by inventing a second on-disk image just to mimic
- * glibc's retrofit. So this loader is ordinary code in libc.a: it
- * mmaps a caller-named .so, parses it, relocates it, and hands back an
- * opaque handle, using no more machinery than any other src/.../linux
- * backend in this tree already does: open()/pread()/close()/malloc()
- * through the ordinary public API (this file runs well after __fd_
- * init()/malloc init, unlike the earliest crt1.c-era code, so those are
- * safe to use directly) -- but its OWN raw mmap()/munmap()/mprotect()
- * syscall wrappers rather than <sys/mman.h>'s public functions, for a
- * real, empirically-found reason: see this file's own "raw mmap()/
- * munmap()/mprotect()" banner further down for why the public mmap()
- * front door's own reservation-table design (src/mman/mman.c) is
- * incompatible with this loader's address-space layout.
- *
- * ============================================================
- * WHAT THIS PASS IMPLEMENTS, PRECISELY
- * ============================================================
- *
- * (Status as of the DT_NEEDED/DT_INIT_ARRAY/aarch64-TLS/PT_GNU_RELRO/
- * pthread_once() pass -- every "NOT yet" this section used to list for
- * those five items is now a "yes, since"; the paragraphs below are
- * rewritten in place, not appended to, so this section never states an
- * old status once it has changed. See test/posix-dl-linux.c for real,
- * running proof of every "yes" below.)
- *
- *   - ELF64, ELFCLASS64/ELFDATA2LSB, EM_AARCH64 or EM_X86_64. Both
- *     arches' relocation-type tables are implemented (R_AARCH64_* and
- *     R_X86_64_* have different numeric values -- see apply_one_reloc()
- *     below, arch-guarded per this file's own EM_MACHINE check at
- *     dlopen() time). i386 is NOT implemented: this file's whole data
- *     model is ELF64/DT_RELA (explicit addends), and i386's real ABI is
- *     ELF32/DT_REL (addends implicit in the relocated instruction/word
- *     itself, read-modify-write rather than a plain store) -- a
- *     genuinely different loader shape, not a same-shape relocation-
- *     type-table swap the way x86_64 was from aarch64. Out of scope for
- *     this pass; crt/linux/i386/start.S's own CRT bring-up is
- *     unaffected (dlopen() and process startup are independent).
- *   - Only ET_DYN (shared object) input. A dlopen()'d PIE executable
- *     (also ET_DYN under the modern convention) would load the same
- *     way in principle but is not a case this pass tests or claims.
- *   - PT_LOAD segments: mapped faithfully, including the bss
- *     (p_memsz > p_filesz) tail-zeroing recipe every real ELF loader
- *     uses (see load_object() below).
- *   - PT_DYNAMIC: DT_HASH (for an exact symbol count -- DT_GNU_HASH is
- *     explicitly NOT supported yet), DT_SYMTAB/DT_STRTAB/DT_SYMENT,
- *     DT_RELA/DT_RELASZ/DT_RELAENT, DT_JMPREL/DT_PLTRELSZ/DT_PLTREL
- *     (PLT relocations are processed identically to DT_RELA -- this
- *     loader always binds eagerly, there is no lazy PLT stub mechanism
- *     here at all, so "RTLD_NOW vs RTLD_LAZY" is moot the same way it
- *     already is on the NT backend, just for a different underlying
- *     reason), DT_NEEDED (see below), and DT_INIT/DT_INIT_ARRAY (see
- *     below).
- *   - Relocation types: R_AARCH64_RELATIVE, R_AARCH64_ABS64,
- *     R_AARCH64_GLOB_DAT, R_AARCH64_JUMP_SLOT, R_AARCH64_IRELATIVE
- *     (GNU ifunc dispatch -- the addend names a resolver FUNCTION this
- *     loader calls at dlopen() time, storing its return value; see
- *     R_AARCH64_IRELATIVE's own #define comment further down for the
- *     empirically-confirmed shape, and R_X86_64_IRELATIVE for its
- *     x86_64 counterpart), and (aarch64 only, see below) R_AARCH64_
- *     TLSDESC. Anything else -- including every OTHER TLS relocation
- *     type (R_AARCH64_TLS_TPREL64, R_AARCH64_TLS_DTPMOD64/DTPREL64 --
- *     the classic __tls_get_addr()-based General-Dynamic encoding,
- *     never emitted by this dev host's own clang for aarch64 -fPIC
- *     code, see R_AARCH64_TLSDESC's own comment below) -- is a clean,
- *     loud dlopen() failure (see apply_one_reloc()'s `default:` case),
+ *   - ELF64, ELFCLASS64/ELFDATA2LSB, EM_AARCH64 or EM_X86_64 only.
+ *     i386 is NOT implemented: its real ABI is ELF32/DT_REL (addends
+ *     implicit in the relocated word) vs. this file's ELF64/DT_RELA
+ *     model -- a genuinely different loader shape, not a drop-in
+ *     relocation-table swap.
+ *   - ET_DYN (shared object) input only.
+ *   - PT_LOAD segments mapped faithfully, including bss tail-zeroing.
+ *   - PT_DYNAMIC: DT_HASH (an exact symbol count; DT_GNU_HASH is NOT
+ *     supported), DT_SYMTAB/DT_STRTAB/DT_SYMENT, DT_RELA/DT_JMPREL
+ *     (PLT relocations processed identically to DT_RELA -- this
+ *     loader always binds eagerly, so RTLD_NOW vs. RTLD_LAZY is moot),
+ *     DT_NEEDED, DT_INIT/DT_INIT_ARRAY.
+ *   - Relocations: R_AARCH64_RELATIVE/ABS64/GLOB_DAT/JUMP_SLOT/
+ *     IRELATIVE (GNU ifunc) and R_AARCH64_TLSDESC (aarch64), the
+ *     equivalent R_X86_64_* set (x86_64). Anything else is a clean,
+ *     loud dlopen() failure (apply_one_reloc()'s `default:` case),
  *     never a silent mis-relocation.
- *   - PT_TLS: on aarch64, LOADED FOR REAL -- a small integer module id,
- *     a per-object miniature TCB-shaped TLS block, and a real TLSDESC
- *     resolver, all wired into a real DTV on the main thread's own TCB
- *     (crt/linux/crt1.c's linux_setup_tls(), extended alongside this
- *     pass). See "TLS / per-library thread descriptors" below for the
- *     full design. On every OTHER architecture (x86_64/i386), still
- *     detected and REFUSED cleanly (dlopen() fails before any memory is
- *     even mapped) rather than loaded incorrectly -- that TCB shape
- *     (AAELF64 "variant I" vs. x86/i386's "variant II") is structurally
- *     different and needs a separately-derived implementation, real
- *     follow-up work this pass did not do; see that same section for
- *     why, argued in the same depth the aarch64 half is.
- *   - DT_NEEDED (dependency .so's): CHASED. load_object() (renamed from
- *     a former, non-recursive __plat_dlopen() body) recursively loads
- *     every DT_NEEDED entry, resolved relative to the referring
- *     object's own directory then as a bare name (no DT_RPATH/DT_
- *     RUNPATH/LD_LIBRARY_PATH/ldconfig-cache search -- see load_
- *     object()'s own DT_NEEDED comment), and an object's own undefined
- *     symbols are checked against its loaded dependencies' exports
- *     before falling through to the static binary (resolve_via_deps(),
- *     ahead of resolve_main_symbol() in resolve_symref()). See
- *     "NAMESPACE ISOLATION" below for the never-dedup invariant this
- *     preserves, now extended transitively through a whole dependency
- *     graph rather than just a single flat .so.
- *   - PT_GNU_RELRO: APPLIED. After the ordinary protection-narrowing
- *     pass (which restores each segment's own declared, non-relro
- *     permissions), load_object() mprotect()'s the PT_GNU_RELRO range
- *     (its own phdr, both bounds rounded down to a real page boundary
- *     -- matches glibc's own _dl_protect_relro algorithm, and for the
- *     same reason) read-only.
- *   - __attribute__((constructor))/DT_INIT/DT_INIT_ARRAY: EXECUTED.
- *     run_ctors() runs DT_INIT (if present) then every DT_INIT_ARRAY
- *     entry in file order, exactly once per dlopen() call (this loader
- *     never dedups, so there is no "did this already run" bookkeeping a
- *     deduping loader would need), after relocation, protection-
- *     narrowing, and PT_GNU_RELRO hardening have all finished -- and,
- *     for a dependency loaded via DT_NEEDED, before the object that
- *     depends on it runs its own (load_object()'s own depth-first
- *     dependency loading order already gives this for free).
+ *   - PT_TLS: loaded for real on aarch64 (see "TLS / per-library
+ *     thread descriptors" below). Refused cleanly, before anything is
+ *     mapped, on every other architecture.
+ *   - DT_NEEDED: chased recursively (load_object() loads each
+ *     dependency, resolved relative to the referring object's own
+ *     directory then as a bare name -- no DT_RPATH/DT_RUNPATH/
+ *     LD_LIBRARY_PATH/ldconfig-cache search). An object's own
+ *     undefined symbols are checked against its loaded dependencies
+ *     before falling through to the static binary. See "NAMESPACE
+ *     ISOLATION" below for how this interacts with dedup.
+ *   - PT_GNU_RELRO: applied (mprotect(PROT_READ) after relocation and
+ *     protection-narrowing, matching glibc's own _dl_protect_relro).
+ *   - DT_INIT/DT_INIT_ARRAY: run once per dlopen(), in file order,
+ *     after relocation/protection/RELRO are finished, and (for a
+ *     DT_NEEDED dependency) before the object that depends on it runs
+ *     its own -- load_object()'s depth-first order gives this for
+ *     free.
  *
  * ============================================================
- * SYMBOL RESOLUTION AGAINST THE STATIC BINARY (open design question 1)
+ * SYMBOL RESOLUTION AGAINST THE STATIC BINARY
  * ============================================================
  *
- * The gap: a dlopen()'d object's undefined R_AARCH64_GLOB_DAT/ABS64/
- * JUMP_SLOT relocations need to resolve against libc's/the main
- * program's own statically-linked symbols, and nothing in this tree
- * exports a symbol table for that -- the static link into libc.a
- * leaves no .dynsym at all (there is no PT_DYNAMIC on the main image),
- * so there is nothing shaped like a normal "shared object exports
- * list" to search.
+ * The static link into libc.a leaves no .dynsym at all -- nothing
+ * shaped like a normal "shared object exports list" to search when a
+ * dlopen()'d object's undefined symbols need to resolve against libc/
+ * the main program.
  *
- * Three shapes were on the table (named in this task's own brief):
- * (a) a generated symbol table (a build step that scrapes libc.a's own
- *     symbols into a linked-in array), (b) a linker-script/section
- *     trick (e.g. a synthetic .dynsym-shaped section built at link
- *     time), (c) something else.
+ * This file's answer: at symbol-resolution time, open /proc/self/exe
+ * -- this same running binary's own file -- and read its ELF section
+ * header table to find .symtab/.strtab, the way `nm`/`readelf` would
+ * from outside the process (self_symtab_load() below). This needs no
+ * build-system changes (no generated export table to keep in sync),
+ * gets every symbol the linker kept rather than a hand-picked subset,
+ * and is exactly the mechanism POSIX already wants dlopen(NULL, ...) +
+ * dlsym() to provide -- MAIN_IMAGE_HANDLE's resolution path and a
+ * dlopen()'d object's own undefined-symbol resolution are the same
+ * function, resolve_main_symbol().
  *
- * This file takes (c): at symbol-resolution time, it opens
- * /proc/self/exe -- this same running binary's own file -- and reads
- * ITS OWN ELF section-header table to find .symtab/.strtab, the same
- * way `nm`/`readelf` would from outside the process. See
- * self_symtab_load() below.
- *
- * Why this, and not (a)/(b):
- *
- *   - It needs zero build-system changes: no new tool, no linker
- *     script, no generated table to keep in sync as libc.a's own
- *     symbol set changes across every future commit. (a) and (b) both
- *     require exactly that kind of generated artifact, and this
- *     project's own Makefile PLAT_GLOBS/REPLACED_OBJS machinery is
- *     already the one place a scheme like that would have to hook in
- *     -- real, but real *extra* surface this approach needs none of.
- *   - It is strictly MORE complete than a generated table for this
- *     purpose: a hand-scraped export list would need its own policy
- *     for "which symbols count" (all of libc.a? only ones some
- *     dlopen()'d .so happens to need, decided how?), where reading the
- *     real .symtab directly gets EVERY symbol the linker kept, main
- *     program included -- not just libc's own, which matters exactly
- *     as much as it does for a real dlopen(NULL, ...)/dlsym() global
- *     lookup (dlopen.html's "global symbol table handle for the
- *     currently running process image", not "for libc specifically").
- *   - It is exactly the same mechanism POSIX already asks dlopen(NULL,
- *     ...) + dlsym() to provide, so this file gets that case for free
- *     by construction: MAIN_IMAGE_HANDLE's __plat_dlsym() path below
- *     and a dlopen()'d object's own undefined-symbol resolution are
- *     literally the same function, resolve_main_symbol(). No second
- *     implementation of "look up a name in the main image" exists
- *     anywhere in this file.
- *
- * The real cost, stated plainly rather than hidden: this depends on
- * the running binary NOT being stripped (a stripped binary has no
- * .symtab at all -- self_symtab_load() fails cleanly in that case, and
- * every dlopen() needing an external symbol then fails with a clear
- * "cannot read own symbol table (stripped binary?)" dlerror() rather
- * than resolving anything silently wrong). A production build that
- * strips its output would need a real (a)/(b)-shaped generated table
- * instead -- that is genuinely deferred work, not a hidden gap: the
- * design space for it is exactly the two options this section named
- * and did not choose, should a stripped-binary story become necessary
- * later.
- *
- * Also worth stating for the NSS case flagged for a *later* pass (not
- * implemented here, but checked against this design so it is not
- * obviously precluded): NSS loads several independently-named modules
- * (libnss_files.so, libnss_dns.so, ...) that each need to resolve
- * against glibc's own internal helpers, not against each other. That
- * is exactly this file's existing shape already: every dlopen()'d
- * object resolves its undefined symbols against (its own definitions,
- * then its own loaded DT_NEEDED dependencies' exports, then) the one
- * shared static-binary symbol table via resolve_main_symbol() -- an
- * NSS loader built later as a thin wrapper choosing which libnss_
- * <service>.so.<N> to dlopen() by convention, then dlsym()ing a handful
- * of well-known _nss_<service>_* names out of the result, needs nothing
- * new from this file's resolution story. What it WOULD have needed
- * first -- DT_NEEDED chasing, if a real NSS module links against a
- * second .so of its own -- is no longer a gap: see "WHAT THIS PASS
- * IMPLEMENTS" above, DT_NEEDED chasing landed this pass.
+ * The real cost: this depends on the running binary NOT being
+ * stripped. A stripped binary has no .symtab -- self_symtab_load()
+ * fails cleanly, and dlopen() then fails with a clear dlerror()
+ * rather than resolving anything silently wrong. A production build
+ * that strips its output would need a generated symbol table instead
+ * (real deferred work, not a hidden gap).
  *
  * ============================================================
- * NAMESPACE ISOLATION / VERSION COEXISTENCE (open design question 2)
+ * NAMESPACE ISOLATION / VERSION COEXISTENCE
  * ============================================================
  *
- * The hard requirement: if A dlopen()s one version of B and C dlopen()s
- * a different version of B, both must coexist correctly, with no
- * global symbol-table collision -- and this has to be plain dlopen()'s
- * DEFAULT behavior, not an opt-in dlmopen()/LM_ID_NEWLM-style variant.
- * musl has no equivalent at all; glibc's dlmopen() is real but opt-in.
+ * Requirement: if A dlopen()s one version of B and C dlopen()s a
+ * different version of B, both must coexist correctly with no global
+ * symbol-table collision -- as plain dlopen()'s DEFAULT behavior, not
+ * an opt-in the way glibc's dlmopen() is (musl has no equivalent at
+ * all).
  *
- * This file's answer is almost embarrassingly direct, and worth
- * stating as a real, deliberate design choice rather than an
- * oversight: __plat_dlopen() NEVER deduplicates. Every call --
- * including two calls on the byte-identical path -- mmaps a fresh,
- * independent copy, gets its own kernel-chosen base address (mmap(NULL,
- * ...)'s own address-space-layout choice, which on a real Linux kernel
- * is not fixed run to run), and gets its own freshly-applied
- * relocations against that address. Two dlopen() instances of "the
- * same" .so never alias: neither their code pages, their GOT/data
- * pages, nor (once TLS support lands -- see below) their TLS.
+ * This file's answer: __plat_dlopen() NEVER deduplicates. Every call,
+ * including two calls on the byte-identical path, mmaps a fresh,
+ * independent copy at its own kernel-chosen address and gets its own
+ * freshly-applied relocations. This is a deliberate, disclosed
+ * deviation from dlopen.html's DESCRIPTION ("only a single copy...
+ * shall be brought into the address space"): the pointer-identity and
+ * no-double-mapping guarantees that sentence buys are exactly what
+ * creates the version-collision hazard this design rules out. Because
+ * there is no dedup, there is also no refcounting: dlclose()
+ * unconditionally tears down exactly the one instance its handle
+ * names.
  *
- * This is a deliberate, disclosed deviation from dlopen.html's own
- * DESCRIPTION: "Only a single copy of an executable object file shall
- * be brought into the address space, even if dlopen() is invoked
- * multiple times in reference to the file". This backend does not do
- * that. The two things POSIX's "shall" buys a caller -- pointer-
- * identity between repeat dlopen() calls on the same file, and not
- * paying to map the same bytes twice -- are exactly the two things
- * that create the collision hazard the user's requirement rules out:
- * a single shared copy is a single shared GOT, is a single namespace,
- * is exactly the "two versions of B fight over one global symbol
- * table" failure mode dlmopen() exists to opt OUT of on glibc. Making
- * that the exception (an opt-in you have to ask for) rather than the
- * rule is what glibc does; this backend inverts that default, per the
- * user's explicit brief. A caller that specifically wants the POSIX
- * single-copy behavior back can still get pointer-stable identity by
- * caching its own dlopen() result and never calling it twice for one
- * logical library -- exactly what most real programs already do in
- * practice; only a caller relying on the identity-on-repeat-dlopen()
- * guarantee ITSELF (rare, and not exercised by this project's own
- * test/posix-dl.c NT-side coverage, which tests refcounting, not
- * cross-call identity as a *feature* callers depend on) would notice.
- *
- * Because there is no dedup, there is also no refcounting to get
- * right: dlclose() unconditionally tears down exactly the one instance
- * its handle names (unmap the whole reservation, free the bookkeeping
- * struct) -- there is no "was this the last reference" question, since
- * every handle IS its own sole reference by construction. This also
- * means dlopen.html's other "single copy" implementation freedom (skip
- * re-loading a file that was removed before a later dlopen() of the
- * same path) is moot: nothing here is shared in the first place.
- *
- * DT_NEEDED chasing (landed this pass -- see "WHAT THIS PASS
- * IMPLEMENTS" above) preserves this property rather than undoing it,
- * exactly as this section originally asked of it: load_object() loads
- * each dependency freshly WITHIN the same top-level dlopen() call's own
- * namespace, never deduped against a sibling top-level dlopen()'s own
- * copy of the identical dependency, so the isolation property this
- * section establishes holds transitively through a dependency graph,
- * not just for a single flat .so.
- *
- * Stated as plainly as the top-level "never dedup" choice itself: this
- * pass went one step further than the minimum that sentence asks for.
- * load_object() never dedups a dependency against ANYTHING -- not a
- * sibling top-level dlopen()'s own copy (the property above), and not
- * even against an EARLIER dependency already loaded within the SAME
- * top-level call's own dependency graph. A diamond-shaped dependency
- * (A needs B and C, both B and C need D) loads D twice, once for B's
- * own load_object() call and once for C's, as two genuinely independent
- * struct dlobj's with two independent mappings, two independent copies
- * of D's own global/static state, and two independent relocation
- * passes. This is a real, disclosed cost -- extra mapping and
- * relocation work, and a diamond dependency with mutable global state
- * no longer shares a single instance of it the way a real ld.so's
- * default namespace would -- traded for the simplest possible rule to
- * state and implement ("every load_object() call mints a fresh object,
- * full stop, no exceptions for a dependency graph shape"), and for
- * uniformity with the top-level behavior this whole section already
- * committed to: a caller relying on within-one-dlopen() dependency
- * deduplication was already outside what this backend promises at the
- * top level, so extending the same non-guarantee one level down, rather
- * than inventing a second, narrower dedup rule that applies only inside
- * a dependency graph, is the smaller, more consistent design.
+ * DT_NEEDED chasing preserves this property transitively: load_object()
+ * never dedups a dependency against anything, not even an earlier
+ * dependency loaded within the same top-level dlopen()'s own graph -- a
+ * diamond dependency (A needs B and C, both need D) loads D twice, as
+ * two fully independent objects. Real cost (extra mapping/relocation
+ * work, no shared mutable state across the diamond), traded for one
+ * uniform rule with no dependency-graph-shaped exception.
  *
  * ============================================================
- * TLS / PER-LIBRARY THREAD DESCRIPTORS (open design question 3)
+ * TLS / PER-LIBRARY THREAD DESCRIPTORS
  * ============================================================
  *
- * The hard requirement: each loaded library's TLS block gets its OWN
- * TD (thread descriptor/TCB -- the struct the thread-pointer register
- * addresses), not a slot carved out of one shared per-thread TD the
- * way glibc's dynamic-TLS extension does it (glibc: one TCB per
- * thread, total; a dlopen()'d module's TLS is just a heap block a DTV
- * entry happens to point at, still logically "inside" that one TCB's
- * bookkeeping).
+ * Requirement: each loaded library's TLS block gets its OWN TD
+ * (thread descriptor/TCB), not a slot carved out of one shared
+ * per-thread TD the way glibc's dynamic-TLS extension does it.
  *
- * crt/linux/crt1.c's linux_setup_tls() (read in full before writing
- * this section) sets TPIDR_EL0 to a freshly mmap'd block shaped
- * `{ dtv; reserved; <TLS data...> }` -- the AAELF64 "variant I" TCB
- * header (2 pointers) immediately followed by the module's own TLS
- * data, with dtv left NULL because there is exactly one static TLS
- * module (the main image) and nothing to index. That function's own
- * comment is explicit that this is single-module only.
+ * crt/linux/crt1.c's linux_setup_tls() sets TPIDR_EL0 to a block
+ * shaped `{ dtv; reserved; <TLS data...> }` (AAELF64 "variant I").
+ * This file's design: INDEX, never swap TPIDR_EL0. The real TCB gets
+ * a real DTV (array of pointers; index 0 reserved, index 1 the main
+ * image); module id N (>=2, assigned at dlopen() time to any object
+ * with a PT_TLS segment) points at a SECOND, independently allocated
+ * block shaped exactly like the real TCB -- satisfying "own TD per
+ * library" literally, even though TPIDR_EL0 itself never moves. The
+ * compiler-generated TLS access sequence for a dlopen()'d .so already
+ * does this indexing for us (General-Dynamic model, R_AARCH64_TLSDESC
+ * on this toolchain -- see that relocation's own #define comment): a
+ * real resolver is just `dtv[module_id] + header + offset`, one array
+ * index off the never-swapped TCB.
  *
- * The concrete question this task asked to resolve: does "own TD per
- * library" mean swapping TPIDR_EL0 around calls into that library's
- * code, or something else (e.g. each library's TD reachable at a fixed
- * offset from the "real" per-thread TD, indexed rather than swapped)?
+ * Why not swap TPIDR_EL0 around calls into library code instead: (1)
+ * "a call into library code" isn't a syntactically closed boundary --
+ * dlsym() hands back a bare function pointer that can be invoked from
+ * anywhere, including a signal handler or after a longjmp() past a
+ * naive restore; only a compiler-generated thunk at every call site
+ * could do this reliably, not something a loader retrofits. (2) it
+ * would make TPIDR_EL0 invisible, dynamically-scoped global state --
+ * two identical-looking `__thread` reads could mean different memory
+ * depending on an ambient register neither reads nor writes. (3)
+ * indexing needs zero call-site codegen changes: it's exactly where a
+ * compiler already routes GD/LD-model TLS access on any ELF platform.
  *
- * This file's answer, worked through and NOT implemented in this pass
- * (see below for exactly what is missing and why): INDEX, NEVER SWAP.
- * Concretely:
+ * What is built (aarch64 only): crt1.c's linux_setup_tls() installs a
+ * real DTV; this file's module-id allocator (next_tls_module_id) and
+ * DTV-growth function (tls_dtv_ensure_capacity()) hand every
+ * PT_TLS-bearing object a fresh id and slot (setup_object_tls()); and
+ * __ntlibc_tlsdesc_resolver (hand-written aarch64 asm, see its own
+ * banner near apply_one_reloc()) is the runtime resolver R_AARCH64_
+ * TLSDESC relocations are wired to. See test/posix-dl-linux.c's
+ * test_pt_tls_per_object() for running proof.
  *
- *   - The real, TPIDR_EL0-addressed TCB gains a real DTV: an array of
- *     pointers, index 0 unused/reserved, index N (a small integer
- *     "TLS module id" assigned at dlopen() time to any loaded object
- *     that has a PT_TLS segment; module 1 is reserved for the main
- *     image) pointing not at a raw data blob, but at a SECOND,
- *     independently heap-allocated block shaped exactly like the
- *     real TCB itself: `{ dtv; reserved; <that module's own TLS
- *     data...> }`. Every loaded module's TLS block is headed by its
- *     own miniature TCB, satisfying "own TD per library" literally --
- *     even though TPIDR_EL0 itself is never pointed at it.
- *   - The compiler-generated access sequence for a `__thread` variable
- *     in a dlopen()'d .so already does the indexing for us: PIC code
- *     with TLS in a shared object uses the General-Dynamic model
- *     (R_AARCH64_TLSDESC, or the older TLSGD relocation pair) --
- *     __tls_get_addr(&tls_index)/the TLSDESC resolver, NOT a bare
- *     tp-relative offset the way the main image's Local-Exec TLS
- *     already works (see linux_setup_tls()'s own comment on why the
- *     main image gets away with pure LE offsets). A real __tls_get_addr
- *     implementation here would be exactly: `real_tcb = (tcb*)
- *     __builtin_thread_pointer(); mod_td = real_tcb->dtv[ti->module_id];
- *     return (char*)mod_td + TCB_HEADER_SIZE + ti->offset;` -- one
- *     pointer-array index off the real, never-swapped TCB, then a
- *     fixed +16 header skip into a SEPARATE td-shaped block. Nothing
- *     about entering or leaving the library's code touches TPIDR_EL0
- *     at all; every access, from anywhere, is this same lookup.
- *
- * Why NOT swap TPIDR_EL0 around calls into loaded-library code -- the
- * reasoning behind rejecting the other option the task asked to weigh,
- * stated concretely rather than asserted:
- *
- *   1. "A call into library code" is not a syntactically closed
- *      boundary a swap-on-entry/restore-on-exit discipline could hook
- *      reliably. dlsym() hands back a bare function pointer; nothing
- *      stops the CALLER from storing it in a struct, handing it to a
- *      third library, and having THAT library invoke it from arbitrary
- *      later control flow -- including from inside a signal handler
- *      that fires mid-call, or after a longjmp() unwinds past the
- *      "restore" half of a swap that a naive thunk assumed would
- *      always run. Getting every one of those paths right needs a
- *      compiler-generated thunk at every call site into and back out
- *      of the library, not something a loader can retrofit at
- *      dlopen()/dlsym() time.
- *   2. It makes TPIDR_EL0 a piece of invisible, dynamically-scoped
- *      global mutable state: two pieces of code that both look like
- *      "read errno" (src/internal/errno.c's own `__thread int
- *      __errno_val`) would silently mean different physical memory
- *      depending on an ambient register value neither reads nor
- *      writes explicitly -- exactly the class of non-local state this
- *      project avoids everywhere else (no hidden globals silently
- *      changing a function's meaning based on "what called it").
- *   3. Indexing needs zero call-site code generation changes: it is
- *      purely a change to what __tls_get_addr()/the TLSDESC resolver
- *      does internally, which is precisely where a compiler already
- *      routes GD/LD-model TLS access on any ELF platform by
- *      convention -- the existing relocation model was built assuming
- *      exactly this shape of indirection, just normally pointing the
- *      DTV slot at a raw data blob instead of at a second TCB header.
- *      Following that grain, rather than fighting it with a swap, is
- *      what "own TD per library" without runtime register-swapping
- *      buys.
- *
- * What IS now built, landed this pass -- the above design, implemented
- * for real, not just designed: crt/linux/crt1.c's aarch64 linux_setup_
- * tls() now installs a real DTV (dtv[1] = the main image's own TCB, see
- * that function's own updated comment) instead of leaving dtv
- * permanently NULL; this file's own module-id allocator (next_tls_
- * module_id, starting at 2) and DTV-growth function (tls_dtv_ensure_
- * capacity()) hand every PT_TLS-bearing dlopen()'d object a fresh id
- * and a real DTV slot (setup_object_tls()); and __ntlibc_tlsdesc_
- * resolver (a small hand-written aarch64 asm function, see its own
- * banner just above apply_one_reloc()) is the real runtime resolver
- * R_AARCH64_TLSDESC relocations are wired to. This file's loader no
- * longer refuses a PT_TLS segment on aarch64 -- see load_object()'s own
- * PT_TLS handling below -- and test/posix-dl-linux.c's test_pt_tls_
- * per_object() is real, running proof: a dlopen()'d .so's own __thread
- * variable is genuinely readable and writable, and two independent
- * dlopen() instances of the identical .so get two genuinely separate
- * TLS blocks (own TD per library, not aliased).
- *
- * What is explicitly still NOT built, disclosed rather than hidden:
- * everything above is aarch64-only. x86_64/i386 still REFUSE any
- * object with a PT_TLS segment cleanly (see load_object()'s own PT_TLS
- * handling), for a real, structural reason worked through rather than
- * assumed away: crt/linux/crt1.c's x86_64/i386 linux_setup_tls() uses
- * the "variant II" TCB (AAELF64's own term, contrasted against variant
- * I in that function's own comment) -- TLS data at NEGATIVE offsets
- * from the thread pointer, and a TCB whose first word is a SELF-pointer
- * (tp->self == tp), not a dtv slot the way variant I's header starts.
- * The General-Dynamic access-and-resolver MODEL is the same in spirit
- * on both arches (a compiler-emitted indirect call/descriptor sequence
- * routes through a resolver this file controls, the same "index, never
- * swap" design applies unchanged), but the TCB SHAPE it would index off
- * of is not: variant II's own psABI reserves no dtv word in its TCB
- * header at all, so adding one needs a genuinely separate design
- * decision (where does it go? does every access pay for an extra
- * indirection variant I's header doesn't need?), not a copy-paste of
- * aarch64's own struct layout. Confirmed materially more work, not
- * merely unstarted: this dev host's own toolchain has no x86_64 target
- * to even cross-check a resolver against the way aarch64's own TLSDESC
- * shape was confirmed empirically (disassembling a real test fixture on
- * this exact host, see R_AARCH64_TLSDESC's own comment) -- landing
- * aarch64 solidly and documenting x86_64 as a following pass, the same
- * way this file already treats i386 relocations generally, is the
- * right call here, not a shortcut.
+ * What is NOT built: x86_64/i386 still refuse any PT_TLS object
+ * cleanly. Their "variant II" TCB (AAELF64's term: TLS data at
+ * NEGATIVE tp offsets, first TCB word a self-pointer) has no dtv word
+ * in its header at all, so adding one needs a genuinely separate
+ * design, not a copy of aarch64's layout -- deferred, not merely
+ * unstarted.
  *
  * ============================================================
  * PT_GNU_RELRO HARDENING
  * ============================================================
  *
- * Applied for real, landed this pass -- see load_object()'s own
- * PT_GNU_RELRO comment for the mechanism (an mprotect(PROT_READ) pass,
- * after every relocation and after the ordinary protection-narrowing
- * pass, over the range PT_GNU_RELRO's own phdr names, both bounds
- * rounded down to a real page boundary the way glibc's own reference
- * implementation does it) and test/posix-dl-linux.c's test_pt_gnu_
- * relro_hardening() for real, running proof: a fork()ed child's attempt
- * to write through a RELRO-covered, load-time-relocated `const`
- * function pointer genuinely faults with SIGSEGV, not merely "the code
- * path ran with no assertion checking the actual protection bits".
+ * See load_object()'s own PT_GNU_RELRO comment for the mechanism, and
+ * test/posix-dl-linux.c's test_pt_gnu_relro_hardening() for running
+ * proof: a fork()ed child's write through a RELRO-covered, load-time-
+ * relocated `const` function pointer genuinely SIGSEGVs.
  *
  * ============================================================
  * THREAD SAFETY
  * ============================================================
  *
- * self_symtab_load()'s lazy init race -- this section's one real,
- * disclosed gap before this pass -- is fixed: self_symtab_load() below
- * now wraps the actual work (self_symtab_load_once()) in a real
- * pthread_once() (src/thread/pthread_tsd.c) rather than a racy plain
- * `if (self_symtab_ready) return; ... self_symtab_ready = 1;` check.
- * pthread_once() over a hand-rolled mutex/atomic: it is the existing,
- * already-correct, already-tested idiomatic primitive this tree
- * provides for exactly "run this initializer exactly once, with every
- * concurrent caller blocked until it has" -- src/thread/linux/plat_
- * thread.c's own __plat_fast_lock()/__plat_event_create()/__plat_wait_
- * one() back it for real on this platform, so using it here needed
- * zero new platform plumbing, unlike a bespoke mutex would have.
+ * self_symtab_load()'s lazy init is race-free: it wraps the real work
+ * in pthread_once() (src/thread/pthread_tsd.c) rather than a racy
+ * plain "already ready?" flag check.
  *
- * What is still NOT fixed, disclosed rather than silently narrowed:
- * dlopen()/dlclose() still do not serialize against each other or
- * against a concurrent dlopen()/dlclose() on another thread. Two
- * threads racing dlopen() and dlclose() on independent objects do not
- * corrupt each other's own struct dlobj (each is its own independent
- * heap allocation and mapping, per this file's own "NAMESPACE
- * ISOLATION" design), but this pass's own new module-id/DTV-growth
- * state (next_tls_module_id, dtv_capacity, and the real TCB's own dtv
- * array pointer, all touched by setup_object_tls()/tls_dtv_ensure_
- * capacity() above) is exactly as unsynchronized as self_symtab_load()
- * used to be, and is NOT covered by this pass's own pthread_once() fix
- * (a once-only initializer is the wrong primitive for state that
- * legitimately changes on every dlopen(), not just the first). A real
- * fix is a mutex around load_object()/teardown_obj() as a whole,
- * deferred here for the same reason this section has always deferred
- * genuinely separable hardening: this pass's own mandate (see the task
- * this file was briefed with) was DT_NEEDED/DT_INIT_ARRAY/aarch64-TLS/
- * PT_GNU_RELRO/self_symtab_load()'s own specific race, not a general
- * concurrency audit of every new piece of state this pass itself added.
+ * What is NOT covered: dlopen()/dlclose() still do not serialize
+ * against each other or against a concurrent dlopen()/dlclose() on
+ * another thread. Each struct dlobj is its own independent allocation
+ * (per "NAMESPACE ISOLATION" above), so two threads racing dlopen()/
+ * dlclose() on independent objects do not corrupt each other's -- but
+ * the module-id/DTV-growth state (next_tls_module_id, dtv_capacity,
+ * the real TCB's own dtv array) is just as unsynchronized as
+ * self_symtab_load() used to be, and pthread_once() cannot fix it
+ * (that state legitimately changes on every dlopen(), not just the
+ * first). A real fix needs a mutex around load_object()/teardown_obj()
+ * as a whole -- deferred, disclosed rather than hidden.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc

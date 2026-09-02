@@ -5,9 +5,7 @@
  * linux/plat_mem.c's own banner for the general discipline every Linux
  * backend file in this tree follows (raw syscall(2), no host libc,
  * -nostdinc against ntlibc's OWN headers, aarch64 syscall numbers
- * confirmed against this build host's real glibc as an oracle rather
- * than assumed -- see this file's own numbers below and the report for
- * how each one was checked).
+ * confirmed against this build host's real glibc as an oracle).
  *
  * Process-handle encoding (this backend's own concern, like plat_fd.c's
  * fd+1 boxing is theirs): a Linux __plat_handle_t here is the pid
@@ -17,52 +15,45 @@
  * (0) can never collide with a real one and no +1 trick is needed.
  *
  * That plain encoding has one real, deliberately-not-fully-solved
- * consequence, documented rather than silently worked around: fork.c's
- * mark_children_inheritable() and children.c's __child_remove() call
- * __plat_dup()/__plat_close() -- src/unistd/linux/plat_fd.c's fd-domain
- * functions -- directly on a __children[] entry's process handle, not
- * just on real fd-table handles. That is correct on NT, where a process
- * handle and a file handle are the same HANDLE domain and
- * NtDuplicateObject/NtClose work on either uniformly; it has no correct
- * Linux equivalent, because a pid and an fd are different kernel
- * namespaces entirely -- there is nothing to "duplicate" about a pid
- * (every process that can see it already can, unconditionally), and
- * __plat_close()'s fd-domain unbox() would reinterpret the boxed pid as
- * (pid - 1) and issue a real close(2) on whatever descriptor number
+ * consequence: fork.c's mark_children_inheritable() and children.c's
+ * __child_remove() call __plat_dup()/__plat_close() --
+ * src/unistd/linux/plat_fd.c's fd-domain functions -- directly on a
+ * __children[] entry's process handle, not just on real fd-table
+ * handles. That is correct on NT, where a process handle and a file
+ * handle are the same HANDLE domain; it has no correct Linux
+ * equivalent, because a pid and an fd are different kernel namespaces
+ * entirely -- there is nothing to "duplicate" about a pid, and
+ * __plat_close()'s fd-domain unbox() would reinterpret the boxed pid
+ * as (pid - 1) and issue a real close(2) on whatever descriptor number
  * that happens to be.
  *
- * This pilot does not fix that cross-subsystem seam (it would need
- * either a shared handle-domain tag across every backend, out of scope
- * here, or upgrading a Linux process handle to a real fd via
+ * Not fixed here (would need either a shared handle-domain tag across
+ * every backend, or upgrading a Linux process handle to a real fd via
  * pidfd_open(2) so it lives in the same namespace close()/dup() already
- * operate on correctly -- real, open future work). What makes the
- * plain-pid encoding survive today's pilot rather than corrupt a live
- * descriptor: pids are drawn from a namespace many orders of magnitude
- * larger than the handful of fds a small test process ever has open
- * (this host handed back a fork() pid over a million, see the report),
- * so close(pid - 1) reliably lands on a descriptor number nothing has
- * ever opened and fails silently with EBADF, which every call site
- * above already discards. That is a coincidence of scale, not a proof,
- * and is called out here exactly so nobody mistakes the pilot's passing
- * test for evidence it is one.
+ * operate on correctly). What keeps the plain-pid encoding from
+ * corrupting a live descriptor in practice: pids are drawn from a
+ * namespace many orders of magnitude larger than the handful of fds a
+ * process ever has open, so close(pid - 1) reliably lands on a
+ * descriptor number nothing has ever opened and fails silently with
+ * EBADF, which every call site above already discards. That is a
+ * coincidence of scale, not a proof.
  *
- * The other consequence of Linux's wait4(2) is a bigger structural
- * difference from NT than any of the pilot's other backends have hit:
- * NtWaitForSingleObject() merely *signals* that a process handle became
- * signalled, and a separate NtQueryInformationProcess() can read its
- * exit code and times afterward, any number of times, because the
- * handle itself keeps the object alive. Linux's wait4()/waitpid() do
- * both in one shot -- reporting a child's exit status IS what reaps it,
+ * The other structural difference from NT: NtWaitForSingleObject()
+ * merely *signals* that a process handle became signalled, and a
+ * separate NtQueryInformationProcess() can read its exit code and
+ * times afterward, any number of times, because the handle itself
+ * keeps the object alive. Linux's wait4()/waitpid() do both in one
+ * shot -- reporting a child's exit status IS what reaps it,
  * irreversibly, and a second wait4() on the same pid fails ECHILD. So
  * __plat_process_wait() below does the real, one-time reap itself (the
  * only call in this file that can), and stashes the translated exit
  * code and CPU times in a small fixed-size table for
  * __plat_process_exit_code()/__plat_process_times() to read back --
- * exactly the split the header's contract expects, just implemented on
- * this side of the interface instead of trusted to the kernel object a
- * second time. The exit code stashed is deliberately encoded the same
- * way the NT backend's is (a plain 0-255 value, or __NT_SIGNAL_EXIT(sig)
- * for a signal death -- see libc.h), so src/process/wait.c's
+ * the split the header's contract expects, implemented on this side of
+ * the interface instead of trusted to the kernel object a second time.
+ * The exit code stashed is deliberately encoded the same way the NT
+ * backend's is (a plain 0-255 value, or __NT_SIGNAL_EXIT(sig) for a
+ * signal death -- see libc.h), so src/process/wait.c's
  * __wait_encode_status(), written once and shared by every backend,
  * reconstructs the identical POSIX wait status Linux's own wait4()
  * status already encoded, without either backend needing its own copy

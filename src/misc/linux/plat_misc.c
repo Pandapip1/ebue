@@ -7,52 +7,39 @@
  * headers, aarch64 syscall numbers confirmed against this host's own
  * <sys/syscall.h>).
  *
- * Process handle encoding: NT needs __plat_process_open{,_checked}() to
- * turn a bare pid into a real kernel object handle before anything else
- * here can touch it, because almost every NT process query/set call
- * takes a HANDLE, not a pid, and that handle has a real, closeable
- * lifetime -- and src/unistd/linux/plat_fd.c's __plat_close() (plat_fd.h)
- * is the SAME close function every front door here (src/misc/sched.c's
- * process_exists(), src/misc/resource.c's getpriority()/setpriority())
- * calls on a handle this file vends, boxed the same fd+1 way as any
- * other Linux fd. That constrains this backend's own choice: a Linux
- * process handle must actually BE something close(2) can correctly
- * close, or __plat_close(h) on a handle from __plat_process_open() would
- * silently close an unrelated, unlucky-numbered fd instead (or worse,
- * a real one, like stdin) -- a real bug, not a hypothetical one, since
- * it would go uncaught in isolation and only misbehave the moment the
+ * Process handle encoding: src/unistd/linux/plat_fd.c's __plat_close()
+ * (plat_fd.h) is the SAME close function every front door here
+ * (src/misc/sched.c's process_exists(), src/misc/resource.c's
+ * getpriority()/setpriority()) calls on a handle this file vends,
+ * boxed the same fd+1 way as any other Linux fd. That constrains this
+ * backend's own choice: a Linux process handle must actually BE
+ * something close(2) can correctly close, or __plat_close(h) on a
+ * handle from __plat_process_open() would silently close an unrelated,
+ * unlucky-numbered fd instead (or worse, a real one, like stdin) if the
  * boxed pid happened to collide with a live fd number.
  *
- * pidfd_open(2) (Linux 5.3+; confirmed present on this host, kernel
- * 7.1.10) is Linux's own answer to exactly the same problem NT's
- * process HANDLE solves: a real, closeable, kernel-refcounted reference
- * to one specific process, immune to pid reuse for as long as it stays
- * open -- so this backend's __plat_handle_t for a process is a boxed
- * pidfd (fd+1, identical to every other Linux fd in this project),
- * making __plat_close() correct here for free, with no special-casing
- * needed in that shared function at all.
+ * pidfd_open(2) (Linux 5.3+) is Linux's own answer to exactly the same
+ * problem NT's process HANDLE solves: a real, closeable,
+ * kernel-refcounted reference to one specific process, immune to pid
+ * reuse for as long as it stays open -- so this backend's
+ * __plat_handle_t for a process is a boxed pidfd (fd+1, identical to
+ * every other Linux fd in this project), making __plat_close() correct
+ * here for free, with no special-casing needed in that shared function.
  *
  * getpriority(2)/setpriority(2) are the one place this still needs a
  * bare pid_t rather than a pidfd -- no pidfd-taking priority syscall
  * exists. A small fixed side table (pidfd_pid_table[] below) records
- * the pid each pidfd this file opens actually belongs to, the same
- * kind of "this library's own bookkeeping, not an NT-specific
- * translation" src/mman/mman.c's reservation table and src/internal/
- * fd.c's own table already are; see pid_for_pidfd()'s own comment for
- * its bounded-size tradeoff.
+ * the pid each pidfd this file opens actually belongs to; see
+ * pid_for_pidfd()'s own comment for its bounded-size tradeoff.
  *
- * Cross-subsystem note, honestly flagged rather than silently assumed:
- * a handle can also reach this file as struct __child's own `h` field
- * (src/internal/libc.h), set by whichever Linux backend src/process/
- * gets from a parallel migration session this file cannot see. If that
- * session's own process handle is NOT a boxed pidfd the same way, a
- * foreign child's handle handed to __plat_priority_get()/_set() here
- * will not be found in this file's side table and will fail (ESRCH)
- * rather than silently misinterpret an arbitrary integer as a pidfd --
- * a safe failure mode, but not full interoperability, and the same
- * kind of independent-but-colliding-design gap __plat_event_set()/
- * __plat_process_resume() (this header's own banner, and plat_signal.h)
- * already needed a follow-up reconciliation commit for once.
+ * Cross-subsystem note: a handle can also reach this file as struct
+ * __child's own `h` field (src/internal/libc.h), set by whichever
+ * Linux backend src/process/ uses. If that process handle is NOT a
+ * boxed pidfd the same way, a foreign child's handle handed to
+ * __plat_priority_get()/_set() here will not be found in this file's
+ * side table and will fail (ESRCH) rather than silently misinterpret
+ * an arbitrary integer as a pidfd -- a safe failure mode, but not full
+ * interoperability.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc

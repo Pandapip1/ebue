@@ -4,138 +4,95 @@
  * Linux implementation of a DELIBERATELY SMALL SLICE of src/internal/
  * plat_thread.h -- see that header's own banner for the full 11-file
  * interface (mutexes, rwlocks, condvars, semaphores, TLS, async I/O,
- * message queues) this does NOT attempt to cover. plat_thread.h is the
- * single hardest subsystem in the platform-abstraction migration: real
- * POSIX threading on Linux rests on two primitives, clone(2) (thread
- * creation) and futex(2) (the wait/wake primitive every mutex/condvar/
- * semaphore ultimately reduces to), and both are genuinely easy to get
- * subtly wrong -- a broken futex wake is a silent race, not a compile
- * error. This file ports exactly enough of both, real and tested under
- * real contention, to prove a working mutex: __plat_semaphore_create/
- * _post/_getvalue, __plat_event_create/_set, __plat_wait_one (single
- * handle only), and __plat_thread_spawn. Everything else plat_thread.h
- * declares (__plat_wait_any, named \BaseNamedObjects-style objects,
- * __plat_thread_suspend/_queue_apc/_redirect_ip/_stack_extent/
- * _duplicate_self/_current_pseudo/_terminate_self, mqueue's
- * __plat_thread_file_io, __plat_cancel_unsafe_abort,
- * __plat_thread_alertable_yield, __plat_query_system_time) is left
- * undefined here, not stubbed -- open follow-up work, same as the mman/
- * unistd pilot (908d58b) left __fd_pos_save/_restore's real interface
- * gap disclosed rather than papered over.
+ * message queues) this does NOT attempt to cover. This file ports just
+ * enough of clone(2)/futex(2) to give a real, contention-tested mutex:
+ * __plat_semaphore_create/_post/_getvalue, __plat_event_create/_set,
+ * __plat_wait_one (single handle only), and __plat_thread_spawn.
+ * Everything else plat_thread.h declares (__plat_wait_any, named
+ * \BaseNamedObjects-style objects, __plat_thread_suspend/_queue_apc/
+ * _redirect_ip/_stack_extent/_duplicate_self/_current_pseudo/
+ * _terminate_self, mqueue's __plat_thread_file_io,
+ * __plat_cancel_unsafe_abort, __plat_thread_alertable_yield,
+ * __plat_query_system_time) is left undefined here, not stubbed --
+ * open follow-up work, disclosed rather than papered over.
  *
- * UPDATE: every src/thread/pthread_*.c/semaphore.c front door's own
- * direct RtlAcquirePebLock()/RtlReleasePebLock() call sites -- the raw
- * ntdll calls this banner originally described as never routed through
- * plat_thread.h at all -- have since been renamed to __plat_fast_lock()/
- * __plat_fast_unlock() (the functions below already provide, byte-
- * identical to the old macro expansion on NT: see src/thread/nt/
- * plat_thread.c's own one-line wrappers). That specific blocker is gone;
- * what remains is genuinely just "the missing functions below" --
  * __pthread_current() (src/thread/pthread.c) still threads through
  * process-lifecycle bookkeeping (live_threads, exit()) this port does
- * not touch, and every function this banner lists as undefined two
- * paragraphs up still is. What this file proves: the two functions
- * pthread_mutex.c's own blocking slow path already rests on --
- * __plat_wait_one() against a binary semaphore, released by
- * __plat_semaphore_post() -- really give real mutual exclusion, under
- * real contention, from real Linux kernel threads on this host. See
- * fuzz/linux_pilot_test_thread.c, which builds a minimal mutex (lock =
- * __plat_wait_one() on a semaphore created initial=1,max=1; unlock =
- * __plat_semaphore_post()) directly on top of the real functions below
- * -- not a separate, unrelated toy -- and stress-tests it with
- * clone()-spawned threads hammering a shared counter. It does not
- * reproduce pthread_mutex_t's owner tracking, recursion, or error
- * checking (those live in pthread_mutex.c's mutex_data bookkeeping,
- * guarded by __plat_fast_lock()/__plat_fast_unlock(), defined further
- * down in this same file) -- only the blocking primitive underneath
- * them.
+ * not touch. See fuzz/linux_pilot_test_thread.c: a minimal mutex (lock
+ * = __plat_wait_one() on a semaphore created initial=1,max=1; unlock =
+ * __plat_semaphore_post()) built directly on the functions below,
+ * stress-tested with clone()-spawned threads hammering a shared
+ * counter. It does not exercise pthread_mutex_t's owner tracking,
+ * recursion, or error checking (pthread_mutex.c's own mutex_data
+ * bookkeeping, guarded by __plat_fast_lock()/__plat_fast_unlock(),
+ * defined further down in this file) -- only the blocking primitive
+ * underneath them.
  *
- * Every syscall here is issued through a small raw-syscall helper
- * written in this file (raw_syscall(), below) rather than through the
- * `extern long syscall(long, ...)` declaration src/mman/linux/plat_mem.c
- * and src/unistd/linux/plat_fd.c use -- a deliberate, tested deviation
- * from their pattern, not an oversight. That symbol resolves at link
- * time to the HOST's real glibc syscall() (this build is -nostdinc, not
- * -nostdlib -- only preprocessing/compiling avoids the host headers, the
- * final link step still pulls in host libc), and glibc's syscall()
- * itself performs the usual libc error-translation: on failure it
- * returns exactly -1 and sets glibc's OWN errno (a different memory
- * location than ntlibc's own errno global, src/internal/errno.c) to the
- * real code -- it does NOT hand back the raw kernel -errno in
- * [-4095,-1] the way a bare `svc`/syscall instruction does. Confirmed
- * empirically on this host before writing a line of the functions below
- * (raw glibc `syscall(SYS_close, -1)` returns -1 with glibc-errno=9, not
- * -9): the [-4095,-1]-range is_sys_error() check plat_mem.c/plat_fd.c
- * both use still happens to flag the failure (-1 is itself inside that
- * range), but their subsequent `errno = (int)-ret` then computes
- * `errno = 1` (EPERM) on EVERY failure of every call in both of those
- * files, discarding the real cause -- a latent bug in already-merged,
- * out-of-scope code, not fixed here (would touch files this port does
- * not own), but avoided in this file by never going through glibc's
- * syscall() wrapper at all. raw_syscall() below talks to the kernel
- * directly via inline `svc #0`, so the value it returns is the genuine
- * kernel ABI result this file's own is_sys_error()/errno translation
- * assumes.
+ * Every syscall here goes through a small raw-syscall helper
+ * (raw_syscall(), below) rather than the `extern long syscall(long,
+ * ...)` declaration src/mman/linux/plat_mem.c and src/unistd/linux/
+ * plat_fd.c use. That distinction matters: that symbol resolves at
+ * link time to the HOST's real glibc syscall() (this build is
+ * -nostdinc, not -nostdlib -- the final link still pulls in host
+ * libc), and glibc's syscall() performs its own error-translation: on
+ * failure it returns -1 and sets glibc's OWN errno (not ntlibc's
+ * errno global, src/internal/errno.c) rather than handing back the raw
+ * kernel -errno in [-4095,-1] a bare `svc`/syscall instruction gives.
+ * Confirmed empirically: glibc `syscall(SYS_close, -1)` returns -1
+ * with glibc-errno=9, not -9. plat_mem.c/plat_fd.c's shared
+ * is_sys_error() check still flags the failure (-1 is itself in
+ * [-4095,-1]), but their `errno = (int)-ret` then computes `errno = 1`
+ * (EPERM) on EVERY failure in both files -- a latent bug in
+ * already-merged code this file does not own and does not fix, but
+ * avoids by talking to the kernel directly via inline `svc #0` in
+ * raw_syscall() instead, so its return value is the genuine kernel ABI
+ * result this file's own errno translation assumes.
  *
  * clone(2) needs more than a raw syscall can give it: a syscall
  * instruction returns twice under clone() exactly like fork() (once in
- * the caller, once in the new child, sharing this thread's register
- * state but using the CHILD's own fresh stack), and
- * the two returns must run different code paths -- the child must not
- * unwind back into this C function's stack frame at all, since that
- * frame lives on the PARENT's stack and the child's stack pointer now
- * points at the fresh memory this file mmap()'d for it. That is
- * genuinely assembly-level work no C function can safely wrap (every
- * real libc's clone() wrapper -- glibc's, musl's -- is hand-written
- * assembly for exactly this reason); see clone_aarch64.S, confirmed
- * correct by first validating a standalone copy of it outside this tree
- * against real clone()+wait4() round trips (see this file's own report
- * for the numbers) before integrating it here.
+ * the caller, once in the child, sharing register state but using the
+ * CHILD's own fresh stack), and the child must not unwind back into
+ * this C function's stack frame -- that frame lives on the PARENT's
+ * stack. That is assembly-level work no C function can safely wrap
+ * (every real libc's clone() wrapper is hand-written assembly for
+ * exactly this reason); see clone_aarch64.S.
  *
- * Two more real, deliberate simplifications, disclosed rather than
- * hidden:
+ * Two real, deliberate simplifications, disclosed rather than hidden:
  *
  *   __plat_thread_spawn() clones with CLONE_VM|CLONE_FS|CLONE_FILES|
  *   CLONE_SIGHAND and the SIGCHLD exit-signal bit, but NOT CLONE_THREAD
  *   and NOT CLONE_SETTLS. This is real concurrent execution sharing one
  *   address space (CLONE_VM is what actually matters for exercising a
- *   shared-memory mutex under genuine contention -- confirmed by the
- *   WITHOUT-mutex control run in fuzz/linux_pilot_test_thread.c, which
- *   reliably shows a corrupted count), but it is not a full NPTL-style
- *   pthread: the spawned thread has no distinct TLS block (no
- *   CLONE_SETTLS -- its TPIDR_EL0 is whatever the creating thread's was,
- *   so any `__thread`-qualified variable would ALIAS the creator's,
- *   unsafely, if one were ever touched from the spawned thread; this
- *   port's own code never touches one for exactly that reason), and
- *   without CLONE_THREAD the new thread is its own thread-group leader,
- *   joined with plain wait4() rather than a futex-on-ctid join the way
- *   CLONE_CHILD_CLEARTID would give a true NPTL thread. Discovered by
- *   testing, not assumed: omitting the low-byte SIGCHLD exit-signal bits
- *   in the clone() flags word makes the resulting child invisible to a
- *   plain wait4(pid, &status, 0) call (ECHILD) even though it is a real,
- *   running, distinct process sharing this one's address space --
- *   wait4() without __WALL/__WCLONE only reports children whose
- *   exit-signal is SIGCHLD, and clone()'s exit-signal is encoded in
- *   flags' low byte, not a separate argument.
+ *   shared-memory mutex under genuine contention), but not a full
+ *   NPTL-style pthread: the spawned thread has no distinct TLS block
+ *   (no CLONE_SETTLS -- its TPIDR_EL0 is whatever the creating thread's
+ *   was, so any `__thread`-qualified variable would ALIAS the
+ *   creator's if ever touched from the spawned thread; this port's own
+ *   code never does), and without CLONE_THREAD the new thread is its
+ *   own thread-group leader, joined with plain wait4() rather than a
+ *   futex-on-ctid join. Discovered by testing: omitting the low-byte
+ *   SIGCHLD exit-signal bits in the clone() flags word makes the
+ *   resulting child invisible to a plain wait4(pid, &status, 0) call
+ *   (ECHILD) even though it is a real, running, distinct process
+ *   sharing this one's address space -- wait4() without __WALL/
+ *   __WCLONE only reports children whose exit-signal is SIGCHLD, and
+ *   clone()'s exit-signal is encoded in flags' low byte, not a
+ *   separate argument.
  *
  *   __plat_wait_one() below only understands a handle THIS file
  *   produced via __plat_semaphore_create()/__plat_event_create() (a
- *   pointer to this file's own struct ntlibc_linux_sync, mmap()'d, tagged with
- *   a kind byte) -- never a thread handle from __plat_thread_spawn()
- *   (which boxes a pid, an unrelated small integer, not a pointer to
- *   that struct at all). NT's HANDLE unifies every waitable kind behind
- *   one WaitForSingleObject-shaped call; this backend does not, the same
- *   class of NT-shaped assumption 908d58b's own report flagged for
- *   __plat_mem_release()'s missing length parameter. Passing a thread
- *   handle to __plat_wait_one() here would dereference garbage. Nothing
- *   in this port's own scope does that (its test harness joins spawned
- *   threads with a direct wait4() call instead, documented at its own
- *   call site) -- disclosed as real follow-up work, not fixed here,
- *   because fixing it for real means either giving thread handles their
- *   own tagged representation understood by every wait path (a design
- *   change to a shared header, better done once rather than piecemeal)
- *   or building the futex-on-ctid join a real CLONE_THREAD port would
- *   need anyway.
+ *   pointer to this file's own struct ntlibc_linux_sync, mmap()'d,
+ *   tagged with a kind byte) -- never a thread handle from
+ *   __plat_thread_spawn() (which boxes a pid, an unrelated small
+ *   integer, not a pointer to that struct at all). NT's HANDLE unifies
+ *   every waitable kind behind one WaitForSingleObject-shaped call;
+ *   this backend does not. Passing a thread handle to __plat_wait_one()
+ *   here would dereference garbage -- nothing in this port's own scope
+ *   does that (its test harness joins spawned threads with a direct
+ *   wait4() call instead). Fixing this for real means either giving
+ *   thread handles their own tagged representation understood by every
+ *   wait path, or building the futex-on-ctid join a real CLONE_THREAD
+ *   port would need anyway -- disclosed follow-up work, not fixed here.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -643,56 +600,39 @@ void __plat_fast_unlock(void)
  * is a real, disclosed tradeoff, not a correctness gap.
  *
  * A second, genuinely different __plat_handle_t domain also has to be
- * handled here, and this is where a real, confirmed SIGSEGV lived: this
- * function's own declaration (src/internal/plat_thread.h) says its one
- * real caller is aio.c's aio_suspend(), via its own on-stack handles[2].
- * That is true, but incomplete -- handles[0] is always this file's own
- * __plat_event_create() result (a `struct ntlibc_linux_sync *`, an
- * mmap()'d page this file allocated), while handles[1], when present, is
- * aio_suspend()'s own `signal_event = __sig_delivery_event()`, which on
- * THIS backend (src/signal/linux/plat_signal.c's __plat_sigevent_create())
- * is a completely different encoding: a raw Linux eventfd(2) descriptor
- * boxed as (fd + 1), the identical small-integer convention src/unistd/
+ * handled here: this function's one real caller is aio.c's
+ * aio_suspend(), via its own on-stack handles[2]. handles[0] is always
+ * this file's own __plat_event_create() result (a `struct
+ * ntlibc_linux_sync *`, an mmap()'d page this file allocated), while
+ * handles[1], when present, is aio_suspend()'s own `signal_event =
+ * __sig_delivery_event()`, which on THIS backend
+ * (src/signal/linux/plat_signal.c's __plat_sigevent_create()) is a
+ * completely different encoding: a raw Linux eventfd(2) descriptor
+ * boxed as (fd + 1), the same small-integer convention src/unistd/
  * linux/plat_fd.c and this backend's own select() port
- * (src/select/linux/plat_select.c) already use for fd-shaped handles.
- * Blindly casting handles[1] to `struct ntlibc_linux_sync *` and reading
- * obj->kind, as this loop always did, dereferences that small boxed
- * integer as a pointer -- almost certainly an unmapped low address, so a
- * guaranteed SIGSEGV whenever the loop actually needs to look past
- * handles[0] (i.e. whenever aio_write()'s request has not yet completed
- * by the time aio_suspend() reaches this wait).
+ * (src/select/linux/plat_select.c) use for fd-shaped handles. Blindly
+ * casting handles[1] to `struct ntlibc_linux_sync *` and reading
+ * obj->kind dereferences that small boxed integer as a pointer --
+ * almost certainly an unmapped low address, so a guaranteed SIGSEGV
+ * whenever the loop needs to look past handles[0].
  *
- * This is what a real fork()-then-AIO-in-the-child reproduction crashed
- * on (a minimal aio_write()+aio_suspend() in the parent to start the
- * worker, fork(), then the same pair again in the child): confirmed by
- * instrumenting aio_suspend() and observing the crash land inside this
- * exact __plat_wait_any() call, and confirmed as the root cause by
- * rebuilding with handles[1] unconditionally omitted -- the identical
- * fork()+AIO reproduction then passed reliably. It is not intrinsically
- * a fork() bug (src/thread/aio.c's own __aio_reset_after_fork(), wired
- * into src/process/fork.c's child path, already gives the child a fresh
- * worker correctly): fork() just makes it reliable, because the child's
- * worker is started cold by the very aio_write() call under test, and
- * loses the race to complete the request before aio_suspend() reaches
- * this wait far more often than a long-running warm worker does (200/200
- * single-process, no-fork repro runs in the same sandbox never hit it).
- *
- * The fix distinguishes the two domains by a real structural fact rather
+ * The two domains are distinguished by a real structural fact rather
  * than a magnitude guess: alloc_sync() above hands out raw mmap(2)
- * results, and mmap(2) is guaranteed by the kernel to return page-aligned
- * addresses (and, via mmap_min_addr, never anything in the first page) --
- * every `struct ntlibc_linux_sync *` this file ever produces therefore
- * has its low 12 bits all zero. A boxed eventfd (fd + 1) lands on that
- * same alignment only if fd is exactly 4095, 8191, ... -- a process would
- * need thousands of descriptors already open, nothing this tree's own
- * fd table (FD_MAX, src/internal/libc.h) or any real caller approaches.
- * So "not page-aligned" is treated as "this is a boxed fd, not one of my
- * own sync objects" and read the same way src/select/linux/plat_select.c
- * already does for that exact encoding: a zero-timeout ppoll(POLLIN),
- * peeking readiness without consuming it -- matching the EVENT-kind
- * branch below, which also only peeks (aio_suspend()'s own
- * __sig_drain_pending() call, right after this wait returns, is what
- * actually consumes a pending signal). */
+ * results, and mmap(2) is guaranteed by the kernel to return
+ * page-aligned addresses (and, via mmap_min_addr, never anything in
+ * the first page) -- every `struct ntlibc_linux_sync *` this file
+ * ever produces therefore has its low 12 bits all zero. A boxed
+ * eventfd (fd + 1) lands on that same alignment only if fd is exactly
+ * 4095, 8191, ... -- far past anything this tree's own fd table
+ * (FD_MAX, src/internal/libc.h) or any real caller approaches. So
+ * "not page-aligned" is treated as "this is a boxed fd, not one of my
+ * own sync objects" and read the same way
+ * src/select/linux/plat_select.c already does for that exact
+ * encoding: a zero-timeout ppoll(POLLIN), peeking readiness without
+ * consuming it -- matching the EVENT-kind branch below, which also
+ * only peeks (aio_suspend()'s own __sig_drain_pending() call, right
+ * after this wait returns, is what actually consumes a pending
+ * signal). */
 #define SYS_nanosleep_wa 101
 #define SYS_ppoll_wa     73
 
