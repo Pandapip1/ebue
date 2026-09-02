@@ -422,6 +422,50 @@ int __util_timeout_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_stty_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_tty_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* Tier 8 (this project's own POSIX-utilities plan originally deferred
+ * both of the utilities below as needing infrastructure the plan
+ * didn't build -- "a terminal database" for tput, real termios/pty
+ * support that had not landed yet for stty/tty; the user has since
+ * explicitly decided to implement both anyway.  tput(1p): real XCU
+ * OPERANDS are narrow (clear/init/reset only) plus a deliberately
+ * bounded, clearly-labeled capname extension over a built-in five-
+ * terminal-type table -- see src/util/tput.c's own header comment for
+ * the full citation and every scope narrowing (no real terminfo
+ * database reader, no general tparm() parameter-string interpreter,
+ * no termcap short names).  Not __pure__: it reads $TERM/argv, queries
+ * the real terminal size via ioctl(TIOCGWINSZ) when one is attached,
+ * and writes to stdout as its entire purpose -- a repeated call is not
+ * guaranteed to answer the same way twice. */
+int __util_tput_main(int argc, char **argv) __attribute__((nonnull(2)));
+
+/* Tier 9: SCCS (Source Code Control System) tooling -- admin(1p), and
+ * enough of get(1p) to retrieve what admin(1p) creates.  This project's
+ * own POSIX-utilities plan (luminous-orbiting-biscuit.md) called admin
+ * "functionally obsolescent... low priority regardless" and deprioritized
+ * it rather than ruling it out; the user has since explicitly decided to
+ * implement it anyway.  Both share the real, documented SCCS `s.file`
+ * delta-encoding text format (SOH-prefixed control lines: ^Ah checksum,
+ * ^Ad delta-table entry, ^Au/^AU user list, ^At/^AT descriptive text,
+ * ^AI/^AE body brackets) -- see src/util/admin.c's own header comment
+ * for the full citation and the real, deliberate scope narrowing (no
+ * delta(1p) at all, so no second delta ever exists to retrieve; no
+ * branches, MR validation, flags, or user-list editing).  Neither is
+ * __pure__: both do real filesystem I/O by design. */
+int __util_admin_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_get_main(int argc, char **argv) __attribute__((nonnull(2)));
+
+/* ---- plumbing shared between src/util/admin.c and src/util/get.c ----
+ *
+ * The SCCS checksum (sccsfile(5): "the sum of all characters [bytes],
+ * except those contained in the first [checksum] line", stored as a
+ * real historical unsigned short so it wraps at 65536) is computed by
+ * admin(1p) when writing a new s.file and re-verified by get(1p) when
+ * reading one back -- the identical algorithm, so it lives once here
+ * rather than being copied into both files and risking the two silently
+ * drifting apart (this project's own "genuine duplication is worth
+ * avoiding" rule, restated from the cp/mv/rm plumbing block above). */
+unsigned __util_sccs_checksum(const char *buf, size_t len) __attribute__((nonnull(1)));
+
 #endif
 
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
