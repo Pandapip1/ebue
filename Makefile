@@ -1011,6 +1011,24 @@ obj/test/posix-realtime-linux.exe: $(srcdir)/test/posix-realtime-linux.c $(ALL_L
 	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) $(TEST_DEPFLAGS) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ $(TESTPROG_CRT) $< -Llib $(TESTPROG_LIBS)
 endif
 
+# test/posix-signal-fault-linux.c: real hardware-fault (SIGSEGV/SIGILL/
+# SIGFPE) coverage for src/signal/linux/plat_signal.c's
+# __plat_sig_install_fault_handlers() -- see that test's own header
+# comment for the full story. Gated exactly like test/posix-dl-linux.c
+# and test/posix-realtime-linux.c just above, and for the closely
+# related reason: a real hardware fault reaching this library's own
+# rt_sigaction(2)-installed handler only means anything to test against
+# this native Linux backend, which is the only platform that handler
+# exists on at all (see __signal_init(), src/signal/signal.c) -- an NT/
+# Wine build already has its own, entirely different fault path
+# (RtlAddVectoredExceptionHandler(), same function) and no rt_sigaction()
+# of any kind to test here.
+TEST_SRCS := $(filter-out $(srcdir)/test/posix-signal-fault-linux.c,$(TEST_SRCS))
+ifeq ($(PLATFORM),linux)
+TEST_SRCS += $(srcdir)/test/posix-signal-fault-linux.c
+TEST_EXES := $(patsubst $(srcdir)/test/%.c,obj/test/%.exe,$(TEST_SRCS))
+endif
+
 obj/test:
 	mkdir -p $@
 
