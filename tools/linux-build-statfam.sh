@@ -63,9 +63,19 @@ FILES="
 	src/stat/linux/plat_stat.c
 	src/unistd/linux/plat_fd.c
 	src/internal/errno.c
+	src/malloc/crt_alloc.c
+	src/malloc/linux/plat_malloc.c
+	src/thread/linux/plat_thread.c
 	fuzz/linux_pilot_harness_fs.c
 	fuzz/linux_pilot_test_statfam.c
 "
+# src/malloc/crt_alloc.c, src/malloc/linux/plat_malloc.c and
+# src/thread/linux/plat_thread.c -- the identical gap and identical fix
+# tools/linux-build-fs.sh's own comment already documents in full
+# (src/stat/chmod.c's fchmod() calls __free() on its EACCES retry path;
+# this test never calls fchmod() either, but src/stat/chmod.c is linked
+# here as a whole object, not pulled from an archive, so its compiled
+# body's own reference must resolve regardless).
 
 echo "$TAG: compiling ($CC, native ELF)..."
 objs=""
