@@ -296,8 +296,9 @@ int msgget(key_t key, int msgflg)
 		char buf[16];
 		int n = snprintf(buf, sizeof buf, "%d", id + 1);
 		lseek(ctrfd, 0, SEEK_SET);
-		if (n > 0) write(ctrfd, buf, (size_t)n);
-		ftruncate(ctrfd, n > 0 ? n : 0);
+		if (n > 0 && (size_t)n < sizeof buf)
+			write(ctrfd, buf, (size_t)n);
+		ftruncate(ctrfd, n > 0 && (size_t)n < sizeof buf ? n : 0);
 	}
 	close(ctrfd);
 	free(ctrpath);
