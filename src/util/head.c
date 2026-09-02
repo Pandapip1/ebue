@@ -42,14 +42,13 @@
 #include <unistd.h>
 #include "util.h"
 
-static int write_all(const char *buf, size_t len)
+static int write_all(const char *buf withtok(readable_span(len)), size_t len)
 {
-	const char *p = buf;
-	while (len > 0) {
-		ssize_t w = write(STDOUT_FILENO, p, len);
+	size_t off = 0;
+	while (off < len) {
+		ssize_t w = write(STDOUT_FILENO, buf + off, len - off);
 		if (w < 0) return -1;
-		p += (size_t)w;
-		len -= (size_t)w;
+		off += (size_t)w;
 	}
 	return 0;
 }
