@@ -226,9 +226,9 @@ static FILE *wfile_get(struct wfile_table *t, const char *name)
 		t->cap = newcap;
 	}
 
-	f = !strcmp(name, "/dev/stdout") ? stdout
-	  : !strcmp(name, "/dev/stderr") ? stderr
-	  : fopen(name, "w");
+	if (!strcmp(name, "/dev/stdout")) f = stdout;
+	else if (!strcmp(name, "/dev/stderr")) f = stderr;
+	else f = fopen(name, "w");
 	if (!f) return 0;
 	t->entries[t->n].name = strdup(name);
 	if (!t->entries[t->n].name) {
@@ -238,6 +238,16 @@ static FILE *wfile_get(struct wfile_table *t, const char *name)
 	t->entries[t->n].f = f;
 	t->n++;
 	return f;
+}
+
+/* s///w and the w command share this exact "look up (or open) the
+ * w-file, then write the pattern space plus a trailing newline to it if
+ * that lookup succeeded" pairing -- folded into one helper so neither
+ * call site has to re-pair wfile_get()'s result with the write itself. */
+static void wfile_write_line(struct wfile_table *t, const char *name, const char *data, size_t len)
+{
+	FILE *wf = wfile_get(t, name);
+	if (wf) { fwrite(data, 1, len, wf); fputc('\n', wf); }
 }
 
 static void wfile_table_close(struct wfile_table *t)
@@ -794,7 +804,9 @@ static int parse_script(struct parser *ps, struct program *pr)
 		if (!cmd) { perr(ps, "out of memory"); return -1; }
 		if (have1) cmd->a1 = a1;
 		if (have2) cmd->a2 = a2;
-		cmd->naddr = have2 ? 2 : (have1 ? 1 : 0);
+		if (have2) cmd->naddr = 2;
+		else if (have1) cmd->naddr = 1;
+		else cmd->naddr = 0;
 		cmd->negate = negate;
 
 		{
@@ -1286,10 +1298,8 @@ static int run_program(struct sed_state *st, struct program *pr, int opt_n)
 						if (rc) {
 							t_flag = 1;
 							if (cmd->flag_p) { fwrite(st->pattern.data, 1, st->pattern.len, stdout); fputc('\n', stdout); }
-							if (cmd->wfile) {
-								FILE *wf = wfile_get(&st->wtab, cmd->wfile);
-								if (wf) { fwrite(st->pattern.data, 1, st->pattern.len, wf); fputc('\n', wf); }
-							}
+							if (cmd->wfile)
+								wfile_write_line(&st->wtab, cmd->wfile, st->pattern.data, st->pattern.len);
 						}
 						pc++;
 						break;
@@ -1383,12 +1393,10 @@ static int run_program(struct sed_state *st, struct program *pr, int opt_n)
 						break;
 					}
 					case CMD_READ: queue_append(&st->aq, APPEND_RFILE, cmd->filename); pc++; break;
-					case CMD_WRITE: {
-						FILE *wf = wfile_get(&st->wtab, cmd->filename);
-						if (wf) { fwrite(st->pattern.data, 1, st->pattern.len, wf); fputc('\n', wf); }
+					case CMD_WRITE:
+						wfile_write_line(&st->wtab, cmd->filename, st->pattern.data, st->pattern.len);
 						pc++;
 						break;
-					}
 					case CMD_BRANCH: pc = cmd->target; break;
 					case CMD_TEST:
 						if (t_flag) { t_flag = 0; pc = cmd->target; }

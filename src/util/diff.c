@@ -579,8 +579,12 @@ static void print_default(FILE *out, const struct hunk *hunks, size_t nh,
 		const struct hunk *h = &hunks[i];
 		int a_empty = h->a0 == h->a1;
 		int b_empty = h->b0 == h->b1;
-		char cmd = a_empty ? 'a' : (b_empty ? 'd' : 'c');
+		char cmd;
 		size_t j;
+
+		if (a_empty) cmd = 'a';
+		else if (b_empty) cmd = 'd';
+		else cmd = 'c';
 
 		print_range(out, h->a0, h->a1, ',');
 		fputc(cmd, out);
@@ -715,8 +719,15 @@ static void print_context_side(FILE *out, enum side side, const struct group *g,
 
 		for (; pos < hs; pos++) print_ctxline(out, "  ", side, a, na, noeol_a, b, nb, noeol_b, pos);
 
-		if (side == SIDE_A) prefix = b_empty ? "- " : (a_empty ? 0 : "! ");
-		else prefix = a_empty ? "+ " : (b_empty ? 0 : "! ");
+		if (side == SIDE_A) {
+			if (b_empty) prefix = "- ";
+			else if (a_empty) prefix = 0;
+			else prefix = "! ";
+		} else {
+			if (a_empty) prefix = "+ ";
+			else if (b_empty) prefix = 0;
+			else prefix = "! ";
+		}
 
 		if (prefix) for (j = hs; j < he; j++) print_ctxline(out, prefix, side, a, na, noeol_a, b, nb, noeol_b, j);
 		pos = he;

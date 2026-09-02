@@ -513,9 +513,9 @@ static int read_text_lines(struct linesrc *src, char ***out_lines, size_t *out_n
 
 static void print_l_format(FILE *out, const char *text)
 {
-	const char *p;
-	for (p = text; *p; p++) {
-		unsigned char c = (unsigned char)*p;
+	size_t len = strlen(text), i;
+	for (i = 0; i < len; i++) {
+		unsigned char c = (unsigned char)text[i];
 		switch (c) {
 		case '\\': fputs("\\\\", out); break;
 		case '\a': fputs("\\a", out); break;
@@ -696,7 +696,9 @@ static int parse_range(struct ed *ed, const char **pp, struct range *r)
 		char sep = *p;
 		long base1;
 		p++;
-		base1 = had1 ? v1 : (sep == ',' ? 1 : eval_cur);
+		if (had1) base1 = v1;
+		else if (sep == ',') base1 = 1;
+		else base1 = eval_cur;
 		if (sep == ';') eval_cur = base1;
 		skip_blanks(&p);
 		if (parse_simple_addr(ed, &p, eval_cur, &v2, &had2) < 0) return ED_ERR;

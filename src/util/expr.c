@@ -256,10 +256,14 @@ static char *do_cmp(struct expr_ctx *c, char *a consume(heap_allocated), const c
 	if (c->err) { result = dupstr(c, ""); goto done; }
 	if (is_num_candidate(a) && is_num_candidate(b)) {
 		long x = strtol(a, NULL, 10), y = strtol(b, NULL, 10);
-		r = x < y ? -1 : x > y ? 1 : 0;
+		if (x < y) r = -1;
+		else if (x > y) r = 1;
+		else r = 0;
 	} else {
-		r = strcmp(a, b);
-		r = r < 0 ? -1 : r > 0 ? 1 : 0;
+		int sr = strcmp(a, b);
+		if (sr < 0) r = -1;
+		else if (sr > 0) r = 1;
+		else r = 0;
 	}
 	if (!strcmp(op, "=")) value = r == 0 ? "1" : "0";
 	else if (!strcmp(op, "!=")) value = r != 0 ? "1" : "0";
