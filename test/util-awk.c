@@ -377,6 +377,65 @@ static void test_syntax_error_is_diagnosed(void)
 	CHECK(err_contains("awk:"));
 }
 
+/* ==== fatal runtime errors: clean rejection, not a crash ==================
+ *
+ * Regression coverage for "awk: never exit() as a shell builtin; fix OOB
+ * heap write on huge $N": a field index or NF assignment far outside
+ * `long` range used to reach set_field()/set_nf() as UB from a bare
+ * (long)/(int) double cast -- concretely, the (int)-truncated idx sized
+ * fields_reserve()'s allocation while a second, untruncated `long idx` a
+ * few lines later walked the fill loop PAST that allocation: a genuine
+ * out-of-bounds heap write, not just theoretical UB. AWK_MAX_FIELD
+ * (1,000,000, in src/util/awk_run.c) now refuses an index/NF this large
+ * outright, via the same fatal()/awk_unwind_fatal() path every other
+ * fatal runtime condition below uses, before the (int) truncation that
+ * used to size the allocation is ever reached. All of these must exit
+ * with awk's own fatal-error status (2, from __util_awk_main()'s
+ * setjmp() catch branch) and a diagnostic on stderr -- NOT a crash (a
+ * crash would show up here as run_awk() returning 128+signal, e.g. 139
+ * for SIGSEGV, which fails the `== 2` checks below). */
+
+static void test_huge_field_index_rejected_cleanly(void)
+{
+	CHECK(run_awk("BEGIN{$111111111111111111111=1}", 0) == 2);
+	CHECK(err_contains("field index too large"));
+}
+
+static void test_huge_nf_assignment_rejected_cleanly(void)
+{
+	CHECK(run_awk("BEGIN{NF=111111111111111111111}", 0) == 2);
+	CHECK(err_contains("NF assignment too large"));
+}
+
+static void test_division_by_zero_rejected_cleanly(void)
+{
+	CHECK(run_awk("BEGIN{print 1/0}", 0) == 2);
+	CHECK(err_contains("division by zero"));
+}
+
+static void test_undefined_function_rejected_cleanly(void)
+{
+	CHECK(run_awk("BEGIN{nosuchfunc()}", 0) == 2);
+	CHECK(err_contains("call to undefined function"));
+}
+
+static void test_invalid_dynamic_regex_rejected_cleanly(void)
+{
+	/* "[" is a string, not a /regex/ literal, so it resolves as a
+	 * DYNAMIC ere via resolve_ere() -- an unterminated bracket
+	 * expression, invalid regcomp() input. */
+	CHECK(run_awk("BEGIN{if (\"x\" ~ \"[\") print \"never\"}", 0) == 2);
+	CHECK(err_contains("invalid dynamic regular expression"));
+}
+
+static void test_output_redirect_open_failure_rejected_cleanly(void)
+{
+	/* scratch/ exists (created in main() below); scratch/nosuchdir/
+	 * does not, so fopen()'s underlying open() fails with ENOENT. */
+	CHECK(run_awk("BEGIN{print \"x\" > \"scratch/nosuchdir/nosuchfile\"}", 0) == 2);
+	CHECK(err_contains("can't open output"));
+}
+
 /* ==== the shell built-in agrees with the standalone executable ============= */
 
 static void test_builtin_matches_standalone(void)
@@ -385,6 +444,56 @@ static void test_builtin_matches_standalone(void)
 	CHECK(out_equals("2\n"));
 	CHECK(run_sh_c("awk -F: '{print $2}' scratch/colon") == 0);
 	CHECK(out_equals("x\nx\n"));
+}
+
+/* ==== the shell built-in survives a fatal awk error (never exit()) ========
+ *
+ * Before the fix, every fatal condition above reached a raw exit(2)
+ * directly from inside bi_awk() -> __util_awk_main(). Because awk runs
+ * as a no-fork src/sh/builtin.c built-in (bi_awk() calls
+ * __util_awk_main() in-process, no fork()), that exit(2) used to tear
+ * down the WHOLE interactive shell over one bad awk program, not just
+ * the one command.
+ *
+ * `sh -c "awk '...'; echo SURVIVED"` runs the awk command and the echo
+ * as two sequential commands in the SAME shell process. If awk's fatal
+ * error still called exit()/_exit(), sh.exe itself would die right
+ * there: "SURVIVED" would never be printed, and run_sh_c() would report
+ * whatever exit(2) status the dying process happened to leave (and could
+ * not run any later commands at all, in a real interactive session).
+ * With the longjmp-based unwind, __util_awk_main() returns 2 like any
+ * other awk failure, bi_awk() returns that as the awk command's own
+ * exit status, and the shell moves on to `echo SURVIVED` exactly as it
+ * would after any other failed command. */
+
+static void test_builtin_survives_division_by_zero(void)
+{
+	CHECK(run_sh_c("awk 'BEGIN{print 1/0}'; echo SURVIVED") == 0);
+	CHECK(out_equals("SURVIVED\n"));
+}
+
+static void test_builtin_survives_undefined_function(void)
+{
+	CHECK(run_sh_c("awk 'BEGIN{nosuchfunc()}'; echo SURVIVED") == 0);
+	CHECK(out_equals("SURVIVED\n"));
+}
+
+static void test_builtin_survives_invalid_dynamic_regex(void)
+{
+	CHECK(run_sh_c("awk 'BEGIN{if (\"x\" ~ \"[\") print 1}'; echo SURVIVED") == 0);
+	CHECK(out_equals("SURVIVED\n"));
+}
+
+static void test_builtin_survives_output_redirect_failure(void)
+{
+	CHECK(run_sh_c("awk 'BEGIN{print \"x\" > \"scratch/nosuchdir/nosuchfile\"}'; echo SURVIVED") == 0);
+	CHECK(out_equals("SURVIVED\n"));
+}
+
+static void test_builtin_survives_huge_field_index(void)
+{
+	CHECK(run_sh_c("awk 'BEGIN{$111111111111111111111=1}'; echo SURVIVED") == 0);
+	CHECK(out_equals("SURVIVED\n"));
 }
 
 static void rmtree_scratch(void)
@@ -461,7 +570,20 @@ int main(int argc, char **argv)
 	test_missing_program_is_diagnosed();
 	test_syntax_error_is_diagnosed();
 
+	test_huge_field_index_rejected_cleanly();
+	test_huge_nf_assignment_rejected_cleanly();
+	test_division_by_zero_rejected_cleanly();
+	test_undefined_function_rejected_cleanly();
+	test_invalid_dynamic_regex_rejected_cleanly();
+	test_output_redirect_open_failure_rejected_cleanly();
+
 	test_builtin_matches_standalone();
+
+	test_builtin_survives_division_by_zero();
+	test_builtin_survives_undefined_function();
+	test_builtin_survives_invalid_dynamic_regex();
+	test_builtin_survives_output_redirect_failure();
+	test_builtin_survives_huge_field_index();
 
 	cleanup_artifacts();
 
