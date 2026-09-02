@@ -157,10 +157,13 @@ def read_config() -> dict[str, str]:
 
 
 def profile(cfg: dict[str, str], runtime: str, supplied: list[str]) -> list[str]:
-    host = platform.machine().lower()
-    host = "x86_64" if host in {"amd64", "x86_64"} else "i386" if host in {
-        "x86", "i386", "i686"
-    } else host
+    raw_host = platform.machine().lower()
+    if raw_host in {"amd64", "x86_64"}:
+        host = "x86_64"
+    elif raw_host in {"x86", "i386", "i686"}:
+        host = "i386"
+    else:
+        host = raw_host
     values = {
         "runtime": runtime,
         "target_arch": cfg.get("ARCH", "unknown"),
@@ -338,8 +341,10 @@ def run_one(result: CaseResult, runner: list[str], work: Path,
         observation = "PASS"
     elif passes:
         observation = "FLAKY"
+    elif len(set(seen)) == 1:
+        observation = seen[-1]
     else:
-        observation = seen[-1] if len(set(seen)) == 1 else "FLAKY"
+        observation = "FLAKY"
     return dataclasses.replace(result, observation=observation,
                                detail="\n".join(logs))
 
