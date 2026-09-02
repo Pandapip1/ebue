@@ -62,10 +62,7 @@ size_t mbrtowc(wchar_t *__restrict wc, const char *__restrict s, size_t n, mbsta
 		else { cp = c & 0x07; need = 3; }
 		seen = 1;
 	}
-	/* A saved state stores need in four bits; newly started UTF-8 needs
-	 * at most three continuation bytes. */
-	for (unsigned steps_left = 15; need > 0 && steps_left > 0;
-	     steps_left--) {
+	while (need > 0) {
 		if (used >= n) {
 			st->__opaque1 = (cp << 8) | (need << 4) | seen;
 			return (size_t)-2;

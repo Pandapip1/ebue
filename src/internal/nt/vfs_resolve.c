@@ -49,8 +49,11 @@ static int component(const char **pp, const char **start) // NOLINT(bugprone-eas
 
 static int same(const char *s, int n, const char *word)
 {
+	int i;
 	if (strlen(word) != (size_t)n) return 0;
-	return !memcmp(s, word, (size_t)n);
+	for (i = 0; i < n; i++)
+		if (s[i] != word[i]) return 0;
+	return 1;
 }
 
 static int native_fallback_status(NTSTATUS status)

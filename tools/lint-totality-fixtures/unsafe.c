@@ -2785,6 +2785,51 @@ const char *signed_guarded_pointer_step(const char *p, int step,
 	return p;
 }
 
+unsigned goto_internal_label_bypasses_countdown(unsigned n, int skip)
+{
+	while (n > 0) { /* totality-expect */
+		if (skip) goto again;
+		n--;
+	again:
+		;
+	}
+	return n;
+}
+
+unsigned goto_backward_label_bypasses_countdown(unsigned n, int skip)
+{
+again:
+	while (n > 0) { /* totality-expect */
+		if (skip) goto again;
+		n--;
+	}
+	return n;
+}
+
+unsigned goto_forward_then_reenters_countdown(unsigned n, int fail,
+	int repeat)
+{
+again:
+	while (n > 0) { /* totality-expect */
+		if (fail) goto out;
+		n--;
+	}
+out:
+	if (repeat) goto again;
+	return n;
+}
+
+unsigned indirect_goto_bypasses_countdown(unsigned n, int skip)
+{
+	void *target = &&out;
+	while (n > 0) { /* totality-expect */
+		if (skip) goto *target;
+		n--;
+	}
+out:
+	return n;
+}
+
 const char *local_pointer_copied_dynamic_cancellation(const char *p,
 	int step, int keep_running)
 {

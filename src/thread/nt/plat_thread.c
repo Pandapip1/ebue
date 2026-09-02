@@ -280,8 +280,9 @@ int __plat_thread_redirect_ip(__plat_handle_t h, void *target) // NOLINT(bugpron
 		(((ULONG_PTR)storage + 15) & ~(ULONG_PTR)15);
 	ULONG_PTR ip = (ULONG_PTR)target;
 	NTSTATUS status;
+	size_t i;
 
-	memset(context, 0, sizeof storage - 15);
+	for (i = 0; i < sizeof storage - 15; i++) context[i] = 0;
 	memcpy(context + flags_offset, &flags, sizeof flags);
 	status = NtGetContextThread(h, context);
 	if (!NT_SUCCESS(status)) return __set_errno_status(status);

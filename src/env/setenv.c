@@ -26,8 +26,8 @@ static int is_putenv(char *s) __attribute__((nonnull(1)));
  * array (and src/thread/{children,fork,wait}.c's __children[i]). */
 static int is_putenv(char *s)
 {
-	size_t i, count = nputenv;
-	for (i = 0; i < count; i++) if (putenv_strings[i] == s) return 1;
+	size_t i;
+	for (i = 0; i < nputenv; i++) if (putenv_strings[i] == s) return 1;
 	return 0;
 }
 
