@@ -255,6 +255,13 @@ struct lexer {
 	const char *p;
 	const char *tokstart;   /* where the token being returned began */
 	struct pending_hd *pending_head, *pending_tail;
+	/* Bumped once per "<<"/"<<-" redirection registered (parse_redirect()
+	 * below), and never decremented -- including by drain_heredocs(),
+	 * unlike pending_head/pending_tail. parse_funcdef() needs exactly
+	 * this: "did the body contain a here-document at all", which
+	 * pending_head cannot answer once the very newline that ends the
+	 * body's line has already drained it (see the long comment there). */
+	unsigned long hd_seen;
 	int err;
 	char errbuf[256];
 	size_t errbuflen;
@@ -667,6 +674,7 @@ static struct sh_redir *parse_redir(struct parser *p)
 		h->next = 0;
 		if (p->lx.pending_tail) p->lx.pending_tail->next = h; else p->lx.pending_head = h;
 		p->lx.pending_tail = h;
+		p->lx.hd_seen++;
 	}
 	advance(p);
 	return r;
@@ -975,6 +983,7 @@ static struct sh_command *parse_funcdef(struct parser *p, struct sh_command *cmd
 	const struct sh_builtin *bi;
 	struct sh_command *body;
 	const char *start, *end;
+	unsigned long hd0;
 
 	advance(p);   /* '(' */
 	if (p->cur.type != T_RPAREN) {
@@ -1000,33 +1009,62 @@ static struct sh_command *parse_funcdef(struct parser *p, struct sh_command *cmd
 	}
 
 	start = p->cur.start;
+	hd0 = p->lx.hd_seen;
 	body = parse_command(p);
 	if (!body) goto fail;      /* perr() already issued */
 
 	/* The body was parsed to find its extent, and is normally thrown
-	 * away here -- but not while a here-document is still queued.
+	 * away here -- but not when it contains a here-document, for two
+	 * independent reasons that both need it kept alive.
 	 *
-	 * A `<<` inside the body registers a `struct pending_hd` holding a
-	 * borrowed pointer to that redirection (see parse_redirect()), and
-	 * the queue is drained at the next <newline> or at EOF, not at the
-	 * end of the body.  So whenever the token *after* the body is
-	 * neither of those -- `|`, `&`, `&&`, `||`, all of which
-	 * parse_command() leaves for the caller -- the entry is still live
-	 * at this point, and freeing the body here left drain_heredocs()
-	 * reading `h->redir->word` out of freed memory.  Found by
-	 * fuzz/fuzz_shparse.c, whose report named parse.c's drain
-	 * (`f()(<<E)&` is the ten-byte reduction, and `f()( a <<E )|b`
-	 * with a real terminator line reproduces it just as well).
+	 * 1. Memory safety.  A `<<` inside the body registers a `struct
+	 *    pending_hd` holding a borrowed pointer to that redirection
+	 *    (see parse_redirect()), and the queue is drained at the next
+	 *    <newline> or at EOF, not at the end of the body.  So whenever
+	 *    the token *after* the body is neither of those -- `|`, `&`,
+	 *    `&&`, `||`, all of which parse_command() leaves for the
+	 *    caller -- the entry is still live at this point, and freeing
+	 *    the body here left drain_heredocs() reading `h->redir->word`
+	 *    out of freed memory.  Found by fuzz/fuzz_shparse.c, whose
+	 *    report named parse.c's drain (`f()(<<E)&` is the ten-byte
+	 *    reduction, and `f()( a <<E )|b` with a real terminator line
+	 *    reproduces it just as well).
 	 *
-	 * Keeping the body alive is the whole fix, and the test is the
-	 * exact condition: pending_head is non-empty iff some entry could
-	 * point into what is about to be freed.  Empty -- the common case,
-	 * every function definition in every script that uses no
-	 * here-document -- and this frees as before.  Non-empty and the
-	 * body lives in cmd->func_body until the enclosing sh_list is
-	 * freed, which is strictly after the drain. */
-	if (p->lx.pending_head) cmd->func_body = body;
-	else                    free_command(body);
+	 * 2. Reprint correctness.  When the token after the body IS the
+	 *    line's <newline> (or EOF), that very peek is what drains the
+	 *    heredoc (next_raw_token() drains on producing T_NEWLINE/T_EOF)
+	 *    -- so by the time this line runs, pending_head is *already*
+	 *    empty again even though a here-document was genuinely part of
+	 *    the body. print_command()'s FUNCDEF case reprints func_text
+	 *    verbatim, which still contains the bare "<<DELIM" operator
+	 *    text with no body or terminator line after it -- those live
+	 *    only in the (about to be freed) redir this function's caller
+	 *    never sees again. Reparsing that output then reads whatever
+	 *    happens to follow, in the ENCLOSING list, as this phantom
+	 *    heredoc's body, silently swallowing it (or erroring if no
+	 *    line ever matches the delimiter) -- the fixed point print.c's
+	 *    banner promises fails, and not by a wrong byte but by an
+	 *    entire trailing command going missing. Found by
+	 *    fuzz/fuzz_shparse.c (issues #4/#7); minimal reproduction is
+	 *    `f() (:)<<X` + a terminated body + a following command, e.g.
+	 *    `f() (:)<<X\nbody\nX\necho hi\n` -- printed as
+	 *    `f() (:)<<X\necho hi\n`, which reparses with "echo hi" mistaken
+	 *    for the heredoc's own unterminated body.
+	 *
+	 * hd_seen (never decremented, unlike pending_head/pending_tail --
+	 * see struct lexer) answers the question this needs, "did the body
+	 * register a here-document at all", which pending_head cannot once
+	 * case 2 has already drained it. Keeping the body alive is the
+	 * whole fix for both cases: drain_heredocs() writes the drained
+	 * body/delimiter straight into the redir sitting inside it, so
+	 * print.c's queue_nested_heredocs_command() finds them whether the
+	 * drain already happened (case 2) or happens later through the
+	 * still-live borrowed pointer (case 1). Unchanged -- the common
+	 * case, every function definition in every script that uses no
+	 * here-document -- and this frees as before: the body lives in
+	 * cmd->func_body until the enclosing sh_list is freed. */
+	if (p->lx.hd_seen != hd0) cmd->func_body = body;
+	else                      free_command(body);
 	end = p->cur.start;        /* the token after the body -- T_EOF has
 	                            * one too, pointing at the NUL, so there
 	                            * is no end-of-input special case */
@@ -1307,6 +1345,7 @@ struct sh_list *__sh_parse(const char *src, char *errbuf, size_t errbuflen)
 	p.lx.p = src;
 	p.lx.tokstart = src;
 	p.lx.pending_head = p.lx.pending_tail = 0;
+	p.lx.hd_seen = 0;
 	p.lx.err = 0;
 	p.lx.errbuf[0] = 0;
 	p.lx.errbuflen = sizeof p.lx.errbuf;

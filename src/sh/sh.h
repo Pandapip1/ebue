@@ -181,14 +181,19 @@ struct sh_command {
 	 * costs an expansion of every word in the body. */
 	char *func_text;
 
-	/* SH_CMD_FUNCDEF: the body's AST, kept ONLY to outlive a here-document
-	 * the lexer has queued but not yet drained -- see parse_funcdef() in
-	 * src/sh/parse.c, which is the only place this is ever set, and which
-	 * sets it only when something is actually pending.  It exists so that
-	 * the `struct sh_redir` a `struct pending_hd` still points at is not
-	 * freed out from under drain_heredocs(); the canonical printer also
-	 * walks it to put those retained here-documents back into its output
-	 * after the definition's terminating newline.
+	/* SH_CMD_FUNCDEF: the body's AST, kept ONLY when the body contained a
+	 * here-document -- see parse_funcdef() in src/sh/parse.c, which is
+	 * the only place this is ever set, via its own hd_seen/pending_head
+	 * bookkeeping, not by re-walking the tree. Two independent things
+	 * need it kept alive for that case: the `struct sh_redir` a `struct
+	 * pending_hd` still points at must not be freed out from under a
+	 * drain_heredocs() still to come, AND -- separately -- when the
+	 * drain has *already* happened by the time parse_funcdef() looks,
+	 * the canonical printer still needs to walk this to put the
+	 * already-drained here-document's body and terminator back into its
+	 * output after the definition's terminating newline, since func_text
+	 * above carries only the bare "<<DELIM" operator text, never the
+	 * body/terminator lines that follow it in the source.
 	 *
 	 * This does NOT reintroduce the hazard the comment above rules out.
 	 * That one is about the *function table* holding a borrowed pointer
