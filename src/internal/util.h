@@ -363,6 +363,26 @@ int __util_m4_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_cmp_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_diff_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* Tier 7 (this project's own POSIX-utilities plan's "Software
+ * Development option tier", the plan's final, explicitly follow-on
+ * tier): nm(1p) -- a real ELF64 object-file symbol-table reader, from
+ * scratch, sharing no code with src/dlfcn/linux/plat_dlfcn.c's own ELF
+ * loader (each keeps its own minimal local Elf64_* structures, the
+ * established per-file convention that file's own header comment
+ * documents) or with src/internal/pe.c's PE *image* export-directory
+ * walker (a different on-disk structure entirely from a COFF object
+ * file's symbol table -- see src/util/nm.c's own header for why PE
+ * object files are out of scope for this first pass). `strip`/`ctags`/
+ * `make`, this tier's other three named utilities, are not yet
+ * implemented -- see this project's own plan document for the rest of
+ * this tier. Not __pure__: it reads real files. nonnull(2) for the
+ * same reason as every other utility above: a real argv from a real
+ * caller is never NULL, and a usage-error path taken with argc==1
+ * still needs argv[0] for its own diagnostic (or, with argc==1, simply
+ * defaults its one implicit operand to "a.out" per XCU nm(1p)'s own
+ * OPERANDS text -- either way argv itself is never NULL). */
+int __util_nm_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 /* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
  * src/util/rm.c -----------------------------------------------------
  *

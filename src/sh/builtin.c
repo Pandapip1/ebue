@@ -592,6 +592,22 @@ static int bi_file(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* Tier 7 (Software Development option group, this project's own plan's
+ * final tier): nm(1p), a real from-scratch ELF64 object-file
+ * symbol-table reader -- see src/util/nm.c's own header for the full
+ * scope writeup (ELF64 only, no archive-member iteration, no PE object
+ * support). Also exists as a real standalone obj/bin/nm.exe
+ * (src/util/nm.c, declared in src/internal/util.h), registered here too
+ * for the same "trusted before PATH lookup/__spawn() succeeds" reason
+ * as every other regular built-in above. Not a 2.14 special built-in,
+ * no effect on the shell execution environment, so `env_effect` is 0. */
+static int bi_nm(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_nm(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_nm_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* Tier 4 continued: find(1p), xargs(1p), expr(1p), ls(1p) -- same
  * reasoning as every tier above: each also exists as a real standalone
  * obj/bin/<name>.exe (src/util/<name>.c, declared in src/internal/
@@ -1254,6 +1270,7 @@ static const struct sh_builtin builtins[] = {
 	{ "pax",  0, 0, bi_pax },
 	{ "ar",   0, 0, bi_ar },
 	{ "file", 0, 0, bi_file },
+	{ "nm",   0, 0, bi_nm },
 	{ "find",  0, 0, bi_find },
 	{ "xargs", 0, 0, bi_xargs },
 	{ "expr",  0, 0, bi_expr },

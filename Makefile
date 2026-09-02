@@ -427,8 +427,21 @@ generated:
 obj/sh:
 	mkdir -p $@
 
+# SH_EXTRA_LIBS (defined further down, alongside PROG_LIBS/PROG_CRT):
+# the same narrowly-scoped fix test/aio-leak-helper.exe's own rule
+# already carries (see that rule's comment for the full bisected story
+# -- fork()/wait()/exec(), src/process/{fork,wait,exec}.c, pull in this
+# library's own long-double math objects, whose 128-bit soft-float
+# intrinsics -nostdlib never supplies on its own). sh(1p) is a real
+# shell -- it calls exec()/fork()/wait() for every external command it
+# runs -- so it hits the identical gap on PLATFORM=linux, confirmed
+# while building obj/sh/sh.exe to verify nm(1p)'s shell built-in
+# (src/sh/builtin.c's bi_nm()) for real against a live sh.exe rather
+# than by inspection alone. A no-op on PLATFORM=nt (SH_EXTRA_LIBS is
+# empty there) -- see that variable's own comment for why this is
+# $(SH_EXE)-specific rather than folded into PROG_LIBS project-wide.
 $(SH_EXE): $(SH_SRCS) $(srcdir)/src/sh/sh.h $(ALL_LIBS) | obj/sh
-	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ $(PROG_CRT) $(SH_SRCS) -Llib $(PROG_LIBS)
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ $(PROG_CRT) $(SH_SRCS) -Llib $(PROG_LIBS) $(SH_EXTRA_LIBS)
 
 sh: $(SH_EXE)
 
@@ -574,6 +587,21 @@ PROG_LIBS = -lc
 # rule was ever actually exercised under PLATFORM=linux (test/posix-dl-
 # linux.c). Matches tools/linux-build-dlfcn.sh's own link line exactly.
 PROG_CRT = lib/start.o lib/crt1.o
+endif
+# SH_EXTRA_LIBS: PLATFORM=linux only -- see $(SH_EXE)'s own recipe
+# comment, further down, for why sh(1p) specifically needs a bare
+# -lgcc there (the same gap test/aio-leak-helper.exe's rule already
+# documents for fork()/exec()'s long-double math fallout). Kept out of
+# PROG_LIBS itself: PROG_LIBS is shared by obj/bin/%.exe's pattern rule
+# too, and not every standalone utility touches fork/exec, so widening
+# PROG_LIBS itself is the same "real, disclosed follow-up work of its
+# own" scope call the aio-leak-helper.exe comment already makes -- this
+# variable stays $(SH_EXE)-only, and empty (never referenced at all) on
+# PLATFORM=nt, where tcc has no libgcc.a to find in the first place.
+ifeq ($(PLATFORM),linux)
+SH_EXTRA_LIBS = -lgcc
+else
+SH_EXTRA_LIBS =
 endif
 # Old names, kept as aliases: some comments/tooling elsewhere in this
 # tree still say "TESTPROG_*"; PROG_LIBS/PROG_CRT is the same value,
@@ -781,6 +809,23 @@ obj/test/util-mail.exe: obj/bin/mailx.exe $(SH_EXE)
 # test/util-textio.c) -- both real man/man1/*.1 pages in this checkout
 # and a real, unmodified excerpt of GNU grep's own grep.1.
 obj/test/util-man.exe: obj/bin/man.exe $(SH_EXE)
+
+# test/nmfix-src/nmfix.c: a tiny, deliberately unlinked object-file
+# fixture for test/util-nm.c -- compiled (not linked, `-c`, no crt1.o/
+# libc.a involved) with the real $(CC), so it is a genuine ELF64 object
+# on PLATFORM=linux with known, predictable symbols (a genuine COFF
+# object under the NT/tcc cross build, where it exists only so the
+# build compiles cleanly -- Wine is broken in this sandbox so that leg
+# is never actually run here; test/util-nm.c's own header comment
+# explains how it degrades gracefully if it ever is).
+obj/test/nmfix.o: $(srcdir)/test/nmfix-src/nmfix.c | obj/test
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -c -o $@ $<
+
+# test/util-nm.c: nm(1p) (Software Development option tier, this
+# project's own plan's final tier), spawned as obj/bin/nm.exe and
+# exercised as a shell built-in via obj/sh/sh.exe -c, against the real
+# ELF64 object fixture above.
+obj/test/util-nm.exe: obj/bin/nm.exe obj/test/nmfix.o $(SH_EXE)
 
 # test/delayall.c and its plugin DLL: proof that an *unmodified* program
 # (plain extern, ordinary call, no ntlibc-specific macro at the call
