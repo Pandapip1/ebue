@@ -13,7 +13,10 @@
  * (sh/main.c), and -- as of stage 5, through the single __sh_cmdsub()
  * call-out declared in src/internal/libc.h -- wordexp()'s command
  * substitution.  system() and popen() still hand their command string
- * to %ComSpec%/cmd.exe and are test/sh-design.md's item 5, not this
+ * to an external shell process rather than to this in-process one --
+ * %ComSpec%/cmd.exe on NT, a PATH-resolved "sh" on Linux (src/stdlib/
+ * system.c, src/stdio/misc.c) -- and wiring them into __sh_main()/
+ * __sh_run_script() instead is test/sh-design.md's item 5, not this
  * stage's.  All names begin with __sh_ or SH_.
  *
  * Grammar coverage is the subset test/sh-design.md scopes in: simple

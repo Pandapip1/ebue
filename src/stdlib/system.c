@@ -21,12 +21,29 @@
  *     Respecting it rather than hard-coding cmd.exe means a caller who
  *     replaced their shell on purpose gets that shell.
  *
+ *     On Linux, the shell is "sh" resolved through __find_program(name,
+ *     1) -- a PATH search, not a hard-coded "/bin/sh" -- matching how
+ *     src/util/atd.c and src/util/crond.c already resolve the shell they
+ *     spawn a job/crontab line through; keeping that the one convention
+ *     this project has for "the shell it runs a command through" on
+ *     Linux, rather than inventing a second one here, is the point. Not
+ *     $SHELL: XBD 8.1 defines that as the invoking user's own preferred
+ *     interactive shell, which is not what "an implementation-defined
+ *     shell" means here -- a caller whose interactive shell is csh or
+ *     fish must still get sh(1p) word-splitting and quoting for the
+ *     command string this passes to "-c", exactly as glibc's and musl's
+ *     own system() hard-code a shell rather than consulting $SHELL for
+ *     the same reason.
+ *
  *   - system(NULL) must return non-zero "if a command processor is
  *     available" (POSIX, same page).  That is read literally: the shell
  *     found above must actually exist and be runnable, checked with
  *     access(path, X_OK) for a %ComSpec% value (__find_program does not
  *     check existence for a name with a directory part) and implicitly
- *     by __find_program's own access() check for the "cmd.exe" fallback.
+ *     by __find_program's own access() check for the "cmd.exe" fallback
+ *     on NT, or the "sh" lookup on Linux -- neither platform gives "sh"/
+ *     "cmd.exe" a directory part, so both go through that same PATH-loop
+ *     access() check every time.
  *
  *   - The return value is a wait status, not an exit code: it comes
  *     straight from waitpid() so WEXITSTATUS/WIFEXITED/WIFSIGNALED work
@@ -88,15 +105,30 @@
  *     needs a raw-cmdline entry point into __spawn that does not exist
  *     and is not this change's to add.
  *
+ *     None of this applies on Linux.  __spawn's Linux backend
+ *     (__plat_process_spawn, src/process/linux/plat_process.c) hands
+ *     argv straight to execve(2) -- there is no intermediate raw command
+ *     line for the child to re-lex the way cmd.exe re-lexes the text
+ *     after "/C", so argv = { shell, "-c", command, NULL } reaches
+ *     sh(1p) as exactly the bytes `command` holds, with no
+ *     quoting/escaping layer of any kind in between and no equivalent of
+ *     the embedded-quote/trailing-backslash gap above.
+ *
  *   - "If a shell could not be executed, the child process shall exit
  *     with a status as if the command interpreter terminated using
  *     exit(127)."  On NT, process creation is atomic -- an invalid or
  *     missing image never produces a process at all, unlike POSIX's
  *     fork()-then-exec() where the child already exists when exec()
  *     discovers the image is bad -- so __spawn() itself fails with
- *     pid < 0 rather than a child later exiting 127.  That failure is
- *     synthesized here into the (127<<8)-shaped wait status this clause
- *     requires (WIFEXITED true, WEXITSTATUS()==127), the same way a real
+ *     pid < 0 rather than a child later exiting 127.  Linux reaches the
+ *     same pid < 0 outcome by a different route: __plat_process_spawn()
+ *     there forks and execve()s, but reports a failed execve() back
+ *     through a close-on-exec self-pipe before returning to this
+ *     caller, so the fork()-then-exec() gap the paragraph above
+ *     describes is closed at that layer and __spawn() fails synchronously
+ *     here exactly as it does on NT.  That failure is synthesized here
+ *     into the (127<<8)-shaped wait status this clause requires
+ *     (WIFEXITED true, WEXITSTATUS()==127), the same way a real
  *     fork()+execve() failure is turned into exit(127) by other libcs'
  *     system() implementations.  No errno is preserved for this case:
  *     the clause's contract is a wait status, not -1/errno, so there is
@@ -113,10 +145,14 @@
 
 /* Resolve the shell to run commands through, or 0 (errno set) if none
  * can be found.  See the header comment for why ComSpec, checked with
- * access() ourselves, comes first. */
+ * access() ourselves, comes first on NT, and why Linux resolves "sh"
+ * through PATH instead of a hard-coded "/bin/sh". */
 withtok(heap_allocated)
 static char *find_shell(void)
 {
+#if defined(__linux__)
+	return __find_program("sh", 1);
+#else
 	const char *cs = getenv("ComSpec");
 	if (cs && *cs && access(cs, X_OK) == 0) {
 		size_t n = strlen(cs) + 1;
@@ -125,6 +161,7 @@ static char *find_shell(void)
 		return r;
 	}
 	return __find_program("cmd.exe", 1);
+#endif
 }
 
 int system(const char *command)
@@ -148,7 +185,11 @@ int system(const char *command)
 		void (*old_quit)(int);
 
 		argv[0] = shell;
+#if defined(__linux__)
+		argv[1] = (char *)"-c";
+#else
 		argv[1] = (char *)"/c";
+#endif
 		argv[2] = (char *)command;
 		argv[3] = 0;
 

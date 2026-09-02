@@ -648,18 +648,54 @@ static void test_system(void)
 	/* "If a shell could not be executed ... the value returned by
 	 * system() shall be as if the command interpreter terminated using
 	 * exit(127)."  This *is* independently triggerable, contrary to
-	 * what the ledger previously assumed: point $ComSpec at a file that
-	 * passes find_shell()'s own access(path, X_OK) check (the fixture is
-	 * explicitly chmod'd executable) but is not a valid PE image, so the
-	 * shell "cannot be executed" once ntlibc actually tries to launch it.
-	 *
-	 * src/stdlib/system.c's find_shell() finds this file (it passes the
-	 * access() check), but __spawn() then fails outright (NT process
-	 * creation is atomic: an invalid image never produces a process at
-	 * all, unlike POSIX's fork()-then-exec() where the child already
-	 * exists when exec() discovers the image is bad).  system() now
-	 * synthesizes a (127<<8)-shaped status for that `pid < 0` case, so
+	 * what the ledger previously assumed, but the fixture that gets
+	 * find_shell() to resolve a real, executable, yet genuinely
+	 * un-runnable file is platform-specific -- ComSpec on NT, PATH on
+	 * Linux, since src/stdlib/system.c's find_shell() consults ComSpec
+	 * on NT but does a plain __find_program("sh", 1) PATH search on
+	 * Linux (see that file's header comment). Either way, system() must
+	 * synthesize a (127<<8)-shaped status for the `pid < 0` __spawn()
+	 * returns once it actually tries to launch the fixture, so
 	 * WIFEXITED(st) && WEXITSTATUS(st)==127 as this clause requires. */
+#if defined(__linux__)
+	/* A directory prepended to PATH with a "sh" in it -- chmod'd
+	 * executable, but neither a valid ELF image nor a "#!" script --
+	 * is found ahead of the real shell by that PATH search and fails
+	 * execve(2) with ENOEXEC.  __spawn()'s Linux backend reports that
+	 * failure back through a close-on-exec self-pipe before returning
+	 * (src/process/linux/plat_process.c), so this reaches the same
+	 * synchronous `pid < 0` outcome NT gets for free from atomic
+	 * process creation -- see system.c's header comment. */
+	{
+		char dir[] = "sysbad-dirXXXXXX";
+		char shpath[32];
+		char *old_path = getenv("PATH");
+
+		old_path = old_path ? strdup(old_path) : 0;
+		CHECK(mkdtemp(dir) == dir);
+		snprintf(shpath, sizeof shpath, "%s/sh", dir);
+		{
+			int fd = open(shpath, O_CREAT | O_WRONLY, 0755);
+			CHECK(fd >= 0);
+			if (fd >= 0) {
+				CHECK(write(fd, "not a valid executable\n", 24) == 24);
+				CHECK(close(fd) == 0);
+				CHECK(chmod(shpath, 0755) == 0);
+			}
+		}
+		{
+			char newpath[PATH_MAX];
+			snprintf(newpath, sizeof newpath, "%s:%s", dir, old_path ? old_path : "");
+			CHECK(setenv("PATH", newpath, 1) == 0);
+		}
+		st = system("exit 0");
+		CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 127);
+		if (old_path) { CHECK(setenv("PATH", old_path, 1) == 0); free(old_path); }
+		else CHECK(unsetenv("PATH") == 0);
+		unlink(shpath);
+		rmdir(dir);
+	}
+#else
 	{
 		char t[] = "sysbad-XXXXXX.exe";
 		int fd = mkstemps(t, 4);
@@ -680,6 +716,7 @@ static void test_system(void)
 			unlink(t);
 		}
 	}
+#endif
 }
 
 /* ---- a64l.html / l64a.html: radix-64 digit mapping and the

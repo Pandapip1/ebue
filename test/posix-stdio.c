@@ -529,26 +529,34 @@ static void test_perror(void)
 	(void)e;
 }
 
-/* popen.html/pclose.html: src/stdio/misc.c's own header comment
+/* popen.html/pclose.html: on NT, src/stdio/misc.c's own header comment
  * documents that popen() hands the command to cmd.exe /c rather than a
- * POSIX shell, since there is no /bin/sh on NT -- that divergence is
+ * POSIX shell, since there is no /bin/sh there -- that divergence is
  * real and not tested here (the *string* handed to the interpreter is
- * cmd syntax, not sh syntax).  Everything else the spec promises about
- * the *stream* and *pclose()*'s return, though, is plain fd/process
- * plumbing that does not depend on which interpreter runs the command,
- * and src/stdio/misc.c implements all of it -- so it is asserted for
- * real below rather than waved off as "no POSIX shell". */
-/* popen() spawns cmd.exe (via %ComSpec%, per src/stdio/misc.c) as a real
- * child process. Under Wine (the normal `make check` target) that is a
- * real, present binary. Under this project's native-ASan harness there
- * is no cmd.exe at all -- __spawn's ability to reach *this test binary*
+ * cmd syntax, not sh syntax).  On Linux there is no such divergence:
+ * misc.c's popen() resolves a real "sh" and hands it "-c", so the
+ * commands below run as genuine sh(1p) syntax; they were kept to forms
+ * ("echo hello", "exit N") that happen to mean the same thing in both,
+ * so nothing here needed to change to cover both platforms for real.
+ * Everything else the spec promises about the *stream* and
+ * *pclose()*'s return, though, is plain fd/process plumbing that does
+ * not depend on which interpreter runs the command, and
+ * src/stdio/misc.c implements all of it -- so it is asserted for real
+ * below rather than waved off as "no POSIX shell". */
+/* popen() spawns a real child process: cmd.exe (via %ComSpec%) on NT,
+ * "sh" (via PATH) on Linux -- both per src/stdio/misc.c. Under Wine
+ * (the normal `make check` target) cmd.exe is a real, present binary,
+ * and a real --platform=linux build always has a real "sh" on PATH, so
+ * both reach every assertion below for real. Under this project's
+ * native-ASan harness, a distinct build from either of those, there is
+ * no cmd.exe at all -- __spawn's ability to reach *this test binary*
  * again under a special-cased argv (as test/posix-strings.c's spawn
  * helper does) does not extend to an arbitrary Windows executable path,
  * so popen() legitimately fails to spawn there. That is an environment
  * limitation, not a popen()/pclose() bug, so each block below degrades
  * to a note instead of a hard failure when popen() itself returns NULL;
- * every assertion still runs for real wherever cmd.exe is actually
- * reachable. */
+ * every assertion still runs for real wherever a real shell is
+ * actually reachable. */
 static void test_popen(void)
 {
 	FILE *f;

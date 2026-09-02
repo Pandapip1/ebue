@@ -286,6 +286,17 @@ static void test_system(void)
 	CHECK(WIFEXITED(status));
 	CHECK(WEXITSTATUS(status) == 0);
 
+#if defined(__linux__)
+	/* A command containing a space still reaches sh(1p) byte-for-byte
+	 * on Linux: __spawn's Linux backend execve(2)s argv[] directly, so
+	 * there is no cmd.exe-style command-line re-lexing here needing a
+	 * quoting layer at all (see system.c's header comment).  "true;
+	 * exit 7" exercises that same "space in the command" shape while
+	 * staying sh(1p) syntax, in place of the nested-cmd.exe form below. */
+	status = system("true; exit 7");
+	CHECK(WIFEXITED(status));
+	CHECK(WEXITSTATUS(status) == 7);
+#else
 	/* A command containing a space exercises append_arg's quoting of
 	 * the "/c" argument -- see the design comment in system.c for why
 	 * this, and not an embedded quote or trailing backslash, is the
@@ -293,6 +304,7 @@ static void test_system(void)
 	status = system("cmd /c exit 7");
 	CHECK(WIFEXITED(status));
 	CHECK(WEXITSTATUS(status) == 7);
+#endif
 }
 
 /* ---- setjmp/longjmp ---- */

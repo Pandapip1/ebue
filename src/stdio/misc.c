@@ -17,6 +17,17 @@
  * (it resolves relative to the current directory, not PATH), and
  * %ComSpec% is the one every other Windows program trusts for the same
  * reason.
+ *
+ * On Linux there is a real /bin/sh, but popen() below still does not
+ * hard-code that path: it resolves "sh" through __find_program(name, 1)
+ * -- a PATH search -- the same way src/stdlib/system.c's find_shell()
+ * and src/util/atd.c/src/util/crond.c already resolve the shell they
+ * spawn a command through, rather than adding a second "the shell"
+ * convention beside the three this project already has.  argv = {
+ * shell, "-c", cmd, NULL } then reaches sh(1p) as exactly the bytes
+ * `cmd` holds: __spawn's Linux backend execve(2)s argv directly, with
+ * none of cmd.exe's "/c" re-lexing above for a child to undo, so unlike
+ * the NT path there is no quoting layer to get right here at all.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -31,6 +42,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/wait.h>
+#include "libc.h"
 #include "ownership_stubs.h"
 #include "stdio_impl.h"
 #include "plat_stdio.h"
@@ -260,14 +272,24 @@ FILE *popen(const char *cmd, const char *mode) // NOLINT(bugprone-easily-swappab
 		return 0;
 	}
 
+#if defined(__linux__)
+	shell = __find_program("sh", 1);
+#else
 	{
 		const char *comspec = getenv("ComSpec");
 		if (!comspec || !*comspec) comspec = "C:\\Windows\\System32\\cmd.exe";
 		shell = strdup(comspec);
 	}
+#endif
 	if (!shell) { pid = -1; }
 	else {
-		argv[0] = shell; argv[1] = (char *)"/c"; argv[2] = (char *)cmd; argv[3] = 0;
+		argv[0] = shell;
+#if defined(__linux__)
+		argv[1] = (char *)"-c";
+#else
+		argv[1] = (char *)"/c";
+#endif
+		argv[2] = (char *)cmd; argv[3] = 0;
 		pid = __spawn(shell, argv, 0);
 		free(shell);
 	}
