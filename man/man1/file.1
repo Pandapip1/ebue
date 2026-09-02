@@ -1,0 +1,143 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH FILE 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+file \- determine file type
+.SH SYNOPSIS
+.B file
+.RB [ \-dh ]
+.I file
+.RI [ file ...]
+.br
+.B file \-i
+.RB [ \-h ]
+.I file
+.RI [ file ...]
+.SH DESCRIPTION
+.B file
+classifies each
+.I file
+operand and writes one line per operand to standard output, in the
+form
+\(lq\fIfile\fR: \fItype\fR\(rq
+(a symbolic link, without
+.BR \-h ,
+is instead reported as
+\(lq\fIfile\fR: symbolic link to \fItarget\fR\(rq).
+Classification proceeds through a fixed set of checks, cheapest first:
+the file's type as reported by the filesystem (directory, FIFO,
+socket, block or character special file, symbolic link, or regular
+file), and, for a non-empty regular file only, a best-effort look at
+its first few kilobytes of content.
+.PP
+The content check recognizes:
+.TP
+.B executable
+An ELF (\(lq\fB\ex7fELF\fR\(rq) or PE/DOS (\(lq\fBMZ\fR\(rq) header at
+the start of the file.
+.TP
+.B archive
+The classic archive magic
+.RB \(lq !<arch>\en \(rq
+at the start of the file.
+.TP
+.B "tar archive"
+The ustar magic
+.RB \(lq ustar \(rq
+at byte offset 257.
+.TP
+.B "cpio archive"
+The octet-oriented cpio magic
+.RB \(lq 070707 \(rq
+at the start of the file.
+.TP
+.B "commands text"
+A
+.RB \(lq #! \(rq
+shebang at the start of the file.
+.TP
+.B "ASCII text"
+Every byte examined is a tab, carriage return, line feed, or
+printable 7-bit ASCII byte.
+.TP
+.B data
+None of the above; in particular, any byte outside that printable/
+whitespace set, including a NUL byte or a non-ASCII byte with no
+recognized magic. This build does not attempt to distinguish, for
+example, C or Fortran source text from other plain text, or to
+identify any binary format beyond the ones listed above; both are
+reported as
+.B "ASCII text"
+or
+.B data
+respectively.
+.PP
+An empty regular file is reported as
+.BR empty ,
+and a file that cannot be opened or stat'd is reported as
+.BR "cannot open" ,
+without attempting any content check.
+.SH OPTIONS
+.TP
+.B \-d
+Apply the default classification described above. This is already
+the default when neither
+.B \-M
+nor
+.B \-m
+is given, so
+.B \-d
+has no additional effect.
+.TP
+.B \-h
+Do not resolve a symbolic link
+.I file
+operand to what it points to; report it as a symbolic link, and its
+raw target text, even when the target exists. Without
+.BR \-h ,
+a symbolic link whose target exists is classified by the referent
+(though the operand's own name is still what is printed); a symbolic
+link whose target does not exist is always reported as a symbolic
+link regardless of
+.BR \-h .
+.TP
+.B \-i
+Do not attempt to classify a regular file's content at all: every
+regular file, empty or not, is reported simply as
+.RB \(lq "regular file" \(rq .
+Every other file type is still classified as usual.
+.TP
+.BI \-M " file"
+Not implemented (supply the set of content tests from a custom
+test-file description, replacing the built-in set). Refused with a
+diagnostic.
+.TP
+.BI \-m " file"
+Not implemented (extend the built-in set of content tests with a
+custom test-file description). Refused with a diagnostic; only the
+built-in test set above is available.
+.SH OPERANDS
+.TP
+.I file
+A pathname to classify. A single
+.RB \(lq \- \(rq
+operand is classified from standard input itself (via its open file
+description, since there is no seekable path to reopen), rather than
+being taken as a literal filename.
+.SH EXIT STATUS
+.TP
+.B 0
+Every operand was classified successfully.
+.TP
+.B 1
+One or more operands could not be opened or stat'd.
+.TP
+.B 2
+A usage error occurred: an invalid option, or
+.B \-M
+or
+.B \-m
+was given.
+.SH SEE ALSO
+.BR ls (1),
+.BR nm (1)

@@ -1,0 +1,256 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH M4 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+m4 \- macro processor
+.SH SYNOPSIS
+.B m4
+.RB [ \-s ]
+.RI [ \-D " name" [ = value ]]...
+.RI [ \-U " name" ]...
+.RI [ file ...]
+.SH DESCRIPTION
+.B m4
+copies each
+.I file
+(or standard input, with no
+.I file
+operands) to standard output, expanding every macro call it
+recognizes as it goes. A macro's expansion is itself rescanned for
+further macro calls before any following text is read, so a call may
+expand into another call and so on; arguments are collected the same
+way, so they are expanded as they are collected unless quoted.
+.PP
+Text is quoted by default with a leading
+.B \(ga
+and a trailing
+.RB \' ,
+which may be changed with
+.BR changequote .
+Quoted text is copied through with the delimiters stripped and is
+never itself scanned for macro names, so quoting a macro name's own
+arguments is the standard way to prevent premature expansion.
+.RB \(lq # \(rq
+begins a comment that runs to the next newline by default (changeable
+with
+.BR changecom ).
+A comment's text is copied through verbatim and is never scanned for
+macro calls either.
+.SH BUILT-IN MACROS
+All thirty-two of the macros required by the POSIX
+.B m4
+specification are implemented:
+.BR define ", " undefine ", " defn ", " pushdef ", " popdef ","
+.BR ifdef ", " ifelse ", " shift ", " dnl ", " changequote ","
+.BR changecom ", " include ", " sinclude ", " divert ", " undivert ","
+.BR divnum ", " len ", " index ", " substr ", " translit ","
+.BR dumpdef ", " eval ", " incr ", " decr ", " syscmd ", " sysval ","
+.BR maketemp ", " mkstemp ", " m4exit ", " m4wrap ", " traceon ","
+and
+.BR traceoff .
+No macro outside this set is built in: a name this implementation does
+not define as a builtin, and that the running script has not defined
+itself, is never a macro call at all \(em it is copied through as
+plain text, the same as any other undefined identifier. In
+particular, GNU extensions such as
+.BR __file__ ", " __line__ ", " errprint ", " esyscmd ", " format ","
+.BR patsubst ", " regexp ", " indir ", " builtin ","
+and
+.BR undivert 's
+filename-argument form, are not implemented; using one of those names
+where no such macro has been user-defined leaves the name in the
+output literally.
+.PP
+This implementation's own behavior for several macros where the
+standard is silent or where a common extension exists:
+.TP
+.B shift
+Its output is each remaining argument individually re-quoted with the
+current quote strings (the same as
+.BR $@ ),
+not a bare comma-joined list.
+.TP
+.B changequote
+With no arguments, resets quoting to the default
+.B \(ga
+/
+.RB \' .
+Given exactly one argument, or an argument that is an empty string,
+is refused with a diagnostic and leaves quoting unchanged \(em the
+standard leaves this case unspecified, and this implementation
+declines to guess rather than pick an arbitrary reading. Each
+delimiter string is limited to 32 bytes; longer is refused with a
+diagnostic.
+.TP
+.B changecom
+With no arguments, or an empty first argument, turns comment
+recognition off. With one non-empty argument, sets the start delimiter
+and defaults the end delimiter to a newline. Each delimiter string is
+limited to 32 bytes; longer is refused with a diagnostic.
+.TP
+.BR divert / undivert
+Nine numbered diversion buffers (1\(en9) are supported, held
+in memory rather than in temporary files; diversion 0 is real standard
+output. Diverting to a negative number discards output; diverting to
+a number greater than 9 is refused with a diagnostic and leaves the
+current diversion unchanged.
+.B undivert
+with no arguments empties buffers 1 through 9, in numeric order, into
+whichever diversion is currently active; given arguments, each must
+be a plain diversion number (the GNU filename form is not
+implemented). Any diversion still holding data when the input is
+exhausted is flushed to real standard output regardless of which
+diversion is current at that point, including after an
+.B m4exit
+call.
+.TP
+.B eval
+Evaluates its first argument as an integer expression using signed
+32-bit arithmetic; overflow wraps around modulo 2^32, and
+division and modulus truncate toward zero. An optional second
+argument sets the output radix (2\(en36, default 10) and an optional
+third sets a minimum field width, zero-padded. A negative result is
+rendered as a
+.RB \(lq \- \(rq
+followed by the magnitude's digits; radix digits above 9 use
+lowercase letters.
+.TP
+.B translit
+Maps each byte of the source string found in the second
+.RI ( from )
+argument to the byte at the same index in the third
+.RI ( to )
+argument, deleting it if
+.I to
+is shorter than
+.IR from ;
+a
+.RB \(lq \- \(rq
+in either argument has no special range meaning.
+.TP
+.B syscmd
+Runs its argument as a shell command; the command's own output goes
+directly to this process's existing standard output/error, not
+captured into
+.BR syscmd 's
+expansion (which is always the empty string). The command's exit
+status is recorded for a following
+.B sysval
+call (128 plus the signal number if the command was killed by a
+signal).
+.TP
+.BR maketemp / mkstemp
+.B mkstemp
+replaces a trailing run of
+.RB \(lq X \(rq
+characters in its argument with characters chosen to name a newly
+created, real, collision-free temporary file, and expands to the
+resulting pathname.
+.B maketemp
+is the older, non-collision-safe form: its trailing
+.RB \(lq X \(rq
+run is simply replaced with this process's decimal process ID.
+.TP
+.B m4exit
+Arranges for processing to stop and this process to exit once the
+current point in the input is reached, with the given exit code (or,
+if no argument is given, 1 if any error has already occurred during
+this run, else 0).
+.TP
+.B m4wrap
+Queues its argument's text to be processed, in the order queued, after
+the real end of input is reached (a call to
+.B m4wrap
+while processing already-queued text appends further text, which is
+likewise processed before the run ends).
+.TP
+.BR traceon / traceoff
+With no arguments, turns tracing of every macro call on or off; given
+one or more names, turns tracing on or off for just those names. A
+traced call prints
+\(lqm4trace: \fIname\fR(\fIargs\fR)\en\(rq
+to standard error.
+.PP
+Definitions made with
+.B pushdef
+stack; a later
+.B popdef
+or a matching
+.B undefine
+uncovers the previous definition (\fBundefine\fR removes the entire
+stack for a name at once, not just its top).
+.SH OPTIONS
+.TP
+.BI \-D name [ = value ]
+Defines
+.I name
+as if by
+\(lqdefine(\fIname\fR,\fIvalue\fR)\(rq
+before any input is read;
+.I value
+defaults to the empty string if
+\(lq=\fIvalue\fR\(rq
+is omitted.
+.TP
+.BI \-U name
+Undefines
+.I name
+as if by
+\(lqundefine(\fIname\fR)\(rq
+before any input is read.
+.IP
+.BR \-D " and " \-U
+are applied strictly in the left-to-right order they appear on the
+command line, interleaved with each other, so a later option always
+wins over an earlier one naming the same macro.
+.TP
+.B \-s
+Accepted for compatibility and otherwise has no effect: this
+implementation never produces line-synchronization output for a
+downstream preprocessor.
+.SH OPERANDS
+.TP
+.I file
+A pathname of an input file, read and processed in the order given.
+.RB \(lq \- \(rq
+means standard input. With no
+.I file
+operands, standard input is read.
+.SH APPLICATION USAGE
+A pathological input such as
+.RI \(lq define(a,a)a \(rq
+expands forever by design, the same as any other implementation of
+.BR m4 ;
+nothing in this build changes that. What this build does bound,
+because it can run in-process as a shell built-in with no separate
+process to interrupt, is runaway recursion from ever corrupting the
+process itself: a cap of two million total macro invocations, and a
+separate cap of 5000 levels of real call nesting (relevant to a shape
+like
+.RI \(lq len(len(len(...))) \(rq
+rather than a long flat chain), each independently aborting the run
+with a diagnostic and a nonzero exit if reached. Neither limit is
+reachable by an ordinarily-written script.
+.SH EXIT STATUS
+.TP
+.B 0
+Processing completed with no error and no
+.B m4exit
+call, or
+.B m4exit
+was called with an argument of 0.
+.TP
+.I other
+An
+.B m4exit
+call with a nonzero argument sets that value as the exit status. Absent an explicit
+.BR m4exit ,
+an exit status of 1 indicates an error occurred during the run (a
+malformed option, an unreadable input or
+.B include
+file, an invalid
+.B eval
+expression, or a runaway-expansion limit reached).
+.SH SEE ALSO
+.BR awk (1),
+.BR patch (1)

@@ -1,0 +1,242 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH LS 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+ls \- list directory contents
+.SH SYNOPSIS
+.B ls
+.RB [ \-aAcCdfFilmnpqrRstux1 ]
+.RI [ file ...]
+.SH DESCRIPTION
+.B ls
+writes information about each
+.I file
+operand, or about the contents of each operand that is a directory,
+to standard output. A plain file operand is listed by name; a
+directory operand's own contents are listed, sorted, unless
+.B \-f
+is given. Every plain-file operand is listed first, followed by each
+directory operand's listing in turn; a
+.RI \(lq name: \(rq
+header line precedes a directory's listing whenever more than one
+operand was given, or
+.B \-R
+is recursing. With no operands, the current directory is listed.
+.PP
+By default, a name beginning with
+.RB \(lq . \(rq
+is omitted from a directory's listing unless
+.B \-a
+or
+.B \-A
+is given. Symbolic links are always reported as themselves (never
+followed) when gathering the information a listing needs; this is the
+one behavior the standard permits when neither
+.B \-H
+nor
+.B \-L
+is in effect, and this build never implements either option to change
+it.
+.SH OPTIONS
+.TP
+.B \-a
+List every entry, including those whose name begins with
+.RB \(lq . \(rq ,
+including
+.B .
+and
+.BR .. .
+.TP
+.B \-A
+Like
+.BR \-a ,
+but never lists
+.B .
+or
+.BR .. .
+.TP
+.B \-C
+Force multi-column output, sorted down the columns. This is the
+default when standard output is a terminal.
+.TP
+.B \-d
+For a directory operand, list the directory entry itself rather than
+its contents (as if it were a plain file).
+.TP
+.B \-f
+List a directory's entries in the order stored, unsupported by any
+sorting: turns
+.B \-a
+on and
+.BR \-l ", " \-t ", " \-S ,
+and
+.B \-r
+off, regardless of the order these options were given on the command
+line.
+.TP
+.B \-F
+Append a marker to certain names: a
+.RB \(lq / \(rq
+after a directory, a
+.RB \(lq * \(rq
+after an executable regular file, and, as extensions beyond the
+standard's own \(lq/\(rq and \(lq*\(rq markers,
+.RB \(lq @ \(rq
+after a symbolic link,
+.RB \(lq | \(rq
+after a FIFO, and
+.RB \(lq = \(rq
+after a socket.
+.TP
+.B \-i
+Print each file's inode number before its name.
+.TP
+.B \-l
+Long format: one line per entry, giving the mode, link count,
+owner, group, size, and modification time, followed by the name. Turns
+off
+.BR \-n .
+.TP
+.B \-m
+Fill the width of the output with a comma-separated list of names.
+Turns off
+.BR \-C " and " \-1 .
+.TP
+.B \-n
+Like
+.BR \-l ,
+but shows the owner and group as raw numeric IDs instead of resolved
+names. Turns off
+.BR \-l .
+.TP
+.B \-p
+Append a
+.RB \(lq / \(rq
+after each directory's name; unlike
+.BR \-F ,
+marks nothing else.
+.TP
+.B \-q
+Replace any non-printable byte in a displayed name with
+.RB \(lq ? \(rq .
+Applied to every name printed, not only when standard output is a
+terminal.
+.TP
+.B \-r
+Reverse whatever sort order is otherwise in effect (including the
+default name order).
+.TP
+.B \-R
+Recursively list each subdirectory encountered. A directory's own
+entries are always listed together, in full, before any of its
+subdirectories are descended into and listed in turn, each with its
+own
+.RI \(lq name: \(rq
+header.
+.TP
+.B \-s
+Print the size, in blocks, of each file before its name. Block size
+is 512 bytes, or 1024 with
+.BR \-k .
+.TP
+.B \-S
+Sort by size, largest first; ties broken by name. Turns off
+.BR \-t .
+.TP
+.B \-t
+Sort by modification time (or, combined with
+.BR \-c " or " \-u ,
+by the corresponding time field), most recent first; ties broken by
+name. Turns off
+.BR \-S .
+.TP
+.B \-u
+Use the file's last-access time, instead of its modification time,
+both for sorting under
+.B \-t
+and for display under
+.BR \-l .
+Mutually exclusive with
+.BR \-c ;
+whichever of the two is given later on the command line takes effect.
+.TP
+.B \-c
+Use the file's last-status-change time, instead of its modification
+time, both for sorting under
+.B \-t
+and for display under
+.BR \-l .
+Mutually exclusive with
+.BR \-u ,
+resolved the same way.
+.TP
+.B \-x
+Force multi-column output, sorted across the rows instead of down the
+columns. Turns off
+.BR \-C ", " \-m ", and " \-1 .
+.TP
+.B \-1
+Force one name per line, with no columns. Turns off
+.BR \-C " and " \-m .
+.TP
+.B \-k
+Used with
+.BR \-s :
+report sizes in 1024-byte blocks instead of 512-byte blocks.
+.TP
+.BR \-H ", " \-L ", " \-g ", " \-o
+Not implemented. Every symbolic link is always listed as itself
+(equivalent to the standard's default, neither-given behavior for
+.BR \-H / \-L );
+.B \-g
+and
+.B \-o
+(owner-omitted and group-omitted long-format variants) have no
+substitute \(em use
+.B \-l
+or
+.B \-n
+instead. Giving any of these four options is a usage error.
+.SH OPERANDS
+.TP
+.I file
+A pathname of a file or directory to list.
+.SH ENVIRONMENT
+.TP
+.B COLUMNS
+When set to a positive integer, used as the display width for laying
+out multi-column output (\fB\-C\fR/\fB\-x\fR, and the default column
+layout when standard output is a terminal) and
+for wrapping
+.B \-m
+output. Ignored if unset, empty, or not a positive integer, in which
+case a width of 80 is assumed. No terminal width is ever queried
+directly.
+.SH APPLICATION USAGE
+Owner and group names are resolved only for this process's own user
+and group; a file owned by any other numeric ID is shown by that
+numeric ID instead of a name, under both
+.B \-l
+and
+.BR \-t .
+.PP
+Under
+.BR \-l / \-n ,
+a modification time (or, with
+.BR \-c / \-u ,
+the corresponding time) within roughly the last six months is shown
+as month, day, hour, and minute; an older time, or one in the future,
+is shown as month, day, and year instead.
+.SH EXIT STATUS
+.TP
+.B 0
+Every operand was listed successfully.
+.TP
+.B 1
+An operand could not be accessed, or a directory could not be read.
+.TP
+.B 2
+A usage error occurred: an invalid or unimplemented option was given.
+.SH SEE ALSO
+.BR pax (1),
+.BR file (1)

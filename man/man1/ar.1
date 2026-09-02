@@ -1,0 +1,189 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH AR 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+ar \- create and maintain library archives
+.SH SYNOPSIS
+.B ar
+.RB \-d | \-m | \-p | \-q | \-r | \-t | \-x
+.RB [ \-cuv ]
+.I archive
+.RI [ file ...]
+.SH DESCRIPTION
+.B ar
+creates and maintains a group of files combined into a single archive
+file. Exactly one of the mode letters
+.BR d ", " m ", " p ", " q ", " r ", " t ,
+or
+.B x
+must be given, and every option letter (mode plus any modifiers) is
+taken from a single option string: the very first command-line
+argument, with or without a leading
+.BR \- .
+No option letter may appear anywhere else on the command line;
+.I archive
+is always the argument immediately following that option string, and
+every argument after that is a
+.I file
+operand.
+.PP
+Archives are written in the classic common archive format: an eight-byte
+.RI \(lq !<arch>\en \(rq
+magic string followed by a sequence of members, each preceded by a
+60-byte header (name, modification time, uid, gid, mode, and size, all
+as decimal or octal ASCII text, terminated by
+.RI \(lq \`\en \(rq ).
+Member names longer than 15 bytes are refused at creation time rather
+than truncated or extended into a long-name table. This build never
+writes a symbol table, and it does not read one either: an archive
+written with GNU-style
+.RI \(lq // \(rq
+long-name members or BSD-style
+.RI \(lq #1/len \(rq
+extended names is refused with a diagnostic rather than misparsed.
+Every archive this utility itself writes uses the plain, inline
+15-byte-or-shorter name field, so this limitation never affects an
+archive round-tripped through this same
+.BR ar .
+.SH OPTIONS
+.TP
+.B \-d
+Delete the named
+.I file
+members from
+.IR archive .
+At least one
+.I file
+operand is required.
+.TP
+.B \-m
+Not implemented. Relative-positioned moving of members requires
+.BR \-a / \-b / \-i ,
+which are also not implemented (see below); this build refuses
+.B \-m
+outright with a diagnostic rather than perform a no-op move.
+.TP
+.B \-p
+Write the contents of the named
+.I file
+members to standard output, in archive order. With no
+.I file
+operands, every member is printed.
+.TP
+.B \-q
+Append each
+.I file
+operand to
+.I archive
+as a new member, without checking whether a member of the same name
+already exists (so a name may end up duplicated).
+.TP
+.B \-r
+Replace each existing member whose name matches a
+.I file
+operand's basename with that file's current contents, in place, and
+append every
+.I file
+operand that had no existing match to the end of the archive.
+Replacing a member never changes its position in the archive.
+.TP
+.B \-t
+Write a table of contents: the name of each member matching a
+.I file
+operand (or, with no operands, every member), one per line, in
+archive order. With
+.BR \-v ,
+each line instead has the form
+\(lq\fImode uid\fR/\fIgid size date name\fR\(rq,
+.B ls
+\-l\-style (this platform's synthesized uid/gid, both always 0).
+.TP
+.B \-x
+Extract the named
+.I file
+members (or, with no operands, every member) into the current
+directory, restoring each extracted file's permission bits. The
+modification time of an extracted file is
+.B not
+restored from the archive; it is left as the time of extraction.
+.TP
+.B \-c
+Suppress the
+\(lq\fIcreating archive\fR\(rq
+diagnostic that
+.B \-q
+and
+.B \-r
+otherwise print to standard error when
+.I archive
+does not already exist.
+.TP
+.B \-u
+With
+.BR \-r ,
+replace an existing member only if the corresponding
+.I file
+operand's modification time is at least as new as the member's
+recorded modification time; an operand that is older than the member
+it would otherwise replace is skipped instead.
+.TP
+.B \-v
+Verbose: print one line per member as it is deleted, replaced,
+appended, extracted, or (with
+.BR \-t )
+listed.
+.TP
+.BR \-a ", " \-b ", " \-i
+Not implemented (relative positioning of a new or moved member before
+or after a named existing member). Refused with a diagnostic; without
+them,
+.B \-r
+and
+.B \-m
+always operate at the end of the archive.
+.TP
+.B \-s
+Not implemented. This build never generates or regenerates a symbol
+table, so there is nothing for a forced regeneration to do; refused
+with a diagnostic rather than silently accepted as a no-op.
+.TP
+.BR \-C ", " \-T
+Not implemented (refuse-on-collision and allow-truncation policies
+for extracting a foreign long-name archive). Refused with a
+diagnostic, since this build already refuses at creation time to
+write a member name that would not fit, and cannot read a foreign
+long-name archive in the first place.
+.SH OPERANDS
+.TP
+.I archive
+The pathname of the archive file.
+.TP
+.I file
+A pathname naming a member to operate on (for
+.BR \-d ", " \-p ", " \-t ","
+and
+.BR \-x )
+or a file to add or update (for
+.BR \-q " and " \-r ).
+Only the final pathname component (the basename) is compared against
+member names stored in the archive.
+.SH EXIT STATUS
+.TP
+.B 0
+The requested operation completed successfully.
+.TP
+.B 1
+An operation-level failure occurred: the archive could not be opened
+or was not a valid archive, a member could not be extracted or
+written, or a required
+.I file
+operand could not be read.
+.TP
+.B 2
+A usage error occurred: no mode letter or more than one mode letter
+was given, an invalid or unimplemented option was given, or a
+required operand was missing.
+.SH SEE ALSO
+.BR nm (1),
+.BR strip (1),
+.BR pax (1)

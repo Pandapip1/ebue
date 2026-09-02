@@ -1,0 +1,361 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH AWK 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+awk \- pattern scanning and processing language
+.SH SYNOPSIS
+.B awk
+.RI [ \-F " sepstring" ]
+.RI [ \-v " assignment" ]...
+.I program
+.RI [ argument ...]
+.br
+.B awk
+.RI [ \-F " sepstring" ]
+.RI [ \-v " assignment" ]...
+.B \-f
+.I progfile
+.RB [ \-f
+.IR progfile ]...
+.RI [ argument ...]
+.SH DESCRIPTION
+.B awk
+runs a program written in the
+.B awk
+language against each
+.I argument
+that names a file (or standard input, if none does), reading one
+record at a time and executing every pattern-action pair in the
+program whose pattern matches that record.
+.PP
+An
+.B awk
+program is a sequence of pattern/action pairs, written
+.RI pattern " { " action " }" ,
+and function definitions. Either the pattern or the action may be
+omitted: a pattern with no action prints the matching record as its
+default action, and an action with no pattern (or the special pattern
+.BR BEGIN " or " END )
+runs unconditionally \(em
+.B BEGIN
+once before the first record is read,
+.B END
+once after the last one. A pattern is a boolean expression, the
+special word
+.BR BEGIN " or " END ,
+or a range pattern, written
+.RI expr1 , expr2 ,
+matching every record from one where
+.I expr1
+first becomes true through the next one where
+.I expr2
+becomes true, inclusive.
+.SS "Records and fields"
+Each input record is split into fields on the separator given by the
+variable
+.BR FS " (default a single space, meaning \(lqsplit on runs of blanks,"
+and ignore leading/trailing blanks\(rq, per the standard). A field is
+referenced as
+.BR $1 ", " $2 ,
+and so on;
+.B $0
+is the whole record, and
+.B NF
+is the number of fields. Assigning to
+.B $0
+re-splits it into fields; assigning to a field beyond
+.B NF
+extends the record, joining fields with
+.BR OFS ;
+assigning to
+.B NF
+itself truncates or extends the field list the same way.
+.B NR
+counts records read so far across all input;
+.B FNR
+counts records read from the current input file; records are
+terminated by the character
+.BR RS " (only its first character is consulted, even if it is set to"
+a longer string). Setting
+.B RS
+to the empty string selects paragraph mode: records are separated by
+one or more blank lines, and, in addition to
+.BR FS ,
+a newline always also separates fields when
+.B FS
+is a single character (including the default) \(em though not when
+.B FS
+is a longer, regular-expression separator.
+.SS "Statements"
+The full statement set is implemented:
+.RS
+.nf
+if (\fIcond\fP) \fIstmt\fP [else \fIstmt\fP]
+while (\fIcond\fP) \fIstmt\fP
+do \fIstmt\fP while (\fIcond\fP)
+for (\fIinit\fP; \fIcond\fP; \fIincr\fP) \fIstmt\fP
+for (\fIvar\fP in \fIarray\fP) \fIstmt\fP
+break
+continue
+next
+exit [\fIexpr\fP]
+return [\fIexpr\fP]
+delete \fIarray\fP[\fIsubscript\fP]
+delete \fIarray\fP                  (removes every element)
+print [\fIexpr\fP, ...] [redirection]
+printf \fIfmt\fP [, \fIexpr\fP, ...] [redirection]
+function \fIname\fP(\fIparams\fP) { \fIstmts\fP }
+.fi
+.RE
+where
+.I redirection
+is one of
+\(lq> \fIfile\fR\(rq, \(lq>> \fIfile\fR\(rq, or \(lq| \fIcmd\fR\(rq
+on
+.BR print " or " printf .
+A function is called by name elsewhere in the program (recursively,
+if desired); within a called function, a bare-identifier argument is
+passed by reference if it is (or, being still uninitialized, becomes)
+an array, and by value if it is a scalar.
+.SS "Expressions"
+The full operator set is implemented: arithmetic
+.RB ( "+ \- * / % ^" ),
+string concatenation (by adjacency), the relational operators
+.RB ( "< <= == != >= >" ),
+.BR ~ " and " !~
+(match/non-match against a regular expression, given either as a
+literal
+.I /ere/
+or as a computed string), the logical operators
+.BR && ", " || ", and " ! ,
+the ternary
+.RB \(lq ?: \(rq ,
+assignment
+.RB ( "= += \-= *= /= %= ^=" ),
+pre/post increment and decrement
+.RB ( "++ \-\-" ),
+array membership
+.RI ( subscript " in " array ),
+and every form of
+.BR getline :
+.RS
+.nf
+getline                (updates $0, NF, NR, FNR)
+getline \fIvar\fP             (updates \fIvar\fP, NR, FNR)
+getline < \fIfile\fP          (updates $0, NF)
+getline \fIvar\fP < \fIfile\fP     (updates \fIvar\fP only)
+\fIcmd\fP | getline           (updates $0, NF, NR)
+\fIcmd\fP | getline \fIvar\fP        (updates \fIvar\fP, NR)
+.fi
+.RE
+.SS "Built-in functions"
+.RS
+.nf
+length([\fIs\fP])              int(\fIx\fP)
+substr(\fIs\fP, \fIm\fP [, \fIn\fP])       rand()
+index(\fIs\fP, \fIt\fP)             srand([\fIseed\fP])
+split(\fIs\fP, \fIarray\fP [, \fIfs\fP])   tolower(\fIs\fP)
+sub(\fIere\fP, \fIrepl\fP [, \fItarget\fP])  toupper(\fIs\fP)
+gsub(\fIere\fP, \fIrepl\fP [, \fItarget\fP]) close(\fIname\fP)
+match(\fIs\fP, \fIere\fP)            system(\fIcmd\fP)
+sprintf(\fIfmt\fP [, \fIexpr\fP, ...])
+sin(\fIx\fP)  cos(\fIx\fP)  atan2(\fIy\fP, \fIx\fP)  exp(\fIx\fP)  log(\fIx\fP)  sqrt(\fIx\fP)
+.fi
+.RE
+Every one of these is a mandatory POSIX
+.B awk
+built-in; none is a gawk or BWK extension.
+.SS "printf/sprintf conversions"
+.B print
+writes its arguments separated by
+.B OFS
+and terminated by
+.BR ORS .
+.BR printf " and " sprintf
+support the conversions
+.BR d ,
+.I i
+(a synonym for
+.BR d ),
+.BR o ,
+.BR u ,
+.BR x ,
+.BR X ,
+.BR e ,
+.BR E ,
+.BR f ,
+.BR F ,
+.BR g ,
+.BR G ,
+.BR c ,
+and
+.BR s .
+Each takes the usual
+\(lq\-+0#\(rq
+flags (and a literal blank flag), a field width, and a precision,
+either given literally or as
+.RB \(lq * \(rq
+to take the next argument's value; a literal
+.RB \(lq %% \(rq
+in the format string produces one
+.RB \(lq % \(rq
+in the output. An unrecognized conversion letter is copied through to
+the output literally rather than silently dropped. No C length
+modifier
+.RB ( "h hh l ll L" )
+is meaningful or accepted, since every
+.B awk
+value is already either a number or a string, never a distinctly
+sized C type.
+.SS "Special variables"
+.RS
+.nf
+FS OFS ORS RS NR NF FNR FILENAME SUBSEP RSTART RLENGTH
+CONVFMT OFMT ARGC ARGV ENVIRON
+.fi
+.RE
+.B ENVIRON
+is populated from this process's own environment before
+.B BEGIN
+runs.
+.BR ARGV / ARGC
+hold the operands following the program text (index 0 of
+.B ARGV
+is the program's invocation name), and elements of
+.B ARGV
+may be reassigned or added to during execution to change which files
+are read.
+.SH OPTIONS
+.TP
+.BI \-F " sepstring"
+Sets
+.B FS
+to
+.I sepstring
+before
+.B BEGIN
+runs, exactly as if
+\(lqFS=\fIsepstring\fR\(rq
+had been given as a
+.B \-v
+assignment.
+.TP
+.BI \-v " assignment"
+An assignment of the form
+.RI \(lq name = value \(rq ,
+applied to variable
+.I name
+before
+.B BEGIN
+runs. May be repeated; assignments are applied in the order given,
+so a later one overrides an earlier one naming the same variable.
+Given together with
+.B \-F
+naming the same variable, whichever option appears later on the
+command line wins (the standard does not specify an order between
+the two; this implementation simply processes every option
+left to right).
+.TP
+.BI \-f " progfile"
+Read the program text from
+.I progfile
+instead of from the first operand. May be repeated; each file's text
+is concatenated, in the order given, to form the complete program (a
+newline is inserted between files if one is missing). Once any
+.B \-f
+is given, there is no
+.I program
+operand: every operand is instead an
+.IR argument .
+.RB \(lq \- \(rq
+as a
+.I progfile
+reads the program text from standard input.
+.SH OPERANDS
+.TP
+.I program
+The program text, taken from the first operand when no
+.B \-f
+option was given.
+.TP
+.I argument
+Either a
+.I file
+to read records from, or, if it has the form
+.RI \(lq name = value \(rq
+where
+.I name
+is a valid identifier, an assignment to variable
+.I name
+that takes effect at the point the main input loop reaches that
+.I argument
+in
+.B ARGV
+order (not all at once before processing begins) \(em so a variable
+assigned this way between two file operands has its old value while
+the first file is read and its new value while the second is. With no
+.I file
+arguments at all, standard input is read.
+.SH APPLICATION USAGE
+Numeric literals in the program text are decimal only, matching the
+standard's own grammar; there is no hexadecimal or octal literal
+syntax, so
+.RB \(lq 0x1 \(rq
+in program source lexes as the number
+.B 0
+concatenated with the identifier
+.BR x1 ,
+not as the number 1.
+.PP
+An empty
+.B FS
+(\(lqsplit every character into its own field\(rq, a common
+extension) is not implemented; with
+.B FS
+set to the empty string, the whole record is treated as a single
+field instead.
+.B nextfile
+and
+.B fflush()
+are gawk/BWK extensions with no citation in the base standard and are
+not implemented; every stream this implementation itself opens is
+still flushed automatically at the moments that matter (before
+.B system()
+or
+\(lq| getline\(rq,
+and at normal program exit).
+.PP
+The iteration order of
+.RI "for (" var " in " array )
+is, as the standard itself leaves it, unspecified; it follows this
+implementation's own hash table's internal layout.
+.PP
+Any fatal condition \(em a division by zero, an array used as a
+scalar or vice versa, a call to an undefined function, an invalid
+computed regular expression, a failed output redirection, or memory
+exhaustion \(em is reported with a diagnostic and ends the program
+with a nonzero exit status rather than continuing in an undefined
+state.
+.SH EXIT STATUS
+.TP
+.B 0
+The program ran to completion (including a normal
+.B exit
+statement with no argument, or with an argument of 0).
+.TP
+.I n
+An
+.B exit
+statement with a nonzero argument
+.I n
+sets that value as the exit status.
+.TP
+.B 2
+A usage error occurred (an invalid option, a missing program or
+.B \-f
+file), the program text failed to parse, or a fatal runtime error
+occurred (see APPLICATION USAGE).
+.SH SEE ALSO
+.BR sed (1),
+.BR grep (1),
+.BR m4 (1)
