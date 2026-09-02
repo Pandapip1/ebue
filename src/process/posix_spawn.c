@@ -125,10 +125,7 @@
  *     console process groups are created by CreateProcess's
  *     CREATE_NEW_PROCESS_GROUP and are the target of
  *     GenerateConsoleCtrlEvent's dwProcessGroupId, which is
- *     job-control signal delivery to a group.  (An earlier version of
- *     this comment compared against job objects and concluded NT had
- *     no such concept; that was the wrong object and the wrong
- *     conclusion -- see test/posix-spawn.c's fence.)  What NT does not
+ *     job-control signal delivery to a group.  What NT does not
  *     have is a way to *join* one: a console process group's members
  *     are exactly the descendants of its root process, its id is
  *     always that root's pid, and no call places a process into a
@@ -174,11 +171,9 @@
  *     policies exist there, so nothing here has invented a substitute
  *     for lacking one the way NT genuinely lacks one, and nothing here
  *     has built or verified applying `sched_priority` for real through
- *     that backend's own __plat_process_spawn(). Note this used to be a
- *     rejection of *acting* on the flag while spawnattr.c's own
- *     accessors stored and returned the value faithfully regardless;
- *     that storage is unconditional and unaffected by whether this
- *     function goes on to act on it.
+ *     that backend's own __plat_process_spawn().  spawnattr.c's own
+ *     accessors still store and return the value unconditionally,
+ *     whether or not this function goes on to act on it.
  *
  *   POSIX_SPAWN_USEVFORK -- not POSIX; accepted, and satisfied by
  *     construction.  __spawn() never copies the parent's address space,
@@ -359,19 +354,16 @@ static int do_action(const struct __spawn_action *a, struct saved_slot *sv, int 
  * Returns 0 or the error number.
  *
  * POSIX_SPAWN_SETSIGMASK (non-empty mask) and POSIX_SPAWN_SETSCHEDPARAM/
- * POSIX_SPAWN_SETSCHEDULER are accepted here on NT, not refused: the
- * mechanism this file's own banner used to say did not exist -- a real
- * window before the child's first instruction, and (for the mask) a
- * real parent-to-child channel to use inside it -- is now built (see
- * __spawn_set_pending_sigmask()/__spawn_set_pending_priority(),
- * libc.h, and src/process/nt/plat_process.c/src/internal/nt/
- * plat_fd_init.c for where each is actually consumed). Left refused on
- * Linux: this file is portable, but the mechanism each flag now rides
- * is NT-specific, and nothing here has built or verified a Linux
- * equivalent -- see test/posix-spawn.c's own two BUG fences, which
- * spawn_with_flags() only ever drives through __spawn() ->
- * __plat_process_spawn(), and only the NT implementation of that
- * function does anything with either flag. */
+ * POSIX_SPAWN_SETSCHEDULER are accepted here on NT, not refused: both
+ * ride the suspended-process window before the child's first
+ * instruction, and (for the mask) the same parent-to-child channel (see
+ * __spawn_set_pending_sigmask()/__spawn_set_pending_priority(), libc.h,
+ * and src/process/nt/plat_process.c/src/internal/nt/plat_fd_init.c for
+ * where each is actually consumed).  Left refused on Linux: this file is
+ * portable, but the mechanism each flag rides is NT-specific, and
+ * nothing here has built or verified a Linux equivalent -- only the NT
+ * implementation of __plat_process_spawn() does anything with either
+ * flag. */
 static int check_attr(const posix_spawnattr_t *at)
 {
 	short f;
@@ -441,9 +433,7 @@ static int spawn_common(pid_t *pid, const char *path,
 	 * ever grows via a checked realloc that assigns fa->__actions before
 	 * fa->__len can exceed the old capacity, so fa->__len > 0 implies
 	 * fa->__actions != NULL by construction -- a fact about a struct
-	 * FIELD's value, not about fa itself, the same class of residual
-	 * d24fe86's own pthread_rwlock unlink_waiter() comment already
-	 * established. */
+	 * FIELD's value, not about fa itself. */
 	if (fa && fa->__len) {
 		cap = fa->__len;
 		sv = malloc((size_t)cap * sizeof *sv);

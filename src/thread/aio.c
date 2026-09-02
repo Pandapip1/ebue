@@ -195,12 +195,12 @@ static void notify(const struct sigevent *event)
  * happens inside that branch (`request->group && request->group->active
  * && ...`), not on every call.
  *
- * A newer sweep's report also flags `request->cb->aio_sigevent`
- * (line below) -- the same "global table entry's own FIELD liveness,
- * not a parameter" residual class as aio_cancel()'s own comment
- * documents for `request->cb->aio_fildes`: request->cb is only ever
- * non-NULL once submit() has set it (after its own `if (!cb ...)`
- * check), and finish_locked()/perform() are only ever called on a
+ * `request->cb->aio_sigevent` (line below) is the same "global table
+ * entry's own FIELD liveness, not a parameter" residual class as
+ * aio_cancel()'s own comment documents for `request->cb->aio_fildes`:
+ * request->cb is only ever non-NULL once submit() has set it (after
+ * its own `if (!cb ...)` check), and finish_locked()/perform() are
+ * only ever called on a
  * request already past that point (REQ_RUNNING, transitioning to
  * REQ_DONE) -- verified sound by hand, not force-fit to `nonnull`,
  * which has no way to describe a struct field's own conditional

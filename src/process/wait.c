@@ -347,21 +347,15 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 	if (pid < 0) pid = -pid;   /* process groups are single processes here */
 	c = __child_find(pid);
 	if (!c) {
-		/* Not in the table means not waitable, full stop.
-		 *
-		 * There used to be a fallback here that reopened the pid with
-		 * NtOpenProcess and accepted the process if its
-		 * InheritedFromUniqueProcessId was us, to cover a child lost to an
-		 * allocation failure in __child_add.  It rested on the assumption
-		 * that an exited process with no handles left to it cannot be
-		 * opened at all -- true under Wine, false on Windows, where the
-		 * kernel process object outlives the last handle.  So on real
-		 * Windows waitpid() reopened an already-reaped child and handed
-		 * back its pid and exit status a second time, where POSIX requires
-		 * ECHILD: a reaped child has ceased to exist and is no longer a
-		 * child of this process (wait.html DESCRIPTION/ERRORS).
-		 * test/waitpid-overflow.c:143 caught it on the real-Windows CI leg
-		 * once wineserver was taught to keep exited pids openable too.
+		/* Not in the table means not waitable, full stop.  Reopening the
+		 * pid with NtOpenProcess (to cover a child lost to an allocation
+		 * failure in __child_add) is not a safe fallback: on real Windows
+		 * the kernel process object outlives its last handle, so an
+		 * already-reaped, no-longer-existing child can still be opened
+		 * and would hand back its pid and exit status a second time,
+		 * where POSIX requires ECHILD (a reaped child has ceased to exist
+		 * and is no longer a child of this process -- wait.html
+		 * DESCRIPTION/ERRORS).
 		 *
 		 * A child that never made it into the table is therefore
 		 * unwaitable, which is the honest outcome: __child_add failing is
