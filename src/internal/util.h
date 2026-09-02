@@ -516,6 +516,18 @@ int __util_crond_main(int argc, char **argv) __attribute__((nonnull(2)));
  * mailbox files, writes/appends to them, and reads stdin/a terminal. */
 int __util_mailx_main(int argc, char **argv) __attribute__((nonnull(2)));
 
+/* man(1p): finds a manual page by name/section across $MANPATH and
+ * formats it -- a real parser/formatter for the `man`-macro-package
+ * troff subset real-world pages overwhelmingly use (.TH, .SH/.SS,
+ * .TP/.IP, .PP/.LP, the B/I family, .RS/.RE, .nf/.fi), NOT a general
+ * troff/groff engine (out of scope by design -- see src/util/man.c's
+ * own header comment for the exact, cited boundary: which macros are
+ * supported, which degrade gracefully, and why gzip-compressed pages
+ * and real tbl/eqn content are unsupported rather than silently
+ * mis-rendered). Not __pure__: it reads real files under $MANPATH,
+ * queries the real terminal size, and may spawn a real pager. */
+int __util_man_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 #endif
 
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

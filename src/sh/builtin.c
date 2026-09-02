@@ -1159,6 +1159,17 @@ static int bi_mailx(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* man(1p) -- see src/util/man.c's own header comment for the real
+ * troff-macro-subset formatter this wraps. env_effect is 0: it only
+ * ever reads $MANPATH pages and writes to stdout/a pager, changing
+ * nothing XCU 2.12 lists as part of the shell execution environment. */
+static int bi_man(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_man(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_man_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* ==== the dispatcher ==================================================== */
 
 /* `special` is XCU 2.14's distinction, recorded because 2.8.1 hangs
@@ -1263,6 +1274,7 @@ static const struct sh_builtin builtins[] = {
 	{ "batch",   0, 0, bi_batch },
 	{ "crontab", 0, 0, bi_crontab },
 	{ "mailx",   0, 0, bi_mailx },
+	{ "man",     0, 0, bi_man },
 	{ 0, 0, 0, 0 }
 };
 

@@ -1,0 +1,54 @@
+.\" SPDX-FileCopyrightText: (C) 2026 Gavin John
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH CAT 1 "2026" "ntlibc" "ntlibc User Commands"
+.SH NAME
+cat \- concatenate and print files
+.SH SYNOPSIS
+.B cat
+.RB [ \-u ]
+.RI [ file ]\ .\|.\|.
+.SH DESCRIPTION
+.B cat
+reads
+.I file
+in sequence and writes their contents to standard output in the same
+sequence, byte for byte, with no line-ending translation of any kind.
+.PP
+If no
+.I file
+operand is given, standard input is used. If a
+.I file
+is
+.BR \- ,
+.B cat
+reads from standard input at that point in the sequence \(em so
+.B \-
+is not merely a synonym for "no operands"; it can appear anywhere in
+a mixed operand list and is honored positionally.
+.SH OPTIONS
+.TP
+.B \-u
+Write bytes to standard output without delay as each is read. Accepted
+as a real no-op: this implementation already writes every block it
+reads immediately, with no buffering layer above the raw
+.BR read(2)/write(2)
+pair
+.B \-u
+could disable.
+.SH OPERANDS
+.TP
+.I file
+A pathname of an input file. If
+.B \-
+is given, standard input is used at that point in the sequence.
+.SH EXIT STATUS
+.TP
+.B 0
+All input files were output successfully.
+.TP
+.B >0
+An error occurred; processing continues with the next operand.
+.SH SEE ALSO
+.BR echo (1),
+.BR tee (1),
+.BR head (1)
