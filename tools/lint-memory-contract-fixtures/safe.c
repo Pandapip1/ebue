@@ -155,6 +155,11 @@ void consume_counted_elements(const struct counted_elements *buffer)
 	consume_elements(buffer->data, buffer->count);
 }
 
+void consume_counted_element_bytes(const struct counted_elements *buffer)
+{
+	consume_bytes(buffer->data, buffer->count * sizeof *buffer->data);
+}
+
 struct fixture_record {
 	int first;
 	int second;
@@ -404,5 +409,17 @@ void fill_guarded_contracted_suffix(
 	if (offset > capacity) return;
 	size_t remaining = capacity - offset;
 	if (length > remaining) return;
+	memcpy(buffer + offset, source, length);
+}
+
+void fill_strictly_guarded_contracted_suffix(
+	char *restrict buffer withtok(fixture_writable_span(capacity)),
+	size_t capacity,
+	const char *source withtok(fixture_readable_span(length)), size_t offset,
+	size_t length)
+{
+	if (offset >= capacity) return;
+	size_t remaining = capacity - offset;
+	if (length >= remaining) return;
 	memcpy(buffer + offset, source, length);
 }
