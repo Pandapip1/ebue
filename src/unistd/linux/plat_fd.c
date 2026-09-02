@@ -66,7 +66,7 @@
  * project's own documentation culture, not a silent gap: seeking past
  * 2 GiB in a single file fails/wraps on THIS backend's __plat_seek_*()
  * below on i386 specifically, unlike aarch64/x86_64 where lseek(2)
- * already takes a native 64-bit offset. Fine for what this pass proves
+ * already takes a native 64-bit offset. Fine for what this file needs
  * (the CRT/dlopen pilots below never seek at all); a real fix is
  * _llseek(2), separate future work should a 32-bit-Linux consumer ever
  * need large-file seeks. */

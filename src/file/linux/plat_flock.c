@@ -50,8 +50,8 @@
  * freestanding build and collapses every failure to exactly -1 with
  * glibc's OWN errno rather than the raw kernel -errno this file's
  * is_sys_error()/`errno = (int)-ret` translation requires -- see
- * src/mman/linux/plat_mem.c's fix (commit 299458a) for the fuller
- * account, confirmed independently across six other Linux backends.
+ * src/mman/linux/plat_mem.c's fix for the fuller account, confirmed
+ * independently across six other Linux backends.
  * aarch64's syscall calling convention: x8 = syscall number, x0..x5 =
  * up to 6 arguments, result (or -errno in [-4095,-1]) in x0. */
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct

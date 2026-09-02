@@ -2,21 +2,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * getnameinfo(): https://pubs.opengroup.org/onlinepubs/9699919799/
- * functions/getnameinfo.html, the reverse of getaddrinfo(). This
- * pass's previous banner (include/netdb.h) declined this function
- * entirely for needing a reverse (address -> name) walk hosts.c did not
- * build and, for the non-numeric case, a PTR DNS query type this
- * resolver does not send. The first half is no longer true --
- * __hosts_lookup_reverse() (src/netdb/linux/hosts.c) is exactly that
- * walk, added this pass -- so the node side below does real, honest
- * /etc/hosts reverse resolution before ever falling back to numeric.
- * The second half remains a real, disclosed gap: no PTR query is sent,
- * so a name only in DNS (not in the local hosts file) still falls back
- * to its numeric form, exactly as if NI_NUMERICHOST had been requested
- * -- not a wrong answer (DESCRIPTION explicitly allows a numeric
- * fallback whenever the name "cannot be located", and only requires an
- * error when NI_NAMEREQD says fallback itself is unacceptable), just an
- * incomplete resolver.
+ * functions/getnameinfo.html, the reverse of getaddrinfo(). The node
+ * side below does real, honest /etc/hosts reverse resolution via
+ * __hosts_lookup_reverse() (src/netdb/linux/hosts.c) before ever
+ * falling back to numeric. One real, disclosed gap remains: no PTR DNS
+ * query is sent, so a name only in DNS (not in the local hosts file)
+ * still falls back to its numeric form, exactly as if NI_NUMERICHOST
+ * had been requested -- not a wrong answer (DESCRIPTION explicitly
+ * allows a numeric fallback whenever the name "cannot be located", and
+ * only requires an error when NI_NAMEREQD says fallback itself is
+ * unacceptable), just an incomplete resolver.
  *
  * The service side asks services.c's getservbyport() for a name (a
  * database that DOES fully exist, unlike DNS-only hostnames), so a

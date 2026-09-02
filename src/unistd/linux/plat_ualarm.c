@@ -12,11 +12,11 @@
  * after the number of microseconds specified by useconds. ... If the
  * interval argument is non-zero, a SIGALRM signal shall be generated
  * every interval microseconds after the first" -- ITIMER_REAL, in
- * different units. So, per this task's own instruction, this is built
- * directly on this library's own new setitimer(ITIMER_REAL, ...)
- * (src/time/linux/plat_itimer.c) rather than a second raw mechanism:
- * there is nothing ualarm() needs that setitimer() does not already
- * provide, real repeating delivery included.
+ * different units. This is built directly on this library's own
+ * setitimer(ITIMER_REAL, ...) (src/time/linux/plat_itimer.c) rather
+ * than a second raw mechanism: there is nothing ualarm() needs that
+ * setitimer() does not already provide, real repeating delivery
+ * included.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc

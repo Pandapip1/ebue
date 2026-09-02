@@ -27,53 +27,48 @@
  *     -- an abstract-namespace socket path, say -- is not the same
  *     kind of thing NT's object manager namespace is), not attempted
  *     here.
- *   - __plat_thread_start(): its only caller was
- *     __sig_delivery_init() in the NT-only sigdelivery.c (src/signal/
- *     nt/sigdelivery.c, after this migration's own relocation), to
+ *   - __plat_thread_start(): its only caller is __sig_delivery_init()
+ *     in the NT-only sigdelivery.c (src/signal/nt/sigdelivery.c), to
  *     launch the transport's own listener thread -- unreachable, and
  *     therefore not implemented, without the transport it exists to
  *     serve. src/signal/linux/sigdelivery.c's own real, portable
  *     __sig_delivery_init() needs no such thread at all.
  *
- * UPDATE, since the paragraph above was first written:
- * __plat_stop_event_create()/__plat_stop_event_probe() ARE now
- * implemented below, using a real (if scoped-down) design: the
- * filesystem namespace under /tmp, shared by every process on this
- * host exactly like \BaseNamedObjects is, plus O_CREAT|O_EXCL for
- * atomic create-vs-open detection and a MAP_SHARED mapping of a small
- * backing file so every process that opens the same path sees the
- * SAME futex word -- see src/thread/linux/plat_thread.c's own copy of
- * this same technique (named semaphores) for the fuller writeup of the
- * approach and its one disclosed race (a second opener's mmap can, in
- * principle, race the creator's ftruncate()).
- *
  * What IS implemented below is every function that is either required
- * (__plat_sigevent_create(), by this task's own instruction) or
- * genuinely NT-primitive-shaped-but-portable-in-spirit: event create/
- * wait/peek, signal.c's kill()-adjacent job-control primitives
- * (__plat_process_suspend{,_self}(), __plat_kill_{open,terminate}(),
- * __plat_segv_code()), and now the named stop-event pair -- none of
- * which touch the still-unimplemented pipe/mutant transport at all.
+ * (__plat_sigevent_create()) or genuinely NT-primitive-shaped-but-
+ * portable-in-spirit: event create/wait/peek, signal.c's kill()-adjacent
+ * job-control primitives (__plat_process_suspend{,_self}(),
+ * __plat_kill_{open,terminate}(), __plat_segv_code()), and the named
+ * stop-event pair -- __plat_stop_event_create()/__plat_stop_event_probe(),
+ * using a real (if scoped-down) design: the filesystem namespace under
+ * /tmp, shared by every process on this host exactly like
+ * \BaseNamedObjects is, plus O_CREAT|O_EXCL for atomic create-vs-open
+ * detection and a MAP_SHARED mapping of a small backing file so every
+ * process that opens the same path sees the SAME futex word (see
+ * src/thread/linux/plat_thread.c's own copy of this same technique --
+ * named semaphores -- for the fuller writeup of the approach and its
+ * one disclosed race: a second opener's mmap can, in principle, race
+ * the creator's ftruncate()) -- none of which touch the still-
+ * unimplemented pipe/mutant transport at all.
  *
- * UPDATE, since the paragraph above was first written: __plat_kill_open(),
- * __plat_process_suspend() and __plat_kill_terminate() below used to box
- * their process handle as fd+1, this file's OWN event-handle convention,
- * on the assumption that a process handle was always a fresh
- * pidfd_open(2) result. It is not: src/signal/signal.c's kill() also
- * feeds these functions `h` straight from struct __child's own .h field
- * for a tracked child, and src/process/linux/plat_process.c's box_pid()
- * sets that to the bare pid, no offset (that file's own banner states
- * the convention outright). Two functions sharing one argument,
- * disagreeing about its encoding, is exactly the bug that let
- * killpg/1-2.c (third_party/ltp's OPEN POSIX suite) leave an orphaned
- * child spinning in sigsuspend() forever: the SIGUSR1 meant to wake it
- * went through __plat_kill_terminate() with `h` misread as fd+1, handed
+ * __plat_kill_open(), __plat_process_suspend(), and
+ * __plat_kill_terminate() below box their process handle as the bare
+ * pid, matching src/process/linux/plat_process.c's own box_pid()
+ * convention (that file's own banner states it outright) -- NOT fd+1,
+ * this file's own event-handle convention elsewhere. Getting this
+ * wrong is a real, confirmed bug, not a theoretical one:
+ * src/signal/signal.c's kill() feeds these functions `h` straight from
+ * struct __child's own .h field for a tracked child, which box_pid()
+ * sets to the bare pid with no offset, so an fd+1 reading here would
+ * misdecode it. That mismatch is exactly what let killpg/1-2.c
+ * (third_party/ltp's OPEN POSIX suite) leave an orphaned child
+ * spinning in sigsuspend() forever: the SIGUSR1 meant to wake it went
+ * through __plat_kill_terminate() with `h` misread as fd+1, handed
  * pidfd_send_signal(2) a garbage descriptor number, failed EBADF, and
- * nothing ever retried. Fixed by making these three functions agree with
- * plat_process.c's own choice instead of keeping a second, silently
- * incompatible one -- see __plat_process_suspend()'s own comment for the
- * detail and the one hazard this reopens (already disclosed and already
- * accepted, for the identical reason, by plat_process.c's own banner).
+ * nothing ever retried. See __plat_process_suspend()'s own comment for
+ * the one hazard this convention reopens (already disclosed and
+ * already accepted, for the identical reason, by plat_process.c's own
+ * banner).
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -180,13 +175,11 @@ __plat_handle_t __plat_sigevent_create(int initially_signalled)
 }
 
 /* __plat_event_set() is declared in plat_signal.h but NOT defined here
- * -- it is ALSO declared in plat_thread.h and, per this migration's own
- * cross-session convention (see src/signal/nt/plat_signal.c's matching
- * comment), belongs to whichever session ports src/thread/'s Linux
- * backend. Defining it here too would be a second, colliding
- * definition of the same symbol -- an ODR violation the NT side already
- * hit once during its own migration and fixed by picking exactly one
- * owner per function; this file just uses it, as sigdelivery.c does. */
+ * -- it is ALSO declared in plat_thread.h and belongs to src/thread/'s
+ * Linux backend, not this file (see src/signal/nt/plat_signal.c's
+ * matching comment for the identical cross-file ownership rule on NT).
+ * Defining it here too would be a second, colliding definition of the
+ * same symbol; this file just uses it, as sigdelivery.c does. */
 
 void __plat_signal_wait(__plat_handle_t wake_event, int has_timeout, long long ticks) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; timeout flag and duration have distinct roles
 {
@@ -209,20 +202,18 @@ void __plat_signal_wait(__plat_handle_t wake_event, int has_timeout, long long t
 	 * NtWaitForSingleObject()/NtDelayExecution(), which understand the
 	 * absolute form natively), same class of disclosed, narrower-than-
 	 * the-full-contract gap as this file's own banner already lists for
-	 * the pipe/mutant transport. What is fixed here is a real,
-	 * confirmed bug, not a new gap: this function used to pass `ticks`
+	 * the pipe/mutant transport. The magnitude computation below guards
+	 * a real, confirmed bug, not a hypothetical one: passing `ticks`
 	 * straight through to the `ns = ticks * 100L` conversion below with
 	 * no sign handling at all, unlike src/thread/linux/plat_thread.c's
 	 * own __plat_wait_one() (`ticks = relative_ticks < 0 ?
 	 * -relative_ticks : relative_ticks`), which decodes the identical
-	 * convention correctly. A relative (negative) `ticks` therefore
-	 * produced a NEGATIVE ts.tv_sec/ts.tv_nsec handed straight to the
-	 * real nanosleep(2)/ppoll(2) syscalls below, which the kernel
-	 * rejects outright (EINVAL) instead of sleeping at all -- confirmed
-	 * with strace against a real sleep(1) call reaching this function
-	 * through __alertable_delay(): `nanosleep({tv_sec=-1, tv_nsec=0})
-	 * = -1 EINVAL`, immediately, every time, never once actually
-	 * sleeping. Silently ignoring that failure (this function has never
+	 * convention correctly, produces a NEGATIVE ts.tv_sec/ts.tv_nsec
+	 * handed straight to the real nanosleep(2)/ppoll(2) syscalls below,
+	 * which the kernel rejects outright (EINVAL) instead of sleeping at
+	 * all -- confirmed with strace against a real sleep(1) call reaching
+	 * this function through __alertable_delay(): `nanosleep({tv_sec=-1,
+	 * tv_nsec=0}) = -1 EINVAL`, immediately, every time, never once actually
 	 * checked the syscall's return value -- see the two bare
 	 * `syscall(SYS_nanosleep, ...)` statements below) turned every
 	 * timed __sig_wait_delivery() call into a zero-duration busy-spin:
@@ -317,36 +308,16 @@ int __plat_process_suspend_self(void)
  * belonging to event handles (__plat_sigevent_create() below): the two
  * happen to share a C type only because plat_signal.h/plat_process.h
  * inherited one universal `__plat_handle_t` typedef from the NT side,
- * where every kind of handle really is interchangeable.
+ * where every kind of handle really is interchangeable. See this
+ * file's own banner for why getting this wrong is a real, confirmed
+ * bug (killpg/1-2.c), not a theoretical one.
  *
- * This was box()/unbox() (fd+1) here too, silently assuming a real
- * pidfd_open(2) result -- wrong on every path that actually matters:
- * signal.c's kill() populates `h` from struct __child's own .h field
- * (src/process/children.c), set at fork() time by
- * src/process/linux/plat_process.c's box_pid(), which is a documented
- * no-op (that file's own banner: "the pid itself, cast straight
- * through"). Feeding a raw pid through this file's fd+1 unbox() reads
- * pid-1 as an fd number and hands it to pidfd_send_signal(2), which
- * fails EBADF against whatever garbage descriptor that number names --
- * confirmed live: killpg/1-2.c (third_party/ltp's OPEN POSIX suite)
- * left an orphaned, un-signalable grandchild spinning forever in its own
- * sigsuspend() wait loop, because the SIGUSR1 delivery that was supposed
- * to wake it silently failed this way and the parent that would have
- * retried already exited. __plat_process_resume() (SIGCONT,
- * src/process/linux/plat_process.c) was ALREADY correct against this
- * exact `h` -- it is the pid-domain owner, unbox_pid() there is a plain
- * cast -- which is what exposed the split: two functions sharing one
- * argument, silently disagreeing about what it meant.
- *
- * Fixed by making every process-handle-consuming function in THIS file
- * (this one, __plat_kill_open(), __plat_kill_terminate() below) agree
- * with plat_process.c's own choice instead of inventing a second one:
- * `h` is the raw pid. A pidfd is opened here, used once, and closed --
- * still real pidfd_send_signal(2) delivery (SIGSTOP is uncatchable
- * regardless, but pidfd_send_signal keeps the same pid-reuse-immunity
- * property __plat_kill_open()'s existence probe already relies on,
- * rather than quietly downgrading to plain kill(2) the way
- * __plat_process_resume() already, separately, does). */
+ * A pidfd is opened here, used once, and closed -- still real
+ * pidfd_send_signal(2) delivery (SIGSTOP is uncatchable regardless,
+ * but pidfd_send_signal keeps the same pid-reuse-immunity property
+ * __plat_kill_open()'s existence probe already relies on, rather than
+ * quietly downgrading to plain kill(2) the way __plat_process_resume()
+ * already, separately, does). */
 int __plat_process_suspend(__plat_handle_t h)
 {
 	long pid = (long)(int)(long)h;
@@ -363,9 +334,9 @@ int __plat_process_suspend(__plat_handle_t h)
  * here -- per this header's own banner, it belongs to
  * src/process/nt/plat_process.c on the NT side (src/process/children.c's
  * resume-a-stopped-child path independently needs the identical
- * primitive), so its Linux counterpart is this migration's process
- * subsystem session's to define, not this file's; defining it here
- * too would be the same ODR collision __plat_event_set() above avoids. */
+ * primitive) and src/process/linux/plat_process.c on this side, not
+ * this file; defining it here too would be the same ODR collision
+ * __plat_event_set() above avoids. */
 
 int __plat_kill_open(pid_t pid, int want_suspend_resume, __plat_handle_t *out) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; process ID and capability flag have distinct roles
 {
@@ -373,34 +344,18 @@ int __plat_kill_open(pid_t pid, int want_suspend_resume, __plat_handle_t *out) /
 	 * syscalls (kill(2), and, via src/misc/linux/plat_misc.c,
 	 * getpriority(2)/setpriority(2), all take a bare pid_t directly).
 	 *
-	 * This used to hand back a pidfd_open(2) handle, boxed fd+1, on the
-	 * reasoning that the result has to survive a later plat_fd.h
-	 * __plat_close() call from kill() (src/signal/signal.c:
-	 * `if (!c) __plat_close(h);`) which only does the right thing on a
-	 * real fd. That reasoning was sound for THAT one call site but broke
-	 * every other consumer of this same __plat_handle_t: kill()'s other
-	 * paths (sig_job_control(), __plat_kill_terminate() below) also
-	 * receive `h` from struct __child's own .h field for a TRACKED
-	 * child, which src/process/linux/plat_process.c's box_pid() sets to
-	 * the bare pid, no offset (that file's own banner states the
-	 * convention outright) -- so the same downstream functions were
-	 * being fed fd+1 on one path and a bare pid on the other, silently
-	 * disagreeing about what their own argument meant. See
-	 * __plat_process_suspend()'s updated comment above for the live
-	 * failure this produced (an orphaned, un-signalable child in
-	 * killpg/1-2.c) and the fix: every process-handle consumer in this
-	 * file now agrees with plat_process.c's choice -- `h` is the bare
-	 * pid -- rather than each function guessing its own encoding.
-	 *
-	 * That does reopen the __plat_close() hazard this used to dodge: a
-	 * bare pid handed to plat_fd.h's fd-domain close() reads pid-1 as an
-	 * fd number and closes whatever real descriptor happens to have that
-	 * value, if any. src/process/linux/plat_process.c's own banner
-	 * already accepts the identical risk for struct __child's .h field
-	 * (mark_children_inheritable()/__child_remove() call the same
-	 * fd-domain __plat_dup()/__plat_close() on a bare-pid handle today)
-	 * with the same disclosed reasoning: real pids on this host run past
-	 * a million (that file's own report), so pid-1 reliably lands on an
+	 * `h` here is the bare pid, matching plat_process.c's box_pid()
+	 * convention -- see this file's own banner for why (killpg/1-2.c).
+	 * That does reopen one hazard: a bare pid handed to plat_fd.h's
+	 * fd-domain close() (kill()'s `if (!c) __plat_close(h);` path,
+	 * src/signal/signal.c) reads pid-1 as an fd number and closes
+	 * whatever real descriptor happens to have that value, if any.
+	 * src/process/linux/plat_process.c's own banner already accepts the
+	 * identical risk for struct __child's .h field (mark_children_
+	 * inheritable()/__child_remove() call the same fd-domain
+	 * __plat_dup()/__plat_close() on a bare-pid handle today) with the
+	 * same disclosed reasoning: real pids on this host run past a
+	 * million (that file's own report), so pid-1 reliably lands on an
 	 * fd number this small a process never opened, and the close fails
 	 * silently EBADF rather than closing something real. A coincidence
 	 * of scale, not a proof, exactly as that banner says -- and now the
@@ -465,8 +420,8 @@ int __plat_kill_terminate(__plat_handle_t h, int exitcode)
 	 * does.
 	 *
 	 * `h` is the bare pid, same as __plat_process_suspend() above and
-	 * for the identical reason (see that function's updated comment) --
-	 * a fresh pidfd is opened, used once for the kill, and closed. */
+	 * for the identical reason (see that function's comment) -- a fresh
+	 * pidfd is opened, used once for the kill, and closed. */
 	long pid = (long)(int)(long)h;
 	long fd = syscall(SYS_pidfd_open, pid, 0L);
 	long ret;
@@ -508,7 +463,7 @@ int __plat_segv_code(void *addr)
 }
 
 /* ---- named stop-events, keyed by the filesystem namespace ----------------
- * See this file's own updated banner. `name`'s wide chars are ASCII by
+ * See this file's own banner. `name`'s wide chars are ASCII by
  * construction (signal.c's own stop_event_name() builds them from a
  * fixed prefix plus hex digits), so narrowing byte-by-byte is exact,
  * not an approximation. */
@@ -526,8 +481,8 @@ int __plat_segv_code(void *addr)
  * __plat_stop_event_create()/__plat_stop_event_probe()) always supply
  * signal.c's own stop_event_name()-built &us, never NULL. buf is left
  * unmarked -- writes into it go through buf[j++], guarded at every
- * step by `j < bufsz - 1`, the same "extent, not nullness" class of
- * fact 9be895e's own frexp precedent already distinguishes. */
+ * step by `j < bufsz - 1`, the same "extent, not nullness" distinction
+ * this tree's own ownership annotations already draw elsewhere. */
 static void stop_event_path(const struct _UNICODE_STRING *name, char *buf, size_t bufsz)
     __attribute__((nonnull(1)));
 static void stop_event_path(const struct _UNICODE_STRING *name, char *buf, size_t bufsz)

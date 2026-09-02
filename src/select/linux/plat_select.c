@@ -31,8 +31,8 @@
  * native Linux port of select()/poll() would collapse that whole
  * strategy into one ppoll(2) call across every requested descriptor at
  * once; that strategy-level rewrite belongs to select.c/poll.c, not to
- * this backend, and is explicitly out of scope for this migration (see
- * tools/linux-build-misc.sh's own scope note).
+ * this backend, and is explicitly out of scope here (see tools/
+ * linux-build-misc.sh's own scope note).
  *
  * __plat_handle_t here is a boxed fd, unboxed the same way
  * src/unistd/linux/plat_fd.c's own unbox() does (fd+1) -- the encoding

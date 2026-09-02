@@ -5,12 +5,11 @@
  * -- a real /etc/hosts(5) parser. See src/netdb/linux/netdb_internal.h
  * for this function's exact contract.
  *
- * UPDATE (this pass): getnameinfo() (src/netdb/linux/getnameinfo.c) and
- * gethostent() (src/netdb/linux/hostent.c) now need exactly the reverse
- * (address -> name) and sequential walks this file's own banner used to
- * say were out of scope -- both built below as small additions on top
- * of the forward scan, sharing its line-shape rules (parse_hosts_addr())
- * rather than re-deriving them.
+ * getnameinfo() (src/netdb/linux/getnameinfo.c) and gethostent()
+ * (src/netdb/linux/hostent.c) also need the reverse (address -> name)
+ * and sequential walks this file provides -- both built below as
+ * small additions on top of the forward scan, sharing its line-shape
+ * rules (parse_hosts_addr()) rather than re-deriving them.
  */
 #include <ctype.h>
 #include <stdio.h>
@@ -23,7 +22,7 @@
 #define HOSTS_LINE_MAX 512
 
 /* True if `tok` (a NUL-terminated whitespace-delimited field already
- * split out of the line) is a real IPv6 literal this pass does not
+ * split out of the line) is a real IPv6 literal this file does not
  * parse -- detected the cheap, sufficient way: a dotted-quad IPv4
  * address never contains ':', and nothing else legitimately appears
  * in /etc/hosts's address column. */

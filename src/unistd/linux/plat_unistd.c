@@ -20,17 +20,17 @@
  * happens only inside the NT backend's own __plat_unlink()/__plat_link()/
  * etc. bodies (src/unistd/nt/plat_unistd.c).
  *
- * __plat_chdir() and (as of the same fix open()'s own front door got,
- * src/fcntl/open.c) __plat_readlink() are the two exceptions to "none of
- * them calls anything NT-only": their front doors (chdir.c, link.c's
- * readlinkat()) used to call __vfs_resolve_at() (src/internal/vfs.c)
- * directly -- not __ntpath_at(), but still the same fixed-POSIX-
+ * __plat_chdir() and __plat_readlink() are the two exceptions to "none
+ * of them calls anything NT-only" in a different way: their front
+ * doors (chdir.c, link.c's readlinkat()) do NOT themselves call
+ * __vfs_resolve_at() (src/internal/vfs.c) -- the same fixed-POSIX-
  * namespace overlay machinery NT needs because it has no native concept
  * of `/`, `/dev`, `/dev/null` etc, and a future UEFI backend most likely
- * will too. That call moved into the NT backend's own __plat_chdir()/
- * __plat_readlink() bodies for the identical reason __plat_open() itself
- * absorbed __vfs_resolve_at() -- and Linux, unlike NT or a hypothetical
- * UEFI backend, has real native devices and a real native root, so it
+ * will too -- because that call lives inside the NT backend's own
+ * __plat_chdir()/__plat_readlink() bodies instead (src/unistd/nt/
+ * plat_unistd.c), the same place __plat_open() itself absorbs it. And
+ * Linux, unlike NT or a hypothetical UEFI backend, has real native
+ * devices and a real native root, so it
  * needs no overlay and no equivalent call at all: __plat_chdir() below
  * always reports __VFS_NONE via its *vfsout parameter (the plat_unistd.h
  * contract for a backend with nothing to report there), and
@@ -64,10 +64,12 @@
  * SCOPED OUT, deliberately: __plat_alarm_arm()'s SIGALRM/timer
  * machinery.  alarm()'s real semantics need a raw signal handler wired
  * through this process's signal-delivery machinery
- * (src/signal/sigdelivery.c's __raise_internal(), which a parallel,
- * separately-owned migration session is porting) -- reimplementing that
- * here risks exactly the duplicate-__plat_* collision the project's own
- * NT-migration history already hit twice.  __plat_alarm_arm() below
+ * (src/signal/sigdelivery.c's __raise_internal(), owned by
+ * src/signal/linux/plat_signal.c, not this file) -- reimplementing
+ * that here risks exactly the duplicate-__plat_* collision this tree's
+ * own one-owner-per-function discipline exists to avoid (see
+ * src/signal/linux/plat_signal.c's own comment on __plat_event_set()).
+ * __plat_alarm_arm() below
  * always returns -1 ("could not arm"), which is the exact degraded mode
  * sleep.c's own alarm() already tolerates ("There is nothing to report a
  * failed arm with, so a request the system silently could not honour
@@ -76,13 +78,11 @@
  * implemented, including __plat_time_now(), the same realtime clock
  * alarm()'s deadline math runs on.
  *
- * getpid()/gettid() are ALSO real here now, via __plat_getpid()/
- * __plat_gettid() below (plat_unistd.h gained both): they used to read
- * NT's TEB directly in src/unistd/getpid.c's own front door, never
- * going through plat_unistd.h at all -- a real gap noted when this file
- * was first written, closed once pthread_mutex.c's own port needed a
- * working getpid() to be reachable on this backend at all (see the
- * pthread front-door work's own commit for the fuller account).
+ * getpid()/gettid() are implemented here too, via __plat_getpid()/
+ * __plat_gettid() below: plat_unistd.h declares both, so
+ * src/unistd/getpid.c's front door reaches this backend rather than
+ * reading NT's TEB directly, giving pthread_mutex.c's own port a
+ * working getpid() reachable on this backend.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -317,9 +317,9 @@ void __plat_alarm_reset_after_fork(void)
 }
 
 /* ======================================================================
- * getpid.c: getpid()/gettid() are real here now (see plat_unistd.h's
- * own updated banner) -- neither can fail on Linux any more than
- * getppid(2) below can, so neither checks is_sys_error() at all.
+ * getpid.c: getpid()/gettid() are implemented here (see this file's own
+ * banner) -- neither can fail on Linux any more than getppid(2) below
+ * can, so neither checks is_sys_error() at all.
  * ====================================================================== */
 
 pid_t __plat_getpid(void)
@@ -576,8 +576,7 @@ uid_t __plat_detect_uid(void)
 	return (uid_t)raw_syscall(SYS_getuid, 0L, 0L, 0L, 0L, 0L, 0L);
 }
 
-/* getgid(2), same "cannot fail" contract as getuid(2) just above --
- * see plat_unistd.h's own updated banner for why this exists now. */
+/* getgid(2), same "cannot fail" contract as getuid(2) just above. */
 gid_t __plat_detect_gid(void)
 {
 	return (gid_t)raw_syscall(SYS_getgid, 0L, 0L, 0L, 0L, 0L, 0L);

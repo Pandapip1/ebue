@@ -48,8 +48,8 @@
  *     "so it compiles" but socket()'s own EPROTOTYPE check in
  *     src/socket/socket.c refuses anything but SOCK_STREAM). Building
  *     real UDP support into that shared, cross-platform front door --
- *     which would also need an NT body, explicitly out of scope for
- *     this pass -- is a separate, deliberately staged piece of work
+ *     which would also need an NT body, explicitly out of scope here
+ *     -- is a separate, deliberately staged piece of work
  *     (test/networking-audit.md sec 4-6); this resolver does not wait
  *     on it or duplicate its intent, exactly the same call
  *     src/dlfcn/linux/plat_dlfcn.c already made for raw mmap()/
@@ -130,9 +130,9 @@ static int is_sys_error(long ret)
 /* parse_resolv_conf(): "nameserver <ipv4>[:<port>]" lines, up to
  * MAX_NAMESERVERS of them. The "[:<port>]" suffix is NOT real
  * resolv.conf(5) syntax (a real nameserver line is always a bare
- * address, always port 53) -- it is this pass's own disclosed
+ * address, always port 53) -- it is this file's own disclosed
  * testability extension (see src/internal/nss_paths.h's banner for
- * the same TZ/HOSTALIASES-precedented reasoning), so this pass's
+ * the same TZ/HOSTALIASES-precedented reasoning), so this file's own
  * tests can point resolv.conf at a fixture DNS server bound to an
  * unprivileged ephemeral port without needing CAP_NET_BIND_SERVICE
  * for port 53. A token with more than one ':' is a real IPv6
