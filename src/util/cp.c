@@ -77,6 +77,7 @@
 #include <ftw.h>
 #include <libgen.h>
 #include "util.h"
+#include "ownership_stubs.h"
 
 /* ==== single regular file: open/read/write loop ======================== */
 
@@ -111,18 +112,19 @@ int __util_copy_regular_file(const char *src, const char *dst, int force)
 	}
 
 	while ((n = read(in, buf, sizeof buf)) > 0) {
-		char *p = buf;
-		while (n > 0) {
-			ssize_t w = write(out, p, (size_t)n);
-			if (w <= 0 || w > n) {
+		if ((size_t)n > sizeof buf) { errno = EIO; n = -1; break; }
+		__ownership_readable_span(buf, (size_t)n);
+		size_t off = 0;
+		while (off < (size_t)n) {
+			ssize_t w = write(out, buf + off, (size_t)n - off);
+			if (w <= 0 || (size_t)w > (size_t)n - off) {
 				if (w >= 0) errno = EIO;
 				__util_diagf("cp: error writing to '%s': %s\n", dst, strerror(errno));
 				(void)close(in);
 				(void)close(out);
 				return -1;
 			}
-			p += w;
-			n -= w;
+			off += (size_t)w;
 		}
 	}
 	if (n < 0) {

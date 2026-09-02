@@ -52,6 +52,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include "util.h"
+#include "ownership_stubs.h"
 
 int __util_tee_main(int argc, char **argv)
 {
@@ -111,29 +112,28 @@ int __util_tee_main(int argc, char **argv)
 	}
 
 	while ((n = read(STDIN_FILENO, buf, sizeof buf)) > 0) {
+		if ((size_t)n > sizeof buf) { errno = EIO; had_error = 1; break; }
+		__ownership_readable_span(buf, (size_t)n);
 		int j;
-		char *p = buf;
-		ssize_t left = n;
+		size_t off = 0;
 
-		while (left > 0) {
-			ssize_t w = write(STDOUT_FILENO, p, (size_t)left);
-			if (w <= 0 || w > left) {
+		while (off < (size_t)n) {
+			ssize_t w = write(STDOUT_FILENO, buf + off, (size_t)n - off);
+			if (w <= 0 || (size_t)w > (size_t)n - off) {
 				if (w >= 0) errno = EIO;
 				__util_diagf("tee: standard output: %s\n", strerror(errno));
 				had_error = 1;
 				break;
 			}
-			p += w;
-			left -= w;
+			off += (size_t)w;
 		}
 
 		for (j = 0; j < nfiles; j++) {
 			if (fds[j] < 0) continue;  /* already failed; skip, per DESCRIPTION */
-			p = buf;
-			left = n;
-			while (left > 0) {
-				ssize_t w = write(fds[j], p, (size_t)left);
-				if (w <= 0 || w > left) {
+			off = 0;
+			while (off < (size_t)n) {
+				ssize_t w = write(fds[j], buf + off, (size_t)n - off);
+				if (w <= 0 || (size_t)w > (size_t)n - off) {
 					if (w >= 0) errno = EIO;
 					__util_diagf("tee: %s: %s\n", paths[j], strerror(errno));
 					had_error = 1;
@@ -141,8 +141,7 @@ int __util_tee_main(int argc, char **argv)
 					fds[j] = -1;
 					break;
 				}
-				p += w;
-				left -= w;
+				off += (size_t)w;
 			}
 		}
 	}
