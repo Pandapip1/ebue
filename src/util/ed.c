@@ -691,7 +691,7 @@ static int parse_range(struct ed *ed, const char **pp, struct range *r)
 		skip_blanks(&p);
 		if (parse_simple_addr(ed, &p, eval_cur, &v2, &had2) < 0) return ED_ERR;
 		if (!had1 && !had2) { v1 = base1; v2 = ed->nlines; }
-		else if (had1 && !had2) { v1 = v1; v2 = v1; }
+		else if (had1 && !had2) { v2 = v1; }
 		else if (!had1) { v1 = base1; }
 		r->n = 2; r->a1 = v1; r->a2 = v2;
 		*pp = p;

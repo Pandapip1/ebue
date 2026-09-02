@@ -699,6 +699,18 @@ static int rewrite_mailbox(int fd, const char *label, const char *buf, const str
 	return 0;
 }
 
+/* True if the parsed command word cmd[0..cmdlen) is exactly `a`, or
+ * (if given) exactly `b` -- every mailx command below accepts both a
+ * one-letter short form and a full spelling (some, like p/print and
+ * t/type, accept two of each), so this replaces a repeated
+ * cmdlen/strncmp comparison per spelling with one readable call per
+ * accepted form. */
+static int cmd_is(const char *cmd, int cmdlen, const char *a, const char *b)
+{
+	if (cmdlen == (int)strlen(a) && !strncmp(cmd, a, (size_t)cmdlen)) return 1;
+	return b && cmdlen == (int)strlen(b) && !strncmp(cmd, b, (size_t)cmdlen);
+}
+
 /* Interactive command loop implementing exactly the minimum mandatory
  * subset this file's header comment names: p/print, d/delete,
  * u/undelete, n/next, h/headers, q/quit, x/exit, plus '=', '#' and '?'.
@@ -758,31 +770,29 @@ static int interactive_loop(int fd, const char *label, char *buf, size_t len, st
 				}
 			}
 
-			if ((cmdlen == 1 && (cmd[0] == 'p' || cmd[0] == 't')) ||
-			    (cmdlen == 5 && !strncmp(cmd, "print", 5)) || (cmdlen == 4 && !strncmp(cmd, "type", 4))) {
+			if (cmd_is(cmd, cmdlen, "p", "print") || cmd_is(cmd, cmdlen, "t", "type")) {
 				if (!n) { printf("No messages\n"); continue; }
 				if (target == (size_t)-1) { size_t ii; for (ii = 1; ii <= n; ii++) print_message(buf, &msgs[ii - 1]); continue; }
 				print_message(buf, &msgs[target - 1]);
 				cur = target;
-			} else if ((cmdlen == 1 && cmd[0] == 'n') || (cmdlen == 4 && !strncmp(cmd, "next", 4))) {
+			} else if (cmd_is(cmd, cmdlen, "n", "next")) {
 				if (cur == 0 || cur >= n) { printf("At end of mailbox\n"); continue; }
 				cur++;
 				print_message(buf, &msgs[cur - 1]);
-			} else if ((cmdlen == 1 && cmd[0] == 'd') || (cmdlen == 6 && !strncmp(cmd, "delete", 6))) {
+			} else if (cmd_is(cmd, cmdlen, "d", "delete")) {
 				if (!n) { printf("No messages\n"); continue; }
 				if (target == (size_t)-1) { size_t ii; for (ii = 0; ii < n; ii++) msgs[ii].deleted = 1; }
 				else msgs[target - 1].deleted = 1;
-			} else if ((cmdlen == 1 && cmd[0] == 'u') || (cmdlen == 8 && !strncmp(cmd, "undelete", 8))) {
+			} else if (cmd_is(cmd, cmdlen, "u", "undelete")) {
 				if (!n) { printf("No messages\n"); continue; }
 				if (target == (size_t)-1) { size_t ii; for (ii = 0; ii < n; ii++) msgs[ii].deleted = 0; }
 				else msgs[target - 1].deleted = 0;
-			} else if ((cmdlen == 1 && cmd[0] == 'h') || (cmdlen == 7 && !strncmp(cmd, "headers", 7))) {
+			} else if (cmd_is(cmd, cmdlen, "h", "headers")) {
 				size_t ii;
 				for (ii = 1; ii <= n; ii++) print_summary_line(buf, &msgs[ii - 1], ii, cur);
-			} else if ((cmdlen == 1 && cmd[0] == 'q') || (cmdlen == 4 && !strncmp(cmd, "quit", 4))) {
+			} else if (cmd_is(cmd, cmdlen, "q", "quit")) {
 				return rewrite_mailbox(fd, label, buf, msgs, n) == 0 ? 0 : 1;
-			} else if ((cmdlen == 1 && (cmd[0] == 'x')) || (cmdlen == 2 && !strncmp(cmd, "ex", 2)) ||
-			           (cmdlen == 4 && !strncmp(cmd, "exit", 4))) {
+			} else if (cmd_is(cmd, cmdlen, "x", 0) || cmd_is(cmd, cmdlen, "ex", "exit")) {
 				return 0;
 			} else if (cmdlen > 0 && isdigit((unsigned char)cmd[0])) {
 				char *endp;
