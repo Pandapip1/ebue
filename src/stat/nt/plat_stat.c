@@ -215,6 +215,19 @@ int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode) // NOLIN
 	return r;
 }
 
+/* NT has no OS-level umask concept of its own to push `m` out to --
+ * see plat_stat.h's own comment on this function for the full
+ * Linux-vs-NT contrast. Masking already happens once, in userspace,
+ * via __umask_get() at every NT front door that needs it (src/fcntl/
+ * nt/plat_fcntl.c's __plat_open(), __plat_mkdir() just below), which is
+ * exactly what chmod.c's umask_value -- the value `m` here already is
+ * -- already feeds. So there is nothing left for this call to do on
+ * NT: a documented no-op, not a stub. */
+void __plat_umask_apply(mode_t m)
+{
+	(void)m;
+}
+
 /* ---- mkdir (src/stat/mkdir.c) ------------------------------------------ */
 
 int __plat_mkdir(int dirfd, const char *path, mode_t mode)

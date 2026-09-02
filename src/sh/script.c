@@ -179,18 +179,18 @@ static const char *const reserved[] = {
  * are equally intrinsic.
  *
  * A name comes off this list exactly when src/sh/builtin.c grows a real
- * implementation of it, never before. `cd`, `:` and `exit` are already
- * gone (src/sh/builtin.c's dispatcher); `test`, `[`, `true` and `false`
- * were never on it, because on a POSIX system they are genuine external
- * utilities and letting PATH lookup fail honestly was the right answer
- * -- except that this platform has no /bin at all, which is why
- * src/sh/builtin.c builds them in too (see its own header).  Anything
- * still on this list is refused, up front, by name. */
+ * implementation of it, never before. `cd`, `:`, `exit` and `umask` are
+ * already gone (src/sh/builtin.c's dispatcher); `test`, `[`, `true` and
+ * `false` were never on it, because on a POSIX system they are genuine
+ * external utilities and letting PATH lookup fail honestly was the
+ * right answer -- except that this platform has no /bin at all, which
+ * is why src/sh/builtin.c builds them in too (see its own header).
+ * Anything still on this list is refused, up front, by name. */
 static const char *const unimplemented_builtins[] = {
 	".", "break", "continue", "eval", "exec", "export",
 	"readonly", "times", "trap", "unset",
 	"alias", "unalias", "bg", "fg", "jobs", "command", "getopts",
-	"hash", "read", "ulimit", "umask", "wait",
+	"hash", "read", "ulimit", "wait",
 	0
 };
 

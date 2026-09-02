@@ -235,9 +235,15 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode,
 /* The current umask (src/stat/chmod.c owns umask_value), as plain
  * unsigned rather than mode_t so this header does not need mode_t
  * defined -- not every includer has pulled in <sys/stat.h>/<fcntl.h>
- * first.  Callers that create a file apply it to the mode they were
- * given themselves, the way open()/creat()/mkdir() do, since umask()
- * only records the mask. */
+ * first.  On NT, which has no OS-level umask concept of its own,
+ * callers that create a file apply it to the mode they were given
+ * themselves, the way open()/creat()/mkdir() do (umask() also pushes
+ * every value it records out to the real kernel mask via
+ * __plat_umask_apply() -- src/internal/plat_stat.h -- but that is a
+ * documented no-op on NT); on Linux, the real kernel-level mask that
+ * call keeps in sync is exactly what the real openat()/mkdirat()/
+ * mknodat() syscalls already honor themselves, so no Linux caller
+ * needs to consult this at all. */
 unsigned __umask_get(void);
 /* The guts of unlink()/rmdir()/unlinkat(); isdir selects the rmdir
  * behaviour.  Returns 0, or -1 with errno. */

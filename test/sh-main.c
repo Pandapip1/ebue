@@ -49,6 +49,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 
 extern char **environ;
 int __spawn(const char *path, char *const argv[], char *const envp[]);
@@ -359,6 +360,9 @@ static void test_refuses_unimplemented_builtins(void)
 	 * the difference between "the list shrank" and "the list shrank
 	 * and the utility works". */
 	CHECK(run_c("cd .", 0) == 0);
+	/* `umask` came off this list too -- test_umask() below is the real
+	 * end-to-end proof it works, not just that it stopped erroring. */
+	CHECK(run_c("umask 022", 0) == 0);
 	CHECK(run_c("exit 3", 0) == 3);
 	CHECK(run_c(":", 0) == 0);
 	CHECK(run_c("true", 0) == 0);
@@ -593,6 +597,77 @@ static void test_stdin_script(void)
 	}
 }
 
+/* ---- umask (XCU umask(1p), 2.12's "file creation mask") ---------------
+ *
+ * The confirmed bug this closes: every at/batch job body
+ * src/util/atbatch.c generates begins with a plain `umask NNNN` line --
+ * at(1p)/batch(1p) both require preserving and restoring the submitting
+ * shell's umask in the job's execution environment -- so a shell with
+ * no `umask` builtin at all refused every single at/batch job on its
+ * very first line (src/sh/script.c's unimplemented_builtins preflight,
+ * already exercised above for `export`; the same mechanism used to
+ * catch `umask` too, and no longer does).
+ *
+ * These are the real end-to-end proof umask(1p) works, not just that
+ * the builtin stopped erroring: a bare `umask` reports this *process's*
+ * current mask in the exact "%04o\n" format umask.html's STDOUT section
+ * specifies, `umask NNNN` changes it for the rest of that same shell
+ * execution environment (2.12), and a file the same shell creates
+ * afterward via its own `>` redirection is really filtered by the new
+ * mask -- open.html DESCRIPTION: "mode is ANDed with the complement of
+ * umask". */
+static void test_umask(void)
+{
+	char buf[64];
+	struct stat st;
+
+	/* No mask operand: prints this fresh process's own current mask --
+	 * src/stat/chmod.c's documented default -- and changes nothing. */
+	CHECK(run_c("umask", 0) == 0);
+	slurp_into(OUTFILE, buf, sizeof buf);
+	CHECK(strcmp(buf, "0022\n") == 0);
+
+	/* Setting is silent (no -S), and a later bare `umask` in the same
+	 * shell execution environment reports the value just set. */
+	CHECK(run_c("umask 077; umask", 0) == 0);
+	slurp_into(OUTFILE, buf, sizeof buf);
+	CHECK(strcmp(buf, "0077\n") == 0);
+
+	/* -S: symbolic form, for the current mask and for one just set --
+	 * umask.html OPTIONS. */
+	CHECK(run_c("umask -S", 0) == 0);
+	slurp_into(OUTFILE, buf, sizeof buf);
+	CHECK(strcmp(buf, "u=rwx,g=rx,o=rx\n") == 0);
+	CHECK(run_c("umask 027; umask -S", 0) == 0);
+	slurp_into(OUTFILE, buf, sizeof buf);
+	CHECK(strcmp(buf, "u=rwx,g=rx,o=\n") == 0);
+
+	/* A bad operand is a real, diagnosed error: an invalid octal digit,
+	 * a symbolic-mode operand (a real, documented gap -- bi_umask()'s
+	 * own header comment, src/sh/builtin.c), and too many operands. */
+	CHECK(run_c("umask 9", 0) != 0);
+	CHECK(err_contains("umask"));
+	CHECK(run_c("umask u+rwx", 0) != 0);
+	CHECK(err_contains("umask"));
+	CHECK(run_c("umask 022 033", 0) != 0);
+	CHECK(err_contains("umask"));
+
+	/* The real proof: open.html's masking rule, exercised through this
+	 * shell's own `>` redirection (src/sh/execute.c's apply_redirs(),
+	 * O_CREAT mode 0666) rather than by calling umask()/open() directly
+	 * -- so this genuinely tests the builtin wired into the real shell
+	 * end to end, not the library function in isolation. */
+	unlink("umask-out1.txt");
+	CHECK(run_c("umask 077; > umask-out1.txt", 0) == 0);
+	CHECK(stat("umask-out1.txt", &st) == 0);
+	CHECK((st.st_mode & 0777) == 0600);
+
+	unlink("umask-out2.txt");
+	CHECK(run_c("umask 022; > umask-out2.txt", 0) == 0);
+	CHECK(stat("umask-out2.txt", &st) == 0);
+	CHECK((st.st_mode & 0777) == 0644);
+}
+
 /* Every fixture and capture file this suite creates, removed on the way
  * out.  tools/run-tests.py gives each test its own mktemp -d working
  * directory, so leaving them behind costs that path nothing -- but a
@@ -610,6 +685,7 @@ static void cleanup_artifacts(void)
 		"cap1.txt", "cap2.txt", "cap3.txt", "cap4.txt",
 		"cap5.txt", "preflight.txt", "script1.sh", "script2.sh",
 		"script3.sh", "script4.sh", "cap6.txt", "preflight2.txt",
+		"umask-out1.txt", "umask-out2.txt",
 		0
 	};
 	size_t i;
@@ -664,6 +740,7 @@ int main(int argc, char **argv)
 	test_refuses_reserved_words();
 	test_compound_commands_run();
 	test_refuses_unimplemented_builtins();
+	test_umask();
 	test_refuses_special_parameters();
 	test_positional_parameters_from_argv();
 	test_functions_through_the_binary();

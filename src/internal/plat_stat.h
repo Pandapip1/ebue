@@ -95,6 +95,23 @@ int __plat_chmod(__plat_handle_t h, mode_t mode);
  * resolution and is not platform-specific). 0/-1(errno). */
 int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode);
 
+/* Pushes `m` (already masked to the low 9 bits by chmod.c's umask())
+ * out to the REAL, OS-level file-creation mask, on a platform that has
+ * one of its own.  Linux does: a real kernel-level umask(2) syscall
+ * exists, and every raw openat(2)/mkdirat(2)/mknodat(2) call this
+ * backend's own Linux implementation makes already honors it directly
+ * (see src/stat/linux/plat_stat.c's own banner on why those calls pass
+ * `mode` UNMASKED and rely on exactly this) -- so calling this here is
+ * what makes a caller's umask() actually change a freshly created
+ * file's mode on Linux, without this library masking `mode` a second
+ * time in userspace on top of what the kernel already does.  NT has no
+ * OS-level umask concept of its own: masking already happens once, in
+ * userspace, at each front door that needs it, via __umask_get()
+ * (src/fcntl/nt/plat_fcntl.c's __plat_open(), this header's own
+ * __plat_mkdir() below) -- so NT's implementation is a documented
+ * no-op, not a stub waiting to be filled in. */
+void __plat_umask_apply(mode_t m);
+
 /* mkdirat(): creates the directory named by `path` (relative to
  * `dirfd`) with mode `mode` -- the RAW, not-yet-umask-applied POSIX
  * mode.  Unlike __plat_open() (which receives an already-umask-applied
