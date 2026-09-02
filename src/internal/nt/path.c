@@ -412,7 +412,10 @@ static int normalize_rel(WCHAR *w, size_t *np, int *trailing)
 			 * least as short as its source and i has passed a
 			 * separator), so this never overwrites the source. */
 			if (out) w[out++] = '\\';
-			memmove(w + out, w + i, len * sizeof(WCHAR));
+			{
+				size_t k;
+				for (k = 0; k < len; k++) w[out + k] = w[i + k];
+			}
 			out += len;
 			lastdot = 0;
 		}
@@ -531,9 +534,15 @@ static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
 			while (curn > 2 && cur[curn-1] == '\\') curn--;
 			joined = __malloc((curn - 2 + 1 + n + 1) * sizeof(WCHAR));
 			if (!joined) return -1;
-			memcpy(joined, cur + 2, (curn - 2) * sizeof(WCHAR));
+			{
+				size_t i;
+				for (i = 0; i < curn - 2; i++) joined[i] = cur[2 + i];
+			}
 			joined[curn - 2] = '\\';
-			memcpy(joined + curn - 1, dos, n * sizeof(WCHAR));
+			{
+				size_t i;
+				for (i = 0; i < n; i++) joined[curn - 1 + i] = dos[i];
+			}
 			bodyn = curn - 1 + n;
 			joined[bodyn] = 0;
 			body = joined;
@@ -548,7 +557,10 @@ static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
 	w[0] = '\\'; w[1] = '?'; w[2] = '?'; w[3] = '\\';
 	w[4] = letter; w[5] = ':'; w[6] = '\\';
 	bn = bodyn - 1;                 /* body[0] is the separator at w[6] */
-	memcpy(w + 7, body + 1, bn * sizeof(WCHAR));
+	{
+		size_t i;
+		for (i = 0; i < bn; i++) w[7 + i] = body[1 + i];
+	}
 	__free(joined);
 	if (normalize_rel(w + 7, &bn, trailing)) { __free(w); return -1; }
 	len = 7 + bn;
@@ -662,7 +674,10 @@ static int ntpath_at_impl(int dirfd, const char *path, struct __ntpath *out,
 			pl = strlen(path);
 			joined = __malloc(dl + 1 + pl + 1);
 			if (!joined) { __free(dir); errno = ENOMEM; return -1; }
-			memcpy(joined, dir, dl);
+			{
+				size_t i;
+				for (i = 0; i < dl; i++) joined[i] = dir[i];
+			}
 			/* "C:\\" already ends in one */
 			if (dl && dir[dl-1] != '\\' && dir[dl-1] != '/') joined[dl++] = '\\';
 			__ownership_writable_span(joined + dl, pl + 1);

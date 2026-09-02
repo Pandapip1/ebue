@@ -2043,12 +2043,14 @@ static char *slurp_fd(int fd, size_t *out_len)
 			nb = __malloc(nc);
 			if (!nb) { __free(buf); return 0; }
 			if (buf) {
-				memcpy(nb, buf, len);
+				size_t i;
+				for (i = 0; i < len; i++) nb[i] = buf[i];
 			}
 			__free(buf);
 			buf = nb;
 			cap = nc;
 		}
+		__ownership_writable_span(buf + len, 4096);
 		n = read(fd, buf + len, 4096);
 		if (n < 0) { __free(buf); return 0; }
 		if (n == 0) break;
