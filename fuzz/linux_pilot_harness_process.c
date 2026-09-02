@@ -57,9 +57,21 @@ int __fd_alloc(int lowest)
 	return -1;
 }
 
+/* Real fd.c's own version (src/internal/fd.c): frees getdents()'s
+ * lazily-allocated continuation buffer before a slot is wiped and
+ * reused -- needed here because both src/unistd/close.c and
+ * src/process/posix_spawn.c (this pilot's own front door) call it.
+ * __free() below is already a no-op stand-in for this pilot, so this
+ * just forwards to it like the real implementation does. */
+void __fd_release_dynamic(struct __fd *f)
+{
+	if (f->dbuf) { __free(f->dbuf); f->dbuf = 0; }
+}
+
 int __fd_install_at(int fd, HANDLE h, unsigned flags, int type)
 {
 	struct __fd *f = &__fds[fd];
+	__fd_release_dynamic(f);
 	memset(f, 0, sizeof *f);
 	f->h = h;
 	f->flags = flags;

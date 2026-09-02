@@ -17,6 +17,7 @@ int close(int fd)
 	int r;
 	if (!f) return -1;
 	__mq_fd_closed(fd);
+	__fd_release_dynamic(f);
 	r = __plat_close(f->h);
 	f->h = __PLAT_HANDLE_NULL;
 	return r;

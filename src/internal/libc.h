@@ -304,6 +304,20 @@ struct __fd {
 	unsigned char shm_mode_valid; /* mode below came from shm_open metadata */
 	unsigned short shm_mode;
 	long long pos;         /* the position of an O_APPEND/async-opened handle; -1 = use the kernel's */
+	/* getdents()'s own continuation state (src/dirent/getdents.c),
+	 * separate from a DIR's (dirent_internal.h's __dirstream, which
+	 * owns its buffer for its own lifetime): getdents() reads directly
+	 * off a bare fd with no such object to hold one, and a single
+	 * backend fill can legitimately decode into more records than the
+	 * caller's own buffer has room for -- see getdents.c's own comment
+	 * on why the leftover has to survive to the fd's NEXT getdents()
+	 * call rather than being re-fetched (the backend's read position
+	 * has already moved past it by then). dbuf is lazily __malloc()'d
+	 * on this fd's first getdents() call, NULL until then; freed by
+	 * __fd_release_dynamic() before this slot is ever repurposed. */
+	unsigned char *dbuf;
+	size_t dbufpos;         /* byte offset in dbuf of the next undecoded record */
+	size_t dbuflen;         /* bytes of dbuf holding real records; 0 = empty */
 };
 
 extern struct __fd __fds[FD_MAX];
@@ -327,6 +341,16 @@ int __fd_alloc(int lowest);                  /* a free slot >= lowest, or -1 (EM
 int __fd_install(HANDLE, unsigned flags, int type);    /* alloc + fill; -1 with errno */
 int __fd_install_at(int fd, HANDLE, unsigned flags, int type);
 struct __fd *__fd_get(int fd);               /* NULL with errno=EBADF */
+/* Frees whatever this slot owns on the heap on its own (getdents()'s
+ * dbuf -- see struct __fd's own comment) before the slot is wiped and
+ * repurposed for a new open, dup2() target, or posix_spawn() close
+ * action.  A no-op on a slot that never allocated one (dbuf is NULL,
+ * either never used with getdents() or already released), which is
+ * also true of every zero-initialized slot in __fds[] that has never
+ * been installed into at all. f is required: every call site below
+ * already holds a real &__fds[i] (an array element's address is never
+ * NULL) or an already-__fd_get()-checked pointer. */
+void __fd_release_dynamic(struct __fd *f) __attribute__((nonnull(1)));
 HANDLE __fd_handle(int fd);                  /* NULL with errno=EBADF */
 /* pos is required: both real bodies (src/internal/nt/fdpos.c's
  * `*pos = pi.CurrentByteOffset;` on the NT_SUCCESS path,

@@ -2,13 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * getdents: the GNU raw-directory-read call, taken directly off a fd
- * rather than a DIR.  Continuation across calls comes for free from the
- * backend's own enumeration cursor -- NT: RestartScan = FALSE (the
- * default state of a freshly opened handle) picks up from wherever the
- * kernel's own cursor on that handle left off; Linux: the directory fd's
- * own file-position cursor advances the same way a real getdents64(2)
- * caller's would -- so nothing needs to be remembered here between
- * calls.
+ * rather than a DIR.
  *
  * Record decoding goes through __plat_dir_decode_one() (src/internal/
  * plat_dirent.h), the same one src/dirent/readdir.c's __dirstream_next()
@@ -17,18 +11,21 @@
  * ordinary records straight from the backend (see dirent_internal.h) and
  * need no special handling here.
  *
- * One pre-existing limitation this refactor carries forward unchanged,
- * not introduced by it: a single call only ever decodes as much of ONE
- * __plat_dir_read() fill as fits in the caller's `out`/`size`. If that
- * fill holds more records than `out` has room for, the rest are not
- * returned by this or any later call -- the backend's cursor has already
- * advanced past all of them by the time this function sees the buffer.
- * True of the original NT-only implementation this replaces too (it
- * `break`s out of its own NextEntryOffset walk the same way); fixing it
- * would mean carrying a decode position across getdents() calls the way
- * DIR does, which is a real behavior change out of scope for a
- * redesign whose job is to keep every backend's observable behavior
- * exactly as it was, just decoded through a shared, portable step. */
+ * A single __plat_dir_read() fill can hold more records than a given
+ * call's `out`/`size` has room to decode into -- this project's own
+ * struct dirent is a fixed 280 bytes (dominated by d_name[256]), well
+ * above a real backend record's typical size (short names), so it is
+ * routine for one fill to decode into more bytes than a caller's own
+ * buffer holds. The backend's read position has already moved past that
+ * whole fill by the time this function sees it, so anything decodable
+ * but not yet handed to the caller has to survive to this fd's NEXT
+ * getdents() call rather than being re-fetched -- a fresh backend read
+ * at that point would only return whatever comes AFTER the fill already
+ * consumed, silently skipping it. That leftover lives in f->dbuf/
+ * dbufpos/dbuflen (struct __fd, src/internal/libc.h), the same
+ * "buffer plus a cursor into it" shape __dirstream_next() already uses
+ * for DIR, just owned by the fd table slot instead of an opendir()'d
+ * object since getdents() has no such object of its own. */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
  * public-header contract; transitive ABI declarations are intentional,
@@ -67,10 +64,7 @@ int getdents(int fd, struct dirent *out withtok(writable_span(size)),
 	size_t size)
 {
 	struct __fd *f = __fd_get(fd);
-	unsigned char buf[8192];
 	struct __dirent_raw r;
-	size_t bufpos, buflen;
-	ssize_t n;
 	size_t used = 0;
 
 	if (!f) return -1;
@@ -102,24 +96,47 @@ int getdents(int fd, struct dirent *out withtok(writable_span(size)),
 		return (int)used;
 	}
 
-	n = __plat_dir_read(f->h, buf, sizeof buf, 0);
-	if (n < 0) return -1;
-	if (n == 0)
-		return f->vfs_native ? append_missing(f, out, size) : 0;
+	if (!f->dbuf) {
+		f->dbuf = __malloc(__DIRBUF_SIZE);
+		if (!f->dbuf) { errno = ENOMEM; return -1; }
+		f->dbufpos = f->dbuflen = 0;
+	}
 
-	bufpos = 0;
-	buflen = (size_t)n;
-	while (used + sizeof(struct dirent) <= size &&
-	       __plat_dir_decode_one(buf, buflen, &bufpos, &r)) {
-		struct dirent *d = (struct dirent *)((char *)out + used);
-		memset(d, 0, sizeof *d);
-		d->d_ino = r.ino;
-		d->d_type = r.type;
-		d->d_reclen = sizeof *d;
-		memcpy(d->d_name, r.name, sizeof d->d_name);
-		if (f->vfs_native) f->vseen |= __vfs_mandatory_seen(f->vfs, d->d_name);
-		used += sizeof *d;
-		d->d_off = (off_t)used;
+	for (;;) {
+		if (used + sizeof(struct dirent) > size) break;
+		if (f->dbufpos >= f->dbuflen ||
+		    !__plat_dir_decode_one(f->dbuf, f->dbuflen, &f->dbufpos, &r)) {
+			/* Nothing left already fetched -- only now, with the
+			 * caller's own buffer confirmed to have room for at
+			 * least one more record (the check above), ask the
+			 * backend for more. Checking capacity first keeps this
+			 * fd's dbufpos from ever moving past a record this call
+			 * cannot actually deliver. */
+			ssize_t n = __plat_dir_read(f->h, f->dbuf, __DIRBUF_SIZE, 0);
+			if (n < 0) return used ? (int)used : -1;
+			if (n == 0) {
+				if (f->vfs_native) {
+					int m = append_missing(f,
+						(struct dirent *)((char *)out + used), size - used);
+					used += (size_t)m;
+				}
+				break;
+			}
+			f->dbuflen = (size_t)n;
+			f->dbufpos = 0;
+			continue;
+		}
+		{
+			struct dirent *d = (struct dirent *)((char *)out + used);
+			memset(d, 0, sizeof *d);
+			d->d_ino = r.ino;
+			d->d_type = r.type;
+			d->d_reclen = sizeof *d;
+			memcpy(d->d_name, r.name, sizeof d->d_name);
+			if (f->vfs_native) f->vseen |= __vfs_mandatory_seen(f->vfs, d->d_name);
+			used += sizeof *d;
+			d->d_off = (off_t)used;
+		}
 	}
 	return (int)used;
 }

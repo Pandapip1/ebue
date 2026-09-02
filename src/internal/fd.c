@@ -77,9 +77,15 @@ int __fd_alloc(int lowest)
 	return -1;
 }
 
+void __fd_release_dynamic(struct __fd *f)
+{
+	if (f->dbuf) { __free(f->dbuf); f->dbuf = 0; }
+}
+
 int __fd_install_at(int fd, HANDLE h, unsigned flags, int type) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = &__fds[fd];
+	__fd_release_dynamic(f);
 	memset(f, 0, sizeof *f);
 	f->h = h;
 	f->flags = flags;

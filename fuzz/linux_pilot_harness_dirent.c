@@ -52,9 +52,21 @@ int __fd_alloc(int lowest)
 	return -1;
 }
 
+/* Real fd.c's own version (src/internal/fd.c): frees getdents()'s
+ * lazily-allocated continuation buffer (struct __fd's own comment,
+ * libc.h) before a slot is wiped and reused. __free() below is already
+ * a no-op stand-in for this pilot (see this file's own banner), so this
+ * is too -- same "linker needs the symbol, not its real behavior"
+ * shape, not a second bump allocator to maintain. */
+void __fd_release_dynamic(struct __fd *f)
+{
+	if (f->dbuf) { __free(f->dbuf); f->dbuf = 0; }
+}
+
 int __fd_install_at(int fd, HANDLE h, unsigned flags, int type)
 {
 	struct __fd *f = &__fds[fd];
+	__fd_release_dynamic(f);
 	memset(f, 0, sizeof *f);
 	f->h = h;
 	f->flags = flags;
