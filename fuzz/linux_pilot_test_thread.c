@@ -40,8 +40,7 @@ extern int printf(const char *, ...);
 static int failures;
 
 #define CHECK(cond, msg) do { \
-	if (cond) printf("ok   - %s\n", msg); \
-	else { printf("FAIL - %s\n", msg); failures++; } \
+	if (!(cond)) { printf("FAIL - %s\n", msg); failures++; } \
 } while (0)
 
 /* ---- a minimal mutex, built on the real plat_thread.h primitives ------- */

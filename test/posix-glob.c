@@ -155,19 +155,15 @@
  * of this header hits an NT wall the way, say, RLIMIT_NOFILE does in
  * test/posix-sysmisc.c -- it is unimplemented, not unimplementable.
  *
- * ==================== Update: fnmatch.h/glob.h/wordexp.h closed =========
- *
- * A follow-up agent implemented all three (include/fnmatch.h,
- * include/glob.h, include/wordexp.h + src/fnmatch/, src/glob/,
- * src/wordexp/) and unfenced every UNIMPL clause below that its
- * implementation satisfies unmodified -- see each clause's own comment
- * for which stayed fenced and why (a couple turned out to need a
- * fixture this platform's filesystem/permission model cannot build,
- * not a further implementation gap). The two paragraphs above and the
- * "since none of these six headers exist" claim below are
- * intentionally left as written for regex.h/search.h/ftw.h, which are
- * still absent; they are simply no longer true of the three that got
- * closed.
+ * All six headers now have real implementations (include/fnmatch.h,
+ * include/glob.h, include/wordexp.h, include/regex.h, include/search.h,
+ * include/ftw.h, plus the matching src/ directories), so the "since none
+ * of these six headers exist" framing above and the genuine-gap-vs-N/A
+ * split by header no longer describe this file's actual coverage; most
+ * UNIMPL fences below are unfenced as a result. The fences that remain
+ * are either genuine N/A (a fixture this platform's filesystem/
+ * permission model cannot build) or a real BUG against a still-unmet
+ * clause -- see each fenced clause's own comment for which and why.
  */
 /* Needed for setenv()/unsetenv() (wordexp arith tests) and
  * clock_gettime()/CLOCK_MONOTONIC (regex interval-expansion timing

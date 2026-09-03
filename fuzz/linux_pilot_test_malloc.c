@@ -26,8 +26,7 @@ extern int printf(const char *, ...);
 static int failures, checks;
 #define CHECK(cond, msg) do { \
 	checks++; \
-	if (cond) printf("ok   - %s\n", msg); \
-	else { printf("FAIL - %s\n", msg); failures++; } \
+	if (!(cond)) { printf("FAIL - %s\n", msg); failures++; } \
 } while (0)
 
 static void fill(unsigned char *p, size_t n, unsigned char seed)
