@@ -281,6 +281,39 @@ const unsigned char *unguarded_pointer_recursion(const unsigned char *p)
 	return unguarded_pointer_recursion(p + 1); /* totality-expect */
 }
 
+/* Same cursor-struct shape as safe.c's scan_group(), minus its one
+ * dominating "sc->p++": no field of the unchanged sc argument ever
+ * advances, so this stays exactly as unproved as it was before
+ * fieldProgressRelation() existed. */
+struct scan_cursor_unguarded {
+	const char *p;
+};
+
+static void scan_group_unguarded(struct scan_cursor_unguarded *sc)
+{
+	if (*sc->p == '(')
+		scan_group_unguarded(sc); /* totality-expect */
+}
+
+/* Same shape again, but the dominating advance is followed by an
+ * untracked reset to an earlier position before the self-call --
+ * bodyMayWriteField() must still catch this as interference even though
+ * safeFieldAdvance() already approved an earlier statement as the
+ * witness for this exact call. */
+struct scan_cursor_reset {
+	const char *p;
+	const char *start;
+};
+
+static void scan_group_reset(struct scan_cursor_reset *sc)
+{
+	if (*sc->p == '(') {
+		sc->p++;
+		sc->p = sc->start;
+		scan_group_reset(sc); /* totality-expect */
+	}
+}
+
 struct vec {
 	unsigned n;
 	unsigned *v;

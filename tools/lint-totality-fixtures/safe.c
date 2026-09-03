@@ -654,6 +654,31 @@ unsigned guarded_else_recursion(unsigned n)
 		return guarded_else_recursion(n - 1);
 }
 
+/* A recursive-descent parser's cursor struct: ps is passed unchanged by
+ * pointer at every call (no scalar argument shrinks), but scan_group()'s
+ * own dominating "sc->p++" before its self-call is the real progress --
+ * see fieldProgressRelation() in TotalityChecker.cpp. scan_mark()'s call
+ * in between is a harmless distraction: it never touches ->p. */
+struct scan_cursor {
+	const char *p;
+	int depth;
+};
+
+static void scan_mark(struct scan_cursor *sc, int op)
+{
+	if (op < 0)
+		sc->depth = op;
+}
+
+static void scan_group(struct scan_cursor *sc)
+{
+	if (*sc->p == '(') {
+		sc->p++;
+		scan_mark(sc, 1);
+		scan_group(sc);
+	}
+}
+
 struct vec {
 	unsigned n;
 	unsigned *v;
