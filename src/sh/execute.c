@@ -1050,198 +1050,107 @@ static int exec_simple(const struct sh_command *cmd, int *status)
 
 /* ==== Subshells and brace groups (XCU 2.9.4, XCU 2.12) =================
  *
- * "( compound-list )" -- "Execute compound-list in a subshell
- * environment; see Shell Execution Environment [2.12]. Variable
- * assignments and built-in commands that affect the environment shall
- * not remain in effect after the list finishes." (2.9.4, "Grouping
- * Commands")
- *
- * "{ compound-list ; }" -- "Execute compound-list in the current
- * process environment." (2.9.4)
- *
- * 2.12 spells out what a "subshell environment" is: "A subshell
- * environment shall be created as a duplicate of the shell environment
- * ... Changes made to the subshell environment shall not affect the
- * shell environment. ... commands that are grouped with parentheses ...
- * shall be executed in a subshell environment." Of the objects 2.12
- * lists as part of that environment, this implementation's shell
- * language can actually change exactly four: shell parameters (set by
- * assignment, all of which -- see exec_assignment_only() above -- are
- * this process's real environ, there being no separate unexported-
- * variable table), the working directory (only via the `cd` builtin
- * just above), open files, and the file creation mask (only via the
- * `umask` builtin, src/sh/builtin.c's bi_umask()) -- saved and restored
- * around a subshell exactly like the working directory is, just below.
- * Traps, ulimit and aliases are not implemented at all yet (sh.h's
- * banner), so there is nothing to isolate there.
+ * "( list )" executes in a subshell environment (2.12): a duplicate whose
+ * changes don't affect the caller. "{ list; }" executes in the current
+ * process environment, changes and all. Of the objects 2.12 lists as
+ * part of that environment, this shell can actually change four: shell
+ * parameters (all in `environ`, via assignment), the working directory
+ * (`cd`), open files, and the file creation mask (`umask`). Traps,
+ * ulimit and aliases aren't implemented, so there's nothing to isolate there.
  *
  * ---- Standalone: save-and-restore, not fork() ---------------------------
  *
- * A brace group's own redirections and its body both need to run
- * without a fork() at all -- that part is identical in shape to
- * exec_simple() above (apply_redirs()/restore_fds() bracket a plain
- * __sh_exec_list()) and needs no environment isolation since 2.9.4 says
- * a brace group's changes *are* supposed to remain in effect.
+ * A brace group's own redirections and body run without fork() exactly
+ * like exec_simple() (apply_redirs()/restore_fds() bracket a plain
+ * __sh_exec_list()), needing no isolation since a brace group's changes
+ * are supposed to persist.
  *
- * A standalone subshell needs the same redirection bracketing, plus
- * genuine isolation of variables and cwd. The obvious tool is fork().
- * It is deliberately not used here. Two things earn that:
+ * A standalone subshell needs the same redirection bracketing plus real
+ * isolation of variables and cwd. fork() is deliberately not used:
+ *  1. Nothing in this shell's supported subset needs the *process*
+ *     boundary fork() buys, only the *state* isolation 2.12 asks for --
+ *     there's no job control, no real backgrounding, and no concurrent
+ *     reader of a subshell's output (command substitution captures to a
+ *     seekable temp file and only reads after __sh_exec_list() returns).
+ *     So nothing else in this process ever needs to run *while* the
+ *     subshell body runs.
+ *  2. fork()'s cost on this platform is real: src/process/fork.c's
+ *     RtlCloneUserProcess wrapper has already needed a fix for a cloexec
+ *     handle surviving a clone while its fd-table entry didn't, freezing
+ *     a handle NT then silently reissued elsewhere. Avoiding fork() here
+ *     keeps one fewer path through that wrapper to get right.
  *
- *  1. Nothing about this shell's supported subset needs the *process*
- *     boundary a fork() buys, only the *state* isolation 2.12 actually
- *     asks for. A standalone "( list )" blocks its caller until it
- *     finishes -- there is no job control, no backgrounding that
- *     actually backgrounds (SH_SEP_AMP still runs synchronously, see
- *     __sh_exec_list()'s comment), and no command substitution reading
- *     its output concurrently (command substitution captures to a
- *     seekable temporary file precisely so that the reader only starts
- *     once __sh_exec_list() here returns -- see __sh_cmdsub() below). So
- *     nothing else in this process ever needs to run *while* the
- *     subshell's body runs, which is the one thing save-and-restore
- *     cannot give you and a real child process can.
- *  2. fork()'s cost on this platform is real, and not just Wine's:
- *     src/process/fork.c's RtlCloneUserProcess wrapper has already
- *     needed a fix for a cloexec descriptor's handle surviving the
- *     clone while its *fd-table entry* did not, which froze a handle
- *     number NT then silently reissued to the next thing that asked,
- *     corrupting an unrelated process handle two frames away. That
- *     specific bug is fixed, but it is exactly the class of
- *     platform-specific sharp edge this file's header comment already
- *     chose to avoid entirely for redirections and pipelines
- *     ("Redirections never need a fork()") rather than merely work
- *     around. A save/restore subshell here keeps that same discipline:
- *     one fewer path through RtlCloneUserProcess to keep correct.
- *
- * What has to be saved, precisely, per 2.12's own list intersected with
- * what this shell can actually change:
- *   - Shell parameters: every name=value pair in `environ`, since (as
- *     exec_assignment_only() notes) this implementation gives shell
- *     variables and exported variables no separate existence -- a
- *     snapshot-and-restore of environ *is* a snapshot-and-restore of
- *     "shell parameters" here. Done via setenv()/unsetenv() only (see
- *     env_snapshot_restore() below), never by swapping __environ's
- *     storage directly, because src/env/setenv.c privately tracks which
- *     entries were added by putenv() (and must therefore never be
- *     freed) in a static table this file cannot see or replicate;
- *     driving the whole restore through the public API keeps that
- *     bookkeeping correct no matter what a caller outside this shell
- *     did to `environ` before ever reaching __sh_exec_list().
- *   - Working directory: getcwd()/chdir(), the only way it can change
- *     within this language (the `cd` builtin above).
- *   - File creation mask: __umask_get()/umask(), the only way it can
- *     change within this language (the `umask` builtin, src/sh/
- *     builtin.c's bi_umask()) -- a plain unsigned read-and-restore,
- *     with no allocation and no failure mode, unlike the cwd case just
- *     above.
- *   - Open files: exactly what apply_redirs()/restore_fds() already
- *     give every simple command for its own cmd->redirs -- bracketing
- *     the subshell's redirections (attached to the compound command
- *     itself) the same way already restores this process's descriptor
- *     table to what it was. Nothing *inside* the body can leave a
- *     lasting fd change either: every simple command's own redirections
- *     are already save/restore-protected the same way (exec_simple()),
- *     and there is no `exec` builtin (sh.h's banner) that could apply a
- *     redirection permanently. So this file's ordinary redir_state
- *     machinery, reused unchanged, is the entire "open files" story.
- * $? is not separately saved/restored at all: it is never a shell
- * variable stored anywhere this file can see (no $?  expansion exists
- * yet either), only the *out-parameter* every __sh_exec_*() already
- * threads through by reference, so "cmd; (false); echo after" getting
- * $?  in "after" from `cmd`'s status rather than the subshell's is
- * simply what *not* writing through `status` until the subshell's own
- * final status is known already gives, for free.
+ * What's saved, precisely, per 2.12's list intersected with what this
+ * shell can change:
+ *   - Shell parameters: every name=value in `environ`, via setenv()/
+ *     unsetenv() only (env_snapshot_restore() below), never by swapping
+ *     __environ's storage directly -- setenv.c privately tracks which
+ *     entries came from putenv() (and must never be freed) in a table
+ *     this file can't see or replicate.
+ *   - Working directory: getcwd()/chdir() (the only way `cd` changes it).
+ *   - File creation mask: __umask_get()/umask() (the only way `umask`
+ *     changes it) -- a plain read-and-restore, no allocation involved.
+ *   - Open files: apply_redirs()/restore_fds(), reused unchanged, bracket
+ *     the subshell's own redirections the same way a simple command's are.
+ * $? is not separately saved: it's never a shell variable, only the
+ * out-parameter every __sh_exec_*() threads by reference, so not writing
+ * through `status` until the subshell's final status is known already
+ * gives the right answer for free.
  *
  * ---- As one stage of a multi-command pipeline: still no fork() ---------
  *
- * Every other stage in a multi-command pipeline is a real
- * concurrently-running OS process connected through a real
- * (64KiB-buffered) pipe, precisely so that no stage's output has to fit
- * in memory and no stage can stall another. Running a compound-command
- * stage's body *in this process* while the rest of the pipeline is
- * still being wired up would risk exactly the self-inflicted hang this
- * file's header comment already warns a heredoc-via-pipe would risk,
- * and fork() would sidestep that -- but on this platform fork() means
- * src/process/fork.c's RtlCloneUserProcess wrapper, which stock Wine
- * (the interpreter CI's `test` legs actually run under -- see
- * .github/workflows/ci.yml) does not implement at all: not a slow path
- * or a missing edge case, but `wine: Call to unimplemented function
- * ntdll.dll.RtlCloneUserProcess, aborting`, which takes the whole
- * process down. sh.exe is not one of this project's `*-win.c` tests
- * (the ones the Makefile's TEST_RUN already excludes from every Wine
- * leg for exactly this reason -- see test/fork-win.c) precisely
- * because it is never expected to fork.
+ * Every other pipeline stage is a real concurrently-running process
+ * connected through a real 64KiB-buffered pipe. Running a compound-
+ * command stage's body *in this process* while the rest of the pipeline
+ * is still being wired up would risk the same self-inflicted hang this
+ * file's header warns a heredoc-via-pipe would risk, and fork() would
+ * sidestep it -- but on this platform fork() means RtlCloneUserProcess,
+ * which stock Wine (the CI `test` legs run under) does not implement at
+ * all: an unimplemented-function abort that takes the whole process
+ * down. sh.exe is therefore never expected to fork.
  *
- * So a compound-command stage's body never runs *while the rest of the
- * pipeline is still being wired up* in the first place.
- * __sh_exec_pipeline() below spawns every real (SH_CMD_SIMPLE) stage
- * first, and only *afterward* -- once every real process in
- * the pipeline already exists and is concurrently draining/filling its
- * own pipe ends -- runs each compound-command stage's body in this
- * process, left to right, via exec_group_stage_inline() below. By the
- * time any deferred stage's body runs, whichever neighbor stage
- * produces its input or consumes its output is either a real spawned
- * process (already running concurrently, so blocking past one pipe
- * buffer is fine -- the real process on the other end keeps draining/
- * filling it) or a deferred stage strictly to its own left, which (by
- * the same left-to-right order) has therefore already finished and
- * closed its end before this one starts reading. Either way there is
- * always something already able to make progress on the other end of
- * every pipe a deferred stage touches, so no fixed-size pipe buffer
- * can wedge this process against itself.
+ * So __sh_exec_pipeline() spawns every real (SH_CMD_SIMPLE) stage first,
+ * and only afterward -- once every real process already exists and is
+ * concurrently draining/filling its own pipe ends -- runs each compound-
+ * command stage's body in this process, left to right
+ * (exec_group_stage_inline() below). By the time any deferred stage's
+ * body runs, whichever neighbor produces its input or consumes its
+ * output is either a real spawned process already running concurrently,
+ * or a deferred stage strictly to its left that has already finished and
+ * closed its end. So no fixed-size pipe buffer can wedge this process
+ * against itself.
  *
- * That reasoning has exactly one hole: two (or more) compound-command
- * stages *directly adjacent* in the same pipeline, with no real
- * spawned stage between them (e.g. "{ a; } | { b; }"). Both sides are
- * deferred; whichever runs first is, by definition, not yet running
- * concurrently with the other, so if it writes (or waits to read) more
- * than one pipe buffer before its neighbor's turn comes, it blocks
- * forever with nothing on the other end to unblock it -- silently,
- * with no unimplemented-function trap to report it. Genuine
- * concurrency (another process, another thread) is the only fix, and
- * this file deliberately has neither available to it here. Rather than
- * risk that hang, __sh_exec_pipeline() below detects two adjacent
- * non-simple stages up front and refuses the whole pipeline via the
- * same "not yet supported" -1 convention this file's own header
- * comment above describes -- a clean,
- * documented failure a caller can report, never a hang or a Wine
- * abort. "( a ) | { b; }" and its permutations are therefore not yet
- * supported by this shell; every other placement of "( ... )"/"{ ...
- * }" in a pipeline, including any number of them separated by at least
- * one ordinary command, works exactly as before.
+ * The one hole: two (or more) compound-command stages *directly
+ * adjacent*, with no real spawned stage between them (e.g.
+ * "{ a; } | { b; }"). Neither side runs concurrently with the other, so
+ * whichever runs first can block forever writing/reading past one pipe
+ * buffer with nothing on the other end to unblock it -- silently, with
+ * no trap to report it. Genuine concurrency is the only fix, and this
+ * file has none available here, so __sh_exec_pipeline() detects two
+ * adjacent non-simple stages up front and refuses the whole pipeline via
+ * the usual -1 convention rather than risk the hang. "( a ) | { b; }"
+ * and its permutations are therefore not yet supported; any other
+ * placement, including any number of "(...)"/"{...}" separated by at
+ * least one ordinary command, works.
  *
- * 2.12's "each command of a multi-command pipeline is in a subshell
- * environment" is not qualified by "(...)" vs "{...}", so a deferred
- * brace-group pipeline stage still needs the same environ/cwd
- * save-and-restore this file's standalone-subshell case above uses --
+ * 2.12's subshell-environment rule for pipeline stages is not qualified
+ * by "(...)" vs "{...}", so a deferred brace-group stage still needs the
+ * same environ/cwd save-and-restore as a standalone subshell --
  * exec_group_stage_inline() applies it unconditionally (unlike
- * exec_group()'s is_subshell-gated version), same as a fork()-based
- * design would give every pipeline stage for free by virtue of being a
- * different process. See test_exec_group_pipeline_stage() in
- * test/sh-engine.c, which checks specifically that a brace group's assignment
- * does not leak out when used as a pipeline stage even though a
- * standalone brace group's does.
+ * exec_group()'s is_subshell-gated version). See
+ * test_exec_group_pipeline_stage() in test/sh-engine.c.
  */
 
-/* Snapshot of every name=value pair currently in `environ`, deep-copied
- * so it survives whatever setenv()/unsetenv()/putenv() calls the
- * subshell body makes to the live one. */
-/* A subshell environment (XCU 2.12) gets its own copy of the
- * positional parameters: "( set -- x )" must not renumber the caller's,
- * any more than "( cd / )" moves it.  2.12's object list does not name
- * them explicitly, but 2.9.1's "the environment of the shell" and the
- * whole point of a subshell -- changes to it "shall not affect the
- * shell execution environment" -- cover them, and every shell agrees.
+/* A subshell environment (2.12) gets its own copy of the positional
+ * parameters: "( set -- x )" must not renumber the caller's, any more
+ * than "( cd / )" moves it.
  *
  * take-then-replace rather than a dedicated copy routine: the take
  * leaves the live list empty and hands this frame the only pointer to
- * the caller's array, and __sh_params_replace() then builds the
- * subshell's own copy out of it.  One owner per array at every moment,
- * which is what makes nesting safe.  Returns -1 on OOM with the
- * caller's list already restored. */
-/* saved is required: `__sh_params_replace(saved->v, saved->n)` right
- * after the take dereferences it directly. fsaved is left unmarked --
- * this function only ever forwards it into __sh_funcs_take()/
- * __sh_funcs_copy()/__sh_funcs_install(), never touching it itself. */
+ * the caller's array, and __sh_params_replace() builds the subshell's
+ * own copy from it -- one owner per array at every moment, which makes
+ * nesting safe. Returns -1 on OOM with the caller's list already
+ * restored. */
 static int params_subshell_enter(struct sh_params *saved, struct sh_funcs *fsaved)
     __attribute__((nonnull(1)));
 static int params_subshell_enter(struct sh_params *saved, struct sh_funcs *fsaved)
@@ -1315,10 +1224,6 @@ static int env_snapshot_take(struct env_snapshot *es)
 	return 0;
 }
 
-/* es is required: `for (i = 0; i < es->n; i++)` is the first statement,
- * unconditional. name is left unmarked -- only ever forwarded to
- * strcmp(), never dereferenced directly here; env_snapshot_restore()
- * below only ever calls this with an already-truthy-checked cur[i]. */
 static int name_in_snapshot(const struct env_snapshot *es, const char *name)
     __attribute__((nonnull(1)));
 static int name_in_snapshot(const struct env_snapshot *es, const char *name)
@@ -1330,17 +1235,8 @@ static int name_in_snapshot(const struct env_snapshot *es, const char *name)
 
 /* Restores `environ` to exactly the state `es` recorded: every name the
  * body added gets unsetenv()'d, every name/value `es` remembers gets
- * setenv(..., 1)'d back (whether the body changed it, left it alone, or
- * deleted it) -- driven entirely through the public setenv()/getenv()/
- * unsetenv() API so src/env/setenv.c's own putenv()-ownership
- * bookkeeping (a static table this file has no access to) stays
- * correct, per this function group's header comment above. */
-/* es is required: the closing `for (i = 0; i < es->n; i++) setenv(...)`
- * is unconditional on every path through this function.
- *
- * Not fixed by this: the flagged `__environ[i]` subscript inside the
- * `if (n && cur)` block is the same global-`environ` residual as
- * build_child_envp()'s above, unrelated to es. */
+ * setenv(..., 1)'d back -- driven entirely through the public API so
+ * setenv.c's putenv()-ownership bookkeeping stays correct. */
 static void env_snapshot_restore(const struct env_snapshot *es)
     __attribute__((nonnull(1)));
 static void env_snapshot_restore(const struct env_snapshot *es)
@@ -1376,63 +1272,39 @@ static void env_snapshot_restore(const struct env_snapshot *es)
 	for (i = 0; i < es->n; i++) setenv(es->names[i], es->vals[i], 1);
 }
 
-/* Runs `cmd`'s own redirections (2.9.4: "each [may be followed by]
- * redirections ... shall apply to all the commands within the compound
- * command that do not explicitly override that redirection") bracketing
- * its body, and -- for SH_CMD_SUBSHELL only -- environ/cwd
- * save-and-restore around that per this function group's header
- * comment. Same -1/0 convention as every other __sh_exec_*() helper. */
+/* Runs `cmd`'s own redirections bracketing its body, and -- for
+ * SH_CMD_SUBSHELL only -- environ/cwd save-and-restore around that.
+ * Same -1/0 convention as every other __sh_exec_*() helper. */
 
 /* ==== Compound commands (XCU 2.9.4) ====================================
  *
- * `if`, `while`, `until`, `for` and function definitions are all
- * implemented below (exec_if()/exec_loop()/exec_for()/exec_funcdef()).
- * `case` alone is not: it still lexes as an ordinary WORD, so
- * script.c's preflight refuses it by name before this file ever sees
- * it.
+ * `if`, `while`, `until`, `for` and function definitions are implemented
+ * below. `case` alone is not: it still lexes as an ordinary WORD, so
+ * script.c's preflight refuses it by name before this file ever sees it.
  *
- * Three properties are shared by all four and are the reason they live
- * next to each other rather than in the executor's simple-command path:
+ * Three properties are shared by all four:
  *
- *  - **They run in this process, with no subshell.**  2.12's list of
- *    what a subshell environment scopes ("Grouping Commands" in 2.9.4
- *    is the construct that asks for one, via "( )") does not include
- *    the control-flow constructs, so a `cd` inside a `for` body moves
- *    the shell, and an assignment in an `if` branch survives the `fi`.
- *    exec_group() supplies the subshell semantics for "( ... )" and
- *    deliberately is not reused here.
- *
- *  - **The condition's status is not the construct's status.**  Every
- *    one of the four says so explicitly and differently -- an `if` with
- *    no branch taken is 0 "if none was executed", a `while` whose body
- *    never runs is 0 "if none was executed", a `for` over an empty word
- *    list is 0.  Each of these therefore keeps the condition's status in
- *    a local and only ever writes *status from a body.  Letting the
- *    condition fall through would make `if false; then ...; fi` report
- *    1, which is the single most common way to get this wrong.
- *
- *  - **A pending `exit` has to get out.**  These are loops and
- *    branches around __sh_exec_list(), which is exactly what sh.h's
- *    control-flow comment means by "however many nested lists" -- so
- *    each checks __sh_flow_pending() at every point it would otherwise
- *    iterate again or evaluate another condition.  Without that,
- *    `while true; do exit 0; done` never terminates: the body returns
- *    normally with the flag set and the loop asks the condition again.
+ *  - **They run in this process, with no subshell.** 2.12's subshell
+ *    scope doesn't include control-flow constructs, so a `cd` inside a
+ *    `for` body moves the shell, and an assignment in an `if` branch
+ *    survives the `fi`. exec_group() supplies the "( ... )" subshell
+ *    semantics and is deliberately not reused here.
+ *  - **The condition's status is not the construct's status.** An `if`
+ *    with no branch taken, a `while` whose body never runs, and a `for`
+ *    over an empty word list are all 0. Each keeps the condition's
+ *    status in a local and only ever writes *status from a body --
+ *    letting the condition fall through would make `if false; then
+ *    ...; fi` wrongly report 1.
+ *  - **A pending `exit` has to get out.** These are loops and branches
+ *    around __sh_exec_list(), so each checks __sh_flow_pending() at
+ *    every point it would otherwise iterate again or evaluate another
+ *    condition -- without that, `while true; do exit 0; done` never
+ *    terminates.
  */
 
-/* 2.9.4 "The if Conditional Construct": "The if compound-list shall be
- * executed; if its exit status is zero, the then compound-list shall be
- * executed and the command shall complete.  Otherwise, each elif
- * compound-list shall be executed, in turn ... Otherwise, the else
- * compound-list shall be executed."  Exit status: "the exit status of
- * the then or else compound-list that was executed, or zero, if none
- * was executed." */
-/* exec_if()/exec_loop()/exec_for() all share the same shape: `*status =
- * 0;` is each one's first statement (status required), immediately
- * followed by an unconditional `cmd->...` access with no branch between
- * them (cmd required). exec_compound() below is the only caller of all
- * three, always with a real cmd and the same status it was itself
- * handed. */
+/* 2.9.4: an `if` with no branch taken, or a `while`/`for` whose body
+ * never runs, exits 0 -- why *status starts at 0 and is only ever
+ * written by a body. */
 // NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_if(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
@@ -1453,15 +1325,7 @@ static int exec_if(const struct sh_command *cmd, int *status)
 	return 0;
 }
 
-/* 2.9.4 "The while Loop": "compound-list-1 shall be executed, and if it
- * has a non-zero exit status, the while command shall complete.
- * Otherwise, the compound-list-2 shall be executed, and the process
- * shall repeat."  "The until Loop" is the same sentence with the test
- * inverted -- "if it has a zero exit status, the until command
- * completes" -- which is `cmd->u.loop.until`.  Exit status for both: "the exit
- * status of the last compound-list-2 executed, or zero if none was
- * executed", which is why *status starts at 0 and is only ever written
- * by the body. */
+/* `until` is `while` with the test inverted (`cmd->u.loop.until`). */
 // NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_loop(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
@@ -1486,56 +1350,29 @@ static int exec_loop(const struct sh_command *cmd, int *status)
 /* 2.9.4 "The for Loop": "the list of words following in shall be
  * expanded to generate a list of items.  Then, the variable name shall
  * be set to each item, in turn, and the compound-list executed each
- * time.  If no items result from the expansion, the compound-list shall
- * not be executed."  Exit status: "the exit status of the last command
- * that executes.  If there are no items, the exit status shall be
- * zero."
+ * time; zero items runs it zero times, exit status 0.
  *
  * The words are expanded exactly the way a simple command's arguments
- * are -- one wordexp() per source word with WRDE_APPEND -- so the item
- * list is whatever that call produces and this file never tokenises
- * anything itself (see this file's header on why that reuse is the
- * point).  "for f in *.c" therefore iterates the matched files without
- * being a special case here.
+ * are -- one wordexp() per source word with WRDE_APPEND -- so "for f in
+ * *.c" iterates the matched files without being a special case here.
+ * One XCU 2.6 rule this consequently does *not* deliver (belongs to
+ * wordexp.c, which states it): a parameter expansion's result is not
+ * field-split, so "for f in $LIST" is one item, not $LIST's fields --
+ * matching what `cmd $LIST` already does, deliberately not special-cased
+ * here. test/sh-engine.c pins it. (Empty-field deletion does work,
+ * though: "for f in $UNSET" runs zero times, not once with an empty item.)
  *
- * One of XCU 2.6's rules is consequently still *not* delivered, and it
- * belongs to src/wordexp/wordexp.c, which states it: the result of a
- * parameter expansion is not field-split, so "for f in $LIST" is one
- * item and not $LIST's fields.  It is not worked around here on
- * purpose: `cmd $LIST` goes through the identical call and gets the
- * identical answer, and a `for` that disagreed with a simple command
- * about what a word expands to would be a worse defect than one
- * consistent documented gap.  test/sh-engine.c pins it, so it inverts
- * visibly if wordexp() grows the behaviour.  (Empty-field deletion per
- * 2.6 already works here, though: "for f in $UNSET" runs the body zero
- * times, not once with an empty item.)
+ * Setting `name` is setenv(), the only variable store this shell has, so
+ * the loop variable is *exported* to children -- the same pre-existing
+ * deviation `X=1; cmd` already has, not a new one.
  *
- * Setting `name` is setenv(), which is what every assignment in this
- * shell already is: the only variable store any expansion here can see
- * is the real `environ` -- there is no separate unexported-variable
- * table in this shell.  The loop variable is therefore *exported* to
- * children, where a real shell would leave it unexported unless
- * something exported it.  That is the
- * pre-existing deviation the whole variable story has, not a new one
- * this construct introduces -- `X=1; cmd` already behaves the same way
- * -- and it is stated here rather than left for someone to find.
- *
- * Every one of those setenv()s is therefore a real assignment to
- * `cmd->u.forloop.name`, so it gets the same read-only check
- * exec_assignment_only() above uses (same __sh_readonly_is() call, same
- * diagnostic). `cmd->u.forloop.name` does not change between iterations,
- * so once it is marked read-only the
- * very first would-be setenv() rejects it; there is no "run the rest of
- * the items anyway" recovery to fall back to the way there is when
- * multiple *different* names share one assignment-only command, so the
- * whole `for` completes immediately with *status left nonzero and its
- * body never entered -- matching bash/dash, which likewise run zero
- * iterations of `for readonly_var in ...` rather than skipping just the
- * first. An empty item list (no positional parameters, or `for f in ;`)
- * still exits 0 with no diagnostic either way: the check only fires at
- * the point an item would actually be assigned, so a loop that was
- * always going to run zero iterations behaves as if `name` were never
- * read-only at all -- also matching bash/dash. */
+ * Each setenv() gets the same read-only check exec_assignment_only()
+ * uses. Since `name` doesn't change between iterations, marking it
+ * read-only rejects the very first assignment and the whole `for`
+ * completes immediately with *status nonzero and its body never entered
+ * -- matching bash/dash. An empty item list still exits 0 with no
+ * diagnostic: the check only fires where an item would actually be
+ * assigned. */
 // NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_for(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
@@ -1549,17 +1386,10 @@ static int exec_for(const struct sh_command *cmd, int *status)
 
 	*status = 0;
 
-	/* 2.9.4: "Omitting: in word ... shall be equivalent to: in "$@"".
-	 * This shell has positional parameters (XCU 2.5.1, src/sh/param.c),
-	 * so the equivalence is delivered directly here.
-	 *
-	 * It reads src/sh/param.c's list directly rather than expanding
-	 * the literal text "\"$@\"" through __wordexp_sh().  The two agree
-	 * -- that is the point of "$@" retaining its fields -- but going
-	 * through the expander would make a `for f; do` depend on the
-	 * quoting of a string this file synthesised, where reading the
-	 * list says what 2.9.4 says: one iteration per positional
-	 * parameter, in order, whatever bytes are in it. */
+	/* 2.9.4: "Omitting: in word" is equivalent to "in \"$@\"". Reads
+	 * param.c's list directly rather than expanding the literal text
+	 * "\"$@\"" through __wordexp_sh(), so a `for f; do` doesn't depend on
+	 * the quoting of a string this file would have to synthesize. */
 	if (!cmd->u.forloop.have_in) {
 		int n = __sh_param_count(), k;
 		for (k = 1; k <= n; k++) {
@@ -1601,33 +1431,21 @@ static int exec_for(const struct sh_command *cmd, int *status)
 	return rc;
 }
 
-/* The body of any compound command, run in this process.  Both callers
- * -- exec_group() for a standalone "(...)"/"{...}"/if/while/for, and
- * exec_group_stage_inline() for one as a pipeline stage -- route
- * through one dispatcher rather than reading cmd->u.group.body directly, so a
- * kind added later cannot be wired into one of those two paths and
- * silently forgotten in the other; the default arm makes that a
- * reported -1 rather than a silent "ran an empty list, exit 0". */
-/* 2.9.5 Exit Status: "The exit status of a function definition shall be
- * zero if the function was declared successfully; otherwise, it shall be
- * greater than zero."  Nothing is expanded here -- 2.9.5: "When the
- * function is declared, none of the expansions in wordexp shall be
- * performed on the text in compound-command or io-redirect; all
- * expansions shall be performed as normal each time the function is
- * called" -- which is exactly what storing the raw source text
- * delivers, rather than being a rule this file has to remember. */
-/* cmd is required: `__sh_func_define(cmd->u.funcdef.name,
- * cmd->u.funcdef.func_text)` is this function's first statement. status is
- * required too, and more
- * strongly than most of this family: both of this function's returns
- * write through it (there is no "-1, status untouched" path here at
- * all). */
+/* The body of any compound command, run in this process. Both callers --
+ * exec_group() for a standalone "(...)"/"{...}"/if/while/for, and
+ * exec_group_stage_inline() for one as a pipeline stage -- route through
+ * one dispatcher rather than reading cmd->u.group.body directly, so a
+ * kind added later can't be wired into one path and silently forgotten
+ * in the other; the default arm reports -1 rather than silently running
+ * an empty list. */
+/* 2.9.5: a function definition exits 0 if declared successfully. Nothing
+ * is expanded here -- storing the raw source text is exactly what
+ * "expansions happen each time the function is called" requires. */
 static int exec_funcdef(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
 static int exec_funcdef(const struct sh_command *cmd, int *status)
 {
 	if (__sh_func_define(cmd->u.funcdef.name, cmd->u.funcdef.func_text) < 0) {
-		/* Function definition already failed and fixes status at one. */
 		(void)fprintf(stderr, "%s: cannot define function\n", cmd->u.funcdef.name);
 		*status = 1;
 		return 0;
@@ -1636,11 +1454,6 @@ static int exec_funcdef(const struct sh_command *cmd, int *status)
 	return 0;
 }
 
-/* cmd is required: `switch (cmd->kind)` is the first statement. status
- * is left unmarked -- this function never touches it directly itself,
- * only forwards it to whichever of exec_funcdef()/exec_if()/exec_loop()/
- * exec_for()/__sh_exec_list() the switch selects, each of which states
- * its own contract. */
 // NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_compound(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1)));
@@ -1706,14 +1519,11 @@ static int exec_group(const struct sh_command *cmd, int *status)
 	rc = exec_compound(cmd, status);
 
 	if (is_subshell) {
-		/* "( exit 3 )" exits *the subshell*, not the shell (2.9.4
-		 * runs the compound-list in a subshell environment, 2.14's
-		 * `exit` exits "the shell" it is running in).  The status is
-		 * already in *status; consuming the pending unwind here is
-		 * what keeps the rest of the caller's program running -- and
-		 * a brace group deliberately does not do this, because
-		 * "{ exit 3; }" runs "in the current process environment"
-		 * (2.9.4) and really is the shell exiting. */
+		/* "( exit 3 )" exits *the subshell*, not the shell; consuming the
+		 * pending unwind here keeps the rest of the caller's program
+		 * running. A brace group deliberately doesn't do this, since
+		 * "{ exit 3; }" runs in the current process environment and
+		 * really is the shell exiting. */
 		if (__sh_flow_pending()) __sh_flow_clear();
 		params_subshell_leave(&ps, &fs);
 		env_snapshot_restore(&es);
@@ -1727,74 +1537,43 @@ static int exec_group(const struct sh_command *cmd, int *status)
 
 /* ==== Command substitution (XCU 2.6.3) =================================
  *
- * "The shell shall expand the command substitution by executing
- * command in a subshell environment (see Shell Execution Environment)
- * and replacing the command substitution (the text of command plus the
- * enclosing "$()" or backquotes) with the standard output of the
- * command, removing sequences of one or more <newline> characters at
- * the end of the substitution." (2.6.3)
+ * 2.6.3: run command in a subshell environment and replace the
+ * substitution with its standard output, trailing newlines stripped.
  *
- * Two halves, and both of them already exist in this file:
- *
- *  - "in a subshell environment" is the *same* environment 2.12
- *    requires for "( list )", which exec_group() above already
- *    implements as environ/cwd snapshot-and-restore plus the ordinary
- *    redir_state bracketing (see that function group's header comment
- *    for why save-and-restore rather than fork(), and for the exact
- *    intersection of 2.12's object list with what this shell's language
- *    can actually change). This function reuses env_snapshot_take()/
- *    env_snapshot_restore()/save_fd()/restore_fds() unchanged rather
- *    than growing a second, subtly different notion of isolation.
- *
- *  - "with the standard output of the command" is the one genuinely new
- *    piece: the list's stdout has to end up somewhere this process can
- *    read back, rather than at an fd a spawned child would inherit
- *    unchanged.
+ * "Subshell environment" reuses exec_group()'s environ/cwd
+ * snapshot-and-restore plus redir_state bracketing unchanged, rather
+ * than growing a second notion of isolation. The genuinely new piece is
+ * "standard output of the command": the list's stdout has to end up
+ * somewhere this process can read back.
  *
  * ---- Why a temporary file and not a pipe -----------------------------
  *
- * A pipe is the obvious capture, and it is wrong here for exactly the
- * reason this file's here-document comment already gives for the
- * mirror-image case: __sh_exec_list() runs to completion *in this
- * process* before this function ever gets control back, so there is
- * nobody to drain a pipe while the substituted commands are filling it.
- * A substitution producing more than one pipe buffer (65536 bytes --
- * src/unistd/pipe.c) would wedge this process against itself forever,
- * silently. Draining it concurrently needs a second thread or a fork(),
- * and this file's "still no fork()" discussion above records at length
- * why fork() is deliberately not used anywhere in this executor (stock
- * Wine, which CI's `test` legs run under, aborts on
- * ntdll.RtlCloneUserProcess).
+ * __sh_exec_list() runs to completion *in this process* before this
+ * function regains control, so nobody could drain a pipe while the
+ * substituted commands fill it -- a substitution producing more than one
+ * pipe buffer (65536 bytes) would wedge this process against itself
+ * silently. Draining concurrently needs a thread or a fork(), and this
+ * file deliberately uses neither (see the "still no fork()" discussion
+ * above).
  *
- * tmpfile() (src/stdio/misc.c) has neither problem: it is seekable, so
- * the writers finish first and the read happens after, with no ordering
- * requirement and no size limit beyond the filesystem's; and it is
- * created-then-unlinked, so the capture is gone the moment the last
- * handle to it closes even if this process dies mid-substitution.
+ * tmpfile() has neither problem: seekable, so writers finish before the
+ * read happens, with no size limit beyond the filesystem's; and
+ * created-then-unlinked, so the capture is gone once the last handle
+ * closes even if this process dies mid-substitution. Trade-off: the
+ * output makes a round trip through %TEMP% instead of staying in
+ * memory, and isn't visible until the whole list finishes -- which costs
+ * nothing, since 2.6.3's result is the complete output anyway.
  *
- * The trade-off accepted: the substituted command's output makes a
- * round trip through %TEMP% rather than staying in memory, so a
- * substitution needs a writable temp directory (everything else in this
- * file needs only a writable cwd), and the output is not visible to
- * anything until the whole list finishes. The latter costs nothing --
- * 2.6.3's result is the *complete* output, so it could not be produced
- * incrementally anyway -- and the former is the same dependency
- * here-documents already have.
- *
- * ---- What is NOT isolated -------------------------------------------
- *
- * fd 2 is deliberately left alone: 2.6.3 replaces the substitution with
- * the command's *standard output*, and every shell lets a substituted
- * command's stderr through to the shell's own, which is what makes a
- * failing "$(...)" say why.
+ * fd 2 is deliberately left alone: only stdout is captured, so a
+ * substituted command's stderr passes through to the shell's own, which
+ * is what makes a failing "$(...)" say why.
  */
 
 /* Reads everything left in `fd` into a freshly __malloc'd,
- * NUL-terminated buffer and stores the exact captured byte count in
+ * NUL-terminated buffer, storing the exact captured byte count in
  * `out_len`. Returns NULL on OOM or a read error. A capture containing
- * null bytes comes back truncated at the first one as far as any string
- * caller can see -- 2.6.3: "If the output contains any null bytes, the
- * behavior is unspecified." */
+ * null bytes reads truncated at the first one to any string caller --
+ * 2.6.3 leaves that behavior unspecified. */
 static char *slurp_fd(int fd, size_t *out_len)
 {
 	char *buf = 0;
@@ -1900,20 +1679,13 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	saved_last = sh_last_status;
 	rc = __sh_exec_list(list, &st);
 
-	/* 2.6.3 runs the substituted command "in a subshell environment",
-	 * so "$(exit 3)" is a substitution whose status is 3, never the
-	 * calling shell exiting. */
+	/* 2.6.3's subshell environment: "$(exit 3)" is a substitution whose
+	 * status is 3, never the calling shell exiting. */
 	if (__sh_flow_pending()) __sh_flow_clear();
-	/* And that subshell environment includes 2.5.2's '?'.  A command
-	 * inside the substitution must not change the calling shell's "$?"
-	 * -- `false; echo "$(true)$?"` prints 1, because the substitution
-	 * ran in a subshell whose statuses are its own.  Without this,
-	 * every "$?" written to the right of a substitution in the same
-	 * word would silently report the substitution's last command
-	 * instead.  The substitution's own status still reaches 2.9.1's
-	 * "no command name, but the command contained a command
-	 * substitution" rule, which travels through cmdsub_status above
-	 * rather than through this variable. */
+	/* That subshell environment includes $?: `false; echo "$(true)$?"`
+	 * must print 1, not the substitution's own last status. The
+	 * substitution's status still reaches 2.9.1's "no command name"
+	 * rule through cmdsub_status above, not through this variable. */
 	sh_last_status = saved_last;
 	params_subshell_leave(&ps, &fs);
 	env_snapshot_restore(&es);
@@ -1945,10 +1717,6 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	return 0;
 }
 
-/* cmd is required: `if (cmd->kind == SH_CMD_SIMPLE)` is this function's
- * first statement. status is left unmarked -- forwarded, never itself
- * dereferenced, to whichever of exec_simple()/exec_group() the check
- * selects. */
 // NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 int __sh_exec_command(const struct sh_command *cmd, int *status)
 {
@@ -1960,31 +1728,15 @@ int __sh_exec_command(const struct sh_command *cmd, int *status)
 
 /* Runs a compound-command pipeline stage's body in this process, once
  * every real (SH_CMD_SIMPLE) stage in the pipeline has already been
- * spawned -- see exec_group()'s header comment above ("As one stage of
- * a multi-command pipeline: still no fork()") for why that ordering is
- * what makes doing this in-process safe here. The caller has already
- * dup2()'d this stage's pipe ends onto fd 0/1 for it, exactly as it
- * does for a spawned simple-command stage; this function applies
- * `cmd`'s own redirections on top of that (same left-to-right ordering
- * apply_redirs() always gives), runs the body with environ/cwd
- * save-and-restore around it (2.12 applies subshell-environment
- * semantics to every pipeline stage regardless of "(...)" vs "{...}",
- * unlike the standalone case exec_group() handles), and restores this
- * process's fds and environ/cwd before returning -- there being no
- * child process whose exit already discarded all of that for free.
- * Returns 0 with *status set to the body's own exit status (the
- * pipeline loop's existing per-stage stage_result_t is not needed
- * here: this always finishes before returning, unlike a spawned stage,
- * so there is no pid to wait for later), or -1 if `cmd`'s own
- * redirections fail to apply (the caller folds that into the same
- * abort_unsupported path a spawn_stage() OOM would take) or if the
- * body itself hits something this shell cannot execute (propagated the
- * same way __sh_exec_command()'s other callers already propagate it). */
-/* cmd is required: `apply_redirs(cmd->redirs, ...)` is this function's
- * first substantive statement. status is required too, on the same
- * "directly dereferenced on a real reachable path, no real caller ever
- * passes NULL" basis as exec_group()'s above -- `*status = 1;` in the
- * `if (failed)` branch. */
+ * spawned (see exec_group()'s "still no fork()" discussion above for why
+ * that ordering makes this safe in-process). The caller has already
+ * dup2()'d this stage's pipe ends onto fd 0/1; this function applies
+ * `cmd`'s own redirections on top, runs the body with environ/cwd
+ * save-and-restore around it (2.12 applies subshell semantics to every
+ * pipeline stage, unlike the standalone case), and restores fds/environ/
+ * cwd before returning, since there's no child process to discard them
+ * for free. Returns 0 with *status set, or -1 if redirections fail to
+ * apply or the body hits something this shell can't execute. */
 // NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
@@ -2017,11 +1769,9 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 
 	rc = exec_compound(cmd, status);
 
-	/* 2.12 puts every stage of a multi-command pipeline in a subshell
-	 * environment regardless of "(...)" vs "{...}", so an `exit` in
-	 * this stage's body exits that subshell only -- unlike the
-	 * standalone brace group exec_group() above deliberately lets
-	 * through. */
+	/* 2.12 puts every pipeline stage in a subshell environment regardless
+	 * of "(...)" vs "{...}", so an `exit` here exits that subshell only --
+	 * unlike the standalone brace group exec_group() lets through. */
 	if (__sh_flow_pending()) __sh_flow_clear();
 	params_subshell_leave(&ps, &fs);
 	env_snapshot_restore(&es);
@@ -2032,16 +1782,12 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 	return rc;
 }
 
-/* Wires this stage's fd 0/1 onto its neighboring pipe ends exactly as
- * 2.9.2 requires (see __sh_exec_pipeline()'s inline comment at its
- * call sites below), save_fd()-protected so the caller's restore_fds()
- * undoes just this. Returns -1 (nothing left half-wired: save_fd()
- * either fully recorded a slot before failing or didn't touch `rs` at
- * all) on OOM, 0 otherwise. Split out because both pass 1 (a
- * SH_CMD_SIMPLE stage, wired and spawned immediately) and pass 2 (a
- * deferred compound-command stage, wired again once it is finally its
- * turn to run -- see exec_group()'s header comment above) need
- * identical wiring, just at different times. */
+/* Wires this stage's fd 0/1 onto its neighboring pipe ends as 2.9.2
+ * requires, save_fd()-protected so the caller's restore_fds() undoes
+ * just this. Returns -1 on OOM, 0 otherwise. Split out because pass 1
+ * (a SH_CMD_SIMPLE stage, wired and spawned immediately) and pass 2 (a
+ * deferred compound-command stage, wired again once it's its turn) need
+ * identical wiring at different times. */
 static int wire_stage_stdio(struct redir_state *rs, int (*pipes)[2], size_t n, size_t i)
 {
 	if (i > 0) {
