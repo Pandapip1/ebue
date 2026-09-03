@@ -4,84 +4,51 @@
 // PurityChecker -- proves __attribute__((pure)) eligibility, and, at least
 // as importantly, disproves it where the tree has already claimed it.
 //
-// GCC/Clang's `pure` is a much stronger, riskier claim than most of the
-// annotations the other checkers in this directory verify: it licenses the
-// compiler to eliminate, reorder, or coalesce calls the program actually
-// depends on if the claim is wrong. A function is ruled in only if, across
-// its own body and its whole reachable call graph:
-//   - it never reads or writes errno,
-//   - it never writes through any pointer argument or global/static pointer,
-//   - it performs no I/O (syscalls, Nt*/Zw* calls, file/console/network),
-//   - it never reads or writes non-const global/static state,
-//   - every callee is itself already proven or trusted pure, and
-//   - it never touches lock state.
+// `pure` is a stronger, riskier claim than most annotations these checkers
+// verify: it licenses the compiler to eliminate, reorder, or coalesce
+// calls the program depends on if the claim is wrong. A function is ruled
+// in only if, across its own body and whole reachable call graph: it never
+// reads/writes errno; never writes through a pointer argument or
+// global/static pointer; performs no I/O; never reads/writes non-const
+// global/static state; every callee is itself proven or trusted pure; and
+// it never touches lock state.
 //
-// Design: this is a whole-function-body property, not a per-path bug
-// pattern -- a single disqualifying construct anywhere in the function is
-// definitive regardless of the values flowing through it, so ExprEngine
-// symbolic execution (bounded by loop/inlining/path budgets, and built to
-// find a feasible bad path rather than to survey an entire body) buys
-// nothing here that a complete, direct walk of the function's own AST does
-// not already give more simply and more completely. This checker is
-// therefore a check::ASTCodeBody checker (the same callback clang's own
-// DeadStoresChecker uses for a similar whole-body property): for every
-// function definition in the translation unit, it walks the full body via
-// RecursiveASTVisitor, and separately, on demand and memoized, does the same
-// for every callee reachable within this translation unit -- proving
-// whole-call-graph purity, not just the function's own statements.
+// This is a whole-function-body property, not a per-path bug pattern -- a
+// single disqualifying construct anywhere is definitive regardless of the
+// values flowing through it, so bounded ExprEngine symbolic execution buys
+// nothing a complete AST walk doesn't already give more simply. Hence a
+// check::ASTCodeBody checker (like clang's own DeadStoresChecker): walks
+// every function definition's full body via RecursiveASTVisitor, and does
+// the same, memoized, for every callee reachable within the TU.
 //
-// Two known, disclosed limitations, both on the conservative (safe) side:
-//   - No alias analysis. `int *p = &global; *p` is read as a load through a
-//     *local* pointer (Base::Local's chain resolves to the local `p`, not
-//     `global`), so a global touched only via a local alias can be missed.
-//     Real code in this tree does not launder access this way (see the
-//     sched.c/locale.c split-refactor precedent, which returns tagged
-//     structs specifically to avoid ever needing an output pointer), so
-//     this is a real but low-probability gap, not a rubber stamp.
-//   - Absence of a violation among the AST nodes this walk visits is
-//     evidence of purity, not proof of it for the "candidate" direction --
-//     candidates are reported for a human to read and spot-check, exactly
-//     as this checker's own commit message calls for, not to be trusted
-//     blindly. The "false claim" direction has the opposite, and stronger,
-//     property: any single disqualifying construct found in a function's
-//     own reachable body is real and unconditional, independent of this
-//     caveat -- there is no bounded-exploration escape hatch the way there
-//     would be for a symbolic path search.
-//   - No call-site-sensitive escape analysis for a callee's OWN pointer-
-//     parameter writes: computePurity() memoizes one pure/not-pure verdict
-//     per callee, reused at every call site, matching how the real
-//     __attribute__((pure)) contract works (the compiler trusts a
-//     function's declaration uniformly, for any caller) -- but this means
-//     a callee that writes through one of ITS OWN pointer parameters is
-//     never treated as pure, even at a specific call site where the actual
-//     argument is `&someLocal`. src/fnmatch/fnmatch.c's fnm_match() calling
-//     bracket_match(&probe, c) is exactly this shape: bracket_match()'s own
-//     `*pp = p;` is a real write if bracket_match were called with, say, a
-//     pointer to a global, but at fnm_match()'s one and only call site
-//     `probe` is always a local variable never visible outside fnm_match()
-//     itself, so the write never actually escapes fnmatch()'s own
-//     observable behavior. Verified sound by hand -- deliberately left as
-//     a known false-claim finding rather than adding the substantially
-//     larger per-call-site parameter-write tracking a sound general fix
-//     would need, matching this checker's own
-//     conservative-by-design posture: local-write recognition here is
-//     scoped to isLocalOnlyWriteBuiltin()'s fixed builtin list and
-//     isLocalArrayWrite()'s direct local-array-object case, not extended
-//     to arbitrary user-defined callees.
+// Three known, disclosed limitations, all conservative (safe):
+//   - No alias analysis: `int *p = &global; *p` reads as a load through
+//     the local `p`, not `global`, so a global touched only via a local
+//     alias can be missed. Real code here doesn't launder access this way
+//     (see the sched.c/locale.c split-refactor precedent, which returns
+//     tagged structs to avoid needing an output pointer).
+//   - Absence of a violation is evidence of purity for the "candidate"
+//     direction, not proof -- candidates are for a human to spot-check.
+//     The "false claim" direction is stronger: any disqualifying
+//     construct found is real and unconditional, with no bounded-
+//     exploration escape hatch.
+//   - No call-site-sensitive escape analysis for a callee's own
+//     pointer-parameter writes: computePurity() memoizes one verdict per
+//     callee, matching how `pure` really works, but a callee that writes
+//     through its own pointer parameter is never pure even where the
+//     actual argument is always a local. fnmatch.c's fnm_match() calling
+//     bracket_match(&probe, c) is this shape -- verified sound by hand,
+//     left as a known false-claim finding rather than adding full
+//     per-call-site parameter-write tracking.
 //
-// Cross-TU calls (a callee declared here but defined in another .c file)
-// are trusted only if already declared __attribute__((pure)) or
-// __attribute__((const)) somewhere visible in this TU, or if the callee's
-// name is one of a small, explicit, hand-picked set of foundational
-// accessors this tree's own OwnershipChecker.cpp already leans on for its
-// always-nonnull lemma: __errno_location() (src/internal/errno.c) and
-// __teb() (src/internal/{i386,x86_64}/teb.c). Both compute a pointer that is
-// stable for the calling thread via a mechanism opaque to this AST-level
-// analysis (TLS storage address; a raw fs:/gs:-relative asm read) but incur
-// no observable side effect of their own -- the actual errno/TEB *content*
-// is a completely separate matter the ordinary global/pointer read-write
-// rules below still cover for every other function that dereferences what
-// these two return.
+// Cross-TU calls are trusted only if already declared
+// __attribute__((pure))/((const)) visible in this TU, or if the callee is
+// one of a small hand-picked set of foundational accessors --
+// __errno_location() and __teb() -- that OwnershipChecker.cpp already
+// leans on for its always-nonnull lemma: both compute a pointer stable for
+// the calling thread via a mechanism opaque to this AST-level analysis,
+// with no observable side effect of their own (the errno/TEB *content* is
+// a separate matter the ordinary read-write rules below still cover).
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Attr.h"
