@@ -2,97 +2,45 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Linux implementation of a DELIBERATELY SMALL SLICE of src/internal/
- * plat_thread.h -- see that header's own banner for the full 11-file
- * interface (mutexes, rwlocks, condvars, semaphores, TLS, async I/O,
- * message queues) this does NOT attempt to cover. This file ports just
- * enough of clone(2)/futex(2) to give a real, contention-tested mutex:
- * __plat_semaphore_create/_post/_getvalue, __plat_event_create/_set,
- * __plat_wait_one (single handle only), and __plat_thread_spawn.
- * Everything else plat_thread.h declares (__plat_wait_any, named
- * \BaseNamedObjects-style objects, __plat_thread_suspend/_queue_apc/
- * _redirect_ip/_stack_extent/_duplicate_self/_current_pseudo/
- * _terminate_self, mqueue's __plat_thread_file_io,
- * __plat_cancel_unsafe_abort, __plat_thread_alertable_yield,
- * __plat_query_system_time) is left undefined here, not stubbed --
- * open follow-up work, disclosed rather than papered over.
+ * plat_thread.h: enough of clone(2)/futex(2) for a real, contention-tested
+ * mutex (__plat_semaphore_create/_post/_getvalue, __plat_event_create/_set,
+ * __plat_wait_one single-handle, __plat_thread_spawn). Everything else
+ * plat_thread.h declares is left undefined here, not stubbed -- open
+ * follow-up work.
  *
- * __pthread_current() (src/thread/pthread.c) still threads through
- * process-lifecycle bookkeeping (live_threads, exit()) this port does
- * not touch. See fuzz/linux_pilot_test_thread.c: a minimal mutex (lock
- * = __plat_wait_one() on a semaphore created initial=1,max=1; unlock =
- * __plat_semaphore_post()) built directly on the functions below,
- * stress-tested with clone()-spawned threads hammering a shared
- * counter. It does not exercise pthread_mutex_t's owner tracking,
- * recursion, or error checking (pthread_mutex.c's own mutex_data
- * bookkeeping, guarded by __plat_fast_lock()/__plat_fast_unlock(),
- * defined further down in this file) -- only the blocking primitive
- * underneath them.
+ * Every syscall here goes through raw_syscall() (below) rather than the
+ * `extern long syscall(...)` declaration src/mman/linux/plat_mem.c and
+ * src/unistd/linux/plat_fd.c use: that symbol resolves to the HOST's real
+ * glibc syscall() at link time, which on failure sets glibc's OWN errno
+ * rather than handing back the raw kernel -errno -- confirmed to make
+ * plat_mem.c/plat_fd.c's shared `errno = (int)-ret` compute EPERM on every
+ * failure, a latent bug this file avoids via a direct inline `svc #0`.
  *
- * Every syscall here goes through a small raw-syscall helper
- * (raw_syscall(), below) rather than the `extern long syscall(long,
- * ...)` declaration src/mman/linux/plat_mem.c and src/unistd/linux/
- * plat_fd.c use. That distinction matters: that symbol resolves at
- * link time to the HOST's real glibc syscall() (this build is
- * -nostdinc, not -nostdlib -- the final link still pulls in host
- * libc), and glibc's syscall() performs its own error-translation: on
- * failure it returns -1 and sets glibc's OWN errno (not ntlibc's
- * errno global, src/internal/errno.c) rather than handing back the raw
- * kernel -errno in [-4095,-1] a bare `svc`/syscall instruction gives.
- * Confirmed empirically: glibc `syscall(SYS_close, -1)` returns -1
- * with glibc-errno=9, not -9. plat_mem.c/plat_fd.c's shared
- * is_sys_error() check still flags the failure (-1 is itself in
- * [-4095,-1]), but their `errno = (int)-ret` then computes `errno = 1`
- * (EPERM) on EVERY failure in both files -- a latent bug in
- * already-merged code this file does not own and does not fix, but
- * avoids by talking to the kernel directly via inline `svc #0` in
- * raw_syscall() instead, so its return value is the genuine kernel ABI
- * result this file's own errno translation assumes.
+ * clone(2) needs more than a raw syscall can give it: the syscall
+ * instruction returns twice, once in the caller and once in the child on
+ * the CHILD's own fresh stack, so the child must not unwind back into this
+ * C function's stack frame. That's assembly-level work; see
+ * clone_aarch64.S.
  *
- * clone(2) needs more than a raw syscall can give it: a syscall
- * instruction returns twice under clone() exactly like fork() (once in
- * the caller, once in the child, sharing register state but using the
- * CHILD's own fresh stack), and the child must not unwind back into
- * this C function's stack frame -- that frame lives on the PARENT's
- * stack. That is assembly-level work no C function can safely wrap
- * (every real libc's clone() wrapper is hand-written assembly for
- * exactly this reason); see clone_aarch64.S.
- *
- * Two real, deliberate simplifications, disclosed rather than hidden:
+ * Two deliberate simplifications:
  *
  *   __plat_thread_spawn() clones with CLONE_VM|CLONE_FS|CLONE_FILES|
- *   CLONE_SIGHAND and the SIGCHLD exit-signal bit, but NOT CLONE_THREAD
- *   and NOT CLONE_SETTLS. This is real concurrent execution sharing one
- *   address space (CLONE_VM is what actually matters for exercising a
- *   shared-memory mutex under genuine contention), but not a full
- *   NPTL-style pthread: the spawned thread has no distinct TLS block
- *   (no CLONE_SETTLS -- its TPIDR_EL0 is whatever the creating thread's
- *   was, so any `__thread`-qualified variable would ALIAS the
- *   creator's if ever touched from the spawned thread; this port's own
- *   code never does), and without CLONE_THREAD the new thread is its
- *   own thread-group leader, joined with plain wait4() rather than a
- *   futex-on-ctid join. Discovered by testing: omitting the low-byte
- *   SIGCHLD exit-signal bits in the clone() flags word makes the
- *   resulting child invisible to a plain wait4(pid, &status, 0) call
- *   (ECHILD) even though it is a real, running, distinct process
- *   sharing this one's address space -- wait4() without __WALL/
- *   __WCLONE only reports children whose exit-signal is SIGCHLD, and
- *   clone()'s exit-signal is encoded in flags' low byte, not a
- *   separate argument.
+ *   CLONE_SIGHAND plus the SIGCHLD exit-signal bit, but NOT CLONE_THREAD
+ *   or CLONE_SETTLS -- real concurrent execution sharing one address space,
+ *   but not a full NPTL-style pthread: the spawned thread has no distinct
+ *   TLS block (any `__thread` variable would alias the creator's), and
+ *   without CLONE_THREAD the new thread is its own thread-group leader,
+ *   joined with plain wait4() rather than a futex-on-ctid join. Omitting
+ *   the SIGCHLD exit-signal bit from the clone() flags word was confirmed
+ *   by testing to make the child invisible to wait4() (ECHILD) despite
+ *   being real and running.
  *
- *   __plat_wait_one() below only understands a handle THIS file
- *   produced via __plat_semaphore_create()/__plat_event_create() (a
- *   pointer to this file's own struct ntlibc_linux_sync, mmap()'d,
- *   tagged with a kind byte) -- never a thread handle from
- *   __plat_thread_spawn() (which boxes a pid, an unrelated small
- *   integer, not a pointer to that struct at all). NT's HANDLE unifies
- *   every waitable kind behind one WaitForSingleObject-shaped call;
- *   this backend does not. Passing a thread handle to __plat_wait_one()
- *   here would dereference garbage -- nothing in this port's own scope
- *   does that (its test harness joins spawned threads with a direct
- *   wait4() call instead). Fixing this for real means either giving
- *   thread handles their own tagged representation understood by every
- *   wait path, or building the futex-on-ctid join a real CLONE_THREAD
- *   port would need anyway -- disclosed follow-up work, not fixed here.
+ *   __plat_wait_one() below only understands a handle this file produced
+ *   via __plat_semaphore_create()/__plat_event_create() (a struct
+ *   ntlibc_linux_sync*), never a thread handle from __plat_thread_spawn()
+ *   (which boxes a pid) -- unlike NT's HANDLE, which unifies every
+ *   waitable kind. Passing a thread handle here would dereference garbage;
+ *   nothing in this port's scope does that.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -105,13 +53,8 @@
 #include "plat_thread.h"
 #include "linux/sync.h"
 
-/* aarch64 Linux syscall numbers -- confirmed against this host's own
- * <sys/syscall.h> (compiled and printed by a throwaway host program, not
- * assumed) and cross-checked against a real kernel
- * asm-generic/unistd.h, the same discipline src/mman/linux/plat_mem.c's
- * banner describes:
- *   SYS_mmap=222 SYS_munmap=215 (unchanged from plat_mem.c, reused here)
- *   SYS_futex=98 SYS_clone=220 SYS_exit=93 SYS_gettid=178 */
+/* aarch64 Linux syscall numbers, confirmed against this host's own
+ * <sys/syscall.h>. */
 #define SYS_mmap   222
 #define SYS_munmap 215
 #define SYS_futex  98
@@ -125,13 +68,9 @@
 #define MAP_PRIVATE   0x02
 #define MAP_ANONYMOUS 0x20
 
-/* clone(2)'s flags word: a real Linux "thread" (CLONE_VM|CLONE_FS|
- * CLONE_FILES|CLONE_SIGHAND), narrowed from a full NPTL pthread exactly
- * as this file's own banner discloses, plus SIGCHLD (17) in the flags'
- * low byte -- the exit-signal field -- so the spawned thread stays
- * visible to a plain wait4() (see the banner for how this was found:
- * omitting it produces a real, running child that wait4() nonetheless
- * reports ECHILD for). */
+/* clone(2)'s flags word, narrowed from a full NPTL pthread (see banner),
+ * plus SIGCHLD (17) in the low byte -- the exit-signal field -- so the
+ * spawned thread stays visible to a plain wait4(). */
 #define CLONE_VM      0x00000100
 #define CLONE_FS      0x00000200
 #define CLONE_FILES   0x00000400
@@ -142,12 +81,9 @@
                                                 * own DEFAULT_STACK_SIZE */
 
 /* A minimal 6-argument raw syscall: `svc #0` directly, no host libc
- * wrapper anywhere in the call path -- see this file's banner for why
- * this differs from plat_mem.c/plat_fd.c's `extern long syscall(...)`
- * pattern (that symbol is satisfied by the HOST's glibc at link time,
- * which silently discards the real -errno magnitude on failure; this
- * does not). aarch64's syscall calling convention: x8 = syscall number,
- * x0..x5 = up to 6 arguments, result (or -errno in [-4095,-1]) in x0. */
+ * wrapper (see this file's banner for why). aarch64 calling convention:
+ * x8 = syscall number, x0..x5 = up to 6 arguments, result (or -errno in
+ * [-4095,-1]) in x0. */
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
@@ -164,11 +100,8 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 	return x0;
 }
 
-/* clone_aarch64.S's hand-written trampoline -- see this file's banner
- * for why a raw syscall cannot do clone()'s job by itself. Matches
- * __plat_thread_entry_t's shape (`unsigned (*)(void*)`, NT's
- * NtCreateThreadEx StartRoutine shape, reused as-is per plat_thread.h's
- * own banner) so callers pass `entry` straight through with no adapter. */
+/* clone_aarch64.S's hand-written trampoline -- see this file's banner for
+ * why a raw syscall cannot do clone()'s job by itself. */
 extern long __ntlibc_linux_clone(__plat_thread_entry_t fn, void *stack_top, // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
                                  long flags, void *arg);
 
@@ -177,63 +110,28 @@ static int is_sys_error(long ret)
 	return (unsigned long)ret >= (unsigned long)-4095L;
 }
 
-/* The raw kernel `struct timespec` shape on a 64-bit arch (two `long`s,
- * seconds then nanoseconds) -- defined once, locally, rather than
- * pulling in ntlibc's own <time.h> struct timespec (a different type by
- * name even if layout-compatible), since this is what the futex(2)
- * syscall ABI itself expects, not a libc-level type. */
+/* The raw kernel `struct timespec` shape (two `long`s, seconds then
+ * nanoseconds) -- defined locally rather than pulling in ntlibc's own
+ * <time.h> type, since this is what the futex(2) syscall ABI expects. */
 struct linux_timespec { long tv_sec; long tv_nsec; };
 
-/* NOT FUTEX_PRIVATE_FLAG -- a real, confirmed bug fixed here, not a
- * missed optimization left on the table. These two helpers back EVERY
- * futex word this file hands out through __plat_wait_one()/
- * __plat_event_set()/__plat_semaphore_post(): both the genuinely
- * per-process objects alloc_sync() creates (MAP_PRIVATE|MAP_ANONYMOUS,
- * where FUTEX_PRIVATE_FLAG's optimization is valid and was originally
- * used) AND the cross-process objects map_named_sem()/
- * __plat_named_mutant_acquire() create (MAP_SHARED, backed by a real
- * file under /tmp, opened independently by every process that touches
- * it). FUTEX_PRIVATE_FLAG tells the kernel to hash a waiter by
- * (this process's mm_struct, the virtual address passed in) instead of
- * by the underlying physical page -- a real optimization, but only
- * correct when every waiter and waker sharing that word are the SAME
- * process (or CLONE_VM threads of it, sharing one mm_struct, exactly
- * what __plat_thread_spawn() above creates and what fuzz/
- * linux_pilot_test_thread.c's own mutex stress test already proved
- * correct). Two SEPARATE processes independently mmap()ing the same
- * MAP_SHARED file get the SAME physical page but, in general, DIFFERENT
- * virtual addresses (confirmed on this host: two real fork/1-1.c
- * processes racing the same named mutant lock mapped it at 0x6f12d3418000
- * and 0x6f12d3418000-0x18384 respectively -- not equal), so a
- * FUTEX_WAKE_PRIVATE issued by the process that posts the lock hashes to
- * a completely different (mm, uaddr) key than the FUTEX_WAIT_PRIVATE the
- * other process is blocked in, and the wakeup is silently never
- * delivered: the kernel has no idea the two calls are even about the
- * same futex word. That is the real root cause diagnosed behind the
- * fork, pthread_atfork, the sem_ family, mqueue, sigsuspend and sigwait
- * TIMEOUT cluster's
- * third, most-elusive bug (after the sleep(1) busy-spin in
- * src/signal/linux/plat_signal.c and the malloc/fast-lock self-deadlock
- * in src/internal/plat_malloc_generic.h): every one of those interfaces'
- * test cases that synchronizes two real, separate processes through a
- * named semaphore or (transitively, via sem_open()'s own namespace lock)
- * this file's named mutant hit exactly this silently-dropped wakeup,
- * intermittently -- exactly as often as the two processes' independent
- * mmap() calls happened to land at different virtual addresses, which in
- * practice was every single time. Confirmed with instrumented tracing
- * (a temporary per-process debug log plus a real statx(2) inode
- * comparison) showing both processes' mappings resolving to the
- * identical inode -- ruling out "different files" -- while their
- * `obj_addr` values differed, and the waiting process's own
- * FUTEX_WAIT_PRIVATE call never returning despite the other process
- * completing a real, successful FUTEX_WAKE_PRIVATE on the same logical
- * object moments earlier. Dropping FUTEX_PRIVATE_FLAG makes the kernel
- * hash by the underlying inode and page offset instead, which is correct
- * for every caller in this file regardless of whether the object turns
- * out to be MAP_PRIVATE or MAP_SHARED, at the cost of the (real, but
- * here-unmeasured and secondary to correctness) performance difference
- * FUTEX_PRIVATE_FLAG exists to buy back for the pure single-process
- * case. */
+/* NOT FUTEX_PRIVATE_FLAG -- a real, confirmed bug fix, not a missed
+ * optimization. These helpers back every futex word this file hands out,
+ * including the cross-process objects map_named_sem()/
+ * __plat_named_mutant_acquire() create (MAP_SHARED, backed by a file under
+ * /tmp, opened independently by every process that touches it).
+ * FUTEX_PRIVATE_FLAG hashes a waiter by (this process's mm_struct,
+ * virtual address), which is wrong across processes: two separate
+ * processes mmap()ing the same MAP_SHARED file get the same physical page
+ * but different virtual addresses, so a FUTEX_WAKE_PRIVATE from one hashes
+ * to a different key than the other's FUTEX_WAIT_PRIVATE, and the wakeup
+ * is silently dropped. Confirmed as the root cause of intermittent
+ * cross-process hangs (fork, pthread_atfork, sem_*, mqueue, sigsuspend,
+ * sigwait) via instrumented tracing showing identical inodes but different
+ * mapped addresses. Dropping FUTEX_PRIVATE_FLAG makes the kernel hash by
+ * inode and page offset instead, correct for both MAP_PRIVATE and
+ * MAP_SHARED callers here, at the cost of FUTEX_PRIVATE_FLAG's
+ * (unmeasured, secondary) single-process performance benefit. */
 static long futex_wait(int *uaddr, int expected, const struct linux_timespec *timeout)
 {
 	return raw_syscall(SYS_futex, (long)uaddr,
@@ -247,40 +145,13 @@ static long futex_wake(int *uaddr, int count)
 	                   FUTEX_WAKE, (long)count, 0, 0, 0);
 }
 
-/* One mmap()'d page per synchronization object -- no allocator dependency
- * (this file is -nostdinc, linked before ntlibc's own malloc is
- * necessarily available in every configuration that might use it), at
- * the cost of a whole page for a handful of bytes. Fine at this port's
- * scale (a pilot proving the primitive, not a production allocator
- * concern); a real port would suballocate. `kind` distinguishes a
- * counting semaphore (P/V, __plat_wait_one decrements) from a manual-
- * reset event (__plat_wait_one only checks nonzero, never consumes) --
- * the two plat_thread.h waitable kinds this file implements. struct
- * ntlibc_linux_sync itself now lives in src/internal/linux/sync.h, not
- * here -- see that header's own banner for why (named semaphores and
- * stop-events need to build the same kind of object this file's own
- * __plat_wait_one()/__plat_event_set()/__plat_semaphore_post() already
- * understand, rather than inventing a second synchronization
- * primitive). */
-
-/* This function's own `out`, and map_named_sem()'s below, are the
- * common root of a whole class of findings left as an honest residual
- * rather than force-fitting `nonnull`: every
- * __plat_*_create()/_open()/_open_or_create() below writes
- * `obj->futex`/`obj->kind`/`obj->max` unconditionally right after
- * calling this function (or map_named_sem()), and `obj` is that
- * checked call's own OUTPUT -- `*out = (struct ntlibc_linux_sync
- * *)ret;`, only reached past `if (is_sys_error(ret)) { ...; return
- * -1; }` -- the identical "checked allocation, then use" shape this
- * tree's own malloc() already gets trusted for elsewhere (see
- * tools/clang/OwnershipChecker.cpp's own allocator-family extent
- * tracking), just via this backend's raw_syscall(SYS_mmap, ...)
- * instead of a call the checker already recognizes as an allocator.
- * Verified sound by hand at every one of this file's own call sites
- * (is_sys_error() is checked before `obj`/`*out` is ever touched,
- * with no path that skips it); teaching the checker to trust this
- * specific raw-syscall idiom the same way is a real, narrow lemma not
- * yet attempted, not a shortcut taken here. */
+/* One mmap()'d page per synchronization object -- no allocator dependency,
+ * at the cost of a whole page for a handful of bytes; fine at this port's
+ * scale, a real port would suballocate. `kind` distinguishes a counting
+ * semaphore (P/V, __plat_wait_one decrements) from a manual-reset event
+ * (__plat_wait_one only checks nonzero, never consumes). struct
+ * ntlibc_linux_sync itself lives in src/internal/linux/sync.h, shared with
+ * named semaphores and stop-events. */
 static int alloc_sync(struct ntlibc_linux_sync **out)
 {
 	long ret = raw_syscall(SYS_mmap, 0, (long)sizeof(struct ntlibc_linux_sync),
@@ -310,13 +181,8 @@ int __plat_event_set(__plat_handle_t h)
 {
 	struct ntlibc_linux_sync *obj = (struct ntlibc_linux_sync *)h;
 	__atomic_store_n(&obj->futex, 1, __ATOMIC_RELEASE);
-	/* This file's only event kind is manual-reset: it stays set after
-	 * this call (never auto-clears the way NT's own SynchronizationEvent
-	 * -- the kind plat_thread.h's own comment names -- does for one
-	 * released waiter), so every current waiter must wake here, not just
-	 * one; a plain futex_wake(&obj->futex, 1) would leave the rest
-	 * parked even though the word is already set. 0x7fffffff (INT_MAX)
-	 * wakes every futex waiter currently parked on this word. */
+	/* Manual-reset, unlike NT's auto-reset SynchronizationEvent, so every
+	 * current waiter must wake here, not just one. */
 	futex_wake(&obj->futex, 0x7fffffff);
 	return 0;
 }
@@ -324,11 +190,7 @@ int __plat_event_set(__plat_handle_t h)
 /* ---- unnamed counting semaphores ---------------------------------------
  * `inheritable` (OBJ_INHERIT on NT) has no separate concept here: a
  * MAP_PRIVATE|MAP_ANONYMOUS mapping is already inherited by a fork()'d
- * child via ordinary copy-on-write, unconditionally -- narrower than
- * NT's per-handle opt-in, but every caller in this port's own scope
- * passes 0 (see plat_thread.h's own comment: real callers only pass
- * nonzero for sem_init()'s process-shared case, out of scope here), so
- * the difference is never exercised. Documented, not silently assumed. */
+ * child via ordinary copy-on-write, unconditionally. */
 int __plat_semaphore_create(long initial, long maximum, int inheritable, // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; initial, maximum, and inheritance values have distinct roles
                             __plat_handle_t *out)
 {
@@ -380,9 +242,8 @@ int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout, // NOLINT
 	struct ntlibc_linux_sync *obj = (struct ntlibc_linux_sync *)h;
 	struct linux_timespec ts, *tsp = 0;
 	(void)alertable; /* Linux has no APC-alertable-wait concept; every wait
-	                  * this backend performs is non-alertable, so
-	                  * __PLAT_WAIT_INTR is never produced here -- no
-	                  * caller in this port's scope relies on it. */
+	                  * here is non-alertable, so __PLAT_WAIT_INTR is never
+	                  * produced. */
 	if (has_timeout) {
 		long long ticks = relative_ticks < 0 ? -relative_ticks : relative_ticks;
 		ts.tv_sec = (long)(ticks / 10000000LL);
@@ -404,16 +265,12 @@ int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout, // NOLINT
 		}
 		r = futex_wait(&obj->futex, 0, tsp);
 		if (r == 0) continue;             /* real wake: recheck the word */
-		if (r == -EAGAIN) continue;       /* word changed before we slept
-		                                   * -- benign race, futex(2)'s own
-		                                   * documented behavior; retry. */
-		if (r == -EINTR) continue;        /* spurious signal; restart the
-		                                   * wait. Does not re-derive a
-		                                   * shortened remaining timeout --
-		                                   * a real, minor, disclosed
-		                                   * inaccuracy for a has_timeout
-		                                   * caller hit by a signal, out of
-		                                   * scope to fix for this pilot. */
+		if (r == -EAGAIN) continue;       /* word changed before we slept;
+		                                   * benign per futex(2), retry. */
+		if (r == -EINTR) continue;        /* spurious signal; restart the wait
+		                                   * without re-deriving a shortened
+		                                   * remaining timeout (disclosed
+		                                   * inaccuracy). */
 		if (r == -ETIMEDOUT) return __PLAT_WAIT_TIMEOUT;
 		errno = (int)-r;
 		return __PLAT_WAIT_ERROR;
@@ -421,50 +278,25 @@ int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout, // NOLINT
 }
 
 /* ---- thread lifecycle ----------------------------------------------------
- * Only __plat_thread_spawn(): see this file's banner for the scope this
- * one function was narrowed to (CLONE_VM-sharing, no CLONE_THREAD/
- * CLONE_SETTLS) and for why the resulting handle cannot be passed to
+ * Only __plat_thread_spawn(): see this file's banner for the CLONE_VM-only
+ * scope and for why the resulting handle cannot be passed to
  * __plat_wait_one() above. `create_suspended` has no primitive on this
- * backend (clone() has no NT-CreateSuspended equivalent short of
- * stopping the child with a real signal immediately after start, its
- * own small synchronization problem) and no caller in this port's scope
- * needs it. NOT this file's to define: __plat_thread_resume() --
- * despite being declared in plat_thread.h, its one real implementation
- * is process's (src/process/nt/plat_process.c); a Linux one belongs
- * there, not here.
+ * backend and no caller needs it. __plat_thread_resume() belongs to
+ * src/process/nt/plat_process.c, not here (ODR).
  *
- * A REAL, SERIOUS, CONFIRMED CONSEQUENCE of "no CLONE_SETTLS" that the
- * scope note above only gestured at: every thread this function spawns
- * shares the CALLING thread's TLS region -- not a separate one of its
- * own -- because aarch64 Linux TLS is addressed through the TPIDR_EL0
- * register, and clone(2) only reinitializes it for the child when
- * CLONE_SETTLS is passed (with a `tls` argument pointing at a real
- * per-thread TCB this backend does not build). Confirmed empirically,
- * not theorized: a standalone probe (`__thread int marker`, four
- * spawned threads and the caller each writing/printing `&marker`) shows
- * every one of the five threads reporting the IDENTICAL address for
- * `marker`. This means EVERY `__thread`-qualified variable anywhere in
- * a program linked against this backend -- including src/thread/
- * pthread.c's own `__pthread_self_control`, the cache
- * __pthread_current() relies on to hand back a stable per-thread
- * identity -- silently ALIASES across every thread __plat_thread_spawn()
- * creates, corrupting whatever multiple real threads concurrently treat
- * as "their own" state through it. This surfaced while porting
- * src/thread/pthread_mutex.c's real front door to this backend: a
- * multi-thread pthread_mutex_t stress test stalled partway through
- * (real, reproducible, not a timing fluke) because every worker thread
- * was unknowingly sharing ONE __pthread control block instead of having
- * its own. Not fixed here: a correct fix needs a real per-thread TCB
- * whose size/layout matches this program's own linked TLS segment (the
- * ELF PT_TLS entry's size/alignment) plus CLONE_SETTLS -- genuinely
- * tied to the "no real crt/startup exists for a Linux target build yet"
- * gap already disclosed elsewhere in this port, not a small, separately
- * fixable thing. Any code that spawns multiple threads via
- * this function and relies on __thread storage being independent per
- * thread (pthread_create()'s own full path would, once ported; this
- * port's own pthread_mutex_t test works around it by staying single-
- * threaded -- see fuzz/linux_pilot_test_pthread_mutex.c's own banner)
- * must know about this first. */
+ * A SERIOUS CONFIRMED CONSEQUENCE of no CLONE_SETTLS: every spawned thread
+ * shares the CALLING thread's TLS region, since aarch64 Linux TLS is
+ * addressed through TPIDR_EL0 and clone(2) only reinitializes it when
+ * CLONE_SETTLS is passed. Confirmed empirically (a `__thread int marker`
+ * probe shows every spawned thread and the caller reporting the identical
+ * address). This means every `__thread` variable, including
+ * src/thread/pthread.c's `__pthread_self_control`, silently ALIASES across
+ * every thread this function creates -- confirmed to stall a multi-thread
+ * pthread_mutex_t stress test because every worker unknowingly shared one
+ * control block. Not fixed here: needs a real per-thread TCB matching the
+ * program's linked TLS segment plus CLONE_SETTLS. Any code relying on
+ * independent __thread storage across threads spawned here must know
+ * about this first. */
 int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
                         size_t stack_size, int create_suspended, // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; stack size and suspension flag have distinct roles
                         __plat_handle_t *out)
@@ -489,30 +321,17 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
 		errno = e;
 		return -1;
 	}
-	/* Boxed as pid+1, echoing src/unistd/linux/plat_fd.c's fd+1 encoding
-	 * (0 stays reserved for __PLAT_HANDLE_NULL) -- but see this file's
-	 * banner: this is a DIFFERENT handle namespace than that file's, and
-	 * the two must never be crossed. The stack this call mmap()'d is
-	 * intentionally leaked (not tracked/freed on join) -- no destroy path
-	 * exists in this port's scope, the same disclosed gap as the
-	 * semaphore/event objects above never being freed. */
+	/* Boxed as pid+1, echoing plat_fd.c's fd+1 encoding, but this is a
+	 * DIFFERENT handle namespace and the two must never be crossed. The
+	 * mmap()'d stack is intentionally leaked; no destroy path exists yet. */
 	*out = (__plat_handle_t)(pid + 1);
 	return 0;
 }
 
-/* __plat_thread_duplicate_self(): boxed exactly like __plat_thread_spawn()
- * above (tid+1) -- a real, durable identifier for the calling thread
- * (gettid(2) never fails and is stable for the thread's whole
- * lifetime, the same "durable, not just valid for one call" property
- * NT's own NtDuplicateObject(NtCurrentThread()) gives __pthread_current()
- * this for). Unlike NT's version, there is no separate pseudo-handle
- * form to fall back to and no failure mode to handle -- gettid(2) is
- * documented to always succeed. See this file's own banner for why
- * __plat_wait_one() cannot yet wait on a thread handle at all (only
- * the semaphore/event objects above): callers that need to actually
- * block on a thread's exit (pthread_join(), out of this port's scope)
- * cannot use this handle for that purpose yet, only identify the
- * thread. */
+/* Boxed like __plat_thread_spawn() above (tid+1): gettid(2) never fails
+ * and is stable for the thread's whole lifetime. See this file's banner
+ * for why __plat_wait_one() cannot wait on a thread handle -- this
+ * identifies the thread but cannot yet be used to block on its exit. */
 #define SYS_gettid 178
 __plat_handle_t __plat_thread_duplicate_self(void)
 {
@@ -522,48 +341,22 @@ __plat_handle_t __plat_thread_duplicate_self(void)
 
 /* ---- src/thread/pthread_mutex.c's/pthread.c's process-wide fast lock -----
  *
- * See plat_thread.h's own banner for the contract: available from the
- * first call, always exactly one, process-wide, no creation step.
- * NT gets this for free from the OS-provided PEB lock; this backend
- * builds the identical property from a single zero-initialized static
- * word (BSS, so no allocation and no lazy-init race the way a
- * dynamically created semaphore would need).
+ * Available from the first call, always exactly one, process-wide, no
+ * creation step: a zero-initialized static word (BSS), no lazy-init race.
  *
- * A plain spinlock, not a futex-based sleep/wake mutex -- deliberately,
- * not a missed opportunity to reuse the futex_wait()/futex_wake()
- * helpers above. Every critical section this lock ever protects is a
- * handful of plain field reads/writes on pthread_mutex_t's own
- * bookkeeping (owner/recursion/waiters/robust_state) -- never a
- * blocking call, never unbounded work -- so the lock is never held
- * for longer than a few instructions by a thread that is, definitionally,
- * currently running (nothing on this backend is preempted-and-parked
- * mid-critical-section the way a fair scheduler might starve a spinner
- * against a *blocked* holder). A first implementation used the
- * standard three-state futex mutex algorithm (0/1/2, matching
- * RtlAcquirePebLock()'s own sleep-based contract more closely) and hit
- * a real, reproducible stall under this port's own contention test
- * (16 threads x 50000 pthread_mutex_lock()/_unlock() cycles apiece
- * through the REAL pthread_mutex_t front door -- fuzz/
- * linux_pilot_test_pthread_mutex.c -- stopped making any further
- * progress after only a few hundred increments, everything asleep on
- * a futex, nothing left to wake it): a genuine bug in that first
- * version, not a false alarm, whether in this file's own algorithm or
- * in some interaction with the semaphore-based blocking path
- * mutex_acquire() ALSO uses for its own, separate, already-proven-
- * correct wait (src/thread/pthread_mutex.c's own semaphore/
- * __plat_wait_one() path, unrelated to this lock). Rather than keep
- * chasing a subtle concurrency bug in a hand-written wakeup protocol
- * for a lock that never needs to sleep in the first place, this
- * backend uses the lock shape that is trivially,
- * inspection-obviously correct for its actual job: spin, yielding the
- * CPU between attempts so a contended spin cannot starve the holder
- * (which is running right now, on this same host, and will release
- * within a few instructions) -- exactly the tool a short, always-brief
- * critical section calls for, and with no wakeup protocol at all,
- * there is no wakeup-protocol bug to have. Recursive acquisition by
- * the same thread deadlocks here exactly like RtlAcquirePebLock()
- * would on NT -- see plat_thread.h's own note that no caller in this
- * tree relies on recursion through this specific lock. */
+ * A plain spinlock, not a futex-based sleep/wake mutex, deliberately:
+ * every critical section this protects is a handful of plain field
+ * reads/writes on pthread_mutex_t's bookkeeping, never blocking or
+ * unbounded, so the lock is never held longer than a few instructions by
+ * a thread that is definitionally currently running. A first
+ * implementation used the standard three-state futex mutex algorithm and
+ * hit a real, reproducible stall under contention testing (16 threads x
+ * 50000 lock/unlock cycles stopped making progress, everything asleep on
+ * a futex with nothing left to wake it) -- rather than keep chasing a
+ * concurrency bug in a wakeup protocol this lock doesn't need, it spins,
+ * yielding the CPU between attempts so a contended spin cannot starve the
+ * holder. Recursive acquisition by the same thread deadlocks here exactly
+ * like RtlAcquirePebLock() would on NT. */
 static int fast_lock_word;
 
 #define SYS_sched_yield 124
@@ -588,51 +381,27 @@ void __plat_fast_unlock(void)
 }
 
 /* ---- waiting on more than one object -------------------------------------
- * A real, correct-if-not-maximally-efficient implementation: Linux has
- * no single primitive matching NtWaitForMultipleObjects' WaitAny mode
- * across arbitrary futex words (a real one would need FUTEX_WAIT on
- * several addresses via io_uring or a helper thread per handle), so
- * this polls every handle's already-real state check (the same ones
- * __plat_wait_one() above performs) in a loop, sleeping briefly
- * between passes. Every caller in this tree (src/thread/aio.c) waits
- * on a small, fixed handful of handles for a relatively coarse aio
- * deadline, not a hot low-latency path, so a millisecond poll interval
- * is a real, disclosed tradeoff, not a correctness gap.
+ * Linux has no single primitive matching NtWaitForMultipleObjects' WaitAny
+ * mode across arbitrary futex words, so this polls every handle's state
+ * check in a loop, sleeping briefly between passes. The only caller
+ * (src/thread/aio.c) waits on a small, fixed handful of handles for a
+ * coarse aio deadline, so a millisecond poll interval is an acceptable
+ * tradeoff.
  *
- * A second, genuinely different __plat_handle_t domain also has to be
- * handled here: this function's one real caller is aio.c's
- * aio_suspend(), via its own on-stack handles[2]. handles[0] is always
- * this file's own __plat_event_create() result (a `struct
- * ntlibc_linux_sync *`, an mmap()'d page this file allocated), while
- * handles[1], when present, is aio_suspend()'s own `signal_event =
- * __sig_delivery_event()`, which on THIS backend
- * (src/signal/linux/plat_signal.c's __plat_sigevent_create()) is a
- * completely different encoding: a raw Linux eventfd(2) descriptor
- * boxed as (fd + 1), the same small-integer convention src/unistd/
- * linux/plat_fd.c and this backend's own select() port
- * (src/select/linux/plat_select.c) use for fd-shaped handles. Blindly
- * casting handles[1] to `struct ntlibc_linux_sync *` and reading
- * obj->kind dereferences that small boxed integer as a pointer --
- * almost certainly an unmapped low address, so a guaranteed SIGSEGV
- * whenever the loop needs to look past handles[0].
+ * A second __plat_handle_t domain has to be handled here: aio_suspend()'s
+ * handles[0] is always this file's own sync object, but handles[1], when
+ * present, is __sig_delivery_event() -- a raw Linux eventfd(2) boxed as
+ * (fd + 1), a completely different encoding. Blindly casting it to
+ * `struct ntlibc_linux_sync *` would dereference a small integer as a
+ * pointer, an almost-guaranteed SIGSEGV.
  *
- * The two domains are distinguished by a real structural fact rather
- * than a magnitude guess: alloc_sync() above hands out raw mmap(2)
- * results, and mmap(2) is guaranteed by the kernel to return
- * page-aligned addresses (and, via mmap_min_addr, never anything in
- * the first page) -- every `struct ntlibc_linux_sync *` this file
- * ever produces therefore has its low 12 bits all zero. A boxed
- * eventfd (fd + 1) lands on that same alignment only if fd is exactly
- * 4095, 8191, ... -- far past anything this tree's own fd table
- * (FD_MAX, src/internal/libc.h) or any real caller approaches. So
- * "not page-aligned" is treated as "this is a boxed fd, not one of my
- * own sync objects" and read the same way
- * src/select/linux/plat_select.c already does for that exact
- * encoding: a zero-timeout ppoll(POLLIN), peeking readiness without
- * consuming it -- matching the EVENT-kind branch below, which also
- * only peeks (aio_suspend()'s own __sig_drain_pending() call, right
- * after this wait returns, is what actually consumes a pending
- * signal). */
+ * The two domains are distinguished structurally: mmap(2) is guaranteed to
+ * return page-aligned addresses, so every sync object this file produces
+ * has its low 12 bits zero, while a boxed eventfd only aligns that way for
+ * an fd far past anything this tree's fd table reaches. "Not page-aligned"
+ * is therefore treated as a boxed fd and read via a zero-timeout
+ * ppoll(POLLIN) peek, matching the EVENT-kind branch below (also peek-only;
+ * aio_suspend()'s __sig_drain_pending() call actually consumes it). */
 #define SYS_nanosleep_wa 101
 #define SYS_ppoll_wa     73
 
@@ -644,11 +413,7 @@ static int handle_is_boxed_fd(__plat_handle_t h)
 	return ((unsigned long)h & 4095UL) != 0;
 }
 
-/* Zero-timeout POLLIN peek on a boxed-fd handle (the same ppoll(2) idiom
- * src/select/linux/plat_select.c's own probes already use), via this
- * file's own raw_syscall() rather than that file's `extern long
- * syscall(...)` -- see this file's banner for why a host-glibc-satisfied
- * syscall() is the wrong primitive here. Peeks only, same as the
+/* Zero-timeout POLLIN peek on a boxed-fd handle. Peeks only, same as the
  * NTLIBC_LX_SYNC_EVENT branch below: never consumes. */
 static int fd_handle_ready(__plat_handle_t h)
 {
@@ -709,20 +474,12 @@ int __plat_wait_any(__plat_handle_t *handles, unsigned count, int alertable, // 
 }
 
 /* ---- named objects, keyed by the filesystem namespace ---------------------
- * NT's object manager namespace (\BaseNamedObjects\...) gives create-
- * or-open-by-name, race-free, as one syscall; Linux has no equivalent
- * single primitive, but the filesystem namespace under /tmp -- shared
- * by every process on this host, exactly like \BaseNamedObjects is --
- * plus O_CREAT|O_EXCL for atomic "did I just create this" detection,
- * gets the same property with a handful of real syscalls: open (or
- * create) a small backing file, size it to fit one struct
- * ntlibc_linux_sync, and MAP_SHARED it so every process that opens the
- * same path sees the SAME futex word -- not a private, per-process
- * copy the way __plat_semaphore_create()'s MAP_PRIVATE mapping above
- * is. This is the real, working primitive both named semaphores
- * (semaphore.c's sem_open()) and, via src/signal/linux/plat_signal.c's
- * own copy of this same technique, signal.c's stop-events are built
- * from. */
+ * NT's \BaseNamedObjects gives create-or-open-by-name, race-free, as one
+ * syscall; Linux has no equivalent, but the filesystem namespace under
+ * /tmp plus O_CREAT|O_EXCL for atomic "did I just create this" detection
+ * gets the same property: open/create a small backing file sized to one
+ * struct ntlibc_linux_sync and MAP_SHARED it, so every process that opens
+ * the same path sees the same futex word. */
 #define SYS_openat    56
 #define SYS_ftruncate 46
 #define SYS_close     57
@@ -742,21 +499,13 @@ static void named_sem_path(const char *name, char *buf, size_t bufsz)
 	buf[j] = 0;
 }
 
-/* Opens (with `flags`) the backing file for `name`, sizes it on
- * O_CREAT, and hands back the MAP_SHARED mapping. A real, disclosed
- * race: if two processes race __plat_named_semaphore_open_or_create()
- * for the same brand-new name, the second one's O_CREAT|O_EXCL fails
- * and it falls back to a plain open() (below) that can, in principle,
- * observe the file before the first process's ftruncate() has run --
- * a zero-length mmap that would fail. Narrow in practice (the window
- * is a handful of instructions between two syscalls on the SAME
- * creator), not eliminated; a real fix would retry the mmap on
- * failure, disclosed as follow-up rather than papered over here.
- *
- * Every one of this function's own callers' obj->futex/obj->kind/obj->max
- * findings share alloc_sync()'s own "checked raw_syscall(SYS_mmap, ...)
- * allocation, then use" residual, above -- see that function's comment;
- * not repeated at each call site below. */
+/* Opens (with `flags`) the backing file for `name`, sizes it on O_CREAT,
+ * and hands back the MAP_SHARED mapping. A real, disclosed race: if two
+ * processes race __plat_named_semaphore_open_or_create() for the same
+ * brand-new name, the second one's O_CREAT|O_EXCL fails and falls back to
+ * a plain open() that can, in principle, observe the file before the
+ * first process's ftruncate() has run. Narrow in practice; a real fix
+ * would retry the mmap on failure. */
 static int map_named_sem(const char *name, long flags, long mode,
                          struct ntlibc_linux_sync **out)
 {
@@ -841,52 +590,24 @@ static void named_mutant_path(const char *name, char *buf, size_t bufsz)
 }
 
 /* Acquire (wait indefinitely, non-alertable) the create-or-open named
- * mutant `name`, matching plat_thread.h's own contract for this
- * function. Unlike the named-semaphore group above, this uses plain
- * O_CREAT (no O_EXCL): two processes both naming a brand-new lock for
- * the first time both legitimately need a valid, initialized lock back,
- * not a create-vs-open distinction. That first-touch initialization is
- * a real, confirmed race if done naively -- checking `obj->kind !=
- * NTLIBC_LX_SYNC_SEMAPHORE` and then, non-atomically, writing
- * obj->max/obj->futex/obj->kind in plain (non-atomic) stores. Two
- * processes racing the same fresh backing file could both observe
- * kind==0 and both start that write sequence; if process A's writes
- * landed, A went on to __plat_wait_one() and successfully decremented
- * futex from 1 to 0 (genuinely acquiring the lock) BEFORE process B's
- * own already-in-flight, already-decided "reinitialize" writes landed --
- * B's plain `obj->futex = 1` then silently overwrote A's decrement, and
- * B's own subsequent __plat_wait_one() call decremented that
- * resurrected 1 back to 0 too, so BOTH processes believed they
- * exclusively held the same lock at once. Confirmed with strace against
- * a real fork/1-1.c run (parent and child both call sem_open() on the
- * same name immediately after fork(), the exact shape this races):
- * intermittent hangs and double-acquisition-shaped corruption that
- * neither the sleep(1)-busy-spin fix (src/signal/linux/plat_signal.c)
- * nor the malloc/fast-lock self-deadlock fix (src/internal/
- * plat_malloc_generic.h) explained on their own -- this was the third,
- * separate bug behind the same TIMEOUT cluster, only reproducing on a
- * fraction of runs because it depends on exact process-scheduling
- * timing, unlike the other two which reproduced every time.
+ * mutant `name`. Unlike the named-semaphore group above, this uses plain
+ * O_CREAT (no O_EXCL): two processes both naming a brand-new lock for the
+ * first time both legitimately need a valid, initialized lock back.
  *
- * The fix: exactly one process ever performs the plain, non-atomic
- * max/futex writes, decided by a real atomic CAS on `kind` (0 ->
- * INITIALIZING) rather than a plain read-then-write. The CAS's winner
- * writes max/futex and then RELEASE-publishes kind=SEMAPHORE; every
- * loser -- whether it raced in during the writes (observes
- * INITIALIZING) or arrives after they are done (observes SEMAPHORE
- * directly) -- only ever ACQUIRE-loads `kind`, synchronizing with that
- * RELEASE store before touching max/futex at all, so no process ever
- * writes those fields concurrently with another and no process ever
- * observes them half-written.
+ * First-touch initialization is a real, confirmed race if done naively
+ * (check-then-plain-write of obj->max/futex/kind): two processes racing
+ * the same fresh backing file could both start that write sequence, and
+ * whichever one's re-initializing write landed second would silently
+ * overwrite the other's already-in-progress lock acquisition, letting
+ * both processes believe they held the lock at once. Confirmed via strace
+ * against fork()+sem_open() as intermittent double-acquisition corruption.
  *
- * obj->kind/obj->max below are the same "checked raw_syscall(SYS_mmap,
- * ...) allocation, then use" residual alloc_sync()'s own comment above
- * documents -- this function inlines its own copy of that pattern
- * (`r = raw_syscall(SYS_mmap, ...); if (is_sys_error(r)) ...; obj =
- * (struct ntlibc_linux_sync *)r;`) rather than sharing alloc_sync()
- * itself, since it maps a real file, not an anonymous page -- same
- * verified-sound-by-hand reasoning, not expressible as a `nonnull` on
- * this function's own name/out parameters. */
+ * The fix: exactly one process performs the plain max/futex writes,
+ * decided by an atomic CAS on `kind` (0 -> INITIALIZING). The CAS winner
+ * writes max/futex then RELEASE-publishes kind=SEMAPHORE; every loser only
+ * ever ACQUIRE-loads `kind`, synchronizing with that RELEASE before
+ * touching max/futex, so no process ever writes those fields concurrently
+ * or observes them half-written. */
 int __plat_named_mutant_acquire(const char *name, __plat_handle_t *out)
 {
 	char path[160];
@@ -907,25 +628,16 @@ int __plat_named_mutant_acquire(const char *name, __plat_handle_t *out)
 	expect = 0;
 	if (__atomic_compare_exchange_n(&obj->kind, &expect, NTLIBC_LX_SYNC_INITIALIZING,
 	                                0, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE)) {
-		/* We are provably the only process that can be writing these
-		 * two fields right now -- the CAS above admits exactly one
-		 * winner across every process racing this same backing file. */
+		/* Provably the only process writing these two fields: the CAS
+		 * above admits exactly one winner. */
 		obj->max = 1;
 		obj->futex = 1;
 		__atomic_store_n(&obj->kind, NTLIBC_LX_SYNC_SEMAPHORE, __ATOMIC_RELEASE);
 	} else {
-		/* Either already published (expect == SEMAPHORE, and the
-		 * ACQUIRE above already synchronizes with whichever process's
-		 * RELEASE store set it) or someone else's initialization is
-		 * still in flight (expect == INITIALIZING) -- spin for the
-		 * real, short window until it publishes. Real, not a
-		 * fabricated wait: the winner's own critical section above is
-		 * two plain integer stores, nothing that blocks or takes a
-		 * kernel round trip, so this never spins for longer than a
-		 * handful of instructions on a peer that is, definitionally,
-		 * currently running -- the identical reasoning __plat_fast_lock()
-		 * above gives for its own spin, reused here rather than
-		 * duplicated with different wording. */
+		/* Either already published, or another process's initialization
+		 * is still in flight -- spin until it publishes. Same reasoning
+		 * as __plat_fast_lock() above: the winner's critical section is
+		 * two plain stores, so this never spins long. */
 		while (__atomic_load_n(&obj->kind, __ATOMIC_ACQUIRE) == NTLIBC_LX_SYNC_INITIALIZING)
 			raw_syscall(SYS_sched_yield, 0L, 0L, 0L, 0L, 0L, 0L);
 	}
@@ -941,10 +653,8 @@ void __plat_named_mutant_release(__plat_handle_t lock)
 }
 
 /* ---- thread lifecycle, the remaining functions -----------------------
- * See this file's own banner (top): __plat_thread_resume() belongs to
- * src/process/linux/plat_process.c, already real (a no-op -- nothing
- * this backend spawns is ever created suspended). The functions below
- * are this file's own remaining share of plat_thread.h.
+ * __plat_thread_resume() belongs to src/process/linux/plat_process.c
+ * (a no-op: nothing this backend spawns is ever created suspended).
  */
 #define SYS_kill_lx    129
 #define SYS_getpid_lx  172
@@ -953,14 +663,9 @@ void __plat_named_mutant_release(__plat_handle_t lock)
 #define SYS_clock_gettime_lx 113
 #define LINUX_SIGSTOP  19
 
-/* Suspends the thread __plat_thread_spawn() created, identified by its
- * boxed tid+1 (see that function's own comment). Real plain kill(2),
- * not tgkill(2): this backend's spawn() does not pass CLONE_THREAD (a
- * disclosed simplification, same banner), so the spawned "thread" is
- * its own thread-group leader -- its own separate pid, not a sibling
- * in the caller's thread group tgkill(2) requires -- and a plain
- * per-process SIGSTOP delivered to that pid is the real, correct
- * primitive for what this backend actually created. */
+/* Plain kill(2), not tgkill(2): this backend's spawn() does not pass
+ * CLONE_THREAD, so the spawned "thread" is its own thread-group leader --
+ * its own separate pid, not a sibling in the caller's thread group. */
 int __plat_thread_suspend(__plat_handle_t h)
 {
 	long tid = (long)h - 1;
@@ -969,17 +674,12 @@ int __plat_thread_suspend(__plat_handle_t h)
 	return 0;
 }
 
-/* NOT implemented for real: NT's QueueApcThread/redirect-via-CONTEXT-
- * record has no Linux equivalent this port builds yet (a real one
- * needs a dedicated real-time signal with a kernel-installed handler,
- * genuinely separate work from anything else in this file -- see
- * src/signal/linux/sigdelivery.c's own banner for the identical gap on
- * the signal-delivery side). Both return a real, honest failure rather
- * than silently doing nothing: src/thread/pthread_cancel.c's
- * PTHREAD_CANCEL_ASYNCHRONOUS path is the only caller of either, and a
- * clean failure there means asynchronous cancellation is not yet
- * available on this platform -- deferred cancellation (the POSIX
- * default type) never calls these at all. */
+/* NOT implemented for real: NT's QueueApcThread/redirect-via-CONTEXT-record
+ * has no Linux equivalent built here yet (needs a dedicated real-time
+ * signal with a kernel-installed handler). Both fail honestly rather than
+ * silently doing nothing; PTHREAD_CANCEL_ASYNCHRONOUS is simply
+ * unavailable on this platform, while deferred cancellation never calls
+ * these at all. */
 int __plat_thread_queue_apc(__plat_handle_t h, __plat_apc_fn fn, void *arg1, void *arg2)
 {
 	(void)h; (void)fn; (void)arg1; (void)arg2;
@@ -994,11 +694,9 @@ int __plat_thread_redirect_ip(__plat_handle_t h, void *target) // NOLINT(bugpron
 	return -1;
 }
 
-/* Same disclosed gap as above: no per-thread TEB-equivalent this port
- * tracks stack bounds through yet (see this file's own banner on the
- * missing CLONE_SETTLS/real TCB). pthread_getattr_np() is a glibc/BSD
- * extension, not strict POSIX -- a real, honest failure here rather
- * than a fabricated answer. */
+/* No per-thread TEB-equivalent tracks stack bounds yet (missing
+ * CLONE_SETTLS/real TCB, see banner). Honest failure rather than a
+ * fabricated answer. */
 int __plat_thread_stack_extent(__plat_handle_t h, void **base, size_t *size)
 {
 	(void)h; (void)base; (void)size;
@@ -1006,11 +704,9 @@ int __plat_thread_stack_extent(__plat_handle_t h, void **base, size_t *size)
 	return -1;
 }
 
-/* Linux has no separate "pseudo-handle valid only for self-operations"
- * concept the way NT's NtCurrentThread() is -- gettid(2) is already a
- * real, durable, always-succeeding identifier for the calling thread,
- * so the same encoding __plat_thread_duplicate_self() above uses
- * (tid+1) answers both plat_thread.h roles identically and for real. */
+/* Linux has no separate pseudo-handle concept like NT's NtCurrentThread():
+ * gettid(2) is already durable, so the same tid+1 encoding answers both
+ * roles. */
 __plat_handle_t __plat_thread_current_pseudo(void)
 {
 	return __plat_thread_duplicate_self();
@@ -1022,13 +718,9 @@ _Noreturn void __plat_thread_terminate_self(void)
 }
 
 /* The bypass-everything emergency abort __pthread_cancel_unsafe_enter()'s
- * documented regions use -- real, not degraded: a raw write(2) straight
- * to fd 2 (this platform's real stderr, no stdio/fd-table locks that a
- * suspended target thread might itself hold involved at all) followed
- * by an immediate, unconditional process exit. `region` is written as
- * a fixed, already-NUL-terminated diagnostic; no formatting, on
- * purpose, for the same async-signal-safety reason
- * src/thread/nt/plat_thread.c's own version gives. */
+ * documented regions use: a raw write(2) straight to fd 2, no stdio/
+ * fd-table locks a suspended target thread might hold, then an immediate
+ * unconditional exit. */
 _Noreturn void __plat_cancel_unsafe_abort(const char *region)
 {
 	static const char msg1[] = "ntlibc: cancellation-unsafe abort in: ";
@@ -1041,11 +733,8 @@ _Noreturn void __plat_cancel_unsafe_abort(const char *region)
 	for (;;) raw_syscall(SYS_exit_lx, 1L, 0L, 0L, 0L, 0L, 0L);
 }
 
-/* Linux has no APC-alertable-wait concept (see __plat_wait_one()'s own
- * comment above) -- a plain sched_yield(2) is the real, honest
- * equivalent of "let a pending APC run first if there is one" here:
- * yield the processor, nothing more, since there is no APC queue to
- * drain. */
+/* Linux has no APC-alertable-wait concept; a plain sched_yield(2) is the
+ * honest equivalent since there is no APC queue to drain. */
 void __plat_thread_alertable_yield(void)
 {
 	raw_syscall(SYS_sched_yield, 0L, 0L, 0L, 0L, 0L, 0L);
@@ -1065,12 +754,8 @@ long long __plat_query_system_time(void)
 	return secs_since_1601 * 10000000LL + (long long)ts.tv_nsec / 100LL;
 }
 
-/* mqueue.c's positioned queue-file transfer -- real pread64(2)/
- * pwrite64(2), which already give exactly the contract mqueue.c's own
- * raw_io() needs (an explicit offset, no side effect on any file
- * position, no end-of-file short-circuit beyond the plain "0 bytes"
- * pread64 itself returns at EOF, which mqueue.c's own retry loop
- * already treats as a real error per plat_thread.h's own comment). */
+/* mqueue.c's positioned queue-file transfer via pread64(2)/pwrite64(2):
+ * explicit offset, no side effect on the file position. */
 #define SYS_pread64_lx  67
 #define SYS_pwrite64_lx 68
 
