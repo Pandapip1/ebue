@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
- * SPDX-License-Identifier: GPL-3.0-or-later */
-
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * NT-only; real Linux isatty() lives in src/unistd/linux/plat_isatty.c. */
+#ifndef __linux__
 #include <unistd.h>
 #include <errno.h>
 #include "libc.h"
@@ -12,3 +14,4 @@ int isatty(int fd)
 	if (f->type != __FD_CONSOLE) { errno = ENOTTY; return 0; }
 	return 1;
 }
+#endif

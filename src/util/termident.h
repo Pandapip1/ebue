@@ -28,34 +28,17 @@
  *  - Linux: a real tty (a pty slave, most commonly) is a real
  *    character-device node with a real path, and this library's own
  *    chmod()/fchmodat() are real syscalls against it
- *    (src/stat/linux/plat_stat.c) -- but isatty() cannot be used to
- *    find it: src/internal/linux/plat_fd_init.c's classify_fd() maps
- *    *every* S_IFCHR descriptor, ptys included, to __FD_CHAR rather
- *    than __FD_CONSOLE (there is no Linux-specific tty recognition in
- *    that classifier at all yet -- a pre-existing gap in this tree's
- *    native-Linux terminal support, confirmed by reading
- *    src/internal/linux/plat_fd_init.c and src/termios/termios.c in
- *    full; out of scope to fix here, since repairing it touches
- *    isatty()/termios(3)/ioctl(2)'s shared classifier used everywhere
- *    in this tree, not just these two utilities, and this sandbox
- *    cannot link or execute a single Linux ntlibc program to validate
- *    such a change -- missing -lntdll on the standard bin/ link line
- *    by the Makefile's own deliberate design, plus missing outline-
- *    atomics/getauxval/__stack_chk_guard providers even working
- *    around that, none of it related to write/mesg). Composing with
- *    isatty() alone would therefore make mesg/write permanently inert
- *    on Linux, silently -- worse than the gap itself.  So this file
- *    finds a real Linux tty a different, still entirely real way:
- *    fstat() + S_ISCHR(), then resolve the actual device node path via
- *    readlink("/proc/self/fd/<fd>") -- procfs is the Linux kernel's
- *    own, not something ntlibc provides (src/internal/vfs.c's own
- *    banner: Linux "has real native devices and a real native root, so
- *    it needs no overlay" -- every path here is native, not synthetic)
- *    -- using only fstat() and readlink(), both already real,
- *    independently-tested primitives (src/stat/linux/plat_stat.c,
- *    src/unistd/link.c). No raw syscalls of this file's own, no new
- *    parallel classification machinery -- just a working route to the
- *    same answer isatty() cannot give on this platform yet.
+ *    (src/stat/linux/plat_stat.c). isatty() (src/unistd/linux/
+ *    plat_isatty.c) is real here too now, but answers a wider question
+ *    than this file needs: it also succeeds on a Unix98 pty MASTER fd
+ *    (/dev/ptmx), which is not a nameable per-session device this file
+ *    could chmod() or write(1p) a message into. So this file finds a
+ *    real Linux tty its own way instead: fstat() + S_ISCHR(), then
+ *    resolve the actual device node path via
+ *    readlink("/proc/self/fd/<fd>") and check it is shaped like a real
+ *    tty (src/util/termident.c's own path_looks_like_tty(), which is
+ *    what filters the ptmx master case out). isatty() is only a
+ *    fallback, for a path this route could not resolve.
  */
 #ifndef _NTLIBC_UTIL_TERMIDENT_H
 #define _NTLIBC_UTIL_TERMIDENT_H

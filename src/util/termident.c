@@ -27,7 +27,8 @@ static void set_shortname(struct term_ident *out, const char *s)
  * shapes the Linux kernel actually hands out for ttys: a pty slave
  * (/dev/pts/N), a virtual console or serial line (/dev/ttyN,
  * /dev/ttyS0, ...), or the /dev/tty and /dev/console aliases
- * themselves. */
+ * themselves -- deliberately excluding /dev/ptmx, the pty master node
+ * (isatty() succeeds on that fd too, but it is not a nameable device). */
 static int path_looks_like_tty(const char *path)
 {
 	static const char *const tty_prefixes[] = {
@@ -64,9 +65,9 @@ static int describe_fd(int fd, struct term_ident *out)
 				return 1;
 			}
 			/* A real, resolved char-device path that is not
-			 * tty-shaped (/dev/null, /dev/zero, ...): not a
-			 * terminal.  Fall through to isatty() below, same
-			 * as any other non-terminal fd. */
+			 * tty-shaped (/dev/null, /dev/zero, /dev/ptmx, ...):
+			 * not a terminal.  Fall through to isatty() below,
+			 * same as any other non-terminal fd. */
 		}
 		/* readlink() failing here (no /proc -- NT, or a Linux
 		 * process started with procfs unmounted) is not itself
