@@ -31,6 +31,14 @@
  *    macro subset, exactly the boundary this project's man(1p) is
  *    scoped to.
  *
+ * A third fixture, GREP1_EXCERPT_GZ (Tier 4: src/util/man_gz.c's own
+ * gzip/DEFLATE decompression), is GREP1_EXCERPT's exact same bytes run
+ * through a real `gzip -9` once by hand -- not a hand-crafted DEFLATE
+ * stream, so decompressing it exercises this project's own inflate
+ * against a real compressor's real dynamic-Huffman output, then
+ * reuses check_grep1_rendered_correctly() to prove the decompressed
+ * result renders byte-for-byte the same page GREP1_EXCERPT does.
+ *
  * Spec pages consulted (https://pubs.opengroup.org/onlinepubs/9699919799/):
  *   utilities/man.html (SYNOPSIS, OPTIONS, OPERANDS, EXIT STATUS)
  */
@@ -642,6 +650,180 @@ static void write_grep1_excerpt(const char *path)
 	fclose(f);
 }
 
+/* ==== fixture page 3: the SAME real, unmodified GREP1_EXCERPT bytes above,
+ * genuinely gzip-compressed (Tier 4 -- src/util/man_gz.c) ================ */
+
+/* `gzip -9 -n` (real gzip(1), -n so the header carries no filename/mtime,
+ * for a deterministic fixture) run once, by hand, over the exact same
+ * 3901 bytes write_grep1_excerpt() writes above -- not a separately
+ * hand-crafted DEFLATE stream, so this exercises this project's own
+ * man_gunzip() (src/util/man_gz.c) against a real compressor's real
+ * output on real troff content, the same "proof against data nobody
+ * wrote for this project" reasoning GREP1_EXCERPT's own comment gives.
+ * 1796 compressed bytes for grep1.raw's 3901 uncompressed -- comfortably
+ * exercises dynamic Huffman blocks (real gzip -9 never emits stored or
+ * fixed-Huffman blocks for text this size), not just the trivial paths. */
+static const unsigned char GREP1_EXCERPT_GZ[] = {
+	31, 139, 8, 0, 0, 0, 0, 0, 2, 3, 165, 87,
+	109, 111, 219, 200, 17, 254, 28, 254, 138, 57, 225, 16,
+	57, 133, 68, 91, 78, 91, 180, 1, 138, 187, 196, 166,
+	109, 1, 23, 71, 144, 228, 235, 165, 199, 107, 181, 34,
+	87, 210, 34, 226, 46, 205, 93, 90, 22, 218, 254, 247,
+	62, 179, 75, 74, 116, 226, 194, 5, 10, 248, 133, 47,
+	179, 207, 204, 60, 243, 202, 56, 237, 209, 245, 237, 29,
+	173, 43, 89, 82, 33, 52, 149, 98, 45, 163, 56, 151,
+	148, 207, 241, 207, 210, 165, 163, 52, 253, 254, 60, 138,
+	99, 220, 206, 105, 174, 10, 57, 180, 78, 20, 229, 59,
+	234, 157, 159, 157, 255, 97, 120, 246, 118, 120, 62, 234,
+	69, 49, 128, 238, 202, 92, 56, 73, 110, 35, 73, 44,
+	205, 3, 48, 248, 118, 183, 145, 90, 62, 200, 138, 4,
+	101, 27, 161, 215, 16, 48, 36, 21, 164, 42, 136, 42,
+	75, 43, 181, 149, 100, 42, 15, 193, 118, 196, 89, 223,
+	82, 191, 182, 176, 164, 79, 171, 90, 103, 78, 25, 77,
+	149, 180, 245, 214, 89, 82, 26, 64, 218, 104, 87, 169,
+	7, 37, 182, 29, 76, 214, 219, 186, 16, 123, 180, 177,
+	166, 164, 16, 153, 29, 208, 222, 212, 148, 225, 93, 125,
+	52, 209, 95, 44, 247, 84, 213, 90, 43, 189, 166, 254,
+	199, 225, 35, 185, 131, 127, 125, 143, 32, 86, 14, 102,
+	242, 233, 66, 124, 145, 29, 23, 54, 194, 249, 199, 185,
+	204, 20, 216, 130, 27, 71, 155, 26, 229, 46, 60, 165,
+	165, 90, 67, 12, 166, 194, 198, 149, 169, 214, 210, 241,
+	213, 87, 150, 224, 76, 20, 207, 111, 232, 122, 154, 76,
+	104, 68, 233, 239, 78, 192, 124, 239, 16, 154, 183, 241,
+	232, 188, 71, 189, 59, 11, 107, 46, 76, 1, 55, 115,
+	219, 227, 35, 74, 82, 170, 79, 226, 53, 113, 176, 250,
+	148, 158, 136, 251, 40, 150, 219, 230, 22, 78, 168, 21,
+	125, 151, 238, 126, 4, 224, 246, 254, 71, 74, 255, 153,
+	122, 227, 166, 50, 147, 218, 13, 165, 54, 245, 122, 3,
+	21, 102, 181, 34, 161, 99, 7, 182, 40, 55, 146, 237,
+	118, 100, 165, 44, 216, 212, 165, 100, 214, 107, 43, 7,
+	254, 172, 53, 112, 103, 165, 116, 48, 222, 194, 105, 189,
+	182, 180, 189, 7, 64, 78, 213, 61, 140, 122, 117, 176,
+	202, 235, 123, 245, 42, 247, 239, 83, 152, 144, 246, 154,
+	251, 138, 239, 171, 112, 159, 254, 27, 127, 96, 244, 19,
+	233, 197, 226, 40, 217, 239, 55, 82, 252, 27, 197, 194,
+	82, 113, 209, 117, 173, 184, 56, 186, 214, 58, 51, 148,
+	143, 238, 69, 135, 190, 114, 166, 20, 21, 82, 204, 172,
+	60, 144, 114, 33, 204, 162, 146, 44, 155, 227, 216, 214,
+	236, 6, 228, 144, 9, 154, 86, 149, 41, 26, 93, 163,
+	248, 252, 109, 124, 22, 19, 93, 25, 159, 229, 166, 220,
+	15, 168, 220, 74, 97, 37, 171, 124, 231, 209, 54, 206,
+	149, 246, 221, 233, 233, 90, 185, 216, 138, 7, 161, 181,
+	216, 196, 107, 93, 199, 200, 136, 211, 12, 79, 79, 61,
+	88, 204, 87, 229, 86, 40, 125, 202, 182, 159, 118, 252,
+	248, 65, 229, 127, 9, 170, 162, 88, 87, 84, 92, 7,
+	142, 135, 35, 143, 63, 28, 14, 105, 230, 96, 63, 204,
+	167, 45, 28, 178, 223, 26, 218, 1, 11, 161, 148, 143,
+	153, 44, 29, 237, 80, 141, 212, 99, 204, 27, 26, 253,
+	190, 135, 90, 131, 5, 25, 123, 188, 111, 31, 159, 133,
+	18, 231, 16, 123, 233, 98, 54, 160, 217, 231, 1, 125,
+	158, 5, 254, 20, 23, 41, 168, 43, 148, 115, 50, 247,
+	217, 12, 241, 203, 150, 90, 84, 2, 120, 71, 193, 84,
+	164, 10, 80, 83, 32, 251, 4, 31, 65, 169, 103, 56,
+	232, 4, 178, 113, 167, 114, 32, 187, 125, 41, 87, 208,
+	30, 251, 254, 83, 92, 208, 197, 95, 125, 168, 53, 53,
+	247, 211, 6, 124, 38, 30, 154, 102, 83, 59, 83, 0,
+	45, 163, 205, 190, 68, 183, 241, 192, 84, 152, 60, 180,
+	129, 182, 21, 188, 159, 191, 158, 147, 99, 34, 6, 124,
+	12, 81, 221, 9, 95, 160, 149, 92, 43, 203, 117, 46,
+	31, 75, 99, 185, 23, 48, 234, 215, 88, 131, 3, 1,
+	56, 178, 19, 123, 118, 200, 178, 9, 62, 237, 165, 117,
+	6, 136, 8, 46, 209, 12, 21, 190, 40, 110, 22, 44,
+	33, 240, 74, 88, 163, 197, 18, 77, 238, 65, 108, 107,
+	233, 97, 208, 7, 158, 99, 195, 99, 149, 149, 92, 193,
+	58, 29, 40, 64, 79, 251, 28, 1, 20, 37, 245, 93,
+	218, 20, 21, 223, 19, 53, 129, 225, 27, 174, 157, 240,
+	48, 55, 205, 115, 200, 254, 26, 111, 246, 191, 209, 161,
+	36, 16, 122, 169, 109, 232, 165, 193, 97, 223, 213, 67,
+	50, 37, 116, 198, 146, 220, 93, 53, 36, 5, 155, 69,
+	39, 201, 47, 167, 73, 242, 230, 135, 134, 240, 9, 242,
+	130, 139, 1, 217, 245, 133, 28, 224, 188, 27, 133, 80,
+	219, 211, 157, 92, 50, 97, 178, 226, 119, 22, 150, 44,
+	62, 206, 23, 222, 155, 197, 221, 116, 129, 214, 187, 221,
+	250, 44, 104, 60, 250, 153, 141, 229, 104, 142, 120, 186,
+	140, 56, 70, 109, 202, 140, 39, 36, 242, 28, 124, 162,
+	107, 131, 232, 28, 145, 133, 81, 90, 20, 40, 214, 149,
+	175, 175, 5, 107, 116, 230, 221, 2, 67, 131, 140, 159,
+	35, 119, 211, 113, 131, 252, 75, 195, 149, 167, 234, 251,
+	225, 40, 180, 5, 102, 70, 4, 117, 178, 153, 103, 68,
+	220, 75, 2, 117, 207, 136, 160, 167, 140, 90, 161, 214,
+	52, 142, 43, 103, 198, 209, 127, 118, 16, 53, 199, 45,
+	157, 109, 99, 167, 7, 222, 227, 198, 154, 191, 181, 126,
+	158, 127, 227, 231, 77, 203, 22, 122, 11, 167, 156, 167,
+	189, 220, 170, 140, 219, 142, 135, 28, 16, 178, 126, 173,
+	30, 164, 30, 176, 167, 71, 173, 222, 231, 157, 178, 33,
+	149, 78, 144, 41, 72, 79, 228, 13, 136, 152, 94, 93,
+	208, 219, 63, 255, 233, 143, 131, 182, 180, 5, 234, 95,
+	172, 57, 193, 194, 52, 194, 212, 130, 177, 182, 46, 75,
+	83, 161, 80, 223, 4, 67, 239, 166, 207, 6, 132, 223,
+	36, 252, 102, 89, 181, 247, 31, 231, 71, 201, 38, 14,
+	79, 15, 124, 236, 30, 8, 180, 249, 174, 212, 228, 84,
+	16, 74, 124, 152, 56, 239, 38, 62, 82, 147, 203, 230,
+	126, 114, 25, 18, 90, 175, 248, 239, 202, 249, 183, 220,
+	235, 131, 116, 66, 163, 35, 110, 2, 242, 143, 168, 224,
+	42, 148, 199, 208, 31, 185, 14, 81, 101, 93, 7, 131,
+	136, 26, 33, 224, 28, 98, 222, 234, 184, 58, 20, 21,
+	108, 240, 79, 38, 141, 128, 58, 150, 91, 18, 172, 107,
+	146, 194, 15, 164, 208, 121, 217, 150, 255, 169, 239, 182,
+	35, 108, 179, 103, 168, 40, 158, 221, 208, 237, 123, 112,
+	230, 167, 124, 58, 68, 241, 43, 132, 170, 193, 225, 233,
+	131, 198, 150, 109, 48, 152, 208, 86, 43, 109, 155, 35,
+	179, 207, 183, 159, 38, 179, 241, 44, 138, 63, 248, 253,
+	32, 138, 167, 99, 250, 149, 62, 77, 230, 227, 79, 183,
+	244, 91, 156, 254, 203, 255, 188, 142, 226, 49, 77, 222,
+	207, 231, 201, 244, 118, 214, 200, 92, 141, 127, 74, 14,
+	18, 81, 204, 188, 188, 132, 241, 1, 134, 201, 39, 80,
+	233, 235, 206, 235, 255, 7, 118, 213, 129, 253, 7, 99,
+	188, 12, 237, 9, 184, 76, 102, 23, 211, 177, 199, 60,
+	40, 178, 82, 84, 217, 6, 188, 113, 41, 182, 132, 113,
+	71, 147, 34, 219, 64, 207, 52, 32, 197, 17, 102, 129,
+	223, 92, 246, 218, 148, 86, 217, 62, 175, 160, 149, 245,
+	37, 92, 12, 176, 175, 42, 16, 142, 98, 241, 51, 159,
+	7, 143, 105, 41, 48, 85, 107, 181, 41, 195, 188, 227,
+	118, 136, 126, 109, 81, 95, 126, 168, 52, 72, 6, 181,
+	136, 222, 240, 132, 51, 32, 26, 205, 139, 46, 166, 9,
+	159, 106, 13, 180, 220, 84, 177, 1, 250, 105, 171, 229,
+	142, 99, 207, 107, 102, 37, 50, 8, 160, 11, 122, 160,
+	198, 71, 159, 30, 214, 123, 228, 147, 164, 147, 35, 112,
+	92, 180, 168, 113, 52, 223, 151, 138, 187, 238, 254, 137,
+	13, 118, 99, 234, 45, 47, 50, 116, 95, 27, 86, 201,
+	203, 249, 1, 252, 224, 51, 175, 216, 118, 35, 209, 179,
+	179, 176, 107, 130, 244, 201, 36, 122, 207, 88, 62, 72,
+	188, 33, 77, 63, 80, 207, 111, 149, 61, 206, 91, 190,
+	172, 238, 123, 17, 79, 242, 60, 132, 192, 95, 138, 138,
+	241, 202, 218, 129, 246, 64, 101, 3, 1, 101, 77, 111,
+	171, 100, 86, 87, 22, 215, 116, 136, 32, 151, 117, 187,
+	147, 237, 76, 245, 133, 27, 100, 174, 32, 136, 33, 187,
+	31, 68, 97, 8, 235, 103, 14, 98, 216, 230, 223, 40,
+	14, 41, 19, 50, 16, 101, 48, 155, 97, 177, 198, 55,
+	73, 133, 133, 97, 82, 153, 117, 37, 10, 172, 7, 28,
+	124, 63, 131, 209, 201, 230, 147, 16, 231, 244, 239, 233,
+	16, 52, 148, 209, 167, 218, 1, 9, 172, 248, 175, 18,
+	42, 48, 157, 248, 191, 240, 29, 72, 177, 10, 127, 100,
+	138, 51, 63, 83, 111, 64, 189, 230, 48, 62, 123, 120,
+	224, 182, 231, 217, 157, 230, 17, 233, 186, 88, 162, 97,
+	51, 147, 13, 253, 29, 52, 54, 113, 18, 66, 73, 179,
+	61, 150, 131, 199, 94, 71, 69, 210, 85, 225, 167, 58,
+	218, 127, 58, 196, 84, 199, 4, 65, 118, 227, 24, 114,
+	210, 61, 137, 188, 176, 212, 74, 242, 248, 175, 183, 194,
+	175, 59, 60, 103, 125, 34, 159, 36, 211, 4, 185, 134,
+	117, 53, 172, 185, 111, 186, 62, 93, 117, 21, 174, 212,
+	35, 107, 107, 246, 254, 255, 174, 206, 203, 181, 159, 7,
+	3, 63, 122, 158, 81, 220, 85, 115, 221, 85, 179, 20,
+	86, 101, 47, 59, 229, 197, 158, 247, 232, 195, 55, 30,
+	205, 121, 15, 229, 85, 148, 63, 186, 176, 100, 226, 131,
+	178, 171, 127, 210, 213, 207, 211, 249, 5, 245, 255, 1,
+	245, 155, 11, 110, 61, 15, 0, 0,
+};
+
+static void write_file_bin(const char *path, const unsigned char *data, size_t len)
+{
+	FILE *f = fopen(path, "wb");
+	if (!f) { fails++; printf("FAIL: cannot write %s\n", path); return; }
+	fwrite(data, 1, len, f);
+	fclose(f);
+}
+
 /* ==== tests =============================================================== */
 
 static void test_finds_and_formats_frobnicate(void)
@@ -931,12 +1113,21 @@ static void test_apropos_dash_k(void)
 	CHECK(out_contains("frobnicate(1)"));
 }
 
-static void test_gzip_only_page_diagnosed(void)
+/* Content is irrelevant here on purpose: this ".1.gz" page exists (so
+ * man_find_one() finds it, Tier 4's own man_find_page() no longer
+ * refuses a ".gz"-only page the way it used to) but is not real gzip
+ * data, so man_gunzip() must reject it -- a bad magic number, since
+ * the file is empty and even the 10-byte fixed header doesn't fit.
+ * Proves a corrupt/malformed gzip page is diagnosed and treated like
+ * any other unreadable file (nonzero exit, one diagnostic mentioning
+ * "gzip"), not a crash and not silently-wrong output reaching the
+ * troff parser. */
+static void test_corrupt_gzip_page_diagnosed(void)
 {
 	char gzpath[400];
 	char *argv[3];
 	snprintf(gzpath, sizeof gzpath, "%s/compressed-only.1.gz", man1dir);
-	write_file(gzpath, ""); /* content is irrelevant: only existence is checked */
+	write_file(gzpath, "");
 
 	argv[0] = (char *)"man"; argv[1] = (char *)"compressed-only"; argv[2] = 0;
 	CHECK(run(man_path, argv) != 0);
@@ -944,13 +1135,12 @@ static void test_gzip_only_page_diagnosed(void)
 	CHECK(err_contains("gzip"));
 }
 
-static void test_real_grep1_excerpt(void)
+/* Shared assertions for GREP1_EXCERPT's real content, run after a
+ * successful `man <name>` -- used both for the plain grep.1 fixture
+ * and (Tier 4) its real gzip-compressed sibling below, so both prove
+ * the exact same rendered output reaches the reader either way. */
+static void check_grep1_rendered_correctly(void)
 {
-	char *argv[3];
-	argv[0] = (char *)"man"; argv[1] = (char *)"grep"; argv[2] = 0;
-	CHECK(run(man_path, argv) == 0);
-	slurp_both();
-
 	/* Real header/footer, real NAME/SYNOPSIS/DESCRIPTION/OPTIONS
 	 * content reaches the page despite the heavy .de/.ie/.ds/.nr
 	 * boilerplate this file opens with. */
@@ -984,6 +1174,56 @@ static void test_real_grep1_excerpt(void)
 	 * always-undefined string register (empty), so this date never
 	 * appeared at all. */
 	CHECK(out_contains("2025-03-21"));
+}
+
+static void test_real_grep1_excerpt(void)
+{
+	char *argv[3];
+	argv[0] = (char *)"man"; argv[1] = (char *)"grep"; argv[2] = 0;
+	CHECK(run(man_path, argv) == 0);
+	slurp_both();
+	check_grep1_rendered_correctly();
+}
+
+/* Tier 4: the exact same real content as test_real_grep1_excerpt()
+ * above, but stored as GREP1_EXCERPT_GZ -- real gzip -9 output, a
+ * different on-disk name ("grepz.1.gz", so man_find_one() cannot
+ * accidentally resolve this to the plain "grep.1" fixture instead and
+ * skip decompression entirely) -- proving man_gunzip() decompresses a
+ * real compressor's real dynamic-Huffman-coded output correctly, all
+ * the way through to identical rendered troff output. */
+static void test_gzip_compressed_grep1_excerpt(void)
+{
+	char gzpath[400];
+	char *argv[3];
+	snprintf(gzpath, sizeof gzpath, "%s/grepz.1.gz", man1dir);
+	write_file_bin(gzpath, GREP1_EXCERPT_GZ, sizeof GREP1_EXCERPT_GZ);
+
+	argv[0] = (char *)"man"; argv[1] = (char *)"grepz"; argv[2] = 0;
+	CHECK(run(man_path, argv) == 0);
+	slurp_both();
+	check_grep1_rendered_correctly();
+}
+
+/* Tier 4's other detection path: the SAME real gzip bytes, but stored
+ * under a name with no ".gz" suffix at all ("grepnogz.1") -- man.c's
+ * own header comment documents that a compressed page need not be
+ * named ".gz" to be treated as one, matching real gzip(1)'s own
+ * magic-number-first behaviour. man_find_one() finds this file
+ * directly (it IS the plain expected path, no ".gz" fallback
+ * involved) and man_read_page() must still recognise and decompress
+ * it purely from its first two bytes. */
+static void test_gzip_magic_detected_without_gz_suffix(void)
+{
+	char path[400];
+	char *argv[3];
+	snprintf(path, sizeof path, "%s/grepnogz.1", man1dir);
+	write_file_bin(path, GREP1_EXCERPT_GZ, sizeof GREP1_EXCERPT_GZ);
+
+	argv[0] = (char *)"man"; argv[1] = (char *)"grepnogz"; argv[2] = 0;
+	CHECK(run(man_path, argv) == 0);
+	slurp_both();
+	check_grep1_rendered_correctly();
 }
 
 static void test_builtin_agrees_with_standalone(void)
@@ -1082,8 +1322,10 @@ int main(int argc, char **argv)
 	test_section_operand_restricts_search();
 	test_no_such_page();
 	test_apropos_dash_k();
-	test_gzip_only_page_diagnosed();
+	test_corrupt_gzip_page_diagnosed();
 	test_real_grep1_excerpt();
+	test_gzip_compressed_grep1_excerpt();
+	test_gzip_magic_detected_without_gz_suffix();
 	test_builtin_agrees_with_standalone();
 
 	raw_rmtree(scratch);
