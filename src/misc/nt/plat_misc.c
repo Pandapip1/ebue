@@ -217,10 +217,20 @@ void __plat_job_apply_limits(rlim_t nproc_cur, rlim_t cpu_cur, rlim_t as_cur, rl
  * than failing outright. */
 static int nt_registry_computername(char *out, size_t outsz)
 {
-	static const WCHAR keypath[] =
-		L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\"
-		L"ComputerName\\ActiveComputerName";
-	static const WCHAR valuename[] = L"ComputerName";
+	/* Spelled as WCHAR-array initializer lists, not L"..." literals -- see
+	 * src/internal/afd.h's identical banner on AFD_TRANSPORT_TCP: a wide
+	 * string literal's element type is the compiler's native wchar_t,
+	 * 32-bit on a non-Windows-targeting compiler, while src/internal/
+	 * nt.h's WCHAR is `unsigned short` -- a real array-element type
+	 * mismatch under the native ASan/fuzz build (tools/asan-build.sh),
+	 * not just a lint nit. */
+	static const WCHAR keypath[] = {
+		'\\','R','e','g','i','s','t','r','y','\\','M','a','c','h','i','n','e','\\',
+		'S','Y','S','T','E','M','\\','C','u','r','r','e','n','t','C','o','n','t','r','o','l','S','e','t','\\',
+		'C','o','n','t','r','o','l','\\','C','o','m','p','u','t','e','r','N','a','m','e','\\',
+		'A','c','t','i','v','e','C','o','m','p','u','t','e','r','N','a','m','e', 0
+	};
+	static const WCHAR valuename[] = { 'C','o','m','p','u','t','e','r','N','a','m','e', 0 };
 	UNICODE_STRING key_us, value_us;
 	OBJECT_ATTRIBUTES oa;
 	HANDLE khandle;
