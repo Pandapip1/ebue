@@ -108,7 +108,10 @@ static int split_by_lines(FILE *in, const char *prefix, int suflen, long lcount)
 
 	for (;;) {
 		ssize_t n = getline(&line, &linecap, in);
-		if (n < 0) break;
+		if (n < 0) {
+			if (ferror(in)) { free(line); return -1; }
+			break;
+		}
 		if (!out || inpiece >= lcount) {
 			if (out && fclose(out) != 0) { free(line); return -1; }
 			out = open_piece(prefix, suflen, piece++, namebuf, sizeof namebuf);
@@ -147,7 +150,10 @@ static int split_by_bytes(FILE *in, const char *prefix, int suflen, long bcount)
 	for (;;) {
 		size_t got = fread(buf, 1, (size_t)bcount, in);
 		FILE *out;
-		if (got == 0) break;
+		if (got == 0) {
+			if (ferror(in)) { free(buf); return -1; }
+			break;
+		}
 		out = open_piece(prefix, suflen, piece++, namebuf, sizeof namebuf);
 		if (!out) { free(buf); return -1; }
 		{
@@ -163,7 +169,12 @@ static int split_by_bytes(FILE *in, const char *prefix, int suflen, long bcount)
 		}
 		if (fclose(out) < 0) { free(buf); return -1; }
 		had_output = 1;
-		if (got < (size_t)bcount) break; /* short read: real EOF */
+		if (got < (size_t)bcount) {
+			/* short fread: could be real EOF or a real I/O error mid-read
+			 * -- ferror() must be checked before treating it as EOF. */
+			if (ferror(in)) { free(buf); return -1; }
+			break;
+		}
 	}
 	if (!had_output) {
 		FILE *out = open_piece(prefix, suflen, piece, namebuf, sizeof namebuf);
