@@ -1028,12 +1028,8 @@ not_compound:
 
 	if (p->cur.type == T_LPAREN) {
 		advance(p);
-		/* Flipped before u.group.body is written below, same reasoning as
-		 * parse_funcdef()'s own kind flip: cmd's union is still all-zero
-		 * from new_command(SH_CMD_SIMPLE), so this is safe the moment it
-		 * happens, and every failure path below reaches free_command()
-		 * with kind already naming the variant those zeroed-or-filled
-		 * bytes belong to. */
+		/* Flipped before u.group.body is written, same reasoning as
+		 * parse_funcdef()'s kind flip. */
 		cmd->kind = SH_CMD_SUBSHELL;
 		cmd->u.group.body = parse_list(p, ST_RPAREN);
 		if (p->had_error) { free_command(cmd); return 0; }
@@ -1050,16 +1046,13 @@ not_compound:
 		struct sh_word *atail = 0, *wtail = 0;
 		int seen_word = 0;
 
-		/* XCU 2.9.5's one-token lookahead: a NAME followed by '(' at
-		 * the very start of a command is a function definition, and a
-		 * NAME followed by anything else is that command's first word.
-		 * There is no peek() in this parser, so the word is consumed
-		 * and *stashed* -- taking ownership of p->cur.text so
-		 * advance() does not free it -- and then either handed to
-		 * parse_funcdef() or pushed onto this command's word list
-		 * below.  is_name() is what keeps `X=1 cmd` and `./cmd` out of
-		 * this path; the compound reserved words were already taken
-		 * above. */
+		/* XCU 2.9.5's one-token lookahead: a NAME followed by '(' at the
+		 * start of a command is a function definition, anything else is
+		 * that command's first word. No peek() in this parser, so the
+		 * word is consumed and stashed (taking ownership of p->cur.text
+		 * so advance() doesn't free it), then handed to parse_funcdef()
+		 * or pushed onto the word list below. is_name() keeps `X=1 cmd`
+		 * and `./cmd` out of this path. */
 		if (p->cur.type == T_WORD && is_name(p->cur.text)) {
 			char *fname = p->cur.text;
 			struct sh_word *w;
@@ -1120,24 +1113,18 @@ simple_fail:
 	}
 
 trailing_redirs:
-	/* 2.9.4: "each can be followed by redirections on the same line as
-	 * the terminator".
+	/* 2.9.4: each construct can be followed by redirections on the same
+	 * line as the terminator.
 	 *
-	 * The failure path frees the whole node through free_command() and
-	 * not by hand, and that is load-bearing rather than stylistic: at
-	 * this point `cmd` owns a redirection list this very loop has been
-	 * building, and it is reached from two directions -- fallthrough
-	 * from the '(' / '{' branches above, where the group's body hangs
-	 * off cmd->u.group.body, and the `goto trailing_redirs` the
-	 * if/while/until/for parsers take, where it hangs off
-	 * cmd->u.ifcmd.arms/cmd->u.loop.cond instead.
-	 * Anything narrower than "free the whole command" would therefore
-	 * have to enumerate a set of fields that new_command() keeps
-	 * growing, and would leak whichever one it had not heard of --
-	 * 42 bytes per already-parsed redirection alone, chosen by the
-	 * input rather than fixed.  test/sh-engine.c's
-	 * test_group_redir_leak() is the regression test, and it is checked
-	 * by `make asan`, whose LeakSanitizer is what can see it at all. */
+	 * The failure path frees the whole node through free_command(), not
+	 * by hand: `cmd` owns a redirection list this loop is building, and
+	 * is reached both from the '(' / '{' branches (group body hangs off
+	 * cmd->u.group.body) and from if/while/until/for's `goto
+	 * trailing_redirs` (hangs off cmd->u.ifcmd.arms/cmd->u.loop.cond
+	 * instead) -- freeing anything narrower would have to enumerate
+	 * fields and leak whichever one it missed. test/sh-engine.c's
+	 * test_group_redir_leak() is the regression test, caught by
+	 * LeakSanitizer under `make asan`. */
 	while (p->cur.type == T_IONUM || is_redir_op(p->cur.type)) {
 		struct sh_redir *r = parse_redir(p);
 		if (!r) { free_command(cmd); return 0; }
@@ -1147,12 +1134,6 @@ trailing_redirs:
 	return cmd;
 }
 
-/* p is required: `p->cur.type == T_WORD` in the `if` guarding the `!`
- * check is this function's first statement. out is required too: the
- * checker flagged only `p->cur` here, but `out->bang = 0;` right before
- * it is an equally unconditional, unguarded direct dereference -- both
- * real call sites in parse_list() below always pass `&head->pipeline`/
- * `&node->pipeline`, never NULL. */
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static int parse_pipeline(struct parser *p, struct sh_pipeline *out)
     __attribute__((nonnull(1, 2)));
