@@ -907,6 +907,38 @@ class ArithmeticZ3Proof {
     return ZCtx.bv_val(Text.c_str(), Width);
   }
 
+  // Widens two already-translated operands from their own exact domains to
+  // their C usual-arithmetic-conversion common type via ScalarSMT::convert,
+  // for the shapes where the analyzer builds a comparison directly from two
+  // differently-typed operands with no intervening SymbolCast.  Left/Right's
+  // domains must be exact for this to be sound; a concrete literal's own
+  // width and sign are always exact, and so is any SymExpr's own getType()
+  // -- only SymbolCast's inaccessible FromTy is not, which is why that node
+  // is still rejected outright above.
+  std::optional<std::pair<z3::expr, z3::expr>>
+  widenToCommon(const z3::expr &Left, ntlibc::algebra::CType LeftType,
+               const z3::expr &Right, ntlibc::algebra::CType RightType,
+               QualType &CommonTypeOut) {
+    std::optional<ntlibc::algebra::CType> Common =
+        Algebra.usualArithmeticType(LeftType, RightType);
+    if (!Common)
+      return std::nullopt;
+    CommonTypeOut = AST.getIntTypeForBitwidth(Common->Width, !Common->Unsigned);
+    if (CommonTypeOut.isNull())
+      return std::nullopt;
+    std::optional<ntlibc::algebra::SemanticResult> LeftInput =
+        Algebra.input(Left, LeftType);
+    std::optional<ntlibc::algebra::SemanticResult> RightInput =
+        Algebra.input(Right, RightType);
+    std::optional<ntlibc::algebra::SemanticResult> LeftWide =
+        LeftInput ? Algebra.convert(*LeftInput, *Common) : std::nullopt;
+    std::optional<ntlibc::algebra::SemanticResult> RightWide =
+        RightInput ? Algebra.convert(*RightInput, *Common) : std::nullopt;
+    if (!LeftWide || !RightWide)
+      return std::nullopt;
+    return std::pair<z3::expr, z3::expr>(LeftWide->Value, RightWide->Value);
+  }
+
   std::optional<z3::expr> translate(const SymExpr *Expression,
                                     unsigned Depth = 0) {
     if (!Expression || Depth > 24 || Expression->getType().isNull() ||
@@ -999,46 +1031,98 @@ class ArithmeticZ3Proof {
     };
 
     if (const auto *Binary = dyn_cast<SymSymExpr>(Expression)) {
-      if (!sameDomain(Binary->getLHS()->getType(),
-                      Binary->getRHS()->getType()))
-        return std::nullopt;
+      QualType LeftType = Binary->getLHS()->getType();
+      QualType RightType = Binary->getRHS()->getType();
       std::optional<z3::expr> Left = translate(Binary->getLHS(), Depth + 1);
       std::optional<z3::expr> Right = translate(Binary->getRHS(), Depth + 1);
       if (!Left || !Right)
         return std::nullopt;
-      if (!BinaryOperator::isComparisonOp(Binary->getOpcode()) &&
-          !sameDomain(Binary->getLHS()->getType(), Binary->getType()))
+      if (sameDomain(LeftType, RightType)) {
+        if (!BinaryOperator::isComparisonOp(Binary->getOpcode()) &&
+            !sameDomain(LeftType, Binary->getType()))
+          return std::nullopt;
+        return Apply(*Left, *Right, Binary->getOpcode(), LeftType);
+      }
+      // A relational comparison is the one shape the analyzer legitimately
+      // builds from two differently-typed operand symbols without an
+      // intervening SymbolCast (e.g. comparing a wider loop counter
+      // against a narrower field): widen both to their common type.
+      if (!BinaryOperator::isComparisonOp(Binary->getOpcode()) ||
+          LeftType.isNull() || RightType.isNull() ||
+          !LeftType->isIntegerType() || !RightType->isIntegerType() ||
+          Left->get_sort().bv_size() != AST.getIntWidth(LeftType) ||
+          Right->get_sort().bv_size() != AST.getIntWidth(RightType))
         return std::nullopt;
-      return Apply(*Left, *Right, Binary->getOpcode(),
-                   Binary->getLHS()->getType());
+      QualType CommonType;
+      std::optional<std::pair<z3::expr, z3::expr>> Widened = widenToCommon(
+          *Left, cType(LeftType), *Right, cType(RightType), CommonType);
+      if (!Widened)
+        return std::nullopt;
+      return Apply(Widened->first, Widened->second, Binary->getOpcode(),
+                 CommonType);
     }
     if (const auto *Binary = dyn_cast<SymIntExpr>(Expression)) {
-      if (!constantDomain(Binary->getRHS(), Binary->getLHS()->getType()))
-        return std::nullopt;
+      QualType LeftType = Binary->getLHS()->getType();
       std::optional<z3::expr> Left = translate(Binary->getLHS(), Depth + 1);
       if (!Left)
         return std::nullopt;
-      if (!BinaryOperator::isComparisonOp(Binary->getOpcode()) &&
-          !sameDomain(Binary->getLHS()->getType(), Binary->getType()))
+      if (constantDomain(Binary->getRHS(), LeftType)) {
+        if (!BinaryOperator::isComparisonOp(Binary->getOpcode()) &&
+            !sameDomain(LeftType, Binary->getType()))
+          return std::nullopt;
+        z3::expr Right = bitVector(Binary->getRHS(),
+                                   Left->get_sort().bv_size());
+        return Apply(*Left, Right, Binary->getOpcode(), LeftType);
+      }
+      // The literal's own width and sign are an exact, unambiguous fact
+      // about a concrete value, so widening it to the symbol's common type
+      // carries none of SymbolCast's private-FromTy risk.
+      if (!BinaryOperator::isComparisonOp(Binary->getOpcode()) ||
+          !LeftType->isIntegerType() ||
+          Left->get_sort().bv_size() != AST.getIntWidth(LeftType))
         return std::nullopt;
-      z3::expr Right = bitVector(Binary->getRHS(),
-                                 Left->get_sort().bv_size());
-      return Apply(*Left, Right, Binary->getOpcode(),
-                   Binary->getLHS()->getType());
+      const llvm::APSInt &RightValue = Binary->getRHS();
+      ntlibc::algebra::CType RightType{RightValue.getBitWidth(),
+                                       RightValue.getBitWidth(),
+                                       RightValue.isUnsigned()};
+      z3::expr RightRaw = bitVector(RightValue, RightValue.getBitWidth());
+      QualType CommonType;
+      std::optional<std::pair<z3::expr, z3::expr>> Widened = widenToCommon(
+          *Left, cType(LeftType), RightRaw, RightType, CommonType);
+      if (!Widened)
+        return std::nullopt;
+      return Apply(Widened->first, Widened->second, Binary->getOpcode(),
+                 CommonType);
     }
     if (const auto *Binary = dyn_cast<IntSymExpr>(Expression)) {
-      if (!constantDomain(Binary->getLHS(), Binary->getRHS()->getType()))
-        return std::nullopt;
+      QualType RightType = Binary->getRHS()->getType();
       std::optional<z3::expr> Right = translate(Binary->getRHS(), Depth + 1);
       if (!Right)
         return std::nullopt;
-      if (!BinaryOperator::isComparisonOp(Binary->getOpcode()) &&
-          !sameDomain(Binary->getRHS()->getType(), Binary->getType()))
+      if (constantDomain(Binary->getLHS(), RightType)) {
+        if (!BinaryOperator::isComparisonOp(Binary->getOpcode()) &&
+            !sameDomain(RightType, Binary->getType()))
+          return std::nullopt;
+        z3::expr Left = bitVector(Binary->getLHS(),
+                                  Right->get_sort().bv_size());
+        return Apply(Left, *Right, Binary->getOpcode(), RightType);
+      }
+      if (!BinaryOperator::isComparisonOp(Binary->getOpcode()) ||
+          !RightType->isIntegerType() ||
+          Right->get_sort().bv_size() != AST.getIntWidth(RightType))
         return std::nullopt;
-      z3::expr Left = bitVector(Binary->getLHS(),
-                                Right->get_sort().bv_size());
-      return Apply(Left, *Right, Binary->getOpcode(),
-                   Binary->getRHS()->getType());
+      const llvm::APSInt &LeftValue = Binary->getLHS();
+      ntlibc::algebra::CType LeftType{LeftValue.getBitWidth(),
+                                      LeftValue.getBitWidth(),
+                                      LeftValue.isUnsigned()};
+      z3::expr LeftRaw = bitVector(LeftValue, LeftValue.getBitWidth());
+      QualType CommonType;
+      std::optional<std::pair<z3::expr, z3::expr>> Widened = widenToCommon(
+          LeftRaw, LeftType, *Right, cType(RightType), CommonType);
+      if (!Widened)
+        return std::nullopt;
+      return Apply(Widened->first, Widened->second, Binary->getOpcode(),
+                 CommonType);
     }
     return std::nullopt;
   }
@@ -1554,10 +1638,16 @@ public:
     SymbolRef Right = Comparison->getRHS();
     QualType LeftType = Left->getType();
     QualType RightType = Right->getType();
+    // Same-width same-signedness operands are the ordinary case; a
+    // same-canonical-type requirement used to gate this, but the analyzer
+    // legitimately builds a strict comparison between two integer symbols
+    // of different width/signedness too (e.g. comparing a wider loop
+    // counter against a narrower field with no intervening SymbolCast).
+    // ArithmeticZ3Proof::translate()'s SymSymExpr case widens each side
+    // through its own exact type before comparing, so recording remains
+    // sound for that case as well; only a non-integer operand is rejected.
     if (LeftType.isNull() || RightType.isNull() ||
-        !LeftType->isSignedIntegerType() ||
-        !RightType->isSignedIntegerType() ||
-        LeftType.getCanonicalType() != RightType.getCanonicalType())
+        !LeftType->isIntegerType() || !RightType->isIntegerType())
       return State;
     return State->set<ArithmeticZ3BranchFact>(Symbol, Assumption);
   }
