@@ -53,6 +53,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <sys/stat.h>
 #include "util.h"
 #include "uucode.h"
@@ -85,7 +86,15 @@ static int decode_line(const char *prog, const char *line, size_t have,
 	size_t pos, written = 0;
 
 	if (have < needed) {
-		__util_diagf("%s: truncated data line (need %zu characters, got %zu)\n", prog, needed, have);
+		/* %zu assumes the host libc's own size_t; this tree's size_t is
+		 * always "unsigned _Addr" (unsigned long long) regardless of
+		 * target, which a bare 'z' length modifier does not name on an
+		 * LP64 host. __util_diagf is the one printf-family function
+		 * here with an explicit format(printf) attribute (see dd.c's
+		 * identical %ju fix and PRIuMAX's own comment in
+		 * include/inttypes.h), so cast to uintmax_t and use PRIuMAX. */
+		__util_diagf("%s: truncated data line (need %" PRIuMAX " characters, got %" PRIuMAX ")\n",
+			prog, (uintmax_t)needed, (uintmax_t)have);
 		return -1;
 	}
 

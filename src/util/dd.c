@@ -445,7 +445,17 @@ int __util_dd_main(int argc, char **argv)
 	sigaction(SIGINT, &old_sa, 0);
 
 summary:
-	__util_diagf("%ju+%ju records in\n%ju+%ju records out\n", in_full, in_partial, out_full, out_partial);
+	/* %ju assumes the host libc's own uintmax_t (e.g. "unsigned long" on
+	 * an LP64 Linux target), which is not what this tree's own
+	 * <stdint.h> defines uintmax_t as (always "unsigned _Int64", i.e.
+	 * "unsigned long long") -- see PRIuMAX's own comment in
+	 * include/inttypes.h. __util_diagf is the one printf-family function
+	 * in this tree that carries an explicit format(printf) attribute
+	 * (src/internal/util.h), so it is the one place that mismatch is
+	 * checkable, and PRIuMAX is exactly the macro built to name the
+	 * matching length modifier instead of the bare, ABI-dependent 'j'. */
+	__util_diagf("%" PRIuMAX "+%" PRIuMAX " records in\n%" PRIuMAX "+%" PRIuMAX " records out\n",
+		in_full, in_partial, out_full, out_partial);
 
 	if (ifd > 0) close(ifd);
 	if (ofd > 1) close(ofd);
