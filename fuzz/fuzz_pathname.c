@@ -2,65 +2,54 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * basename() and dirname() -- src/misc/basename.c and src/misc/dirname.c.
- *
- * WHY THESE.  They are path-taking functions whose argument is, in every
- * real use, a name that came from somewhere else: argv, a config file, a
- * directory listing, $0.  They are also the two functions in the library
- * that do in-place pointer arithmetic on the caller's buffer -- both
- * write NULs into it, both index backwards from strlen(s) - 1, and both
- * compare a `size_t` index against a `start` offset that a drive prefix
- * moves.  A backwards index and an unsigned comparison in the same loop
- * is the shape that produces an out-of-bounds write, and neither
- * function had a harness.
+ * They are the two functions in the library that do in-place pointer
+ * arithmetic on the caller's buffer -- both write NULs into it, both
+ * index backwards from strlen(s) - 1, and both compare a `size_t` index
+ * against a `start` offset that a drive prefix moves. A backwards index
+ * and an unsigned comparison in the same loop is the shape that produces
+ * an out-of-bounds write, and neither function had a harness.
  *
  * This target's versions are NOT glibc's, deliberately: they treat '\\'
  * as a separator and understand a "C:" drive prefix, which POSIX's do
- * not.  So there is no oracle here -- glibc would disagree on every
- * input containing a backslash or a colon, and that disagreement is the
- * documented design, not a defect.  What is checked instead is the set
- * of properties that hold whatever the separator conventions are.
+ * not. So there is no oracle here -- glibc would disagree on every input
+ * containing a backslash or a colon, by design, not by defect. Checked
+ * instead is the set of properties that hold whatever the separator
+ * conventions are:
  *
- * WHAT IS ASSERTED.
- *
- *   - NOTHING IS WRITTEN PAST THE STRING.  The buffer is malloc'd with
+ *   - Nothing is written past the string. The buffer is malloc'd with
  *     eight guard bytes past the NUL, filled with 0xAB and checked
- *     afterwards.  ASan owns the ninth byte and everything after it; the
- *     guard is what catches a write into the slack a rounded-up malloc
- *     bucket would otherwise hide, and it also makes this harness mean
- *     something in a build without ASan.
+ *     afterwards -- the guard catches a write into the slack a
+ *     rounded-up malloc bucket would otherwise hide, and makes this
+ *     harness mean something in a build without ASan too.
  *
- *   - THE RESULT IS INSIDE THE BUFFER, OR IS THE LITERAL ".".  Both
+ *   - The result is inside the buffer, or is the literal ".". Both
  *     functions return either a pointer into the caller's string or a
  *     pointer to a static "." for the cases with no component to name.
- *     A returned pointer that is neither is a pointer the caller cannot
- *     safely read, and no sanitizer would see the caller read it.
+ *     A returned pointer that is neither is one the caller cannot safely
+ *     read, and no sanitizer would see the caller read it.
  *
- *   - basename() RETURNS NO SEPARATOR, EXCEPT A LONE ROOT.
- *     basename.html: "If string is exactly '/', basename() shall return
- *     '/'".  Any other result naming a component must not contain a
- *     separator at all -- a returned "a/b" means the last component was
- *     not found, and every caller that appends to it builds the wrong
- *     path.
+ *   - basename() returns no separator, except a lone root:
+ *     basename.html says exactly "/" comes back as "/", but any other
+ *     result naming a component must not contain a separator -- a
+ *     returned "a/b" means the last component was not found, and every
+ *     caller that appends to it builds the wrong path.
  *
- *   - dirname() NEVER LENGTHENS, AND REACHES A FIXED POINT.  Repeatedly
- *     applying dirname() is how every path walk terminates, so it must
- *     terminate: each application shortens the string or is already the
- *     fixed point ("." or a root).  The loop is bounded at len + 4 and
- *     reports if it is still shrinking after that, which is the same
- *     thing a caller's `while (strcmp(p, "/"))` loop would experience as
- *     a hang.
+ *   - dirname() never lengthens, and reaches a fixed point: repeatedly
+ *     applying dirname() is how every path walk terminates, so each
+ *     application must shorten the string or already be the fixed point
+ *     ("." or a root). The loop is bounded at len + 4 and reports if
+ *     it's still shrinking after that.
  *
- *   - basename() NAMES A SUFFIX OF WHAT dirname() KEPT.  Checked only in
+ *   - basename() names a suffix of what dirname() kept, checked only in
  *     the weak form that survives the trailing-separator stripping both
  *     functions do: basename's result must appear somewhere in the
- *     original string, or be ".".  A basename that is not a substring of
- *     its input is not a component of it.
+ *     original string, or be ".".
  *
- * INPUT.  The whole input is the path, with NULs mapped to '/' so a
- * fuzzer's zero bytes make separators rather than truncating the case.
- * The empty input is a legal case in its own right (both functions
- * document it: a NULL or empty string gives "."), so nothing is
- * rejected for being short.
+ * The whole input is the path, with NULs mapped to '/' so a fuzzer's
+ * zero bytes make separators rather than truncating the case. The empty
+ * input is a legal case in its own right (both functions document it: a
+ * NULL or empty string gives "."), so nothing is rejected for being
+ * short.
  */
 #include <string.h>
 #include <stdlib.h>
