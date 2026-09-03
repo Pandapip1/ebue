@@ -60,6 +60,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <time.h>
+#include <limits.h>
 
 static int fails;
 /* Counts assertion groups this run declined to exercise because the
@@ -1055,13 +1056,20 @@ static void test_wordexp_arith_overflow_wraps(void)
  * unlike test_wordexp_arith_overflow_wraps() above, where the width
  * genuinely differs between the two builds this file runs in -- because
  * the ceiling here is deliberately NOT the compiling machine's: arith.c
- * bounds the count by <limits.h>'s LONG_BIT, which is 32 for both of
- * this library's targets (arch/x86_64 LLP64 and arch/i386 ILP32 both
- * say LONG_BIT 32) and stays 32 in the native sanitizer build, where
- * the host compiler's own long is 64 bits. What a caller of ntlibc's
- * wordexp() may write is a property of ntlibc, not of whoever compiled
- * it, so 32 is out of range in both builds; see arith.c's header note
- * on shift counts. */
+ * bounds the count by <limits.h>'s LONG_BIT, which this library's own
+ * headers already vary per target rather than fixing at 32 everywhere
+ * (arch/x86_64/bits/limits.h and arch/i386/bits/limits.h both say
+ * LONG_BIT 32, and so does arch/aarch64/bits/limits.h under _WIN32, but
+ * that same file says LONG_BIT 64 for Linux/aarch64, which is a real
+ * LP64 target rather than the other two arches' LLP64/ILP32). What a
+ * caller of ntlibc's wordexp() may write is a property of ntlibc's
+ * LONG_BIT for the target it was built for, not of whoever compiled it
+ * -- see arith.c's header note on shift counts -- so most of the counts
+ * below are written as plain out-of-range literals (64 is at or past
+ * LONG_BIT on every target that exists today) while the one count that
+ * sits exactly on the boundary between two targets' LONG_BIT, 32, is
+ * branched on LONG_BIT itself rather than hardcoded to one target's
+ * answer. */
 static void test_wordexp_arith_shift_bounds(void)
 {
 	wordexp_t we;
@@ -1075,7 +1083,17 @@ static void test_wordexp_arith_shift_bounds(void)
 	 * is undefined for the same clause */
 	CHECK(wordexp("$((1<<64))", &we, 0) == WRDE_SYNTAX);
 	CHECK(wordexp("$((1>>64))", &we, 0) == WRDE_SYNTAX);
+	/* 32 is only past the width on a 32-bit target (x86_64, i386, and
+	 * Windows/aarch64 all say LONG_BIT 32); on Linux/aarch64's real
+	 * LP64 long, LONG_BIT is 64, so a count of 32 is still in range and
+	 * must produce an ordinary in-range shift instead of failing. */
+#if LONG_BIT > 32
+	CHECK(wordexp("$((1<<32))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "4294967296") == 0);
+	wordfree(&we);
+#else
 	CHECK(wordexp("$((1<<32))", &we, 0) == WRDE_SYNTAX);
+#endif
 
 	/* The compound-assignment spellings reach the same switch arms and
 	 * must be bounded there too -- arith_assign() routes "<<="/">>="
@@ -1122,9 +1140,12 @@ static void test_wordexp_arith_shift_bounds(void)
 	 * "achieved" by refusing more than 6.5.7p3 asks. A count of 0 is
 	 * the floor (a `<=` where the code needs `<` would reject it) and
 	 * LONG_BIT-1 is the last legal count (a `>` where the code needs
-	 * `>=` would let LONG_BIT itself through, which the 1<<32 case
-	 * above catches, but a `>=` written one too low would reject 31,
-	 * which only this case catches). 1<<31 is also 6.5.7p4's
+	 * `>=` would let LONG_BIT itself through, which the 1<<64 case
+	 * above catches on every target that exists today -- LONG_BIT is
+	 * never more than 64 -- and which 1<<32 above also catches on the
+	 * 32-bit-long targets where LONG_BIT is exactly 32; but a `>=`
+	 * written one too low would reject 31, which only this case
+	 * catches). 1<<31 is also 6.5.7p4's
 	 * overflowing left shift on a 32-bit long: in range as a *count*,
 	 * so it must produce this file's documented wraparound rather
 	 * than an expansion failure. The expected value goes through
