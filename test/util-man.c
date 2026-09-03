@@ -339,6 +339,93 @@ static const char MACROTEST_1[] =
 	".B nofoo\n"
 	".I nobar\n";
 
+/* ==== fixture page 1c: exercises Tier 3 conditionals (.if/.ie/.el) --
+ * numeric comparisons (including parenthesized arithmetic), string
+ * equality, negation, the n/t/o/e device/page-parity tests, .ie/.el
+ * if/else chaining, and \{ ... \} multi-line blocks including one
+ * nested block -- see src/util/man.c's own "CONDITIONALS" header
+ * comment for the exact grammar and the documented n/t/o/e answers. */
+static const char CONDTEST_1[] =
+	".TH CONDTEST 1 \"2026\" \"ntlibc test\" \"ntlibc Test Suite\"\n"
+	".SH NAME\n"
+	"condtest \\- exercise conditional evaluation\n"
+	".SH CONDITIONALS\n"
+	".nr xx 10\n"
+	".if \\n(xx>5 .ds cmp1 numeric-gt-true\n"
+	".if \\n(xx>50 .ds cmp1b numeric-gt-false\n"
+	"Numeric greater-than:\n"
+	".B \\*[cmp1]\n"
+	".B \\*[cmp1b]\n"
+	".br\n"
+	".if (\\n(xx-5)>4 .ds cmpparen paren-arith-true\n"
+	"Parenthesized arithmetic:\n"
+	".B \\*[cmpparen]\n"
+	".br\n"
+	".if \\n(xx=10 .ds cmpeq numeric-eq-true\n"
+	".if \\n(xx=11 .ds cmpeqb numeric-eq-false\n"
+	"Numeric equal:\n"
+	".B \\*[cmpeq]\n"
+	".B \\*[cmpeqb]\n"
+	".br\n"
+	".if 'abc'abc' .ds cmp2 string-eq-true\n"
+	".if 'abc'xyz' .ds cmp2b string-eq-false\n"
+	"String equality:\n"
+	".B \\*[cmp2]\n"
+	".B \\*[cmp2b]\n"
+	".br\n"
+	".if !'abc'xyz' .ds cmp3 negated-neq-true\n"
+	"Negated inequality:\n"
+	".B \\*[cmp3]\n"
+	".br\n"
+	".if n .ds nt nroff-true\n"
+	".if t .ds tt troff-true\n"
+	"Device tests:\n"
+	".B \\*[nt]\n"
+	".B \\*[tt]\n"
+	".br\n"
+	".if o .ds oddp odd-page-true\n"
+	".if e .ds evenp even-page-true\n"
+	"Page parity tests:\n"
+	".B \\*[oddp]\n"
+	".B \\*[evenp]\n"
+	".br\n"
+	".ie \\n(xx=10 .ds iebranch ie-true-branch\n"
+	".el .ds iebranch el-branch\n"
+	"IE chain when true:\n"
+	".B \\*[iebranch]\n"
+	".br\n"
+	".ie \\n(xx=99 .ds iebranch2 ie-alt-branch\n"
+	".el .ds iebranch2 el-alt-branch\n"
+	"IE chain when false:\n"
+	".B \\*[iebranch2]\n"
+	".br\n"
+	".if \\n(xx>5 \\{\n"
+	".ds block1 block-line-one\n"
+	".ds block2 block-line-two\n"
+	".\\}\n"
+	"Block form:\n"
+	".B \\*[block1]\n"
+	".B \\*[block2]\n"
+	".br\n"
+	".if \\n(xx>500 \\{\n"
+	".ds neverblock should-not-appear\n"
+	".\\}\n"
+	"Block form false:\n"
+	".B \\*[neverblock]\n"
+	".br\n"
+	".ie \\n(xx>5 \\{\n"
+	".ds nestbranch nest-true-outer\n"
+	".if \\n(xx>0 \\{\n"
+	".ds nestinner nest-true-inner\n"
+	".\\}\n"
+	".\\}\n"
+	".el \\{\n"
+	".ds nestbranch nest-false-outer\n"
+	".\\}\n"
+	"Nested block:\n"
+	".B \\*[nestbranch]\n"
+	".B \\*[nestinner]\n";
+
 /* ==== fixture page 2: a real, unmodified 210-line prefix of GNU grep's
  * own grep.1 (gzip -dc'd by hand from a real Linux system's
  * /nix/store copy of gnugrep-3.12) -- see this file's own header. */
@@ -739,6 +826,84 @@ static void test_macros(void)
 	CHECK(plain_contains("nofoo nobar"));
 }
 
+/* Real .if/.ie/.el evaluation -- see CONDTEST_1's own header comment
+ * for exactly what each pair exercises. Each label:value pair sits on
+ * its own line via .br, same "never split across a word-wrap boundary"
+ * reasoning FROBNICATE_1's own REGISTERS section already documents;
+ * a register that a FALSE condition never defines resolves to empty
+ * (Tier 1's own undefined-string-register behaviour), so its absence
+ * from the output IS the assertion for the "false" half of every pair. */
+static void test_conditionals(void)
+{
+	char *argv[3];
+	argv[0] = (char *)"man"; argv[1] = (char *)"condtest"; argv[2] = 0;
+	CHECK(run(man_path, argv) == 0);
+	slurp_both();
+
+	/* .if \n(x>5 (10>5, true) vs .if \n(x>50 (false): only the true
+	 * branch's .ds ever runs. */
+	CHECK(plain_contains("numeric-gt-true"));
+	CHECK(!out_contains("numeric-gt-false"));
+
+	/* .if (\n(x-5)>4 -- parenthesized arithmetic (10-5=5, 5>4 true),
+	 * proving the numeric evaluator's grammar, not just bare compares. */
+	CHECK(plain_contains("paren-arith-true"));
+
+	/* .if \n(x=10 (true) vs .if \n(x=11 (false). */
+	CHECK(plain_contains("numeric-eq-true"));
+	CHECK(!out_contains("numeric-eq-false"));
+
+	/* .if 'abc'abc' (true) vs .if 'abc'xyz' (false): quoted-delimiter
+	 * string equality. */
+	CHECK(plain_contains("string-eq-true"));
+	CHECK(!out_contains("string-eq-false"));
+
+	/* .if !'abc'xyz' -- ! negates a false string comparison to true. */
+	CHECK(plain_contains("negated-neq-true"));
+
+	/* .if n (true: this file only ever emits nroff-style output) vs
+	 * .if t (always false -- never real typeset troff output). */
+	CHECK(plain_contains("nroff-true"));
+	CHECK(!out_contains("troff-true"));
+
+	/* .if o (true: page 1 is odd, this file's own stable documented
+	 * answer) vs .if e (false, the exact complement). */
+	CHECK(plain_contains("odd-page-true"));
+	CHECK(!out_contains("even-page-true"));
+
+	/* .ie \n(x=10 .ds iebranch ie-true-branch / .el ... el-branch: the
+	 * .ie branch (true) runs, NOT the paired .el. */
+	CHECK(plain_contains("ie-true-branch"));
+	CHECK(!out_contains("el-branch"));
+
+	/* .ie \n(xx=99 (false) / .el ...: this time the PAIRED .el runs
+	 * instead, proving .el really does track its own .ie's outcome
+	 * rather than always running or never running. Distinct label text
+	 * from the pair above (not "ie-true-branch2"/"el-branch2") so
+	 * neither substring-collides with "ie-true-branch"/"el-branch". */
+	CHECK(!out_contains("ie-alt-branch"));
+	CHECK(plain_contains("el-alt-branch"));
+
+	/* .if \n(x>5 \{ ... \}: a true multi-line block runs both of its
+	 * lines. */
+	CHECK(plain_contains("block-line-one"));
+	CHECK(plain_contains("block-line-two"));
+
+	/* .if \n(x>500 \{ ... \}: a false multi-line block runs neither --
+	 * its own .ds never executes, so the register stays undefined. */
+	CHECK(!out_contains("should-not-appear"));
+
+	/* .ie \n(x>5 \{ ... nested .if \n(x>0 \{ ... \} ... \} .el \{ ... \}:
+	 * the outer .ie's TRUE branch runs (nest-true-outer, not
+	 * nest-false-outer from the paired .el, which must not run at all),
+	 * and the block nested inside it ALSO evaluates for real
+	 * (nest-true-inner) -- proving nested \{ \} depth-tracking during
+	 * both collection and replay, not just a single flat level. */
+	CHECK(plain_contains("nest-true-outer"));
+	CHECK(!out_contains("nest-false-outer"));
+	CHECK(plain_contains("nest-true-inner"));
+}
+
 static void test_section_operand_restricts_search(void)
 {
 	char *argv[4];
@@ -879,6 +1044,11 @@ int main(int argc, char **argv)
 		write_file(macropath, MACROTEST_1);
 	}
 	{
+		char condpath[400];
+		snprintf(condpath, sizeof condpath, "%s/condtest.1", man1dir);
+		write_file(condpath, CONDTEST_1);
+	}
+	{
 		char greppath[400];
 		snprintf(greppath, sizeof greppath, "%s/grep.1", man1dir);
 		write_grep1_excerpt(greppath);
@@ -908,6 +1078,7 @@ int main(int argc, char **argv)
 	test_finds_and_formats_frobnicate();
 	test_registers();
 	test_macros();
+	test_conditionals();
 	test_section_operand_restricts_search();
 	test_no_such_page();
 	test_apropos_dash_k();
