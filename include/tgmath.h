@@ -8,42 +8,23 @@
  *
  * <tgmath.h> -- C99 7.22 type-generic macros: `sin(x)` (etc.) dispatches
  * to sinf/sin/sinl by x's real type, or to csinf/csin/csinl if x is
- * complex, all without the caller naming which. ISO C, not POSIX (no
- * .../functions/ page of its own -- POSIX.1-2017 XBD 1.9 just says the
- * base standard's headers apply), so there is no clause-by-clause audit
- * here the way test/posix-complex.c gives <complex.h>; it is included
- * because third_party/libc-test's own tgmath.c case (test/
- * libc-test-expected.txt) currently fails at `#include <tgmath.h>` --
- * the header did not exist at all -- and that inventory gap is a real,
- * separately-flagged one independent of the fenced <complex.h> tests.
+ * complex, without the caller naming which.
  *
- * The dispatch technique below (__IS_FP/__IS_CX/__RETCAST/__tg_real_*)
- * is musl's include/tgmath.h, adapted essentially unchanged (MIT
- * licensed; fetched from https://github.com/kraj/musl per this tree's
- * established "fetch, don't reconstruct from memory" discipline -- see
- * src/math/aarch64_math.h's own banner): getting the return-type
- * deduction right by hand, in plain C99 with no _Generic, is exactly
- * the kind of thing worth not re-deriving. It leans on two GNU
- * extensions every compiler in this tree's matrix that gets past the
- * #ifdef below already provides -- __typeof__ and the ?: operand-type
- * rule for a null-pointer-constant branch -- rather than C11 _Generic,
- * so it works under this tree's own -std=c99.
+ * The dispatch technique below (__IS_FP/__IS_CX/__RETCAST/__tg_real_*) is
+ * musl's include/tgmath.h, adapted essentially unchanged (MIT licensed;
+ * fetched from https://github.com/kraj/musl). It leans on __typeof__ and
+ * the ?: operand-type rule rather than C11 _Generic, so it works under
+ * this tree's own -std=c99.
  *
- * ==================== the tcc gap, again ===============================
- *
- * Every dispatch macro below that can see a complex argument
- * (__tg_real_complex, __tg_complex, __tg_complex_retreal, and
- * __tg_real_complex_pow/_fabs) has to name `_Complex`/`complex` types in
- * its own text to classify one, which is unconditionally unparseable
- * under __TINYC__ (include/complex.h's own banner: no tcc build this
- * tree targets implements the keyword at all). Under __TINYC__ this
- * header therefore defines the REAL-only subset: `sin(x)` and friends
- * still dispatch correctly across float/double/long double, but never
- * check whether x is complex, and no `I`/complex type appears anywhere
- * in this file's text -- a real, useful, disclosed narrowing (the same
- * "confirmed missing, not silently patched over" posture <complex.h>
- * itself takes), not a stub. A caller who never uses `double complex`
- * sees no difference from the full header. */
+ * Every dispatch macro that can see a complex argument has to name
+ * `_Complex`/`complex` types in its own text to classify one, which is
+ * unconditionally unparseable under __TINYC__ (no tcc build this tree
+ * targets implements the keyword). Under __TINYC__ this header therefore
+ * defines the REAL-only subset: `sin(x)` and friends still dispatch
+ * correctly across float/double/long double, but never check whether x
+ * is complex, and no `I`/complex type appears anywhere in this file's
+ * text -- a disclosed narrowing, not a stub.
+ */
 #ifndef _TGMATH_H
 #define _TGMATH_H
 
@@ -90,16 +71,9 @@
 
 #ifdef __TINYC__
 
-/* Real-only dispatch: no I, no `complex`, no __RETCAST_CX/__RETCAST_REAL
- * (which name a complex type to strip or add one), no __tg_complex /
- * __tg_real_complex* macros. Every function that has both a real and a
- * complex form under the full header (acos, cos, exp, pow, sqrt, ...)
- * dispatches over float/double/long double only here, via the same
- * __tg_real machinery as a real-only function like cbrt or floor
- * already uses. fabs keeps its own name below (cabs/cabsf/cabsl are not
- * declared at all here, since <complex.h> is __STDC_NO_COMPLEX__ under
- * __TINYC__ too) rather than __tg_real_complex_fabs's complex-aware
- * version. */
+/* Real-only dispatch: functions with both a real and complex form under
+ * the full header dispatch over float/double/long double only here, via
+ * the same __tg_real machinery a real-only function like cbrt uses. */
 #define __tg_maybe_complex(fun, x) __tg_real(fun, (x))
 #define __tg_maybe_complex_pow(x, y) (__RETCAST_2(x, y)( \
 	__FLT(x) && __FLT(y) ? powf(x, y) : \
