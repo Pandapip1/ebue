@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include "libc.h"
 #include "plat_exit.h"
+#include "linux/tls.h"
 
 int main(int, char **, char **);
 
@@ -224,72 +225,41 @@ static struct elf_phdr *find_tls_phdr(long *auxv, unsigned long *load_bias_out)
  *
  * The dtv slot is real: src/dlfcn/linux/plat_dlfcn.c builds per-
  * dlopen()'d-object TLS on top of it, with module 1 reserved for the
- * main image (dtv[1] = tp below).
+ * main image (dtv[1] = tp, set inside __ntlibc_linux_tls_block_create()
+ * below).
  *
  * A TCB (with real DTV) is ALWAYS installed, even with no PT_TLS
  * segment: a later dlopen() of a PT_TLS-bearing object still needs a
  * real TPIDR_EL0/DTV to register into, and this is the only place that
  * runs before any dlopen() could. `tls` being NULL just means an empty
- * main-image TLS block. */
+ * main-image TLS block.
+ *
+ * The actual block construction (raw mmap() of the TCB+DTV, copying
+ * PT_TLS's data in) lives in src/internal/linux/tls_setup.c's
+ * __ntlibc_linux_tls_block_create(), not here: src/thread/linux/
+ * plat_thread.c's __plat_thread_spawn() needs to build the exact same
+ * shape for every pthread_create()'d thread's own CLONE_SETTLS block,
+ * and sharing the one real implementation rules out the two ever
+ * silently drifting apart. This function's own job narrows to finding
+ * PT_TLS (auxv is only ever available here, at process startup) and
+ * publishing it through __ntlibc_linux_tls_layout for that shared
+ * builder to read -- including from a later pthread_create() call, long
+ * after auxv has gone out of scope. */
 static void linux_setup_tls(long *auxv)
 {
 	unsigned long load_bias;
 	struct elf_phdr *tls = find_tls_phdr(auxv, &load_bias);
-	unsigned long tls_vaddr = tls ? tls->p_vaddr + load_bias : 0;
-	unsigned long tls_filesz = tls ? tls->p_filesz : 0;
-	unsigned long tls_memsz = tls ? tls->p_memsz : 0;
-	unsigned long tcb_size, data_align, alloc_size;
-	long mm, dtv_mm;
-	unsigned char *base, *data;
-	void **dtv;
+	void *tp;
 
-	data_align = (tls && tls->p_align > 16) ? tls->p_align : 16;
-	tcb_size = 16; /* dtv + reserved, fixed by the ABI */
-	alloc_size = tcb_size + tls_memsz + data_align; /* slack for alignment */
+	__ntlibc_linux_tls_layout.vaddr = tls ? tls->p_vaddr + load_bias : 0;
+	__ntlibc_linux_tls_layout.filesz = tls ? tls->p_filesz : 0;
+	__ntlibc_linux_tls_layout.memsz = tls ? tls->p_memsz : 0;
+	__ntlibc_linux_tls_layout.align = tls ? tls->p_align : 0;
 
-	mm = raw_syscall(SYS_mmap, 0, (long)alloc_size, PROT_READ | PROT_WRITE,
-	                 MAP_PRIVATE | MAP_ANONYMOUS, -1L, 0L);
-	if ((unsigned long)mm >= (unsigned long)-4095L) return; /* bootstrap alloc failed -- leave tp at 0 */
-	base = (unsigned char *)mm;
+	tp = __ntlibc_linux_tls_block_create();
+	if (!tp) return; /* bootstrap alloc failed -- leave TPIDR_EL0 unset */
 
-	data = base + tcb_size;
-	data = (unsigned char *)(((unsigned long)data + data_align - 1) & ~(data_align - 1));
-
-	if (tls_filesz) {
-		size_t i;
-		const unsigned char *source = (const unsigned char *)tls_vaddr;
-		for (i = 0; i < tls_filesz; i++) data[i] = source[i];
-	}
-	if (tls_memsz > tls_filesz) {
-		size_t i;
-		for (i = tls_filesz; i < tls_memsz; i++) data[i] = 0;
-	}
-
-	/* Must equal src/dlfcn/linux/plat_dlfcn.c's TLS_DTV_INITIAL_CAPACITY
-	 * -- a numeric contract duplicated across the two files rather than
-	 * shared through a header. Allocated via raw mmap(), not malloc():
-	 * the allocator hasn't been initialized yet. Not a ceiling:
-	 * plat_dlfcn.c's tls_dtv_ensure_capacity() reallocates via malloc()
-	 * once a dlopen() needs more. */
-#define TLS_DTV_INITIAL_CAPACITY 8
-	dtv_mm = raw_syscall(SYS_mmap, 0, (long)(TLS_DTV_INITIAL_CAPACITY * sizeof(void *)),
-	                     PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1L, 0L);
-	if ((unsigned long)dtv_mm >= (unsigned long)-4095L) return; /* leave TPIDR_EL0 unset --
-	                                                              * the non-dlopen path never
-	                                                              * dereferences dtv */
-	dtv = (void **)dtv_mm;
-	{
-		size_t i;
-		for (i = 0; i < TLS_DTV_INITIAL_CAPACITY; i++) dtv[i] = 0;
-	}
-
-	{
-		unsigned char *tp = data - tcb_size;
-		dtv[1] = tp; /* module 1 == the main image, see this function's own banner */
-		((void **)tp)[0] = dtv;
-		((void **)tp)[1] = 0; /* reserved */
-		__asm__ volatile("msr tpidr_el0, %0" : : "r"(tp) : "memory");
-	}
+	__asm__ volatile("msr tpidr_el0, %0" : : "r"(tp) : "memory");
 }
 #elif defined(__x86_64__) || defined(__i386__)
 /* x86_64/i386's TLS layout ("variant II", contrasted with aarch64's

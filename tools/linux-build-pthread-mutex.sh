@@ -51,6 +51,7 @@ FILES="
 	src/thread/pthread.c
 	src/thread/linux/plat_thread.c
 	src/thread/linux/clone_aarch64.S
+	src/internal/linux/tls_setup.c
 	src/unistd/getpid.c
 	src/unistd/linux/plat_unistd.c
 	src/unistd/linux/plat_fd.c

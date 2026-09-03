@@ -8,11 +8,14 @@
 # libc wrapper, -nostdinc against ntlibc's own generated headers,
 # aarch64-host-only syscall numbers).
 #
-# Builds src/thread/linux/plat_thread.c + clone_aarch64.S -- a
-# deliberately narrow slice of src/internal/plat_thread.h (semaphores,
-# a manual-reset event, single-handle waiting, and real clone(2)-based
-# thread creation; see plat_thread.c's own banner for the full list of
-# what this does NOT cover and why) -- and links them against fuzz/
+# Builds src/thread/linux/plat_thread.c + clone_aarch64.S +
+# src/internal/linux/tls_setup.c (the real per-thread CLONE_SETTLS TLS
+# block builder plat_thread.c's __plat_thread_spawn() calls -- linked
+# here too since this pilot's whole point is exercising real clone()'d
+# threads) -- a deliberately narrow slice of src/internal/plat_thread.h
+# (semaphores, a manual-reset event, single-handle waiting, and real
+# clone(2)-based thread creation; see plat_thread.c's own banner for the
+# full list of what this does NOT cover and why) -- and links them against fuzz/
 # linux_pilot_test_thread.c, which builds a minimal mutex directly on
 # top of the real backend functions and stress-tests it with real,
 # clone()-spawned Linux threads hammering a shared counter. Unlike
@@ -60,6 +63,7 @@ $INC -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL -Wall -Wno-unused-func
 FILES="
 	src/thread/linux/plat_thread.c
 	src/thread/linux/clone_aarch64.S
+	src/internal/linux/tls_setup.c
 	src/internal/errno.c
 	fuzz/linux_pilot_test_thread.c
 "

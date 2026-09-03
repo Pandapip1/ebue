@@ -22,18 +22,18 @@
  * C function's stack frame. That's assembly-level work; see
  * clone_aarch64.S.
  *
- * Two deliberate simplifications:
+ * One deliberate simplification remains:
  *
  *   __plat_thread_spawn() clones with CLONE_VM|CLONE_FS|CLONE_FILES|
- *   CLONE_SIGHAND plus the SIGCHLD exit-signal bit, but NOT CLONE_THREAD
- *   or CLONE_SETTLS -- real concurrent execution sharing one address space,
- *   but not a full NPTL-style pthread: the spawned thread has no distinct
- *   TLS block (any `__thread` variable would alias the creator's), and
- *   without CLONE_THREAD the new thread is its own thread-group leader,
- *   joined with plain wait4() rather than a futex-on-ctid join. Omitting
- *   the SIGCHLD exit-signal bit from the clone() flags word was confirmed
- *   by testing to make the child invisible to wait4() (ECHILD) despite
- *   being real and running.
+ *   CLONE_SIGHAND|CLONE_SETTLS plus the SIGCHLD exit-signal bit, but NOT
+ *   CLONE_THREAD -- real concurrent execution sharing one address space,
+ *   with a real, independent TLS block per thread (see this function's
+ *   own comment for how that block is built), but still not a full
+ *   NPTL-style pthread: without CLONE_THREAD the new thread is its own
+ *   thread-group leader, joined with plain wait4() rather than a
+ *   futex-on-ctid join. Omitting the SIGCHLD exit-signal bit from the
+ *   clone() flags word was confirmed by testing to make the child
+ *   invisible to wait4() (ECHILD) despite being real and running.
  *
  *   __plat_wait_one() below understands two, structurally distinguished
  *   handle domains rather than unifying every waitable kind the way NT's
@@ -55,6 +55,9 @@
 #include <stddef.h>
 #include "plat_thread.h"
 #include "linux/sync.h"
+#if defined(__aarch64__)
+#include "linux/tls.h"
+#endif
 
 /* Linux syscall numbers -- aarch64 confirmed against this host's own
  * <sys/syscall.h>; x86_64 confirmed against a real x86_64-linux-gnu
@@ -100,6 +103,7 @@
 #define CLONE_FS      0x00000200
 #define CLONE_FILES   0x00000400
 #define CLONE_SIGHAND 0x00000800
+#define CLONE_SETTLS  0x00080000
 #define LINUX_SIGCHLD 17
 
 #define DEFAULT_STACK_BYTES ((size_t)1 << 20) /* 1 MiB, matches pthread.c's
@@ -174,7 +178,7 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
  * needs its own clone(2) trampoline for the same double-return-into-
  * CLONE_VM-child reason clone_aarch64.S's own banner gives. */
 extern long __ntlibc_linux_clone(__plat_thread_entry_t fn, void *stack_top, // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
-                                 long flags, void *arg);
+                                 long flags, void *arg, void *tls);
 
 static int is_sys_error(long ret)
 {
@@ -403,19 +407,26 @@ int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout, // NOLINT
  * src/process/linux/plat_process.c's own reap_cache uses for pid ->
  * exit-status), keyed by tid and cleared once resumed.
  *
- * A SERIOUS CONFIRMED CONSEQUENCE of no CLONE_SETTLS: every spawned thread
- * shares the CALLING thread's TLS region, since aarch64 Linux TLS is
- * addressed through TPIDR_EL0 and clone(2) only reinitializes it when
- * CLONE_SETTLS is passed. Confirmed empirically (a `__thread int marker`
- * probe shows every spawned thread and the caller reporting the identical
- * address). This means every `__thread` variable, including
- * src/thread/pthread.c's `__pthread_self_control`, silently ALIASES across
- * every thread this function creates -- confirmed to stall a multi-thread
- * pthread_mutex_t stress test because every worker unknowingly shared one
- * control block. Not fixed here: needs a real per-thread TCB matching the
- * program's linked TLS segment plus CLONE_SETTLS. Any code relying on
- * independent __thread storage across threads spawned here must know
- * about this first. */
+ * FIXED, previously a SERIOUS CONFIRMED bug: without CLONE_SETTLS, every
+ * spawned thread shared the CALLING thread's TLS region, since aarch64
+ * Linux TLS is addressed through TPIDR_EL0 and clone(2) only
+ * reinitializes it when CLONE_SETTLS is passed. Confirmed empirically (a
+ * `__thread int marker` probe showed every spawned thread and the caller
+ * reporting the identical address). That meant every `__thread`
+ * variable, including src/thread/pthread.c's `__pthread_self_control`
+ * and errno itself, silently ALIASED across every thread this function
+ * created -- confirmed to stall a multi-thread pthread_mutex_t stress
+ * test because every worker unknowingly shared one control block.
+ *
+ * Fixed by giving every spawned thread its own real TCB, the same shape
+ * (and same code path -- src/internal/linux/tls_setup.c's
+ * __ntlibc_linux_tls_block_create(), see that file's own banner) that
+ * crt/linux/crt1.c already builds for the initial thread, then passing
+ * its `tp` as clone(2)'s tls argument with CLONE_SETTLS set: the kernel
+ * installs it as the child's TPIDR_EL0 before the child ever executes
+ * an instruction, so start_trampoline() below -- and everything it
+ * calls, including thread_entry()'s first `__pthread_self_control`
+ * write -- already sees a private TLS block, never the creator's. */
 struct linux_thread_start {
 	__plat_thread_entry_t entry;
 	void *arg;
@@ -483,12 +494,30 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
 	void *top;
 	struct linux_thread_start *start;
 	struct ntlibc_linux_sync *gate = 0;
+#if defined(__aarch64__)
+	void *tls;
+#endif
 
 	sz = stack_size ? stack_size : DEFAULT_STACK_BYTES;
 	stack_ret = raw_syscall(SYS_mmap, 0, (long)sz, PROT_READ | PROT_WRITE,
 	                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (is_sys_error(stack_ret)) { errno = (int)-stack_ret; return -1; }
 	top = (void *)(stack_ret + (long)sz);
+
+#if defined(__aarch64__)
+	/* Built BEFORE `gate`, not after: on failure here only the stack
+	 * above needs cleanup, matching alloc_sync()'s own single-resource
+	 * cleanup shape just below rather than adding a second one. tls != 0
+	 * is a hard precondition for CLONE_SETTLS below -- see linux/tls.h's
+	 * own comment on why a thread must never actually start running with
+	 * TPIDR_EL0 == 0. */
+	tls = __ntlibc_linux_tls_block_create();
+	if (!tls) {
+		raw_syscall(SYS_munmap, stack_ret, (long)sz, 0, 0, 0, 0);
+		errno = ENOMEM;
+		return -1;
+	}
+#endif
 
 	if (create_suspended) {
 		if (alloc_sync(&gate) < 0) {
@@ -511,8 +540,23 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
 	start->gate = gate;
 
 	flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | LINUX_SIGCHLD;
-	pid = __ntlibc_linux_clone(start_trampoline, top, flags, start);
+#if defined(__aarch64__)
+	flags |= CLONE_SETTLS;
+	pid = __ntlibc_linux_clone(start_trampoline, top, flags, start, tls);
+#else
+	/* No clone(2) trampoline exists for this arch at all (see the extern
+	 * __ntlibc_linux_clone() declaration's own comment) -- this call
+	 * survives only because nothing in this port's curated build FILES
+	 * lists reaches it, letting --gc-sections drop the whole function.
+	 * tls=0/no CLONE_SETTLS here is unreachable dead weight, not a real
+	 * per-arch choice. */
+	pid = __ntlibc_linux_clone(start_trampoline, top, flags, start, 0);
+#endif
 	if (pid < 0) {
+		/* `tls` (aarch64 only) is intentionally leaked here too, joining
+		 * the stack/gate leaks this same rare clone()-failure path
+		 * already accepts below -- see this function's own closing
+		 * comment on why no destroy path exists yet. */
 		int e = (int)-pid;
 		raw_syscall(SYS_munmap, stack_ret, (long)sz, 0, 0, 0, 0);
 		errno = e;
@@ -528,8 +572,10 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
 	}
 	/* Boxed as pid+1, echoing plat_fd.c's fd+1 encoding, but this is a
 	 * DIFFERENT handle namespace and the two must never be crossed. The
-	 * mmap()'d stack (and, for a suspended create, the `gate` event) is
-	 * intentionally leaked; no destroy path exists yet. */
+	 * mmap()'d stack (and, for a suspended create, the `gate` event, and
+	 * on aarch64, `tls`'s TCB/DTV blocks -- now genuinely owned by the
+	 * running thread, not a leak in the usual sense) is intentionally
+	 * left unreclaimed; no destroy path exists yet. */
 	*out = (__plat_handle_t)(pid + 1);
 	return 0;
 }
@@ -892,6 +938,35 @@ int __plat_named_mutant_acquire(const char *name, __plat_handle_t *out)
 void __plat_named_mutant_release(__plat_handle_t lock)
 {
 	__plat_semaphore_post(lock);
+}
+
+/* A REAL, CONFIRMED bug, distinct from the TLS/CLONE_SETTLS one this file's
+ * __plat_thread_spawn() banner documents: pthread.c used to release every
+ * thread handle (join, detach, the error-unwind in pthread_create()) via
+ * plat_fd.h's generic __plat_close(), which issues close(2) on
+ * `(int)((long)h - 1)`. That is exactly right for an fd+1 handle, but a
+ * THREAD handle here is a boxed pid+1 (see this file's own top banner) --
+ * a different kernel namespace that merely shares the same small-integer
+ * ENCODING. Confirmed via test/pthread-surface.c's
+ * test_errno_thread_isolation(): closing a freshly wait4()-joined
+ * thread's pid-as-if-it-were-an-fd returned a bogus EBADF, silently
+ * clobbering the JOINING thread's own errno right after a successful
+ * pthread_join() -- indistinguishable, before this fix, from a TLS
+ * aliasing bug, and only unmasked once pthread_create()/pthread_join()
+ * started actually running real threads. Worse than a wrong errno in
+ * general: if a spawned thread's pid ever numerically equalled a real
+ * open fd + 1, this would have closed that unrelated, live file
+ * descriptor out from under the process.
+ *
+ * See plat_thread.h's own __plat_thread_close() banner for the full
+ * fix. This backend's implementation is a real no-op: __plat_wait_one()
+ * (this file's own wait4(2) join path) already reaps the exited
+ * thread-group-leader process by the time any caller could reach this,
+ * and there is no other Linux-side resource this boxed handle owns. */
+int __plat_thread_close(__plat_handle_t h)
+{
+	(void)h;
+	return 0;
 }
 
 /* ---- thread lifecycle, the remaining functions -----------------------

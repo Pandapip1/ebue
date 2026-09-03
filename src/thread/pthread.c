@@ -125,7 +125,7 @@ static void finish(struct __pthread *self, void *result)
 	__plat_fast_unlock();
 	if (last) exit(0);
 	if (detached && self->handle && self->handle != __plat_thread_current_pseudo()) {
-		__plat_close(self->handle);
+		__plat_thread_close(self->handle);
 		self->handle = 0;
 	}
 }
@@ -201,7 +201,7 @@ int pthread_create(pthread_t *__restrict output,
 	__plat_fast_unlock();
 	*output = thread;
 	if (__plat_thread_resume(handle) < 0) {
-		__plat_close(handle);
+		__plat_thread_close(handle);
 		thread->handle = 0;
 		thread->joined = 1;
 		__plat_fast_lock();
@@ -239,7 +239,7 @@ int pthread_join(pthread_t thread, void **result)
 		return EINVAL;
 	}
 	if (result) *result = thread->result;
-	__plat_close(thread->handle);
+	__plat_thread_close(thread->handle);
 	thread->handle = 0;
 	thread->joining = 0;
 	thread->joined = 1;
@@ -263,7 +263,7 @@ int pthread_detach(pthread_t thread)
 	close_handle = thread->exited && thread->handle != 0;
 	__plat_fast_unlock();
 	if (close_handle) {
-		__plat_close(thread->handle);
+		__plat_thread_close(thread->handle);
 		thread->handle = 0;
 	}
 	return 0;
