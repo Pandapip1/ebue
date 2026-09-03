@@ -40,19 +40,34 @@
 #include "libc.h"
 #include "plat_stdio.h"
 
-/* aarch64 Linux syscall number (confirmed against this host's own
+/* Linux syscall number (aarch64 confirmed against this host's own
  * <sys/syscall.h> via a throwaway oracle program, not assumed -- see
  * plat_mem.c's banner for why this file cannot include that header
- * itself). aarch64 has no plain SYS_rename (the "generic modern ABI"
- * ports dropped every legacy non-*at() syscall) -- only *at() forms
- * exist, which is exactly the shape src/stdio/misc.c's renameat()
- * front door already calls this interface with. */
+ * itself; x86_64/i386 confirmed against this host's own /nix/store
+ * linux-headers asm/unistd_64.h / asm/unistd_32.h). aarch64 has no
+ * plain SYS_rename (the "generic modern ABI" ports dropped every
+ * legacy non-*at() syscall) -- only *at() forms exist, which is
+ * exactly the shape src/stdio/misc.c's renameat() front door already
+ * calls this interface with. x86_64/i386 both still carry a legacy
+ * plain SYS_rename, but this file uses SYS_renameat on every arch
+ * regardless, matching the *at()-shaped call site uniformly rather
+ * than special-casing two of the three arches. */
+#if defined(__aarch64__)
 #define SYS_renameat 38
+#elif defined(__x86_64__)
+#define SYS_renameat 264
+#elif defined(__i386__)
+#define SYS_renameat 302
+#else
+#error "plat_stdio.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
-/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
- * the call path at all. aarch64's syscall calling convention: x8 =
- * syscall number, x0..x5 = up to 6 arguments, result (or -errno in
- * [-4095,-1]) in x0. */
+/* A minimal 6-argument raw syscall: no host libc in the call path at
+ * all. Three per-arch bodies, same "own syscall table per file"
+ * discipline this tree already uses (see src/dirent/linux/
+ * plat_dirent.c's own raw_syscall()): aarch64's `svc #0`, x86_64's
+ * `syscall`, i386's register-starved `int $0x80`. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
@@ -68,6 +83,47 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 		: "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#else
+#error "plat_stdio.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 static int is_sys_error(long ret)
 {
