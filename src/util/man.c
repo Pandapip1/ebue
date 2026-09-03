@@ -17,7 +17,8 @@
  * world man pages use: .TH, .SH/.SS, .TP/.IP, .PP/.LP, .B/.I and all
  * six alternating-font pairs (.BI/.BR/.IR/.IB/.RB/.RI, one shared
  * helper), .RS/.RE, .nf/.fi, .br (real pages routinely need it to keep
- * alternate SYNOPSIS forms on separate lines), .ds/.nr/.rn (string/
+ * alternate SYNOPSIS forms on separate lines), .ad/.na (fill-and-adjust
+ * justification -- see "ADJUSTMENT" below), .ds/.nr/.rn (string/
  * number registers -- see "REGISTERS" below), .de/.de1/.am/.am1/.ig/
  * .rm/.als (user-defined macros -- see "MACROS" below), .if/.ie/.el
  * (conditionals -- see "CONDITIONALS" below), .TS/.TE (tbl tables --
@@ -31,9 +32,23 @@
  *  - \k (mark register) and \s (point-size change): recognised and
  *    consumed only -- no horizontal-motion tracking or point-size
  *    concept exists here for them to act on.
- *  - Hyphenation and full justification (real troff's fill+adjust
- *    spreads inter-word spaces to flush both margins): not
- *    implemented. Output is ordinary ragged-right greedy word-wrap.
+ *  - Hyphenation: not implemented. A word too long to fit the
+ *    remaining space on a filled line is never split at a hyphenation
+ *    point -- it simply starts the next line whole (or, if it alone
+ *    exceeds the full line width, overflows that one line, the same
+ *    "any_word" first-word-always-placed carve-out man_wrap_emit() has
+ *    always had). Real troff/groff hyphenation is pattern-based (the
+ *    Knuth-Liang algorithm, the same one TeX uses, driven by a
+ *    language-specific pattern table) -- a correct implementation is
+ *    itself a real, bounded, but substantial sub-project, and this
+ *    project's own troff-engine plan (.claude/plans/man-troff-
+ *    engine.md, Tier 7's own text) explicitly names it as large enough
+ *    to warrant a separately-dispatched follow-up patch rather than
+ *    being folded blind into the justification work below. This is a
+ *    scope line drawn by that plan itself, not a downgrade improvised
+ *    here: justification (the smaller, more clearly-scoped half of
+ *    Tier 7) is real and complete; hyphenation is real work not yet
+ *    started, tracked separately.
  *
  * ---- UNKNOWN-MACRO DEGRADATION ------------------------------------------
  *
@@ -586,6 +601,72 @@
  * this character" meaning for an unknown escape.
  *
  * ============================================================
+ * ADJUSTMENT: .ad/.na, AND REAL FILL-AND-ADJUST JUSTIFICATION
+ * ============================================================
+ *
+ * Real troff's own default rendering fills AND adjusts: a paragraph's
+ * text is greedily packed onto each line (fill, which this file has
+ * always done) and the leftover slack on every line but the last is
+ * then spread back out across that line's own inter-word gaps
+ * (adjust), so both margins land flush -- the classic "extra spaces
+ * between words" look of old troff/nroff output. This file's own
+ * default instead stays ragged-right (single space between words, no
+ * stretching) even after this tier, a deliberate divergence from real
+ * troff's own default, NOT an unfinished feature: `.ad`/`.na` are real,
+ * troff-compatible REQUESTS here (they toggle c->adjust, one of the
+ * MAN_ADJ_* modes below) and produce real, complete justification the
+ * moment a page actually asks for it -- but a page that never mentions
+ * either request (the overwhelming majority; real troff already has
+ * adjustment on by default, so most real pages never need to ask)
+ * keeps rendering exactly the way every earlier tier of this file
+ * already did and every existing test already assumes. Defaulting to
+ * real troff's own "adjust on" instead would have silently reformatted
+ * every already-passing test and every real page this file has ever
+ * been verified against, for a purely cosmetic difference (inter-word
+ * spacing) nothing downstream actually depends on -- a deliberate,
+ * disclosed judgement call, not a correctness gap.
+ *
+ * `.ad [c|l|r|b|n]`: `l` ragged right (this file's own default, see
+ * above), `r` ragged LEFT (each line's right edge flush, left edge
+ * shifted over by that line's own slack), `c` each line centred (slack
+ * split, remainder to the left), `b`/`n` real both-margins
+ * justification, and a bare `.ad` with no argument also sets `b`/`n` --
+ * real troff instead restores whichever specific mode was last active
+ * before an intervening `.na`, a remembered-mode distinction this file
+ * does not separately track (c->adjust just holds the current mode, not
+ * a history of it); real pages essentially always use bare `.ad`/`.na`
+ * as a simple on/off pair without an `.ad r`/`.ad c` in between, so the
+ * two behave identically in every case that matters in practice, a
+ * documented simplification. An unrecognised argument is a no-op,
+ * matching this file's own "malformed value leaves the setting
+ * untouched" precedent `.nr` already established. `.na`: ragged right,
+ * unconditionally (real troff's own `.na` takes no argument).
+ *
+ * Both requests flush the current paragraph accumulator first, exactly
+ * like `.nf`/`.fi` already do, for the same reason: c->acc buffers an
+ * entire paragraph's raw text and only word-wraps it as one unit when
+ * the paragraph ends (man_flush_paragraph() -> man_wrap_emit()), so a
+ * mode change mid-paragraph could otherwise only ever apply uniformly
+ * to the WHOLE buffered block regardless of exactly where in the
+ * source it appeared -- flushing first turns that into an explicit,
+ * honest boundary instead of a silently backdated one.
+ *
+ * The actual justification math (man_wrap_flush_line()): once a line's
+ * full word list is known (greedy packing is unchanged from before this
+ * tier -- adjustment only changes INTER-WORD SPACING, never where a
+ * line breaks), MAN_ADJ_BOTH distributes `cols - content_width` extra
+ * columns across the line's own (word_count - 1) gaps as evenly as
+ * integer division allows, any remainder going to the LEFTMOST gaps
+ * first -- classic troff's own left-to-right distribution, and why a
+ * justified line with non-uniform word lengths still often shows one
+ * gap slightly wider than its neighbours rather than a perfectly even
+ * split. A single-word line has no gap to stretch and a fill span's own
+ * LAST line is never stretched at all (both real troff behaviours,
+ * carried via man_wrap_emit()'s own `is_last` bookkeeping -- see its
+ * header comment) -- both fall back to plain single-space rendering
+ * even under MAN_ADJ_BOTH.
+ *
+ * ============================================================
  * RENDERING: WHERE BOLD/ITALIC COME FROM, AND HOW WIDTH IS CHOSEN
  * ============================================================
  *
@@ -722,6 +803,13 @@
 #define MAN_M_BOLD  '\x01'
 #define MAN_M_ITAL  '\x02'
 #define MAN_M_ROMAN '\x03'
+
+/* ==== `.ad`/`.na` adjustment modes -- see this file's header comment
+ * ("ADJUSTMENT") -- and man_wrap_emit()'s own use of them. */
+#define MAN_ADJ_LEFT   0  /* ragged right, this file's own long-standing default */
+#define MAN_ADJ_RIGHT  1
+#define MAN_ADJ_CENTER 2
+#define MAN_ADJ_BOTH   3  /* real justification: both margins flush */
 
 /* ==== growable byte buffer (src/util/m4.c's strbuf_append() idiom) ===== */
 
@@ -1623,6 +1711,8 @@ struct man_ctx {
 	struct man_buf acc;     /* paragraph/tag accumulator, styled */
 	int width;
 	int fill;               /* 1 = fill (wrap) mode, 0 = .nf no-fill mode */
+	int adjust;              /* MAN_ADJ_* -- .ad/.na, only meaningful while fill is on --
+	                            * see "ADJUSTMENT" in this file's header comment */
 	int nf_started;         /* has this .nf block emitted its first line yet */
 	int rs_indent;          /* current body indent, from base + RS/RE stack */
 	int rs_stack[MAN_MAX_RS_DEPTH];
@@ -1664,6 +1754,7 @@ static int man_ctx_init(struct man_ctx *c, int width)
 	memset(c, 0, sizeof *c);
 	c->width = width;
 	c->fill = 1;
+	c->adjust = MAN_ADJ_LEFT;
 	c->rs_indent = MAN_BASE_INDENT;
 	return 1;
 }
@@ -1696,11 +1787,100 @@ static int man_block_start(struct man_ctx *c)
 	return 1;
 }
 
-/* Greedy word-wrap of `styled` (marker-embedded) into c->doc at the
- * given indent. If first_prefix is non-NULL it is used verbatim
- * (already padded to `indent` visible columns) as the first output
- * line's left margin instead of `indent` plain spaces -- the ".TP tag
- * short enough to share the body's first line" case. */
+/* One word already located within a man_wrap_emit() call's `styled`
+ * buffer -- start/len index into it directly rather than copying, wcols
+ * is its pre-measured man_vislen() width. */
+struct man_wrapword { size_t start, len; int wcols; };
+
+static int man_wrapword_push(struct man_wrapword **v, size_t *n, size_t *cap,
+                              size_t start, size_t len, int wcols)
+{
+	if (*n + 1 > *cap) {
+		size_t newcap;
+		struct man_wrapword *g;
+		if (!__util_array_capacity(*cap, *n, 1, 16, sizeof **v, &newcap)) return 0;
+		g = __util_reallocarray(*v, newcap, sizeof **v);
+		if (!g) return 0;
+		*v = g; *cap = newcap;
+	}
+	(*v)[*n].start = start; (*v)[*n].len = len; (*v)[*n].wcols = wcols;
+	(*n)++;
+	return 1;
+}
+
+/* Emits one already-line-broken word list (see man_wrap_emit() below)
+ * as one physical output line: `indent` plain spaces, or `prefix`
+ * verbatim if non-NULL (already padded to `indent` visible columns --
+ * the ".TP tag short enough to share the body's first line" case), then
+ * the words themselves. `is_last` marks the final physical line this
+ * man_wrap_emit() call will produce -- real troff never stretches a
+ * fill span's own last line to the right margin even under `.ad`, so
+ * MAN_ADJ_BOTH only distributes slack when `!is_last`. MAN_ADJ_RIGHT/
+ * MAN_ADJ_CENTER apply to every line, `is_last` included, since neither
+ * one has troff's "last line stays ragged" carve-out (there is nothing
+ * to stretch, only to shift). */
+static int man_wrap_flush_line(struct man_ctx *c, const char *styled,
+                                const struct man_wrapword *words, size_t wn,
+                                int indent, int cols, int is_last, int adjust,
+                                const char *prefix)
+{
+	size_t i;
+	int content_cols;
+	int gap_base = 1, gap_extra = 0;
+
+	if (wn == 0) {
+		if (prefix) {
+			size_t l = strlen(prefix);
+			while (l > 0 && prefix[l - 1] == ' ') l--;
+			if (!mbuf_append(&c->doc, prefix, l)) return 0;
+		} else {
+			if (!mbuf_appendn(&c->doc, indent, ' ')) return 0;
+		}
+		return mbuf_appendc(&c->doc, '\n');
+	}
+
+	content_cols = (int)wn - 1;
+	for (i = 0; i < wn; i++) content_cols += words[i].wcols;
+
+	if (prefix) { if (!mbuf_appendstr(&c->doc, prefix)) return 0; }
+	else { if (!mbuf_appendn(&c->doc, indent, ' ')) return 0; }
+
+	if (adjust == MAN_ADJ_RIGHT || adjust == MAN_ADJ_CENTER) {
+		int pad = cols - content_cols;
+		if (pad < 0) pad = 0;
+		if (!mbuf_appendn(&c->doc, adjust == MAN_ADJ_CENTER ? pad / 2 : pad, ' ')) return 0;
+	} else if (adjust == MAN_ADJ_BOTH && !is_last && wn > 1) {
+		int slack = cols - content_cols;
+		int gaps = (int)wn - 1;
+		if (slack < 0) slack = 0;
+		gap_base = 1 + slack / gaps;
+		gap_extra = slack % gaps;
+	}
+
+	for (i = 0; i < wn; i++) {
+		if (i > 0) {
+			int spaces = gap_base + (((int)i - 1) < gap_extra ? 1 : 0);
+			if (!mbuf_appendn(&c->doc, spaces, ' ')) return 0;
+		}
+		if (!mbuf_append(&c->doc, styled + words[i].start, words[i].len)) return 0;
+	}
+	return mbuf_appendc(&c->doc, '\n');
+}
+
+/* Word-wrap of `styled` (marker-embedded) into c->doc at the given
+ * indent, honouring c->adjust (MAN_ADJ_* -- see "ADJUSTMENT" in this
+ * file's header comment). If first_prefix is non-NULL it is used
+ * verbatim as the FIRST output line's own left margin instead of
+ * `indent` plain spaces, the ".TP tag short enough to share the body's
+ * first line" case.
+ *
+ * Single pass: words are greedily assigned to the current line exactly
+ * as before Tier 7; the difference is that a completed line's words are
+ * buffered (man_wrapword) rather than emitted immediately, because
+ * MAN_ADJ_BOTH's inter-word spacing for that line can only be computed
+ * once every word that belongs on it is known. A line is known-complete
+ * either when the next word doesn't fit (more text follows -- `is_last`
+ * false) or when the input runs out (this IS the last line). */
 static int man_wrap_emit(struct man_ctx *c, const char *styled, int indent, const char *first_prefix)
 {
 	size_t n = strlen(styled);
@@ -1708,50 +1888,48 @@ static int man_wrap_emit(struct man_ctx *c, const char *styled, int indent, cons
 	int cols = c->width - indent;
 	int line_cols = 0;
 	int any_word = 0;
+	int first_line = 1;
+	struct man_wrapword *words = 0;
+	size_t wn = 0, wcap = 0;
+	int result = 1;
 
 	if (cols < 20) cols = 20;
 
-	if (first_prefix) {
-		if (!mbuf_appendstr(&c->doc, first_prefix)) return 0;
-	} else {
-		if (!mbuf_appendn(&c->doc, indent, ' ')) return 0;
-	}
-
 	while (i < n) {
-		size_t wstart;
-		size_t wlen;
+		size_t wstart, wlen, wcols;
 
 		while (i < n && styled[i] == ' ') i++;
 		if (i >= n) break;
 		wstart = i;
 		while (i < n && styled[i] != ' ') i++;
 		wlen = i - wstart;
+		wcols = man_vislen(styled + wstart, wlen);
 
 		{
-			size_t wcols = man_vislen(styled + wstart, wlen);
 			int sep = any_word ? 1 : 0;
 
 			if (any_word && (size_t)(line_cols + sep) + wcols > (size_t)cols) {
-				if (!mbuf_appendc(&c->doc, '\n')) return 0;
-				if (!mbuf_appendn(&c->doc, indent, ' ')) return 0;
+				if (!man_wrap_flush_line(c, styled, words, wn, indent, cols, 0,
+				                          c->adjust, first_line ? first_prefix : 0)) {
+					result = 0; break;
+				}
+				first_line = 0;
+				wn = 0;
 				line_cols = 0;
+				any_word = 0;
 				sep = 0;
 			}
-			if (sep) { if (!mbuf_appendc(&c->doc, ' ')) return 0; line_cols++; }
-			if (!mbuf_append(&c->doc, styled + wstart, wlen)) return 0;
-			line_cols += (int)wcols;
+			if (!man_wrapword_push(&words, &wn, &wcap, wstart, wlen, (int)wcols)) { result = 0; break; }
+			line_cols += sep + (int)wcols;
 			any_word = 1;
 		}
 	}
-	if (!any_word && first_prefix) {
-		/* Nothing followed a deferred tag before the next flush: trim
-		 * the trailing pad spaces first_prefix carried so the tag
-		 * doesn't leave a ragged trailing-space-only line. */
-		while (c->doc.len > 0 && c->doc.data[c->doc.len - 1] == ' ') c->doc.len--;
-		c->doc.data[c->doc.len] = 0;
+	if (result && (wn > 0 || first_line)) {
+		result = man_wrap_flush_line(c, styled, words, wn, indent, cols, 1,
+		                              c->adjust, first_line ? first_prefix : 0);
 	}
-	if (!mbuf_appendc(&c->doc, '\n')) return 0;
-	return 1;
+	free(words);
+	return result;
 }
 
 /* Ends the current paragraph/tag-body accumulator, if any, or an
@@ -3498,6 +3676,32 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 		} else if (!strcmp(name, "fi")) {
 			c->fill = 1;
 			c->nf_started = 0;
+		} else if (!strcmp(name, "ad")) {
+			/* `.ad [c|l|r|b|n]` -- see "ADJUSTMENT" in this file's
+			 * header comment. Flushed first, same as .nf/.fi above:
+			 * c->acc buffers a whole paragraph before man_wrap_emit()
+			 * ever runs, so a mode change mid-paragraph could otherwise
+			 * only ever apply uniformly to that whole buffered block
+			 * anyway (whichever mode is active when it's finally
+			 * flushed) -- flushing first makes that boundary explicit
+			 * instead of silently backdating the new mode onto text
+			 * already accumulated under the old one. An unrecognised
+			 * argument is a no-op, the same "malformed value leaves the
+			 * setting untouched" precedent `.nr` already documents. */
+			ok = man_flush_paragraph(c);
+			if (ok && a.n == 0) c->adjust = MAN_ADJ_BOTH;
+			else if (ok && a.n > 0 && a.v[0][0] && !a.v[0][1]) {
+				switch (a.v[0][0]) {
+				case 'l': c->adjust = MAN_ADJ_LEFT; break;
+				case 'r': c->adjust = MAN_ADJ_RIGHT; break;
+				case 'c': c->adjust = MAN_ADJ_CENTER; break;
+				case 'b': case 'n': c->adjust = MAN_ADJ_BOTH; break;
+				default: break;
+				}
+			}
+		} else if (!strcmp(name, "na")) {
+			ok = man_flush_paragraph(c);
+			c->adjust = MAN_ADJ_LEFT;
 		} else if (!strcmp(name, "br")) {
 			/* .br: force a line break WITHOUT starting a new block --
 			 * no blank line, no indent/tag-state reset, unlike .PP.
@@ -3606,10 +3810,12 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 			struct man_macro *m = man_mac_find(&c->macros, name);
 			/* Checked only here, after every built-in request name
 			 * above -- a page can never shadow a built-in by defining
-			 * a same-named macro. Anything still unmatched (.EQ,
-			 * .ad, .na, .hy, .sp, .ce, .in, .ll, ...): unimplemented,
-			 * silently skipped -- see this file's own
-			 * "UNKNOWN-MACRO DEGRADATION" header comment. */
+			 * a same-named macro. Anything still unmatched (.hy, .sp,
+			 * .ce, .in, .ll, ...): unimplemented, silently skipped --
+			 * see this file's own "UNKNOWN-MACRO DEGRADATION" header
+			 * comment. (.EQ/.TS are handled earlier, before this
+			 * dispatch even runs -- see c->eqn_active/c->tbl_active
+			 * above; .ad/.na are handled above too.) */
 			if (m) ok = man_invoke_macro(c, r, m, name, &a);
 		}
 		man_argv_free(&a);
