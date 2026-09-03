@@ -324,24 +324,24 @@ static int check_command(const struct sh_command *c)
 	if (check_redirs(c->redirs)) return -1;
 
 	/* Switched on the kind rather than on "does it have a body?": the
-	 * compound commands keep their parts in several different fields
-	 * (an if's arms, a loop's condition, a for's word
+	 * compound commands keep their parts in several different union
+	 * variants (an if's arms, a loop's condition, a for's word
 	 * list), and a `for` in particular has *both* a word list to scan
-	 * for unsupported expansions and a body to recurse into.  The old
-	 * `if (c->body) return check_list(c->body);` would have walked a
-	 * loop's body and silently skipped its condition -- a program whose
+	 * for unsupported expansions and a body to recurse into.  Reading a
+	 * single "body" field regardless of kind would have walked a loop's
+	 * body and silently skipped its condition -- a program whose
 	 * `while` test used "$1" would then have run. */
 	switch (c->kind) {
 	case SH_CMD_SUBSHELL:
 	case SH_CMD_BRACE:
-		return check_list(c->body);
+		return check_list(c->u.group.body);
 	case SH_CMD_IF:
-		for (a = c->arms; a; a = a->next)
+		for (a = c->u.ifcmd.arms; a; a = a->next)
 			if (check_list(a->cond) || check_list(a->body)) return -1;
-		return check_list(c->else_body);
+		return check_list(c->u.ifcmd.else_body);
 	case SH_CMD_LOOP:
-		if (check_list(c->cond)) return -1;
-		return check_list(c->body);
+		if (check_list(c->u.loop.cond)) return -1;
+		return check_list(c->u.loop.body);
 	case SH_CMD_FUNCDEF:
 		/* The body is source text (src/sh/sh.h), not a subtree, so it
 		 * is re-parsed to be checked.  Checking it *here*, at the
@@ -352,10 +352,10 @@ static int check_command(const struct sh_command *c)
 		 * impossible for text src/sh/parse.c already parsed once, and
 		 * is reported rather than assumed away. */
 		{
-			struct sh_list *body = __sh_parse(c->func_text, 0, 0);
+			struct sh_list *body = __sh_parse(c->u.funcdef.func_text, 0, 0);
 			int rc;
 			if (!body) {
-				diag("%s: cannot re-parse the function body", c->name);
+				diag("%s: cannot re-parse the function body", c->u.funcdef.name);
 				return -1;
 			}
 			rc = check_list(body);
@@ -368,16 +368,16 @@ static int check_command(const struct sh_command *c)
 		 * shell has positional parameters to iterate (src/sh/param.c),
 		 * so there is nothing left for this arm to refuse beyond what
 		 * the word list and body already get. */
-		if (check_words(c->words)) return -1;
-		return check_list(c->body);
+		if (check_words(c->u.forloop.words)) return -1;
+		return check_list(c->u.forloop.body);
 	default:
 		break;
 	}
 
-	if (check_words(c->assigns) || check_words(c->words)) return -1;
+	if (check_words(c->u.simple.assigns) || check_words(c->u.simple.words)) return -1;
 
-	if (!c->words || !c->words->text) return 0;
-	name = c->words->text;
+	if (!c->u.simple.words || !c->u.simple.words->text) return 0;
+	name = c->u.simple.words->text;
 	if (in_list(reserved, name)) {
 		diag("%s: the `case' construct is not implemented", name);
 		return -1;
@@ -392,8 +392,8 @@ static int check_command(const struct sh_command *c)
 
 /* list is deliberately left unmarked: `if (!list) return 0;` right below
  * is a real, working check -- check_command()'s own SH_CMD_IF/LOOP/FOR
- * arms above pass a compound command's optional parts (e.g. cmd->else_body
- * with no `else`) straight through as NULL.
+ * arms above pass a compound command's optional parts (e.g.
+ * cmd->u.ifcmd.else_body with no `else`) straight through as NULL.
  *
  * Not fixed by this: the flagged `a->pipeline.commands[i]` deref is
  * about `a`, a local loop variable walking `it->andor`, and its own

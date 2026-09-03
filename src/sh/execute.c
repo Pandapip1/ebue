@@ -392,8 +392,8 @@ static int env_set(char ***vp, size_t *n, size_t *cap, char *entry, size_t namel
  * site (spawn_stage() below) passes NULL. assigns is deliberately left
  * unmarked: `for (a = assigns; a; a = a->next)` is the same NULL-safe
  * "empty list" traversal every sh_word chain in this file uses, and a
- * command with no assignment prefix genuinely passes cmd->assigns as
- * NULL here.
+ * command with no assignment prefix genuinely passes cmd->u.simple.assigns
+ * as NULL here.
  *
  * Not fixed by this: the flagged subscript around `__environ[i]`/`v[i]`
  * is about the global `environ` this loop walks, not about either
@@ -470,7 +470,7 @@ static int exec_assignment_only(const struct sh_command *cmd, int *status)
 {
 	const struct sh_word *a;
 	int ok = 1;
-	for (a = cmd->assigns; a; a = a->next) {
+	for (a = cmd->u.simple.assigns; a; a = a->next) {
 		char *name, *val;
 		if (split_assignment(a->text, &name, &val)) continue;
 		if (__sh_readonly_is(name)) {
@@ -968,7 +968,7 @@ typedef struct stage_variant_result {
  * which argues this at length for `cd` and then for the column.
  */
 
-/* Finds and starts the program named by cmd->words (which must be
+/* Finds and starts the program named by cmd->u.simple.words (which must be
  * non-NULL -- the assignment-only case is handled by the caller, see
  * run_stage() below), but does not wait for it: a pipeline needs every
  * stage spawned before it waits for any of them (see this file's
@@ -1079,8 +1079,9 @@ static int run_interpreted(const char *resolved, const wordexp_t *we, int *statu
 }
 
 /* cmd and out are both required: `out->kind = 1;` is this function's
- * first statement, and `if (!cmd->words)` right after it is unconditional
- * too -- no branch precedes either. run_stage() below (the only caller)
+ * first statement, and `if (!cmd->u.simple.words)` right after it is
+ * unconditional too -- no branch precedes either. run_stage() below (the
+ * only caller)
  * always passes a real cmd and the address of a real stage_result_t. */
 // NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
@@ -1100,15 +1101,15 @@ static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int en
 	out->kind = 1;
 	out->had_name = 0;
 
-	/* run_stage() never calls this with cmd->words == NULL (that is
+	/* run_stage() never calls this with cmd->u.simple.words == NULL (that is
 	 * exactly the assignment-only case it handles itself), but a
 	 * static analyzer cannot see across the call boundary and flags
 	 * `we` as read uninitialized on a hypothetical zero-iteration
 	 * loop below -- so this makes the invariant an explicit, checked
 	 * fact rather than something only a comment promises. */
-	if (!cmd->words) { out->special = 0; return 0; }
+	if (!cmd->u.simple.words) { out->special = 0; return 0; }
 
-	for (w = cmd->words; w; w = w->next) {
+	for (w = cmd->u.simple.words; w; w = w->next) {
 		rc = __wordexp_sh(w->text, &we, first ? 0 : WRDE_APPEND);
 		if (rc) {
 			if (!first) wordfree(&we);
@@ -1156,7 +1157,7 @@ static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int en
 			 * variable store is the real `environ`, so applying it
 			 * would leak with no way to undo it.  Silently not
 			 * applying it is worse than refusing. */
-			if (cmd->assigns) { wordfree(&we); return -1; }
+			if (cmd->u.simple.assigns) { wordfree(&we); return -1; }
 			if (!env_mutate) {
 				/* One stage of a multi-command pipeline is a subshell
 				 * environment (2.12) that this shell does not fork
@@ -1174,7 +1175,7 @@ static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int en
 	}
 	if (bi) {
 		struct sh_builtin_ctx ctx;
-		if (cmd->assigns) { wordfree(&we); return -1; }
+		if (cmd->u.simple.assigns) { wordfree(&we); return -1; }
 		if (!env_mutate && bi->env_effect) {
 			/* A pipeline stage's `cd` would change *this* process's
 			 * working directory with nothing to put it back; 2.12
@@ -1196,8 +1197,8 @@ static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int en
 		return rc;
 	}
 
-	if (cmd->assigns) {
-		envp = build_child_envp(cmd->assigns, &envn);
+	if (cmd->u.simple.assigns) {
+		envp = build_child_envp(cmd->u.simple.assigns, &envn);
 		if (!envp) { wordfree(&we); return -1; }
 	}
 
@@ -1254,7 +1255,7 @@ static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int en
  * then discarded -- nothing downstream of the pipeline can tell the
  * difference -- and it is what keeps this file's "no fork()" pipeline
  * design correct rather than merely convenient. */
-/* cmd is required: `if (!cmd->words)` is this function's first
+/* cmd is required: `if (!cmd->u.simple.words)` is this function's first
  * statement. out is required too: it is either dereferenced directly in
  * the assignment-only branch (`out->kind = 1;`) or forwarded to
  * spawn_stage(), which requires it nonnull above -- every path
@@ -1266,7 +1267,7 @@ static int run_stage(const struct sh_command *cmd, stage_result_t *out, int env_
 // NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int run_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
 {
-	if (!cmd->words) {
+	if (!cmd->u.simple.words) {
 		out->kind = 1;
 		out->had_name = 0;
 		if (env_mutate) exec_assignment_only(cmd, &out->special);
@@ -1737,14 +1738,14 @@ static int exec_if(const struct sh_command *cmd, int *status)
 	const struct sh_ifarm *a;
 
 	*status = 0;
-	for (a = cmd->arms; a; a = a->next) {
+	for (a = cmd->u.ifcmd.arms; a; a = a->next) {
 		int cond_status;
 		int rc = __sh_exec_list(a->cond, &cond_status);
 		if (rc) return rc;
 		if (__sh_flow_pending()) { *status = cond_status; return 0; }
 		if (cond_status == 0) return __sh_exec_list(a->body, status);
 	}
-	if (cmd->else_body) return __sh_exec_list(cmd->else_body, status);
+	if (cmd->u.ifcmd.else_body) return __sh_exec_list(cmd->u.ifcmd.else_body, status);
 	return 0;
 }
 
@@ -1753,7 +1754,7 @@ static int exec_if(const struct sh_command *cmd, int *status)
  * Otherwise, the compound-list-2 shall be executed, and the process
  * shall repeat."  "The until Loop" is the same sentence with the test
  * inverted -- "if it has a zero exit status, the until command
- * completes" -- which is `cmd->until`.  Exit status for both: "the exit
+ * completes" -- which is `cmd->u.loop.until`.  Exit status for both: "the exit
  * status of the last compound-list-2 executed, or zero if none was
  * executed", which is why *status starts at 0 and is only ever written
  * by the body. */
@@ -1767,12 +1768,12 @@ static int exec_loop(const struct sh_command *cmd, int *status)
 	for (;;) {
 		int cond_status, rc;
 
-		rc = __sh_exec_list(cmd->cond, &cond_status);
+		rc = __sh_exec_list(cmd->u.loop.cond, &cond_status);
 		if (rc) return rc;
 		if (__sh_flow_pending()) { *status = cond_status; return 0; }
-		if (cmd->until ? (cond_status == 0) : (cond_status != 0)) return 0;
+		if (cmd->u.loop.until ? (cond_status == 0) : (cond_status != 0)) return 0;
 
-		rc = __sh_exec_list(cmd->body, status);
+		rc = __sh_exec_list(cmd->u.loop.body, status);
 		if (rc) return rc;
 		if (__sh_flow_pending()) return 0;
 	}
@@ -1816,9 +1817,10 @@ static int exec_loop(const struct sh_command *cmd, int *status)
  * -- and it is stated here rather than left for someone to find.
  *
  * Every one of those setenv()s is therefore a real assignment to
- * `cmd->name`, so it gets the same read-only check exec_assignment_only()
- * above uses (same __sh_readonly_is() call, same diagnostic). `cmd->name`
- * does not change between iterations, so once it is marked read-only the
+ * `cmd->u.forloop.name`, so it gets the same read-only check
+ * exec_assignment_only() above uses (same __sh_readonly_is() call, same
+ * diagnostic). `cmd->u.forloop.name` does not change between iterations,
+ * so once it is marked read-only the
  * very first would-be setenv() rejects it; there is no "run the rest of
  * the items anyway" recovery to fall back to the way there is when
  * multiple *different* names share one assignment-only command, so the
@@ -1854,25 +1856,25 @@ static int exec_for(const struct sh_command *cmd, int *status)
 	 * quoting of a string this file synthesised, where reading the
 	 * list says what 2.9.4 says: one iteration per positional
 	 * parameter, in order, whatever bytes are in it. */
-	if (!cmd->have_in) {
+	if (!cmd->u.forloop.have_in) {
 		int n = __sh_param_count(), k;
 		for (k = 1; k <= n; k++) {
-			if (__sh_readonly_is(cmd->name)) {
-				(void)fprintf(stderr, "%s: readonly variable\n", cmd->name);
+			if (__sh_readonly_is(cmd->u.forloop.name)) {
+				(void)fprintf(stderr, "%s: readonly variable\n", cmd->u.forloop.name);
 				*status = 1;
 				break;
 			}
-			if (setenv(cmd->name, __sh_param_get(k), 1) < 0) return -1;
-			rc = __sh_exec_list(cmd->body, status);
+			if (setenv(cmd->u.forloop.name, __sh_param_get(k), 1) < 0) return -1;
+			rc = __sh_exec_list(cmd->u.forloop.body, status);
 			if (rc) break;
 			if (__sh_flow_pending()) break;
 		}
 		return rc;
 	}
 
-	if (!cmd->words) return 0; /* `for f in ; do` -- no items, exit 0 */
+	if (!cmd->u.forloop.words) return 0; /* `for f in ; do` -- no items, exit 0 */
 
-	for (w = cmd->words; w; w = w->next) {
+	for (w = cmd->u.forloop.words; w; w = w->next) {
 		if (__wordexp_sh(w->text, &we, first ? 0 : WRDE_APPEND)) {
 			if (!first) wordfree(&we);
 			return -1; /* same meaning as in spawn_stage() */
@@ -1881,13 +1883,13 @@ static int exec_for(const struct sh_command *cmd, int *status)
 	}
 
 	for (i = 0; i < we.we_wordc; i++) {
-		if (__sh_readonly_is(cmd->name)) {
-			(void)fprintf(stderr, "%s: readonly variable\n", cmd->name);
+		if (__sh_readonly_is(cmd->u.forloop.name)) {
+			(void)fprintf(stderr, "%s: readonly variable\n", cmd->u.forloop.name);
 			*status = 1;
 			break;
 		}
-		if (setenv(cmd->name, we.we_wordv[i], 1) < 0) { rc = -1; break; }
-		rc = __sh_exec_list(cmd->body, status);
+		if (setenv(cmd->u.forloop.name, we.we_wordv[i], 1) < 0) { rc = -1; break; }
+		rc = __sh_exec_list(cmd->u.forloop.body, status);
 		if (rc) break;
 		if (__sh_flow_pending()) break;
 	}
@@ -1898,7 +1900,7 @@ static int exec_for(const struct sh_command *cmd, int *status)
 /* The body of any compound command, run in this process.  Both callers
  * -- exec_group() for a standalone "(...)"/"{...}"/if/while/for, and
  * exec_group_stage_inline() for one as a pipeline stage -- route
- * through one dispatcher rather than reading cmd->body directly, so a
+ * through one dispatcher rather than reading cmd->u.group.body directly, so a
  * kind added later cannot be wired into one of those two paths and
  * silently forgotten in the other; the default arm makes that a
  * reported -1 rather than a silent "ran an empty list, exit 0". */
@@ -1910,8 +1912,9 @@ static int exec_for(const struct sh_command *cmd, int *status)
  * expansions shall be performed as normal each time the function is
  * called" -- which is exactly what storing the raw source text
  * delivers, rather than being a rule this file has to remember. */
-/* cmd is required: `__sh_func_define(cmd->name, cmd->func_text)` is
- * this function's first statement. status is required too, and more
+/* cmd is required: `__sh_func_define(cmd->u.funcdef.name,
+ * cmd->u.funcdef.func_text)` is this function's first statement. status is
+ * required too, and more
  * strongly than most of this family: both of this function's returns
  * write through it (there is no "-1, status untouched" path here at
  * all). */
@@ -1919,9 +1922,9 @@ static int exec_funcdef(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
 static int exec_funcdef(const struct sh_command *cmd, int *status)
 {
-	if (__sh_func_define(cmd->name, cmd->func_text) < 0) {
+	if (__sh_func_define(cmd->u.funcdef.name, cmd->u.funcdef.func_text) < 0) {
 		/* Function definition already failed and fixes status at one. */
-		(void)fprintf(stderr, "%s: cannot define function\n", cmd->name);
+		(void)fprintf(stderr, "%s: cannot define function\n", cmd->u.funcdef.name);
 		*status = 1;
 		return 0;
 	}
@@ -1945,7 +1948,7 @@ static int exec_compound(const struct sh_command *cmd, int *status)
 		return exec_funcdef(cmd, status);
 	case SH_CMD_SUBSHELL:
 	case SH_CMD_BRACE:
-		return __sh_exec_list(cmd->body, status);
+		return __sh_exec_list(cmd->u.group.body, status);
 	case SH_CMD_IF:
 		return exec_if(cmd, status);
 	case SH_CMD_LOOP:
@@ -2597,7 +2600,7 @@ static unsigned exec_list_depth;
 /* status is required: `*status = 0;` is this function's first statement,
  * unconditional. list is deliberately left unmarked -- `if (!list)
  * return 0;` right after is a real, working defensive check: an empty
- * compound-command body (e.g. cmd->else_body when there is no `else`)
+ * compound-command body (e.g. cmd->u.ifcmd.else_body when there is no `else`)
  * genuinely passes list as NULL here, and every caller in this file
  * relies on that. */
 // NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
