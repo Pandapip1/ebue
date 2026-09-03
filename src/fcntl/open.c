@@ -3,16 +3,11 @@
  *
  * open: the POSIX flags turned into NtCreateFile's.
  *
- * Every file is opened synchronous (FILE_SYNCHRONOUS_IO_NONALERT) so that
- * the kernel keeps the file position and read/write need not; and with
- * all three share modes, which is what Unix semantics demand and what
- * lets one program delete a file another has open.  Handles are made
- * inheritable unless O_CLOEXEC says otherwise, because fork needs them
- * copied and exec passes them on.
- *
+ * Every file is opened synchronous with all three share modes, matching
+ * Unix semantics where one program can delete a file another has open.
  * A newly created file receives WSL's $LXMOD NTFS extended attribute;
- * FILE_ATTRIBUTE_READONLY also mirrors the aggregate write bits for
- * ordinary Windows programs.
+ * FILE_ATTRIBUTE_READONLY mirrors the aggregate write bits for ordinary
+ * Windows programs.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
