@@ -6,8 +6,8 @@
  * the default action -- see src/signal/sigdelivery.c and
  * src/signal/signal.c's file banner for the whole mechanism. This file
  * is the real-Windows/real-Wine coverage for it: windows-test builds
- * TEST_SRCS = test/*.c (Makefile) and runs every one of them, so this is
- * checked against an actual NT kernel, not only Wine.
+ * TEST_SRCS globs every test/ source (Makefile) and runs every one of
+ * them, so this is checked against an actual NT kernel, not only Wine.
  *
  * Every scenario below uses __spawn(), the same real-second-process
  * primitive test/posix-sigpipe.c and test/posix-signal.c already use for
@@ -37,7 +37,7 @@
  */
 /* sigaction() and the sigemptyset()/sigaddset()/sigprocmask() family
  * are feature-test gated in include/signal.h; same define most other
- * test/*.c already carry for the same reason (see test/posix-glob.c's
+ * tests in test/ already carry for the same reason (see test/posix-glob.c's
  * comment on this exact define). */
 #define _GNU_SOURCE
 #include <unistd.h>

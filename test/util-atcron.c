@@ -37,7 +37,7 @@
  * NTLIBC_ATD_POLL_MS/NTLIBC_CROND_POLL_MS (both files' own header
  * comments document these as a deliberate test-speed-only knob, not a
  * spec deviation) so the at(1p)/batch(1p) cases stay in the
- * few-seconds range test/*.c's own convention calls for. crond's own
+ * few-seconds range this tree's other tests already stay in. crond's own
  * schedule granularity is genuinely per-minute (crontab(5) has no
  * finer field), so that one case is unavoidably slower -- bounded at
  * "wait until the next real minute boundary plus a short margin", not
@@ -446,7 +446,7 @@ static void cleanup_artifacts(void)
 	unlink("crontab-src2.txt");
 	unlink("crontab-bad.txt");
 	unlink("crontab-timed.txt");
-	/* $HOME/.ntlibc/{atjobs,crontabs}/* and the scratch home tree
+	/* Everything under $HOME/.ntlibc/{atjobs,crontabs}/ and the scratch home tree
 	 * itself: best-effort, not exhaustive -- these are already
 	 * confined under this test's own private scratch directory
 	 * (never a real developer/CI home), so anything this leaves

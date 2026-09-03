@@ -17,7 +17,7 @@
  */
 /* kill() and the sigaction()/sigemptyset()/sigprocmask() family are
  * feature-test gated in include/signal.h; same define most other
- * test/*.c already carry for the same reason (see test/posix-glob.c's
+ * tests in test/ already carry for the same reason (see test/posix-glob.c's
  * comment on this exact define). */
 #define _GNU_SOURCE
 #include "test-policy.h"
@@ -1475,7 +1475,7 @@ static void test_wait4_sanity(void)
  * signal number."
  *
  * killpg() and sigaltstack() both exist in src/signal/signal.c and link,
- * but were named by no assertion anywhere in test/*.c before this (see
+ * but were named by no assertion anywhere in the test/ tree before this (see
  * test/POSIX-GAP-ACCOUNTING.md's "implemented, but no assertion
  * anywhere" list).  These run on real Windows in CI too; neither
  * depends on Wine-specific behaviour. */
@@ -1520,7 +1520,7 @@ static void test_sigaltstack_disabled(void)
 
 /* sigset.html (XSI, obsolescent) and siginterrupt.html (XSI,
  * obsolescent) -- the five <signal.h> names test/POSIX-GAP-ACCOUNTING.md
- * lists as never asserted anywhere in test/*.c.
+ * lists as never asserted anywhere in the test/ tree.
  *
  * Pure library bookkeeping over this file's own signal-mask tables, so
  * Wine is a sound oracle for all of it; nothing here touches the

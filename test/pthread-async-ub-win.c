@@ -44,7 +44,7 @@
 /* nanosleep()/usleep()/clock_nanosleep()/clock_gettime() and
  * CLOCK_REALTIME/CLOCK_MONOTONIC/TIMER_ABSTIME are feature-test gated
  * in include/time.h and include/unistd.h; same define most other
- * test/*.c already carry for the same reason (see test/posix-glob.c's
+ * tests in test/ already carry for the same reason (see test/posix-glob.c's
  * comment on this exact define). */
 #define _GNU_SOURCE
 #include <pthread.h>

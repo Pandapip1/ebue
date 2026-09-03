@@ -5,7 +5,7 @@
  * standard utilities -- the text I/O tier: `cat`, `echo`, `tee`, `wc`,
  * `head`, `tail` (XCU cat(1p), echo(1p), tee(1p), wc(1p), head(1p),
  * tail(1p)).  Same shape as test/util-fileops.c and test/util-fsops.c
- * (see either file's header): each standalone obj/bin/*.exe is spawned
+ * (see either file's header): each standalone obj/bin/NAME.exe is spawned
  * as a real process, and the shell built-in is exercised too, through
  * `obj/sh/sh.exe -c`, confirming both callers of __util_*_main()
  * (src/internal/util.h) agree.

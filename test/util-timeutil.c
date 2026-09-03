@@ -170,7 +170,7 @@ static void check_timing_report(void)
 }
 
 /* Every operand below that names a *real* command for time/timeout to
- * spawn uses the fully resolved obj/bin/*.exe path (true_path, not
+ * spawn uses the fully resolved obj/bin/NAME.exe path (true_path, not
  * bare "true"), deliberately: __util_time_main()/__util_timeout_main()
  * always resolve their own utility operand via __find_program()/PATH
  * (see each file's header comment on why -- they never dispatch to a

@@ -6,7 +6,7 @@
  * dirname(1p), pathchk(1p)), and the two non-XCU fellow travelers
  * `readlink` and `realpath` (src/util/readlink.c's own comment explains
  * why they are here).  Same technique as test/util-trivial.c, which
- * covers the first tier (true/false/test): each standalone obj/bin/*.exe
+ * covers the first tier (true/false/test): each standalone obj/bin/NAME.exe
  * is spawned as a real process (test/sh-main.c's technique), and each
  * utility's shell built-in is exercised too via `obj/sh/sh.exe -c`, so
  * both callers of __util_*_main() (src/internal/util.h) are checked to

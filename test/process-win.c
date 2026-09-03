@@ -10,8 +10,8 @@
  * without depending on any other program being present.
  */
 /* setenv()/wait3()/wait4() are feature-test gated in include/stdlib.h
- * and include/sys/wait.h; same define most other test/*.c already
- * carry for the same reason (see test/posix-glob.c's comment on this
+ * and include/sys/wait.h; same define most other tests in test/
+ * already carry for the same reason (see test/posix-glob.c's comment on this
  * exact define). */
 #define _GNU_SOURCE
 #include <stdio.h>

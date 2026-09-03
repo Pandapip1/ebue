@@ -160,12 +160,12 @@
  * winioctl.h (FSCTL_SET_SPARSE / FSCTL_SET_ZERO_DATA at :1509-1510,
  * FILE_SET_SPARSE_BUFFER at :1905, FILE_ZERO_DATA_INFORMATION at :1909)
  * and from src/internal/nt.h (FILE_STANDARD_INFORMATION,
- * FileStandardInformation = 5), because test/*.c is not built with
+ * FileStandardInformation = 5), because the test/ tree is not built with
  * src/internal/ on the include path -- the same hand-declaration
  * convention test/posix-errno.c and test/posix-signal.c already use.
  */
 /* mkdtemp() is feature-test gated in include/stdlib.h; same define
- * most other test/*.c already carry for the same reason (see
+ * most other tests in test/ already carry for the same reason (see
  * test/posix-glob.c's comment on this exact define). */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -280,7 +280,7 @@ HANDLE __fd_handle(int fd);
 #define STATUS_INVALID_PARAMETER ((NTSTATUS)0xC000000DL)
 
 /* FILE_FS_SIZE_INFORMATION / FileFsSizeInformation, hand-declared for the
- * same reason as everything else here (test/*.c has no src/internal on
+ * same reason as everything else here (the test/ tree has no src/internal on
  * the include path).  cluster = SectorsPerAllocationUnit * BytesPerSector. */
 typedef struct _FILE_FS_SIZE_INFORMATION {
 	LONGLONG TotalAllocationUnits;

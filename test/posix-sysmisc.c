@@ -1120,7 +1120,7 @@ static void test_fd_macros(void)
 
 /* Not a POSIX.1-2017 header at all -- absent from the basedefs index
  * (https://pubs.opengroup.org/onlinepubs/9699919799/idx/head.html
- * lists 17 sys/*.h headers; sys/param.h is not among them). A BSD
+ * lists 17 sys/ headers; sys/param.h is not among them). A BSD
  * extension, correctly not claimed as POSIX anywhere in ntlibc's own
  * comments. Only internal consistency is testable: there is no spec
  * page to hold it to. */

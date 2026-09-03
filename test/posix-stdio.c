@@ -11,7 +11,7 @@
  */
 /* strdup()/mkstemp()/fileno()/fmemopen()/open_memstream()/fseeko()/
  * ftello() are feature-test gated in include/string.h, include/stdlib.h
- * and include/stdio.h; same define most other test/*.c already carry
+ * and include/stdio.h; same define most other tests in test/ already carry
  * for the same reason (see test/posix-glob.c's comment on this exact
  * define). */
 #define _GNU_SOURCE
@@ -665,9 +665,9 @@ static void test_popen_emfile(void)
 #endif
 
 /* Everything below exists in src/ and links, but was named by no
- * assertion anywhere in test/*.c before this (see
+ * assertion anywhere in the test/ tree before this (see
  * test/POSIX-GAP-ACCOUNTING.md's "implemented, but no assertion
- * anywhere in test/*.c" list, which this closes for <stdio.h>).  These
+ * anywhere in the test/ tree" list, which this closes for <stdio.h>).  These
  * are deliberately the cheap RETURN VALUE / DESCRIPTION clauses, not a
  * clause-by-clause audit -- the ledger's stdio.h section stays the
  * authority for that.  They run on real Windows in CI too, which is the

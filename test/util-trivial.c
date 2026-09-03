@@ -9,7 +9,7 @@
  * shared-core architecture (src/internal/util.h) rather than exercising
  * a large surface each.
  *
- * Two things get checked for each utility: the standalone obj/bin/*.exe
+ * Two things get checked for each utility: the standalone obj/bin/NAME.exe
  * (spawned as a real process, same technique test/sh-main.c uses for
  * obj/sh/sh.exe -- see that file's header for why a second process is
  * unavoidable here) and the shell built-in (via `obj/sh/sh.exe -c`),
@@ -41,7 +41,7 @@ static char obj_root[1024];
 
 /* obj/test/util-trivial.exe -> obj -- same walk-up-from-argv[0] technique
  * as test/sh-main.c's find_sh(), generalized to stop one level higher so
- * both obj/bin/*.exe and obj/sh/sh.exe are reachable from it. */
+ * both obj/bin/NAME.exe and obj/sh/sh.exe are reachable from it. */
 static int find_obj_root(const char *argv0)
 {
 	size_t n;

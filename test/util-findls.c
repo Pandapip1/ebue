@@ -33,7 +33,7 @@
  *    wrapper -- see test_find_exec_builtin_matches_standalone() and
  *    test_xargs_matches_between_builtin_and_standalone().
  *  - This test binary is itself a cross-compiled x86_64-win32 PE image
- *    (same as every other obj/test/*.exe here) and this environment has
+ *    (same as every other obj/test/NAME.exe here) and this environment has
  *    no working Wine to run it in -- so, as with every prior POSIX-
  *    utility batch's own verification, `make obj/test/util-findls.exe`
  *    (a successful link) is the ceiling this file's own author could
