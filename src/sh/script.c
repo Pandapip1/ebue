@@ -6,31 +6,14 @@
  * in the rest of src/sh/ (see sh.h for the AST and the __sh_exec_*()
  * contract).
  *
- * Two callers, and the second is why this is not sh/main.c any more:
- *
- *   - sh/main.c, which is now literally `return __sh_main(argc, argv)`.
- *     That is what the design note's "the `sh` binary is a thin main()
- *     over them" always said it should be; until this file moved, the
- *     "them" stopped short of everything below and the binary was the
- *     only way to reach it.
- *
- *   - __sh_run_script() at the end of this file: the interpreter that
- *     XSH exec's [ENOEXEC] clause and XCU 2.9.1's command search both
- *     have to invoke for a script with no usable image header.  Those
- *     two used to spawn sh.exe as a second process, found beside the
- *     calling image or on PATH.  Both halves of that were wrong, and
- *     the reasons are src/process/exec.c's to state; the short form is
- *     the design note's own reuse rule, which those two are not
- *     exempt from: "The shell is a set of internal functions compiled
- *     into libc.a.  The sh binary is a thin main() over them.  [...]
- *     call those functions directly and never spawn an external
- *     interpreter."
+ * Two callers: sh/main.c (`return __sh_main(argc, argv)`), and
+ * __sh_run_script() at the end of this file, which src/process/exec.c's
+ * [ENOEXEC] fallback and XCU 2.9.1's command search call directly
+ * in-process instead of spawning sh.exe as a second process.
  *
  * Nothing here may be named `main`: the Makefile archives a wildcard
- * over src/ into libc.a, so a main() here would collide with the main()
- * of every program that links it.  That is the same constraint that put
- * this code under sh/ to begin with; only the name has to give, not the
- * placement, because the placement is what the reuse rule needs.
+ * over src/ into libc.a, so a main() here would collide with every
+ * program that links it.
  *
  * ---- What this accepts (XCU sh(1p), "SYNOPSIS") ----------------------
  *
@@ -39,81 +22,52 @@
  *
  * With no -c and no command_file, the program text is read from standard
  * input, exactly as `-s` asks for explicitly. `--` ends option parsing;
- * a lone `-` is accepted as the historical synonym for "no more
- * options" that every sh honours.
+ * a lone `-` is the historical synonym for "no more options".
  *
- * Deliberate deviation, stated rather than hidden: a script read from
- * standard input is read *to EOF up front* and then executed, where a
- * real sh reads it incrementally and leaves the unread remainder on fd
- * 0 for the commands themselves to consume. Nothing in the supported
- * subset can loop over its own input (no while/read -- see below), so
- * the difference is observable only to a command that deliberately reads
- * the rest of the script off fd 0, and reading up front is what lets
- * this file hand __sh_parse() a complete program the way `-c` does.
+ * Deliberate deviation: standard input is read *to EOF up front* and then
+ * executed, rather than incrementally with the remainder left on fd 0.
+ * Nothing in the supported subset can loop over its own input (no
+ * while/read), so this is observable only to a command that deliberately
+ * reads the rest of the script off fd 0.
  *
  * ---- What it refuses, and why refusing beats running -----------------
  *
- * The engine implements a documented subset (src/sh/sh.h's banner:
- * simple commands, pipelines, and-or lists, redirections including
- * here-documents, subshells, brace groups, the compound commands, the
- * built-ins, and the positional parameters). Two classes of thing a
- * real script does would otherwise be *silently misinterpreted* rather
- * than diagnosed, because they are syntactically indistinguishable from
+ * The engine implements a documented subset (sh.h's banner). Two classes
+ * of construct would otherwise be *silently misinterpreted* rather than
+ * diagnosed, because they're syntactically indistinguishable from
  * something the engine does support:
  *
  *   - Reserved words and unimplemented built-ins. `case` and `unset`
- *     still lex as ordinary WORD tokens (sh.h's banner), so
- *     `case x in y) ;; esac` parses as simple commands and would run a
- *     program called "case". PATH lookup then fails and the shell
- *     reports "case: command not found" with status 127 -- a true
- *     statement about a fiction. `unset X` is worse: it fails with
- *     127 while the variable is silently left set.
+ *     still lex as ordinary WORD tokens, so `case x in y) ;; esac` parses
+ *     as simple commands and would run a nonexistent program called
+ *     "case"; `unset X` fails with 127 while silently leaving X set.
+ *     Function definitions, `if`/`while`/`until`/`for` are not in this
+ *     class: they have real grammar, so a misplaced `fi`/`do`/`done` is a
+ *     parse error, not a command name. A function body is re-parsed and
+ *     checked at its definition (check_command() below), before any of
+ *     the program runs.
+ *   - Special parameters not yet implemented. wordexp() expands
+ *     $NAME/${NAME} and the positional/`@`/`*`/`#`/`0` parameters; `$`
+ *     followed by anything else (?, !, -, $) is left as a literal `$`,
+ *     so `exit $?` would silently never see a status. `${#NAME}` (string
+ *     length) is likewise refused rather than mistaken for `${#}`.
  *
- *     Function definitions are not in this class: XCU 2.9.5 gives them
- *     a real grammar, so `f() { ... }` is parsed and `f` really is
- *     called.  A definition's body is checked *here*, at the
- *     definition, by re-parsing it -- see check_command() below -- so
- *     a function whose body uses something on these lists is refused
- *     before any of the program runs, not on the call.
+ * preflight() below walks the AST and refuses the whole program, naming
+ * what is unsupported, before running any of it -- a shell that already
+ * ran half a build script before discovering it can't finish has done
+ * real damage a diagnostic can't undo.
  *
- *     `if`/`while`/`until`/`for` are not in this class either: they
- *     have a real grammar, and a misplaced `fi`/`do`/`done` is a parse
- *     error rather than a command name. `for name` with no `in` list
- *     -- XCU 2.9.4's `in "$@"` -- is likewise supported, since this
- *     shell has a "$@" to iterate (src/sh/param.c).
- *   - The special parameters that are still not implemented.
- *     src/wordexp/wordexp.c expands $NAME/${NAME} and, through
- *     __wordexp_sh(), XCU 2.5.1's positional parameters plus 2.5.2's
- *     '@', '*', '#' and '0'; a `$` followed by anything else (?, !, -,
- *     $) is left in place as a literal `$`, so `exit $?` never sees a
- *     status. That is silent corruption of a script's meaning, not a
- *     missing feature the script can notice, so it is refused. So is
- *     `${#NAME}`, which is string length -- a different expansion that
- *     must not be mistaken for the `${#}` this shell does implement.
- *
- * So preflight() below walks the AST __sh_parse() just produced and
- * refuses the whole program, naming what is unsupported, before running
- * any of it. Refusing up front rather than at the point of use is the
- * conservative choice on purpose: a shell that has already run half a
- * build script before discovering it cannot run the rest has done real
- * damage that a diagnostic cannot undo.
- *
- * Everything the *engine* declines at execution time reaches this file
- * as __sh_exec_list()'s -1 ("cannot execute this AST node at all", see
- * src/sh/sh.h) rather than as a status, and is reported the same way --
- * a message on stderr and a nonzero exit, never a made-up status.
+ * Everything the *engine* declines at execution time reaches this file as
+ * __sh_exec_list()'s -1 (sh.h: "cannot execute this AST node at all")
+ * and is reported the same way: a stderr message and nonzero exit, never
+ * a made-up status.
  *
  * ---- Exit status (XCU 2.8.2, sh(1p) "EXIT STATUS") -------------------
  *
- * "The exit status of the shell shall be the exit status of the last
- * command executed" -- an empty program (or one that is only comments)
- * runs no command and exits 0. A syntax error, an unsupported construct
- * and a usage error all exit 2 (>0, with a diagnostic on stderr, which
- * is what 2.8.1 requires of a non-interactive shell; the specific value
- * is implementation-defined, and 2 is what bash/dash use for exactly
- * these). A command_file that cannot be opened or read exits 127, the
- * value sh(1p) gives for "the command_file could not be found" and the
- * one this project's system()/exec.c already use for that class.
+ * An empty program (or comments only) runs no command and exits 0. A
+ * syntax error, unsupported construct, or usage error exits 2 (bash/dash's
+ * convention for these). A command_file that can't be opened or read
+ * exits 127, matching sh(1p) and this project's exec.c.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -126,13 +80,10 @@
 
 static const char *progname = "sh";
 
-/* Every diagnostic this file writes goes to stderr, prefixed with $0,
- * and ends in a newline -- XCU sh(1p)'s "STDERR" ("used only for
- * diagnostic messages") plus 2.8.1's requirement that a non-interactive
- * shell say something before it gives up. A macro rather than a
- * function so each call site keeps its own printf arguments.  These writes
- * are secondary to an exit status already selected; stderr failure cannot
- * be reported recursively and must not replace that primary outcome. */
+/* Diagnostics go to stderr, prefixed with $0, ending in a newline (XCU
+ * sh(1p) STDERR, 2.8.1). A macro so each call site keeps its own printf
+ * arguments; a write failure here must not override the exit status already
+ * chosen. */
 #define diag(...) do { \
 	(void)fprintf(stderr, "%s: ", progname); \
 	(void)fprintf(stderr, __VA_ARGS__); \
@@ -151,42 +102,24 @@ static void diag_bad_param(const char *what, const char *where)
  *
  * Reserved words (XCU 2.4) that the grammar does not implement.
  *
- * Down to two.  `if`/`then`/`else`/`elif`/`fi`, `while`/`until`,
- * `for`/`do`/`done` and `in` are gone: src/sh/parse.c builds those
- * constructs now, and a *misplaced* one of them -- a bare
- * `fi`, a stray `do` -- is a syntax error raised there (XCU 2.10.1
- * rule 1) rather than a command named "fi".  The property this list
- * exists to preserve is that no such word is ever silently executed as
- * an external program, and the parser now holds that property for these
- * words directly, which is a strictly stronger place for it: it catches
- * a misplaced `fi` anywhere in the program, including inside a "(...)"
- * this check would have to recurse into.  `{`, `}` and `!` were never
- * on this list for exactly the same reason.
- *
- * `case`/`esac` stay: that construct is not implemented, so `case`
- * still lexes as an ordinary WORD (sh.h's banner) and
- * `case x in y) ;; esac` would otherwise run a program called "case"
- * and exit 127 about a fiction. */
+ * Down to two: `if`/`while`/`for`/etc. are gone because parse.c now
+ * builds those constructs and raises a syntax error on a misplaced `fi`
+ * or `do` directly, which also catches it inside a "(...)" this list
+ * never recursed into. `case`/`esac` stay: that construct isn't
+ * implemented, so `case` still lexes as an ordinary WORD and would
+ * otherwise run a nonexistent program called "case". */
 static const char *const reserved[] = {
 	"case", "esac",
 	0
 };
 
-/* Utilities whose whole effect is on the shell's own execution
- * environment (XCU 2.12) and which therefore *cannot* be a program
- * found on PATH: every XCU 2.14 special built-in plus the regular
- * built-ins from XCU 2.9.1's "Command Search and Execution" note that
- * are equally intrinsic.
+/* Utilities whose whole effect is on the shell's own execution environment
+ * (XCU 2.12) and which therefore *cannot* be a program found on PATH.
  *
- * A name comes off this list exactly when src/sh/builtin.c grows a real
- * implementation of it, never before. `cd`, `:`, `exit`, `umask`,
- * `export` and `readonly` are already gone (src/sh/builtin.c's
- * dispatcher); `test`, `[`, `true` and `false` were never on it,
- * because on a POSIX system they are genuine external utilities and
- * letting PATH lookup fail honestly was the right answer -- except
- * that this platform has no /bin at all, which is why src/sh/builtin.c
- * builds them in too (see its own header).
- * Anything still on this list is refused, up front, by name. */
+ * A name comes off this list exactly when builtin.c grows a real
+ * implementation of it. `test`/`[`/`true`/`false` were never on it: on a
+ * real POSIX system they're external utilities, but this platform has no
+ * /bin, so builtin.c builds them in too (see its own header). */
 static const char *const unimplemented_builtins[] = {
 	".", "break", "continue", "eval", "exec",
 	"times", "trap", "unset",
@@ -195,12 +128,8 @@ static const char *const unimplemented_builtins[] = {
 	0
 };
 
-/* list is required: `list[i]` is indexed unconditionally in the loop's
- * own init/condition, evaluated at least once regardless. Every real
- * call site passes one of this file's own static, always-populated
- * arrays (`reserved`, `unimplemented_builtins`). s is left unmarked --
- * only ever forwarded into strcmp(), never dereferenced by this
- * function itself. */
+/* list is required: every real call site passes one of this file's own
+ * static, always-populated arrays. */
 static int in_list(const char *const *list, const char *s) __attribute__((nonnull(1)));
 static int in_list(const char *const *list, const char *s)
 {
@@ -209,19 +138,16 @@ static int in_list(const char *const *list, const char *s)
 	return 0;
 }
 
-/* Scans one word's *raw* source text (quotes and backslashes still in
- * place, see sh.h) for a parameter expansion wordexp() would not
- * perform. Returns the offending text's leading characters in `what`
- * (NUL-terminated, at most 4 characters, so `what` needs 5 bytes)
- * and 1, or 0 if the word is clean.
+/* Scans one word's *raw* source text (quotes/backslashes still in place)
+ * for a parameter expansion wordexp() would not perform. Returns the
+ * offending text's leading characters in `what` (NUL-terminated, at most
+ * 4 characters, so `what` needs 5 bytes) and 1, or 0 if clean.
  *
- * The quoting state machine is the minimum that gets the answer right
- * rather than a second lexer: single quotes make everything up to the
- * next single quote literal (2.2.2, no escapes inside), a backslash
- * outside single quotes escapes the next character (2.2.1/2.2.3), and
- * double quotes change nothing about whether `$` introduces an
- * expansion (2.2.3 -- "$1" is still an expansion), only about field
- * splitting, which is not what this is looking for. */
+ * Minimal quoting state machine, not a second lexer: single quotes make
+ * everything up to the next one literal (2.2.2), a backslash outside
+ * single quotes escapes the next character, and double quotes don't
+ * change whether `$` introduces an expansion (2.2.3), only field
+ * splitting, which isn't relevant here. */
 static int bad_expansion(const char *text, char *what)
 {
 	const char *p = text;
@@ -239,13 +165,9 @@ static int bad_expansion(const char *text, char *what)
 			char c = p[1];
 			const char *bad = 0;
 			if (c == '{') {
-				/* What __wordexp_sh() accepts inside braces, and
-				 * nothing else.  ${1}/${10} (XCU 2.5.1 requires the
-				 * braces past one digit), ${@}/${*}/${#} (2.5.2) and
-				 * ${NAME} are real expansions now; ${#NAME} is string
-				 * length, a different expansion this shell does not
-				 * implement, and it must stay refused rather than
-				 * being mistaken for ${#}. */
+				/* ${1}/${10}, ${@}/${*}/${#}, and ${NAME} are real
+				 * expansions; ${#NAME} (string length) is not and must
+				 * stay refused rather than be mistaken for ${#}. */
 				const char *d = p + 2;
 				if (*d >= '0' && *d <= '9') {
 					while (*d >= '0' && *d <= '9') d++;
@@ -256,17 +178,13 @@ static int bad_expansion(const char *text, char *what)
 					bad = p;
 				}
 			} else if (c == '!' || c == '-' || c == '$') {
-				/* The special parameters of 2.5.2 that are still not
-				 * implemented.  $0..$9, $@, $*, $# and $? are all
-				 * expanded for real. */
+				/* $!, $-, $$: still-unimplemented special parameters. */
 				bad = p;
 			}
 			if (bad) {
-				/* Quote back just the expansion's introducer ("$1",
-				 * "$@", "${#"), never a fixed number of following
-				 * characters -- those would drag in whatever the rest
-				 * of the word happened to be and make the message
-				 * read as if the shell were confused about it. */
+				/* Quote back just the expansion's introducer ("$1", "${#"),
+				 * not a fixed number of characters -- that would drag in
+				 * whatever text follows and misrepresent it. */
 				size_t n = 0;
 				what[n++] = '$';
 				if (bad[1]) what[n++] = bad[1];
@@ -300,9 +218,8 @@ static int check_redirs(const struct sh_redir *r)
 			diag_bad_param(what, "");
 			return -1;
 		}
-		/* A here-document body is expanded exactly like a double-quoted
-		 * word unless the delimiter was quoted (2.7.4), so an unquoted
-		 * one is subject to the same silent-literal problem. */
+		/* A here-document body expands like a double-quoted word unless
+		 * the delimiter was quoted (2.7.4), hence the same check. */
 		if (r->heredoc && !r->heredoc_quoted &&
 		    bad_expansion(r->heredoc, what)) {
 			diag_bad_param(what, " (in a here-document body)");
@@ -323,14 +240,9 @@ static int check_command(const struct sh_command *c)
 
 	if (check_redirs(c->redirs)) return -1;
 
-	/* Switched on the kind rather than on "does it have a body?": the
-	 * compound commands keep their parts in several different union
-	 * variants (an if's arms, a loop's condition, a for's word
-	 * list), and a `for` in particular has *both* a word list to scan
-	 * for unsupported expansions and a body to recurse into.  Reading a
-	 * single "body" field regardless of kind would have walked a loop's
-	 * body and silently skipped its condition -- a program whose
-	 * `while` test used "$1" would then have run. */
+	/* Switched on kind rather than a generic "body" field: a `for` has
+	 * both a word list and a body to check, and a single shared field
+	 * would silently skip a loop's condition (a `while "$1"` test). */
 	switch (c->kind) {
 	case SH_CMD_SUBSHELL:
 	case SH_CMD_BRACE:
@@ -343,14 +255,10 @@ static int check_command(const struct sh_command *c)
 		if (check_list(c->u.loop.cond)) return -1;
 		return check_list(c->u.loop.body);
 	case SH_CMD_FUNCDEF:
-		/* The body is source text (src/sh/sh.h), not a subtree, so it
-		 * is re-parsed to be checked.  Checking it *here*, at the
-		 * definition, is what keeps this file's refuse-before-anything-
-		 * runs property: a function whose body uses `unset` or `$!`
-		 * would otherwise be defined happily and blow up on the call,
-		 * by which time half the script has run.  A parse failure is
-		 * impossible for text src/sh/parse.c already parsed once, and
-		 * is reported rather than assumed away. */
+		/* The body is source text, not a subtree, so it must be re-parsed
+		 * to check it. Checking here, at the definition, keeps the
+		 * refuse-before-anything-runs property instead of blowing up
+		 * later on the call. */
 		{
 			struct sh_list *body = __sh_parse(c->u.funcdef.func_text, 0, 0);
 			int rc;
@@ -363,11 +271,9 @@ static int check_command(const struct sh_command *c)
 			return rc;
 		}
 	case SH_CMD_FOR:
-		/* `for name` with no `in` list -- XCU 2.9.4's "Omitting: in
-		 * word ... shall be equivalent to: in "$@"" -- runs fine: this
-		 * shell has positional parameters to iterate (src/sh/param.c),
-		 * so there is nothing left for this arm to refuse beyond what
-		 * the word list and body already get. */
+		/* `for name` with no `in` list is equivalent to `in "$@"` (2.9.4)
+		 * and this shell has positional parameters to iterate, so there's
+		 * nothing more to refuse here. */
 		if (check_words(c->u.forloop.words)) return -1;
 		return check_list(c->u.forloop.body);
 	default:
@@ -390,16 +296,9 @@ static int check_command(const struct sh_command *c)
 	return 0;
 }
 
-/* list is deliberately left unmarked: `if (!list) return 0;` right below
- * is a real, working check -- check_command()'s own SH_CMD_IF/LOOP/FOR
- * arms above pass a compound command's optional parts (e.g.
- * cmd->u.ifcmd.else_body with no `else`) straight through as NULL.
- *
- * Not fixed by this: the flagged `a->pipeline.commands[i]` deref is
- * about `a`, a local loop variable walking `it->andor`, and its own
- * `.pipeline.commands` array pointer -- the same class of internal-AST
- * residual as print.c's queue_nested_heredocs_list() above, not
- * something list's own nullability can express. */
+/* list is deliberately left unmarked nonnull: check_command()'s
+ * SH_CMD_IF/LOOP/FOR arms pass a compound command's optional parts (e.g.
+ * an else_body with no `else`) straight through as NULL. */
 // NOLINTNEXTLINE(misc-no-recursion) -- validation mirrors the nested shell-AST hierarchy
 static int check_list(const struct sh_list *list)
 {
@@ -410,11 +309,9 @@ static int check_list(const struct sh_list *list)
 	if (!list) return 0;
 	for (it = list->items; it; it = it->next) {
 		if (it->sep == SH_SEP_AMP) {
-			/* src/sh/execute.c's __sh_exec_list() runs an async item
-			 * synchronously ("true backgrounding is future work"),
-			 * which is a silently different meaning -- the caller
-			 * blocks, and the list's status is the command's rather
-			 * than 0 -- not a missing feature it can detect. */
+			/* execute.c runs an async item synchronously instead --
+			 * silently different behavior, not a detectable missing
+			 * feature, so it's refused here instead. */
 			diag("asynchronous lists (`&') are not implemented");
 			return -1;
 		}
@@ -435,12 +332,9 @@ static int preflight(const struct sh_list *list)
 /* ---- reading the program text --------------------------------------- */
 
 /* Reads all of `f` into a freshly malloc'd, NUL-terminated buffer.
- * Returns 0 on success (and never leaves *out set on failure).
- *
- * The buffer is grown *before* each read rather than after, so `room`
- * is never zero and fread() is never called with nothing to read into;
- * and the loop stops on the first short read, so it is never called
- * again on a stream that already hit EOF or an error. */
+ * Returns 0 on success (and never leaves *out set on failure). Grows the
+ * buffer before each read so fread() is never called with zero room, and
+ * stops on the first short read. */
 static int slurp(FILE *f, char **out)
 {
 	size_t cap = 4096, len = 0;
@@ -516,29 +410,19 @@ int __sh_main(int argc, char **argv)
 	}
 	if (i < argc && strcmp(argv[i], "-") == 0) i++;   /* historical "-" */
 
-	/* sh(1p) OPERANDS, and XCU 2.5.1's "[p]ositional parameters are
-	 * initially assigned when the shell is invoked (see sh)".  The
-	 * engine keeps a real list for them (src/sh/param.c), so the
-	 * operands are installed for real here.
-	 *
-	 * Which operand is $0 differs by form, and 2.5.2 is emphatic that
-	 * $0 is not one of the positional parameters, so it is set
-	 * separately in all three:
+	/* sh(1p) OPERANDS. Which operand is $0 differs by form, and 2.5.2 is
+	 * emphatic that $0 is not itself a positional parameter:
 	 *
 	 *  - `sh -c command_string [command_name [argument...]]`:
-	 *    command_name is $0 and the arguments after it are $1 on.  An
-	 *    absent command_name leaves $0 as the shell's own name.
-	 *  - `sh command_file [argument...]`: sh(1p) OPERANDS makes
-	 *    command_file "$0", and the arguments after it $1 on.
-	 *  - `sh [-s] [argument...]`: the program comes from standard
-	 *    input, so every operand is a positional parameter.
+	 *    command_name is $0, arguments after it are $1 on.
+	 *  - `sh command_file [argument...]`: command_file is $0.
+	 *  - `sh [-s] [argument...]`: program comes from stdin, so every
+	 *    operand is a positional parameter.
 	 *
-	 * `progname` -- what this file prefixes its own diagnostics with --
-	 * deliberately does *not* follow $0 into the command_file case:
-	 * "script.sh: script.sh: cannot open command_file" reads as a
-	 * confused shell rather than a clear one.  It follows $0 for -c,
-	 * which is the form where a build system chooses a name precisely
-	 * so that diagnostics carry it. */
+	 * `progname` deliberately does *not* follow $0 for command_file:
+	 * "script.sh: script.sh: cannot open command_file" would read as a
+	 * confused shell. It does follow $0 for -c, where a build system
+	 * chooses a name precisely so diagnostics carry it. */
 	pfirst = argc;
 	if (cmdstr) {
 		if (i < argc && *argv[i]) progname = argv[i];   /* command_name is $0 */
@@ -582,13 +466,9 @@ int __sh_main(int argc, char **argv)
 		return EX_USAGE;
 	}
 	if (__sh_exec_list(list, &status)) {
-		/* src/sh/sh.h: -1 is "cannot execute this AST node at all",
-		 * with no status written. What can actually cause it is narrow
-		 * and not worth guessing at in the message -- two directly
-		 * adjacent compound commands in one pipeline ("( a ) | { b; }",
-		 * which exec.c refuses rather than deadlock without a fork()),
-		 * a command substitution whose own command hits one of these,
-		 * and resource failures. */
+		/* -1 means "cannot execute this AST node at all", no status
+		 * written (e.g. two adjacent compound commands in one pipeline,
+		 * which exec.c refuses rather than deadlock without fork()). */
 		diag("cannot execute: an unsupported construct");
 		__sh_list_free(list);
 		free(text);
@@ -601,31 +481,18 @@ int __sh_main(int argc, char **argv)
 
 /* ---- the [ENOEXEC] interpreter --------------------------------------
  *
- * Runs `argv` -- already in the shape both clauses specify, i.e.
- * { arg0, command_file, argument..., 0 } -- as one invocation of the
- * sh utility above, in this process, and returns its exit status.
+ * Runs `argv` -- { arg0, command_file, argument..., 0 } -- as one
+ * invocation of the sh utility above, in this process, and returns its
+ * exit status.
  *
- * The only thing this adds to __sh_main() is that it is re-entrant with
- * respect to a shell that is *already* running in this process, which
- * is exactly the src/sh/execute.c caller's situation: XCU 2.9.1's fallback
- * is a shell invoked to run one command, not a takeover of the one that
- * invoked it, so the running shell's positional parameters, $0 and
- * function definitions have to survive it.  Save/restore is the same
- * move-out/move-in pair a subshell and a function call already use
- * (src/sh/param.c, src/sh/func.c), for the same reason and with the
- * same nesting behaviour.
+ * Adds re-entrancy to __sh_main(): the calling shell's positional
+ * parameters, $0, and function definitions must survive this nested
+ * invocation, so they're saved/restored with the same move-out/move-in
+ * pair a subshell or function call already uses (param.c, func.c).
  *
- * __sh_flow_clear() consumes any pending `exit` on the way out: the
- * script exiting is the end of *this* invocation, and leaving the flag
- * set would unwind the calling shell too.  Consuming a pending exit at
- * a shell-environment boundary is what sh.h already specifies for a
- * subshell.
- *
- * The src/process/exec.c caller needs none of that -- it _exit()s with
- * the status and never comes back -- but paying for it there is a
- * strdup and two pointer swaps, and one shared entry point is what
- * keeps the two clauses' behaviour identical by construction rather
- * than by review. */
+ * __sh_flow_clear() consumes any pending `exit` on the way out, so this
+ * invocation's exit doesn't unwind the calling shell too -- the same
+ * thing sh.h already specifies at a subshell boundary. */
 int __sh_run_script(int argc, char *const argv[])
 {
 	struct sh_params psaved;
