@@ -333,8 +333,13 @@ static int x_visit(FILE *ar, const struct ar_member *m, long data_off, void *ctx
 		}
 		remain -= (long)got;
 	}
-	fclose(out);
-	chmod(m->name, (mode_t)(m->mode & 07777));
+	if (fclose(out) != 0) {
+		__util_diagf("ar: error writing '%s': %s\n", m->name, strerror(errno));
+		ctx->failed = 1;
+	} else if (chmod(m->name, (mode_t)(m->mode & 07777)) != 0) {
+		__util_diagf("ar: %s: chmod: %s\n", m->name, strerror(errno));
+		ctx->failed = 1;
+	}
 	/* "The modification time of each file extracted shall be set to
 	 * the time the file is extracted from the archive" -- i.e.
 	 * deliberately NOT m->mtime; no utime() call here. */
@@ -483,8 +488,12 @@ static int do_delete(const char *archive, char **files, int nfiles, int verbose)
 		}
 		emit_member(tmp, &arr[i].m, src, arr[i].data_off, NULL);
 	}
-	fclose(src);
-	fclose(tmp);
+	(void)fclose(src);
+	if (fclose(tmp) != 0) {
+		__util_diagf("ar: %s: %s\n", tmppath, strerror(errno));
+		free(arr);
+		return 1;
+	}
 	free(arr);
 	if (rename(tmppath, archive) != 0) {
 		__util_diagf("ar: cannot replace %s: %s\n", archive, strerror(errno));
@@ -552,7 +561,7 @@ static int do_append_or_replace(const char *archive, char **files, int nfiles,
 				if (emit_member(tmp, &arr[i].m, src, arr[i].data_off, NULL) < 0) status = 1;
 			}
 		}
-		if (src) fclose(src);
+		if (src) (void)fclose(src);
 	}
 
 	for (i = 0; i < nfiles; i++) {
@@ -563,7 +572,12 @@ static int do_append_or_replace(const char *archive, char **files, int nfiles,
 		if (emit_member(tmp, &nm, NULL, 0, files[i]) < 0) status = 1;
 	}
 
-	fclose(tmp);
+	if (fclose(tmp) != 0) {
+		__util_diagf("ar: %s: %s\n", tmppath, strerror(errno));
+		free(arr);
+		free(consumed);
+		return 1;
+	}
 	free(arr);
 	free(consumed);
 	if (rename(tmppath, archive) != 0) {

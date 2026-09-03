@@ -549,8 +549,18 @@ static int write_atomic(const char *path, const unsigned char *buf, size_t size,
 		errno = EIO;
 		return -1;
 	}
-	fclose(f);
-	chmod(tmppath, mode & 07777);
+	if (fclose(f) != 0) {
+		int saved = errno;
+		unlink(tmppath);
+		errno = saved;
+		return -1;
+	}
+	if (chmod(tmppath, mode & 07777) != 0) {
+		int saved = errno;
+		unlink(tmppath);
+		errno = saved;
+		return -1;
+	}
 	if (rename(tmppath, path) != 0) {
 		int saved = errno;
 		unlink(tmppath);
