@@ -31,13 +31,8 @@ static void putle32(unsigned char *p, unsigned v)
 	p[3] = (unsigned char)(v >> 24);
 }
 
-/* Builds the raw $LXMOD extended-attribute buffer NtCreateFile's own EA
- * parameter and __plat_lxmod_set() (src/stat/nt/plat_stat.c) both need.
- * This makes no platform call itself -- it stays here, this library's
- * own choice of how to persist a POSIX mode at all, shared verbatim by
- * every caller (src/fcntl/open.c, src/stat/mkdir.c, and __plat_lxmod_set
- * indirectly) exactly like mman.c's reservation table stays in its own
- * front door -- see src/internal/plat_stat.h's banner. */
+/* Builds the raw $LXMOD extended-attribute buffer NtCreateFile's EA
+ * parameter and __plat_lxmod_set() (src/stat/nt/plat_stat.c) both need. */
 unsigned __lxmod_create_buffer(
     void *buffer withtok(writable_span(19)), unsigned mode)
 {

@@ -3,28 +3,16 @@
  *
  * stat, from the information NT keeps.
  *
- * Permission and special bits come from WSL's $LXMOD NTFS extended attribute
- * when it exists.  It is a four-byte mode value and gives files created by
- * ntlibc a persistent POSIX mode without editing a Windows DACL.  ntlibc does
- * not create $LXUID or $LXGID: those are literal IDs in a WSL distribution
- * and cannot be derived from ntlibc's Windows process identity.
+ * Permission and special bits come from WSL's $LXMOD NTFS extended
+ * attribute when it exists, giving files created by ntlibc a persistent
+ * POSIX mode without editing a Windows DACL. A file with no $LXMOD gets
+ * a compatibility default: directories 0755, files 0644, a PE32/PE32+
+ * image 0111 regardless of suffix, FILE_ATTRIBUTE_READONLY removing 0222.
  *
- * A file with no $LXMOD keeps a compatibility default for pre-existing
- * Windows files: directories are 0755, ordinary files 0644, and an actual
- * executable PE32/PE32+ image receives 0111 regardless of its suffix.
- * FILE_ATTRIBUTE_READONLY removes 0222.  A suffix alone never grants execute
- * permission, and explicit $LXMOD metadata always wins.
- *
- * Pipes, consoles, character devices and the "couldn't classify it"
- * fallback get a synthetic st_dev/st_ino instead: stat.html's DESCRIPTION
- * requires "[st_ino] together with [st_dev] uniquely identify the file
- * within the system" (see also <sys/stat.h>'s own text to that effect),
- * and the universal same-file idiom (`a.st_dev==b.st_dev &&
- * a.st_ino==b.st_ino`) depends on it.  The guts of stat()/fstat(),
- * including how that synthetic identity is derived, now live in
- * __plat_fstat()/__plat_fstatat() (src/stat/nt/plat_stat.c) --
- * everything NT-specific about turning a handle into a struct stat is
- * there, not here.
+ * Pipes, consoles, character devices, and unclassifiable objects get a
+ * synthetic st_dev/st_ino so the universal same-file idiom
+ * (a.st_dev==b.st_dev && a.st_ino==b.st_ino) still holds. The NT-specific
+ * details live in __plat_fstat()/__plat_fstatat() (src/stat/nt/plat_stat.c).
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -57,12 +45,9 @@ int fstat(int fd, struct stat *st)
 int fstatat(int dirfd, const char *path, struct stat *st, int flags)
 {
 	if (!path) { errno = EFAULT; return -1; }
-	/* /dev/stdin, /dev/stdout, /dev/stderr are the fd table -- genuinely
-	 * portable POSIX-shaped logic (every backend's fd table works the
-	 * same way), so this stays in the front door rather than moving into
-	 * __plat_fstatat() alongside the NT-specific VFS-overlay/path-
-	 * resolution machinery below it -- see src/fcntl/open.c's own /dev/
-	 * std* special case for the precedent this mirrors. */
+	/* /dev/stdin, /dev/stdout, /dev/stderr are fd-table lookups, portable
+	 * across backends, so handled here rather than in __plat_fstatat();
+	 * mirrors src/fcntl/open.c's own /dev/std* special case. */
 	if (!strncmp(path, "/dev/", 5)) {
 		int fd = -1;
 		if (!strcmp(path, "/dev/stdin")) fd = 0;
