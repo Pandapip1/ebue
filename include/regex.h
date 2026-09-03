@@ -52,37 +52,17 @@ typedef struct {
 #define REG_ESPACE	12
 #define REG_BADRPT	13
 
-/* preg/pattern both required (POSIX: undefined if either does not
- * designate a valid object/string). src/regex/regex.c's own body
- * dereferences preg unconditionally on every return path
- * (`preg->__opaque = ...`), and pattern -- though only ever assigned
- * into `struct parser`'s own `p` field there, never dereferenced by
- * regcomp() directly -- is what every one of that struct's own parser
- * functions dereferences through that field, with no NULL check
- * anywhere in the chain; see src/regex/regex.c's own ere_branch()/
- * bre_branch() comments for the specific findings this resolves. */
 int regcomp(regex_t *__restrict, const char *__restrict, int)
     __attribute__((nonnull(1, 2)));
-/* preg/string both required (preg->__opaque and strlen(string) are
- * both dereferenced unconditionally at entry). pmatch is deliberately
- * NOT marked: src/regex/regex.c's own body defensively checks it
- * (`if (matched && nmatch > 0 && pmatch && ...)`), matching POSIX's own
- * "nmatch == 0" convention for "the caller does not want match
- * offsets" -- the same "real check, not decoration" reasoning
- * 9be895e's own commit established for setenv/unsetenv's `name`. */
+/* pmatch is deliberately not marked nonnull: it is defensively checked,
+ * matching POSIX's "nmatch == 0" convention for "no match offsets wanted". */
 int regexec(const regex_t *__restrict, const char *__restrict, size_t, regmatch_t *__restrict, int)
     __attribute__((nonnull(1, 2)));
-/* preg is deliberately NOT marked here: src/regex/regex.c's own body
- * never dereferences it (`(void)preg;`) -- POSIX explicitly permits an
- * implementation to ignore it. errbuf is likewise not marked: it is
- * only dereferenced when errbuf_size != 0, POSIX's own documented
- * convention for "just tell me how big a buffer I would need". */
+/* preg is unused here -- POSIX permits an implementation to ignore it.
+ * errbuf is only dereferenced when errbuf_size != 0. */
 size_t regerror(int errcode, const regex_t *__restrict preg,
 	char *__restrict errbuf withtok(writable_span(errbuf_size)),
 	size_t errbuf_size);
-/* preg required: src/regex/regex.c's own body dereferences it
- * unconditionally (`struct rx *rx = preg->__opaque;`), with no
- * defensive check of preg itself (only of the rx it derives). */
 void regfree(regex_t *) __attribute__((nonnull(1)));
 
 #ifdef __cplusplus

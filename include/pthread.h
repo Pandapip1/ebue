@@ -139,12 +139,6 @@ int pthread_attr_getstackaddr(const pthread_attr_t *__restrict handle(pthread_at
 int pthread_attr_setstackaddr(pthread_attr_t * handle(pthread_attr), void *);
 int pthread_getattr_np(pthread_t, pthread_attr_t *);
 
-/* control is required: src/thread/pthread_tsd.c's own pthread_once()
- * dereferences it unconditionally (`if (*control == 2) ...`) at the
- * top of its own retry loop, with no NULL check anywhere in the body.
- * initialize is left unmarked -- it is only ever called, never
- * dereferenced through `*`/`->`/`[]`, so there is nothing here for
- * `nonnull` (a pointer-dereference contract) to describe. */
 int pthread_once(pthread_once_t *, void (*)(void)) __attribute__((nonnull(1)));
 int pthread_key_create(pthread_key_t *, void (*)(void *));
 int pthread_key_delete(pthread_key_t);

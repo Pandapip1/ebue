@@ -6,28 +6,16 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * <resolv.h>: not POSIX (historical BSD resolver API, glibc/musl both
- * carry it under _DEFAULT_SOURCE/_BSD_SOURCE, exactly the guard
- * third_party/libc-test's own dn_expand-empty.c/dn_expand-ptr-0.c
- * define before including this header). Only dn_expand() is declared
- * here -- the rest of the historical <resolv.h> surface (res_init(),
- * res_query(), the global `_res` state struct, ns_*() message-parsing
- * helpers) has no corpus test in this tree needing it, so it stays
- * undeclared rather than fabricated ahead of a real need.
+ * <resolv.h>: not POSIX (historical BSD resolver API). Only dn_expand() is
+ * declared; the rest of the historical surface (res_init(), res_query(),
+ * `_res`, ns_*()) has no need in this tree, so it stays undeclared rather
+ * than fabricated ahead of one.
  *
- * dn_expand() decodes one RFC 1035 sec 4.1.4 compressed domain name
- * out of a raw DNS message already in memory -- msg/eomorig bound the
- * whole message, comp_dn points at the name to decode (which may
- * itself be anywhere in [msg, eomorig)), exp_dn/length bound the
- * output buffer. This is pure buffer-walking logic with no OS
- * dependency (same message format on every platform this project
- * targets), so src/resolv/dn_expand.c gives it one shared
- * implementation with no nt/linux split, the same shape as
- * src/misc/mntent.c (see that file's own banner for the precedent).
- * src/netdb/linux/resolv.c's own skip_name() already walks this exact
- * wire format for its stub resolver's internal use; dn_expand() is
- * the public, general-purpose front door for the same kind of walk,
- * not a duplicate of that internal helper.
+ * dn_expand() decodes one RFC 1035 sec 4.1.4 compressed domain name from a
+ * raw DNS message already in memory: msg/eomorig bound the message,
+ * comp_dn points at the name to decode, exp_dn/length bound the output
+ * buffer. Pure buffer-walking with no OS dependency, so src/resolv/
+ * dn_expand.c has one shared implementation with no nt/linux split.
  */
 #ifndef _RESOLV_H
 #define _RESOLV_H
