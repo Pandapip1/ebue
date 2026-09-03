@@ -144,39 +144,66 @@ static void unlink_waiter(struct rw_waiter *waiter)
 	waiter->linked = 0;
 }
 
+/* pthread_rwlock_rdlock.html, "Thread Execution Scheduling" clause: a
+ * reader is blocked by a still-queued writer only if that writer's
+ * priority is >= the reader's own -- not by mere presence in the
+ * queue -- so the wake/admission paths need the highest priority
+ * among currently-queued writers, not just whether any are queued. -1
+ * is below every real sched_priority (SCHED_OTHER's minimum is 0), so
+ * it is the correct "no writer queued" sentinel. */
+static int max_waiting_writer_priority(const struct rwlock_data *data)
+{
+	struct rw_waiter *waiter;
+	int max = -1;
+	for (waiter = data->head; waiter; waiter = waiter->next)
+		if (waiter->write && waiter->owner->sched_priority > max)
+			max = waiter->owner->sched_priority;
+	return max;
+}
+
 /* Records the acquisition too, on success, so both call sites can't drift
  * out of step on the "mark self as new owner" step. */
 static int rwlock_try_immediate(struct rwlock_data *data, pthread_t self, int write)
 {
 	int available = write ? (!data->writer && !data->readers)
-	                      : (!data->writer && !data->waiting_writers);
+	                      : (!data->writer &&
+	                         self->sched_priority > max_waiting_writer_priority(data));
 	if (!available) return 0;
 	if (write) data->writer = self;
 	else data->readers++;
 	return 1;
 }
 
+/* pthread_rwlock_unlock.html: waiters "acquire the lock in priority
+ * order"; "for equal priority threads, write locks take precedence
+ * over read locks". Readers whose priority beats every still-queued
+ * writer can all be admitted together (they only ever contend with
+ * that writer, not with each other); a writer is admitted only once
+ * no reader was admitted this round, and ties among queued writers
+ * break in FIFO (arrival) order via the strict '>' comparison below. */
 static void wake_waiters(struct rwlock_data *data)
 {
-	struct rw_waiter *waiter, *next;
+	struct rw_waiter *waiter, *next, *best;
+	int max_writer;
 	if (data->writer) return;
-	if (!data->readers && data->waiting_writers) {
-		for (waiter = data->head; waiter; waiter = waiter->next) {
-			if (!waiter->write) continue;
-			data->writer = waiter->owner;
-			unlink_waiter(waiter);
-			__plat_semaphore_post(waiter->semaphore);
-			return;
-		}
-	}
-	if (data->waiting_writers) return;
+	max_writer = max_waiting_writer_priority(data);
 	for (waiter = data->head; waiter; waiter = next) {
 		next = waiter->next;
-		if (waiter->write) continue;
+		if (waiter->write || waiter->owner->sched_priority <= max_writer) continue;
 		data->readers++;
 		unlink_waiter(waiter);
 		__plat_semaphore_post(waiter->semaphore);
 	}
+	if (data->readers || !data->waiting_writers) return;
+	best = 0;
+	for (waiter = data->head; waiter; waiter = waiter->next) {
+		if (!waiter->write) continue;
+		if (!best || waiter->owner->sched_priority > best->owner->sched_priority)
+			best = waiter;
+	}
+	data->writer = best->owner;
+	unlink_waiter(best);
+	__plat_semaphore_post(best->semaphore);
 }
 
 static void wait_cleanup(void *argument) __attribute__((nonnull(1)));
