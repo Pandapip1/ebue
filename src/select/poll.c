@@ -4,42 +4,27 @@
  * poll(): https://pubs.opengroup.org/onlinepubs/9699919799/functions/
  * poll.html.  Shares select.c's per-descriptor readiness probe
  * (__fd_probe()) and wait/sleep primitive (__fd_wait_or_delay()) --
- * see that file's banner for the wait-vs-poll design, the 20ms
- * pipe-poll interval and why, and the EINTR-never-happens note (same
- * reasoning applies here unchanged: this library's signal delivery is
- * synchronous only). The outer loop here is not shared with select's:
- * it walks a caller-supplied struct pollfd array directly rather than
- * an nfds-sized fd_set bit range, which is a different enough shape
- * that forcing them through one loop would have cost more code than
- * it saved.
+ * see that file's banner for the wait-vs-poll design and 20ms
+ * pipe-poll interval. The outer loop is not shared with select's: it
+ * walks a caller-supplied pollfd array rather than an fd_set bit
+ * range, different enough to not be worth unifying.
  *
- * revents per DESCRIPTION: POLLIN/POLLRDNORM mirror this library's
- * "readable" probe, POLLOUT/POLLWRNORM mirror "writable"; POLLPRI/
- * POLLRDBAND/POLLWRBAND (priority/band data) have no analogue on any
- * of this library's descriptor shapes and are never set, which is
- * conformant -- POSIX only requires reporting conditions that exist.
- * POLLHUP is set whenever __fd_probe() reports the peer end gone (its
- * *hup out-param): a broken/disconnected pipe, or a socket AFD reports
- * closed/aborted/disconnected -- and also a socket whose probe ioctl
- * itself failed, which __fd_probe() deliberately treats as "ready and
- * hung up" rather than "never ready" (see its comment there).  POLLERR
- * is never set here since none of the shapes select()/poll() cover
- * today can report a device error without first reporting EOF/broken
- * via read()/write() itself.
- * POLLNVAL marks an fd that is not open, and -- per DESCRIPTION --
- * counts toward the return value the same as any other revents hit;
- * a negative fd is the one case revents is left untouched at 0 and
- * does not count, since DESCRIPTION says such an entry is ignored
- * outright.
+ * revents: POLLIN/POLLRDNORM and POLLOUT/POLLWRNORM mirror
+ * __fd_probe()'s readable/writable; POLLPRI/POLLRDBAND/POLLWRBAND have
+ * no analogue on any descriptor shape here and are never set (POSIX
+ * only requires reporting conditions that exist). POLLHUP mirrors
+ * __fd_probe()'s *hup (peer gone, or a failed socket probe ioctl,
+ * which it deliberately treats as ready-and-hung-up). POLLERR is
+ * never set: none of these shapes can report a device error without
+ * first surfacing EOF/broken via read()/write() itself. POLLNVAL
+ * marks an fd that is not open and counts toward the return value; a
+ * negative fd is left at revents==0 and does not count, since
+ * DESCRIPTION says such an entry is ignored outright.
  *
- * The `timeout` millisecond parameter follows exactly the null/zero
- * distinction select.c documents for struct timeval, just shifted
- * one level: -1 is "block indefinitely" (poll.html: "a negative value
- * ... shall cause poll() to block until a requested event occurs or
- * until the call is interrupted"), 0 polls without blocking ("shall
- * return immediately"), and a positive value bounds the wait,
- * converted here from milliseconds to the same 100ns tick unit
- * select.c's core already works in.
+ * `timeout` (milliseconds) follows select.c's null/zero timeval
+ * distinction one level down: -1 blocks indefinitely, 0 polls without
+ * blocking, a positive value bounds the wait and is converted to the
+ * same 100ns tick unit select.c's core uses.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -53,13 +38,9 @@
 
 #define POLL_INTERVAL_TICKS 200000LL  /* 20ms; see select.c's file banner */
 
-/* pfds is deliberately NOT required (nonnull): every dereference of it
- * below is inside `for (i = 0; i < nfds; i++)`, so poll(NULL, 0,
- * timeout) -- the well-known portable "sleep" idiom several real-world
- * programs use poll() for -- already works correctly as written, with
- * no unconditional dereference for the attribute to describe. Nothing
- * in this tree exercises that pattern today, but a libc's own public
- * poll() must not foreclose it for code linked against this one. */
+/* pfds is deliberately not nonnull: every dereference is inside the
+ * `i < nfds` loop, so poll(NULL, 0, timeout) -- the portable "sleep"
+ * idiom -- already works and must not be foreclosed. */
 int poll(struct pollfd *pfds, nfds_t nfds, int timeout) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	long long remaining;
@@ -76,12 +57,6 @@ int poll(struct pollfd *pfds, nfds_t nfds, int timeout) // NOLINT(bugprone-easil
 
 		total = 0;
 		for (i = 0; i < nfds; i++) {
-			/* p->revents just below is a second, related residual: p is
-			 * &pfds[i], a LOCAL, not a parameter of poll() itself, so
-			 * nonnull has nothing on poll()'s own signature to describe
-			 * even though pfds is real (see this function's own
-			 * definition-site comment on why pfds itself stays
-			 * unmarked). */
 			struct pollfd *p = &pfds[i];
 			struct __fd *f;
 			int cr, cw, hup;
@@ -93,13 +68,8 @@ int poll(struct pollfd *pfds, nfds_t nfds, int timeout) // NOLINT(bugprone-easil
 			if (!f) { p->revents = POLLNVAL; total++; continue; }
 
 			if (f->type == __FD_PIPE || f->type == __FD_SOCKET) {
-				/* The two shapes with a real instantaneous
-				 * answer, and no waitable NT object behind
-				 * either -- so both are re-probed on the
-				 * POLL_INTERVAL_TICKS timer.  Same routing as
-				 * select.c's poll_pass(); see that file's
-				 * banner for why it is by probeability rather
-				 * than by one named type. */
+				/* No waitable NT object behind either, so both
+				 * are re-probed on the POLL_INTERVAL_TICKS timer. */
 				have_poll = 1;
 				__fd_probe(f, &cr, &cw, &hup);
 				if (hup) p->revents = (short)(p->revents | POLLHUP);
@@ -114,9 +84,7 @@ int poll(struct pollfd *pfds, nfds_t nfds, int timeout) // NOLINT(bugprone-easil
 				}
 			} else {
 				/* __FD_FILE/__FD_DIR/__FD_CHAR/__FD_UNKNOWN:
-				 * always ready, same as select(). The right
-				 * answer for these shapes, not a fallback --
-				 * see __fd_probe()'s default case. */
+				 * always ready, same as select(). */
 				p->revents = (short)(p->revents | (p->events & (POLLIN | POLLRDNORM | POLLOUT | POLLWRNORM)));
 			}
 			if (p->revents) total++;
