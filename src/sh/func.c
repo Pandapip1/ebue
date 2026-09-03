@@ -3,28 +3,17 @@
  *
  * The shell's function table (XCU 2.9.5 "Function Definition Command").
  *
- * A definition is a (name, body-source) pair.  Why the body is source
- * text rather than an AST node is argued where the field is declared --
- * src/sh/sh.h, sh_command.func_text -- and comes down to lifetime: a
- * function outlives the sh_list it was defined in, and this shell frees
- * a complete AST per command substitution and per program.
+ * A definition is a (name, body-source) pair; the body is kept as source
+ * text rather than an AST node because a function outlives the sh_list it
+ * was defined in (sh.h, sh_command.func_text has the full argument).
  *
- * A linked list, not a hash table, and deliberately so: five real
- * autoconf `configure` scripts define between 4 and 30 functions each,
- * and every lookup here happens after a wordexp() that has already
- * touched the heap several times.  A table would be a measurement
- * without a measurement behind it.
+ * A linked list, not a hash table: real autoconf `configure` scripts define
+ * a few dozen functions at most, and every lookup already follows a
+ * heap-touching wordexp(), so a table would be unmeasured optimization.
  *
- * 2.9.5: "The implementation shall maintain separate name spaces for
- * functions and variables."  That falls out for free here, since this
- * table has nothing to do with `environ`, which is where every variable
- * in this shell lives -- a `PATH` function and a `PATH` variable are
- * unrelated objects, as they must be.
- *
- * Redefinition replaces: 2.9.5 gives no way to have two functions of
- * one name, and every shell takes the later definition.  The new body
- * is built before the old one is released, so a failed redefinition
- * leaves the previous definition intact rather than unsetting it.
+ * Redefinition replaces (2.9.5 gives no way to have two functions of one
+ * name). The new body is built before the old one is freed, so a failed
+ * redefinition leaves the previous definition intact.
  */
 #include <string.h>
 #include "libc.h"
@@ -90,18 +79,12 @@ int __sh_func_define(const char *name, const char *body)
 
 /* ---- subshell scoping (XCU 2.12) -------------------------------------
  *
- * A function defined inside "( ... )" or inside a command substitution
- * must not survive it, exactly as an assignment or a `cd` must not:
- * 2.12's subshell environment is a copy, and "changes made to the
- * subshell environment shall not affect the shell environment".
- * src/sh/execute.c already brackets `environ`, the working directory and
- * the positional parameters; this is the same bracket for one more kind
- * of state.
+ * A function defined inside "( ... )" or a command substitution must not
+ * survive it, so execute.c brackets this table the same way it already
+ * brackets `environ`, cwd, and the positional parameters.
  *
- * The same take-then-copy shape as src/sh/param.c's, for the same
- * reason: the take leaves the live table empty and hands the caller the
- * only pointer to the outer one, so there is exactly one owner of every
- * node at every moment and nesting cannot alias. */
+ * Take-then-copy shape matches param.c's: the take leaves the live table
+ * empty and hands the caller the only pointer to it, so nesting can't alias. */
 void __sh_funcs_take(struct sh_funcs *out)
 {
 	out->head = table;
@@ -113,10 +96,8 @@ int __sh_funcs_copy(const struct sh_funcs *src)
 	struct sh_fn *f, *tail = 0, *nf;
 	struct sh_fn *built = 0;
 
-	/* Built in source order onto a local head first, so a failure part
-	 * way through frees only what this call allocated and leaves the
-	 * live table (empty, post-take) untouched for the caller to
-	 * restore. */
+	/* Built onto a local head first so a failure part way through frees only
+	 * what this call allocated, leaving the live (post-take, empty) table alone. */
 	for (f = src->head; f; f = f->next) {
 		nf = __malloc(sizeof *nf);
 		if (!nf) { free_chain(built); return -1; }
@@ -143,15 +124,9 @@ void __sh_funcs_install(struct sh_funcs *in)
 	in->head = 0;
 }
 
-/* The third operation of the take/copy/install trio: release a taken
- * table instead of putting it back.  A subshell always installs, so
- * nothing in src/sh/ calls this -- but a *take* that is never matched
- * by an install is a leak with no way to clean it up, and the only
- * reason exec.c never does one is that it never wants to.  A caller
- * that does want one (test/sh-engine.c runs many independent programs
- * in a single process, where a real shell process runs exactly one, so
- * it has to be able to drop the definitions between them) has no other
- * way to say so. */
+/* Releases a taken table instead of putting it back. Nothing in src/sh/ calls
+ * this (a subshell always installs), but test/sh-engine.c runs many independent
+ * programs in one process and needs to drop definitions between them. */
 void __sh_funcs_free(struct sh_funcs *f)
 {
 	free_chain(f->head);

@@ -1,9 +1,8 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Freeing the AST sh.h declares. One recursive walk per node kind;
- * parse.c's error-recovery paths reuse the word/redir/command-contents
- * pieces directly instead of duplicating this traversal.
+ * Freeing the AST sh.h declares. parse.c's error-recovery paths reuse
+ * these per-node-kind helpers directly instead of duplicating them.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -35,9 +34,7 @@ void __sh_free_redirs(struct sh_redir *r)
 	}
 }
 
-/* SH_CMD_IF's arms.  Each arm owns its two compound-lists; the chain
- * covers the `if` arm and every `elif` arm, which sh.h makes the same
- * node type for exactly this reason. */
+/* `if` and `elif` arms share the same node type, so this one chain covers both. */
 // NOLINTNEXTLINE(misc-no-recursion) -- the destructor mirrors the owned shell-AST hierarchy
 static void free_ifarms(struct sh_ifarm *a)
 {
@@ -50,26 +47,12 @@ static void free_ifarms(struct sh_ifarm *a)
 	}
 }
 
-/* Switched on c->kind rather than freeing every field unconditionally:
- * the union means only the active variant's pointers are meaningful,
- * and reading a different variant's pointer out of the same bytes is
- * not "freeing an unused NULL" the way it was when every kind had its
- * own separate field.  This still handles a node abandoned mid-parse
- * safely -- new_command() zeroes the whole union up front, and every
- * place parse.c later changes c->kind in place (SUBSHELL/BRACE/FUNCDEF)
- * does so before writing any field of the new variant, so whichever
- * variant c->kind names at the point of a free is the one that has
- * actually been initialised, whether or not parsing went on to finish
- * populating it. */
-/* c is required, unlike every free_*() sibling above and below it: this
- * frees a command's *contents*, not a linked-list node, so there is no
- * "NULL means empty list" reading available here the way there is for
- * __sh_free_words()/__sh_free_redirs()/free_ifarms()/__sh_list_free().
- * `switch (c->kind)` dereferences c unconditionally on entry, and every
- * real call site -- this file's own recursive func_body call (guarded
- * by `if (c->u.funcdef.func_body)` first), and free_pipeline_contents()
- * below (always `&pl->commands[i]`, an array element's address) --
- * always passes a real struct. */
+/* Must switch on c->kind rather than freeing every field unconditionally:
+ * only the active union variant's pointers are meaningful. new_command()
+ * zeroes the whole union, and parse.c always sets kind before writing any
+ * field of a new variant, so this is safe even on a node abandoned mid-parse.
+ * Unlike its free_*() siblings, c is required: this frees a command's
+ * contents, not a list node, so there's no "NULL means empty" convention. */
 // NOLINTNEXTLINE(misc-no-recursion) -- the destructor mirrors the owned shell-AST hierarchy
 void __sh_free_command_contents(struct sh_command *c)
 {
@@ -99,10 +82,7 @@ void __sh_free_command_contents(struct sh_command *c)
 	case SH_CMD_FUNCDEF:
 		__free(c->u.funcdef.name);
 		__free(c->u.funcdef.func_text);
-		/* Recursive rather than a __sh_list_free() like the fields
-		 * above: sh.h's func_body is a bare sh_command, not a list, and
-		 * parse.c's free_command() -- which would be the natural call --
-		 * is static there.  This is the same two lines it is. */
+		/* func_body is a bare sh_command, not a list, so no __sh_list_free(). */
 		if (c->u.funcdef.func_body) {
 			__sh_free_command_contents(c->u.funcdef.func_body);
 			__free(c->u.funcdef.func_body);

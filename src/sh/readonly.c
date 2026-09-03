@@ -4,31 +4,16 @@
  * The read-only *attribute* a name can be given by the `readonly`
  * special built-in (XCU 2.14, readonly(1p)), kept apart from its value.
  *
- * src/sh/builtin.c's bi_export() header comment explains why this
- * shell's only variable store is the real `environ`: every assignment,
- * exported or not, is already a setenv(). `readonly` needs something
- * environ cannot give it, though -- a name's *value* lives there, but
- * environ has no per-entry flag for "further assignment to this name
- * must fail", and no third-party code that reads environ (this file's
- * own callers included) may invent one by, say, reserving a sentinel
- * value or a shadow name; that would corrupt a real value the script
- * chose. So the read-only *set* -- which names are marked, independent
- * of whether they currently have a value -- gets the one array this
- * file owns, the same shape param.c uses for the same reason: state
- * with no home in environ gets a small dedicated store instead of a
- * bolted-on convention over it.
+ * Every assignment is already a setenv() into the real `environ`
+ * (builtin.c's bi_export()), but environ has no per-entry "further
+ * assignment must fail" flag, so the read-only *set* -- independent of
+ * whether a name currently has a value -- gets its own small array here,
+ * the same shape param.c uses for state with no home in environ.
  *
- * There is no unmark: nothing in this shell's currently-implemented
- * subset ever needs one. `unset` (XCU 2.14) would, since unset(1p)
- * requires unsetting a read-only variable to fail loudly rather than
- * removing the mark, but `unset` is separately unimplemented
- * (src/sh/script.c's unimplemented_builtins) and stays out of scope
- * here -- see the readonly builtin's own header comment in builtin.c.
- * A mark, once made, is therefore permanent for the life of the
- * process, which is exactly readonly(1p)'s own contract: "Once a
- * variable is set to become read-only in this manner, it shall be an
- * error for it to appear as a name in a subsequent readonly [or
- * assignment] ... command."
+ * There is no unmark: `unset` is the only thing that would need one, and
+ * it's unimplemented (script.c's unimplemented_builtins). A mark is
+ * therefore permanent for the process's life, matching readonly(1p): once
+ * read-only, a name must error on any later readonly or assignment.
  */
 #include <string.h>
 #include "libc.h"
@@ -83,12 +68,8 @@ size_t __sh_readonly_count(void)
 	return count;
 }
 
-/* i is 1:1 with a slot this file itself appended in __sh_readonly_mark()
- * above; every real caller (builtin.c's readonly listing) loops
- * `i < __sh_readonly_count()`, so an out-of-range i never happens in
- * practice. Returns NULL rather than asserting for the same reason
- * __sh_param_get() does (param.c): a defensive out-of-range answer, not
- * a contract callers are meant to rely on. */
+/* Returns NULL out-of-range rather than asserting, as __sh_param_get() does
+ * (param.c) -- a defensive answer, not a contract callers rely on. */
 const char *__sh_readonly_name(size_t i)
 {
 	return i < count ? names[i] : 0;
