@@ -6,37 +6,27 @@
  * AST, the two deliberate lexical simplifications the lexer makes, and
  * the -1 "not implemented at this stage" convention __sh_exec_*() use.
  *
- * Named sh-engine.c, not sh.c: every test/%.c builds to obj/test/%.exe,
- * and the real shell binary (sh/main.c -> obj/sh/sh.exe) owns the name
- * sh.exe.  Two different sh.exe's would be indistinguishable in a build
- * log, and CI's real-Windows legs download every test executable into
- * one flat directory -- where one would silently shadow the other and
- * the leg would still go green.  The name also says what this file
- * actually covers: the engine linked out of libc.a, driven in-process
- * through __sh_parse()/__sh_exec_*(), never a second image.  The black-
- * box tests of the *program* -- argument handling, exit status, the
- * diagnostics -- live in test/sh-main.c and spawn obj/sh/sh.exe for
- * real.
+ * Named sh-engine.c, not sh.c, because the real shell binary
+ * (sh/main.c -> obj/sh/sh.exe) already owns that name and CI's
+ * real-Windows legs flatten every test executable into one directory.
+ * The name also says what this file covers: the engine linked out of
+ * libc.a, driven in-process through __sh_parse()/__sh_exec_*(), never a
+ * second image. Black-box tests of the *program* -- argument handling,
+ * exit status, diagnostics -- live in test/sh-main.c and spawn
+ * obj/sh/sh.exe for real.
  *
- * Stage 1 (lexer/parser, no execution) tests either inspect the parsed
- * AST directly or exercise the "testable on its own: parse-and-print"
- * requirement by round-tripping through __sh_print_list() and
- * reparsing. Stage 2 (execution of simple commands) and stage 3
- * (redirections and pipelines) tests actually run processes: they
- * re-exec this binary itself as the command(s), matching test/misc.c's
- * test_abort_child() pattern -- argv[1] selects a role (see
- * child_role() below) that makes main() act as that role instead of
- * running the test suite. "--exit-child N" is stage 2's; stage 3 adds
- * a handful more (--produce, --cat, --stdin-eq, --produce-both,
- * --fd-open) so redirection and pipeline tests do not depend on any
- * external program (no /bin/cat, /bin/true, ... on this platform).
+ * Stage 1 (lexer/parser, no execution) tests inspect the parsed AST
+ * directly or round-trip through __sh_print_list() and reparse. Stage 2
+ * (simple commands) and stage 3 (redirections/pipelines) tests actually
+ * run processes: they re-exec this binary as the command(s), matching
+ * test/misc.c's test_abort_child() pattern -- argv[1] selects a role
+ * (child_role() below) so redirection/pipeline tests don't depend on
+ * any external program.
  *
  * The internal entry points (__sh_parse/__sh_print_list/__sh_list_free/
- * __sh_exec_*) are not part of any installed header -- src/sh/sh.h is
- * reached with a plain relative #include, matching how the rest of
- * this test suite (test/misc.c's __spawn, test/posix-*.c's local
- * prototypes) declares internal-but-linked symbols itself rather than
- * exposing them publicly.
+ * __sh_exec_*) aren't in any installed header -- src/sh/sh.h is reached
+ * with a plain relative #include, like the rest of this suite declares
+ * internal-but-linked symbols itself.
  *
  * Spec pages consulted (https://pubs.opengroup.org/onlinepubs/9699919799/
  * utilities/V3_chap02.html):
