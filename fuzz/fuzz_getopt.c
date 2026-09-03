@@ -1,58 +1,29 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * getopt(), getopt_long() and getopt_long_only() -- src/misc/getopt.c
- * and src/misc/getopt_long.c.  A command-line parser is the one piece
- * of a C library whose input is, by definition, whatever the user
- * typed, and this one does three things that reward hostile input:
- * it walks an optstring looking for a character and for the ':' and
- * '::' that follow it, it walks a longopts table matching a prefix and
- * an optional "=value", and -- the part with real pointer arithmetic --
- * it PERMUTES the caller's argv so that non-option arguments end up
- * after the options.
+ * Fuzzes getopt()/getopt_long()/getopt_long_only() (src/misc/getopt.c,
+ * getopt_long.c). Besides the optstring and longopts-table scans, these
+ * PERMUTE the caller's argv so non-options end up after options -- real
+ * pointer arithmetic, which is why this harness builds an actual argv
+ * (of "-x", "--long=v", "--", "-", bare words) rather than calling
+ * getopt once, exercising __getopt_long()'s permute loop for real.
  *
- * The permutation is why this harness builds a real argv rather than
- * calling getopt once.  src/misc/getopt_long.c's __getopt_long() moves
- * elements with a `permute` helper in a loop whose bound is computed
- * from three indices (skipped, resumed, optind); a fuzzer that supplies
- * an arbitrary mix of "-x", "--long=v", "--", "-" and bare words
- * explores that arithmetic in a way a fixed argv cannot.
+ * Byte 0 selects which entry point; byte 1 the number of longopts to
+ * build; the rest splits on '\n' into optstring, longopt names, and
+ * argv elements. opterr is forced to 0 (unrecognized options otherwise
+ * write a diagnostic through write(2), costing an order of magnitude of
+ * throughput) except on one input in two (byte 0's high bit), so that
+ * path still gets driven, just not every time.
  *
- * INPUT LAYOUT.  Byte 0 selects which of the three entry points is
- * driven; byte 1 is the number of longopts to build.  The rest is split
- * on NUL-free record boundaries into an optstring, the longopt names,
- * and the argv elements.  argv[0] is always a fixed program name, as
- * every real caller's is, so optind's initial value of 1 means what it
- * means everywhere else.
- *
- * opterr IS FORCED TO 0.  With it set, every unrecognised option writes
- * a diagnostic to fd 2 through __getopt_msg -> write(2, ...), which in
- * this build goes into fuzz/ntstubs.c's simulated volume and costs a
- * syscall shim per character class.  It is not the code under test
- * here, and leaving it on cuts throughput by an order of magnitude.
- * The message path is not lost: byte 0's high bit turns opterr back on
- * for one input in two, so __getopt_msg and its write(2, ...) are still
- * driven -- just not on every single input.
- *
- * WHAT IS ASSERTED.
- *
- *   - IT TERMINATES.  A parse loop that never returns -1 is a hang, and
- *     a hang is the failure mode this family of function has had in
- *     more than one C library.  The loop is bounded at 4*argc+16
- *     iterations and reports if it is still going.
- *   - optind stays within [0, argc] at every step.  It is the index the
- *     caller will use to read argv, so an out-of-range value is an
- *     out-of-bounds read in the *caller*, which no sanitizer here would
- *     see -- it has to be checked positively.
- *   - THE PERMUTATION LOSES NOTHING.  argv's elements after the parse
- *     must be a permutation of the elements before it: same multiset of
- *     pointers, no duplicate, no NULL introduced before argc.  That is
- *     the single strongest property of the permuting path and the one a
- *     miscomputed loop bound breaks.
- *   - A returned option character is one the optstring or longopts
- *     actually offered, or '?' or ':'; and when it is '?' or ':',
- *     optopt names something.
- *   - optarg, when set, points either into an argv element or is NULL.
+ * Asserted: the parse loop terminates (bounded, since a hang has been a
+ * real failure mode in more than one C library's getopt); optind stays
+ * in [0, argc] at every step (an out-of-range value would be an
+ * out-of-bounds read in the *caller*, invisible to any sanitizer here);
+ * the permutation loses nothing (argv after the parse is the same
+ * multiset of pointers as before, no duplicates, no NULL introduced);
+ * a returned option character is one the optstring/longopts actually
+ * offered, or '?'/':' with optopt naming something; optarg, when set,
+ * points into an argv element.
  */
 #include <getopt.h>
 #include <unistd.h>
@@ -69,16 +40,10 @@ static char storage[CAP + 1];
 
 int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 {
-	/* MAXARGV + 2, not + 1.  The input supplies up to MAXARGV
-	 * elements, prepending "prog" makes MAXARGV + 1, and argv must
-	 * then carry the terminating NULL that every real argv has --
-	 * so the largest index written is MAXARGV + 1.  At + 1 the
-	 * `argv[argc] = 0` below wrote one past the end whenever the
-	 * input filled every slot, and `before` overran with it in the
-	 * memcpy of argc + 1 pointers.  VERIFIED: UBSan reported
-	 * "index 25 out of bounds for type 'char *[25]'" at that
-	 * assignment.  It took a fuzzer that could fill all 24 slots to
-	 * reach it, which is why it survived the first runs. */
+	/* MAXARGV + 2: MAXARGV input elements + prepended "prog" + the
+	 * terminating NULL every real argv has. At + 1, `argv[argc] = 0`
+	 * below wrote one past the end whenever the input filled every
+	 * slot -- caught by UBSan once a fuzzer found an input that did. */
 	char *argv[MAXARGV + 2];
 	char *before[MAXARGV + 2];
 	struct option longopts[MAXLONG + 1];
@@ -88,7 +53,7 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 
 	if (size < 4) return 0;
 	which = data[0] % 3;
-	err_on = (data[0] & 0x80) != 0;         /* see the banner: opterr */
+	err_on = (data[0] & 0x80) != 0;
 	nlong = data[1] % (MAXLONG + 1);
 	data += 2; size -= 2;
 
@@ -151,23 +116,14 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 	optarg = 0;
 	optopt = 0;
 
-	/* The bound has to be counted in CHARACTERS, not in argv
-	 * elements.  getopt() returns one result per option character,
-	 * and clustered short options mean a single element yields as
-	 * many results as it has bytes: with an empty optstring,
-	 * argv[1] = "--RR-R..." (25 bytes) makes 24 successive calls
-	 * return '?', one per character, before the 25th returns -1.
-	 * That is correct behaviour and the old bound of 4*argc+16 --
-	 * 24 for this argc -- called it a hang.  VERIFIED: that exact
-	 * input is what libFuzzer reduced to, and the assertion fired
-	 * on a library doing precisely what 1.4 says it should.
-	 *
-	 * Summing the lengths keeps the assertion meaningful -- a real
-	 * failure to advance still trips it, because no correct parse
-	 * can return more times than there are characters to consume --
-	 * while removing the false positive.  The 4*argc+16 slack is
-	 * kept on top for the per-element results (a '?' for a missing
-	 * argument, the "--" terminator) that consume no character. */
+	/* Counted in CHARACTERS, not argv elements: clustered short options
+	 * mean one element yields one result per byte (e.g. a 25-byte
+	 * "--RR-R..." makes 24 '?' returns before -1), which the old
+	 * 4*argc+16 bound alone mistook for a hang. Summing lengths keeps
+	 * the assertion meaningful (no correct parse returns more times
+	 * than there are characters to consume) while fixing the false
+	 * positive; the flat term stays for per-element results ('?' for a
+	 * missing argument, "--") that consume no character. */
 	limit = 4 * argc + 16;
 	for (i = 0; i < argc; i++) limit += (int)strlen(argv[i]);
 	for (iter = 0; iter < limit; iter++) {
@@ -201,36 +157,15 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 			 * here does. */
 			oracle_mismatch_i("returned 0 with no flag-bearing longopt", optstring, 0, 1);
 		} else if (c == 1 && optstring[0] == '-') {
-			/* Not a defect, and not necessarily an option character.
-			 * An optstring beginning with '-' selects the mode in
-			 * which every non-option argument is returned, in
-			 * argument order, as option character 1:
-			 * src/misc/getopt.c:50 implements it deliberately, and
-			 * sets optarg to the argument.  The first version of this
-			 * harness asserted strchr(optstring, c) unconditionally
-			 * and reported "-:\x08\x82" as a finding within twenty
-			 * seconds -- it was the harness that was wrong.
-			 *
-			 * The second version tried to excuse it positively, by
-			 * requiring optarg to be set, and was wrong in the other
-			 * direction: a fuzzer puts the byte 0x01 IN the optstring,
-			 * and then a return of 1 is an ordinary option character
-			 * with no argument.  The two cases are indistinguishable
-			 * from outside -- getopt has exactly one channel for the
-			 * value -- so the two must be excused together, and that
-			 * is all this branch may assert: EITHER the mode set
-			 * optarg, OR the byte really is an option character the
-			 * optstring offered.  src/misc/getopt.c has exactly two
-			 * ways to return 1 -- the non-option path at :50, which
-			 * assigns optarg before returning, and the ordinary match
-			 * loop, which cannot match a character the optstring does
-			 * not contain -- and it is the only one of the three entry
-			 * points that can produce a 1 at all, because every longopt
-			 * this harness builds has val 0x100 or more.  The
-			 * disjunction is therefore exactly the set of legal
-			 * outcomes.  Asserting nothing here instead would have been
-			 * the easy way out and would have left a blind spot the
-			 * size of the whole leading-'-' mode. */
+			/* An optstring beginning with '-' selects the mode where
+			 * every non-option argument is returned as character 1
+			 * with optarg set (src/misc/getopt.c:50) -- but a fuzzer
+			 * can also put byte 0x01 IN the optstring, making a
+			 * return of 1 an ordinary option character with no
+			 * argument instead. The two are indistinguishable from
+			 * outside (getopt has one channel for the value), so only
+			 * their disjunction is assertable: either optarg was set,
+			 * or 1 really is an offered option character. */
 			if (!optarg && strchr(optstring, c) == 0)
 				oracle_mismatch_i("returned 1 that is neither a non-option"
 				                  " argument nor an option character",
