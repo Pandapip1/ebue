@@ -1,67 +1,50 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * getdate() -- src/time/getdate.c.
- *
- * WHY THIS ONE RANKS.  It is the most parser-shaped function in
+ * getdate() -- src/time/getdate.c. The most parser-shaped function in
  * src/time/, and both of its inputs are untrusted in the ordinary case:
  * the date string is whatever the user typed, and $DATEMSK names a FILE
- * whose contents become strptime format strings.  An environment
- * variable that makes a library open a path and interpret what it finds
- * there as a format is a wide seam, and nothing was exercising it.
+ * whose contents become strptime format strings.
  *
- * WHAT IT TAKES TO FUZZ AT ALL, and why this harness could not simply be
- * written earlier: getdate() calls time(0) and seeds its working struct
- * tm from localtime_r() so that fields the matched template does not
- * mention default to today (getdate.html's "elements ... not specified
- * by the [matched] template shall be set the same as their equivalents
- * in the current time and date").  The same input therefore takes
- * different branches on different days, and a crash artefact might not
- * reproduce from the bytes that produced it.  __ntfuzz_freeze_clock()
- * in fuzz/ntstubs.c is the seam that fixes it -- see the long comment
- * there for why a frozen NT system clock is a state the real platform
- * presents rather than a convenient fiction.  It is called from
- * LLVMFuzzerInitialize, which libFuzzer runs before any input.
+ * getdate() calls time(0) and seeds its working struct tm from
+ * localtime_r() so that fields the matched template does not mention
+ * default to today. The same input therefore takes different branches on
+ * different days, and a crash artefact might not reproduce from the
+ * bytes that produced it. __ntfuzz_freeze_clock() in fuzz/ntstubs.c is
+ * the seam that fixes it, called from LLVMFuzzerInitialize, which
+ * libFuzzer runs before any input.
  *
- * INPUT LAYOUT.  Byte 0 is flags.  The rest is split on '\n' into
- * records: record 0 is the date string handed to getdate(); the
- * remaining records, when flags bit 0 is set, are written to a file in
- * the simulated volume that $DATEMSK then names -- so the fuzzer writes
- * the template file as well as the input, and read_templates() and
- * every strptime format those templates spell are under test.  With bit
- * 0 clear, $DATEMSK is unset and getdate() takes its built-in template
- * list instead; both paths matter and both are reached.
+ * Byte 0 is flags. The rest is split on '\n' into records: record 0 is
+ * the date string handed to getdate(); the remaining records, when
+ * flags bit 0 is set, are written to a file in the simulated volume
+ * that $DATEMSK then names -- so the fuzzer writes the template file as
+ * well as the input, and read_templates() and every strptime format
+ * those templates spell are under test. With bit 0 clear, $DATEMSK is
+ * unset and getdate() takes its built-in template list instead; both
+ * paths matter and both are reached.
  *
- * WHAT IS ASSERTED.
+ * Asserted:
  *
- *   - THE CONTRACT BETWEEN THE RETURN AND getdate_err.  getdate.html:
- *     on failure getdate() returns NULL and sets getdate_err to a value
- *     in 1..8; on success it returns a pointer and getdate_err is not
- *     meaningful.  A NULL with getdate_err left at 0, or set outside
+ *   - The contract between the return and getdate_err. getdate.html: on
+ *     failure getdate() returns NULL and sets getdate_err to a value in
+ *     1..8; on success it returns a pointer and getdate_err is not
+ *     meaningful. A NULL with getdate_err left at 0, or set outside
  *     1..8, is a caller that cannot tell what went wrong -- and
  *     getdate_err is the only channel there is, since getdate() does
  *     not set errno.
  *
- *   - A SUCCESSFUL PARSE IS A REAL DATE.  When getdate() returns a
- *     struct tm, its fields must be in range: tm_mon 0..11, tm_mday
- *     1..31, tm_hour 0..23, tm_min/tm_sec 0..60, tm_wday 0..6, tm_yday
- *     0..365.  getdate.c range-checks the day against the actual length
- *     of the month before accepting (its ERRORS code 8 path) and then
- *     runs mktime() to normalize, so anything out of range here means
- *     one of those two did not happen.
+ *   - A successful parse is a real date: tm_mon 0..11, tm_mday 1..31,
+ *     tm_hour 0..23, tm_min/tm_sec 0..60, tm_wday 0..6, tm_yday 0..365.
+ *     getdate.c range-checks the day against the actual length of the
+ *     month before accepting and then runs mktime() to normalize, so
+ *     anything out of range here means one of those two did not happen.
  *
- *   - THE RETURNED tm ROUND-TRIPS.  timegm() of the returned fields,
- *     back through gmtime_r(), must give the same fields.  A struct tm
+ *   - The returned tm round-trips: timegm() of the returned fields,
+ *     back through gmtime_r(), must give the same fields. A struct tm
  *     that does not describe any instant is not a parse result.
  *
- *   - IT TERMINATES AND DOES NOT ESCAPE THE BUFFER.  ASan owns the
- *     second (in the ubsan build, the storage below is sized so the
- *     harness's own writes are checkable by inspection instead); the
- *     first is what a template file full of "%" conversions is most
- *     likely to break.
- *
- * NOT ASSERTED: which template matched, or what the defaulted fields
- * came out as.  Those depend on the frozen instant, and pinning them
+ * Not asserted: which template matched, or what the defaulted fields
+ * came out as. Those depend on the frozen instant, and pinning them
  * would be pinning this harness's arbitrary choice of "now" rather than
  * anything about getdate().
  */
@@ -89,14 +72,10 @@ int LLVMFuzzerInitialize(int *argc, char ***argv)
 {
 	(void)argc; (void)argv;
 	__ntfuzz_freeze_clock(FROZEN_NOW);
-	/* CHECKED, NOT ASSUMED.  If the seam ever stops taking effect --
-	 * a reordered constructor in ntstubs.c, a second clock path added
-	 * to NtQuerySystemTime, this call quietly removed -- every
-	 * assertion below still passes and the harness silently goes back
-	 * to being nondeterministic, which is the state it was written to
-	 * escape.  Nothing else in the run would notice.  One call to
-	 * ntlibc's own time() closes that, and closes it here rather than
-	 * per input, since libFuzzer runs this before any of them. */
+	/* Checked, not assumed: if the freeze seam ever silently stops
+	 * taking effect, every assertion below still passes and the
+	 * harness quietly goes back to being nondeterministic, which
+	 * nothing else in the run would notice. */
 	if ((long long)time(0) != FROZEN_NOW)
 		oracle_mismatch_i("the frozen-clock seam did not take effect", "",
 		                  (long long)time(0), FROZEN_NOW);
