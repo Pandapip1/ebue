@@ -4652,6 +4652,10 @@ NOTIMPL(NtOpenSymbolicLinkObject, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES 
 NOTIMPL(NtQuerySymbolicLinkObject, (HANDLE a, PUNICODE_STRING b, PULONG c))
 NOTIMPL(NtQuerySystemInformation, (SYSTEM_INFORMATION_CLASS a, PVOID b, ULONG c, PULONG d))
 NOTIMPL(NtSetSystemTime, (LARGE_INTEGER *a, LARGE_INTEGER *b))
+/* src/misc/nt/plat_misc.c's registry-based hostname lookup (uname()'s
+ * nodename) falls back gracefully on a failing/NOTIMPL status. */
+NOTIMPL(NtOpenKey, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c))
+NOTIMPL(NtQueryValueKey, (HANDLE a, PUNICODE_STRING b, KEY_VALUE_INFORMATION_CLASS c, PVOID d, ULONG e, PULONG f))
 /* src/misc/resource.c's setrlimit(): the job-object route it takes for
  * RLIMIT_NPROC/CPU/AS/DATA is best-effort (its own soft/hard state is
  * what getrlimit() actually reads back), so a real host process never
@@ -4659,6 +4663,9 @@ NOTIMPL(NtSetSystemTime, (LARGE_INTEGER *a, LARGE_INTEGER *b))
 NOTIMPL(NtCreateJobObject, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c))
 NOTIMPL(NtAssignProcessToJobObject, (HANDLE a, HANDLE b))
 NOTIMPL(NtSetInformationJobObject, (HANDLE a, JOBOBJECTINFOCLASS b, PVOID c, ULONG d))
+/* src/process/nt/plat_process.c's __plat_process_times() also falls back
+ * gracefully when this fails. */
+NOTIMPL(NtQueryInformationJobObject, (HANDLE a, JOBOBJECTINFOCLASS b, PVOID c, ULONG d, PULONG e))
 /* The whole-library native link now contains pthread, AIO, and the synthetic
  * VFS-directory handle path.  None of the fuzz targets exercises their NT
  * dispatcher/thread substrate, and a Linux process has no NT TEB or native
