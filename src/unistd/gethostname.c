@@ -14,14 +14,9 @@
 
 int gethostname(char *name withtok(writable_span(len)), size_t len)
 {
-	/* This system's own hostname, however this backend actually knows
-	 * it -- NT's COMPUTERNAME environment variable, or Linux's real
-	 * uname(2) nodename; see __plat_hostname()'s own comment
-	 * (src/internal/plat_unistd.h) for why the two backends differ here
-	 * and why they still have to agree with uname()'s own nodename on
-	 * whichever platform is running. 256 matches this library's own
-	 * struct utsname field width (include/sys/utsname.h), comfortably
-	 * above any real hostname either backend can produce. */
+	/* NT's COMPUTERNAME or Linux's real uname(2) nodename, via
+	 * __plat_hostname(); the two must agree with uname()'s own nodename.
+	 * 256 matches struct utsname's field width (include/sys/utsname.h). */
 	char h[256];
 	size_t n;
 	__plat_hostname(h, sizeof h);

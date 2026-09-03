@@ -6,16 +6,12 @@
  * so hosted include ownership and unused-include advice do not apply. */
 // NOLINTBEGIN(misc-include-cleaner)
 
-/* This front door's own job is only what plat_unistd.h's __plat_getcwd()
- * comment says a backend should NOT have to know: the __VFS_ROOT/
- * __VFS_DEV overlay special cases (portable bookkeeping, same as
- * chdir.c's own __vfs_cwd_set() split), and getcwd.html's buf/size
- * contract -- NULL buf means "malloc exactly what's needed", size 0
- * with a non-NULL buf is [EINVAL], and a result that would not fit is
- * [ERANGE].  What a "current directory" even means on this backend --
- * NT's DOS-form UTF-16 RtlGetCurrentDirectory_U, Linux's byte-for-byte
- * getcwd(2) -- is entirely __plat_getcwd()'s job now (src/unistd/{nt,
- * linux}/plat_unistd.c), not this file's. */
+/* This front door only handles the __VFS_ROOT/__VFS_DEV overlay special
+ * cases (portable bookkeeping, same split as chdir.c's __vfs_cwd_set())
+ * and getcwd.html's buf/size contract -- NULL buf mallocs exactly what's
+ * needed, size 0 with non-NULL buf is EINVAL, a result that won't fit is
+ * ERANGE. What "current directory" means on this backend is entirely
+ * __plat_getcwd()'s job (src/unistd/{nt,linux}/plat_unistd.c). */
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>

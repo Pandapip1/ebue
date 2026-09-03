@@ -51,25 +51,18 @@ ssize_t pwrite(int fd, const void *buf withtok(readable_span(count)),
 	if (f->type != __FD_FILE) { errno = ESPIPE; return -1; }
 	if (off < 0) { errno = EINVAL; return -1; }
 	if (count > 0x7fffffff) count = 0x7fffffff;
-	/* The offset maximum, measured against the CALLER'S offset: for
-	 * pwrite the "starting position" write.html's [EFBIG] speaks of is
-	 * the offset argument, so unlike write() above this needs no query
-	 * and is decided before anything is attempted.  The clamp below is
-	 * the DESCRIPTION's other half -- "For regular files, no data
-	 * transfer shall occur past the offset maximum established in the
-	 * open file description associated with fildes" -- which turns a
-	 * request straddling the maximum into a short write rather than an
-	 * error.  Both arms are unsigned so that off + count cannot overflow
-	 * a signed off_t on the way to being compared.  This is the file's
-	 * limit and not the process's, so like write()'s matching arm it
-	 * raises no SIGXFSZ. */
+	/* write.html's EFBIG offset maximum, measured against the caller's
+	 * offset arg (pwrite needs no position query, unlike write()). A
+	 * request straddling the maximum is a short write, not an error;
+	 * both arms are unsigned so off + count can't overflow a signed
+	 * off_t. This is the file's own limit, not the process's, so unlike
+	 * below it raises no SIGXFSZ. */
 	if (count && off >= __OFF_MAX) { errno = EFBIG; return -1; }
 	if ((unsigned long long)off + count > (unsigned long long)__OFF_MAX)
 		count = (size_t)(__OFF_MAX - off);
-	/* RLIMIT_FSIZE, measured against the CALLER'S offset rather than the
-	 * file position -- pwrite writes where it is told.  Unlike the two
-	 * offset-maximum arms above this one IS the process limit, so the
-	 * refusal goes through __fsize_exceeded() and generates SIGXFSZ. */
+	/* RLIMIT_FSIZE, measured against the caller's offset since pwrite
+	 * writes where it's told; this IS the process limit, so it goes
+	 * through __fsize_exceeded() and generates SIGXFSZ. */
 	if (__fsize_limited()) {
 		long long room = __fsize_room_at(off);
 		if (room <= 0) return __fsize_exceeded();

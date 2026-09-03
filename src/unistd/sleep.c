@@ -3,41 +3,27 @@
  *
  * Sleeping, and the one alarm clock.
  *
- * alarm() is a real NT waitable timer: NtCreateTimer once, NtSetTimer
- * for each request, NtCancelTimer to withdraw one.  Expiry queues a
- * user APC to the thread that armed it, and that APC calls
- * __raise_internal(SIGALRM) -- the same in-process delivery path
- * raise(), abort() and the vectored exception handler use, so a SIGALRM
- * handler installed with signal()/sigaction() runs exactly as it would
- * anywhere else.
+ * alarm() is a real NT waitable timer (NtCreateTimer/NtSetTimer/
+ * NtCancelTimer); expiry queues a user APC that calls
+ * __raise_internal(SIGALRM), the same in-process delivery path raise()
+ * and abort() use.
  *
- * WHAT THAT DOES AND DOES NOT REACH, because the boundary is the whole
- * character of this implementation.  NT runs a queued user APC only
- * when the target thread is in an *alertable* wait; there is no
- * mechanism to interrupt a thread that is running.  So a thread sitting
- * in sleep(), nanosleep(), usleep() or pause() -- all four pass
- * Alertable=1 below -- gets its SIGALRM at the right instant, and the
- * sleep ends with the "unslept" amount POSIX asks for.  A thread that
- * is computing gets nothing until the next such wait, at which point
- * the APC is still queued and fires immediately (measured: an expiry
- * that arrives during a non-alertable NtDelayExecution is delivered at
- * the head of the next alertable one).  A program that never sleeps
- * never sees its SIGALRM at all.  That gap is recorded in
- * test/POSIX-GAP-ACCOUNTING.md rather than glossed over.
+ * NT only runs a queued APC when the target thread is in an *alertable*
+ * wait -- there's no way to interrupt a running thread. sleep(),
+ * nanosleep(), usleep() and pause() all wait alertably, so they get
+ * SIGALRM at the right instant; a thread that's computing gets nothing
+ * until its next alertable wait, where a pending APC fires immediately.
+ * A program that never sleeps never sees its SIGALRM. That gap is
+ * recorded in test/POSIX-GAP-ACCOUNTING.md.
  *
- * POSIX timers now use a dedicated manager thread (src/time/timer.c).
- * That thread signals the delivery event when it queues or catches a
- * signal, waking __alertable_delay() below and turning a caught handler
- * into EINTR for sleep()/nanosleep().
+ * POSIX timers use a dedicated manager thread (src/time/timer.c) that
+ * signals a delivery event when it queues or catches a signal, waking
+ * __alertable_delay() below and turning a caught handler into EINTR.
  *
- * The deadline is kept as an absolute NT system time, the same
- * NtQuerySystemTime clock time() and clock_gettime(CLOCK_REALTIME) read
- * and the same one NtSetTimer's absolute mode fires on.  alarm.html
- * says "realtime seconds", which is that clock and not the performance
- * counter; keeping both the kernel's deadline and this file's
- * arithmetic on it means the answer alarm() reports and the moment the
- * signal actually arrives cannot drift apart, including across a
- * clock_settime().
+ * The deadline is kept as an absolute NT system time -- the same clock
+ * time()/clock_gettime(CLOCK_REALTIME) read and NtSetTimer's absolute
+ * mode fires on -- so the alarm() answer and the actual signal moment
+ * cannot drift apart, including across a clock_settime().
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -60,67 +46,42 @@ static long long alarm_due;
  * alarm_apc_fire. */
 static unsigned long alarm_seq;
 
-/* Called by the backend (src/unistd/nt/plat_unistd.c) when the alarm
- * timer __plat_alarm_arm() armed expires, on the thread that armed it,
- * only while that thread is in an alertable wait -- see this file's
- * header comment for exactly what that does and does not reach.
+/* Called on the arming thread when its alarm timer expires, only while
+ * that thread is in an alertable wait (see the header comment). The APC
+ * may belong to a request already superseded by a later alarm() or
+ * alarm(0): __plat_alarm_cancel() can't recall an APC already handed to
+ * the thread, only run at the next alertable wait.
  *
- * Do not trust the queue: this may belong to a request that is already
- * gone.  __plat_alarm_cancel() withdraws a timer, but it cannot recall
- * an APC that the expiry has already handed to this thread -- and a
- * handed-over APC is not *run* until the next alertable wait, so a
- * program that lets an alarm expire while it is computing and only then
- * calls alarm(0), or re-arms for later, reaches here with the request it
- * names already spent.
- *
- * WHICH REQUEST THIS IS FOR IS ASKED BY IDENTITY, NOT BY THE CLOCK, and
- * that distinction is the whole of this comment.  The obvious test --
- * re-read the time and drop the notification if the deadline has not
- * passed -- is wrong, because it cannot tell a superseded notification
- * from a punctual one: an NT timer may run its APC a hair BEFORE
- * __plat_time_now() agrees the due time has arrived, the two being
- * different clocks sampled at different moments.  A dropped notification
- * is not retried, and alarm_due stays set, so that loses the SIGALRM
- * permanently.  Measured under Wine before this was changed, with the
- * comparison instrumented: the APC ran with `now - alarm_due` at -9886
- * ticks (0.99ms early) and the signal was silently swallowed, on roughly
- * one run in three; the same binary passed the other two.  A tolerance
- * would only move the boundary, not remove it.
- *
- * The generation counter answers the question exactly instead.  Every
- * alarm() bumps alarm_seq and hands the new value to __plat_alarm_arm()
- * as the request's identity, so `seq == alarm_seq` is true for precisely
- * the notification of the current request and false for every stale one
- * -- no clock is read, and an early expiry is delivered as the expiry it
- * is.  alarm_due == 0 covers the cancelled case, where there is no
- * current request for any notification to match. */
+ * Matching is done by generation counter (seq == alarm_seq), not by
+ * re-checking the clock: an NT timer can fire its APC a hair before
+ * __plat_time_now() agrees the deadline passed (measured under Wine,
+ * ~1ms early on roughly one run in three), and a clock check would drop
+ * that notification permanently since it's never retried. The counter
+ * matches an early expiry correctly with no clock read; alarm_due == 0
+ * covers the cancelled case. */
 static void alarm_apc_fire(unsigned long seq)
 {
 	if (!alarm_due || seq != alarm_seq) return;
 
-	/* Cleared before delivery, not after: SIGALRM's default action is
-	 * to terminate, so __raise_internal() does not return in that
-	 * case, and a handler that calls alarm() must see "no request
-	 * pending" rather than one that is already in the past. */
+	/* Cleared before delivery, not after: SIGALRM's default action
+	 * terminates (so __raise_internal() may not return), and a handler
+	 * that calls alarm() must see "no request pending". */
 	alarm_due = 0;
 	__sig_lock();
 	__raise_internal(SIGALRM);
 	__sig_unlock();
 }
 
-/* alarm.html RETURN VALUE: "a non-zero value that is the number of
- * seconds until the previous request would have generated a SIGALRM
- * signal".  Rounded *up*: any part-second still owed is a request with
- * time remaining, and 0 is the reserved answer for "there was no such
- * request", so truncating would report a live alarm as absent. */
+/* alarm.html: seconds until the previous request would fire, rounded
+ * *up* -- 0 is reserved for "no such request", so truncating a part-second
+ * remainder would wrongly report a live alarm as absent. */
 static unsigned alarm_remaining(long long now)
 {
 	long long left;
 	if (!alarm_due) return 0;
 	left = alarm_due - now;
-	/* Due, or overdue and not yet delivered because this thread has
-	 * not been in an alertable wait since (see the header comment).
-	 * No time remains either way, so 0 is the honest answer. */
+	/* Due, or overdue and not yet delivered (thread not alertable since;
+	 * see header). No time remains either way. */
 	if (left <= 0) return 0;
 	return (unsigned)((left + __TICKS_PER_SEC - 1) / __TICKS_PER_SEC);
 }
@@ -131,38 +92,30 @@ unsigned alarm(unsigned s)
 	long long due;
 	unsigned prev = alarm_remaining(now);
 
-	/* "If seconds is 0, a pending alarm request, if any, is canceled"
-	 * -- and a new request replaces the old one, so both paths start
-	 * by withdrawing what is there. */
+	/* A new request replaces the old one; both paths start by
+	 * withdrawing what's there ("seconds == 0" cancels). */
 	__plat_alarm_cancel();
 	alarm_due = 0;
-	/* Retire the old request's identity before arming a new one, so a
-	 * notification already handed over for it can no longer match
-	 * (alarm_apc_fire). */
+	/* Retire the old request's identity first, so a notification already
+	 * handed over for it can no longer match (alarm_apc_fire). */
 	alarm_seq++;
 
 	if (s) {
 		due = now + (long long)s * __TICKS_PER_SEC;
-		/* alarm.html ERRORS: "The alarm() function is always
-		 * successful, and no return value is reserved to indicate an
-		 * error."  There is nothing to report a failed arm with, so
-		 * a request the system silently could not honour just leaves
-		 * alarm_due at 0, same as the cancelled case above. */
+		/* alarm() is always successful (no error return), so a silent
+		 * arming failure just leaves alarm_due at 0. */
 		if (__plat_alarm_arm(due, alarm_seq, alarm_apc_fire) == 0)
 			alarm_due = due;
 	}
 	return prev;
 }
 
-/* fork()'s child side only.  RtlCloneUserProcess copies the address
- * space, so alarm_due and alarm_timer arrive in the child holding the
- * parent's values -- fork.html: "The time left until an alarm clock
- * signal shall be reset to zero, and the alarm, if any, shall be
- * canceled."  Forgetting them is the whole job and is deliberately not
- * a cancel-and-close: the timer object was created without OBJ_INHERIT
- * (above), so that handle number was never duplicated into the child
- * and NT is free to have handed it out again for something else.
- * Closing it would close whatever that is. */
+/* fork()'s child side only. RtlCloneUserProcess copies the address space,
+ * so alarm_due arrives holding the parent's value; fork.html requires it
+ * reset to zero and any alarm canceled. Deliberately not a
+ * cancel-and-close: the timer handle was created without OBJ_INHERIT, so
+ * it was never duplicated into the child and NT may have reused that
+ * handle number for something else -- closing it would close that. */
 void __alarm_reset_after_fork(void)
 {
 	alarm_due = 0;
@@ -171,38 +124,28 @@ void __alarm_reset_after_fork(void)
 }
 
 /* Wait out `ticks` 100ns units, alertable, so an alarm APC can be
- * delivered in the middle of it (see the header comment).
+ * delivered mid-wait (see header comment).
  *
- * Returns 0 if the whole interval elapsed.  Returns -1 with errno set
- * to EINTR, and *left set to the 100ns units still owed, if a
- * signal-catching function ran first -- sleep.html and nanosleep.html
- * both end the wait only on a signal "whose action is to invoke a
- * signal-catching function or to terminate the process", so a SIGALRM
- * that was ignored has to leave the interval running.  That is what the
- * __sig_caught_count() comparison distinguishes; __raise_internal()
- * returns 0 for the handled and the ignored case alike, and the
- * terminate case does not come back here at all.
+ * Returns 0 if the whole interval elapsed. Returns -1/EINTR with *left
+ * set to the ticks still owed if a signal-catching function ran first --
+ * an *ignored* SIGALRM must leave the interval running, which is what
+ * the __sig_caught_count() comparison distinguishes (it only changes for
+ * caught signals, not ignored ones).
  *
- * Elapsed time is measured on __plat_time_now() rather than the
- * performance counter, which would be immune to a clock step: alarm()
- * deadlines use the system clock, and having the two agree matters more
- * here than making either one step-proof. The delivery event permits one
- * wait for the whole remaining interval while retaining exact elapsed-time
- * accounting across early wakes. */
+ * Elapsed time is measured on __plat_time_now(), not the performance
+ * counter, so it agrees with alarm()'s system-clock deadlines even
+ * across a clock step. */
 int __alertable_delay(long long ticks, long long *left, const char *operation)
 {
 	unsigned long caught = __sig_caught_count();
 	long long start, now, t;
 
-	/* No unsafe/defer region here: the only shared state this function
-	 * touches is reached through __sig_drain_pending()/__sig_wait_delivery(),
-	 * which take __sig_lock() internally and that lock is itself a defer
-	 * region (src/signal/sigdelivery.c).  Everything else below is a local
-	 * (start/now/t/ticks/caught) that an abandoned, exiting thread can
-	 * safely leave half-updated.  Asynchronous cancellation landing anywhere
-	 * in this function -- including mid-wait in __sig_wait_delivery() -- is
-	 * therefore safe, and is exactly the case the pthread_cancel/2-1, 3-1,
-	 * 4-1 conformance tests exercise: they cancel a peer that is asleep. */
+	/* No unsafe/defer region needed: the only shared state here is reached
+	 * through __sig_drain_pending()/__sig_wait_delivery(), which take
+	 * __sig_lock() internally (itself a defer region); everything else is
+	 * a local an abandoned thread can safely leave half-updated. So
+	 * cancellation landing anywhere here, including mid-wait, is safe --
+	 * exactly what pthread_cancel/2-1,3-1,4-1 exercise. */
 	(void)operation;
 	start = __plat_time_now();
 	__pthread_testcancel();
@@ -259,12 +202,9 @@ unsigned sleep(unsigned s)
 	long long owed = 0;
 	if (__alertable_delay((long long)s * __TICKS_PER_SEC, &owed,
 	    "sleep()") < 0)
-		/* sleep.html RETURN VALUE: "If sleep() returns because the
-		 * requested time has elapsed, the value returned shall be 0.
-		 * If sleep() returns due to the delivery of a signal, the
-		 * value returned shall be the 'unslept' amount ... in
-		 * seconds."  Rounded up for the same reason alarm()'s is:
-		 * 0 is the value that means the full interval elapsed. */
+		/* sleep.html: returns the "unslept" amount in seconds, rounded
+		 * up for the same reason as alarm() -- 0 must mean the full
+		 * interval elapsed. */
 		return (unsigned)((owed + __TICKS_PER_SEC - 1) / __TICKS_PER_SEC);
 	return 0;
 }
@@ -278,17 +218,10 @@ int usleep(unsigned us)
 int pause(void)
 {
 	unsigned long caught = __sig_caught_count();
-	/* pause.html: "suspend the calling thread until delivery of a
-	 * signal whose action is either to execute a signal-catching
-	 * function or to terminate the process", after which "-1 shall be
-	 * returned and errno set" to [EINTR].  Alertable, so an alarm()
-	 * APC ends it.  Signals delivered by a background delivery thread
-	 * set the delivery event and are observed through the caught counter.
-	 * An ignored signal changes no counter and therefore leaves pause()
-	 * waiting, as POSIX requires.  No unsafe/defer region: see the comment
-	 * in __alertable_delay() above -- the shared state here is reached only
-	 * through __sig_drain_pending()/__sig_wait_delivery(), which are already
-	 * defer-protected by __sig_lock(). */
+	/* pause.html: waits for a signal that is caught or terminates,
+	 * then EINTR. Alertable, so an alarm() APC ends it; an ignored
+	 * signal changes no counter and leaves pause() waiting, as POSIX
+	 * requires. No unsafe/defer region: see __alertable_delay() above. */
 	while (__sig_caught_count() == caught) {
 		__pthread_testcancel();
 		__sig_drain_pending();

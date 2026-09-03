@@ -3,29 +3,17 @@
  *
  * sysconf()/pathconf()/fpathconf()/confstr().
  *
- * The shape of sysconf() below is set by one sentence in sysconf.html
- * and one in unistd.h.html, read together.  <unistd.h> "shall define
- * the following symbolic constants for sysconf()" and then lists 125
- * _SC_ names unconditionally, so every one of them is a VALID name by
- * definition; sysconf.html gives [EINVAL] for an *invalid* name only.
- * A `default: errno = EINVAL` that catches mandated names therefore
- * tells the caller "no such variable" about a variable the header it
- * just included promises exists, and the caller cannot tell that from a
- * genuine rejection.
+ * <unistd.h> unconditionally lists all 125 _SC_ names as valid, and
+ * sysconf.html reserves [EINVAL] for an *invalid* name -- so a
+ * `default: EINVAL` that also catches mandated-but-unimplemented names
+ * would misreport them as nonexistent. Instead the switch answers all
+ * 125: a real value where there is one, else -1 with errno untouched
+ * (sysconf.html's own answer for "no limit"). `default: EINVAL` is left
+ * for names outside the mandated list entirely.
  *
- * The truthful answer for a variable this library has no number for is
- * the one sysconf.html spells out: "If the variable corresponding to
- * name has no limit ... sysconf() shall return -1 without changing
- * errno."  So the switch answers all 125: a real value where there is
- * one, and -1 with errno untouched where the option is absent.  errno
- * is left for names that are not on the list at all, which is the only
- * case [EINVAL] describes.
- *
- * An option answered -1 here is answered by SILENCE in <unistd.h> --
- * no _POSIX_* constant at all, rather than one set to -1 -- for the
- * reasons that header's own comment gives.  The two must not drift:
- * a header claiming an option sysconf() denies, or the reverse, is
- * worse than either answer alone.
+ * An option answered -1 here must correspondingly be *absent* (no
+ * _POSIX_* constant at all, not one set to -1) in <unistd.h> -- the two
+ * must not drift.
  */
 #include <unistd.h>
 #include <limits.h>
@@ -97,13 +85,9 @@ long sysconf(int name)
 	case _SC_ATEXIT_MAX: return ATEXIT_CAP_;
 
 	/* ---- options this library does support -------------------- */
-	/* Each of these names an option whose whole interface set is
-	 * present and implemented here, so a value greater than zero is
-	 * the honest answer -- an application that asks in order to
-	 * decide whether to use fsync(), regcomp() or posix_spawn()
-	 * should be told yes.  <unistd.h> defines no matching _POSIX_*
-	 * constant for any of them, which is exactly the case
-	 * sysconf.html exists for. */
+	/* Each of these names an option fully implemented here, so a
+	 * positive value is the honest answer even though <unistd.h>
+	 * defines no matching _POSIX_* constant for it. */
 	case _SC_FSYNC: return _POSIX_VERSION;           /* src/unistd/fsync.c */ // NOLINT(bugprone-branch-clone) -- each selector reports a distinct implemented interface and must remain independently adjustable when feature levels diverge
 	case _SC_REGEXP: return _POSIX_VERSION;          /* src/regex/regex.c */
 	case _SC_SPAWN: return _POSIX_VERSION;           /* src/process/posix_spawn.c */
@@ -131,46 +115,26 @@ long sysconf(int name)
 
 	/* ---- the rest of the mandated list: -1, errno untouched ---- */
 	/*
-	 * Absent option groups, by what is missing:
+	 * Absent option groups, by what is missing: no prioritized AIO
+	 * (_SC_PRIORITIZED_IO); no typed memory objects
+	 * (_SC_TYPED_MEMORY_OBJECTS, _SC_XOPEN_SHM); no development
+	 * utilities (the _SC_2_* set, including _SC_SHELL -- system()/
+	 * popen() run %ComSpec%, not a POSIX shell); declined outright
+	 * (_SC_TRACE*, _SC_SPORADIC_SERVER, _SC_PRIORITY_SCHEDULING,
+	 * _SC_XOPEN_CRYPT, _SC_ADVISORY_INFO, _SC_IPV6/_SC_RAW_SOCKETS).
+	 * _SC_JOB_CONTROL/_SC_SAVED_IDS: NT has no process groups to
+	 * stop/resume, and src/unistd/ids.c has no saved-set id.
 	 *
-	 *   no prioritized AIO      -- _SC_PRIORITIZED_IO
-	 *   no typed memory objects -- _SC_TYPED_MEMORY_OBJECTS, _SC_XOPEN_SHM
-	 *   no utilities            -- the _SC_2_* development-utility set
-	 *                              (c99, fort77, localedef, PBS, ...);
-	 *                              sh/ implements a documented subset of
-	 *                              sh, and system()/popen() run %ComSpec%
-	 *                              rather than a POSIX shell, so
-	 *                              _SC_SHELL goes with them
-	 *   declined outright       -- _SC_TRACE*, _SC_SPORADIC_SERVER,
-	 *                              _SC_PRIORITY_SCHEDULING,
-	 *                              _SC_XOPEN_CRYPT (crypt() is
-	 *                              undefined-ok), _SC_ADVISORY_INFO
-	 *                              (posix_madvise() needs mman),
-	 *                              _SC_IPV6/_SC_RAW_SOCKETS
-	 *                              (<netinet/in.h>'s banner)
+	 * The eight programming-model names are declined deliberately:
+	 * x86_64-win32 is LLP64 (none of the four fit), and even where
+	 * i386-win32 would fit ILP32_OFFBIG, confstr() can't supply the
+	 * matching _CS_POSIX_V7_ILP32_OFFBIG_* build flags -- claiming a
+	 * model whose flags are unobtainable is worse than declining it.
 	 *
-	 * _SC_JOB_CONTROL and _SC_SAVED_IDS answered -1 before this list
-	 * existed and keep doing so: NT has no process groups to stop and
-	 * resume, and src/unistd/ids.c has one fixed identity with no
-	 * saved-set to switch between.
-	 *
-	 * The eight programming-model names are a deliberate decline
-	 * rather than an oversight.  x86_64-win32 is LLP64, which is none
-	 * of ILP32_OFF32/ILP32_OFFBIG/LP64_OFF64/LPBIG_OFFBIG, and even
-	 * where i386-win32 would fit ILP32_OFFBIG a positive answer is
-	 * only actionable together with the _CS_POSIX_V7_ILP32_OFFBIG_*
-	 * flags, which confstr() cannot supply (see this file's confstr()
-	 * and the defect recorded against it).  Claiming a model whose
-	 * build flags are unobtainable is worse than declining it.
-	 *
-	 * _SC_LOGIN_NAME_MAX, _SC_GETPW_R_SIZE_MAX and
-	 * _SC_GETGR_R_SIZE_MAX are the "no limit" case rather than the
-	 * "no option" one, and answer -1 for that reason: the record
-	 * src/misc/pwd.c hands back is built out of %USERNAME%,
-	 * %USERPROFILE% and %ComSpec%, environment strings with no bound
-	 * this library imposes, so any fixed maximum printed here would
-	 * be a guess.  Callers grow the buffer on [ERANGE], which is the
-	 * contract those functions already have.
+	 * _SC_LOGIN_NAME_MAX/_SC_GETPW_R_SIZE_MAX/_SC_GETGR_R_SIZE_MAX are
+	 * the "no limit" case, not "no option": src/misc/pwd.c's records
+	 * come from unbounded environment strings, so any fixed maximum
+	 * here would be a guess; callers grow the buffer on ERANGE instead.
 	 */
 	case _SC_JOB_CONTROL:
 	case _SC_SAVED_IDS:
@@ -238,19 +202,14 @@ long sysconf(int name)
 	}
 }
 
-/* pathconf()/fpathconf().  Unlike sysconf() this one is NOT obliged to
- * answer every mandated name: fpathconf.html lists "[EINVAL] The
- * implementation does not support an association of the variable name
- * with the specified file" as a *may fail*, so refusing a variable that
- * means nothing for the file in hand is conforming.  What is not
- * conforming is the name failing to exist, which is why <unistd.h>
+/* pathconf()/fpathconf(). Unlike sysconf(), this one may EINVAL a
+ * mandated name if it's inapplicable to the file (fpathconf.html: a
+ * *may fail*) -- but the name itself must still exist, hence <unistd.h>
  * defines all 21 either way.
  *
- * Nothing here looks at path or fd yet -- every answer below is a
- * property of this library or of NT, not of the individual file -- so
- * fpathconf() is implemented by forwarding, which also makes the two
- * entry points agree by construction rather than by parallel
- * maintenance. */
+ * Nothing here looks at path or fd -- every answer is a property of this
+ * library/NT, not the file -- so fpathconf() just forwards, keeping the
+ * two entry points in agreement by construction. */
 long pathconf(const char *path, int name)
 {
 	(void)path;
@@ -277,19 +236,12 @@ long pathconf(const char *path, int name)
 	 * express. */
 	case _PC_TIMESTAMP_RESOLUTION: return 100;
 
-	/* The remaining seven are the "may fail" case the header comment
-	 * describes, answered as "no limit / not supported" -- -1 with
-	 * errno untouched -- rather than [EINVAL]:
-	 *
-	 *   _PC_ASYNC_IO, _PC_PRIO_IO, _PC_SYNC_IO name the aio and
-	 *   prioritized/synchronized-I/O options, which sysconf() above
-	 *   also declines;
-	 *   _PC_ALLOC_SIZE_MIN and the three _PC_REC_* are the XSI
-	 *   recommended-transfer-size set, which would have to come from
-	 *   the volume's cluster geometry per file.  This function does
-	 *   not open path, so any number printed here would be invented,
-	 *   and pathconf.html's own APPLICATION USAGE treats these as
-	 *   advisory rather than required. */
+	/* The remaining seven answer "no limit / not supported" (-1, errno
+	 * untouched) rather than EINVAL: _PC_ASYNC_IO/_PC_PRIO_IO/
+	 * _PC_SYNC_IO are the aio/prioritized-I/O options sysconf() also
+	 * declines; _PC_ALLOC_SIZE_MIN and the three _PC_REC_* would need
+	 * the volume's cluster geometry per file, which this function
+	 * can't produce without opening path. */
 	case _PC_ASYNC_IO:
 	case _PC_PRIO_IO:
 	case _PC_SYNC_IO:
@@ -307,18 +259,14 @@ long pathconf(const char *path, int name)
 long fpathconf(int fd, int name) { (void)fd; return pathconf("", name); } // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 int getpagesize(void) { return 4096; }
 int getdtablesize(void) { return FD_MAX; }
-/* confstr.html RETURN VALUE: an invalid name is 0 with [EINVAL], not the
- * 1 that a lone terminating null would account for and not (size_t)-1.
- * The name set is closed here rather than defaulted, which is what makes
- * that reachable: <unistd.h> defines exactly one _CS_* constant, so
- * every name but _CS_PATH is invalid, and a name added to the header has
- * to gain a case below with it.
+/* confstr.html: an invalid name returns 0 with EINVAL, not 1 or
+ * (size_t)-1. <unistd.h> defines exactly one _CS_* constant (_CS_PATH),
+ * so every other name is invalid here.
  *
- * POSIX's other zero -- a valid name with no configuration-defined
- * value, which returns 0 with errno UNCHANGED -- has no name to reach it
- * in this tree.  A case wanting it cannot just set s to "": the tail
- * below counts the null it writes and returns 1.
- */
+ * POSIX's other zero case -- a valid name with no configuration-defined
+ * value, returning 0 with errno unchanged -- has no name to reach it in
+ * this tree; a case wanting it can't just set s to "", since the tail
+ * below counts the null it writes and returns 1. */
 size_t confstr(int name, char *buf, size_t len)
 {
 	const char *s;

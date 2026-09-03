@@ -2,75 +2,35 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * crypt()/encrypt()/setkey(): the traditional Unix DES-based password
- * hashing family. Previously marked undefined-ok on the theory that "DES
- * password hashing is not something this library implements from
- * scratch" -- but DES is fully specified (FIPS 46-3) and standalone from
- * scratch is exactly what other from-scratch libcs do (musl's own
- * src/crypt/crypt_des.c). This is a plain, portable ISO C implementation
- * of the algorithm: no platform dependency, so it is one of the few
- * src/unistd/*.c files with no nt/ or linux/ backend at all.
+ * hashing family, a plain portable ISO C implementation with no platform
+ * backend. crypt.html leaves the algorithm implementation-defined; this
+ * is the traditional 2-character-salt DES every historical crypt(3) (V7,
+ * BSD, glibc's descrypt) agrees on, for real interoperability:
  *
- * crypt.html: "The algorithm is implementation-defined" -- POSIX does
- * not mandate DES, only that "the first two bytes of [salt] may be used
- * to perturb the encoding algorithm". This implements the traditional,
- * de facto standard algorithm every historical crypt(3) (V7, BSD,
- * glibc's descrypt) agrees on, since that is the one with real
- * interoperability value (matching real /etc/passwd-style hashes):
+ *   1. Up to 8 password bytes, low 7 bits each, become a 56-bit DES key.
+ *   2. The 2-character salt decodes to 12 bits; bit i set swaps the
+ *      48-bit E-expansion's bits i and i+24 every round -- the "perturb
+ *      the encoding algorithm" salt.html describes.
+ *   3. The all-zero block is DES-encrypted, with that modified
+ *      E-expansion, 25 times chained.
+ *   4. salt + the 64-bit result, padded to 66 bits and regrouped into 11
+ *      six-bit groups, mapped through the crypt64 alphabet ("./0-9A-Za-z"),
+ *      is the 13-character result.
  *
- *   1. Up to the first 8 bytes of the password, each truncated to its
- *      low-order 7 bits, become a 56-bit DES key (the 8th/parity bit of
- *      each byte is left 0; DES's own key schedule (PC1) never reads
- *      it, so its value is moot).
- *   2. The 2-character salt is decoded to a 12-bit integer (6 bits per
- *      character, first character low). For i in 0..11, if salt bit i
- *      is set, DES's 48-bit E-expansion output has bits i and i+24
- *      swapped, every round -- this is the "perturb the encoding
- *      algorithm" the salt exists for, and specifically what stops
- *      off-the-shelf DES hardware/software from being reused to attack
- *      it. (Independently confirmed against
- *      https://www.usenix.org/legacyurl/traditional-crypt, "if bit i of
- *      the salt is set, then bits i and i+24 are swapped in the DES
- *      E-box output".)
- *   3. The all-zero 64-bit block is DES-encrypted, with that modified
- *      E-expansion, 25 times in a row (each iteration's ciphertext is
- *      the next iteration's plaintext).
- *   4. The salt (verbatim) followed by the final 64-bit result -- padded
- *      to 66 bits with two trailing zero bits, then regrouped into 11
- *      six-bit groups MSB-first -- each mapped through the crypt64
- *      alphabet ("./0-9A-Za-z") is the 13-character result.
+ * The DES core was verified against the FIPS 46-3 known-answer test and
+ * its tables cross-checked against Openwall John the Ripper's DES_std.c;
+ * crypt()'s wrapper against two known-answer outputs test/posix-unistd.c's
+ * test_crypt() also pins.
  *
- * The DES core (permute()/key_schedule()/des_block(), and every table)
- * was verified, before this file was written, against the official
- * FIPS 46-3 known-answer test (key 0x133457799BBCDFF1, plaintext
- * 0x0123456789ABCDEF, ciphertext 0x85E813540F0AB405) in a standalone
- * driver, and the IP/E/P/PC1/PC2/S1 tables independently cross-checked
- * entry-for-entry against Openwall John the Ripper's DES_std.c.
- * crypt()'s own salt/chaining/encoding wrapper was verified the same
- * way against two known-answer crypt(3) outputs from mogest/unix-
- * crypt's test suite, which test/posix-unistd.c's test_crypt() also
- * pins: crypt("test","PQ") == "PQl1.p7BcJRuM" and
- * crypt("much longer password here","xx") == "xxtHrOGVa3182".
+ * Extended ($1$/$2a$/$5$/$6$) variants are not implemented -- traditional
+ * DES is the POSIX-mandatory minimum, and a salt using their alphabet
+ * ('$', '_', ...) already fails EINVAL below, same as a real
+ * multi-algorithm crypt() rejects a hash it was built without.
  *
- * Extended (glibc _crypt_blowfish-style "$1$"/"$2a$"/"$5$"/"$6$")
- * variants are deliberately not implemented -- traditional 2-character-
- * salt DES is the POSIX-mandatory minimum, the others are a much larger
- * surface for no required-behaviour gain, and crypt() already has the
- * right failure mode for a salt it does not understand: since none of
- * '$', '_' etc. are in the traditional salt alphabet, ascii_to_bin()-
- * style validation below rejects them with EINVAL, same as a real
- * multi-algorithm crypt() rejects a salt naming a hash it was built
- * without.
- *
- * encrypt()/setkey() (crypt.html's less-used siblings) are the same DES
- * core with no salt and no 25x chaining: setkey() loads a caller-given
- * 64-bit key (as 64 ASCII '0'/'1' characters, bit 1 first) into
- * module-static subkeys; encrypt() runs a single forward (edflag == 0)
- * or reverse (edflag != 0) DES pass over a caller-given 64-bit block (in
- * the same 64-character representation), in place. Like rand()/srand()
- * (src/stdlib/rand.c), the shared state is a plain static, not
- * thread-local: POSIX does not require either family to be thread-safe,
- * and setkey() explicitly documents "The effect ... when ... called
- * from more than one thread ... is unspecified."
+ * encrypt()/setkey() are the same DES core with no salt/chaining: keys
+ * and blocks are 64 ASCII '0'/'1' bytes, bit 1 first. Like rand()/srand(),
+ * the shared state is a plain static, not thread-local -- POSIX allows
+ * that ("effect ... called from more than one thread ... is unspecified").
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -139,9 +99,7 @@ static const unsigned char Sbox[8][64] = {
 
 /* Extract table[i]'s 1-indexed bit (MSB-first) from `in` (`inbits` wide,
  * right-justified) for i in 0..outbits-1, and pack the results MSB-first
- * into an outbits-wide, right-justified result. Used for every fixed
- * permutation/selection/compression table above (IP, FP, E, P, PC1,
- * PC2), which differ only in table contents and in/out widths. */
+ * into an outbits-wide, right-justified result. */
 static uint64_t permute(uint64_t in, const unsigned char *table, int outbits, int inbits)
 {
 	uint64_t out = 0;
@@ -160,11 +118,9 @@ static uint32_t rotl28(uint32_t v, int n)
 	return ((v << n) | (v >> (28 - n))) & 0x0FFFFFFFu;
 }
 
-/* Standard DES key schedule: PC1 selects 56 of the 64 key bits (the
- * other 8 are the traditional per-byte parity bits, never read), split
- * into two 28-bit halves that are independently left-rotated by
- * SHIFTS[round] before each round's subkey is PC2's 48-bit selection of
- * the concatenated result. */
+/* Standard DES key schedule: PC1 selects 56 of the 64 key bits (the other
+ * 8 are parity, never read), split into two 28-bit halves rotated by
+ * SHIFTS[round] before each round's subkey is PC2's 48-bit selection. */
 static void key_schedule(uint64_t key, uint64_t subkeys[16])
 {
 	uint64_t cd = permute(key, PC1, 56, 64);
@@ -178,11 +134,8 @@ static void key_schedule(uint64_t key, uint64_t subkeys[16])
 	}
 }
 
-/* One full DES pass (IP, 16 Feistel rounds, FP) over a 64-bit block.
- * `decrypt` runs the round keys in reverse order, the standard way DES
- * decryption reuses the same Feistel network as encryption. `salt12`,
- * if nonzero, is crypt()'s salt: for i in 0..11, bit i set swaps the
- * 48-bit E-expansion's bit i and bit i+24 every round (see this file's
+/* One full DES pass (IP, 16 Feistel rounds, FP). `decrypt` runs the round
+ * keys in reverse order. `salt12`, if nonzero, is crypt()'s salt (see the
  * banner); 0 leaves E unmodified, which is what encrypt()/setkey() want
  * -- plain DES has no salt. */
 static uint64_t des_block(uint64_t block, const uint64_t subkeys[16], unsigned salt12, int decrypt)
@@ -229,10 +182,8 @@ static uint64_t des_block(uint64_t block, const uint64_t subkeys[16], unsigned s
 
 static const char crypt64[] = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/* Inverse of crypt64[]: -1 for a byte outside the traditional salt/
- * output alphabet. Same mapping crypt(3) has always used, and the one
- * this file's banner cites being cross-checked against musl's
- * src/crypt/crypt_des.c ascii_to_bin(). */
+/* Inverse of crypt64[]: -1 for a byte outside the traditional salt/output
+ * alphabet. */
 static int crypt64_val(unsigned char c)
 {
 	if (c == '.') return 0;
@@ -243,17 +194,11 @@ static int crypt64_val(unsigned char c)
 	return -1;
 }
 
-/* crypt.html DESCRIPTION/RETURN VALUE: see this file's banner for the
- * algorithm. Returns a pointer to a static buffer, overwritten by the
- * next call -- crypt() has never been required to be reentrant
- * (crypt_r() is the POSIX answer for that, not implemented here: no
- * caller in this tree needs it, and it is a thin reentrant wrapper
- * around exactly this algorithm, not a new one).
- *
- * key/salt are required (include/unistd.h marks both nonnull): every
- * real caller (test/posix-unistd.c, third_party/libc-test's crypt.c)
- * passes real strings, and there is no defined behaviour to fall back
- * to for a NULL password or salt. */
+/* Returns a pointer to a static buffer, overwritten by the next call --
+ * crypt() has never been required to be reentrant (crypt_r() is the
+ * POSIX answer for that, not implemented here). key/salt are required
+ * (include/unistd.h marks both nonnull); no defined behaviour exists for
+ * a NULL password or salt. */
 char *crypt(const char *key, const char *salt)
 {
 	static char out[14];
@@ -297,17 +242,14 @@ char *crypt(const char *key, const char *salt)
 	return out;
 }
 
-/* setkey.html/encrypt.html DESCRIPTION: both represent a 64-bit
- * quantity as 64 ASCII '0'/'1' bytes, most significant bit (DES bit 1)
- * first -- the array-of-bits interface XSI defines instead of crypt()'s
- * packed password/salt strings. Shared, plain-static (not per-thread)
- * subkey state: see this file's banner for why. */
+/* setkey.html/encrypt.html: a 64-bit quantity as 64 ASCII '0'/'1' bytes,
+ * MSB (DES bit 1) first -- the array-of-bits interface XSI defines
+ * instead of crypt()'s packed strings. */
 static uint64_t despriv_subkeys[16];
 
-/* block/key are required (include/stdlib.h and include/unistd.h mark
- * both nonnull): both pages describe them as fixed 64-element arrays
- * with no null-pointer provision, and every element is read (or written
- * back, for encrypt()) unconditionally. */
+/* block/key are required (include/stdlib.h and include/unistd.h mark both
+ * nonnull): both pages describe fixed 64-element arrays with no
+ * null-pointer provision. */
 void setkey(const char *key)
 {
 	uint64_t keybits = 0;
