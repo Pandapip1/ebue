@@ -6,23 +6,15 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * ioctl(): NOT a POSIX interface -- POSIX deliberately specifies
- * termios(3) (include/termios.h) instead of a general ioctl(2) for
- * terminal control, precisely because ioctl request numbers and
- * semantics are not standardized across systems. This header exists
- * anyway because it is a de-facto-universal BSD/SVR4 extension that a
- * large amount of portable-in-practice code assumes exists alongside
- * termios.h (FIONREAD and TIOCGWINSZ above all). Implemented in
- * src/ioctl/ioctl.c, which documents the exact, small set of requests
- * given a real answer here and what an unrecognised request does
- * (nothing silent -- see that file's banner).
+ * ioctl(): NOT a POSIX interface -- POSIX specifies termios(3) instead,
+ * precisely because ioctl request numbers and semantics are not
+ * standardized. This header exists anyway as a de-facto-universal BSD/
+ * SVR4 extension a large amount of portable-in-practice code assumes
+ * exists alongside termios.h. Implemented in src/ioctl/ioctl.c, which
+ * documents the small set of requests given a real answer.
  *
- * Request numbers below match Linux's (asm-generic/ioctls.h) rather
- * than inventing new ones: nothing in POSIX or any other standard
- * assigns these values, but a huge amount of existing source calls
- * ioctl() with the numeric macro from <sys/ioctl.h>, never a literal,
- * so matching the most common convention costs nothing and avoids
- * surprising a portable program that happens to hardcode one anyway.
+ * Request numbers match Linux's (asm-generic/ioctls.h) rather than
+ * inventing new ones, since a lot of existing source hardcodes them.
  */
 #ifndef _SYS_IOCTL_H
 #define _SYS_IOCTL_H
@@ -43,13 +35,8 @@ struct winsize {
 };
 #define TIOCGWINSZ 0x5413
 
-/* FIONREAD: bytes immediately readable without blocking. Real for a
- * pipe (the same NtQueryInformationFile(FilePipeLocalInformation)
- * ReadDataAvailable field src/select/select.c's __fd_probe() already
- * queries for pipe readability -- not duplicated logic, the same NT
- * mechanism applied to get a byte count instead of a boolean) and for
- * a regular file (bytes remaining until EOF, via
- * FileStandardInformation/FilePositionInformation). Not supported for
+/* FIONREAD: bytes immediately readable without blocking. Real for a pipe
+ * and for a regular file (bytes remaining until EOF); not supported for
  * anything else -- see src/ioctl/ioctl.c. */
 #define FIONREAD 0x541B
 
