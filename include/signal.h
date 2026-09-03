@@ -49,34 +49,13 @@ extern "C" {
 #define SI_USER 0
 #define SI_KERNEL 128
 
-/* si_code values for the hardware-fault signals (SIGILL/SIGFPE/SIGSEGV/
- * SIGBUS), the ones src/signal/signal.c's exception_handler() derives
- * from the NT EXCEPTION_RECORD -- see the derivation comments there for
- * how each is actually computed. Numeric values match musl/glibc's
- * bits/signal.h so a program that hardcodes these numbers instead of
- * the names still behaves the same as on Linux; POSIX itself only
- * requires the names, not particular values.
- *
- * signal.h.html's si_code table is marked [CX], which is the standard's
- * marker for an extension to ISO C that POSIX requires and not an
- * option group, so every Code column entry is mandatory regardless of
- * what this platform can raise. Each name below therefore says in its
- * comment which NT exception status produces it, or that nothing does:
- * defining a value promises only that it is a value si_code may hold,
- * never that this system produces it -- the same reasoning the CLD_*
- * block below spells out, and the same way defining EROFS promises no
- * errno will ever be it. A handler that cannot name a code cannot have
- * a default branch for it either, so a `switch (si_code)` covering all
- * eight ILL_* is a hard build failure rather than a graceful fallback.
- *
- * The values are distinct within each signal's own group, which is the
- * property that makes the table usable: si_code is compared for
- * equality, so two reasons for the same signal sharing a value would
- * leave a handler unable to tell them apart.
- *
+/* si_code values for SIGILL/SIGFPE/SIGSEGV/SIGBUS, derived from the NT
+ * EXCEPTION_RECORD by src/signal/signal.c's exception_handler(). All
+ * POSIX-mandated codes are defined even where NT never produces them
+ * (each such macro below says so), since a `switch (si_code)` covering
+ * every case must still compile. Numeric values match musl/glibc.
  * SEGV_BNDERR, SEGV_PKUERR, SEGV_MTEAERR, SEGV_MTESERR, BUS_MCEERR_AR
- * and BUS_MCEERR_AO stay out: those are Linux extensions, not POSIX
- * table entries, and nothing on this platform reports them. */
+ * and BUS_MCEERR_AO stay out: those are Linux extensions, not POSIX. */
 #define ILL_ILLOPC 1   /* EXCEPTION_ILLEGAL_INSTRUCTION */
 #define ILL_ILLOPN 2   /* not produced: EXCEPTION_ILLEGAL_INSTRUCTION is
                         * NT's whole vocabulary for an undecodable
@@ -124,32 +103,12 @@ extern "C" {
 #define BUS_OBJERR 3   /* EXCEPTION_IN_PAGE_ERROR: a mapped object's backing
                         * store could not supply the faulted page */
 
-/* si_code values for SIGCHLD (waitid.html, basedefs/signal.h.html).
- * All six are defined even though ntlibc produces only five of them,
- * on the same footing as the fault subcodes above: CLD_* is the
- * ordinary vocabulary of wait-family status reporting, which any
- * portable SIGCHLD handler may switch over without doing anything
- * platform-specific.  A `switch (si_code)` covering all six is
- * guaranteed to compile by POSIX, and breaking that is a hard build
- * failure, not a graceful fallback.  Defining a value promises only
- * that it is a value si_code may hold, never that this system produces
- * it -- the same way defining EROFS promises no errno will ever be it.
- *
- * waitid() produces CLD_EXITED, CLD_KILLED and CLD_DUMPED, and -- for a
- * child this library itself stopped -- CLD_STOPPED and CLD_CONTINUED:
- * kill(pid, SIGSTOP) is NtSuspendProcess and kill(pid, SIGCONT) is
- * NtResumeProcess (src/signal/signal.c), and because the stop is one
- * ntlibc performed rather than one it must be told about, it needs no
- * notification from NT to report it (src/process/wait.c).
- *
- * CLD_TRAPPED is defined for source compatibility and is never
- * produced: it reports a child stopped by a *trace* trap, and this
- * library has no ptrace and no debugger interface for one to come
- * from.  A child suspended by something outside this library is
- * likewise unreportable -- an NT process object transitions to
- * signalled exactly once, on termination, so there is no waitable stop
- * transition and nothing to poll -- but that is not what any CLD_* code
- * above describes either.  Numeric values match musl/glibc, as above. */
+/* si_code values for SIGCHLD. All six are defined for POSIX conformance
+ * though CLD_TRAPPED is never produced: it reports a trace-trap stop,
+ * and this library has no ptrace/debugger interface. waitid() produces
+ * the other five; CLD_STOPPED/CLD_CONTINUED come from ntlibc's own
+ * kill(SIGSTOP/SIGCONT) (NtSuspendProcess/NtResumeProcess), not from an
+ * NT notification. Numeric values match musl/glibc. */
 #define CLD_EXITED    1
 #define CLD_KILLED    2
 #define CLD_DUMPED    3
@@ -244,17 +203,8 @@ int __libc_current_sigrtmax(void);
 
 int kill(pid_t, int);
 
-/* The whole sigset_t-taking family below shares one contract: every
- * real body (src/signal/signal.c) touches its set argument(s)
- * unconditionally -- memset() for sigemptyset()/sigfillset(),
- * s->__bits[...] for sigaddset()/sigdelset()/sigismember(), a loop
- * over ->__bits for sigisemptyset()/sigorset() -- with no NULL check
- * anywhere in this file, and no real call site in this tree (~230
- * combined, across src/ and test/) ever passes one. The sig argument
- * to sigismember() is NOT marked nonnull-relevant (it is an int, not
- * a pointer); the sig_valid(sig) range check inside sigismember() is
- * a different fact from the nullability of s and does not guard it
- * either way. */
+/* Every sigset_t-taking function below dereferences its set argument(s)
+ * unconditionally, with no NULL check in its implementation. */
 int sigemptyset(sigset_t *) __attribute__((nonnull(1)));
 int sigfillset(sigset_t *) __attribute__((nonnull(1)));
 int sigaddset(sigset_t *, int) __attribute__((nonnull(1)));
@@ -264,40 +214,23 @@ int sigismember(const sigset_t *, int) __attribute__((nonnull(1)));
 int sigprocmask(int, const sigset_t *__restrict, sigset_t *__restrict);
 int sigsuspend(const sigset_t *);
 int sigaction(int, const struct sigaction *__restrict, struct sigaction *__restrict);
-/* s forwarded, unconditionally and with no guard of its own, straight
- * into the required `d` argument of sigorset(d, a, b) -- the identical
- * "readdir_r entry forwarded into fill(), also required" shape the
- * 9be895e sweep already established, not a fresh judgment call. */
 int sigpending(sigset_t *) __attribute__((nonnull(1)));
-/* s (the wait set) is dereferenced unconditionally (`waiting_set =
- * *s;`) with no guard; sig is deliberately NOT marked -- `if (sig)
- * *sig = selected;` is a real, live guard in the body of sigwait()
- * (no real caller in this tree exercises the NULL path, but the guard
- * itself is not decoration to be told is dead code -- same standard
- * the 9be895e setenv/unsetenv precedent applies). */
+/* sig is deliberately NOT marked: sigwait() guards it with a real
+ * `if (sig) *sig = selected;`. */
 int sigwait(const sigset_t *__restrict, int *__restrict) __attribute__((nonnull(1)));
 int pthread_sigmask(int, const sigset_t *__restrict, sigset_t *__restrict);
-/* set required (`waiting_set = *set;`, unconditional, no guard); info
- * is forwarded into take_pending_from_set()/take_pending_signal_from(),
- * which itself only writes through it behind a real `if (si) *si =
- * ...;` guard -- genuinely optional, not left unmarked by oversight. */
+/* info is optional: sigwaitinfo() only writes through it behind a real
+ * `if (si) *si = ...;` guard. */
 int sigwaitinfo(const sigset_t *__restrict, siginfo_t *__restrict) __attribute__((nonnull(1)));
-/* set required, same as sigwaitinfo() above. info is optional for the
- * same reason. timeout is deliberately NOT marked despite being
- * unconditionally tested (`if (!timeout || timeout->tv_sec < 0 ...)`)
- * -- that IS the guard: a real, live NULL check whose current effect
- * (EINVAL) is what a caller here observes, not something `nonnull`
- * may tell the compiler is unreachable. */
+/* timeout is deliberately NOT marked: sigtimedwait() has a real, live
+ * NULL check (`if (!timeout || ...) return EINVAL;`). */
 int sigtimedwait(const sigset_t *__restrict, siginfo_t *__restrict, const struct timespec *__restrict) __attribute__((nonnull(1)));
 int sigqueue(pid_t, int, union sigval);
 
 int sigaltstack(const stack_t *__restrict, stack_t *__restrict);
 
-/* pinfo is dereferenced unconditionally (`psignal(pinfo->si_signo,
- * s);`); every real call site in this tree (test/posix-signal.c,
- * test/posix-unreferenced.c) passes &si, never NULL. s (the optional
- * message prefix) is unaffected -- psignal() itself already guards it
- * with a real `if (s && *s)`. */
+/* pinfo is dereferenced unconditionally; s (the message prefix) is
+ * optional -- psignal() itself guards it with `if (s && *s)`. */
 void psiginfo(const siginfo_t *, const char *) __attribute__((nonnull(1)));
 
 #endif
@@ -312,15 +245,9 @@ int sigignore(int);
 int sighold(int);
 int sigrelse(int);
 void (*sigset(int, void (*)(int)))(int);
-/* basedefs/signal.h.html requires SIG_HOLD alongside sigset(): it is
- * both an argument to sigset() ("If func is SIG_HOLD, sig shall be
- * added to the calling process' signal mask") and its "the signal had
- * been blocked" return value.  2 continues the SIG_DFL 0 / SIG_IGN 1
- * sequence at the bottom of this header (same value musl and glibc
- * use), which is all the standard asks of it: SIG_HOLD only has to be
- * distinguishable from SIG_DFL, SIG_IGN, SIG_ERR and from the address
- * of any function a caller could actually pass, and no target this
- * library builds for can place code at 2. */
+/* 2 continues the SIG_DFL 0 / SIG_IGN 1 sequence below (same value
+ * musl and glibc use); just needs to be distinguishable from those,
+ * SIG_ERR, and any real function address. */
 #define SIG_HOLD ((void (*)(int)) 2)
 #define TRAP_BRKPT 1
 #define TRAP_TRACE 2

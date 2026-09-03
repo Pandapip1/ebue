@@ -149,10 +149,8 @@ extern int optind, opterr, optopt;
 long pathconf(const char *, int);
 long fpathconf(int, int);
 long sysconf(int);
-/* buf is deliberately NOT required: confstr(name, NULL, 0) -- query the
- * needed length without writing anything -- is real and
- * POSIX-documented (confstr.html: "If len is 0 ... buf may be a null
- * pointer"). */
+/* buf is NOT required: confstr(name, NULL, 0) queries the needed length
+ * without writing anything. */
 size_t confstr(int, char *, size_t);
 
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
@@ -182,33 +180,23 @@ void swab(const void *__restrict, void *__restrict, ssize_t) __attribute__((nonn
 #if (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE+0 < 700) \
  || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 int usleep(unsigned);
-unsigned ualarm(unsigned, unsigned);  /* undefined-ok on NT: alarm()'s NT
-	timer (src/unistd/sleep.c) can carry a microsecond deadline, but
-	ualarm()'s second argument makes it a repeating timer, and repeating
-	cannot be honoured there -- SIGALRM is delivered by an APC that only
-	runs while the thread is in an alertable wait, so a missed expiry
-	arrives as one delivery rather than a series. Linux has a real,
-	repeating setitimer(ITIMER_REAL, ...) (src/time/linux/plat_itimer.c)
-	and ualarm() is defined in terms of it in
-	src/unistd/linux/plat_ualarm.c. */
+unsigned ualarm(unsigned, unsigned);  /* undefined-ok on NT: its second
+	(repeating-interval) argument can't be honoured -- NT's SIGALRM timer
+	is an APC delivered only during an alertable wait, so a missed expiry
+	is a single delivery, not a series. Real on Linux via setitimer(). */
 #endif
 
 #if defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 #define L_SET 0
 #define L_INCR 1
 #define L_XTND 2
-int brk(void *);  /* undefined-ok on NT: this library's allocator is NT's
-	private heap (RtlAllocateHeap, src/malloc/malloc.c), not a single
-	growable brk-style arena, and there is no NT primitive shaped like
-	brk(). Linux has a real brk(2) syscall and a real, independent
-	program-break, separate from this library's own mmap(2)-based
-	malloc() there (src/malloc/linux/plat_malloc.c) -- implemented in
-	src/unistd/linux/plat_brk.c, the same way musl and glibc both ship a
-	real brk()/sbrk() alongside their own mmap-based mallocs. */
+int brk(void *);  /* undefined-ok on NT: allocator is NT's private heap
+	(RtlAllocateHeap), not a growable brk-style arena. Real on Linux
+	(brk(2)), independent of this library's own mmap-based malloc(). */
 void *sbrk(intptr_t);  /* undefined-ok: see brk */
 pid_t vfork(void);
-int vhangup(void);  /* undefined-ok: hangs up a Unix controlling terminal,
-	a session/tty concept this library does not model */
+int vhangup(void);  /* undefined-ok: session/tty concept this library
+	does not model */
 int chroot(const char *);
 int getpagesize(void);
 int getdtablesize(void);
@@ -220,36 +208,21 @@ int getdomainname(char *, size_t);  /* undefined-ok: NIS/YP domain name,
 int setdomainname(const char *, size_t);  /* undefined-ok: see getdomainname */
 char *getpass(const char *);  /* undefined-ok: needs echo-off terminal
 	input; this library has no termios-style tty control */
-int daemon(int, int);  /* src/unistd/daemon.c: fork()+setsid(), the same
-	BSD idiom real fork() (src/process/fork.c, RtlCloneUserProcess-
-	backed, already used by vfork() -- src/unistd/vfork.c -- and by
-	this tree's own *-win.c fork tests) is a perfectly good foundation
-	for -- CONTRIBUTING.md's Wine caveat is about *running the test
-	suite for it* under an unpatched Wine, not about whether fork()
-	itself works on real NT (it does) */
+int daemon(int, int);  /* implemented as fork()+setsid(), the standard
+	BSD idiom; fork() itself is real on NT (RtlCloneUserProcess-backed) */
 void setusershell(void);  /* undefined-ok on NT: /etc/shells enumeration,
-	no such file or concept there. Linux has a real, simple,
-	line-oriented /etc/shells this library just reads, in
-	src/unistd/linux/plat_shells.c. */
+	no such file or concept there. Real on Linux (reads /etc/shells). */
 void endusershell(void);  /* undefined-ok: see setusershell */
 char *getusershell(void);  /* undefined-ok: see setusershell */
 int acct(const char *);  /* undefined-ok on NT: Unix process accounting is
-	a kernel facility NT has no equivalent of. Linux has a real acct(2)
-	syscall and does define this one, in src/unistd/linux/plat_unistd.c. */
+	a kernel facility NT has no equivalent of. Real on Linux (acct(2)). */
 long syscall(long, ...);  /* undefined-ok on NT: no stable, numbered
-	raw-syscall ABI exposed to user mode the way this presumes; the Nt*
-	entry points this library calls directly are the closest analogue.
-	Linux has exactly that ABI and does define this one, in
-	src/unistd/linux/plat_unistd.c. */
+	raw-syscall ABI exposed to user mode; the Nt* entry points this
+	library calls directly are the closest analogue. Real on Linux. */
 int execvpe(const char *, char *const [], char *const []);
 int issetugid(void);
-/* src/unistd/getentropy.c: real on Linux (src/unistd/linux/plat_unistd.c's
- * __plat_getentropy(), getrandom(2)) and, under NTLIBC_USE_KERNEL32,
- * real on NT too (src/unistd/nt/plat_unistd.c's __plat_getentropy(),
- * BCryptGenRandom -- the same "fall back to kernel32" escape hatch
- * src/unistd/ids.c's advapi32 use and src/signal/signal.c's
- * SetConsoleCtrlHandler use already exercise). The default ntdll-only
- * NT build has no fallback to reach and reports ENOSYS. */
+/* Real on Linux (getrandom(2)) and, under NTLIBC_USE_KERNEL32, on NT
+ * (BCryptGenRandom). The default ntdll-only NT build reports ENOSYS. */
 int getentropy(void *, size_t);
 extern int optreset;
 #endif
@@ -257,28 +230,20 @@ extern int optreset;
 #ifdef _GNU_SOURCE
 extern char **environ;
 int setresuid(uid_t, uid_t, uid_t);  /* undefined-ok on NT: real/effective/
-	saved IDs are a Linux-specific refinement of Unix credentials; this
-	library's getuid()/geteuid() (src/unistd/ids.c) already report a
-	single fixed identity there, so there is nothing for the triple to
-	select between. Linux has real setresuid(2)/setresgid(2)/
-	getresuid(2)/getresgid(2) syscalls with real, distinct
-	ruid/euid/suid, and does define all four, in
-	src/unistd/linux/plat_ids.c. */
+	saved IDs are a Linux-specific refinement; NT's getuid()/geteuid()
+	already report a single fixed identity, so there's nothing to select
+	between. Real on Linux (setresuid(2)/setresgid(2)/getresuid(2)/
+	getresgid(2)). */
 int setresgid(gid_t, gid_t, gid_t);  /* undefined-ok: see setresuid */
 int getresuid(uid_t *, uid_t *, uid_t *);  /* undefined-ok: see setresuid */
 int getresgid(gid_t *, gid_t *, gid_t *);  /* undefined-ok: see setresuid */
 withtok(heap_allocated)
 char *get_current_dir_name(void);
-int syncfs(int);  /* undefined-ok on NT: syncs an entire filesystem by fd;
-	NT has no per-volume sync primitive this library wires up, and
-	fsync() (src/unistd/fsync.c) already covers the per-descriptor case.
-	Linux has a real syncfs(2) syscall and does define this one, in
-	src/unistd/linux/plat_unistd.c. */
+int syncfs(int);  /* undefined-ok on NT: no per-volume sync primitive;
+	fsync() already covers the per-descriptor case. Real on Linux. */
 int euidaccess(const char *, int);  /* undefined-ok on NT: distinguishes
-	real from effective uid, which this library's uid/euid are not on
-	NT (see setresuid). Linux has a real effective-id access check
-	(faccessat2(2)'s AT_EACCESS), and does define this one, in
-	src/unistd/linux/plat_ids.c. */
+	real from effective uid, which are not distinct there (see
+	setresuid). Real on Linux (faccessat2(2)'s AT_EACCESS). */
 int eaccess(const char *, int);  /* undefined-ok: glibc alias of
 	euidaccess(); see euidaccess */
 pid_t gettid(void);
@@ -293,15 +258,9 @@ pid_t gettid(void);
 #define _POSIX_VERSION  200809L
 #define _POSIX2_VERSION _POSIX_VERSION
 
-/* The Monotonic Clock option. clock_gettime()/clock_getres()/
- * clock_nanosleep() all accept CLOCK_MONOTONIC (see src/time/
- * clock_gettime.c, which backs it with NtQueryPerformanceCounter), so
- * POSIX requires <unistd.h> to say so. Portable code selects between
- * CLOCK_MONOTONIC and CLOCK_REALTIME on this macro alone, and without
- * it every such caller silently falls back to CLOCK_REALTIME -- which
- * on this target is NtQuerySystemTime, a clock Wine deliberately reads
- * from CLOCK_REALTIME_COARSE and whose granularity is therefore 1 ms
- * rather than the 100 ns clock_getres() advertises. */
+/* CLOCK_MONOTONIC is backed by NtQueryPerformanceCounter; portable code
+ * checks this macro before using it instead of falling back to the
+ * coarser CLOCK_REALTIME. */
 #define _POSIX_MONOTONIC_CLOCK  200809L
 
 /* Process CPU-time clocks and clock_getcpuclockid(). */
@@ -331,16 +290,11 @@ pid_t gettid(void);
 /* Per-process timers over the clocks exposed by <time.h>. */
 #define _POSIX_TIMERS 200809L
 
-/* unistd.h.html, "Constants for Functions": "_POSIX_VDISABLE ... shall
- * always be set to a value other than -1."  0, not the BSD '\377',
- * because src/unistd/sysconf.c's pathconf() already answers
- * _PC_VDISABLE with 0 and POSIX has the two name the same character --
- * a constant that disagreed with the running answer would be a new
- * defect rather than a fix.  If one changes, change both. */
+/* 0, not the BSD '\377' -- must match what pathconf()'s _PC_VDISABLE
+ * answer (src/unistd/sysconf.c) returns. If one changes, change both. */
 #define _POSIX_VDISABLE 0
 
-/* Mandatory option-group constants.  Keep these compile-time promises in
- * step with sysconf() and the implementations in src/thread and src/mman. */
+
 #define _POSIX_BARRIERS 200809L
 #define _POSIX_CLOCK_SELECTION 200809L
 #define _POSIX_MAPPED_FILES 200809L
@@ -351,15 +305,9 @@ pid_t gettid(void);
 #define _POSIX_THREAD_SAFE_FUNCTIONS 200809L
 #define _POSIX_TIMEOUTS 200809L
 
-/* unistd.h.html: "The <unistd.h> header shall define the following
- * symbolic constants for pathconf()".  Unconditional -- a variable an
- * implementation cannot associate with a file still needs a name for
- * pathconf() to reject, which fpathconf.html's "[EINVAL] The
- * implementation does not support an association of the variable name
- * with the specified file" presumes.  Values follow the numbering glibc
- * and musl share, so a consumer built against either sees the selectors
- * it expects; the gap at 12 is their non-POSIX _PC_SOCK_MAXBUF, left
- * free rather than reused. */
+/* Values follow the glibc/musl numbering so a consumer built against
+ * either sees the selectors it expects; the gap at 12 is their
+ * non-POSIX _PC_SOCK_MAXBUF, left free rather than reused. */
 #define _PC_LINK_MAX	0
 #define _PC_MAX_CANON	1
 #define _PC_MAX_INPUT	2
@@ -380,26 +328,13 @@ pid_t gettid(void);
 #define _PC_ALLOC_SIZE_MIN	18
 #define _PC_SYMLINK_MAX	19
 #define _PC_2_SYMLINKS	20
-/* Issue 7 added _PC_TIMESTAMP_RESOLUTION after glibc and musl had
- * numbered the block above, so neither has a value to copy; 21 extends
- * their sequence rather than opening a private range for one name. */
 #define _PC_TIMESTAMP_RESOLUTION	21
 
-/* unistd.h.html: "The <unistd.h> header shall define the following
- * symbolic constants for sysconf()", 125 names, unconditional.  A name
- * this implementation has no real limit for is still valid input:
- * sysconf() reports that with -1 and errno UNTOUCHED (see
- * src/unistd/sysconf.c), which is what separates "option absent" from
- * the [EINVAL] of a name that does not exist.  Defining the names
- * without that second half would only move the failure -- the symbol
- * would appear, a configure probe would pass, and the consumer would
- * stand down its own replacement on the strength of it.
- *
- * Numbering follows glibc/musl, which the fifteen names that were here
- * first already did; the gaps are their non-POSIX entries
- * (_SC_EQUIV_CLASS_MAX at 41, the _SC_PII_* block from 53, the
- * _SC_LEVEL*_CACHE_* block from 185, ...), left free so a later addition
- * can take the value everyone else uses. */
+/* A name with no real limit is still valid input: sysconf() reports it
+ * with -1 and errno untouched (src/unistd/sysconf.c), distinguishing
+ * "option absent" from an unrecognized name's [EINVAL]. Numbering
+ * follows glibc/musl; gaps are their non-POSIX entries, left free so a
+ * later addition can take the value everyone else uses. */
 #define _SC_ARG_MAX	0
 #define _SC_CHILD_MAX	1
 #define _SC_CLK_TCK	2
@@ -527,36 +462,14 @@ pid_t gettid(void);
 #define _SC_THREAD_ROBUST_PRIO_INHERIT	247
 #define _SC_THREAD_ROBUST_PRIO_PROTECT	248
 
-/* The two mandated names glibc and musl leave for the implementation to
- * number, put above everything either of them uses so a later
- * glibc-compatible addition cannot collide with them.
- *
- * _SC_PAGE_SIZE is NOT an alias of _SC_PAGESIZE here, which is the one
- * place this list departs from those two.  POSIX lists both names and
- * nowhere says they share a value, and a selector is only usable if it
- * can be a distinct switch label -- two names sharing one value cannot
- * both appear in src/unistd/sysconf.c's switch, so the alias spelling
- * makes one of two mandated names unimplementable.  The two *answers*
- * are identical, which is all limits.h.html asks for when it says
- * {PAGESIZE} is "equivalent to {PAGE_SIZE}". */
+/* _SC_PAGE_SIZE is deliberately NOT an alias of _SC_PAGESIZE: they need
+ * distinct values to both be usable as switch labels in
+ * src/unistd/sysconf.c, even though they answer identically. */
 #define _SC_PAGE_SIZE	300
 #define _SC_XOPEN_UUCP	301
 
-/* unistd.h.html: "The <unistd.h> header shall define the following
- * symbolic constants for the confstr() function", 31 names.  Numbering
- * follows glibc/musl, including their reserved-but-unused slots for the
- * _LINTFLAGS members POSIX deleted in Issue 7 (every fourth value in
- * the 1116..1147 block), so a name added back later lands where those
- * two put it.  _CS_POSIX_V7_THREADS_* is past the range either numbers
- * and continues the sequence.
- *
- * The definitions are all this claims.  confstr() answers these with
- * the empty string today and cannot be shown to do otherwise while the
- * separately recorded defect stands (POSIX-COVERAGE.md, "confstr()
- * reports success for an invalid name"): until an unrecognized name is
- * rejected there is no observable difference between "recognized, no
- * value" and "not recognized", so nothing here should be read as
- * confstr() having answers for them. */
+/* Numbering follows glibc/musl. confstr() currently answers all of
+ * these with the empty string (see POSIX-COVERAGE.md). */
 #define _CS_PATH	0
 #define _CS_POSIX_V6_WIDTH_RESTRICTED_ENVS	1
 #define _CS_POSIX_V7_WIDTH_RESTRICTED_ENVS	5
