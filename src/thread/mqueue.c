@@ -38,7 +38,7 @@
 #include "plat_fd.h"
 
 #define MQ_MAGIC 0x4e544d51u
-#define MQ_VERSION 1
+#define MQ_VERSION 2
 #define MQ_MAXMSG_LIMIT 256
 #define MQ_MSGSIZE_LIMIT 65536
 #define MQ_DEFAULT_MAXMSG 10
@@ -54,11 +54,12 @@ struct mq_header {
 	unsigned receive_waiters;
 	unsigned long long sequence;
 	int notify_active;
-	int notify_kind;
+	int notify_kind; /* SIGEV_NONE or SIGEV_SIGNAL; mq_notify() rejects SIGEV_THREAD */
 	int notify_pid;
-	int notify_fd;
-	int notify_signo;
-	union sigval notify_value;
+	int notify_fd; /* registering descriptor; meaningful for every notify_kind, so it stays outside notify */
+	union {
+		struct { int signo; union sigval value; } signal;
+	} notify;
 	char lock_name[112];
 	char items_name[112];
 	char spaces_name[112];
@@ -501,7 +502,10 @@ int mq_timedsend(mqd_t mqdes, const char *msg, size_t len, unsigned prio, // NOL
 	if (raw_write(d->file, &s, sizeof s, slot_offset(d, free_slot)) < 0) goto rollback;
 	if (!h.curmsgs && h.notify_active && !h.receive_waiters) {
 		notify = 1; notify_kind = h.notify_kind; notify_pid = h.notify_pid;
-		notify_signo = h.notify_signo; notify_value = h.notify_value;
+		if (notify_kind == SIGEV_SIGNAL) {
+			notify_signo = h.notify.signal.signo;
+			notify_value = h.notify.signal.value;
+		}
 		h.notify_active = 0;
 	}
 	h.curmsgs++;
@@ -619,8 +623,10 @@ int mq_notify(mqd_t mqdes, const struct sigevent *event)
 		h.notify_kind = event->sigev_notify;
 		h.notify_pid = (int)getpid();
 		h.notify_fd = mqdes;
-		h.notify_signo = event->sigev_signo;
-		h.notify_value = event->sigev_value;
+		if (event->sigev_notify == SIGEV_SIGNAL) {
+			h.notify.signal.signo = event->sigev_signo;
+			h.notify.signal.value = event->sigev_value;
+		}
 	}
 	if (raw_write(d->file, &h, sizeof h, 0) < 0) { give(d->lock); return -1; }
 	give(d->lock);
