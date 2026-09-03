@@ -512,10 +512,10 @@ static void test_mkstemp_permission_bits(void)
        * synthesized at the ordinary 0644 default -- not the 0600 this
        * fence requires. Same blocker as its two siblings in
        * test/posix-unistd.c, see the fuller note on
-       * test_chmod_cannot_clear_read_bits there. Not attempted this
-       * pass for the same reason: no working Wine in this session to
-       * verify either the EA-write failure or a real ACL alternative
-       * against actual NT/Wine behaviour. */
+       * test_chmod_cannot_clear_read_bits there. Not attempted here for
+       * the same reason: no working Wine available to verify either the
+       * EA-write failure or a real ACL alternative against actual
+       * NT/Wine behaviour. */
 	char t[] = "mkperm-XXXXXX";
 	int fd = mkstemp(t);
 	struct stat st;

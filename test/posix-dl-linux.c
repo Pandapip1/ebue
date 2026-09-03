@@ -60,11 +60,10 @@ static char fixture_dir_buf[4096];
 /* Directory containing THIS executable's own argv[0] -- see this file's
  * own header comment for why fixtures are found this way rather than
  * relative to cwd. A bare basename (no '/' in argv[0] at all, e.g. a
- * shell that found this program via $PATH) falls back to "." -- exactly
- * how `make obj/test/posix-dl-linux.exe && ./obj/test/posix-dl-linux.exe`
- * is actually invoked in this task's own documented workflow, argv[0]
- * always has a '/' in it, so this fallback is a safety net, not the
- * expected path. */
+ * shell that found this program via $PATH) falls back to "." -- but the
+ * documented invocation, `make obj/test/posix-dl-linux.exe &&
+ * ./obj/test/posix-dl-linux.exe`, always gives argv[0] a '/' in it, so
+ * this fallback is a safety net, not the expected path. */
 static const char *fixture_dir(const char *argv0)
 {
 	const char *slash = strrchr(argv0, '/');

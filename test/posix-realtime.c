@@ -29,9 +29,8 @@
  * `tools/test-policy.py --pedantic` re-decides every fence and remains
  * the authority: an interface regression turns a required PASS into a
  * build or runtime policy failure instead of making the old gap silent.
- * The XSI IPC group <sys/ipc.h> /
- * <sys/shm.h> / <sys/msg.h> / <sys/sem.h> (claude/posix-gap-batch's
- * 9dc13a9 is already fencing it).
+ * The XSI IPC group (<sys/ipc.h> / <sys/shm.h> / <sys/msg.h> /
+ * <sys/sem.h>) is out of scope here; it is fenced separately.
  */
 
 #include <stdio.h>

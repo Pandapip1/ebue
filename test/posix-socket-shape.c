@@ -158,17 +158,10 @@ static void check_true(int n, const char *name, int cond, const char *detail)
 	       name, cond ? 1 : 0, (detail && *detail) ? " " : "", (detail && *detail) ? detail : "");
 }
 
-/* Lines the harness must surface even on a clean run.  The runner that
- * honours this prefix arrives with the branch that adds MEASURE_PREFIX
- * to tools/run-tests.py; as of this commit that has not landed, so the
- * prefix here is *inert*.  Concretely: today these two lines reach the
- * log on every outcome except a clean PASS, because the runner echoes a
- * non-passing test's output and swallows a passing one's.  So on the
- * one platform where this test is expected to pass outright -- real
- * Windows -- the detected version is currently invisible in CI, and
- * becomes visible the moment that branch lands, with no change here.
- * Running the binary directly always prints them, which is how the
- * ReactOS session will read it. */
+/* Lines the harness must surface even on a clean run: tools/run-tests.py
+ * echoes any line starting with its MEASURE_PREFIX ("measure: ", the M
+ * macro below) regardless of outcome.  Running the binary directly
+ * always prints them too. */
 /* The one exit path, so that the executed-check total is printed on
  * every outcome including the truncated ones.  A run that stops early
  * still has to say how much of itself ran; that is the whole point of

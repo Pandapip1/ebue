@@ -19,10 +19,8 @@
  *
  * Needs a real fork(), so like fork-win.c this only runs where
  * RtlCloneUserProcess actually works: not stock Wine (unimplemented,
- * per the Makefile's *-win.c note), but does run under the locally
- * patched Wine build at /mnt/extra/claude-repos/wine/build-wow64/wine
- * (see the ntlibc-build-gotchas / wine-rtlcloneuserprocess-patch notes)
- * and on real Windows CI.
+ * per the Makefile's *-win.c note), but does run under a Wine build
+ * patched to implement RtlCloneUserProcess, and on real Windows CI.
  */
 #include <stdio.h>
 #include <errno.h>

@@ -435,11 +435,11 @@ static void test_stdint_max(void)
 }
 
 /* ---- intptr_t/uintptr_t/ptrdiff_t/size_t: the LLP64 pointer-width
- * split -- the highest-value part of this task per the brief. All four
- * are `_Addr`-family types (arch/{i386,x86_64}/bits/alltypes.h.in): `int` on
- * i386, `long long` on x86_64. Verified against sizeof(void*)/the
- * type's own arithmetic, not a per-arch hardcoded literal, so one
- * build of this file (either arch) checks itself. ---- */
+ * split. All four are `_Addr`-family types
+ * (arch/{i386,x86_64}/bits/alltypes.h.in): `int` on i386, `long long`
+ * on x86_64. Verified against sizeof(void*)/the type's own arithmetic,
+ * not a per-arch hardcoded literal, so one build of this file (either
+ * arch) checks itself. ---- */
 static void test_stdint_pointer_width(void)
 {
 	CHECK(sizeof(intptr_t) == sizeof(void *));

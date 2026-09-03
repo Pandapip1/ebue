@@ -24,8 +24,7 @@
  * read that format (see its own header comment on scope), so this test
  * degrades to checking that nm reports a real, graceful "unrecognized
  * format" diagnostic (nonzero exit, no crash) rather than misparsing
- * it. Wine is broken in this sandbox, so that leg is never actually
- * exercised here -- this is the same defensive shape test/util-archive.c's
+ * it -- this is the same defensive shape test/util-archive.c's
  * own test_file_symlink() uses for a platform capability that may not
  * be present ("no symlink support here; skip quietly"), just applied to
  * an object *format* instead of a filesystem feature.
