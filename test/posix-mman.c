@@ -599,7 +599,7 @@ static int test_mlock_munlock(void)
  * missing is that the sentence was ONLY a sentence: a name-level
  * cross-index of the 1190 POSIX.1-2017 interfaces (see
  * test/posix-pthread.c's banner for the method and the edition) against
- * every identifier in test/*.c found them with no mention anywhere
+ * every identifier in the test/ tree found them with no mention anywhere
  * in the suite.  This repo counts "I chose not to" as UNIMPL, so these
  * are UNIMPL fences with real bodies -- what should pass the day the
  * decision is revisited, not prose restating the decision.

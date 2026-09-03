@@ -998,7 +998,7 @@ int main(int argc, char **argv)
 
 	/* exec.html, the l-forms and fexecve -- four names
 	 * test/POSIX-GAP-ACCOUNTING.md listed as implemented but never
-	 * called from anywhere in test/*.c, plus fexecve.  Same shape as
+	 * called from anywhere in the test/ tree, plus fexecve.  Same shape as
 	 * the v-forms above: the intermediate child execs itself in an
 	 * --argvl role and the exec'd image checks what it received.
 	 *

@@ -38,7 +38,7 @@
  * ==================== the gap ========================================
  *
  * The name-level cross-index behind test/posix-pthread.c finds 22
- * <netdb.h> interfaces with no mention anywhere in test/*.c.  (Its
+ * <netdb.h> interfaces with no mention anywhere in the test/ tree.  (Its
  * per-header bucketing puts 20 of them under <netdb.h> and two --
  * freeaddrinfo, getnameinfo -- under <sys/socket.h>, because it buckets
  * by the FIRST #include in a page's SYNOPSIS and freeaddrinfo.html

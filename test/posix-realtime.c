@@ -15,7 +15,7 @@
  *
  * The same name-level cross-index that found <pthread.h> (see
  * test/posix-pthread.c's banner: 1190 interfaces from 882 function
- * pages, 364 with no mention anywhere in test/*.c) puts these five
+ * pages, 364 with no mention anywhere in the test/ tree) puts these five
  * groups together for a reason that is not just their original absence.  They are
  * the option groups an NT libc has the most obvious machinery for and
  * the least excuse to skip: NT has real semaphore objects, real

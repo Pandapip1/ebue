@@ -20,7 +20,7 @@
  * requirement can hide -- so every oracle below is instead an explicit
  * *enumeration* of the characters XBD 7.3.1 LC_CTYPE puts in that class
  * in the POSIX locale, written out character by character, sharing no
- * arithmetic with src/ctype/*.c at all.
+ * arithmetic with the src/ctype/ sources at all.
  *
  * Spec pages consulted (https://pubs.opengroup.org/onlinepubs/9699919799/):
  *   functions/isalnum.html   functions/isalpha.html
@@ -75,7 +75,7 @@
  * out-of-domain argument indexes outside it -- a silent
  * heap/global-buffer-overflow that no return-value check can see.  Under
  * `make asan` (tools/asan-build.sh builds every test that links) that
- * probe is what would catch it.  ntlibc's src/ctype/*.c are pure
+ * probe is what would catch it.  ntlibc's src/ctype/ sources are pure
  * arithmetic on `(unsigned)c` with no table at all, so the probe passes
  * by construction today; it exists so that it would stop being true the
  * moment someone "optimizes" this family into a lookup table.
@@ -125,7 +125,7 @@ static void sweep(const char *name, int (*f)(int), const char *members)
 
 /* The twelve POSIX-locale class enumerations, straight out of XBD 7.3.1
  * LC_CTYPE.  Written as literals, character by character, sharing no
- * expression with src/ctype/*.c. */
+ * expression with the src/ctype/ sources. */
 #define UPPER "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 #define LOWER "abcdefghijklmnopqrstuvwxyz"
 #define DIGIT "0123456789"
@@ -411,7 +411,7 @@ static void test_no_errors_defined(void)
  *
  * handed the `probes[]` array below dies with "AddressSanitizer: SEGV"
  * inside isalpha_tbl on the first out-of-domain value.  ntlibc's
- * src/ctype/*.c are pure arithmetic on `(unsigned)c` with no table at
+ * src/ctype/ sources are pure arithmetic on `(unsigned)c` with no table at
  * all, so this passes by construction today -- and that is exactly why
  * it must stay: it exists to stop being true the moment someone
  * "optimizes" this family into a lookup table.

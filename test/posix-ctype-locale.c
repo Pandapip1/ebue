@@ -11,7 +11,7 @@
  * ==================== the gap, and why it is a real one ==============
  *
  * The same name-level cross-index behind test/posix-pthread.c finds 30
- * `_l` names with no mention anywhere in test/*.c:
+ * `_l` names with no mention anywhere in the test/ tree:
  *
  *   <ctype.h>   isalnum_l is not in the list -- see below --
  *               isalpha_l isblank_l iscntrl_l isdigit_l isgraph_l
@@ -54,7 +54,7 @@
  * ==================== not fenced here, deliberately ==================
  *
  * isalnum_l and iswalnum_l do not appear in the gap list above because
- * those two identifiers already occur in test/*.c -- at
+ * those two identifiers already occur in the test/ tree -- at
  * test/posix-headers.c:173, in prose, not in an assertion.  The index
  * over-reports coverage by construction (it is a name match, not a
  * call-site audit); rather than silently correct it in one direction,
@@ -391,7 +391,7 @@ int main(void)
 	 * no longer returns nothing: include/ctype.h and include/wctype.h
 	 * now declare the whole isalnum_l() ... wctrans_l() family (see
 	 * their own banners), each one forwarding to its non-_l sibling
-	 * (src/ctype/*.c). tools/test-policy.py --pedantic re-decides each
+	 * (the src/ctype/ sources). tools/test-policy.py --pedantic re-decides each
 	 * case independently; that is what turned every fence above from
 	 * UNIMPL to PASS. */
 	if (!fails) printf("posix-ctype-locale: all tests passed\n");

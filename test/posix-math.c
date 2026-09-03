@@ -26,7 +26,7 @@
  *
  * Every requirement this file names now gets a test, even one that
  * cannot pass: fenced blocks use three conventions, greppable by the
- * tag right after "#if 0 /* ":
+ * tag right after "#if 0 / * ":
  *   BUG:    a confirmed, real spec violation (should pass once fixed)
  *   N/A:    genuinely impossible on this platform
  *   UNIMPL: not implemented at all here, but implementable
@@ -34,7 +34,7 @@
  * clause requires, written as if it would run -- never a hand-wave.
  */
 /* M_PI and friends are feature-test gated in include/math.h; same
- * define most other test/*.c already carry for the same reason (see
+ * define most other tests in test/ already carry for the same reason (see
  * test/posix-glob.c's comment on this exact define). */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -1162,7 +1162,7 @@ static void test_fmaxmin_variants(void)
 
 /* ---------------------------------------------------------------------
  * The math.h f/l tail: the 70 names test/POSIX-GAP-ACCOUNTING.md lists
- * as implemented with no assertion anywhere in test/*.c.  Item 3 of that
+ * as implemented with no assertion anywhere in the test/ tree.  Item 3 of that
  * file's successor queue, and the last of the original 112.
  *
  * Every one of these shares a manual page with the double form audited

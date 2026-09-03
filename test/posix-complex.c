@@ -16,7 +16,7 @@
  * 22 base functions in three precisions each.  cabs carg cimag creal
  * conj cproj csqrt cexp clog cpow ccos csin ctan ccosh csinh ctanh
  * cacos casin catan cacosh casinh catanh, each also as `f` and `l`.
- * None of the 66 is mentioned anywhere in test/*.c.
+ * None of the 66 is mentioned anywhere in the test/ tree.
  *
  * These are mandatory: every page carries the same header sentence --
  * "The functionality described on this reference page is aligned with

@@ -20,7 +20,7 @@
 /* posix_memalign()/setenv()/unsetenv()/putenv() and the sigaction()
  * family used by the child re-exec below are feature-test gated in
  * include/stdlib.h and include/signal.h; same define most other
- * test/*.c already carry for the same reason (see test/posix-glob.c's
+ * tests in test/ already carry for the same reason (see test/posix-glob.c's
  * comment on this exact define). */
 #define _GNU_SOURCE
 #include <stdio.h>

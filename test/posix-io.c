@@ -8,7 +8,7 @@
  * the list.
  */
 /* kill() is feature-test gated in include/signal.h; same define most
- * other test/*.c already carry for the same reason (see
+ * other tests in test/ already carry for the same reason (see
  * test/posix-glob.c's comment on this exact define). */
 #define _GNU_SOURCE
 #include "test-policy.h"

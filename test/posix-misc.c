@@ -587,7 +587,7 @@ static void test_setjmp(void)
 	 * respectively, with the additional restriction that _longjmp() and
 	 * _setjmp() shall not manipulate the signal mask"; RETURN VALUE
 	 * defers to longjmp/setjmp; ERRORS: "No errors are defined."  These
-	 * two had no assertion anywhere in test/*.c before this
+	 * two had no assertion anywhere in the test/ tree before this
 	 * (test/POSIX-GAP-ACCOUNTING.md's <setjmp.h> pair), even though
 	 * src/setjmp/{i386,x86_64}/setjmp.S and longjmp.S both export the
 	 * underscored names as aliases of the plain ones.
