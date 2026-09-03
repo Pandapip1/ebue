@@ -5444,6 +5444,369 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
            preservesPositiveValue(Change.GuardedStep, Step);
   }
 
+  /* True for Expression's type when a constant of that type equal to zero
+   * -- a null pointer, or a plain zero -- is exactly the "not there"
+   * sentinel a small accessor returns to mean "stop". */
+  static bool zeroSentinelConstant(const Expr *Expression, ASTContext &Ctx) {
+    if (!Expression)
+      return false;
+    if (Expression->getType()->isPointerType())
+      return Expression->isNullPointerConstant(
+                 Ctx, Expr::NPC_ValueDependentIsNotNull) != Expr::NPCK_NotNull;
+    Expr::EvalResult Result;
+    return Expression->EvaluateAsInt(Result, Ctx) &&
+           Result.Val.getInt().isZero();
+  }
+
+  /* True when Left and Right are both compile-time constants of the same
+   * value -- either the same integer, or both a null pointer constant.
+   * Used to recognize a caller-written `accessor(...) != SENTINEL` whose
+   * SENTINEL is literally the same value the accessor's own ternary
+   * returns to mean "stop". */
+  static bool sameConstant(const Expr *Left, const Expr *Right,
+                           ASTContext &Ctx) {
+    if (!Left || !Right)
+      return false;
+    if (Left->getType()->isPointerType() || Right->getType()->isPointerType())
+      return zeroSentinelConstant(Left, Ctx) && zeroSentinelConstant(Right, Ctx);
+    Expr::EvalResult LeftValue, RightValue;
+    return Left->EvaluateAsInt(LeftValue, Ctx) &&
+           Right->EvaluateAsInt(RightValue, Ctx) &&
+           llvm::APSInt::compareValues(LeftValue.Val.getInt(),
+                                       RightValue.Val.getInt()) == 0;
+  }
+
+  /* True when some leaf of Expression is a reference to one of Callee's
+   * own parameters -- i.e. Expression cannot be reused verbatim outside
+   * Callee's body without first being substituted. */
+  static bool referencesParameter(const Expr *Expression,
+                                  const FunctionDecl *Callee) {
+    if (!Expression)
+      return false;
+    if (const auto *Reference = dyn_cast<DeclRefExpr>(Expression)) {
+      const auto *Parameter = dyn_cast<ParmVarDecl>(Reference->getDecl());
+      return Parameter && Parameter->getDeclContext() == Callee;
+    }
+    for (const Stmt *Child : Expression->children())
+      if (const auto *ChildExpr = dyn_cast_or_null<Expr>(Child))
+        if (referencesParameter(ChildExpr, Callee))
+          return true;
+    return false;
+  }
+
+  /* ---- Bounded truthiness-preserving call inlining ----------------------
+   *
+   * loopProof()'s shape matchers (strictComparison(), sentinelCondition(),
+   * etc., below) pattern-match the loop condition's own AST directly.  A
+   * small read-only accessor -- `while (peek(c) && ...)` where peek()
+   * reads `c->pos`/`c->len` internally -- hides exactly the comparison
+   * those matchers look for behind an opaque CallExpr, even once
+   * containsImpureCall() has already proved, via ReadonlyFunctionFacts,
+   * that the call itself cannot touch the rank, its bound, or the
+   * sentinel object.  substituteLeaf()/substituteTruthy() splice such an
+   * accessor's own `return <expr>;` body into the condition, substituting
+   * the callee's parameters for the call's actual arguments, so the
+   * matchers below see the comparison exactly as if it had been written
+   * inline.
+   *
+   * Every rewrite performed is an exact identity for C's truth value,
+   * never a heuristic approximation: &&, ||, and unary ! keep their own
+   * short-circuit meaning with a substituted operand, a comparison keeps
+   * its exact shape, and `cond ? value : 0` (or the mirrored
+   * `cond ? 0 : value`) becomes `cond && value` (or `!cond && value`)
+   * only because C already evaluates the ternary that way -- the zero arm
+   * is reached exactly when the substituted subexpression is not.  A
+   * shape outside this grammar -- a callee with more than the one return
+   * statement, a general ternary whose neither arm is a constant zero, a
+   * nested call whose own arguments would need rewriting -- is left
+   * exactly as it was: the call stays opaque and loopProof() falls back
+   * to its ordinary "unproved" verdict, which is always sound. */
+
+  const Expr *substituteLeaf(const Expr *Expression, const FunctionDecl *Callee,
+                             const CallExpr *Call) const {
+    if (!Expression)
+      return nullptr;
+    if (const auto *Paren = dyn_cast<ParenExpr>(Expression))
+      return substituteLeaf(Paren->getSubExpr(), Callee, Call);
+    if (const auto *Cast = dyn_cast<ImplicitCastExpr>(Expression))
+      return substituteLeaf(Cast->getSubExpr(), Callee, Call);
+    /* A narrowing/reinterpreting cast (`(unsigned char)lx->src[lx->pos]`)
+     * changes only how the leaf's bit pattern is read back, never which
+     * memory location or field it names -- the one thing every matcher
+     * fed this leaf actually inspects -- so it is dropped the same as an
+     * implicit one rather than aborting the substitution. */
+    if (const auto *Cast = dyn_cast<CStyleCastExpr>(Expression))
+      return substituteLeaf(Cast->getSubExpr(), Callee, Call);
+    if (const auto *Reference = dyn_cast<DeclRefExpr>(Expression)) {
+      const auto *Parameter = dyn_cast<ParmVarDecl>(Reference->getDecl());
+      if (!Parameter || Parameter->getDeclContext() != Callee)
+        return Expression;
+      unsigned Index = Parameter->getFunctionScopeIndex();
+      return Index < Call->getNumArgs() ? Call->getArg(Index) : nullptr;
+    }
+    if (const auto *Member = dyn_cast<MemberExpr>(Expression)) {
+      const Expr *Base = substituteLeaf(Member->getBase(), Callee, Call);
+      if (!Base)
+        return nullptr;
+      if (Base == Member->getBase())
+        return Expression;
+      return MemberExpr::CreateImplicit(
+          Context, const_cast<Expr *>(Base), Member->isArrow(),
+          Member->getMemberDecl(), Member->getType(), Member->getValueKind(),
+          Member->getObjectKind());
+    }
+    if (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(Expression)) {
+      const Expr *Base = substituteLeaf(Subscript->getBase(), Callee, Call);
+      const Expr *Index = substituteLeaf(Subscript->getIdx(), Callee, Call);
+      if (!Base || !Index)
+        return nullptr;
+      if (Base == Subscript->getBase() && Index == Subscript->getIdx())
+        return Expression;
+      return new (Context.Allocate(sizeof(ArraySubscriptExpr),
+                                   alignof(ArraySubscriptExpr)))
+          ArraySubscriptExpr(const_cast<Expr *>(Base),
+                             const_cast<Expr *>(Index), Subscript->getType(),
+                             Subscript->getValueKind(),
+                             Subscript->getObjectKind(), SourceLocation());
+    }
+    if (const auto *Unary = dyn_cast<UnaryOperator>(Expression)) {
+      if (Unary->getOpcode() != UO_Deref && Unary->getOpcode() != UO_LNot)
+        return referencesParameter(Expression, Callee) ? nullptr : Expression;
+      const Expr *Sub = substituteLeaf(Unary->getSubExpr(), Callee, Call);
+      if (!Sub)
+        return nullptr;
+      if (Sub == Unary->getSubExpr())
+        return Expression;
+      return UnaryOperator::Create(
+          Context, const_cast<Expr *>(Sub), Unary->getOpcode(),
+          Unary->getType(), Unary->getValueKind(), Unary->getObjectKind(),
+          Unary->getOperatorLoc(), Unary->canOverflow(),
+          Unary->getFPOptionsOverride());
+    }
+    return referencesParameter(Expression, Callee) ? nullptr : Expression;
+  }
+
+  const Expr *substituteTruthy(const Expr *Expression,
+                               const FunctionDecl *Callee,
+                               const CallExpr *Call) const {
+    if (!Expression)
+      return nullptr;
+    if (const auto *Paren = dyn_cast<ParenExpr>(Expression))
+      return substituteTruthy(Paren->getSubExpr(), Callee, Call);
+    if (const auto *Cast = dyn_cast<ImplicitCastExpr>(Expression))
+      return substituteTruthy(Cast->getSubExpr(), Callee, Call);
+    if (const auto *Cast = dyn_cast<CStyleCastExpr>(Expression))
+      return substituteTruthy(Cast->getSubExpr(), Callee, Call);
+    if (const auto *Unary = dyn_cast<UnaryOperator>(Expression)) {
+      if (Unary->getOpcode() == UO_LNot) {
+        const Expr *Sub = substituteTruthy(Unary->getSubExpr(), Callee, Call);
+        if (!Sub)
+          return nullptr;
+        if (Sub == Unary->getSubExpr())
+          return Expression;
+        return UnaryOperator::Create(
+            Context, const_cast<Expr *>(Sub), UO_LNot, Unary->getType(),
+            Unary->getValueKind(), Unary->getObjectKind(),
+            Unary->getOperatorLoc(), false, Unary->getFPOptionsOverride());
+      }
+    }
+    if (const auto *Binary = dyn_cast<BinaryOperator>(Expression)) {
+      if (Binary->getOpcode() == BO_LAnd || Binary->getOpcode() == BO_LOr) {
+        const Expr *Left = substituteTruthy(Binary->getLHS(), Callee, Call);
+        const Expr *Right = substituteTruthy(Binary->getRHS(), Callee, Call);
+        if (!Left || !Right)
+          return nullptr;
+        if (Left == Binary->getLHS() && Right == Binary->getRHS())
+          return Expression;
+        return BinaryOperator::Create(
+            Context, const_cast<Expr *>(Left), const_cast<Expr *>(Right),
+            Binary->getOpcode(), Binary->getType(), Binary->getValueKind(),
+            Binary->getObjectKind(), Binary->getOperatorLoc(),
+            Binary->getFPFeatures());
+      }
+      if (Binary->isComparisonOp()) {
+        const Expr *Left = substituteLeaf(Binary->getLHS(), Callee, Call);
+        const Expr *Right = substituteLeaf(Binary->getRHS(), Callee, Call);
+        if (!Left || !Right)
+          return nullptr;
+        if (Left == Binary->getLHS() && Right == Binary->getRHS())
+          return Expression;
+        return BinaryOperator::Create(
+            Context, const_cast<Expr *>(Left), const_cast<Expr *>(Right),
+            Binary->getOpcode(), Binary->getType(), Binary->getValueKind(),
+            Binary->getObjectKind(), Binary->getOperatorLoc(),
+            Binary->getFPFeatures());
+      }
+      return referencesParameter(Expression, Callee) ? nullptr : Expression;
+    }
+    if (const auto *Conditional = dyn_cast<ConditionalOperator>(Expression)) {
+      const Expr *TrueExpr = Conditional->getTrueExpr();
+      const Expr *FalseExpr = Conditional->getFalseExpr();
+      bool TrueIsZero = zeroSentinelConstant(TrueExpr, Context);
+      bool FalseIsZero = zeroSentinelConstant(FalseExpr, Context);
+      /* Exactly one arm must be the constant "stop" value: an ordinary
+       * two-sided ternary does not reduce to a single conjunction. */
+      if (TrueIsZero == FalseIsZero)
+        return referencesParameter(Expression, Callee) ? nullptr : Expression;
+      const Expr *Cond =
+          substituteTruthy(Conditional->getCond(), Callee, Call);
+      const Expr *Survivor =
+          substituteTruthy(FalseIsZero ? TrueExpr : FalseExpr, Callee, Call);
+      if (!Cond || !Survivor)
+        return nullptr;
+      if (!FalseIsZero)
+        Cond = UnaryOperator::Create(
+            Context, const_cast<Expr *>(Cond), UO_LNot, Context.IntTy,
+            VK_PRValue, OK_Ordinary, Conditional->getQuestionLoc(), false,
+            FPOptionsOverride());
+      return BinaryOperator::Create(
+          Context, const_cast<Expr *>(Cond), const_cast<Expr *>(Survivor),
+          BO_LAnd, Context.IntTy, VK_PRValue, OK_Ordinary,
+          Conditional->getQuestionLoc(), FPOptionsOverride());
+    }
+    return substituteLeaf(Expression, Callee, Call);
+  }
+
+  /* Callee is bounded-inlinable exactly when its definition is visible in
+   * this translation unit and its entire body is one `return <expr>;` --
+   * the one shape simple enough that inlining it can never hide a loop, a
+   * second statement's side effect, or unbounded recursion. */
+  const Expr *expandCall(const CallExpr *Call) const {
+    const FunctionDecl *Callee = Call->getDirectCallee();
+    if (!Callee)
+      return nullptr;
+    const FunctionDecl *Definition = Callee->getDefinition();
+    if (!Definition)
+      return nullptr;
+    const auto *CalleeBody =
+        dyn_cast_or_null<CompoundStmt>(Definition->getBody());
+    if (!CalleeBody || CalleeBody->size() != 1)
+      return nullptr;
+    const auto *Return = dyn_cast<ReturnStmt>(*CalleeBody->body_begin());
+    if (!Return || !Return->getRetValue())
+      return nullptr;
+    return substituteTruthy(Return->getRetValue(), Definition, Call);
+  }
+
+  /* Handles a caller-written `accessor(...) == K` / `accessor(...) != K`
+   * where accessor's own body is `return cond ? A : K;` (or the mirrored
+   * `cond ? K : A`) for that very same constant K -- the shape a
+   * peekc()-style accessor uses to signal "nothing left" with an explicit
+   * sentinel return value instead of relying on truthiness.  The K arm is
+   * reached exactly when Cond is not, so the comparison is an exact
+   * rewrite to a plain && or || of Cond (or its negation) with the
+   * surviving arm's own comparison against K -- never an approximation of
+   * what the accessor actually returns. */
+  const Expr *expandComparisonCall(const CallExpr *Call,
+                                   BinaryOperatorKind Opcode,
+                                   const Expr *Constant) const {
+    if (Opcode != BO_EQ && Opcode != BO_NE)
+      return nullptr;
+    const FunctionDecl *Callee = Call->getDirectCallee();
+    if (!Callee)
+      return nullptr;
+    const FunctionDecl *Definition = Callee->getDefinition();
+    if (!Definition)
+      return nullptr;
+    const auto *CalleeBody =
+        dyn_cast_or_null<CompoundStmt>(Definition->getBody());
+    if (!CalleeBody || CalleeBody->size() != 1)
+      return nullptr;
+    const auto *Return = dyn_cast<ReturnStmt>(*CalleeBody->body_begin());
+    if (!Return || !Return->getRetValue())
+      return nullptr;
+    const auto *Conditional =
+        dyn_cast<ConditionalOperator>(ignore(Return->getRetValue()));
+    if (!Conditional)
+      return nullptr;
+    const Expr *TrueExpr = Conditional->getTrueExpr();
+    const Expr *FalseExpr = Conditional->getFalseExpr();
+    bool TrueMatches = sameConstant(TrueExpr, Constant, Context);
+    bool FalseMatches = sameConstant(FalseExpr, Constant, Context);
+    if (TrueMatches == FalseMatches)
+      return nullptr;
+    const Expr *Cond = substituteTruthy(Conditional->getCond(), Definition, Call);
+    const Expr *Survivor = substituteLeaf(FalseMatches ? TrueExpr : FalseExpr,
+                                          Definition, Call);
+    if (!Cond || !Survivor)
+      return nullptr;
+    const Expr *SurvivorComparison = BinaryOperator::Create(
+        Context, const_cast<Expr *>(Survivor), const_cast<Expr *>(Constant),
+        Opcode, Context.IntTy, VK_PRValue, OK_Ordinary,
+        Conditional->getQuestionLoc(), FPOptionsOverride());
+    bool NegateCond = (Opcode == BO_NE) ? TrueMatches : FalseMatches;
+    if (NegateCond)
+      Cond = UnaryOperator::Create(
+          Context, const_cast<Expr *>(Cond), UO_LNot, Context.IntTy,
+          VK_PRValue, OK_Ordinary, Conditional->getQuestionLoc(), false,
+          FPOptionsOverride());
+    return BinaryOperator::Create(
+        Context, const_cast<Expr *>(Cond), const_cast<Expr *>(SurvivorComparison),
+        Opcode == BO_NE ? BO_LAnd : BO_LOr, Context.IntTy, VK_PRValue,
+        OK_Ordinary, Conditional->getQuestionLoc(), FPOptionsOverride());
+  }
+
+  /* Top-level condition rewrite: recurses through &&, ||, !, and
+   * "assign-and-test" (`(v = call()) && ...`, whose value for truthiness
+   * purposes is exactly the assigned call's own value) looking for a bare
+   * call to expand.  Anything else -- including a call this deep down
+   * that expandCall() declines -- is left exactly as written, so this
+   * always returns a condition at least as provable as the original. */
+  const Expr *expandConditionCalls(const Expr *Condition) const {
+    if (!Condition)
+      return Condition;
+    if (const auto *Paren = dyn_cast<ParenExpr>(Condition))
+      return expandConditionCalls(Paren->getSubExpr());
+    if (const auto *Cast = dyn_cast<ImplicitCastExpr>(Condition))
+      return expandConditionCalls(Cast->getSubExpr());
+    if (const auto *Unary = dyn_cast<UnaryOperator>(Condition)) {
+      if (Unary->getOpcode() == UO_LNot) {
+        const Expr *Sub = expandConditionCalls(Unary->getSubExpr());
+        if (Sub == Unary->getSubExpr())
+          return Condition;
+        return UnaryOperator::Create(
+            Context, const_cast<Expr *>(Sub), UO_LNot, Unary->getType(),
+            Unary->getValueKind(), Unary->getObjectKind(),
+            Unary->getOperatorLoc(), false, Unary->getFPOptionsOverride());
+      }
+      return Condition;
+    }
+    if (const auto *Binary = dyn_cast<BinaryOperator>(Condition)) {
+      if (Binary->getOpcode() == BO_LAnd || Binary->getOpcode() == BO_LOr) {
+        const Expr *Left = expandConditionCalls(Binary->getLHS());
+        const Expr *Right = expandConditionCalls(Binary->getRHS());
+        if (Left == Binary->getLHS() && Right == Binary->getRHS())
+          return Condition;
+        return BinaryOperator::Create(
+            Context, const_cast<Expr *>(Left), const_cast<Expr *>(Right),
+            Binary->getOpcode(), Binary->getType(), Binary->getValueKind(),
+            Binary->getObjectKind(), Binary->getOperatorLoc(),
+            Binary->getFPFeatures());
+      }
+      if (Binary->getOpcode() == BO_Assign)
+        return expandConditionCalls(Binary->getRHS());
+      if (Binary->getOpcode() == BO_EQ || Binary->getOpcode() == BO_NE) {
+        const auto *LeftCall = dyn_cast<CallExpr>(ignore(Binary->getLHS()));
+        const auto *RightCall = dyn_cast<CallExpr>(ignore(Binary->getRHS()));
+        const Expr *Expanded = nullptr;
+        if (LeftCall && !RightCall)
+          Expanded = expandComparisonCall(LeftCall, Binary->getOpcode(),
+                                          Binary->getRHS());
+        else if (RightCall && !LeftCall)
+          Expanded = expandComparisonCall(RightCall, Binary->getOpcode(),
+                                          Binary->getLHS());
+        if (Expanded)
+          return Expanded;
+      }
+      return Condition;
+    }
+    if (const auto *Call = dyn_cast<CallExpr>(Condition)) {
+      const Expr *Expanded = expandCall(Call);
+      return Expanded ? Expanded : Condition;
+    }
+    return Condition;
+  }
+
   std::string loopProof(const Stmt *Loop, const Expr *Condition,
                         const Expr *Increment, const Stmt *Body,
                         bool ConditionBeforeBody) const {
@@ -5454,6 +5817,11 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
      * mutate globally reachable rank or bound state. */
     if (containsImpureCall(Condition))
       return "unproved";
+    /* Every call remaining in Condition is now known pure/const/readonly.
+     * Splice in the body of any small accessor whose own shape the
+     * matchers below could otherwise not see through -- see
+     * expandConditionCalls() above. */
+    Condition = expandConditionCalls(Condition);
     if (ConditionBeforeBody && !Increment &&
         branchCompleteIntervalDescent(Condition, Body))
       return "strict-scalar-rank";
