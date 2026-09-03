@@ -15,8 +15,8 @@
  *
  * As with the mman/unistd pilot, open() itself is out of scope (its own
  * front door still calls NT-only __ntpath_at() directly -- see
- * src/internal/plat_fcntl.h's own banner and this pilot's report), so a
- * raw openat(2) stands in for it, exactly like fuzz/linux_pilot_test.c
+ * src/internal/plat_fcntl.h's own banner), so a raw openat(2) stands in
+ * for it, exactly like fuzz/linux_pilot_test.c
  * already does, and the raw fd is registered into ntlibc's own fd table
  * via __fd_install() the identical way.
  *
