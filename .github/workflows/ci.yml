@@ -370,8 +370,8 @@ jobs:
           - { stage: errno, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: purity, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: ownership, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: undefined, packages: "" }
-          - { stage: unreferenced, packages: clang }
+          - { stage: undefined, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: unreferenced, packages: "clang clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: widthmod, packages: "" }
     name: lint (${{ matrix.stage }})
     steps:
