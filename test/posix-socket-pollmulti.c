@@ -683,15 +683,7 @@ static int set_pattern(unsigned want)
  * 16 + k * H_SIZE -- so a PASS *is* the numeric claim and nothing here
  * weakens it.  But the next question about AFD's poll wire format will
  * arrive without these numbers unless they are in the log, and
- * re-deriving them costs a CI run on hardware that only CI has.
- *
- * NOTE: MEASURE_PREFIX does NOT exist in tools/run-tests.py on this
- * file's base.  It arrives with test/entry-arg.c (branch
- * claude/crt1-peb-from-teb), which is not on main yet.  Until that
- * lands these lines are inert -- printed by the test, dropped by the
- * harness on PASS, and visible on FAIL like any other output.  They are
- * written now so that no edit to this file is needed when it does land;
- * nothing about the assertions depends on it. */
+ * re-deriving them costs a CI run on hardware that only CI has. */
 static void measure(const char *kind, const char *name, unsigned want,
                     size_t nready, size_t base, size_t stride,
                     int st, unsigned long count, size_t info,

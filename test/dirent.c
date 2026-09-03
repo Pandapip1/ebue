@@ -203,7 +203,6 @@ int main(void)
 		CHECK(dp == 0);
 	}
 
-	/* Clean up. */
 	for (i = 0; i < sizeof names / sizeof *names; i++) {
 		char p[64];
 		strcpy(p, dir); strcat(p, "/"); strcat(p, names[i]);

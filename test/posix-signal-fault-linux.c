@@ -24,7 +24,7 @@
  * file in this directory already uses for "a genuinely separate crashed
  * process", so there is no reason for this one to invent a second way).
  *
- * Two shapes per fault, both required by this change's own plan:
+ * Two shapes per fault:
  *
  *   - DEFAULT disposition (no handler installed): the child must
  *     actually die from the real signal, and the PARENT's waitpid()
@@ -45,9 +45,7 @@
  *     lived to return normally" apart from the one true positive.
  *
  * SIGFPE deliberately does NOT use integer division by zero, unlike the
- * common x86 idiom (and unlike this project's own plan document, which
- * named it as the expected mechanism before this file was written and
- * this was checked against the real hardware): AArch64's SDIV/UDIV
+ * common x86 idiom: AArch64's SDIV/UDIV
  * instructions do not trap on division by zero at all -- the ISA defines
  * the result as a silent 0, full stop, confirmed empirically on this
  * exact host (`volatile int c = 1/0;` under real clang -O0 here prints
@@ -60,9 +58,7 @@
  * (architecturally optional on AArch64; some cores wire the FPCR xxE
  * bits RES0 and never trap at all -- confirmed NOT the case here), and
  * the resulting real SIGFPE carries si_code FPE_FLTDIV, matching
- * signal.h's own FPE_FLTDIV value. This is exactly the "or an
- * feenableexcept-style FP trap" alternative this change's own plan
- * document names for precisely this reason.
+ * signal.h's own FPE_FLTDIV value.
  */
 #define _GNU_SOURCE
 #include <unistd.h>

@@ -524,9 +524,8 @@ static void test_posix_fallocate_inside_file(void)
 	status range, not a guess), and src/internal/nt/errno_nt.c's
 	__errno_from_status() now maps it to ELOOP instead of falling
 	through to the generic Win32-code table's EIO default. Verified
-	by compilation/linking only (see this session's own notes on
-	Wine availability): this NTSTATUS value could not be produced
-	and observed end-to-end here.
+	by compilation/linking only, not end-to-end: no working Wine was
+	available to actually produce and observe this NTSTATUS value.
 
 	The assertions below are what would run if it were implemented,
 	and now are implemented -- but they still need symlink(), which
@@ -714,9 +713,9 @@ static void test_statvfs_eloop(void)
 	exercise it). Nothing below claims otherwise.
 
 	VERIFIED BY INSPECTION, NOT BY MEASUREMENT, and that distinction
-	is deliberately not hidden: this session had no working Wine (see
-	its own notes on that) to re-run the Windows-11-vs-Wine
-	AllocationSize comparison the ORIGINAL FINDING made. The case
+	is deliberately not hidden: no working Wine was available to
+	re-run the Windows-11-vs-Wine AllocationSize comparison the
+	ORIGINAL FINDING made. The case
 	for un-fencing rests on reading materialize_zero_tail() and
 	__plat_fallocate() as they stand today, and on the load-bearing
 	fact that a real write, unlike a bare EndOfFile extension,

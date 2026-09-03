@@ -354,10 +354,10 @@ static void test_test_dash_L(void)
 	unlink(SCRATCH_LINK);
 	if (symlink("tf_file", SCRATCH_LINK) != 0) {
 		/* Symlink support is environment-dependent (real NT and
-		 * native Linux have it, this session's Wine sandbox does
-		 * not) -- test/util-archive.c's test_file_symlink() skips
-		 * the same way rather than asserting anything about a
-		 * primitive the runner does not provide. */
+		 * native Linux have it, some Wine setups do not) --
+		 * test/util-archive.c's test_file_symlink() skips the same
+		 * way rather than asserting anything about a primitive the
+		 * runner does not provide. */
 		printf("note: skipping -L: symlink() unsupported here\n");
 		return;
 	}

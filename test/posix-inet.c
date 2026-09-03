@@ -757,8 +757,8 @@ static void test_inet6_addrstrlen_defined(void)
 	against a host libc.  The first three fail there (the values
 	above are what came back); the fourth PASSES there, because
 	that build's unsigned long is 64 bits -- which is the
-	divergence, seen from the only side this session can run.  The
-	32-bit side was measured the same way, on the same parse loop
+	divergence, seen from the only side directly runnable this way.
+	The 32-bit side was measured the same way, on the same parse loop
 	with a 32-bit part type standing in for LLP64, and returned
 	255.255.255.254.  All four stay fenced together because the
 	clause they test is one clause, and because a live assertion

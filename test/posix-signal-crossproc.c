@@ -21,9 +21,9 @@
  * this binary happens to be running under stock or patched Wine.
  * src/signal/sigdelivery.c's fork-repair path (__sig_delivery_reinit_after_fork(),
  * called from src/process/fork.c) is therefore NOT covered here; it was
- * checked by hand against the RtlCloneUserProcess-patched Wine build
- * named in this change's own test run instead, for the same reason
- * fork() itself is absent from every other file in this directory.
+ * checked by hand against a RtlCloneUserProcess-patched Wine build
+ * instead, for the same reason fork() itself is absent from every other
+ * file in this directory.
  *
  * The one race every scenario below has to account for: __sig_delivery_init()
  * runs unconditionally during __signal_init(), which crt1.c calls before
@@ -593,17 +593,15 @@ static void test_remote_wait_interface(const char *self, const char *mode,
  * "no listener ever" on at least some runs.
  *
  * Deliberately does NOT assert what happens to the child. Whichever
- * side of the race this lands on, kill() takes the SAME action it took
- * before this change existed for a signal whose target it cannot reach
- * (fall through to the unconditional NtTerminateProcess path) -- and
- * that path terminates the child outright even for a signal like
- * SIGWINCH whose default_action() (src/signal/signal.c) is "ignore",
- * which is a real, PRE-EXISTING gap (kill() to a process with no
- * listener has never consulted default_action() at all, only ever
- * assumed "terminate") that is not this change's to fix -- see this
- * file's header comment on scope. The only property under test here is
- * the one this change is actually responsible for: that reaching for a
- * listener that is not there yet costs milliseconds, not a hang. */
+ * side of the race this lands on, kill() takes the same action for a
+ * signal whose target it cannot reach: fall through to the
+ * unconditional NtTerminateProcess path -- and that path terminates the
+ * child outright even for a signal like SIGWINCH whose default_action()
+ * (src/signal/signal.c) is "ignore", a separate, pre-existing gap
+ * (kill() to a process with no listener has never consulted
+ * default_action() at all, only ever assumed "terminate") outside this
+ * file's scope. The only property under test here is that reaching for
+ * a listener that is not there yet costs milliseconds, not a hang. */
 static void test_no_listener_does_not_hang(const char *self)
 {
 	pid_t pid;
