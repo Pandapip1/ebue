@@ -61,7 +61,7 @@
  * immediate check) absorbs the real, disclosed, sub-millisecond gap
  * between aio_worker_atexit()'s wait returning (worker_done_event
  * observed set) and the worker's own SYS_exit syscall actually
- * completing (see clone_aarch64.S's own trampoline) -- an inherent
+ * completing (see aarch64/clone.S's own trampoline) -- an inherent
  * scheduling window, not a bug, and small enough that a flaky poll
  * interval would be the wrong fix for it.
  */

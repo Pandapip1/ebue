@@ -1,10 +1,12 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The one piece of __plat_thread_spawn() (plat_thread.c, same directory)
- * that cannot be a raw syscall call from C: clone(2) returns TWICE, once
- * in the calling thread and once in the new one -- exactly like fork(2)
- * -- except the new thread's stack pointer becomes the `stack_top`
+ * The one piece of __plat_thread_spawn() (src/thread/linux/plat_thread.c,
+ * one directory up -- PLAT_ARCH_GLOBS's own src/thread/linux/$(ARCH)/
+ * *.[csS] shape, see Makefile's own comment on that glob) that cannot be
+ * a raw syscall call from C: clone(2) returns TWICE, once in the
+ * calling thread and once in the new one -- exactly like fork(2) --
+ * except the new thread's stack pointer becomes the `stack_top`
  * argument below, a fresh mmap()'d region, not a continuation of the
  * calling thread's own stack. A `svc #0` wrapped in an ordinary C
  * function would, in the child, execute that C function's epilogue
@@ -12,9 +14,12 @@
  * pointer that never held any of those values -- real, silent memory
  * corruption, not a crash on the first instruction. Every real libc's
  * clone() (glibc's, musl's) is hand-written assembly for exactly this
- * reason; this is that same shape, aarch64 only (this pilot's declared
- * scope, matching src/mman/linux/plat_mem.c's own "this host only"
- * caveat), musl's src/thread/aarch64/clone.s the direct model.
+ * reason; this is that same shape, musl's src/thread/aarch64/clone.s
+ * the direct model. src/thread/linux/x86_64/clone.S and src/thread/
+ * linux/i386/clone.S are this file's siblings for the other two arches
+ * this tree targets, each following its own arch's calling convention
+ * and clone(2) register ABI (see their own banners) but implementing
+ * the identical __ntlibc_linux_clone() contract documented below.
  *
  * Validated standalone, outside this tree, before being wired in here:
  * a byte-identical copy of this trampoline, called from a throwaway

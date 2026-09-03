@@ -15,7 +15,7 @@
  * __plat_wait_one() from src/thread/linux/plat_thread.c -- the same two
  * primitives pthread_mutex.c's own blocking slow path rests on -- tested
  * under genuine contention from real Linux kernel threads spawned via
- * __plat_thread_spawn() (clone(2) + src/thread/linux/clone_aarch64.S).
+ * __plat_thread_spawn() (clone(2) + src/thread/linux/aarch64/clone.S).
  *
  * Two runs, back to back, over the SAME shared counter and thread count:
  * one with no locking at all (expected, and required by this test, to
