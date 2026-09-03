@@ -290,44 +290,34 @@ public:
     return false;
   }
 
-  // expressionInterval() below already knows how to narrow `hash % n`,
-  // `mask & bits`, and `value >> shift` past their operands' full type
-  // range when it walks those operators inline in the source AST -- but
-  // that walk starts over from each new Expr, so it only ever sees a
-  // divisor/mask/shift-count that is ITSELF still written out at the use
-  // site. src/stdlib/strtod.c's bn_shl() writes `int b = k % 32;` once
-  // and rereads plain `b` three lines later in `v >> (32 - b)`;
-  // src/stdio/printf.c's fmt_a() writes `int shift = (13 - prec) * 4;`
-  // once (prec itself bounded [0,12] by two literal ifs immediately
-  // above) and rereads plain `shift` four times after. Both are the same
-  // shape: a value ALREADY narrow by construction, materialized into a
-  // local and re-read past the point where the source-level walk can see
-  // the operator that narrowed it.
+  // expressionInterval() below already narrows `hash % n`, `mask & bits`,
+  // and `value >> shift` when it walks those operators inline in the
+  // source AST -- but that walk starts fresh from each Expr, so it only
+  // sees a divisor/mask/shift-count still written out at the use site.
+  // strtod.c's bn_shl() writes `int b = k % 32;` once and rereads plain
+  // `b` in `v >> (32 - b)`; printf.c's fmt_a() writes `int shift =
+  // (13 - prec) * 4;` once and rereads `shift` four times. Both are a
+  // value already narrow by construction, re-read past where the
+  // source-level walk can see the operator that narrowed it.
   //
-  // RegionStore gives an exact answer for what that reread actually
-  // finds: absent an intervening call that could have written through an
-  // escaped alias, a load from that local returns the very same SVal
-  // that was stored -- so the symbol behind a rereard of `b` IS the
-  // SymIntExpr for `$k % 32`, not a fresh unconstrained symbol. The
-  // default RangeConstraintManager's own solver does not re-derive a
-  // tight range for that compound symbol on its own (nothing ever
-  // branched on `b`'s value to teach it one), which is exactly why
-  // expressionInterval()'s own Rem/And/Shr special cases exist in the
-  // first place; symbolInterval() is that same reasoning run over the
-  // SymExpr the engine already built instead of over the Expr the
-  // programmer wrote, so it reaches a re-read the same way the original
-  // reasoning reaches an inline use.
+  // RegionStore gives an exact answer for what that reread finds: absent
+  // an intervening call that could write through an escaped alias, a
+  // load from that local returns the same SVal that was stored, so the
+  // symbol behind a reread of `b` IS the SymIntExpr for `$k % 32`. The
+  // default solver doesn't re-derive a tight range for that compound
+  // symbol on its own (nothing branched on `b`'s value to teach it one),
+  // which is why expressionInterval()'s Rem/And/Shr cases exist;
+  // symbolInterval() runs that same reasoning over the SymExpr the
+  // engine already built instead of the Expr the programmer wrote.
   //
   // Every branch here is a strict subset of what expressionInterval()
-  // already computes for the equivalent AST shape (same Rem/And/Shr sign
-  // and magnitude rules, same interval arithmetic for Add/Sub/Mul), so
-  // this adds no new interval theory, only a second path to the existing
-  // one. A shape this cannot decompose (a call result, a load through a
-  // pointer, anything past MaxSymbolDepth) falls through to the same
-  // solver bisection constrainedInterval() already ran, so this can only
-  // ever tighten a result, never replace a sound one with an unsound
-  // one -- and combined via intersectInterval(), which itself falls back
-  // to the solver-only side on any disagreement.
+  // already computes for the equivalent AST shape, so this adds no new
+  // interval theory, only a second path to the existing one. A shape
+  // this can't decompose falls through to the same solver bisection
+  // constrainedInterval() already ran, so this can only tighten a
+  // result, never replace a sound one with an unsound one --
+  // intersectInterval() falls back to the solver-only side on
+  // disagreement.
   static Interval symbolInterval(SymbolRef Sym, ProgramStateRef State,
                                  CheckerContext &C, unsigned Depth) {
     ASTContext &Ctx = C.getASTContext();
@@ -2373,18 +2363,13 @@ public:
         return;
     }
     // The assume() above asks the path-sensitive solver alone, which
-    // (being the default RangeConstraintManager, not an SMT backend)
-    // does not re-derive a divisor's range from an already-narrow
-    // SymExpr the way SizeCastChecker::expressionInterval() does --
-    // that reasoning (the BO_Rem/BO_And/BO_Shr special cases, plus the
-    // symbolInterval() decomposition of a materialized local or field
-    // behind the same SVal) was already built for SignedArithmeticChecker
-    // and applies just as soundly here: any divisor the solver alone
-    // could not rule out zero for, but whose statically-computed range
-    // provably excludes zero, is a second, independent, purely-additive
-    // proof this checker never tried before.  The stage disables Clang's
-    // core.DivideZero checker, so querying the current state cannot borrow a
-    // same-operation nonzero assumption from that overlapping checker.
+    // doesn't re-derive a divisor's range from an already-narrow SymExpr
+    // the way expressionInterval() does. That reasoning, built for
+    // SignedArithmeticChecker, applies just as soundly here as a second,
+    // independent proof avenue: a divisor the solver can't rule out zero
+    // for, but whose statically-computed range provably excludes zero.
+    // The stage disables Clang's core.DivideZero, so this can't borrow a
+    // nonzero assumption from that overlapping checker.
     SizeCastChecker::Interval Range = SizeCastChecker::expressionInterval(
         Operation->getRHS(), C, Input);
     llvm::APSInt Zero(llvm::APInt(SizeCastChecker::MathBits, 0), false);
@@ -2434,16 +2419,10 @@ public:
       if (!Violation)
         return;
     }
-    // Same second, independent proof avenue as DivisorChecker just above.
-    // The stage likewise disables core.BitwiseShift, so the raw solver's
-    // assumeInclusiveRange() only sees a shift count's own SVal, not the
-    // Rem/And/Shr/Add/Sub/Mul structure expressionInterval() (and,
-    // through it, symbolInterval() for a materialized local or field)
-    // already reconstructs -- e.g. `b = k % 32;` used three lines later
-    // as `v >> (32 - b)` was previously provable as SignedArithmetic's
-    // `32 - b` result but NOT as this checker's own shift count, purely
-    // because this checker never consulted the same interval before
-    // falling back to reporting.
+    // Same second, independent proof avenue as DivisorChecker just above:
+    // the stage likewise disables core.BitwiseShift, so the raw solver
+    // only sees a shift count's own SVal, not the Rem/And/Shr/Add/Sub/Mul
+    // structure expressionInterval() reconstructs.
     SizeCastChecker::Interval CountRange = SizeCastChecker::expressionInterval(
         Operation->getRHS(), C, Input);
     SizeCastChecker::Interval Safe{SizeCastChecker::asMath(Low),
