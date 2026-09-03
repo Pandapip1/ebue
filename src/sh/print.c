@@ -89,25 +89,25 @@ static void queue_nested_heredocs_command(struct pctx *c,
 	switch (cmd->kind) {
 	case SH_CMD_SUBSHELL:
 	case SH_CMD_BRACE:
-		queue_nested_heredocs_list(c, cmd->body);
+		queue_nested_heredocs_list(c, cmd->u.group.body);
 		break;
 	case SH_CMD_IF:
-		for (arm = cmd->arms; arm; arm = arm->next) {
+		for (arm = cmd->u.ifcmd.arms; arm; arm = arm->next) {
 			queue_nested_heredocs_list(c, arm->cond);
 			queue_nested_heredocs_list(c, arm->body);
 		}
-		queue_nested_heredocs_list(c, cmd->else_body);
+		queue_nested_heredocs_list(c, cmd->u.ifcmd.else_body);
 		break;
 	case SH_CMD_LOOP:
-		queue_nested_heredocs_list(c, cmd->cond);
-		queue_nested_heredocs_list(c, cmd->body);
+		queue_nested_heredocs_list(c, cmd->u.loop.cond);
+		queue_nested_heredocs_list(c, cmd->u.loop.body);
 		break;
 	case SH_CMD_FOR:
-		queue_nested_heredocs_list(c, cmd->body);
+		queue_nested_heredocs_list(c, cmd->u.forloop.body);
 		break;
 	case SH_CMD_FUNCDEF:
-		if (cmd->func_body)
-			queue_nested_heredocs_command(c, cmd->func_body);
+		if (cmd->u.funcdef.func_body)
+			queue_nested_heredocs_command(c, cmd->u.funcdef.func_body);
 		break;
 	default:
 		break;
@@ -222,12 +222,12 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
 	switch (cmd->kind) {
 	case SH_CMD_SUBSHELL:
 		emit_char(c, '(');
-		print_list(c, cmd->body);
+		print_list(c, cmd->u.group.body);
 		emit_char(c, ')');
 		break;
 	case SH_CMD_BRACE:
 		emit_string(c, "{ ");
-		print_list(c, cmd->body);
+		print_list(c, cmd->u.group.body);
 		emit_string(c, "}");
 		break;
 	/* The compound commands are reprinted in the multi-line form XCU
@@ -240,35 +240,35 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
 	 * file exists to support. */
 	case SH_CMD_IF: {
 		const struct sh_ifarm *a;
-		for (a = cmd->arms; a; a = a->next) {
-			emit_string(c, a == cmd->arms ? "if " : "elif ");
+		for (a = cmd->u.ifcmd.arms; a; a = a->next) {
+			emit_string(c, a == cmd->u.ifcmd.arms ? "if " : "elif ");
 			print_list(c, a->cond);
 			emit_string(c, "then\n");
 			print_list(c, a->body);
 		}
-		if (cmd->else_body) {
+		if (cmd->u.ifcmd.else_body) {
 			emit_string(c, "else\n");
-			print_list(c, cmd->else_body);
+			print_list(c, cmd->u.ifcmd.else_body);
 		}
 		emit_string(c, "fi");
 		break;
 	}
 	case SH_CMD_LOOP:
-		emit_string(c, cmd->until ? "until " : "while ");
-		print_list(c, cmd->cond);
+		emit_string(c, cmd->u.loop.until ? "until " : "while ");
+		print_list(c, cmd->u.loop.cond);
 		emit_string(c, "do\n");
-		print_list(c, cmd->body);
+		print_list(c, cmd->u.loop.body);
 		emit_string(c, "done");
 		break;
 	case SH_CMD_FOR:
 		emit_string(c, "for ");
-		emit_string(c, cmd->name);
-		if (cmd->have_in) {
+		emit_string(c, cmd->u.forloop.name);
+		if (cmd->u.forloop.have_in) {
 			emit_string(c, " in");
-			print_words(c, cmd->words, 1);
+			print_words(c, cmd->u.forloop.words, 1);
 		}
 		emit_string(c, "\ndo\n");
-		print_list(c, cmd->body);
+		print_list(c, cmd->u.forloop.body);
 		emit_string(c, "done");
 		break;
 	/* XCU 2.9.5: "fname ( ) compound-command [io-redirect...]".  The
@@ -279,15 +279,15 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
 	 * reprint of a body this file never parsed could not promise
 	 * that. */
 	case SH_CMD_FUNCDEF:
-		emit_string(c, cmd->name);
+		emit_string(c, cmd->u.funcdef.name);
 		emit_string(c, "() ");
-		emit_string(c, cmd->func_text);
-		if (cmd->func_body)
-			queue_nested_heredocs_command(c, cmd->func_body);
+		emit_string(c, cmd->u.funcdef.func_text);
+		if (cmd->u.funcdef.func_body)
+			queue_nested_heredocs_command(c, cmd->u.funcdef.func_body);
 		break;
 	default:
-		print_words(c, cmd->assigns, 0);
-		print_words(c, cmd->words, cmd->assigns != 0);
+		print_words(c, cmd->u.simple.assigns, 0);
+		print_words(c, cmd->u.simple.words, cmd->u.simple.assigns != 0);
 		break;
 	}
 	print_redirs(c, cmd->redirs);
