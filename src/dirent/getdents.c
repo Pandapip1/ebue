@@ -2,30 +2,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * getdents: the GNU raw-directory-read call, taken directly off a fd
- * rather than a DIR.
+ * rather than a DIR. Record decoding goes through __plat_dir_decode_one()
+ * (src/internal/plat_dirent.h), shared with readdir()'s __dirstream_next().
  *
- * Record decoding goes through __plat_dir_decode_one() (src/internal/
- * plat_dirent.h), the same one src/dirent/readdir.c's __dirstream_next()
- * uses; this file no longer parses FILE_ID_BOTH_DIR_INFORMATION or
- * linux_dirent64 itself. Like readdir(), "." and ".." come through as
- * ordinary records straight from the backend (see dirent_internal.h) and
- * need no special handling here.
- *
- * A single __plat_dir_read() fill can hold more records than a given
- * call's `out`/`size` has room to decode into -- this project's own
- * struct dirent is a fixed 280 bytes (dominated by d_name[256]), well
- * above a real backend record's typical size (short names), so it is
- * routine for one fill to decode into more bytes than a caller's own
- * buffer holds. The backend's read position has already moved past that
- * whole fill by the time this function sees it, so anything decodable
- * but not yet handed to the caller has to survive to this fd's NEXT
- * getdents() call rather than being re-fetched -- a fresh backend read
- * at that point would only return whatever comes AFTER the fill already
- * consumed, silently skipping it. That leftover lives in f->dbuf/
- * dbufpos/dbuflen (struct __fd, src/internal/libc.h), the same
- * "buffer plus a cursor into it" shape __dirstream_next() already uses
- * for DIR, just owned by the fd table slot instead of an opendir()'d
- * object since getdents() has no such object of its own. */
+ * A single backend fill can decode into more struct dirent records than
+ * a caller's buffer has room for, since struct dirent is a fixed 280
+ * bytes; the leftover must survive to the next getdents() call rather
+ * than being re-fetched, since a fresh backend read would skip past it.
+ * It lives in f->dbuf/dbufpos/dbuflen (struct __fd), the same shape
+ * __dirstream_next() uses for DIR, owned by the fd slot instead since
+ * getdents() has no DIR object of its own. */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
  * public-header contract; transitive ABI declarations are intentional,
@@ -106,12 +92,8 @@ int getdents(int fd, struct dirent *out withtok(writable_span(size)),
 		if (used + sizeof(struct dirent) > size) break;
 		if (f->dbufpos >= f->dbuflen ||
 		    !__plat_dir_decode_one(f->dbuf, f->dbuflen, &f->dbufpos, &r)) {
-			/* Nothing left already fetched -- only now, with the
-			 * caller's own buffer confirmed to have room for at
-			 * least one more record (the check above), ask the
-			 * backend for more. Checking capacity first keeps this
-			 * fd's dbufpos from ever moving past a record this call
-			 * cannot actually deliver. */
+			/* Capacity is checked before refilling so dbufpos never
+			 * moves past a record this call can't actually deliver. */
 			ssize_t n = __plat_dir_read(f->h, f->dbuf, __DIRBUF_SIZE, 0);
 			if (n < 0) return used ? (int)used : -1;
 			if (n == 0) {

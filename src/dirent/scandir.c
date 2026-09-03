@@ -14,16 +14,10 @@
 #include <errno.h>
 #include "libc.h"
 
-/* qsort_r's comparator has type int (*)(const void *, const void *, void *);
- * the caller's compar has type
- * int (*)(const struct dirent **, const struct dirent **).  Casting compar
- * itself to the qsort_r shape and calling it that way is undefined (C99
- * 6.3.2.3p8): the call would go through a function pointer type that does
- * not match how the function was defined, and -fsanitize=function traps on
- * exactly that.  This adapter instead has the type qsort_r actually calls,
- * and does the reinterpretation on the *arguments* -- an ordinary object
- * pointer conversion, not a function-pointer one -- before calling compar
- * through its own, correct type. */
+/* Casting compar itself to qsort_r's comparator type and calling it that
+ * way is UB (C99 6.3.2.3p8) and traps under -fsanitize=function; this
+ * adapter has the type qsort_r actually calls and reinterprets the
+ * arguments instead, an ordinary object-pointer conversion. */
 static int scandir_cmp(const void *a, const void *b, void *arg) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int (*compar)(const struct dirent **, const struct dirent **) = arg;

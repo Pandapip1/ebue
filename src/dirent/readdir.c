@@ -1,22 +1,14 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * readdir/readdir_r, and __dirstream_next which every other file in this
- * directory that walks a DIR's entries (scandir, seekdir) goes through.
- * __dirstream_next() is now entirely backend-neutral: it refills dp->buf
- * via __plat_dir_read() and decodes one record at a time via
- * __plat_dir_decode_one() (src/internal/plat_dirent.h) -- neither this
- * file nor dirent_internal.h parses FILE_ID_BOTH_DIR_INFORMATION or
- * linux_dirent64 directly anymore; that moved into each backend's own
- * src/dirent/{nt,linux}/plat_dirent.c.
+ * readdir/readdir_r, and __dirstream_next() which every other DIR-walking
+ * file here (scandir, seekdir) goes through. It refills dp->buf via
+ * __plat_dir_read() and decodes records via __plat_dir_decode_one()
+ * (src/internal/plat_dirent.h); the backend-specific record parsing lives
+ * in each src/dirent/{nt,linux}/plat_dirent.c.
  *
- * d_reclen is always sizeof(struct dirent): unlike Linux's real getdents,
- * nothing here ever packs entries tighter than that, so there is no
- * shorter length to report.  d_off is dp->tell after the entry is
- * counted -- see dirent_internal.h for why that, and not a kernel byte
- * offset, is what telldir()/seekdir() work with.  "." and ".." arrive as
- * ordinary records straight from the backend (see dirent_internal.h);
- * nothing here treats them specially.
+ * d_reclen is always sizeof(struct dirent), never packed tighter. d_off
+ * is dp->tell (an entry count, not a kernel offset — see dirent_internal.h).
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -49,9 +41,6 @@ int __dirstream_next(DIR *dp, struct __dirent_raw *out)
 		if (dp->bufpos < dp->buflen &&
 		    __plat_dir_decode_one(dp->buf, dp->buflen, &dp->bufpos, out))
 			return 1;
-		/* Either the buffer was already exhausted, or
-		 * __plat_dir_decode_one() says nothing is left at/after
-		 * bufpos in THIS fill -- either way, a refill is needed. */
 		dp->bufpos = dp->buflen;
 		if (dp->done) return 0;
 
@@ -68,12 +57,6 @@ int __dirstream_next(DIR *dp, struct __dirent_raw *out)
 	}
 }
 
-/* All three are required by every one of this static helper's callers
- * (this file's own fill(), single call site): dp and out are the same
- * always-valid handles their own callers hold (see this family's
- * comments in include/dirent.h and dirent_internal.h), and r is always
- * `&r`, the address of fill()'s own on-stack __dirstream_next() output,
- * never NULL. */
 static int make_real(DIR *dp, const struct __dirent_raw *r, struct dirent *out)
     __attribute__((nonnull(1, 2, 3)));
 static int make_real(DIR *dp, const struct __dirent_raw *r, struct dirent *out)
@@ -86,13 +69,7 @@ static int make_real(DIR *dp, const struct __dirent_raw *r, struct dirent *out)
 	return advance_offset(dp, out);
 }
 
-/* 0 = filled *out; 1 = end of directory; -1 = error, errno set.
- *
- * dp is this family's usual required handle; out is required too --
- * both of fill()'s callers below pass a real object's address
- * (readdir_r's own `entry` parameter, or readdir's `&dp->ent`), never
- * NULL, and nothing in this function ever checks out for NULL before
- * writing through it. */
+/* 0 = filled *out; 1 = end of directory; -1 = error, errno set. */
 static int fill(DIR *dp, struct dirent *out) __attribute__((nonnull(1, 2)));
 static int fill(DIR *dp, struct dirent *out)
 {
