@@ -4,30 +4,19 @@
  * exec.
  *
  * No Windows call replaces the running image, so execve cannot do what
- * it does on Unix.  What it does instead is start the program as a child,
- * wait for it, and end with its status -- so that to anything watching
- * (a shell running `exec prog`, a parent that will waitpid) the process
- * runs prog and ends when prog ends.  The one visible difference is that
- * the pid changes; nothing else here can be helped.
+ * it does on Unix. What it does instead is start the program as a child,
+ * wait for it, and end with its status, so anything watching (a shell
+ * running `exec prog`, a parent that will waitpid) sees the process run
+ * prog and end when prog ends. The pid changes; nothing else can be
+ * helped -- the same approach every from-scratch Unix-on-Windows layer
+ * without a kernel personality ends up taking.
  *
- * This is the same thing the M2libc Windows port does, and the same
- * thing every from-scratch Unix-on-Windows layer without a personality
- * in the kernel ends up doing.
- *
- * Linux, unlike NT, has the real primitive this whole file's fork+wait
- * dance is a stand-in for: execve(2) replaces the calling process's own
- * image in place -- same pid, no new process, no parent watching a
- * child at all.  __plat_process_exec() (src/process/linux/plat_process.c)
- * is that real syscall, and execve() below calls it directly, under
- * #if defined(__linux__), instead of running the emulation.  Nothing
- * else in this file changes: execvpe()'s PATH search and [ENOEXEC]
- * shell fallback, execv()/execl()/execle()/execlp()/fexecve() all still
- * funnel through execve(), so a real in-place exec is exactly as far as
- * this one #ifdef has to reach.  __plat_process_exec() itself is
- * declared only for the Linux backend to implement (plat_process.h's
- * own comment); confining every call to it inside #if defined(__linux__)
- * is what keeps an NT build from ever referencing a symbol nothing
- * there defines.
+ * Linux has the real primitive this fork+wait dance stands in for:
+ * execve(2) replaces the process image in place, same pid, no child.
+ * __plat_process_exec() is that real syscall, and execve() below calls
+ * it directly under #if defined(__linux__) instead of running the
+ * emulation; every other function here still funnels through execve(),
+ * so that one #ifdef is as far as the real path needs to reach.
  */
 #include <unistd.h>
 #include <stdlib.h>
@@ -51,59 +40,41 @@ int execve(const char *path, char *const argv[], char *const envp[])
 		return -1;
 	}
 #if defined(__linux__)
-	/* The real thing: getpid() after this returns unchanged (or this
-	 * call does not return at all), unlike the fork+wait stand-in
-	 * below.  A failed real execve() already leaves this process's
-	 * image completely untouched -- POSIX's own promise for a *failed*
-	 * exec, exec.html's "the calling process image shall be
-	 * unchanged" -- so there is no cloexec-close, no _exit(), nothing
-	 * left for this function to do afterward on either path: success
-	 * never returns here, and failure returns exactly what
-	 * __plat_process_exec() reports. */
+	/* The real thing: getpid() after this returns unchanged, unlike the
+	 * fork+wait stand-in below. A failed real execve() already leaves
+	 * the process image untouched (exec.html's promise for a failed
+	 * exec), so there's no cloexec-close or _exit() left to do here on
+	 * either path. */
 	return __plat_process_exec(path, argv, envp);
 #else
 	pid = __spawn(path, argv, envp);
 	if (pid < 0) return -1;
 	/* Past this point exec has "succeeded": the new program is running
-	 * and this process only stands in for it until it ends.  Only now may
-	 * the close-on-exec descriptors go.  Closing them before the spawn --
-	 * which is what this used to do -- broke the one thing POSIX promises
-	 * about a *failed* exec, that the process image is unchanged: a
-	 * caller whose execv() returned ENOENT got back a process whose
-	 * cloexec fds had already been closed under it.
+	 * and this process only stands in for it. Only now may cloexec
+	 * descriptors close -- closing them before the spawn would leave a
+	 * failed exec (e.g. ENOENT) with an already-mutated process image,
+	 * breaking POSIX's unchanged-on-failure promise.
 	 *
-	 * Nothing about the child needs them closed first.  A cloexec
-	 * descriptor's handle is created without OBJ_INHERIT (src/fcntl/open.c,
-	 * src/unistd/dup.c, src/unistd/pipe.c, src/fcntl/fcntl.c), so
-	 * RtlCreateUserProcess does not copy it however the flag is set here,
-	 * and __fd_runtime_data (src/internal/fd.c) leaves cloexec entries out
-	 * of the table the child reads back.  The close is still done, rather
-	 * than dropped, because this process outlives the spawn: holding a
-	 * file open for the child's whole run would keep a lock or a pending
-	 * delete alive that a real exec would have released. */
+	 * The child never needed them closed first: a cloexec handle is
+	 * created without OBJ_INHERIT, so RtlCreateUserProcess never copies
+	 * it regardless. The close still happens because this process
+	 * outlives the spawn -- holding the file open for the child's whole
+	 * run would keep a lock or pending delete alive that a real exec
+	 * would have released. */
 	__fd_close_all_cloexec();
 	if (waitpid(pid, &status, 0) < 0) return -1;
-	/* End the way _exit() does, not the way exit() does.  exec.html
-	 * DESCRIPTION: "After a successful call to any of the exec functions,
-	 * any functions previously registered by the atexit(),
-	 * at_quick_exit(), or pthread_atfork() functions are no longer
-	 * registered."  A real exec throws the address space away, so nothing
-	 * registered before it can run afterwards.  This stand-in keeps the
-	 * address space, so calling exit() here ran the *caller's* atexit
-	 * handlers at the moment the exec'd program finished.
+	/* End the way _exit() does, not exit(): exec.html says a successful
+	 * exec unregisters every atexit()/at_quick_exit()/pthread_atfork()
+	 * handler, but this stand-in keeps the address space, so calling
+	 * exit() here would run the *caller's* atexit handlers when the
+	 * exec'd program finishes -- not cosmetic: GCC's driver registers
+	 * delete_temp_files() with atexit() then fork()+execv()s cc1, and a
+	 * stand-in that ran it on cc1's exit deleted the driver's own
+	 * intermediate .s before "as" could read it.
 	 *
-	 * That is not cosmetic.  GCC's driver registers delete_temp_files()
-	 * with atexit() and then fork()s + execv()s cc1; the forked stand-in
-	 * ran that handler when cc1 exited, deleting the driver's own
-	 * intermediate .s the instant cc1 had written it, and the "as" step
-	 * that followed found nothing there.
-	 *
-	 * The stdio flush goes for the same reason.  The standard says
-	 * nothing about buffered data across exec, so glibc is the oracle:
-	 * printf() with no newline followed by execl() prints nothing
-	 * (measured, glibc 2.39), because the buffer dies with the image.
-	 * Flushing here would emit, after the exec'd program's own output,
-	 * bytes a real exec had discarded. */
+	 * Skip the stdio flush for the same reason: glibc's own behavior
+	 * (measured, 2.39) is that a printf() with no newline followed by
+	 * execl() prints nothing, since the buffer dies with the image. */
 	if (WIFEXITED(status)) _exit(WEXITSTATUS(status));
 	/* The child died by a signal; this process is standing in for it, so
 	 * end the same way and let *our* parent's waitpid see WIFSIGNALED. */
@@ -116,54 +87,24 @@ int execv(const char *path, char *const argv[])
 	return execve(path, argv, __environ);
 }
 
-/* exec.html DESCRIPTION: "In the cases where the other members of the
- * exec family of functions would fail and set errno to [ENOEXEC], the
- * execlp() and execvp() functions shall execute a command interpreter
- * and the environment of the executed command shall be as if the
- * process invoked the sh utility using execl() as follows:
+/* exec.html: on [ENOEXEC], execlp()/execvp() must run a command
+ * interpreter as if by execl(<shell path>, arg0, file, arg1, ...,
+ * (char *)0) -- the page's [ENOEXEC] shall-fail clause explicitly
+ * excludes these two, and APPLICATION USAGE requires treating the file
+ * as a shell script (required since POSIX.1-2017).
  *
- *     execl(<shell path>, arg0, file, arg1, ..., (char *)0);
+ * The interpreter is this libc's own __sh_run_script() (src/sh/script.c),
+ * called as a function rather than spawned as a second image, per the
+ * shell's own "reuse rule" design note. Spawning sh as a second image was
+ * rejected: resolving it through PATH would give arbitrary code
+ * execution to whoever can set PATH for a script the caller chose but
+ * never trusted PATH to interpret, and locating an sh.exe beside the
+ * running image only holds for `make install`'s own layout.
  *
- * where <shell path> is an unspecified pathname for the sh utility,
- * file is the process image file, and for execvp(), where arg0, arg1,
- * and so on correspond to the values passed to execvp() in argv[0],
- * argv[1], and so on."
- *
- * which is why the same page's [ENOEXEC] entry is scoped "The exec
- * functions, *except for execlp() and execvp()*, shall fail if" -- for
- * these two it is not an error at all.  APPLICATION USAGE says the same
- * thing from the other side: "When the execlp() and execvp() functions
- * encounter such a file, they assume the file to be a shell script and
- * invoke a known command interpreter to interpret such files.  This is
- * now required by POSIX.1-2017."
- *
- * Which sh, and why: this libc's own, called as a function --
- * __sh_run_script() (src/sh/script.c) -- and not spawned as a second
- * image, per the shell's own design note (its "reuse rule"): it "is a
- * set of internal functions compiled into libc.a", and callers "call
- * those functions directly and never spawn an external interpreter."
- * This clause is the case the rule was written for, not an exception
- * to it.
- *
- * Spawning sh as a second image was rejected on two counts.  Resolving
- * the interpreter through PATH would hand whoever can set PATH
- * arbitrary code execution in every process that execs a script -- the
- * script named by `file` is one the caller chose to run, but the
- * interpreter never was, so PATH would be trusted for strictly more
- * than the caller trusted it for (include/ntlibc/rpath.h refuses the
- * same bargain for $ORIGIN DLL search).  And locating an sh.exe beside
- * the running image only holds for `make install`'s own layout,
- * breaking silently for every other build or packaging layout.
- *
- * Running the interpreter in this process does not "leave the old
- * image underneath the new one" any more than execve() above does:
- * nothing here ever replaces an address space, since NT has no
- * primitive that does.  __sh_run_script() is the same exec stand-in
- * with the spawn taken out, so it closes cloexec descriptors and calls
- * _exit() rather than exit() in the same order execve() does, exactly
- * as exec.html requires.
- *
- * Returns only on failure, like every other exec path here. */
+ * __sh_run_script() is the same exec stand-in with the spawn taken out:
+ * it closes cloexec descriptors and calls _exit(), not exit(), in the
+ * same order execve() does above. Returns only on failure, like every
+ * other exec path here. */
 static int shell_fallback(const char *path, char *const argv[], char *const envp[]) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int enoexec = errno;
@@ -174,49 +115,33 @@ static int shell_fallback(const char *path, char *const argv[], char *const envp
 	while (argv[n]) n++;
 	av = (char **)malloc((n + 3) * sizeof *av);
 	if (!av) { errno = enoexec; return -1; }
-	/* arg0, file, arg1, ..., (char *)0 -- the clause's own shape.
-	 * arg0 is the caller's, not the shell's path: glibc substitutes
-	 * _PATH_BSHELL there, but POSIX.1-2017 names arg0 as "the value
-	 * passed to execvp() in argv[0]" and POSIX.1-2024 relaxes the same
-	 * slot to "<name> is an unspecified string", so passing argv[0]
-	 * through satisfies both.  It is only what the shell prefixes its
-	 * diagnostics with (src/sh/script.c's progname); $0 is the operand
-	 * after it either way (sh(1p) OPERANDS).
+	/* arg0, file, arg1, ..., (char *)0 -- the clause's own shape. arg0 is
+	 * the caller's, not the shell's path: it's only what the shell
+	 * prefixes its diagnostics with, and passing argv[0] through
+	 * satisfies both POSIX.1-2017's and -2024's wording for that slot.
 	 *
-	 * What is passed as `file` is the *resolved* path, not the argument
-	 * as given.  exec.html says "file is the process image file", and
-	 * for a name with no <slash> the process image file is what the
-	 * PATH search found; the shell's command_file operand is a pathname
-	 * it opens relative to its own current directory, so handing it the
-	 * bare name would resolve it a second time, by different rules,
-	 * against a different place than the one it was found in.
+	 * `file` is the *resolved* path, not the argument as given: the
+	 * shell would otherwise open a bare name a second time, by different
+	 * rules, against a different place than where PATH search found it.
 	 *
-	 * An empty argv (n == 0) is not something a conforming caller
-	 * produces -- exec.html: "The application shall ensure that the
-	 * last member of this array is a null pointer" and arg0 "should
-	 * point to a filename string" -- but it must not index argv[0]
-	 * here, so the shell gets its own name in that slot. */
+	 * An empty argv (n == 0) is nonconforming, but must not index
+	 * argv[0] here, so the shell gets its own name in that slot. */
 	av[0] = n ? argv[0] : (char *)"sh";
 	av[1] = (char *)path;
 	for (i = 1; i < n; i++) av[i + 1] = argv[i];
 	argc = (int)(n ? n : 1) + 1;
 	av[argc] = 0;
 
-	/* "the environment of the executed command shall be as if the
-	 * process invoked the sh utility using execl()" -- the interpreter
-	 * runs with `envp`, which for execvp()/execlp() is the caller's own
-	 * environ and for execvpe() is whatever the caller supplied.  The
-	 * engine reads the environment through __environ (getenv(),
-	 * wordexp()), so pointing that at envp is what an execve() of the
-	 * shell would have done to the new image's environ. */
+	/* The interpreter must run with the environment execl() of the shell
+	 * would have given it; the engine reads the environment through
+	 * __environ (getenv(), wordexp()), so pointing that at envp achieves
+	 * it. */
 	__environ = (char **)envp;
 
-	/* Past this point the exec has "succeeded" in the only sense this
-	 * file ever means it (see execve() above): the interpreter is
-	 * committed to and this process is standing in for it.  Only now
-	 * may the close-on-exec descriptors go, and only _exit() may end
-	 * it -- the caller's atexit handlers and unflushed stdio died with
-	 * the image a real exec threw away. */
+	/* Past this point the exec has "succeeded" (see execve() above): the
+	 * interpreter is committed to. Only now may cloexec descriptors go,
+	 * and only _exit() may end it -- atexit handlers and unflushed stdio
+	 * died with the image a real exec would have thrown away. */
 	__fd_close_all_cloexec();
 	_exit(__sh_run_script(argc, av));
 	return -1;   /* not reached: _exit() does not return */
@@ -230,22 +155,15 @@ int execvpe(const char *file, char *const argv[], char *const envp[])
 	full = __find_program(file, use_path);
 	if (!full) { errno = ENOENT; return -1; }
 	r = execve(full, argv, envp);
-	/* The one place the p-forms part company with the rest of the
-	 * family.  [ENOEXEC] here is NT refusing the file as a process
-	 * image: RtlCreateUserProcess answers STATUS_INVALID_IMAGE_NOT_MZ
-	 * for a file with no MZ header at all or STATUS_INVALID_IMAGE_FORMAT
-	 * for a malformed one, and src/process/spawn.c turns both into
-	 * ENOEXEC.  Reading it back off errno rather than plumbing a status
-	 * out of __spawn() keeps the condition stated in the terms
-	 * exec.html states it in -- "would fail and set errno to [ENOEXEC]"
-	 * -- and needs no second channel through execve().
+	/* [ENOEXEC] here is NT refusing the file as a process image
+	 * (RtlCreateUserProcess: STATUS_INVALID_IMAGE_NOT_MZ or
+	 * _FORMAT, mapped to ENOEXEC by spawn.c). Reading it back off errno
+	 * matches how exec.html states the condition and needs no second
+	 * channel through execve().
 	 *
-	 * Not gated on use_path.  The clause is about which *function* was
-	 * called, not how the name resolved: "the execlp() and execvp()
-	 * functions shall execute a command interpreter", with no exception
-	 * for a file argument containing a <slash>.  XCU 2.9.1 makes the
-	 * same choice explicitly for the shell's two branches, giving the
-	 * <slash> case its own sentence with the same fallback in it. */
+	 * Not gated on use_path: the clause is about which *function* was
+	 * called, not how the name resolved, and XCU 2.9.1 gives a <slash>
+	 * file argument the same fallback explicitly. */
 	if (r == -1 && errno == ENOEXEC) r = shell_fallback(full, argv, envp);
 	e = errno;
 	free(full);
@@ -325,29 +243,16 @@ int fexecve(int fd, char *const argv[], char *const envp[])
 	struct stat st;
 	int r;
 
-	/* exec.html gives fexecve() one shall-fail clause of its own:
-	 * "[EBADF] The fd argument is not a valid file descriptor open for
-	 *  executing."
-	 * Nothing below can produce it.  fexecve() recovers a path from the
-	 * descriptor and hands it to execve(), and from there the outcome is
-	 * whatever NT makes of that path as a process image -- a directory
-	 * descriptor reaches RtlCreateUserProcess (src/process/spawn.c) and
-	 * comes back as an image-section failure, whose NTSTATUS is about
-	 * the *file* and carries nothing about the descriptor.  Measured on
-	 * Windows 11 22621, NtCreateSection(SEC_IMAGE) on a directory handle
-	 * is STATUS_INVALID_FILE_FOR_SECTION (0xc0000020).  spawn.c maps that
-	 * status to ENOEXEC when it describes process creation, but that still
-	 * cannot recover fexecve()'s descriptor-specific EBADF distinction.
-	 * Wine gets there by another route and produces EBADF.
-	 *
-	 * So the clause is decided here, where the descriptor still exists,
-	 * rather than left to a status that is not about it.  A descriptor
-	 * that is not open on a regular file is not "open for executing" --
-	 * exec.html's own [EACCES] clause for the path-taking members names
-	 * "not a regular file" as the condition -- and that verdict does not
-	 * depend on which of NT or Wine is underneath.  Anything else stays
-	 * with execve(): a regular file that is not an executable is still
-	 * ENOEXEC, not EBADF. */
+	/* exec.html's fexecve()-specific [EBADF] ("fd ... not open for
+	 * executing") can't come from execve() below it: a directory
+	 * descriptor reaches RtlCreateUserProcess and comes back as an
+	 * image-section NTSTATUS about the *file*, not the descriptor
+	 * (measured, Windows 11 22621: STATUS_INVALID_FILE_FOR_SECTION on a
+	 * directory handle, which spawn.c maps to ENOEXEC, not EBADF). So the
+	 * clause is decided here instead, while the descriptor still exists:
+	 * not open on a regular file means not "open for executing". A
+	 * regular file that isn't executable still falls through to
+	 * execve()'s own ENOEXEC. */
 	if (fstat(fd, &st) < 0) { errno = EBADF; return -1; }
 	if (!S_ISREG(st.st_mode)) { errno = EBADF; return -1; }
 

@@ -4,71 +4,31 @@
  * Resolving a program name for execvp.
  *
  * A name with a directory part (a '/', a '\\', or a drive letter) is
- * taken as-is; __spawn reports ENOENT if it does not exist.  Anything
- * else is looked up in each directory of PATH, trying the name and then
- * the name with ".exe" appended, which is what Windows expects an image
- * to be called (and which __is_program()'s own sniff means a Linux
- * candidate never actually needs, since it is never named that way, but
- * trying it costs one extra failed access() and matches Windows PATH
- * search order exactly).  PATH's entry separator and the character
- * try_dir() joins a directory to `name` with are both platform, not
- * fixed: on NT, PATH entries are separated by ';' -- a ':' cannot be
- * the separator because every absolute entry ("C:\Windows") contains
- * one -- and a synthesized path is joined with '\\'.  On Linux, PATH
- * entries are separated by ':' and joined with '/', because that is
- * what gets handed to the real execve(2)/access() calls afterward, not
- * to another NT API that would tolerate either.  An empty entry means
- * the current directory, as on Unix.
+ * taken as-is; __spawn reports ENOENT if it does not exist. Otherwise
+ * each PATH directory is tried with the name, then with ".exe" appended
+ * (what Windows expects, and what a Linux candidate never needs but
+ * costs only one extra failed access() to rule out). PATH's separator
+ * (';' on NT, since ':' appears in every absolute entry like
+ * "C:\Windows"; ':' on Linux) and join character ('\\' vs '/') are both
+ * platform-specific; an empty entry means the current directory.
  *
- * A candidate needs both access(X_OK), backed by $LXMOD when present,
- * and __is_program(), below: the first two bytes are "MZ" (an image NT's
- * own loader will take) or "#!" (a
- * script, which execvp() must hand to a command interpreter -- exec.html
- * DESCRIPTION, the clause that scopes the [ENOEXEC] error "except for
- * execlp() and execvp()").  Reading exactly those two bytes is not an
- * invention: exec.html APPLICATION USAGE names it as one of the two
- * historical strategies -- "some historical implementations handle shell
- * scripts is by recognizing the first two bytes of the file as the
- * character string \"#!\"".
+ * A candidate needs both access(X_OK) (backed by $LXMOD) and
+ * __is_program() below (first two bytes "MZ" or "#!", the latter one of
+ * the two historical script-detection strategies exec.html APPLICATION
+ * USAGE names). XBD 8.3 requires only "an executable file ... with
+ * appropriate execution permissions" and names no mechanism for probing
+ * it; musl's execvp() confirms access() was never required, since it
+ * just execve()s each candidate instead -- not viable here, since NT
+ * process creation isn't cheap the way a failed execve() on a fork()ed
+ * child is. MSVCRT splits the same two questions across separate pages
+ * (PATH search order vs. execute-bit checks) for the same reason.
  *
- * The two checks answer different halves of XBD 8.3's requirement that
- * PATH locate "an executable file ... with appropriate execution
- * permissions": $LXMOD supplies permission and the short read rejects a
- * directory or data file which happens to carry that permission.  The
- * only normative statement of the match
- * criterion is XBD 8.3, under PATH: "The list shall be searched from
- * beginning to end, applying the filename to each prefix, until an
- * executable file with the specified name and appropriate execution
- * permissions is found."  That is a *property of the file*, with no
- * mandated way of probing for it -- exec.html itself says only that "the
- * path prefix for this file is obtained by a search of the directories
- * passed as the environment variable PATH", and neither page mentions
- * access() or X_OK anywhere.  musl agrees by construction: its
- * src/process/execvp.c calls no access() at all, it simply execve()s
- * each candidate and continues on EACCES/ENOENT/ENOTDIR.  That algorithm
- * is not available here -- NT process creation is atomic, so a failed
- * attempt is not free the way a failed execve() on a fork()ed child is
- * -- but it settles whether access() was ever the required mechanism.
- * It was not.  Even MSVCRT splits these two questions the same way: its
- * documented extension list (.com/.exe/.bat/.cmd) is on the _exec/_spawn
- * pages, describing *PATH search order*, while the _stat page says only
- * that the user execute bits follow "the filename extension" and
- * enumerates nothing.
- *
- * Content sniffing stays here rather than in stat(): it is needed once
- * per PATH candidate, while putting it in stat() would open and read every
- * regular file merely to report metadata.
- *
- * Cygwin is the cautionary case here, and the difference is where the
- * sniff sits.  Its noacl fallback sniffs inside stat(), pays the open
- * and read on every stat() of every file, and never caches the negative
- * result -- so a non-executable file is re-opened and re-read on each
- * fstat, even on the same descriptor.  That is why its manual documents
- * `ls -l` as slow and offers exec/cygexec mount options to switch the
- * sniff off.  This sniff is reached once per PATH candidate inside one
- * execvp(), never from stat(), so there is no repeated-call pattern for
- * a cache to serve; the fix for Cygwin's problem is not to add a cache
- * here but to keep the sniff out of stat(), which src/stat/stat.c does.
+ * Content sniffing stays out of stat(): needed once per PATH candidate
+ * here, not on every stat() of every file. Cygwin's noacl fallback
+ * sniffs inside stat() instead, paying the open+read on every call with
+ * no cache (hence `ls -l` being documented as slow there); the fix is
+ * keeping the sniff out of stat() (src/stat/stat.c), not adding a cache
+ * here.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -87,24 +47,17 @@
 
 /* Can NT start this file, or is it a script something else can run?
  *
- * FILE_NON_DIRECTORY_FILE matters as much as the two bytes do: without
- * it a PATH entry with an empty program name appended ("C:\Windows\")
- * opens the *directory* and the search accepts it, which is how
- * execvp("") used to resolve to the first directory in PATH and try to
- * execute it (test/POSIX-COVERAGE.md, exec group, bug 1).
+ * FILE_NON_DIRECTORY_FILE matters as much as the two-byte sniff: without
+ * it, an empty program name appended to a PATH entry ("C:\Windows\")
+ * opens the *directory* and the search accepts it (test/POSIX-COVERAGE.md,
+ * exec group, bug 1).
  *
- * FILE_OPEN_NO_RECALL and the two RECALL_ON_* attribute checks keep this
- * from waking a cloud-backed placeholder.  A OneDrive-style provider
- * fetches the entire file when one is opened or first read, so a PATH
- * search that sniffed blindly could pull megabytes over a network to
- * look at two bytes -- and a PATH directory full of placeholders would
- * do it once per candidate.  A placeholder is answered "no" without
- * being read: it is not a program this search can vouch for, and a
- * caller who knows better can still name it with a path and reach
- * __spawn directly, which is what execv() does.
- *
- * Any other failure is "no" for the same reason.
- */
+ * FILE_OPEN_NO_RECALL and the RECALL_ON_* attribute checks keep this
+ * from waking a cloud-backed placeholder: a OneDrive-style provider
+ * fetches the whole file on open/first-read, so blind sniffing could
+ * pull megabytes over a network just to look at two bytes. A placeholder
+ * (or any other failure) is answered "no" without being read; a caller
+ * who knows better can still reach __spawn directly with a path. */
 int __is_program(const char *path)
 {
 	return __plat_is_program(path);
@@ -158,20 +111,13 @@ char *__find_program(const char *name, int use_path)
 #else
 	static const char psep[] = ";";
 #endif
-	/* The empty string names nothing, and it has to be answered here
-	 * rather than left to the search below.  exec.html's [ENOENT] is
-	 * explicit -- "A component of path or file does not name an
-	 * existing file or path or file is an empty string" -- but "" has
-	 * no directory part, so has_dir() sends it into the PATH loop,
-	 * where try_dir() appends it to a PATH entry and produces
-	 * `<entry>\` (or `<entry>/` on Linux): the directory itself, with
-	 * nothing after it.  A search implementation can otherwise
-	 * accidentally turn it into that, so reject it before consulting
-	 * PATH.  __is_program()
-	 * also refuses directories, but this check stays: a shall-fail clause
-	 * should not
-	 * rest on an open flag two functions away, and musl rejects the
-	 * empty string up front for the same reason.) */
+	/* The empty string must be rejected before the PATH loop: it has no
+	 * directory part, so has_dir() would otherwise send it through
+	 * try_dir(), which appends nothing to a PATH entry and produces just
+	 * `<entry>/` -- the directory itself. __is_program() also refuses
+	 * directories, but a shall-fail clause shouldn't rest on an open
+	 * flag two functions away; musl rejects the empty string up front
+	 * too. */
 	if (!name[0]) { errno = ENOENT; return 0; }
 	if (!use_path || has_dir(name)) {
 		size_t n = strlen(name) + 1;
