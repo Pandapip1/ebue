@@ -23,7 +23,7 @@
  * truly sharing memory, not accidentally serialized), and one guarded by
  * the mutex below (required to show the EXACT expected count, every
  * time). A single-threaded test proves nothing about lock correctness;
- * this is the real contention test the report for this port describes.
+ * this is the real contention test that matters.
  */
 #include <stddef.h>
 #include "plat_thread.h"
@@ -114,10 +114,8 @@ static unsigned worker(void *arg)
  * banner on why a thread handle from __plat_thread_spawn() cannot be
  * passed to __plat_wait_one() in this backend (a different handle
  * namespace than the futex-object handles __plat_wait_one understands).
- * This is exactly the kind of Linux-only, local, test-scaffolding-only
- * extension the task's own instructions anticipate ("do not implement
- * the real thing yourself -- add a clearly-marked LOCAL-ONLY stub"),
- * except here it is a real, correct wait4() rather than a stub, because
+ * This is a Linux-only, local, test-scaffolding-only extension -- a
+ * real, correct wait4() rather than a stub, because
  * __plat_thread_spawn()'s own clone() flags (see plat_thread.c) were
  * chosen specifically to make the spawned thread visible to a plain
  * wait4() call. */
