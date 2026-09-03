@@ -442,22 +442,18 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options) // NOLINT(bu
 	if (idtype != P_ALL && want <= 0) { errno = ECHILD; return -1; }
 
 	if (options & WEXITED) {
-		/* WSTOPPED is WUNTRACED and WCONTINUED is WCONTINUED (the
-		 * same bits, <sys/wait.h>), so the flags pass straight
-		 * through and do_waitpid() applies its own job_report() ahead
-		 * of the exit wait.  WEXITED itself has no waitpid() spelling
-		 * -- it is what waitpid() always does -- and must be masked
-		 * off, since do_waitpid() rejects any bit it does not know. */
+		/* WSTOPPED/WCONTINUED share bits with WUNTRACED/WCONTINUED
+		 * (<sys/wait.h>), so they pass straight through to
+		 * do_waitpid()'s own job_report(). WEXITED has no waitpid()
+		 * spelling -- it's what waitpid() always does -- so it must be
+		 * masked off, since do_waitpid() rejects any bit it doesn't know. */
 		pid = do_waitpid(want, &status, options & (WNOHANG | WSTOPPED | WCONTINUED),
 		                 0, options & WNOWAIT ? 1 : 0);
 		if (pid < 0) return -1;
-		/* "If WNOHANG was specified and status is not available, 0
-		 * shall be returned" (RETURN VALUE).  DESCRIPTION also
-		 * requires infop to be distinguishable in that case;
-		 * POSIX.1-2017 leaves it implementation-defined whether infop
-		 * is written, and zeroing it (si_signo == 0, si_pid == 0) is
-		 * what makes "nothing happened" detectable by a caller that
-		 * only has the 0 return to go on. */
+		/* WNOHANG with no status available returns 0; POSIX.1-2017
+		 * leaves infop implementation-defined in that case, and zeroing
+		 * it (si_signo == 0) is what makes "nothing happened" detectable
+		 * by a caller with only the 0 return to go on. */
 		if (pid == 0) {
 			if (infop) {
 				memset(infop, 0, sizeof *infop);
@@ -465,10 +461,9 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options) // NOLINT(bu
 			return 0;
 		}
 	} else {
-		/* No WEXITED: the caller wants a stop or continue report and
-		 * explicitly not an exit, so do_waitpid() must not be entered
-		 * at all -- it would wait on the process handle and reap a
-		 * child whose death this call did not ask to hear about.
+		/* No WEXITED: the caller wants a stop/continue report only, so
+		 * do_waitpid() must not run at all -- it would wait on the
+		 * process handle and reap a child this call didn't ask about.
 		 * Read the report directly instead. */
 		struct __child *c = job_report(want < 0 ? 0 : want, options & (WSTOPPED | WCONTINUED));
 
@@ -477,14 +472,12 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options) // NOLINT(bu
 			pid = c->pid;
 			if (!(options & WNOWAIT)) c->jobstat = 0;
 		} else {
-			/* Nothing pending, and nothing can make one pending
-			 * later: the only thing that stops or continues a child
-			 * here is this process calling kill(), and a blocked
-			 * waitid() is not calling kill().  So the wait POSIX
-			 * describes would be an unconditional hang.  With WNOHANG
-			 * this is plainly "no status available", a 0 return;
-			 * without it, ECHILD is both terminating and true --
-			 * there is no child that can ever satisfy this request. */
+			/* Nothing pending, and nothing can make one pending later:
+			 * only this process's own kill() stops or continues a
+			 * child, and a blocked waitid() isn't calling kill(). So
+			 * the wait POSIX describes would hang forever -- WNOHANG
+			 * makes that "no status available" (0); without it, ECHILD
+			 * is simply true. */
 			if (infop) {
 				memset(infop, 0, sizeof *infop);
 			}
