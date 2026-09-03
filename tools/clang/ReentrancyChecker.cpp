@@ -7,50 +7,32 @@
 // member on the same path, which silently invalidates the first result, and
 // then reads/dereferences/passes on the now-stale pointer.
 //
-// This is a distinct dataflow problem from OwnershipChecker's malloc/free
-// bookkeeping in this same directory: there is no allocation and no free,
-// the "resource" is implicit shared static storage, and the bug is "stale
-// pointer read after a same-family call invalidated it."
+// Distinct from OwnershipChecker's malloc/free bookkeeping: there's no
+// allocation and no free, the "resource" is implicit shared static
+// storage, and the bug is a stale pointer read after a same-family call
+// invalidated it.
 //
-// Family grounding (src/string, src/time; read in full before writing this
-// table):
+// Family grounding (src/string, src/time):
+//   strtok    src/string/strtok.c's hidden file-scope `static char *p`
+//             threads state across calls with a NULL first argument.
+//   (wcstok/strtok_r excluded) both take an explicit `ptr`/`saveptr`
+//             argument and keep no static state at all.
+//   gmtime/localtime/asctime/ctime/getdate each have their own,
+//             independent static buffer in src/time/*.c -- contrary to
+//             the usual libc folklore of a shared buffer, grep confirms
+//             five separate declarations, one per function, and
+//             ctime_r/asctime_r only ever call the _r (explicit-buffer)
+//             helpers. So each real family below has exactly one member:
+//             only calling that same public function again invalidates
+//             its own prior result.
 //
-//   strtok    src/string/strtok.c keeps a hidden file-scope `static char *p`
-//             that threads state across calls with a NULL first argument.
-//             The returned token pointer aliases the caller's own string,
-//             but POSIX strtok's implicit per-call state is exactly the
-//             "silently invalidated by a second call" hazard this checker
-//             looks for, so it is in the family.
-//   (wcstok excluded) src/string/wcstok.c is explicit: it takes a
-//             `wchar_t **restrict ptr` argument and keeps no static state at
-//             all (see the file's own header comment) -- it is the
-//             reentrant-safe shape, like strtok_r, and never touches hidden
-//             storage.  strtok_r is excluded for the same reason.
-//   gmtime    src/time/gmtime.c: `static struct tm tm;` local to gmtime().
-//   localtime src/time/localtime.c: its own, separate `static struct tm tm;`
-//   asctime   src/time/asctime.c: its own `static char buf[32];`
-//   ctime     src/time/ctime.c: its own, separate `static char buf[32];`
-//   getdate   src/time/getdate.c: its own `static struct tm tm;`
-//
-//   Contrary to the usual "gmtime/localtime/asctime/ctime commonly share one
-//   implementation buffer" libc folklore, grep across src/time/*.c shows
-//   ntlibc gives each of gmtime, localtime, asctime, ctime, and getdate its
-//   OWN independent static buffer (five separate `static struct tm`/`static
-//   char buf[]` declarations, one per function) -- and ctime_r/asctime_r
-//   only ever call the _r (explicit-buffer) forms of their helpers, never
-//   the public static-storage ones, so there is no real cross-function
-//   sharing to model.  Each real family below therefore has exactly one
-//   member: only calling that same public function a second time can
-//   invalidate the first call's result on this target.
-//
-//   The checker's mechanism nonetheless supports a family with more than
-//   one member (a call to any member invalidates every other member's
-//   outstanding result), because that is the general shape of the bug
-//   class and the shape a future shared-buffer implementation would need.
-//   Two synthetic, fixture-only names (fake_gmtime/fake_localtime,
-//   FixtureShared below) exist purely so tools/lint-reentrancy-fixtures/
-//   can exercise that sibling-invalidation path; no real ntlibc symbol
-//   uses those names.
+//   The checker's mechanism nonetheless supports multi-member families (a
+//   call to any member invalidates every other member's result), the
+//   shape a future shared-buffer implementation would need. Two
+//   synthetic fixture-only names (fake_gmtime/fake_localtime,
+//   FixtureShared below) exist purely to exercise that sibling-
+//   invalidation path in tools/lint-reentrancy-fixtures/; no real ntlibc
+//   symbol uses them.
 
 #include "clang/AST/Expr.h"
 #include "clang/Lex/Lexer.h"

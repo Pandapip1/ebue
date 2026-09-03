@@ -5,42 +5,25 @@
 // hand-rolled character-at-a-time scanner for "what functions does this
 // file declare (MODE=decl) or define (MODE=def)".
 //
-// tools/clang/DeclScanner.cpp already replaced this exact class of scanner
-// for tools/linkcheck.sh (see its own header comment for the full story:
-// `// NOLINTBEGIN(...)` comments and ownership.h's `withtok()` prefix
-// attribute both defeated the awk's "first identifier before '('"
-// heuristic). tools/lint-decls.awk is a *different*, independently
-// hand-written implementation of the identical idea -- shared between
-// tools/lint-undefined.sh and tools/lint-unreferenced.sh -- with the
-// identical two blind spots: it only strips /* */ comments, never //
-// ones, and it uses the same naive name heuristic. The failure is not
-// theoretical: `awk -v MODE=def -f tools/lint-decls.awk src/stdlib/abs.c`
-// prints "NOLINTBEGIN<TAB>11" instead of "abs<TAB>11", because the `//
-// NOLINTBEGIN(misc-include-cleaner)` banner most .c files carry near
-// their top gets absorbed into the accumulating declarator buffer and
-// mis-attributes the next real definition to a bogus "NOLINTBEGIN" entry
-// -- which is why tools/lint-undefined.sh currently misreports abs(),
-// bsearch(), div(), ecvt(), mblen() and others as "declared but never
-// defined" even though they are genuinely defined and archived into
-// lib/libc.a.
+// tools/lint-decls.awk (shared by lint-undefined.sh/lint-unreferenced.sh)
+// has the same two blind spots DeclScanner.cpp already fixed for
+// linkcheck.sh: it only strips /* */ comments, never //, and uses a
+// naive "first identifier before '('" name heuristic. Not theoretical:
+// `awk -v MODE=def -f tools/lint-decls.awk src/stdlib/abs.c` prints
+// "NOLINTBEGIN<TAB>11" instead of "abs<TAB>11", because the `//
+// NOLINTBEGIN(misc-include-cleaner)` banner most .c files carry gets
+// absorbed into the declarator buffer -- which is why lint-undefined.sh
+// currently misreports abs(), bsearch(), div(), ecvt(), mblen() and
+// others as undefined despite being archived into lib/libc.a.
 //
-// This is a distinct tool from DeclScanner.cpp, not an extra mode bolted
-// onto it, because the two have genuinely different output contracts:
-// DeclScanner.cpp reports (name, header, fixed_argc, undefined_ok) --
-// linkcheck.sh needs the argument count to synthesize a call, and prints
-// the header path back verbatim so its declfile format needs no
-// changes. Neither lint-undefined.sh nor lint-unreferenced.sh needs an
-// argument count at all, and both already know which file they are
-// scanning (they build the file:line themselves), so bolting those two
-// extra, unused columns onto every line here would just be dead weight.
-// What this tool's two callers *do* share with tools/lint-decls.awk is
-// its MODE=decl/MODE=def split and its "name<TAB>line" per-declaration
-// output shape, so this mirrors that contract as closely as a real AST
-// walk allows, rather than inventing a third shape.
+// A distinct tool from DeclScanner.cpp, not an extra mode on it: that one
+// reports (name, header, fixed_argc, undefined_ok) for linkcheck.sh's
+// call-synthesis needs, while this mirrors lint-decls.awk's simpler
+// MODE=decl/MODE=def split and "name<TAB>line" shape, since neither
+// lint-undefined.sh nor lint-unreferenced.sh needs an argument count.
 //
 // Usage: run once per file, in C mode, with the same CFLAGS a real
-// compile of that file would use (see tools/lint-undefined.sh and
-// tools/lint-unreferenced.sh for what each picks), e.g.:
+// compile would use, e.g.:
 //
 //   clang-18 -std=c99 -fsyntax-only $CFLAGS \
 //     -Xclang -load -Xclang ntlibc-lintdecls.so \
@@ -49,55 +32,28 @@
 //     -Xclang -plugin-arg-ntlibc-lintdecls -Xclang "$file" \
 //     "$file"
 //
-// The two plugin arguments are MODE ("decl" or "def") and PATH, in that
-// order. PATH is printed back exactly as given, the same way
-// DeclScanner.cpp's single HeaderPath argument is (see its own header
-// comment): it lets a caller run this once per file and concatenate
-// every file's output into one combined stream (mirroring
-// tools/linkcheck.sh's scan()) without losing track of which line came
-// from which file, and without depending on this plugin re-deriving a
-// path from the AST that might not match what the caller's own
-// bookkeeping (e.g. tools/lint-undefined.sh's file:line report) expects.
+// Plugin arguments are MODE ("decl"/"def") and PATH, in that order; PATH
+// is printed back exactly as given so a caller can concatenate every
+// file's output into one stream without losing track of which line came
+// from which file.
 //
-// Output, to stdout, one line per top-level function declarator found:
-//
-//   MODE=decl (a header: report every FunctionDecl with no body --
-//   exactly the old awk mode's "a declarator ends at a top-level ';'"):
+// Output, to stdout, one line per top-level function declarator:
+//   MODE=decl (header, every FunctionDecl with no body):
 //     name  path  line  undefined_ok(0/1)
-//
-//   MODE=def (a .c file: report every FunctionDecl WITH a body --
-//   exactly the old awk mode's "a declarator ends at a top-level '{',
-//   then its body is skipped"):
+//   MODE=def (.c file, every FunctionDecl WITH a body):
 //     name  path  line
 //
-// "line" is the declaration's own starting line in the file that was
-// scanned (1-based, from the same SourceManager the compile itself
-// used) -- the AST equivalent of the old awk's `bufline` (the line the
-// declarator's first non-blank character appeared on).
+// "line" is the declaration's starting line (1-based). undefined_ok
+// (MODE=decl only) is computed as DeclScanner.cpp does: search the raw
+// source from this declaration's start offset to the next top-level
+// declaration's start (or EOF) for "undefined-ok:".
 //
-// undefined_ok (MODE=decl only) is computed exactly the way
-// DeclScanner.cpp already computes it: search the raw source text, from
-// this declaration's own start offset up to the next top-level
-// declaration's start offset (or end of file, for the last one), for
-// the substring "undefined-ok:". This subsumes tools/lint-undefined.sh's
-// former second, independent regex-based `markednames` pass, which had
-// its own copy of the same naive name-extraction heuristic; folding it
-// in here removes that copy rather than leaving it to rot on its own.
-//
-// FunctionDecl is the only Decl kind matched, so typedefs (including
-// function-pointer typedefs) and top-level variables are naturally
-// excluded -- no separate "is this a typedef" check is needed the way
-// the awk scanner needed one. A static-inline function defined right in
-// a header (endian.h's inline bswaps) has a body, so it is invisible to
-// MODE=decl, exactly matching the awk's behaviour: a top-level '{' in
-// decl mode was already treated as an opaque nested block with no
-// declarator emitted, not as a definition to report.
-//
-// This does not distinguish storage class in MODE=def: a `static`
-// function's name is reported exactly like an external one, matching
-// the old awk (which never looked at linkage either). Both callers only
-// ask "is this name defined somewhere in this tree", so this parity
-// choice is deliberate, not an oversight.
+// FunctionDecl is the only Decl kind matched, so typedefs and top-level
+// variables are naturally excluded. A static-inline function defined in
+// a header has a body, so it's invisible to MODE=decl, matching the
+// awk's behavior. MODE=def doesn't distinguish storage class: a `static`
+// function is reported like an external one, since both callers only
+// ask "is this name defined somewhere in this tree".
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"

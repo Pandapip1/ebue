@@ -27,22 +27,16 @@
 using namespace clang;
 using namespace ento;
 
-// strlen(s)'s own byte-count contract is exactly "the number of bytes
-// before s's first NUL", so s is guaranteed to have at least that many
-// bytes PLUS the terminator itself -- reading strlen(s) + up-to-1 bytes
-// from s is always safe. strnlen(s, n)'s contract is looser: either it
-// found a real terminator within the first n bytes (in which case the
-// same "+1" reasoning applies) or it read all n bytes without finding
-// one, in which case only the n (not n+1) bytes it actually walked are
-// known-safe -- so a plain source-region-plus-slack-bound of 0, not 1,
-// is all this checker can soundly attribute to an strnlen() result.
-// Recording "this conjured return symbol came from strlen/strnlen(s)"
-// at the call (see checkPostCall) is what lets spanProven recognize the
-// extremely common "n = strlen(s) + 1; p = __malloc(n); memcpy(p, s,
-// n);" idiom's SOURCE argument as in-bounds -- this tree's own xstrdup
-// (src/glob/glob.c, src/sh/execute.c, src/sh/parse.c,
-// src/wordexp/wordexp.c) and strdup.c/strndup.c themselves all share
-// this exact shape.
+// strlen(s)'s contract is "bytes before s's first NUL", so s is
+// guaranteed at least that many bytes plus the terminator -- reading
+// strlen(s) + up-to-1 bytes is always safe. strnlen(s, n)'s contract is
+// looser: either it found a real terminator within n bytes (same "+1"
+// reasoning) or it read all n bytes without finding one, so only n (not
+// n+1) bytes are known-safe -- a slack bound of 0, not 1. Recording
+// "this conjured return symbol came from strlen/strnlen(s)" at the call
+// lets spanProven recognize the common "n = strlen(s) + 1; p =
+// __malloc(n); memcpy(p, s, n);" idiom's source argument as in-bounds --
+// this tree's own xstrdup and strdup.c/strndup.c share this shape.
 REGISTER_MAP_WITH_PROGRAMSTATE(StrlenSource, SymbolRef, const MemRegion *)
 REGISTER_MAP_WITH_PROGRAMSTATE(StrnlenSource, SymbolRef, const MemRegion *)
 /* A checked annotated call establishes a span from the exact pointer value,
@@ -649,23 +643,16 @@ class MemoryContractChecker
     return symbolicConstantDifference(Left, Right) == 0;
   }
 
-  // For a heap allocation whose real dynamic extent was set (above)
-  // directly from its own size ARGUMENT expression, prove a span
-  // in-bounds when the operation's LENGTH argument shares that same
-  // argument expression's own root symbol: `d = __malloc(l + 1);
-  // memcpy(d, s, l);` (extent = l+1, length = l) is strndup.c's own
-  // shape, but `n = strlen(s) + 1; p = __malloc(n); memcpy(p, s, n);`
-  // (extent = n = L+1, length = n = L+1, the SAME compound expression on
-  // both sides -- this tree's own xstrdup, duplicated in
-  // src/glob/glob.c, src/sh/execute.c, src/sh/parse.c, and
-  // src/wordexp/wordexp.c) is at least as common, and a plain "does the
-  // extent's own root symbol match the length's" check (the previous,
-  // narrower version of this function) does not recognize it: it only
-  // ever looked at the LENGTH side as a bare symbol, never decomposed a
-  // compound length into its own root+offset. Decomposing both sides the
-  // same way subsumes that narrower case (offset 0 on the length side)
-  // while also covering this one (equal, nonzero offsets on both sides),
-  // subject to the solver-backed no-wrap proof below.
+  // For a heap allocation whose dynamic extent was set from its own size
+  // argument expression, prove a span in-bounds when the length argument
+  // shares that same expression's root symbol: `d = __malloc(l + 1);
+  // memcpy(d, s, l);` (extent = l+1, length = l) is strndup.c's shape,
+  // but `n = strlen(s) + 1; p = __malloc(n); memcpy(p, s, n);` (extent =
+  // length = the same compound expression, this tree's own xstrdup) is
+  // at least as common, and a bare-symbol match doesn't recognize it.
+  // Decomposing both sides into root+offset subsumes the bare-symbol
+  // case (offset 0 on the length side) and covers equal-nonzero-offset
+  // cases too, subject to the solver-backed no-wrap proof below.
   static bool sameSymbolSpanProven(SVal Extent, SVal Length,
                                    ProgramStateRef State,
                                    CheckerContext &C) {
@@ -736,30 +723,20 @@ class MemoryContractChecker
     return Maximum && *Maximum <= Limit;
   }
 
-  // The allocator-extent lemma above only ever closes the DESTINATION
-  // side of a memcpy's span obligation: the overwhelming majority of
-  // memcpy calls in this tree copy FROM a plain `const char *` parameter
-  // with no dynamic extent at all, so even after the destination is
-  // proven, checkPreCall's independent check on the SECOND argument
-  // still fails and the call is still reported (measured directly: the
-  // tree-wide finding count did not move by even one after the
-  // allocator-extent lemma alone -- see the commit message). Almost all
-  // of those source pointers share one shape: `n = strlen(s) + 1; p =
-  // __malloc(n); memcpy(p, s, n);` (this tree's own xstrdup, duplicated
-  // in src/glob/glob.c, src/sh/execute.c, src/sh/parse.c, and
-  // src/wordexp/wordexp.c, plus src/string/strdup.c and strndup.c
-  // themselves) or the strnlen()-bounded equivalent. strlen(s)'s own
-  // byte-count contract makes the source side of that copy safe by
-  // construction: it returns the exact number of non-NUL bytes before
-  // s's terminator, so s is guaranteed to have at least that many bytes
-  // PLUS the terminator itself. strnlen(s, n)'s contract is looser --
-  // either it found a real terminator (same "+1" reasoning applies) or
-  // it walked all n bytes without one, in which case only those n (not
-  // n+1) bytes are known-safe -- so this only credits an strnlen()
-  // result with a zero-byte, not one-byte, slack. See the StrlenSource/
-  // StrnlenSource ProgramState maps and checkPostCall below, which
-  // record "this conjured return symbol came from strlen/strnlen(s)" at
-  // the call that produces it.
+  // The allocator-extent lemma above only closes the DESTINATION side of
+  // a memcpy's span obligation: most memcpy calls here copy FROM a plain
+  // `const char *` with no dynamic extent, so checkPreCall's check on
+  // the source argument still fails even after the destination is
+  // proven (measured: the tree-wide finding count didn't move after the
+  // allocator-extent lemma alone). Almost all of those sources share the
+  // "n = strlen(s) + 1; p = __malloc(n); memcpy(p, s, n);" shape (this
+  // tree's own xstrdup, strdup.c, strndup.c) or the strnlen()-bounded
+  // equivalent. strlen(s)'s byte-count contract makes the source safe by
+  // construction: s has at least that many bytes plus the terminator.
+  // strnlen(s, n) is looser -- only n (not n+1) bytes are known-safe if
+  // it walked all n without finding a terminator -- so this credits it
+  // with zero-byte, not one-byte, slack. See the StrlenSource/
+  // StrnlenSource ProgramState maps and checkPostCall below.
   static bool stringLengthSourceSpanProven(SVal Pointer, SVal Length,
                                            ProgramStateRef State,
                                            CheckerContext &C) {

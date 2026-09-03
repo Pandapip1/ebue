@@ -26,14 +26,11 @@ REGISTER_MAP_WITH_PROGRAMSTATE(HeldLocks, const MemRegion *, HeldKind)
 REGISTER_MAP_WITH_PROGRAMSTATE(LockAcquirers, const MemRegion *,
                                const StackFrameContext *)
 // A region tagged here, for the stack frame that tagged it, is exempt from
-// checkEndFunction's "function exits while a lock is held" report --
-// because for that specific frame, ending while holding this specific
-// lock is not a leak but the whole point: a hand-off to whatever runs
-// next (the function's caller, or, for a pthread_cleanup_push() handler,
-// the cancellation machinery that invoked it). See RequiresHeldOnEntry
-// and AcquiresLockForCaller below for the two ways a region gets tagged,
-// and their own comments for why ntlibc has exactly two functions that
-// need this and no general-purpose annotation mechanism for it.
+// checkEndFunction's "function exits while a lock is held" report:
+// ending while holding this lock is a deliberate hand-off (to the
+// caller, or, for a pthread_cleanup_push() handler, the cancellation
+// machinery). See RequiresHeldOnEntry/AcquiresLockForCaller below for
+// the two ways a region gets tagged.
 REGISTER_MAP_WITH_PROGRAMSTATE(HandoffExempt, const MemRegion *,
                                const StackFrameContext *)
 
@@ -55,34 +52,24 @@ struct LockCall {
 
 // A (function name, argument index) pair whose designated lock argument
 // is, by contract, already held by the caller when the function is
-// entered -- and is handed back held on every return path, success,
-// failure, or cancellation alike.
+// entered, and handed back held on every return path.
 //
 // cond_wait() is pthread_cond_wait()/pthread_cond_timedwait()'s shared
-// implementation (src/thread/pthread_cond.c): POSIX requires the mutex
-// argument to those two public functions to already be locked by the
-// calling thread on entry, and requires it to be locked again on every
-// return.  protocolFor()'s RequireHeld entry for the two public names
-// already enforces the first half of that at THEIR call sites -- but
-// cond_wait is a separate C function implementing the same contract, and
-// the by-name protocol table below has no way to reach into a function
-// it never sees a call to. Without the entry below, cond_wait's own
-// first pthread_mutex_unlock(mutex) call (releasing the lock its own
-// caller handed it) is indistinguishable, to a checker with no memory of
-// an un-observed precondition, from releasing a lock nobody ever
-// acquired -- a real false positive this project's own fixtures already
-// demonstrate is otherwise correctly reported (see unsafe.c's
-// unlocked_release).
+// implementation: POSIX requires the mutex argument to those two public
+// functions to already be locked on entry and locked again on every
+// return. protocolFor()'s RequireHeld entry enforces the first half at
+// their call sites, but cond_wait is a separate function the by-name
+// protocol table never sees a call to. Without this entry, cond_wait's
+// own first pthread_mutex_unlock(mutex) call looks indistinguishable
+// from releasing a lock nobody acquired (a real false positive; see
+// unsafe.c's unlocked_release).
 //
-// checkBeginFunction seeds the designated region as held, and also tags
-// it exempt in HandoffExempt (see that map's comment). The exemption
-// tag, once set, is never cleared for the rest of that stack frame's
-// lifetime -- it survives the region's own later release/reacquire
-// cycles (cond_wait unlocks this exact mutex once, then relocks it
-// before returning), so every return path is covered uniformly: both
-// the early "the caller handed me an already-dead condvar" returns that
-// never touch the mutex at all, and the ordinary return after a full
-// wait-and-reacquire cycle.
+// checkBeginFunction seeds the region as held and tags it exempt in
+// HandoffExempt. The exemption, once set, is never cleared for that
+// stack frame -- it survives the region's own later release/reacquire
+// cycle (cond_wait unlocks then relocks the same mutex before
+// returning), covering both early returns that never touch the mutex
+// and the ordinary full wait-and-reacquire path.
 struct HandoffParameter {
   const char *Function;
   unsigned Argument;
@@ -93,23 +80,18 @@ constexpr HandoffParameter RequiresHeldOnEntry[] = {
 
 // Functions that acquire a lock purely to hand it off held to whatever
 // runs next, not to release it themselves -- checkPostCall tags the
-// region such a function acquires as HandoffExempt the moment the
-// acquisition succeeds, rather than seeding it in advance the way
-// RequiresHeldOnEntry does.
+// acquired region as HandoffExempt the moment acquisition succeeds,
+// rather than seeding it in advance the way RequiresHeldOnEntry does.
 //
 // cond_wait_cleanup is the pthread_cleanup_push() handler cond_wait
-// registers for the duration of its wait: if the thread is cancelled out
-// of the wait, the cancellation machinery invokes this handler, whose
-// entire job is to restore the same "mutex locked" postcondition on the
-// cancellation path that cond_wait itself guarantees on every ordinary
-// path (see RequiresHeldOnEntry's comment) -- the lock it takes here is
-// for the code that resumes after cancellation, not for itself to
-// release. It cannot use RequiresHeldOnEntry's parameter-index seeding:
-// its mutex is not a plain parameter but cleanup->mutex, a struct field
-// reached through its lone void* argument, so there is no fixed region
-// to compute until the real pthread_mutex_lock(cleanup->mutex) call
-// inside its body actually resolves that indirection -- which is exactly
-// the moment checkPostCall tags it.
+// registers for its wait: if cancelled, the cancellation machinery
+// invokes this handler to restore the "mutex locked" postcondition on
+// the cancellation path, for the code that resumes after, not for
+// itself to release. It can't use RequiresHeldOnEntry's parameter-index
+// seeding since its mutex is cleanup->mutex, a struct field reached
+// through its lone void* argument -- there's no fixed region until the
+// real pthread_mutex_lock(cleanup->mutex) call resolves that
+// indirection, exactly when checkPostCall tags it.
 constexpr const char *AcquiresLockForCaller[] = {
     "cond_wait_cleanup",
 };

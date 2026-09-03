@@ -10,30 +10,17 @@
  *   <monetary.h>   strfmon, strfmon_l              IMPLEMENTED 2026-08-25
  *   <iconv.h>      iconv_open, iconv, iconv_close  IMPLEMENTED 2026-08-25
  *
- * STATUS, and read the rest of this banner in its light.  Everything
- * below the next heading was written and measured on 2026-08-25 against
- * a tree in which all four were absent, and it is kept verbatim because
- * a record of what was checked is worth more than a record edited to
- * agree with today.  What has changed since: <langinfo.h> now exists
- * (include/langinfo.h, src/misc/langinfo.c) with all fifty-five item
- * constants, nl_langinfo() and nl_langinfo_l(); nl_item and nl_catd are
- * typedef'd in bits/alltypes.h; and <nl_types.h> now exists too
- * (include/nl_types.h, src/misc/catgets.c) with catopen(), catgets()
- * and catclose() over a real NLSPATH resolution and a real catalogue
- * reader; and <monetary.h> now exists (include/monetary.h,
- * src/misc/strfmon.c) with strfmon() and strfmon_l(); and <iconv.h>
- * now exists (include/iconv.h, src/misc/iconv.c) with iconv_open(),
- * iconv() and iconv_close() over UTF-8 and UTF-16LE.  All four of the
- * headers this file was written about are now present.  The six cases
- * covering them in this file are
- * consequently un-fenced and run, and one new case --
- * test_catgets_reads_a_catalogue() -- was added, because the original
- * one can only watch catopen() fail on a machine with no catalogues
- * installed and so could not tell a reader from a stub.  Sentences below that say
- * "the four", "eleven functions" or "does not exist" are about the
- * 2026-08-25 tree; where a *fenced* case's own comment made such a
- * claim, that comment was rewritten in the same commit as the
- * implementation rather than left to go stale.
+ * STATUS, and read the rest of this banner in its light. Everything below
+ * the next heading was written and measured on 2026-08-25 against a tree
+ * in which all four were absent, and is kept verbatim -- a record of what
+ * was checked is worth more than one edited to agree with today. All four
+ * headers are now implemented (include/{langinfo,nl_types,monetary,
+ * iconv}.h and the matching src/misc/*.c), so the six cases covering them
+ * are un-fenced and run, plus one new case, test_catgets_reads_a_catalogue(),
+ * since the original could only watch catopen() fail on a machine with no
+ * catalogues installed. Sentences below saying "the four" or "does not
+ * exist" describe the 2026-08-25 tree; a *fenced* case's own claim of
+ * that kind was rewritten in the same commit as its implementation.
  *
  * Spec pages consulted (https://pubs.opengroup.org/onlinepubs/9699919799/):
  *   basedefs/langinfo.h.html    functions/nl_langinfo.html

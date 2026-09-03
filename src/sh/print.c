@@ -49,11 +49,6 @@ static void emit_fd(struct pctx *c, int fd)
 	if (!c->failed && fprintf(c->f, "%d", fd) < 0) c->failed = 1;
 }
 
-/* c is required: `c->tail`/`c->head` are dereferenced directly once
- * `n` (the freshly __malloc'd queue node) is non-NULL, and every real
- * call site passes the address of a real pctx. r is left unmarked --
- * only ever stored as a raw pointer value (`n->r = r;`), never
- * dereferenced by this function itself. */
 static void queue_heredoc(struct pctx *c, const struct sh_redir *r) __attribute__((nonnull(1)));
 static void queue_heredoc(struct pctx *c, const struct sh_redir *r)
 {
@@ -68,14 +63,9 @@ static void queue_heredoc(struct pctx *c, const struct sh_redir *r)
 static void queue_nested_heredocs_list(struct pctx *, const struct sh_list *);
 
 /* Function definitions are printed from func_text, but parse.c may retain
- * their body AST when a here-document was still pending at the end of the
- * definition.  Walk that retained tree in source order so the bodies are
- * emitted after the definition's terminating newline just like any other
- * queued here-document. */
-/* cmd is required: `switch (cmd->kind)` is this function's first
- * statement. c is left unmarked -- only ever forwarded into
- * queue_nested_heredocs_list()/queue_heredoc(), never dereferenced by
- * this function itself. */
+ * their body AST when a here-document was still pending at the definition's
+ * end. Walk that retained tree in source order so the bodies are emitted
+ * after the definition's terminating newline like any other queued heredoc. */
 // NOLINTNEXTLINE(misc-no-recursion) -- formatting and heredoc traversal mirror the nested shell-AST hierarchy
 static void queue_nested_heredocs_command(struct pctx *c,
 		const struct sh_command *cmd) __attribute__((nonnull(2)));
@@ -117,17 +107,8 @@ static void queue_nested_heredocs_command(struct pctx *c,
 			queue_heredoc(c, r);
 }
 
-/* Neither parameter is marked here: list is genuinely optional --
- * `if (!list) return;` right below is a real, working check, exercised
- * whenever a compound command's optional part (e.g. an `if` with no
- * `else`) is absent -- and c is forward-only, never dereferenced
- * directly by this function itself.
- *
- * Not fixed by this: the flagged `andor->pipeline.commands[i]` deref is
- * about `andor`, a local loop variable walking `item->andor`, and its
- * own `.pipeline.commands` array pointer -- an internal AST invariant
- * neither parameter here can express via `nonnull`, the same class of
- * residual as execute.c's we.we_wordv[0]/__environ[i]. */
+/* list is genuinely optional: a compound command's optional part (e.g.
+ * an `if` with no `else`) is absent as NULL here. */
 // NOLINTNEXTLINE(misc-no-recursion) -- formatting and heredoc traversal mirror the nested shell-AST hierarchy
 static void queue_nested_heredocs_list(struct pctx *c,
 		const struct sh_list *list)
@@ -144,13 +125,6 @@ static void queue_nested_heredocs_list(struct pctx *c,
 				    &andor->pipeline.commands[i]);
 }
 
-/* c is required: `struct hdq *h = c->head;` is this function's first
- * statement. __sh_print_list() below is the only real entry point,
- * always via `&c` where c is its own on-stack pctx.
- *
- * Not fixed by this: the flagged `h->r->heredoc` deref is about `h->r`,
- * set by queue_heredoc() elsewhere (always a real redir there, but not
- * an invariant this function's own parameter can express), not about c. */
 static void drain_heredocs(struct pctx *c) __attribute__((nonnull(1)));
 static void drain_heredocs(struct pctx *c)
 {
@@ -166,10 +140,6 @@ static void drain_heredocs(struct pctx *c)
 	}
 }
 
-/* Both required: `emit_char(c, ' ');` is this function's first statement,
- * and `if (r->fd >= 0)` right after it is equally unconditional, with
- * no branch between them. print_redirs() below (the only caller)
- * always passes a real c and a real list node. */
 static void print_redir(struct pctx *c, const struct sh_redir *r)
     __attribute__((nonnull(1, 2)));
 static void print_redir(struct pctx *c, const struct sh_redir *r)
@@ -190,11 +160,7 @@ static void print_redirs(struct pctx *c, const struct sh_redir *r)
 	for (; r; r = r->next) print_redir(c, r);
 }
 
-/* c is required: whenever the loop body runs at all, `c->f` is
- * dereferenced with no NULL check, and every real call site passes a
- * real pctx. w is deliberately left unmarked -- `for (; w; w = w->next)`
- * is the usual NULL-safe "empty list" walk, and a command with no words
- * (e.g. an assignment-only simple command) genuinely passes NULL here. */
+/* w may be NULL: an assignment-only simple command has no words. */
 static void print_words(struct pctx *c, const struct sh_word *w, int leading_space)
     __attribute__((nonnull(1)));
 static void print_words(struct pctx *c, const struct sh_word *w, int leading_space)
@@ -209,10 +175,6 @@ static void print_words(struct pctx *c, const struct sh_word *w, int leading_spa
 
 static void print_list(struct pctx *c, const struct sh_list *list);
 
-/* cmd is required: `switch (cmd->kind)` is this function's first
- * statement. c is required too: most switch arms directly dereference
- * `c->f` (fputc()/fputs() calls), and print_list()/print_pipeline()
- * below always pass a real pctx. */
 // NOLINTNEXTLINE(misc-no-recursion) -- formatting and heredoc traversal mirror the nested shell-AST hierarchy
 static void print_command(struct pctx *c, const struct sh_command *cmd)
     __attribute__((nonnull(1, 2)));
@@ -230,14 +192,10 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
 		print_list(c, cmd->u.group.body);
 		emit_string(c, "}");
 		break;
-	/* The compound commands are reprinted in the multi-line form XCU
-	 * 2.9.4 gives them, with a real <newline> before each terminator
-	 * reserved word rather than a "; ".  That is not cosmetic: print_list()
-	 * already ends every item with a newline, so `fi`/`done` land in
-	 * command position on a fresh line, which is the only position
-	 * parse.c recognises a reserved word in -- printing "cmd; fi" would
-	 * reparse `fi` as an argument and break the round-trip the whole
-	 * file exists to support. */
+	/* Compound commands are reprinted with a real <newline> before each
+	 * terminator reserved word rather than "; ": parse.c only recognizes
+	 * a reserved word in command position, so "cmd; fi" would reparse `fi`
+	 * as an argument and break the round-trip. */
 	case SH_CMD_IF: {
 		const struct sh_ifarm *a;
 		for (a = cmd->u.ifcmd.arms; a; a = a->next) {
@@ -271,13 +229,9 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
 		print_list(c, cmd->u.forloop.body);
 		emit_string(c, "done");
 		break;
-	/* XCU 2.9.5: "fname ( ) compound-command [io-redirect...]".  The
-	 * body is reprinted as the raw source text the parser captured
-	 * (sh.h's func_text), which is what makes the round-trip a fixed
-	 * point: re-parsing this output captures the identical substring,
-	 * so the second print is byte-for-byte the first.  A canonicalised
-	 * reprint of a body this file never parsed could not promise
-	 * that. */
+	/* Reprinted from func_text, the raw source the parser captured, not
+	 * re-derived from the AST: re-parsing it yields the identical
+	 * substring, making the round-trip a fixed point. */
 	case SH_CMD_FUNCDEF:
 		emit_string(c, cmd->u.funcdef.name);
 		emit_string(c, "() ");
@@ -293,11 +247,6 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
 	print_redirs(c, cmd->redirs);
 }
 
-/* pl is required: `if (pl->bang)` is this function's first statement.
- * c is required too: reached directly (`emit_string(c, " ! ")`) on the
- * real, reachable `pl->bang` path and the real, reachable `i > 0`
- * path of a multi-command pipeline, and print_andor() below always
- * passes a real pctx and `&a->pipeline`. */
 // NOLINTNEXTLINE(misc-no-recursion) -- formatting and heredoc traversal mirror the nested shell-AST hierarchy
 static void print_pipeline(struct pctx *c, const struct sh_pipeline *pl)
     __attribute__((nonnull(1, 2)));

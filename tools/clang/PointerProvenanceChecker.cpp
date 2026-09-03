@@ -521,17 +521,12 @@ class PointerProvenanceChecker
   }
 
   // isConstantSentinel: the source of an integer-to-pointer cast is a
-  // compile-time constant (e.g. NT's own `(HANDLE)(LONG_PTR)-1`
-  // pseudo-handle convention -- see NtCurrentProcess()/NtCurrentThread()
-  // in src/internal/nt.h -- or the equally common `(void (*)(int))1`-style
-  // SIG_DFL/SIG_IGN/SIG_ERR and MAP_FAILED-style invalid-handle sentinels
-  // used throughout this tree for nl_catd, iconv_t, sem_t, fenv_t, and
-  // signal-handler results).  "Provenance" is not a coherent question for
-  // a literal: it was never derived from any pointer, real or forged, and
-  // its value is fully visible to any reader of the diff, unlike an
-  // integer arriving from a variable, a syscall, or (worse) untrusted
-  // input.  This is a strengthening of the checker's own stated purpose
-  // ("rejects integer-derived pointers") rather than a relaxation of it:
+  // compile-time constant (NT's `(HANDLE)(LONG_PTR)-1` pseudo-handle
+  // convention, SIG_DFL/SIG_IGN/SIG_ERR- and MAP_FAILED-style invalid-
+  // handle sentinels). "Provenance" isn't a coherent question for a
+  // literal: it was never derived from any pointer and is fully visible
+  // in the diff, unlike an integer from a variable, syscall, or untrusted
+  // input. A strengthening of the checker's purpose, not a relaxation:
   // a fixed sentinel was never *derived* from anything.
   static bool isConstantSentinel(const Expr *E, ASTContext &Ctx) {
     if (E->isValueDependent() || E->isTypeDependent())
@@ -542,15 +537,14 @@ class PointerProvenanceChecker
 
   // derivesFromPointer: true if E is built, through parens, arithmetic
   // (+, -, &, |, ^, unary ~) or a conditional operator, from a nested
-  // pointer-to-integral cast.  This recognises the pointer -> integer ->
+  // pointer-to-integral cast. Recognises the pointer -> integer ->
   // (mask/offset) -> pointer round trip used for alignment throughout
-  // this tree (posix_memalign(), align16(), the redirect_async_cancel()
-  // stack-probe alignment, and mman.c's page-range intersection -- see
-  // the ternary-operator case, needed for `lo = a > b ? a : b`-style
-  // range clamps built from two such round trips).  The integer was
-  // never anything but a pointer's own bit pattern plus a compile-time-
-  // visible adjustment, so the cast back is provenance-preserving by
-  // construction, not merely unproven.
+  // this tree (posix_memalign(), align16(), stack-probe alignment,
+  // mman.c's page-range intersection); the ternary case handles
+  // `lo = a > b ? a : b`-style range clamps built from two such round
+  // trips. The integer was never anything but a pointer's bit pattern
+  // plus a compile-time-visible adjustment, so the cast back is
+  // provenance-preserving by construction.
   static bool derivesFromPointer(const Expr *E) {
     E = E->IgnoreParens();
     if (const auto *CE = dyn_cast<CastExpr>(E)) {
@@ -665,94 +659,69 @@ class PointerProvenanceChecker
 
   // A short, explicit, auditable list of (file suffix, function) pairs
   // where a finding has been individually read and judged genuine but
-  // irreducible: the provenance the checker wants proof of crosses a
-  // boundary no C-level static analysis can see across -- hand-written
-  // assembly, the kernel's own ABI, or a hardware fault handler -- and
-  // no source-level rewrite removes the boundary without changing what
-  // the code does.  Each entry names exactly the function whose body it
-  // covers, not a type or a value, so that this table can only ever grow
-  // by someone reading a specific function and writing down why, the
-  // same discipline tools/lint.sh's own header asks of every stage:
-  // "findings get reported and judged, not blanket-silenced."
+  // irreducible: the provenance crosses a boundary no C-level static
+  // analysis can see across (hand-written assembly, kernel ABI, hardware
+  // fault handler), and no source-level rewrite removes it. Each entry
+  // names the specific function it covers, not a type or value, so this
+  // table can only grow by someone reading a function and writing down
+  // why -- tools/lint.sh's own discipline: "findings get reported and
+  // judged, not blanket-silenced."
   //
   //   crt/delayload2.c __delayLoadHelper2
   //   src/internal/delayload.c ntlibc_delayLoadHelper2
-  //     `piat`, the slot being resolved, is computed by the delay-load
-  //     thunk stub -- hand-written assembly (see crt/delayload1.asm) --
-  //     as `base + <that import's own RVA>`, exactly like `iat`'s C-side
-  //     computation two lines below it, but nothing in this translation
-  //     unit ever sees that assembly, so there is no C expression
-  //     linking the two.  The file's own header comment (crt/
-  //     delayload2.c) is the proof this is real, not assumed.
+  //     `piat` is computed by the hand-written delay-load thunk stub
+  //     (crt/delayload1.asm) as `base + <RVA>`, same as `iat`'s C-side
+  //     computation nearby, but nothing in this TU sees that assembly.
   //   src/thread/aio.c lookup
   //   src/time/timer.c timer_signal
-  //     Both check a pointer parameter for membership in a fixed global
-  //     table (`requests`/`timers`) that the pointer was itself carved
-  //     out of by a *different* function (submit()/timer_create()) at
-  //     an earlier, unrelated point in program execution -- an invariant
-  //     that is true across the table's entire lifetime but is
+  //     Both check a pointer for membership in a fixed global table
+  //     (`requests`/`timers`) carved out by a *different* function
+  //     (submit()/timer_create()) earlier in the program, an invariant
   //     established nowhere this function's own body can see.
   //   src/thread/pthread.c pthread_getattr_np
-  //     `teb->NtTib.StackBase` and `StackLimit` are two fields of one
-  //     THREAD_INFORMATION_BLOCK the kernel populated via
-  //     NtQueryInformationThread's opaque out-parameter; the engine
-  //     conjures each field load as an independent unconstrained symbol
-  //     because it cannot see into the syscall, even though both fields
-  //     genuinely bound the same OS-allocated stack.
+  //     `teb->NtTib.StackBase`/`StackLimit` are two fields of one
+  //     THREAD_INFORMATION_BLOCK the kernel populated via an opaque
+  //     NtQueryInformationThread out-parameter; each field load looks
+  //     like an independent unconstrained symbol even though both bound
+  //     the same OS-allocated stack.
   //   src/signal/signal.c exception_handler
-  //     `ExceptionInformation` is ULONG_PTR[] in NT's own EXCEPTION_
-  //     RECORD; slot [1] is the CPU-supplied faulting address for
-  //     access-violation-class exceptions and nothing else in the array
-  //     is even the same kind of value for other exception codes (see
-  //     the comment at the call site) -- there is no pointer this
-  //     library ever held to derive it from, because the hardware fault
-  //     handler produced it, not any C expression.
+  //     `ExceptionInformation[1]` is the CPU-supplied faulting address
+  //     for access-violation exceptions in NT's EXCEPTION_RECORD; the
+  //     hardware fault handler produced it, not any C expression.
   //   src/sh/parse.c parse_funcdef
-  //     `start` and `end` are both `p->cur.start`, the lexer's current
-  //     token position, read at two different points in parsing the
-  //     same function body; nothing changes what buffer `p` tokenizes
-  //     out of in between, but that invariant lives in the shape of the
-  //     whole recursive-descent parser, not in any one function.
+  //     `start` and `end` are both `p->cur.start` read at two points
+  //     while parsing the same function body; the invariant that nothing
+  //     changes what buffer `p` tokenizes lives in the whole recursive-
+  //     descent parser's shape, not in any one function.
   //   src/fcntl/fcntl.c fcntl
-  //     fcntl(2)'s vararg's real type is a function of `cmd`; every
-  //     conforming implementation reads it once via one word-sized type
-  //     (here `intptr_t`, C11 7.20.1.4's own designated round-trip type)
-  //     and reinterprets, because a C vararg list cannot be re-read with
-  //     a different type per case without restarting it once per case.
+  //     fcntl(2)'s vararg type depends on `cmd`; every conforming
+  //     implementation reads it once via one word-sized type
+  //     (`intptr_t`) and reinterprets, since a vararg list can't be
+  //     re-read with a different type per case.
   //   src/stdio/scanf.c vfscanf_st
   //   src/stdio/scanf.c vswscanf_impl
-  //     The reference implementation of the %p conversion specifier,
-  //     whose entire documented contract (C11 7.21.6.2p12) is to turn
-  //     text -- typically, by convention, a previous %p's own output --
-  //     back into a pointer.  No compile-time provenance is possible for
-  //     the very feature this code exists to provide; the fixture at
-  //     tools/lint-pointer-provenance-fixtures/unsafe.c's
-  //     integer_pointer() establishes that this checker must still flag
-  //     the general case of an arbitrary integer cast to a pointer type,
-  //     so the exemption is scoped to these two named functions, not to
-  //     the cast shape.
+  //     The %p conversion specifier's whole contract (C11 7.21.6.2p12)
+  //     is turning text back into a pointer; no compile-time provenance
+  //     is possible for the feature itself. The exemption is scoped to
+  //     these two functions, not the cast shape -- unsafe.c's
+  //     integer_pointer() fixture still requires flagging the general
+  //     integer-to-pointer cast.
   //   Linux kernel mapping-return functions listed below
-  //     mmap(2) returns an address in a signed machine-word syscall return
-  //     register.  The conversion from that ABI word to a pointer is the
-  //     operation these functions exist to perform; no C pointer exists
-  //     before the kernel creates the mapping from which provenance could
-  //     be derived.  shmat(2) creates a System V shared-memory attachment
-  //     through the same signed syscall-return register, and brk(2) returns
-  //     the kernel's resulting break through it.  The same applies to the
-  //     initial stack/TLS/ELF image addresses supplied by the kernel in
-  //     crt1.c.
+  //     mmap(2)/shmat(2)/brk(2) return an address in a signed
+  //     machine-word syscall register; converting that ABI word to a
+  //     pointer is the operation these functions exist to perform, and
+  //     the same applies to crt1.c's kernel-supplied initial
+  //     stack/TLS/ELF addresses.
   //   Linux box()/install/open/pipe/process functions listed below
-  //     __plat_handle_t is deliberately an opaque one-word carrier shared
-  //     with the NT backend.  Linux file descriptors, pids, and tids are
-  //     integers encoded in that carrier and are never dereferenced.  Each
-  //     listed function is an explicit ABI boundary, rather than a global
-  //     exemption for integer-to-pointer casts.
+  //     __plat_handle_t is an opaque one-word carrier shared with the NT
+  //     backend; Linux fds/pids/tids are integers encoded in it and
+  //     never dereferenced. Each listed function is an explicit ABI
+  //     boundary, not a blanket exemption.
   //   src/dlfcn/linux/plat_dlfcn.c loader functions listed below
-  //     ELF defines load addresses and symbol/relocation values as integer
-  //     virtual addresses.  Reconstructing pointers from the mapped image's
-  //     load bias is the dynamic loader's required ABI operation; the file
-  //     validates every range before use, but C-level provenance cannot be
-  //     carried through an ELF integer field.
+  //     ELF defines load addresses and symbol/relocation values as
+  //     integer virtual addresses; reconstructing pointers from the
+  //     mapped image's load bias is the dynamic loader's required ABI
+  //     operation. The file validates every range before use.
   struct NamedException {
     const char *FileSuffix;
     const char *Function;

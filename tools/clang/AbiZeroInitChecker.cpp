@@ -3,65 +3,42 @@
 //
 // AbiZeroInitChecker -- proves that a stack-local struct or array whose
 // address crosses a raw Nt*/Zw* syscall boundary (an OUT or IN-OUT
-// argument, per this project's own src/internal/nt.h prototypes) is fully
-// initialized, including padding, rather than filled in field-by-field and
-// left with a gap.  Padding and unset tail bytes that cross an ABI
-// boundary are a real, well-known bug class: uninitialised bytes handed to
-// the kernel on the way in are read by it (junk into a real syscall), and
-// uninitialised bytes handed back on an OUT buffer that the caller never
-// consumes are a wasted proof obligation on the other side of the same
-// boundary.
+// argument) is fully initialized, including padding, rather than filled
+// in field-by-field and left with a gap. Uninitialized bytes handed to
+// the kernel on the way in are junk into a real syscall; uninitialized
+// bytes handed back on an OUT buffer the caller never reads are a wasted
+// proof obligation on the other side of the same boundary.
 //
-// This is deliberately narrower than the two checkers it sits next to:
-// InitializationChecker proves that no *read* observes definitely
-// uninitialized storage, and OwnershipChecker proves that every
-// *dereference* has live, in-bounds, aligned storage -- neither one
-// reasons about "every byte of this object, including compiler-inserted
-// padding, is set before its address leaves this translation unit at a
-// kernel boundary", which is a distinct, boundary-specific obligation:
-// whole-object definite-assignment, not per-field liveness.
+// Narrower than the two checkers it sits next to: InitializationChecker
+// proves no *read* observes uninitialized storage, and OwnershipChecker
+// proves every *dereference* has live, in-bounds storage -- neither
+// reasons about whole-object definite-assignment (every byte, including
+// padding, set before the address leaves this TU at a kernel boundary).
 //
-// Scope, matching what this project's own Nt* call sites actually do
-// (grepped from src/*/*.c and grounded against src/internal/nt.h's
-// prototypes, not guessed from memory):
-//
+// Scope, grounded against src/internal/nt.h's prototypes and actual
+// src/*/*.c call sites:
 //   - Only `&local` and a local array decaying to pointer, passed
-//     directly as the argument expression, are tracked.  Multiple levels
-//     of indirection or aliasing through another pointer are out of
-//     scope, matching this checker's tractable, high-value slice.
-//
-//   - "Fully initialized" is proven exactly two ways: a declaration-time
-//     aggregate initializer (`= {0}` / `= {...}`), or a prior whole-object
-//     `memset`/`__builtin_memset`/`bzero` call whose target is the base
-//     object itself (not a field of it) and whose length, when it can be
-//     resolved to a constant, covers the whole type.  A plain whole-object
+//     directly as the argument expression, are tracked. Aliasing through
+//     another pointer is out of scope.
+//   - "Fully initialized" is proven two ways: a declaration-time
+//     aggregate initializer (`= {0}`/`= {...}`), or a prior whole-object
+//     memset/bzero call covering the whole type. A plain whole-object
 //     assignment (`x = y;`) also counts.
-//
-//   - The footgun this exists to catch is the partial one: at least one
-//     field or element was written individually (an assignment or
-//     increment/decrement through a MemberExpr/ArraySubscriptExpr) and no
-//     whole-object initializer was ever seen for that object.  A struct
-//     nobody has touched at all (the common IO_STATUS_BLOCK-as-pure-OUT-
-//     buffer idiom this project uses throughout src/file, src/mman, and
-//     src/thread) is not flagged by this rule: the kernel is expected to
-//     write the whole thing, and there is no partial-write footgun to
-//     prove against.
-//
-//   - Argument positions: an OBJECT_ATTRIBUTES* argument is recognised
-//     generically by its pointee record name, since essentially every
-//     NtCreate*/NtOpen* prototype in src/internal/nt.h takes one and the
-//     kernel only ever reads it.  A small table grounded directly in the
-//     other prototypes read from src/internal/nt.h covers the remaining
-//     IN PVOID buffer slots (NtSetInformationFile, NtSetInformationProcess,
-//     NtSetInformationJobObject, NtSetEaFile, NtFsControlFile and
-//     NtDeviceIoControlFile's InputBuffer, NtSetContextThread) and OUT
-//     PVOID buffer slots (the NtQuery*/NtGetContextThread family) used for
-//     the second, lower-priority check.
-//
-//   - Second, lower-priority check: the same tracked OUT-parameter object
-//     never has any of its fields read before the enclosing function
-//     returns -- a wasted round trip through the kernel, symmetrical with
-//     the first check on the other side of the same boundary.
+//   - The footgun caught is the partial one: at least one field/element
+//     written individually with no whole-object initializer ever seen.
+//     A struct nobody touched at all (the common IO_STATUS_BLOCK-as-
+//     pure-OUT-buffer idiom throughout src/file, src/mman, src/thread)
+//     is not flagged: the kernel is expected to write the whole thing.
+//   - Argument positions: OBJECT_ATTRIBUTES* is recognised generically by
+//     its pointee record name (every NtCreate*/NtOpen* prototype takes
+//     one, kernel-read-only). A small table covers the remaining IN PVOID
+//     slots (NtSetInformationFile/Process/JobObject, NtSetEaFile,
+//     NtFsControlFile/NtDeviceIoControlFile's InputBuffer,
+//     NtSetContextThread) and OUT PVOID slots (NtQuery*/
+//     NtGetContextThread) for the second, lower-priority check.
+//   - Second check: the same tracked OUT-parameter object never has any
+//     field read before the function returns -- a wasted kernel round
+//     trip, symmetrical with the first check.
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Expr.h"
@@ -103,21 +80,16 @@ struct ArgSlot {
   unsigned Index;
 };
 
-// A record type none of whose fields are bitfields, every one of which
-// has been individually written on this path, and whose fields --
-// walked in declaration order against the *real target's* own computed
-// layout, not a guess -- leave no gap before the first field, between
-// any two adjacent fields, or after the last one, has by simple
-// arithmetic had every one of its bytes set exactly once: no compiler
-// padding can exist that this struct's own field set does not already
-// account for. This is what actually justifies not flagging idioms like
-// FILE_POSITION_INFORMATION's single LARGE_INTEGER field (a one-field
-// struct can never have padding at all) or PROCESS_PRIORITY_CLASS's two
-// adjacent UCHAR fields (both 1-byte aligned, nothing between or after
-// them), while still flagging a struct a target's real ABI actually does
-// pad, such as OBJECT_ATTRIBUTES on LLP64 -- computed per call, so it is
-// right for whichever arch is currently being analyzed rather than
-// assuming one layout for all of them.
+// A record type with no bitfields, every field individually written on
+// this path, whose fields -- walked in declaration order against the
+// real target's computed layout -- leave no gap before, between, or
+// after them, has every byte set exactly once: no compiler padding can
+// exist that the field set doesn't already account for. This is what
+// justifies not flagging FILE_POSITION_INFORMATION's single field (can
+// never have padding) or PROCESS_PRIORITY_CLASS's two adjacent 1-byte
+// fields, while still flagging a struct the real ABI does pad (e.g.
+// OBJECT_ATTRIBUTES on LLP64) -- computed per call, so it's right for
+// whichever arch is being analyzed.
 static bool allFieldsCoverWholeObject(const RecordDecl *RD, unsigned Mask,
                                       ASTContext &Ctx) {
   if (!RD || !RD->isCompleteDefinition())
@@ -139,23 +111,18 @@ static bool allFieldsCoverWholeObject(const RecordDecl *RD, unsigned Mask,
   return Expected == Layout.getSize();
 }
 
-// True if Callee's body contains, as one of its own top-level statements
-// (unconditional -- not nested inside a branch or loop, so this is not
-// claiming anything about a memset that only sometimes runs), a call to
-// memset/__builtin_memset/bzero whose target is exactly the
-// ParamIndex'th parameter dereferenced, covering the whole pointee.  A
-// locally-defined helper that unconditionally memsets its own
-// by-address out-parameter proves the *caller's* corresponding local
-// just as completely as if that memset were written at the call site --
-// C's pass-by-address semantics make the two identical, no path-
-// sensitive symbolic execution across the call boundary required.  This
-// is what lets a shared setup helper -- e.g. this tree's own per-file
-// object_attributes() in src/thread/semaphore.c and src/thread/
-// mqueue.c, whose only store to its OBJECT_ATTRIBUTES* parameter is a
-// call to InitializeObjectAttributes(), which itself opens with exactly
-// this memset -- prove its callers' locals even though this checker
-// analyzes one function frame at a time and does not itself see across
-// that call.
+// True if Callee's body contains, as an unconditional top-level statement
+// (not nested in a branch/loop), a call to memset/__builtin_memset/bzero
+// whose target is the ParamIndex'th parameter dereferenced, covering the
+// whole pointee. A locally-defined helper that unconditionally memsets
+// its own by-address out-parameter proves the *caller's* local just as
+// completely as if the memset were written at the call site -- C's
+// pass-by-address semantics make the two identical, no cross-call
+// symbolic execution required. This is what lets a shared setup helper
+// (e.g. object_attributes() in src/thread/semaphore.c/mqueue.c, whose
+// only store is a call to InitializeObjectAttributes(), which opens with
+// exactly this memset) prove its callers' locals even though this
+// checker analyzes one function frame at a time.
 static bool isMemsetCallOfParam(const CallExpr *CE, const ParmVarDecl *Param,
                                 QualType PointeeType, ASTContext &Ctx) {
   const FunctionDecl *Target = CE->getDirectCallee();

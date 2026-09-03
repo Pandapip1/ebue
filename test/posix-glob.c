@@ -1,58 +1,30 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Clause-by-clause POSIX.1-2017 audit of a group of headers ntlibc does
- * not have AT ALL: <fnmatch.h>, <glob.h>, <wordexp.h>, <regex.h>,
- * <search.h>, <ftw.h>.  `grep -rl` over src/ and include/ for every
- * symbol these headers declare (fnmatch, glob/globfree, wordexp/
- * wordfree, regcomp/regexec/regerror/regfree, hcreate/hdestroy/hsearch,
- * tsearch/tfind/tdelete/twalk, lsearch/lfind, insque/remque, ftw/nftw)
- * finds nothing -- not a declaration, not a definition.
+ * Clause-by-clause POSIX.1-2017 audit of <fnmatch.h>, <glob.h>,
+ * <wordexp.h>, <regex.h>, <search.h>, <ftw.h> -- a group test/POSIX-
+ * COVERAGE.md's audit method missed entirely, since it only asked "does
+ * every function in a header we have match the spec", never which
+ * headers POSIX requires. Found when a GNU Make bootstrap tripped over
+ * <pwd.h>/glob() being unavailable at all.
  *
- * This group exists because test/POSIX-COVERAGE.md's audit method only
- * ever asked "does every function *in a header we have* match the
- * spec?" -- it never asked which headers POSIX *requires* in the first
- * place, so a header that is simply missing was invisible to it.  That
- * blind spot was found the hard way: a full-source bootstrap building
- * GNU Make against ntlibc tripped over <pwd.h> (gnulib's glob.c and
- * Make's src/read.c both #include it unconditionally on non-_WIN32
- * targets) -- and glob()/fnmatch() are exactly the pattern-matching
- * surface that bootstrap needed and ntlibc could not provide at all.
- *
- * Since none of these six headers exist, this file cannot #include any
- * of them and still compile.  Per test/posix-sysmisc.c's precedent (and
- * test/misc.c's __spawn before it), every type and prototype these
- * tests need is declared locally, right above the section that uses
- * it, matching the relevant basedefs/<header>.html "shall define at
- * least" wording.  Every test body is fenced with one of the three
- * conventions test/posix-sysmisc.c established:
- *
- *   #if 0 / * BUG: <requirement + citation> * /     -- a real spec
+ * These headers now have real implementations (include/{fnmatch,glob,
+ * wordexp,regex,search,ftw}.h and the matching src/ directories), so
+ * most fences below have been lifted; the ones that remain use the
+ * three conventions test/posix-sysmisc.c established:
+ *   #if 0 /* BUG: <requirement + citation> */    -- a real spec
  *   violation in code that exists; should pass once fixed.
- *   #if 0 / * N/A: <requirement + citation + why NT can't> * / --
+ *   #if 0 /* N/A: <requirement + citation + why NT can't> */ --
  *   genuinely impossible on this platform.
- *   #if 0 / * UNIMPL: <requirement + citation> * /  -- not implemented
- *   here, but implementable; the fence comment names the mechanism.
+ *   #if 0 /* UNIMPL: <requirement + citation> */  -- not implemented
+ *   here, but implementable; the fence names the mechanism.
  *
- * One boundary between the last two is worth stating outright, because
- * three fences in this file got it wrong and
- * test/verification-coverage-accounting.md section 5 had to find them:
- * a clause whose CODE EXISTS but whose TEST FIXTURE cannot be built
- * here is N/A, not UNIMPL.  UNIMPL's contract is "absent, but
- * implementable, and here is the mechanism"; a fence with nothing
- * absent and no mechanism to name is not making that claim.  N/A's
- * definition in test/POSIX-COVERAGE.md already covers it -- "the
- * clause cannot be triggered/observed under Wine" -- and such an N/A
- * is normally conditional, so it carries an expiry condition naming
- * what would make the fixture buildable.  The three are GLOB_ERR/
- * errfunc, GLOB_NOESCAPE, and nftw()'s FTW_PHYS, each retagged with
- * its reasoning at the fence.
- *
- * Every function in this group is UNIMPL or N/A -- there are no BUGs,
- * because there is no code to be wrong yet.  Fenced bodies are written
- * as real, runnable assertions (real CHECK()s against real locally
- * declared types) rather than prose, so the file is what would exist
- * the day each gap is closed, not a description of one.
+ * One boundary worth stating: a clause whose CODE EXISTS but whose TEST
+ * FIXTURE can't be built here is N/A, not UNIMPL (three fences got this
+ * wrong before being retagged: GLOB_ERR/errfunc, GLOB_NOESCAPE, and
+ * nftw()'s FTW_PHYS). Every type/prototype these tests need is declared
+ * locally, matching the basedefs/<header>.html "shall define at least"
+ * wording, per test/posix-sysmisc.c's precedent.
  *
  * Spec pages consulted (https://pubs.opengroup.org/onlinepubs/9699919799/):
  *   functions/fnmatch.html      functions/glob.html
@@ -62,108 +34,6 @@
  *   functions/tsearch.html      functions/lsearch.html
  *   functions/insque.html       functions/ftw.html
  *   functions/nftw.html
- *
- * ==================== Genuine gap vs. genuinely N/A ====================
- *
- * fnmatch.h -- 100% genuine gap.  Pure string matching against a
- * pattern grammar and two strings already in memory; no OS dependency
- * at all.  The most self-contained header in this group.
- *
- * glob.h -- genuine gap for the POSIX base function itself (pattern
- * matching against ntlibc's own working opendir/readdir/stat layer,
- * src/dirent/, src/unistd/stat.c).  One real interaction worth
- * flagging: POSIX's glob() explicitly does *not* do tilde expansion --
- * glob.html's APPLICATION USAGE says outright "Applications that need
- * tilde and parameter expansion should use wordexp()" -- so `~` is out
- * of scope for the base function and does not depend on the sibling
- * <pwd.h> work at all.  glibc's non-standard GLOB_TILDE flag is a
- * different story: if ntlibc ever added that GNU extension, it would
- * need getpwnam() for `~user` (not just getenv("HOME") for bare `~`);
- * getpwnam() itself now exists (wordexp()'s own tilde expansion below
- * uses it), but GLOB_TILDE is still unimplemented, and it is not itself
- * a POSIX.1-2017 base requirement.
- *
- * wordexp.h -- no longer split at all.  wordexp() is defined as
- * performing shell word expansion "as described in XCU Word
- * Expansions" (wordexp.html DESCRIPTION), i.e. as if by the shell
- * described in XBD Shell Command Language.  This paragraph used to
- * record, correctly at the time, that this platform had no such shell
- * -- src/stdio/misc.c's popen() hands shell work to cmd.exe /c, an
- * entirely different, non-POSIX grammar, precisely *because* there is
- * no /bin/sh -- and that command substitution ($(...) or `...`), which
- * needs an embedded, arbitrarily complex command *list* executed per
- * that grammar, was therefore N/A short of porting a real POSIX shell
- * binary.
- *
- * ntlibc has one now: src/sh/, an in-process shell compiled into the
- * same libc.a rather than a separate interpreter image (see
- * test/sh-design.md for why a C library grew one, and why linkage
- * rather than PATH discovery).  wordexp() calls into it, so command
- * substitution is live below, and with it the thing the old note called
- * out as tied to it by construction: field splitting of a command
- * substitution's *result*.  That one was N/A for a subtler reason worth
- * keeping on the record -- XBD 2.6.5 defines field splitting as
- * operating on the *results* of the other expansions with quote context
- * carried through them, so a correct splitter cannot be cut loose from
- * the command substitution whose boundaries it must track, which is
- * exactly why it is done inside the same scan and not bolted on
- * afterwards.  Splitting a literal string (or an arithmetic
- * expansion's decimal result, which is exactly that) on IFS bytes is
- * the trivial half and is covered separately.
- *
- * Two field-splitting gaps do remain, neither about command
- * substitution: an unquoted parameter expansion's result is not split,
- * and IFS itself is never consulted (space/tab/newline are hard-coded).
- * Arithmetic expansion ($((...))) was never the same kind of gap as
- * command substitution -- XBD 2.6.4 defines it as evaluating a
- * self-contained C-like expression already reduced to text, with no
- * command execution anywhere in it (see src/wordexp/arith.c's own
- * header) -- and has been live since an earlier update.  The rest, none
- * of which ever needed a command interpreter: tilde expansion (~ and
- * ~user -- same HOME/getpwnam mechanism as GLOB_TILDE above),
- * parameter expansion of bare $VAR/${VAR} against environ, pathname
- * expansion (delegates straight to glob(), itself a gap above), quote
- * removal, and the WRDE_DOOFFS/WRDE_APPEND/WRDE_REUSE bookkeeping
- * flags.
- *
- * regex.h -- genuine gap.  A BRE/ERE compiler and matcher is pure
- * string/automaton code with no NT dependency; large, so this file
- * covers the structure (regex_t/regmatch_t, cflags/eflags, the
- * BRE-vs-ERE grouping-syntax difference, subexpression capture,
- * REG_NOSUB/REG_NEWLINE/REG_ICASE, a representative subset of the
- * REG_* error codes, and regerror's two-call size-query idiom) rather
- * than every corner of either pattern language (backreferences,
- * collating symbols/equivalence classes, interval expressions'
- * boundary counts, and locale-dependent bracket expressions are left
- * unaudited).
- *
- * search.h -- genuine gap, almost entirely.  tsearch/tfind/tdelete/
- * twalk, hsearch/hcreate/hdestroy, lsearch/lfind, and insque/remque are
- * all pure in-memory data structures (a binary tree, an open hash
- * table, a linear array, a doubly linked list) with no OS dependency
- * whatsoever -- not even malloc() needs anything ntlibc doesn't already
- * have.  There is no N/A case anywhere in this header; every clause
- * below is UNIMPL.
- *
- * ftw.h -- genuine gap.  Both functions are a directory-recursion
- * driver on top of facilities ntlibc already has working: opendir/
- * readdir/closedir (src/dirent/) for descent, and stat/lstat/fstatat
- * (src/unistd/) for the per-entry struct stat and for telling FTW_SL
- * (symlink) apart from FTW_F/FTW_D. FTW_MOUNT's "same file system"
- * check is st_dev equality, already reported by ntlibc's stat(); FTW_
- * CHDIR needs chdir(), already implemented (include/unistd.h). No piece
- * of this header hits an NT wall the way, say, RLIMIT_NOFILE does in
- * test/posix-sysmisc.c -- it is unimplemented, not unimplementable.
- *
- * All six headers now have real implementations (include/fnmatch.h,
- * include/glob.h, include/wordexp.h, include/regex.h, include/search.h,
- * include/ftw.h, plus the matching src/ directories), so the "since none
- * of these six headers exist" framing above and the genuine-gap-vs-N/A
- * split by header no longer describe this file's actual coverage; most
- * UNIMPL fences below are unfenced as a result. The fences that remain
- * are either genuine N/A (a fixture this platform's filesystem/
- * permission model cannot build) or a real BUG against a still-unmet
- * clause -- see each fenced clause's own comment for which and why.
  */
 /* Needed for setenv()/unsetenv() (wordexp arith tests) and
  * clock_gettime()/CLOCK_MONOTONIC (regex interval-expansion timing

@@ -2488,16 +2488,13 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   }
 
   // Mirrors writesVariable() exactly, but matches a struct/union FIELD
-  // (any `Base->Field` or `Base.Field`, for ANY base expression) instead of
-  // a single ValueDecl.  Matching on field identity rather than chasing the
-  // specific base expression is deliberately coarser than the alias
-  // tracking below: it cannot tell two same-named fields on two unrelated
-  // objects apart, so a write to an unconnected object's same-named field
-  // makes this return a conservative true where a sharper analysis would
-  // not have to.  That coarseness only ever costs precision (a real-but-
-  // undetected stable bound stays unproved), never soundness -- it can
-  // never miss an actual write to the field this checker is about to rely
-  // on as unchanging.
+  // (any `Base->Field` or `Base.Field`) instead of a single ValueDecl.
+  // Matching on field identity, not the specific base expression, is
+  // deliberately coarser: it can't tell two same-named fields on unrelated
+  // objects apart, so a write to an unconnected object's field returns a
+  // conservative true. That only costs precision, never soundness -- it
+  // can never miss an actual write to the field this checker relies on as
+  // unchanging.
   static bool writesMember(const Stmt *Statement, const ValueDecl *Field) {
     if (!Statement)
       return false;
@@ -2518,27 +2515,20 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   }
 
   // A loop bound of the shape `base->field` or `base.field`, where `base`
-  // is a plain parameter or local variable, is stable across the loop when
-  // three things are all true: the base itself is never reseated or
-  // handed to something that could reseat or overwrite it out from under
-  // this read (the same writesVariable/aliasedWrite tests the plain-
-  // variable case above already requires of `base`); nothing in the
-  // tested region writes `*base` wholesale or passes `base` on to a call
-  // that could reach back through it (writesThroughAlias, applied to
-  // `base` directly -- it already recognizes exactly that shape for a
-  // pointer-typed alias, which is exactly what an arrow base is; a dot
-  // base is a struct, not a pointer, so this test is vacuous for it,
-  // which is correct, not a gap: aliasedWrite already covers a struct
-  // local whose OWN address escaped); and no expression anywhere in the
-  // tested region assigns through a member with the same field identity
-  // (writesMember, coarse but sound as documented on it above).
+  // is a plain parameter or local, is stable across the loop when: the
+  // base is never reseated or handed somewhere that could overwrite it
+  // (writesVariable/aliasedWrite, as for the plain-variable case above);
+  // nothing writes `*base` wholesale or passes `base` to a call that
+  // could reach back through it (writesThroughAlias -- vacuous for a
+  // dot base since that's a struct, not a pointer, which is correct
+  // since aliasedWrite already covers an escaped struct local); and no
+  // expression assigns through a member with the same field identity
+  // (writesMember, coarse but sound as documented above).
   //
-  // A member reached through anything other than a single plain base
-  // variable (another member expression, a call result, a subscript) is
-  // deliberately left unrecognized here and falls through to this
-  // function's existing "false" -- there is no local var to run the
-  // escape checks against, so nothing about it can be shown stable this
-  // way, and this lemma does not try.
+  // A member reached through anything but a single plain base variable
+  // (another member expression, a call result, a subscript) is left
+  // unrecognized and falls through to "false": there's no local var to
+  // run the escape checks against.
   bool memberStable(const MemberExpr *Member, const Stmt *Body,
                     const Expr *Increment) const {
     const ValueDecl *Field = Member->getMemberDecl();

@@ -3,48 +3,35 @@
  *
  * ntstubs.c -- the ntdll side of the world, for native (Linux) builds.
  *
- * The point of this file is to let the *real* src/*.c be compiled and
- * linked by a native clang with ASan/UBSan/libFuzzer.  Nothing here is
- * part of ntlibc: it stands in for ntdll.dll, which is the one thing a
- * native build cannot have.  Everything ntlibc itself computes -- format
- * conversion, number parsing, buffer sizing -- runs unmodified.
+ * Lets the *real* src/*.c be compiled and linked by a native clang with
+ * ASan/UBSan/libFuzzer. Nothing here is part of ntlibc: it stands in for
+ * ntdll.dll, the one thing a native build can't have. Everything ntlibc
+ * itself computes runs unmodified.
  *
  * Three grades of stub live here:
- *
- *   real       RtlAllocateHeap & friends (ASan's allocator, so ntlibc's
- *              heap use is redzone-checked); the file system -- a
- *              simulated volume in memory, described above NtCreateFile
- *              below, with the paths, handles, directories, pipes and
- *              information classes ntlibc actually uses; process
- *              creation, which fork+execve really performs; process
- *              cloning (RtlCloneUserProcess, so fork()), which a real
- *              host fork(2) performs, described above it; the clocks;
- *              RtlUTF8ToUnicodeN/RtlUnicodeToUTF8N (a from-spec
- *              conversion; see the note above them), RtlInitUnicodeString.
+ *   real       RtlAllocateHeap & friends (ASan's allocator); the file
+ *              system (a simulated in-memory volume, see NtCreateFile
+ *              below); process creation (real fork+execve); process
+ *              cloning (RtlCloneUserProcess via a real host fork(2));
+ *              the clocks; RtlUTF8ToUnicodeN/RtlUnicodeToUTF8N (a
+ *              from-spec conversion), RtlInitUnicodeString.
  *   plausible  NtQueryVolumeInformationFile for descriptors 0-2, which a
- *              native run cannot classify beyond "a character device".
- *   refusing   everything else: STATUS_NOT_IMPLEMENTED.  Any ntlibc code
- *              path that reaches one of those is simply not covered by
- *              the native build, and will report an error rather than
- *              pretend to work.  What is left is chiefly the
- *              object-manager symbolic links and NtFsControlFile.
+ *              native run can't classify beyond "a character device".
+ *   refusing   everything else: STATUS_NOT_IMPLEMENTED. Any ntlibc code
+ *              path reaching one is not covered by the native build and
+ *              reports an error rather than pretending to work --
+ *              chiefly object-manager symbolic links and NtFsControlFile.
  *
- * Host services are reached through syscall(2) rather than through
- * write()/read()/malloc(), because those names belong to ntlibc in this
+ * Host services are reached through syscall(2) rather than
+ * write()/read()/malloc(), since those names belong to ntlibc in this
  * link and calling them would recurse straight back into the library.
  *
- * A caveat that used to outrank everything in this file, kept here so
- * nobody re-derives it: NTSTATUS was once `long` (src/internal/nt.h),
- * which is 32-bit on the NT target but 64-bit on a native x86_64 build,
- * so nt.h's own ((NTSTATUS)0xC0000034L) came out *positive* natively and
- * NT_SUCCESS() answered "success" for every failure status this file
- * reported.  Fixed in `ee85d92` (nt.h's typedef is `int`); no per-test
- * skip was ever needed for it in tools/asan-build.sh, because nothing
- * had shipped depending on the bug by the time it was found.  Left
- * documented rather than deleted because thirty-nine commits have
- * touched this file since without anyone noticing the fix, which is
- * itself worth knowing: check src/internal/nt.h before believing a
- * comment about it, this one included.
+ * A caveat worth keeping documented: NTSTATUS was once `long`, 32-bit on
+ * the NT target but 64-bit on native x86_64, so a status like
+ * ((NTSTATUS)0xC0000034L) came out *positive* natively and NT_SUCCESS()
+ * reported success for every failure. Fixed by making nt.h's typedef
+ * `int`; check src/internal/nt.h before trusting a comment about it,
+ * this one included.
  */
 #include <stddef.h>
 #include <stdio.h>
@@ -213,31 +200,23 @@ static char *host_self;
 static int vfs_snapshot_fd = -1;
 
 /*
- * The exit code a host wait4() reports is 8 bits (WEXITSTATUS); the exit
- * code this file's own NtTerminateProcess is asked for can be a full NT
- * status -- in particular __ENCODE_SIGNAL_EXIT(sig) = 0xE0DE0000 | sig, which
- * a plain _exit(status) low-byte-truncates down to just `sig`, indistin-
- * guishable on the host from a process that legitimately called
- * exit(sig).  That is the whole reason waitpid-overflow and posix-signal
- * are skipped natively (see not_native() in tools/asan-build.sh) -- but
- * the fix does not have to live in src/*.c, which already gets this
- * right for the real NT target; it only has to get the *full* code from
+ * The exit code a host wait4() reports is 8 bits (WEXITSTATUS), but the
+ * code NtTerminateProcess is asked for can be a full NT status (e.g.
+ * __ENCODE_SIGNAL_EXIT(sig) = 0xE0DE0000 | sig), which a plain
+ * _exit(status) truncates to just `sig` -- indistinguishable on the host
+ * from a real exit(sig). This is why waitpid-overflow and posix-signal
+ * are skipped natively; the fix only needs to get the *full* code from
  * the dying process to the one that reaps it, out of band from the
- * host's own 8-bit accounting.
+ * host's 8-bit accounting.
  *
  * A small table in an anonymous, memfd-backed MAP_SHARED page does that:
- * whichever process ends another (NtTerminateProcess, self or via a
- * handle) records {pid, code} in it before the host-visible exit/kill
- * happens, and proc_poll() below prefers that record over the
- * host-status heuristic whenever one matches the pid it just reaped.
- * The mapping needs no extra plumbing to reach a child: RtlCloneUserProcess's
- * real fork(2) shares it automatically (fork does not unmap anything),
- * and RtlCreateUserProcess's real fork+execve passes the *fd number* to
- * the child via envp (XSTATUS_FD_MARK below), the same trick XCHILD_MARK
- * already uses for "was this execve'd by this file" -- the fd itself
- * survives execve (memfd_create() does not set FD_CLOEXEC here), so the
- * child's own __ntshim_init() just re-mmaps the fd it inherited instead
- * of creating a fresh, unrelated table. */
+ * whichever process ends another records {pid, code} in it before the
+ * host-visible exit/kill, and proc_poll() below prefers that record when
+ * one matches the pid it just reaped. RtlCloneUserProcess's real fork(2)
+ * shares the mapping automatically; RtlCreateUserProcess's real
+ * fork+execve passes the fd number to the child via envp
+ * (XSTATUS_FD_MARK below), since the fd itself survives execve
+ * (memfd_create() doesn't set FD_CLOEXEC here). */
 #define XSTATUS_FD_PREFIX "_NTLIBC_XSTATUS_FD="
 #define XSTATUS_N 4096
 struct xstatus_ent { int pid; int code; };
@@ -399,70 +378,42 @@ __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char
 
 /* -------------------------------------------------------------- file I/O
  *
- * A simulated file system, entirely in memory.
+ * A simulated file system, entirely in memory: the native build has no
+ * ntdll, and the fuzzers drive these entry points millions of times, so
+ * real files would be slow, leave debris, and risk letting a library bug
+ * damage something real. In-memory is hermetic and deterministic, and
+ * ASan still catches a handle/buffer mistake in ntlibc's own use of it.
  *
- * The native build has no ntdll, so every file call ntlibc makes has to
- * land somewhere.  It lands here rather than on the host: the fuzzers
- * drive these entry points millions of times, and a harness that creates,
- * truncates and deletes real files that many times would be slow, would
- * leave debris, and -- since test/unistd exercises unlink, rename, chmod
- * and ftruncate -- would let a library bug damage something real.  In
- * memory it is hermetic, deterministic (which is what a fuzzing corpus
- * needs), and ASan sees the simulated file system's own allocations too,
- * so a mistake in ntlibc's handle or buffer use still gets caught.
+ * What is modelled:
+ *   nodes    A file or directory: contents (growable byte buffer), the
+ *            four NT timestamps, FileAttributes, link count, index
+ *            number -- what stat.c/fd.c actually read back. Directory
+ *            entries are separate from nodes, so hard links work.
+ *   handles  A HANDLE is a table index + 1 (0 stays "no handle");
+ *            pseudo-handles 1-3 are stdin/stdout/stderr, marked as
+ *            devices. NtDuplicateObject shares the same file object (and
+ *            so the same position), as on NT and POSIX.
+ *   paths    ntlibc hands in NT paths; RtlDosPathNameToNtPathName_U_-
+ *            WithStatus below does the DOS->NT half exactly as ntdll
+ *            does, and resolve() does the object-manager half, so
+ *            src/internal/path.c is really exercised, not bypassed.
+ *   case     Names compare case-insensitively (ASCII only, not NT's full
+ *            Unicode upcase table), matching OBJ_CASE_INSENSITIVE.
+ *   order    Directory enumeration is ".", "..", then creation order --
+ *            a legal, stable answer since NT guarantees neither NTFS's
+ *            nor FAT's actual order.
+ *   layout   C:\ with C:\work (starting cwd) and C:\tmp. The environment
+ *            starts empty, so tmpfile()/mkstemp() fall back to cwd;
+ *            C:\tmp exists for a test that sets $TMPDIR itself.
  *
- * What is modelled, and how faithfully:
+ * Where NT and POSIX differ, NT wins: a positioned read/write *does* move
+ * the file object's position (these handles are synchronous), which is
+ * why src/internal/fdpos.c exists and would go untested against a
+ * POSIX-like stub.
  *
- *   nodes      A node is a file or a directory: contents (a growable byte
- *              buffer), the four NT timestamps, FileAttributes, a link
- *              count and an index number.  That is what src/stat/stat.c
- *              and src/internal/fd.c actually read back; nothing more is
- *              invented.  Directory entries are separate from nodes, so
- *              hard links (FileLinkInformation) work and NumberOfLinks
- *              means something.
- *   handles    A HANDLE is an index into a table of file objects, plus
- *              one, so 0 stays "no handle" -- the scheme the shim already
- *              used for stdin/stdout/stderr, whose pseudo-handles 1, 2
- *              and 3 are simply the first three entries of that table and
- *              are marked as devices rather than files.  A file object
- *              holds the node, the byte offset, the granted access and
- *              the create options; NtDuplicateObject makes a second
- *              handle onto the *same* file object, so a dup'd descriptor
- *              shares the position, as it does on NT and on POSIX.
- *   paths      ntlibc hands in NT paths (\??\C:\dir\file), which is where
- *              the translation belongs: RtlDosPathNameToNtPathName_U_-
- *              WithStatus below does the DOS -> NT half (current
- *              directory, drive letters, . and .. collapsing, reserved
- *              device names) exactly as ntdll does, and the object
- *              manager half -- walking \??\C:\... down the node tree --
- *              happens in one place, resolve().  So the path handling in
- *              src/internal/path.c is really exercised, not bypassed.
- *   case       Names compare case-insensitively (ASCII only; NT uses a
- *              full Unicode upcase table, this does not), because that is
- *              what NT does and what OBJ_CASE_INSENSITIVE asks for.  A
- *              case-sensitive simulation would let tests pass here that
- *              would fail on the target.
- *   order      Directory enumeration is: ".", "..", then the entries in
- *              the order they were created.  NTFS returns them in B-tree
- *              (roughly case-insensitive alphabetical) order and FAT in
- *              creation order; NT guarantees neither, so creation order
- *              is a legal answer and a stable one.
- *   layout     The initial tree is C:\ with C:\work (the starting current
- *              directory) and C:\tmp.  The environment starts empty, so
- *              tmpfile()/tmpnam()/mkstemp() fall back to the current
- *              directory (see tmpdir() in src/stdio/misc.c); C:\tmp is
- *              there for a test that sets $TMPDIR itself.
- *
- * Where NT and POSIX differ, NT wins here.  In particular a positioned
- * read or write (an explicit ByteOffset) *does* move the file object's
- * position, because these handles are synchronous and that is what NT
- * does -- src/internal/fdpos.c exists to compensate for it, and would go
- * untested against a POSIX-like stub.
- *
- * Not simulated, and refused rather than faked: share-mode conflicts
- * (every open is as if FILE_SHARE_VALID_FLAGS), security descriptors,
- * reparse points and symlinks, alternate streams, extended attributes
- * other than the single $LXMOD word used by stat/chmod, short (8.3)
+ * Not simulated, refused rather than faked: share-mode conflicts,
+ * security descriptors, reparse points/symlinks, alternate streams,
+ * extended attributes other than the single $LXMOD word, short (8.3)
  * names, and volumes other than C:.
  */
 
@@ -1022,59 +973,33 @@ static void materialize_argv0(const char *name, const char *host)
 
 /* ---- the corpus mirror ------------------------------------------------
  *
- * Why this exists.  libFuzzer's corpus is a *directory*: it stats it,
- * lists it, reads every file in it at start-up, and writes each newly
- * interesting input back into it as a file named after the input's SHA1.
- * It does all of that through the C library it is linked against, which
- * in this executable is ntlibc -- so its stat/opendir/open land in the
- * volume above, which starts out holding only C:\work and C:\tmp.  The
- * corpus directory is simply not in it, and libFuzzer refuses to start:
+ * libFuzzer's corpus is a *directory*: it stats/lists/reads it at
+ * start-up and writes new interesting inputs into it, all through the C
+ * library it's linked against (ntlibc here), so those calls land in the
+ * in-memory volume above, which starts out holding only C:\work and
+ * C:\tmp. The corpus directory is simply not in it, so libFuzzer refuses
+ * to start ("required directory does not exist"). NtCreateFile is fully
+ * implemented against the volume; the gap is a missing directory, not a
+ * missing syscall.
  *
- *     ERROR: The required directory "/x/corpus" does not exist
+ * NTLIBC_FUZZ_MIRROR=<host directory> closes it: the named host tree is
+ * copied into the volume at start-up at the same path (dos_from_posix()
+ * maps "/a/b" onto "\??\C:\a\b"), and a file in that subtree is written
+ * back to the host when the last handle opened for writing is closed --
+ * on close rather than at exit, since libFuzzer's crash artefact is
+ * written just before _Exit(), which runs no atexit handler.
  *
- * That is the whole of the "no corpus survives a run" problem, and it is
- * worth being precise about it because the comment this replaces was
- * not: NtCreateFile is *not* unimplemented here and does not answer
- * STATUS_NOT_IMPLEMENTED.  It is fully implemented, against the in-memory
- * volume; stat() of the corpus directory fails with a plain ENOENT
- * because nothing ever put that directory in the volume.  The gap is a
- * missing directory, not a missing syscall.
+ * Deletions are mirrored too: libFuzzer's -reduce_inputs unlinks a
+ * corpus file once a smaller input reaches the same coverage (measured:
+ * 1326 files on disk vs. 374 actually used after two 15s fuzz_strtod
+ * runs), so without mirrored deletes the host directory grows unbounded.
+ * libFuzzer's own `-merge=1` doesn't work here: merge re-execs the
+ * harness per input through RtlCreateUserProcess rather than a real
+ * fork, and a 1326-file merge produced "0 new files with 0 new features".
  *
- * NTLIBC_FUZZ_MIRROR=<host directory> closes it.  At start-up the named
- * host directory tree is copied into the volume at the same path --
- * src/internal/path.c's dos_from_posix() maps "/a/b" onto "\??\C:\a\b",
- * so a host absolute path names the same node here with no translation
- * -- and a file inside that subtree is written back to the host when the
- * last handle that was opened for writing is closed.
- *
- * Write-through on close rather than a flush at exit, deliberately: the
- * artefact that matters most is the one libFuzzer writes on a crash, and
- * it writes that and then calls _Exit(), which runs no atexit handler.
- * A close hook catches the crash artefact and the corpus unit alike.
- *
- * Deletions are mirrored too, and they have to be.  libFuzzer's
- * -reduce_inputs (on by default) unlinks a corpus file the moment a
- * smaller input reaches the same coverage, so its live corpus stays
- * minimal -- 1326 files on disk against 374 it was actually using, after
- * two 15s runs of fuzz_strtod.  Without mirrored deletes the host
- * directory keeps every input any run ever wrote and grows without bound,
- * which for a nightly cron is a cache that eventually costs more to load
- * than the fuzzing is worth.  With them, the host directory *is*
- * libFuzzer's minimized corpus.
- *
- * libFuzzer's own answer to this, `-merge=1`, does not work here and was
- * measured not to: merge re-execs the harness once per input
- * (MERGE-OUTER: attempt N) so that a crashing input cannot lose the whole
- * merge, and those child processes go through ntstubs' RtlCreateUserProcess
- * rather than a real fork of a real binary.  A 1326-file merge produced
- * "0 new files with 0 new features added".
- *
- * The unlink is fenced hard: only a path that resolves inside the
- * mirrored subtree, only a regular file, never a directory.  A directory
- * this file created on the host is left there.
- *
- * Unset, none of this runs and the volume behaves exactly as before, so
- * `make asan` and every native test see no change at all.
+ * The unlink is fenced hard: only a path resolving inside the mirrored
+ * subtree, only a regular file, never a directory. Unset, none of this
+ * runs and the volume behaves exactly as before.
  */
 
 #define SYS_mkdirat    258
@@ -3118,38 +3043,23 @@ static void vfs_init(void)
 
 /* ---------------------------------------------------------------- clocks */
 
-/* A FIXED SYSTEM CLOCK, FOR HARNESSES WHOSE TARGET READS "NOW".
+/* A fixed system clock, for harnesses whose target reads "now". Off unless
+ * a harness asks for it in its own LLVMFuzzerInitialize.
  *
- * Off unless a harness asks for it, and a harness asks for it in its own
- * LLVMFuzzerInitialize, which libFuzzer runs before any input.
+ * Why: a fuzz target that consults the wall clock isn't reproducible
+ * (e.g. getdate.c seeds unmatched struct tm fields from time(0), so the
+ * same input takes different branches on different days), and a crash
+ * artefact that doesn't reproduce is worth little.
  *
- * WHY IT EXISTS.  A fuzz target that consults the wall clock is not
- * reproducible: src/time/getdate.c seeds its working struct tm from
- * time(0) so that fields a template does not mention default to today
- * (getdate.html: "elements ... not specified by the [matched] template
- * shall be set the same as their equivalents in the current time and
- * date"), which means the same input takes different branches on
- * different days, and a crash artefact may not reproduce from the input
- * that produced it.  A fuzzer whose findings do not reproduce is worth
- * very little.
+ * Why freezing is faithful, not a convenient fiction: NT's system time
+ * advances at the timer tick (~15.6ms by default), and NtQuerySystemTime
+ * returns the same value for every call in between -- freezing stretches
+ * a state the real platform genuinely presents, not one it never does.
+ * It is not a model of a clock that never advances, so it's opt-in and
+ * NtQueryPerformanceCounter below is deliberately left alone -- a target
+ * measuring an interval should still see one.
  *
- * WHY FREEZING IS A FAITHFUL MODEL AND NOT A CONVENIENT FICTION -- which
- * matters, because a stub that encodes a belief rather than a platform
- * behaviour cannot be evidence about the code it serves.  NT's system
- * time is not a high-resolution counter: it advances at the timer tick,
- * about 15.6 ms by default, and NtQuerySystemTime returns the same value
- * for every call in between.  A program that queries it several times
- * inside one tick observes exactly what this produces -- an unchanging
- * clock.  Freezing is therefore a state the real platform genuinely
- * presents, at a duration this build stretches, not one it never does.
- * What it is NOT is a model of a clock that never advances at all, and
- * anything testing elapsed time must not use it; that is why it is
- * opt-in and why NtQueryPerformanceCounter below is deliberately left
- * alone -- a target measuring an interval should still see one.
- *
- * The instant is supplied by the caller and is arbitrary: no value here
- * is derived from anything under test.
- */
+ * The instant is supplied by the caller and is arbitrary. */
 static long long fixed_time_ns100 = -1;
 
 void __ntfuzz_freeze_clock(long long unix_seconds)
@@ -3329,43 +3239,29 @@ NTSTATUS NTAPI NtYieldExecution(void)
  *
  * Starting a child, and waiting for it.
  *
- * Unlike the file system above, this cannot be simulated in memory: what
- * __spawn asks for is that *another copy of the test program* runs, so
- * the host has to start a real process.  fork+execve is the whole of it.
- * The NT shape is kept where it is observable -- the process parameters
- * really are built and taken apart again, the command line really is
- * re-parsed by the rules crt1.c's split_cmdline uses, so a quoting bug in
- * src/process/spawn.c shows up here as a mangled argv rather than being
- * skipped over -- and the differences are these:
+ * Unlike the file system above, this can't be simulated in memory: __spawn
+ * asks for *another copy of the test program* to run, so the host starts
+ * a real process via fork+execve. The NT shape is kept where observable
+ * (process parameters are really built and taken apart, the command line
+ * really re-parsed by crt1.c's split_cmdline rules, so a quoting bug in
+ * spawn.c shows up as a mangled argv), with these differences:
  *
- *   - The image path is an NT path (\??\C:\...) which is turned back into
- *     a host path.  The simulated volume's root doubles as the host root
- *     for this one purpose, because the image has to be a file the host
- *     kernel can actually execute.
+ *   - The image path is an NT path turned back into a host path; the
+ *     simulated volume's root doubles as the host root for this purpose,
+ *     since the image has to be something the host kernel can execute.
  *   - NT creates the process suspended and __spawn resumes it;
- *     fork+execve starts running at once, so NtResumeThread is a no-op.
- *   - Handle inheritance is the host's: an inherited descriptor is one
- *     the child gets because fork copies the descriptor table, not
- *     because OBJ_INHERIT was set.  The simulated file system does not
- *     cross a real execve -- it is ordinary heap memory, and execve
- *     replaces the address space -- so the child gets its own, empty but
- *     for the starting layout, and cannot see a file its parent made
- *     there or a handle onto one (only descriptors 0-2, real host fds,
- *     survive the trip, the same as they would for any host program).
- *     __ntshim_init() below closes the one gap that actually matters to
- *     test/exec.c: it re-materialises a real copy of argv[0] into the
- *     freshly started volume (materialize_argv0(), above the node-tree
- *     helpers), so a process -- exec'd or not -- can always open its own
- *     on-disk path, and it rebuilds environ from the *real* envp execve()
- *     was given when RtlCreateUserProcess marked that envp as this file's
- *     own (XCHILD_MARK), rather than resetting environ to empty as a
- *     freshly started process otherwise does.  Nothing here shares the
- *     rest of the volume, or handles beyond 0-2, across the exec: a
- *     child cannot see a file its parent created elsewhere, or a
- *     descriptor its parent opened onto one.  No test needs it to.
- *   - A child killed by a host signal is reported with the exit code this
- *     library itself uses for a signal death, __ENCODE_SIGNAL_EXIT(sig), so
- *     that waitpid() decodes it the way it would on NT.
+ *     fork+execve runs at once, so NtResumeThread is a no-op.
+ *   - Handle inheritance is the host's (fork copies the descriptor
+ *     table). The simulated file system doesn't cross execve (it's
+ *     ordinary heap memory, replaced with the address space), so the
+ *     child gets its own empty volume and only descriptors 0-2 survive.
+ *     __ntshim_init() below closes the one gap test/exec.c needs:
+ *     re-materializing argv[0] into the fresh volume so a process can
+ *     always open its own path, and rebuilding environ from the real
+ *     envp execve() was given (via XCHILD_MARK) rather than resetting it
+ *     to empty. Nothing else crosses the exec; no test needs it to.
+ *   - A child killed by a host signal is reported with
+ *     __ENCODE_SIGNAL_EXIT(sig), so waitpid() decodes it as it would on NT.
  */
 
 #define SYS_fork      57
@@ -3973,41 +3869,31 @@ NTSTATUS NTAPI NtTerminateProcess(HANDLE h, NTSTATUS code)
  * RtlCloneUserProcess -- src/process/fork.c's one real dependency, and so
  * fork()'s.
  *
- * Unlike RtlCreateUserProcess above, there is no second image to start:
- * the whole point of a clone is that the child resumes *this* call, with
- * a copy of this process's own address space.  A host fork(2) is exactly
- * that primitive, so it is used directly rather than reconstructed from
- * pieces the way RtlCreateUserProcess reconstructs "start a new image"
- * from fork+execve.  Every simulated NT object this file keeps -- vroot,
- * vcwd, vpipes, vhandles, the ofile structs themselves -- is ordinary
- * process memory, so the host's fork() carries all of it into the child
- * automatically, the same "it's just memory" property fork.c's own
- * header comment claims for __fds and the ntlibc heap.
+ * Unlike RtlCreateUserProcess above, there's no second image to start:
+ * the child resumes *this* call with a copy of this process's address
+ * space, exactly what a host fork(2) provides, so it's used directly.
+ * Every simulated NT object here (vroot, vcwd, vpipes, vhandles, the
+ * ofile structs) is ordinary process memory, so fork() carries it into
+ * the child automatically -- the same "it's just memory" property
+ * fork.c's own header claims for __fds and the heap.
  *
- * What real NT's INHERIT_HANDLES flag would selectively copy, plain
- * fork() copies unconditionally -- there is no per-handle OBJ_INHERIT
- * bookkeeping in this file's object table for it to consult even if it
- * wanted to be selective (NtDuplicateObject's attrs argument is already
- * ignored, above). That is not a gap that matters here: it makes every
- * handle "inherit", which is a superset of real NT's behaviour, and the
- * one place a test distinguishes the two -- a process handle for a
- * *third* process that predates the fork, reaching the clone only as a
- * plain-memory table entry (test/fork-handles-win.c, test/process-win.c's
- * test_prefork_handle) -- still gets a real, principled failure: the
- * clone is the host's *sibling* of that third process, not its parent,
- * so proc_poll's wait4() on it fails on its own, honestly, without any
- * handle-table trickery needed to produce that outcome.
+ * What NT's INHERIT_HANDLES flag would selectively copy, plain fork()
+ * copies unconditionally -- there's no per-handle OBJ_INHERIT bookkeeping
+ * here to be selective with. That's a superset of real NT's behavior,
+ * not a gap that matters: the one place a test distinguishes the two (a
+ * process handle for a *third* process predating the fork,
+ * test/fork-handles-win.c) still fails honestly, since the clone is that
+ * third process's sibling, not its parent, so wait4() on it fails on its
+ * own.
  *
- * RTL_CLONE_PROCESS_FLAGS_CREATE_SUSPENDED asks for the new thread to
- * start suspended, to be released by a later NtResumeThread.  A host
- * fork() child starts running immediately, at the same point in this
- * very function -- but that is fine: nothing between here and fork.c's
- * NtResumeThread(info.Thread, 0) call runs in the child at all (the
- * child returns STATUS_PROCESS_CLONED right below and takes the
- * `if (st == STATUS_PROCESS_CLONED)` branch, which never touches the
- * thread handle), and NtResumeThread on this file's OF_PROC objects is
- * already a documented no-op for the same reason RtlCreateUserProcess's
- * fork+execve needs it to be one.
+ * RTL_CLONE_PROCESS_FLAGS_CREATE_SUSPENDED asks the new thread to start
+ * suspended, released by a later NtResumeThread. A host fork() child
+ * starts running immediately at the same point in this function, but
+ * that's fine: nothing between here and fork.c's NtResumeThread() call
+ * runs in the child (it returns STATUS_PROCESS_CLONED and takes a branch
+ * that never touches the thread handle), and NtResumeThread on this
+ * file's OF_PROC objects is already a documented no-op for the same
+ * reason RtlCreateUserProcess's fork+execve needs it to be one.
  */
 NTSTATUS NTAPI RtlCloneUserProcess(ULONG flags, PVOID psd, PVOID tsd, HANDLE debug,
                                    RTL_USER_PROCESS_INFORMATION *info)
@@ -4351,39 +4237,28 @@ NTSTATUS NTAPI NtFsControlFile(HANDLE h, HANDLE ev, PIO_APC_ROUTINE apc, PVOID a
  *
  * src/socket/afdsupport.c's __afd_ioctl(): every AFD request (bind,
  * listen, connect, accept, send, recv, select/poll, disconnect,
- * getsockname) goes through NtDeviceIoControlFile below, against the
- * real host AF_INET/SOCK_STREAM socket __afd_open() (NtCreateFile
- * against \Device\Afd\Endpoint, above) already created.  Every request
- * and reply is read and written through src/internal/afd.h's own
- * AFD_*_OFF_* byte offsets -- the same ones src/socket/*.c's request
- * builders use -- so this parses exactly what the library sends rather
- * than a second, independently guessed layout; the offset disputes that
- * header's banners document (phnt vs. ReactOS, on x86_64 only) are
- * therefore not this file's problem to get right a second time.
+ * getsockname) goes through NtDeviceIoControlFile below, against the real
+ * host AF_INET/SOCK_STREAM socket __afd_open() already created. Requests
+ * and replies are read/written through afd.h's own AFD_*_OFF_* byte
+ * offsets, the same ones src/socket/*.c's request builders use, so this
+ * parses exactly what the library sends rather than a second guessed
+ * layout.
  *
- * Everything here blocks on the real host syscall, deliberately:
- * src/socket/connect.c's own comment records that this project "only
- * ever opens sockets non-blocking-unaware ... so this is always the
- * blocking form", and __afd_ioctl() only ever waits for STATUS_PENDING
- * synchronously (NtWaitForSingleObject immediately after issuing the
- * ioctl) -- so a blocking host syscall is not a simplification, it is
- * what every caller already assumes.  Nothing below returns
- * STATUS_PENDING.
+ * Everything here blocks on the real host syscall, deliberately: this
+ * project only ever opens sockets in the blocking form, and
+ * __afd_ioctl() only ever waits for STATUS_PENDING synchronously -- a
+ * blocking host syscall is what every caller already assumes. Nothing
+ * below returns STATUS_PENDING.
  *
- * Raw syscalls throughout, and a hand-rolled one at that (raw_syscall()
- * below), not glibc's syscall(3): this file needs the exact host errno
- * a failed bind()/connect()/... produced (EADDRINUSE vs ECONNREFUSED
- * vs ...) to answer with a meaningfully different NTSTATUS, and
- * glibc's syscall(3) wrapper converts a negative-range kernel return
- * into "-1, with errno set" the same way every other libc wrapper
- * does -- which would mean trusting that glibc's own errno-setting code
- * path, compiled into libc.so, correctly reaches *this* executable's
- * overridden errno storage rather than some other copy.  fuzz/aflshim.c
- * exists because that exact kind of trust was measured to fail for
- * AFL++'s runtime; raw_syscall() sidesteps the question entirely by
- * reading the kernel's own return value (0 or positive on success, the
- * negative errno on failure) directly out of the syscall instruction,
- * the same guarantee ntlibc's own syscall wrappers rely on. */
+ * Raw syscalls throughout, via a hand-rolled raw_syscall() below, not
+ * glibc's syscall(3): this file needs the exact host errno a failed
+ * bind()/connect()/... produced to answer with a meaningfully different
+ * NTSTATUS, and glibc's syscall(3) wrapper sets its own errno, which
+ * would mean trusting that code path reaches this executable's
+ * overridden errno storage rather than some other copy -- a trust
+ * measured to fail for AFL++'s runtime (see fuzz/aflshim.c).
+ * raw_syscall() sidesteps it by reading the kernel's own return value
+ * directly out of the syscall instruction. */
 static long raw_syscall(long n, long a1, long a2, long a3, long a4, long a5, long a6)
 {
 	long ret;
@@ -4975,57 +4850,38 @@ NTSTATUS NTAPI NtReleaseSemaphore(HANDLE handle, LONG release,
 }
 /* ---- virtual memory, backed by the host's real mappings ----------
  *
- * src/mman/mman.c is the first thing in this library to use the
+ * mman.c is the first thing in this library to use the
  * NtAllocateVirtualMemory/NtFreeVirtualMemory/NtProtectVirtualMemory
- * family, and it links into libc.a, so without these four every test in
- * the native build fails to link -- which is how they got here.
+ * family, and it links into libc.a, so without these four every native
+ * test fails to link.
  *
- * They are FUNCTIONAL rather than NOTIMPL, deliberately.  A NOTIMPL
- * would have fixed the link and left src/mman/mman.c with zero ASan
- * coverage, and the risky part of that file is not the NT calls -- it is
- * the per-page `live` bookkeeping around them, an array index derived
- * from a pointer difference, which is exactly the sort of thing ASan
- * exists to catch and exactly the sort of thing a NOTIMPL stub would
- * hide by never letting the code run.
+ * Functional rather than NOTIMPL, deliberately: the risky part of
+ * mman.c is not the NT calls, it's the per-page `live` bookkeeping
+ * around them (an array index derived from a pointer difference) --
+ * exactly what ASan exists to catch and what a NOTIMPL stub would hide
+ * by never letting the code run. The host's mmap(2) stands in for the
+ * *substrate* (the way NtCreateFile stands in for the volume), not a
+ * model to assert against; a genuine substrate difference is noted below.
  *
- * This is not modelling NT's allocator so that a test can assert against
- * the model -- the objection recorded for spawn-stdhandle-attr above.
- * The subject under test is mman.c's bookkeeping; the host's mmap(2) is
- * standing in for the *substrate*, the same way this file's NtCreateFile
- * stands in for the volume.  Where the substrate genuinely differs from
- * NT the difference is noted below rather than papered over.
- *
- * The mapping onto host primitives:
- *
+ * Mapping onto host primitives:
  *   MEM_RESERVE|MEM_COMMIT, base NULL -> mmap(NULL, ..., MAP_ANONYMOUS)
  *   MEM_COMMIT, base inside a reservation -> mprotect() to the requested
- *     protection.  NT would zero a freshly committed page; the host has
- *     already done that in the MEM_DECOMMIT below, which is why decommit
- *     is implemented as a fresh anonymous MAP_FIXED rather than as
- *     mprotect(PROT_NONE) -- MAP_FIXED over an anonymous range discards
- *     the old pages and the next read sees zeroes, which is the NT
- *     behaviour mman.c's MAP_FIXED discard clause depends on.
+ *     protection. NT would zero a freshly committed page; MEM_DECOMMIT
+ *     below already did that, which is why decommit is a fresh anonymous
+ *     MAP_FIXED rather than mprotect(PROT_NONE) -- MAP_FIXED discards the
+ *     old pages so the next read sees zeroes, matching mman.c's
+ *     MAP_FIXED discard clause.
  *   MEM_DECOMMIT -> mmap(MAP_FIXED|MAP_ANONYMOUS, PROT_NONE)
- *   MEM_RELEASE  -> munmap() of the whole reservation.  NT takes base
- *     with size 0 for this, so the size has to come from somewhere: the
- *     small table below remembers what this stub handed out.
+ *   MEM_RELEASE  -> munmap() of the whole reservation. NT takes base with
+ *     size 0, so the small table below remembers what this stub handed out.
  */
-/* Raw syscalls, not the <sys/mman.h> wrappers.  Two reasons, and both
- * are the point rather than an inconvenience:
- *
- *   - This file is compiled -nostdinc against ntlibc's own headers, so
- *     <sys/mman.h> here is include/sys/mman.h and mmap() here would be
- *     src/mman/mman.c's mmap() -- i.e. the code under test calling
- *     itself through its own substrate.  Unbounded recursion, and a
- *     measurement of nothing.
- *   - The asan build passes only -D_XOPEN_SOURCE=700, so MAP_ANONYMOUS
- *     is not even visible here.  That is the _BSD_SOURCE/_GNU_SOURCE
- *     gate in include/sys/mman.h doing exactly its job, demonstrated by
- *     accident: a strictly-POSIX translation unit does not see the
- *     extension.
- *
- * So the constants below are the host kernel's own, spelled out the way
- * this file already spells AT_FDCWD as -100. */
+/* Raw syscalls, not the <sys/mman.h> wrappers: this file is compiled
+ * -nostdinc against ntlibc's own headers, so mmap() here would recurse
+ * into mman.c's own mmap() (unbounded recursion), and the asan build's
+ * -D_XOPEN_SOURCE=700 doesn't even expose MAP_ANONYMOUS (the
+ * _BSD_SOURCE/_GNU_SOURCE gate in sys/mman.h doing its job). So the
+ * constants below are the host kernel's own, spelled out the way this
+ * file already spells AT_FDCWD as -100. */
 #define SYS_mprotect 10
 #define SYS_munmap   11
 #define SYS_mlock    149
@@ -5327,45 +5183,29 @@ NTSTATUS NTAPI NtUnlockVirtualMemory(HANDLE proc, PVOID *base, SIZE_T *size, ULO
 
 /* ---- file-backed sections (src/mman/mman.c's map_file(), Pass 2) --
  *
- * NtCreateSection()/NtMapViewOfSection()/NtUnmapViewOfSection() cannot
- * be hand off to the host's mmap(fd, ...) the way the anonymous-VM
- * stubs above hand MEM_RESERVE straight to mmap(MAP_ANONYMOUS): an
- * OF_VFS handle here has no real host file descriptor behind it at all
- * -- "files" are the in-memory vnode tree described above NtCreateFile,
- * not real files on disk (this file's header banner).
+ * NtCreateSection()/NtMapViewOfSection()/NtUnmapViewOfSection() can't be
+ * handed off to host mmap(fd, ...) like the anonymous-VM stubs hand
+ * MEM_RESERVE to mmap(MAP_ANONYMOUS): an OF_VFS handle has no real host
+ * fd behind it -- "files" are the in-memory vnode tree, not real files.
  *
- * What IS available, and genuine rather than invented: the vnode's own
- * `data`/`size`, directly readable in this same process.  So a view is
- * real host anonymous memory (same substrate, same ASan coverage as the
- * anon-VM stubs), seeded by copying the vnode's bytes in at map time
- * (so a caller reading a file-backed mapping sees the file's actual
- * contents, not garbage or zero) and, for a writable MAP_SHARED view,
- * copied back into the vnode at unmap time (so mmap/write/munmap/
- * reopen/mmap -- the shape test/posix-mman.c's own test_mmap_file_backed
- * checks -- sees the write persist).  This is real memory with real
- * per-page bookkeeping under ASan, which is the point (see the anon-VM
- * stubs' own banner for why that outranks a NOTIMPL here too); the
- * places it is NOT faithful to NT, spelled out rather than papered
- * over:
+ * What IS genuine: the vnode's own `data`/`size`, directly readable in
+ * this process. So a view is real host anonymous memory, seeded by
+ * copying the vnode's bytes in at map time and, for a writable
+ * MAP_SHARED view, copied back at unmap time (so mmap/write/munmap/
+ * reopen/mmap, test_mmap_file_backed's shape, sees the write persist).
+ * Real memory with real per-page ASan bookkeeping, same as the anon-VM
+ * stubs; where it's NOT faithful to NT:
  *
- *   - No cross-process sharing.  A second, independent view of the same
- *     section (this stub's native build never forks two live processes
- *     sharing a section handle the way real NT would) does not observe
- *     a first view's writes.  Nothing measured against this library
- *     opens a section from two processes.
- *   - No file-access-mode enforcement.  A real, working section on a
- *     read-only-opened file rejects a writable request; this stub does
- *     not model that, because src/mman/mman.c's own O_ACCMODE check
- *     (mmap(), before map_file() is ever called) already rejects the
- *     one case that matters to a caller -- MAP_SHARED+PROT_WRITE on a
- *     read-only descriptor -- so no code path here ever asks this stub
- *     to enforce it.
- *   - Growing the file past its current vnode capacity on a write past
- *     EOF is declined (see NtUnmapViewOfSection below) rather than
- *     guessed at: this stub has no ftruncate()-equivalent write path of
- *     its own to invent, and doing so quietly would be exactly the kind
- *     of plausible-but-wrong host-specific behaviour this file's header
- *     warns against.
+ *   - No cross-process sharing: a second view of the same section
+ *     doesn't observe a first view's writes. Nothing measured against
+ *     this library opens a section from two processes.
+ *   - No file-access-mode enforcement: mman.c's own O_ACCMODE check
+ *     (before map_file() is called) already rejects the one case that
+ *     matters (MAP_SHARED+PROT_WRITE on a read-only descriptor), so no
+ *     code path here needs to enforce it.
+ *   - Growing the file past its vnode capacity on a write past EOF is
+ *     declined rather than guessed at: this stub has no
+ *     ftruncate()-equivalent write path to invent.
  */
 #define NTSTUB_SECTION_MAX 64
 struct ntstub_section { struct vnode *v; long long size; };
@@ -5549,35 +5389,28 @@ int __real_stat(const char *path, struct stat *st);
 /* This IS `stat` in the harness link, and __real_stat is ntlibc's own.
  *
  * fuzz/Makefile renames `stat` to __real_stat throughout the library
- * objects with objcopy, definition and internal references together, so
- * ntlibc's own callers -- src/glob/glob.c, src/ftw/ftw.c,
- * src/stdlib/mktemp.c -- reach ntlibc's stat() with ntlibc's struct
- * stat, and nothing can come between them.  What is left holding the
- * name `stat` is this function, which answers in the *host's* layout,
- * and the only caller that can still reach it is the compiler runtime:
- * libFuzzer, compiled long ago against the host headers, calling stat()
- * to decide whether its corpus path is a directory.  See fuzz/statshim.h
- * for the measured field offsets and the whole story.
+ * objects with objcopy, so ntlibc's own callers (glob.c, ftw.c,
+ * mktemp.c) reach ntlibc's stat() with ntlibc's struct stat. What's left
+ * holding the name `stat` is this function, answering in the *host's*
+ * layout, reachable only by libFuzzer's own runtime calling stat() to
+ * check its corpus path (see fuzz/statshim.h for the measured offsets).
  *
- * The predecessor of this function was __wrap_stat, under
- * -Wl,--wrap=stat.  That was wrong: --wrap is a link-wide rename, so
- * every one of ntlibc's six internal stat() call sites was getting a
- * 144-byte host struct stat written into its 120-byte ntlibc one.  The
- * shim had been reviewed and its blast radius stated as "confined to
- * fuzz/"; it was not, and nothing noticed until fuzz_glob became the
- * first harness ever to reach an internal stat() call.
+ * The predecessor was __wrap_stat under -Wl,--wrap=stat, which was
+ * wrong: --wrap is link-wide, so every internal stat() call site got a
+ * 144-byte host struct stat written into its 120-byte ntlibc one. Its
+ * blast radius had been stated as "confined to fuzz/"; it wasn't, and
+ * nothing noticed until fuzz_glob became the first harness to reach an
+ * internal stat() call.
  *
- * A harness is NOT part of the renamed set -- it is compiled from
- * fuzz_*.c against ntlibc's headers and linked as-is -- so a plain
- * stat() call in a harness lands here and overruns its buffer the same
- * way.  Harnesses must call __real_stat(); fuzz/fuzz_glob.c does.
+ * A harness is not part of the renamed set, so a plain stat() call in
+ * one lands here and overruns its buffer the same way. Harnesses must
+ * call __real_stat(); fuzz_glob.c does.
  *
- * Defined under a private name and aliased to `stat` in assembly,
- * because <sys/stat.h> -- included just above, so that `struct stat` and
- * __real_stat's prototype are ntlibc's -- already declares stat() with
- * ntlibc's own signature, and this one deliberately takes a void * that
- * is a host struct stat.  A C definition would be a conflicting
- * redeclaration; the alias is the same symbol either way. */
+ * Defined under a private name and aliased to `stat` in assembly: the
+ * included <sys/stat.h> already declares stat() with ntlibc's own
+ * signature, and this one deliberately takes a void * that is a host
+ * struct stat, so a C definition would conflict; the alias is the same
+ * symbol either way. */
 static int host_layout_stat(const char *path, void *hostbuf)
 {
 	struct stat st;

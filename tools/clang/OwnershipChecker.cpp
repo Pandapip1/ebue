@@ -658,32 +658,19 @@ class OwnershipChecker
 
   // Nothing in clang's own builtin summaries relates a NUL-terminated
   // string SCAN's return value to the dynamic extent of the pointer it
-  // scanned -- the same gap allocationSizeInBytes above closes for this
-  // tree's own __malloc family, just on the other side of the same
-  // relationship: strlen(s)/wcslen(s) cannot return a value L without
-  // having read s[0..L] (the L scanned bytes plus the NUL itself) to
-  // find it, so the region s points to really does have at least L+1
-  // bytes/wchar_t's, exactly as real and exactly as directly available
-  // as an allocator's own size argument is. strcspn(s,reject)/
-  // wcscspn(s,reject) and strspn(s,accept)/wcsspn(s,accept) share the
-  // identical shape: each one stops the instant s[L] is a byte the call
-  // itself had to inspect to decide whether to keep going (a member
-  // of/absent from the reject/accept set, OR the string's own NUL), so
-  // s[L] was read either way and the same "L scanned plus one more"
-  // bound holds no matter which of the two stopping conditions actually
-  // ended the scan.
+  // scanned: strlen(s)/wcslen(s) can't return L without having read
+  // s[0..L] to find it, so s really does have at least L+1 bytes.
+  // strcspn/wcscspn/strspn/wcsspn share the shape: each stops the
+  // instant s[L] is a byte it had to inspect (in/absent from the
+  // reject/accept set, or the NUL), so the same bound holds regardless
+  // of which stopping condition ended the scan.
   //
-  // src/string/strsep.c's real `end = s + strcspn(s, sep); if (*end)
-  // *end++ = 0;`, src/string/strtok.c's and strtok_r.c's real `s +=
-  // strspn(s, sep); if (!*s) ...`, and src/misc/catgets.c's expand()
-  // real `v = lang + strcspn(lang, "_"); if (*v) v++;` are the concrete
-  // code this was developed against: all three dereference exactly the
-  // scan's own return-value offset into the exact same pointer that was
-  // just scanned, with no allocator anywhere in sight -- before this
-  // fix, every one of them had nothing but an unconstrained placeholder
-  // extent for a plain borrowed parameter no allocator ever touched,
-  // and was reported, even though the scan that had *just* run is
-  // exactly what proves it safe.
+  // Developed against strsep.c's `end = s + strcspn(s, sep); if (*end)
+  // *end++ = 0;`, strtok.c/strtok_r.c's `s += strspn(s, sep); if (!*s)
+  // ...`, and catgets.c's `v = lang + strcspn(lang, "_"); if (*v) v++;`
+  // -- all three deref the scan's own offset into the pointer just
+  // scanned, with no allocator involved, and were false positives
+  // before this fix gave them a real extent.
   static bool isScanExtentFunction(const CallEvent &Call) {
     static constexpr llvm::StringLiteral Names[] = {
         "strlen", "strcspn", "strspn", "wcslen", "wcscspn", "wcsspn"};
@@ -696,59 +683,29 @@ class OwnershipChecker
   // Sets the scanned argument's own dynamic extent from the scan's
   // return value, per isScanExtentFunction's comment above.
   //
-  // Deliberately narrow in the same way allocationSizeInBytes is
-  // deliberately narrow: only fires when the scanned argument's own
-  // region IS the base region already -- no pointer arithmetic already
-  // applied to it (not itself an ElementRegion at a nonzero offset). A
-  // scan of an already-advanced cursor (strtok_r.c's SECOND strcspn()
-  // call, scanning `s` after `s += strspn(...)` already moved it) would
-  // need the offset already walked PLUS this scan's own return value
-  // composed together, which this narrow form does not attempt; that
-  // case is left exactly where it already was, an unprovable (but
-  // still correct) residual, rather than risk getting the composition
-  // wrong.
+  // Deliberately narrow, like allocationSizeInBytes: only fires when the
+  // scanned argument's region IS the base region already (no offset
+  // already applied). A scan of an already-advanced cursor (strtok_r.c's
+  // second strcspn() call, on `s` after `s += strspn(...)`) would need
+  // that offset composed with this scan's return value, which this
+  // doesn't attempt -- left as an unprovable-but-correct residual.
   //
-  // Only ever WRITES an extent that is not already real -- the same
-  // "placeholder or nothing" test getDynamicExtentWithOffset's own
-  // NoRealExtentInfo branch already applies at the actual dereference
-  // site. A base region a previous, unrelated scan or allocation
-  // already gave a real extent to is left alone even if THIS scan's
-  // own bound happens to be larger: there is no general way to compare
-  // two symbolic bounds against each other, so whichever fact was
-  // established FIRST along a given path is simply kept. That costs
-  // completeness, never soundness -- every one of these scan contracts
-  // is a true LOWER bound on the real allocation, never an upper one,
-  // so keeping an earlier, possibly smaller, established bound is
-  // always still a true fact about the region; it just is not always
-  // the tightest one available.
-  // The element width used to convert the scan's return value (always
-  // in ELEMENTS: a wcslen() count is a count of wchar_t's, not bytes)
-  // into the bytes getDynamicExtent()/setDynamicExtent() actually deal
-  // in is read off the scanned argument's own real, AST-declared
-  // pointee type -- NOT clang's built-in notion of "the target's
-  // wchar_t" (ASTContext::getWCharType(), what a wide string LITERAL's
-  // own type is built from). Those two are not the same type in this
-  // tree and do not even always have the same SIZE: this codebase's own
-  // `wchar_t` (arch/*/bits/alltypes.h.in's `TYPEDEF unsigned short
-  // wchar_t`) is deliberately kept 2 bytes on EVERY arch it builds for
-  // (this tree's own UTF-16 convention, not the platform's native
-  // wide-character width) -- confirmed empirically to differ from
-  // clang's own builtin wchar_t on a target with no explicit --target
-  // triple (aarch64 here, analyzed with the host's native clang and so
-  // getWCharType()'s builtin default -- `int`, 4 bytes, glibc's usual
-  // UCS-4 convention), while the i386/x86_64 legs' `--target=*-w64-
-  // mingw32` happens to make clang's OWN builtin wchar_t 2 bytes too, by
-  // coincidence of that target's own ABI matching this tree's typedef.
-  // Using getWCharType() would work on i386/x86_64 by that coincidence but
-  // silently produce the WRONG byte multiplier on aarch64 (4 instead of
-  // 2): src/string/wcstok.c's `s += wcsspn(s, sep); if (!*s) ...` (the
-  // wcsspn() twin of strtok_r.c's narrow scanner) would prove fine on
-  // i386/x86_64 while staying reported on aarch64. Reading the actual
-  // pointee type off the argument sidesteps this entirely, and is also strictly
-  // more general: it needs no separate "is this call one of the wide
-  // names" check at all, and does the right thing even if some entirely
-  // different fixed-width scanner were ever added to
-  // isScanExtentFunction above.
+  // Only ever writes an extent that isn't already real: a base region a
+  // previous scan/allocation already gave a real (possibly smaller)
+  // extent to is left alone, since there's no general way to compare two
+  // symbolic bounds. Every scan contract is a true lower bound, so this
+  // costs completeness, never soundness.
+  //
+  // The element width used to convert the scan's return value (always in
+  // elements: wcslen() counts wchar_t's) into bytes is read off the
+  // argument's real AST-declared pointee type, NOT clang's builtin
+  // wchar_t (ASTContext::getWCharType()). This codebase's own wchar_t is
+  // deliberately 2 bytes on every arch (its own UTF-16 convention), which
+  // differs from clang's builtin default on aarch64 (4 bytes, no
+  // --target triple) even though it happens to coincide on the
+  // i386/x86_64 mingw32 targets -- using getWCharType() would silently
+  // use the wrong byte multiplier on aarch64 and leave wcstok.c's
+  // wcsspn() scanner reported there while proving fine elsewhere.
   static void trackScanExtent(const CallEvent &Call, CheckerContext &C) {
     if (Call.getNumArgs() < 1)
       return;
@@ -969,37 +926,19 @@ public:
     const OwnershipKind *Kind =
         Symbol ? State->get<OwnershipMap>(Symbol) : nullptr;
     if (!Kind) {
-      // Symbol == nullptr means the argument is not derived from any
-      // symbolic region at all -- a concrete address this analysis can
-      // name outright (the address of a stack-local or global variable,
-      // an array, ...), which by construction was never returned by
-      // malloc(). That is positive evidence of a real bug (freeing a
-      // non-heap object), not merely absence of information, so it is
-      // still reported -- UNLESS the value is Unknown/Undef, meaning the
-      // analyzer itself lost track of what it is (most commonly a loop
-      // variable widened away after clang's default max-loop iteration
-      // cap, e.g. __fd_close_all_cloexec's `for (i = 0; i < FD_MAX; i++)`
-      // with FD_MAX == 1024): that is the same "no information" case as
-      // an untracked symbol below, just represented differently by the
-      // analyzer, and demanding proof of something the analyzer itself
-      // admits it cannot characterize is not a real proof obligation
-      // either.
+      // Symbol == nullptr: the argument is a concrete address (stack-local,
+      // global, array, ...) never returned by malloc() -- positive evidence
+      // of a real bug, still reported, UNLESS the value is Unknown/Undef
+      // (the analyzer itself lost track of it, e.g. a loop variable widened
+      // away past clang's max-loop cap), which is the same "no information"
+      // case as an untracked symbol below and not a real proof obligation.
       //
-      // Symbol != nullptr but absent from OwnershipMap is a different
-      // case: the pointer's provenance is opaque to this per-function
-      // analysis -- exactly the same "was this analysis's own
-      // malloc()/free() tracking ever able to see this value" gap fixed
-      // for ValidPointerChecker's liveness proof above. A handle
-      // received across a call boundary (closedir()'s `DIR *dp`, itself
-      // malloc'd inside a DIFFERENT function -- opendir() -- that this
-      // analysis never sees) has no OwnershipMap entry not because it
-      // is known unowned, but because per-function analysis cannot see
-      // what happened before this function was entered. Demanding proof
-      // here is exactly as structurally unsatisfiable as it was for
-      // liveness, so this only trusts the borrow; it still transitions
-      // the symbol to Consumed on a real free() so a same-function
-      // double-free of this exact borrowed pointer is still caught by
-      // the *Kind == Consumed branch below.
+      // Symbol != nullptr but absent from OwnershipMap: the pointer's
+      // provenance is opaque to this per-function analysis, e.g. a handle
+      // received across a call boundary (closedir()'s DIR*, malloc'd inside
+      // a different function this analysis never sees). This only trusts
+      // the borrow; it still transitions the symbol to Consumed on a real
+      // free() so a same-function double-free is still caught below.
       if (!Symbol) {
         if (Argument.isUnknownOrUndef())
           return;
@@ -2915,51 +2854,27 @@ class ValidPointerChecker
 
   // Functions this codebase itself guarantees always return a pointer to
   // real, live storage and never NULL, but which this checker has no
-  // other way to know that about: not a heap allocation Ownership would
-  // see, just a fixed, always-present object. errno.h defines
-  // `#define errno (*__errno_location())`, so this one function's return
-  // value is implicitly dereferenced by every `errno = ...` and
-  // `if (errno)` in the tree -- __errno_location() is declared to always
-  // return a valid pointer to the calling thread's own storage and is
-  // never permitted to return NULL, so without this, essentially every
-  // errno use in the codebase produced an unprovable "not proven
-  // nonnull" finding for the exact same reason, at the exact same call.
+  // other way to know: not a heap allocation, just a fixed,
+  // always-present object. Cross-TU analysis can't see these bodies
+  // (their real definitions live in another translation unit), so each
+  // needs to be named explicitly:
+  //   - __errno_location() (errno.h's `#define errno
+  //     (*__errno_location())`): always returns the calling thread's own
+  //     storage, never NULL.
+  //   - __teb() (src/internal/libc.h): reads the current thread's TEB via
+  //     a segment register/TPIDR, which the OS guarantees exists for any
+  //     running thread; crt1.c's __libc_start_main bootstraps __peb from
+  //     exactly this fact.
+  //   - localeconv() (src/misc/locale.c): `return &__posix_lconv;`,
+  //     unconditional, the only return statement in its real definition.
   //
-  // __teb() (src/internal/libc.h: `PTEB __teb(void);`) is the same shape
-  // for NT: it reads the current thread's Thread Environment Block via
-  // the GS/FS segment (x86_64/i386) or TPIDR register (aarch64), which
-  // the OS itself guarantees exists for any running thread -- there is
-  // no code path, on any arch this tree supports, where a live thread
-  // observes its own TEB as absent. crt/crt1.c's __libc_start_main uses
-  // exactly this fact to bootstrap __peb itself (see
-  // isAlwaysNonNullGlobal below) before anything else in the program has
-  // run: `__peb = __teb()->ProcessEnvironmentBlock;`.
-  //
-  // localeconv() (src/misc/locale.c) is the same shape again, one file
-  // over: `return &__posix_lconv;`, unconditional, the address of a
-  // fixed static object, with no other return statement anywhere in
-  // its one real definition. src/misc/langinfo.c's own
-  // RADIXCHAR/THOUSEP cases (`localeconv()->decimal_point`,
-  // `localeconv()->thousands_sep`) are a different translation unit,
-  // so this checker's own per-TU analysis has no way to see that body
-  // and prove it from first principles the way it could within
-  // locale.c itself -- exactly the cross-file gap __errno_location and
-  // __teb already needed this same mechanism for.
-  //
-  // Beyond these three individually-named cases, also honor GCC/
-  // Clang's own `returns_nonnull` attribute -- the exact return-value
+  // Also honors GCC/Clang's `returns_nonnull` attribute, the return-value
   // counterpart of the `nonnull` parameter attribute checkBeginFunction
-  // already trusts below, and the standard way a function states "this
-  // never returns NULL" as part of its real, published contract rather
-  // than something a caller must re-derive. src/string/strchr.c's own
-  // `char *r = strchrnul(s, c); return *(unsigned char *)r == ...;` is
-  // the motivating case: strchrnul() (include/string.h) is documented
-  // and marked exactly this way, and without this, every strchr() call
-  // produced an unprovable "not proven nonnull" finding on r for a fact
-  // strchrnul()'s own signature already states truthfully. Symmetric
-  // with the `nonnull` parameter mechanism: this only trusts a return
-  // value for a function this project has itself explicitly annotated,
-  // one function at a time, never a blanket relaxation.
+  // trusts below. Motivating case: strchr.c's `char *r =
+  // strchrnul(s, c); ...` -- strchrnul() is marked `returns_nonnull`, and
+  // without honoring it every strchr() call produced an unprovable
+  // finding on r. Symmetric with the parameter mechanism: this only
+  // trusts a return value the project has itself explicitly annotated.
   static bool isAlwaysNonNull(const CallEvent &Call) {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
     if (!Function || !Function->getIdentifier())
@@ -3152,63 +3067,29 @@ class ValidPointerChecker
     return true;
   }
 
-  // For `buf[i]` into a HEAP-allocated buffer (a SymbolicRegion, so no
-  // compile-time ConstantArrayType exists for arrayIndexProvenInBounds
-  // above to use) whose real dynamic extent was set -- by this checker
-  // itself, see OwnershipChecker::allocationSizeInBytes -- directly from
-  // an allocation call's own size ARGUMENT expression (e.g. `malloc(n +
-  // 1)`), prove `buf[i]` in-bounds when `i` is EXACTLY that same
-  // argument expression's own root symbol: `buf[n]`, the single most
-  // common "allocate len+1, write the terminator at len" idiom
-  // throughout this tree (strndup.c's `d = malloc(l+1); ...; d[l] = 0;`
-  // is the motivating case, and is proven fully in-bounds by this
-  // function). The generic byte-extent machinery below
-  // computes this exact same relationship -- extent_of_buf (itself
-  // `n + 1`, already a compound expression) MINUS the access offset
-  // (`n`) -- but clang's range-based constraint solver does not fold
-  // "(S + K) - S" down to the literal K for two separately-built
-  // compound expressions that merely happen to share a root symbol; it
-  // proves a single symbol's own affine range well (arrayIndexProvenInBounds
-  // above already exploits exactly that), but not this kind of
-  // cross-expression cancellation: SValBuilder::evalBinOp leaves the
-  // subtraction unsimplified (still a compound SymSymExpr), and even an explicit
-  // follow-up assume() on the resulting comparison cannot refute the
-  // "too small" case -- the solver is not merely missing an
-  // optimization here, it structurally cannot correlate two affine
-  // expressions built from the same symbol without recognizing the
-  // syntactic identity itself, which is exactly what this function does
-  // instead, with plain integer arithmetic that needs no solver help at
-  // all once the two expressions are known to share a root symbol.
-  // Deliberately narrow in the byte-stride dimension: only a byte-stride
-  // (`char`) element type is handled, since that is the only case where
-  // the index and the allocation's own size argument are expressed in
-  // the same units without a further multiplication this function does
-  // not attempt to peel through (a `wchar_t` buffer sized as
-  // `(n+1)*sizeof(WCHAR)` falls through to the existing machinery,
-  // unchanged). It ORIGINALLY also required the exact same bare symbol
-  // on both sides (only a `+` between that one symbol's root and a
-  // literal, nothing else) -- collectLinearTerms()/linearExtentProvenInBounds()
-  // below generalize that part to any number of summed/subtracted
-  // symbols on either side, folded via ordinary linear-term
-  // cancellation instead of a single pointer-identity comparison; see
-  // that function's own comment for why and for the concrete callers
-  // that need it. A provably-equal-but-differently-DERIVED symbol (two
-  // separate calls that happen to compute the same value) is still not
-  // recognized by either version -- src/internal/linux/handle_path.c's
-  // `r = __malloc((size_t)n + 1); if (n) memcpy(...); r[n] = 0;` still
-  // reports on its `n == 0` branch (where the index is concretized to
-  // the literal 0 rather than staying the symbol `n`), a real remaining
-  // gap neither version closes; see the ownership-lemma commit message
-  // for why that narrower residual was left rather than chased further.
-  // A plain, unchecked width/signedness conversion (`(size_t)n` at the
-  // allocation call vs. the raw `long n` used again as the index, also
-  // from handle_path.c) wraps the same underlying symbol in a
-  // SymbolCast, which is a genuinely different SymExpr object from the
-  // bare symbol -- so a pointer-identity comparison between the two
-  // sides needs to see through any such casts on either side to
-  // recognize they still name the same value (this part of that file's
-  // shape IS handled, by stripCasts below, called from within
-  // collectLinearTerms() too).
+  // Proves `buf[i]` in-bounds for a heap SymbolicRegion whose dynamic
+  // extent was set from an allocation's own size argument (e.g.
+  // `malloc(n + 1)`), when `i` is that same argument's root symbol:
+  // `buf[n]`, the "allocate len+1, write the terminator at len" idiom
+  // (strndup.c is the motivating case). Clang's range solver can prove a
+  // single symbol's own affine range but cannot fold "(S + K) - S" down
+  // to K across two separately-built compound expressions that merely
+  // share a root symbol, so this does the cancellation with plain
+  // integer arithmetic instead. Deliberately narrow to byte-stride
+  // (`char`) elements, where index and size argument are in the same
+  // units with no multiplication to peel through (`wchar_t` falls
+  // through to the existing machinery unchanged).
+  //
+  // collectLinearTerms()/linearExtentProvenInBounds() below generalize
+  // the original bare-symbol-only match to any number of summed/
+  // subtracted symbols, via linear-term cancellation. Neither version
+  // recognizes a provably-equal-but-differently-derived symbol: handle_path.c's
+  // `r = __malloc((size_t)n + 1); ...; r[n] = 0;` still reports on the
+  // `n == 0` branch, where the index concretizes to the literal 0 rather
+  // than staying the symbol `n` -- a known remaining gap. A width/
+  // signedness cast on one side (`(size_t)n` vs. a raw `long n` index)
+  // is handled: stripCasts, called from collectLinearTerms(), sees
+  // through it.
   static SymbolRef stripCasts(SymbolRef Symbol) {
     while (const auto *Cast = dyn_cast_or_null<SymbolCast>(Symbol))
       Symbol = Cast->getOperand();
@@ -3407,38 +3288,23 @@ public:
       return;
     // Reinterpreting an already-nonnull pointer through a pointer-to-
     // pointer cast never turns it into a null one, but evaluating the
-    // CAST expression's own SVal loses that fact: src/stdio/printf.c's
-    // and scanf.c's shared gf() macro reads one format character as
-    // `*(q)` for a byte format or `*(const wchar_t *)(const void *)(q)`
-    // for a wide one (the cast lets one parser serve both fprintf() and
-    // fwprintf()), where `q` is a cursor walked across an
-    // already-nonnull `fmt`/`fp` by `q += st` each iteration. Only the
-    // CAST side was ever flagged "not proven nonnull" -- the identical
-    // `q`, dereferenced without the cast a few lines away in the very
-    // same loop, was not -- which isolated the cast, not the cursor
-    // arithmetic, as what breaks the proof: evaluating the SVal of a
-    // BitCast/NoOp pointer-to-pointer CastExpr does not, in general,
-    // preserve the symbolic region identity (and so the nonnull fact
-    // already established for it) that evaluating its sub-expression
-    // directly does. Confirmed empirically against four minimal repros
-    // before touching this file: a bare `*q` after `q += st` (symbolic
-    // stride) proves fine; the identical cursor dereferenced through
-    // `*(wchar_t_fake *)q` does not; and looking through the cast fixes
-    // it without hiding a real bug -- `*(T *)p` for a `p` that is
-    // actually unconstrained, or explicitly null (`char *p = 0; *(T
-    // *)(void *)p`), is still caught, both by this checker (the fix
-    // only changes what EvalExpr designates, not whether isNonNull is
-    // asked about it) and independently by clang's own core.NullDereference.
-    // Deliberately narrow: only CK_BitCast/CK_NoOp are looked through --
-    // never CK_LValueToRValue, because looking through that would evaluate
-    // the SVal of the pointer VARIABLE's own storage location instead of
-    // the pointer VALUE stored there, which is trivially "nonnull" as any
-    // local's address always is, so every unconstrained raw parameter
-    // would wrongly appear proven nonnull (the pointer-safe.c/pointer-
-    // unsafe.c fixture suite every other lemma here is checked against
-    // would catch that) -- and only when the sub-expression is itself of
-    // pointer type, so a cast that changes value category or turns an
-    // integer into a pointer is left alone.
+    // CAST expression's own SVal loses that fact: printf.c/scanf.c's
+    // shared gf() macro dereferences a format cursor `q` as `*(q)` or
+    // through `*(const wchar_t *)(const void *)(q)`, and only the cast
+    // side was ever flagged "not proven nonnull" even though the same
+    // `q` a few lines away, without the cast, was not -- evaluating a
+    // BitCast/NoOp pointer-to-pointer CastExpr's SVal doesn't in general
+    // preserve the symbolic region identity a nonnull fact was
+    // established for.
+    //
+    // Deliberately narrow: only CK_BitCast/CK_NoOp are looked through,
+    // never CK_LValueToRValue (which would evaluate the pointer
+    // variable's own storage location instead of the value stored there,
+    // trivially "nonnull" the way any local's address is, wrongly
+    // proving every unconstrained raw parameter), and only when the
+    // sub-expression is itself pointer-typed. A genuinely null or
+    // unconstrained pointer behind the cast is still caught, both here
+    // and by clang's own core.NullDereference.
     const Expr *EvalExpr = Pointer;
     for (;;) {
       const auto *Cast = dyn_cast<CastExpr>(EvalExpr->IgnoreParens());

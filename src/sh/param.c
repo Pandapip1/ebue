@@ -4,48 +4,18 @@
  * The shell's positional parameters (XCU 2.5.1) and the special
  * parameter 0, which is *not* one of them.
  *
- * ---- Why this is a file of its own -------------------------------------
+ * Unlike every other piece of shell state (which lives in the real
+ * `environ`, see execute.c), positional parameters get their own array:
+ * they're an ordered list `shift` renumbers atomically, "$@" needs a
+ * known length a stray inherited `1=...` can't corrupt, 2.9.5 requires
+ * a function to save/restore the whole list cheaply, and critically,
+ * XCU 2.5.1's list is not exported -- storing it in environ would leak
+ * $1 into a child process. The array holds $1 at index 0; `n` is `$#`.
  *
- * Every other piece of shell state this project has needed so far lives
- * in the real `environ`: an assignment is setenv(), an expansion is
- * getenv(), and src/sh/execute.c says so at length.  Positional parameters
- * cannot be stored that way and it is worth being explicit about why,
- * because "just put them in the environment as $1, $2, ..." looks
- * plausible until three separate rules break:
- *
- *  - 2.5.1 makes them an *ordered list* with a length, and `shift`
- *    renumbers the whole list.  Renumbering N environment variables is
- *    not atomic and leaves the list observably wrong halfway through.
- *  - "$@" must expand to a list whose length is known (2.5.2: "if
- *    there are no positional parameters, the expansion of '@' shall
- *    generate zero fields"), and environ has no way to say "there are
- *    exactly three" that a stray inherited `1=...` cannot corrupt.
- *  - 2.9.5 requires a shell function to *save and restore* the caller's
- *    entire list.  A save/restore of a contiguous array is three lines;
- *    of a scattered set of environment entries it is a transaction.
- *
- * And, decisively, XCU 2.5.1's list is not exported: a child process
- * must not inherit the shell's `$1` as an environment variable named
- * "1".  Storing them in environ would export them.
- *
- * So: one array, owned here, never visible to a child.  The array holds
- * $1 at index 0; `n` is the value of `$#` (2.5.2: "the command name
- * (parameter 0) shall not be counted in the number given by '#'").
- *
- * ---- $0 ---------------------------------------------------------------
- *
- * 2.5.2 lists '0' among the *special* parameters, not the positional
- * ones, and 2.5.1 says a positional parameter is "denoted by the
- * decimal value represented by one or more digits, other than the
- * single digit 0".  It therefore lives in its own variable here:
- * `shift` never touches it, `$#` never counts it, `set` never replaces
- * it, and 2.9.5 says a function call leaves it unchanged.  Keeping it
- * out of the array is what makes all four of those true by
- * construction rather than by four separate special cases.
- *
- * Spec pages: XCU 2.5.1 Positional Parameters, 2.5.2 Special
- * Parameters, 2.9.5 Function Definition Command, and the `set`/`shift`
- * special built-ins in 2.14.
+ * $0 is a *special* parameter, not a positional one (2.5.1 excludes the
+ * digit 0), so it lives in its own variable: `shift` never touches it,
+ * `$#` never counts it, `set` never replaces it, and a function call
+ * leaves it unchanged (2.9.5), all by construction.
  */
 #include <string.h>
 #include "libc.h"
@@ -55,10 +25,9 @@
 static char **pv;
 static int pn;
 
-/* $0.  NULL means "never set", which only happens in a process that
- * links the engine without going through sh/main.c -- a test binary, or
- * wordexp()'s command substitution inside an arbitrary program.  "sh"
- * is what such a shell is; sh(1p) makes $0 the shell or script name. */
+/* $0. NULL means "never set" (engine linked without sh/main.c, e.g. a test
+ * binary or wordexp()'s command substitution); __sh_param_zero() then falls
+ * back to "sh", per sh(1p) making $0 the shell or script name. */
 static char *pzero;
 
 static char *dup_str(const char *s)
@@ -96,17 +65,8 @@ int __sh_param_count(void)
 	return pn;
 }
 
-/* $n, 1-based.  NULL for an unset parameter -- 2.5.2's '@' talks about
- * "each positional parameter that is set", and an out-of-range index is
- * simply not set.  Callers must not pass 0: that is $0, which is not a
- * positional parameter and comes from __sh_param_zero(). */
-/* `pv[n - 1]` is flagged as not proven nonnull, but there is no pointer
- * parameter here to attach `nonnull` to -- `n` is an int, and `pv` is
- * this file's own static array, guarded by `n > pn` above (pn tracks
- * exactly how many of pv's slots are populated) rather than by any
- * caller-supplied contract.  Left as a genuine residual: the checker
- * cannot see across a static global the same way it sees across a
- * parameter, and there is no parameter-level fix available for it. */
+/* $n, 1-based; NULL for out-of-range. Callers must not pass 0 -- that's
+ * $0, which comes from __sh_param_zero() instead. */
 const char *__sh_param_get(int n)
 {
 	if (n < 1 || n > pn) return 0;
@@ -141,16 +101,8 @@ int __sh_params_replace(char *const *argv, int n)
 	return 0;
 }
 
-/* shift(1p): "Positional parameter 1 shall be assigned the value of
- * parameter (1+n) ... The value n shall be an unsigned decimal integer
- * less than or equal to the value of the special parameter '#'.  ...
- * If n is 0, the positional and special parameters are not changed."
- *
- * Returns -1 without touching anything for an out-of-range n, which is
- * the case shift(1p)'s EXIT STATUS makes a nonzero status. */
-/* Same residual as __sh_param_get() above: `pv[i]` is this file's own
- * static array, not reachable via `n` (an int), so there is no
- * parameter-level `nonnull` fix for the flagged deref here either. */
+/* shift(1p): n must be <= $#; n == 0 leaves the parameters unchanged.
+ * Returns -1 without touching anything for an out-of-range n. */
 int __sh_params_shift(int n)
 {
 	int i;
@@ -166,16 +118,10 @@ int __sh_params_shift(int n)
 
 /* ---- save/restore, for 2.9.5 and for subshell environments ------------
  *
- * 2.9.5: "When the function completes, the values of the positional
- * parameters and the special parameter '#' shall be restored to the
- * values they had before the function was executed."  Nesting and
- * recursion fall out of that being a *move* rather than a copy: each
- * frame owns the list it took, and there is exactly one owner of every
- * array at every moment, so a recursive call cannot alias its parent's.
- *
- * $0 is deliberately not part of the saved state: 2.9.5 says "[t]he
- * special parameter 0 shall be unchanged", so there is nothing to
- * restore. */
+ * A *move*, not a copy: each frame owns the list it took, so recursion
+ * can't alias a parent's array. $0 is not part of the saved state --
+ * 2.9.5 leaves it unchanged across a function call, so there's nothing
+ * to restore. */
 void __sh_params_take(struct sh_params *out)
 {
 	out->v = pv;
