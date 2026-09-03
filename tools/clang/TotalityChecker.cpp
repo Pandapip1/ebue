@@ -437,6 +437,7 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
   const FunctionDecl *Current = nullptr;
   std::unique_ptr<CFG> CurrentCFG;
   mutable const Stmt *ActiveLoop = nullptr;
+  mutable std::map<const RecordDecl *, bool> GlobalRecordCache;
 
   enum class ProgressKind { Up, Down };
 
@@ -689,9 +690,292 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return Left;
   }
 
+  /* A pointer argument carried into a recursive call unchanged (the plain
+   * '=' case just below) gives the size-change graph no decrease to
+   * report, even when the callee is provably closer to done: a parser
+   * struct passed by pointer at every call of a recursive-descent grammar
+   * is that exact shape, with the real progress in a cursor FIELD of the
+   * pointee instead of the pointer value itself.  firstPointerField()
+   * fixes which field that is -- the struct's own first pointer-typed
+   * field, in declaration order -- once and for all from the type alone,
+   * so any two functions sharing the struct type agree on it without
+   * comparing notes.  Each function gets one extra "virtual parameter"
+   * slot per real parameter (see the doubled count in TraverseFunctionDecl
+   * below) carrying that field's own progress across the same call graph
+   * lint-totality.py already walks for the real parameters -- a strict
+   * step there composes exactly like a strict step on a real argument. */
+  static const FieldDecl *firstPointerField(QualType Type) {
+    const auto *Pointer = Type->getAs<PointerType>();
+    const RecordDecl *Record =
+        Pointer ? Pointer->getPointeeType()->getAsRecordDecl() : nullptr;
+    if (!Record || !Record->isCompleteDefinition())
+      return nullptr;
+    for (const FieldDecl *Field : Record->fields())
+      if (Field->getType()->isPointerType())
+        return Field;
+    return nullptr;
+  }
+
+  /* A global (or file-static) of the cursor struct's own type gives some
+   * entirely unrelated function a second, untracked route to the same
+   * field.  Bail rather than assume every write to it arrives only
+   * through the parameter this analysis is following. */
+  bool recordDeclaredGlobally(const RecordDecl *Record) const {
+    Record = cast<RecordDecl>(Record->getCanonicalDecl());
+    auto Cached = GlobalRecordCache.find(Record);
+    if (Cached != GlobalRecordCache.end())
+      return Cached->second;
+    bool Found = false;
+    for (const Decl *Declaration : Context.getTranslationUnitDecl()->decls()) {
+      const auto *Variable = dyn_cast<VarDecl>(Declaration);
+      if (!Variable || !Variable->hasGlobalStorage())
+        continue;
+      QualType Type = Variable->getType();
+      const RecordDecl *Candidate = Type->getAsRecordDecl();
+      if (!Candidate) {
+        const auto *Pointer = Type->getAs<PointerType>();
+        Candidate = Pointer ? Pointer->getPointeeType()->getAsRecordDecl() : nullptr;
+      }
+      if (Candidate && Candidate->getCanonicalDecl() == Record) {
+        Found = true;
+        break;
+      }
+    }
+    GlobalRecordCache[Record] = Found;
+    return Found;
+  }
+
+  static bool containsGotoOrLabel(const Stmt *Statement) {
+    if (!Statement)
+      return false;
+    if (isa<GotoStmt>(Statement) || isa<IndirectGotoStmt>(Statement) ||
+        isa<LabelStmt>(Statement))
+      return true;
+    for (const Stmt *Child : Statement->children())
+      if (containsGotoOrLabel(Child))
+        return true;
+    return false;
+  }
+
+  /* Every statement guaranteed to already have run, in order, by the time
+   * Node is reached: Node's own preceding siblings, then its enclosing
+   * block's preceding siblings, and so on out to the function body.
+   * Climbing past a non-block ancestor (an IfStmt's then-branch, a loop
+   * body) contributes nothing at that level -- entering it at all already
+   * implies whatever test guards it ran, but nothing about which of its
+   * own statements executed, so this stays conservative and adds no
+   * false prefix.  An ambiguous or non-statement parent -- unexpected in
+   * a plain C function body -- empties the result rather than risk an
+   * incomplete one. */
+  std::vector<const Stmt *> precedingStatements(const Stmt *Node) const {
+    std::vector<const Stmt *> Result;
+    const Stmt *Target = Node;
+    while (true) {
+      DynTypedNodeList Parents =
+          Context.getParents(DynTypedNode::create(*Target));
+      if (Parents.size() != 1)
+        return {};
+      const Stmt *Parent = Parents[0].get<Stmt>();
+      if (!Parent)
+        return {};
+      const auto *Compound = dyn_cast<CompoundStmt>(Parent);
+      if (!Compound) {
+        Target = Parent;
+        continue;
+      }
+      for (const Stmt *Child : Compound->body()) {
+        if (Child == Target)
+          break;
+        Result.push_back(Child);
+      }
+      if (Compound == Current->getBody())
+        return Result;
+      Target = Compound;
+    }
+  }
+
+  /* True exactly for the same shape the witness search in
+   * fieldProgressRelation() looks for: Expression is itself a strict,
+   * admissible, pointer-typed advance of Field through Base.  Reused so
+   * an already-recognized advance reached through a further call --
+   * ere_branch() calling ere_atom(), whose own "ps->p++" is a statement
+   * in a different function entirely -- excuses itself the same way a
+   * direct one would, instead of registering as unexplained interference
+   * (see the TolerateAdvances parameter below). */
+  bool safeFieldAdvance(const Expr *Expression, const ValueDecl *Base,
+                        const FieldDecl *Field) const {
+    std::optional<Progress> Candidate = progress(Expression);
+    return Candidate && Candidate->Base == Base && Candidate->Variable == Field &&
+           Candidate->Kind == ProgressKind::Up &&
+           Candidate->Variable->getType()->isPointerType() &&
+           admissibleProgress(*Candidate);
+  }
+
+  using FieldVisitSet = std::set<std::pair<const FunctionDecl *, unsigned>>;
+
+  /* Does invoking Function, with Base's own pointer value landed in its
+   * ParamIndex-th parameter, reach a write to Field -- directly, or by
+   * forwarding that same parameter on into a further call?  A call that
+   * never receives Base at all cannot reach Field through it regardless
+   * of the call's own parameter types, which is what lets a call like
+   * realloc(rx->prog, ...) -- typed compatibly but never handed ps --
+   * pass unexamined without this ever having to look inside realloc().
+   *
+   * A (Function, ParamIndex) pair already on the active Visiting stack is
+   * a real call-graph cycle back to an obligation this same query is
+   * still in the middle of discharging -- exactly the shape
+   * ere_branch()->ere_atom()->ere_alt() closes back on ere_alt() itself.
+   * "May write unsafely" is a safety property (every reachable write, on
+   * every explored path, must be a safe advance), and the standard proof
+   * technique for a safety property over a cyclic graph is coinductive:
+   * assume the property along a back-edge and verify every NEW
+   * obligation it unfolds to.  Every direct write reachable without
+   * detouring through this exact back-edge was already inspected on the
+   * way to it, so resolving the back-edge itself as safe adds no
+   * unchecked write -- unlike guessing "safe" at an arbitrary, unrelated
+   * point, which would. */
+  bool mayWriteFieldThroughParam(const FunctionDecl *Function,
+                                 unsigned ParamIndex, const FieldDecl *Field,
+                                 FieldVisitSet &Visiting,
+                                 bool TolerateAdvances) const {
+    if (!Function)
+      return true;
+    const FunctionDecl *Canonical = Function->getCanonicalDecl();
+    if (Canonical->hasAttr<PureAttr>() || Canonical->hasAttr<ConstAttr>() ||
+        ReadonlyFunctions.contains(Canonical))
+      return false;
+    const FunctionDecl *Definition = Canonical->getDefinition();
+    if (!Definition || !Definition->hasBody() ||
+        ParamIndex >= Definition->getNumParams())
+      return true;
+    if (!Visiting.insert({Definition, ParamIndex}).second)
+      return false;
+    bool Result = bodyMayWriteField(Definition->getBody(),
+                                    Definition->getParamDecl(ParamIndex),
+                                    Field, Visiting, nullptr, TolerateAdvances);
+    Visiting.erase({Definition, ParamIndex});
+    return Result;
+  }
+
+  /* TolerateAdvances distinguishes the two claims fieldProgressRelation()
+   * can make: proving '<' already has its one required strict step (the
+   * witness), so a further write only threatens that proof if it could
+   * move Field somewhere other than further forward -- an already
+   * recognized advance is harmless piled on top of another.  Proving '='
+   * has no witness to fall back on: literally any write, including a
+   * provably-forward one, means the field did not, in fact, pass through
+   * this call unchanged, so TolerateAdvances must be false there. */
+  bool bodyMayWriteField(const Stmt *Statement, const ValueDecl *Base,
+                         const FieldDecl *Field, FieldVisitSet &Visiting,
+                         const Stmt *Ignore, bool TolerateAdvances) const {
+    if (!Statement || Statement == Ignore)
+      return false;
+    if (const auto *Expression = dyn_cast<Expr>(Statement)) {
+      const Expr *Plain = ignore(Expression);
+      bool Excused = TolerateAdvances && safeFieldAdvance(Plain, Base, Field);
+      if (!Excused) {
+        if (const auto *Unary = dyn_cast_or_null<UnaryOperator>(Plain)) {
+          const auto *Member = Unary->isIncrementDecrementOp()
+              ? dyn_cast_or_null<MemberExpr>(ignore(Unary->getSubExpr()))
+              : nullptr;
+          if (Member && Member->getMemberDecl() == Field &&
+              value(Member->getBase()) == Base)
+            return true;
+        }
+        if (const auto *Binary = dyn_cast_or_null<BinaryOperator>(Plain)) {
+          if (Binary->isAssignmentOp()) {
+            const Expr *LHS = ignore(Binary->getLHS());
+            const auto *Member = dyn_cast_or_null<MemberExpr>(LHS);
+            if (Member && Member->getMemberDecl() == Field &&
+                value(Member->getBase()) == Base)
+              return true;
+            const auto *Deref = dyn_cast_or_null<UnaryOperator>(LHS);
+            if (Deref && Deref->getOpcode() == UO_Deref &&
+                value(Deref->getSubExpr()) == Base)
+              return true; // *base = wholeObject overwrites every field.
+            if (Binary->getOpcode() == BO_Assign &&
+                value(Binary->getRHS()) == Base && value(LHS) != Base &&
+                LHS->getType()->isPointerType())
+              return true; // a second alias of Base, untracked from here.
+          }
+        }
+      }
+      if (const auto *Call = dyn_cast<CallExpr>(Plain)) {
+        const FunctionDecl *Callee = Call->getDirectCallee();
+        for (unsigned I = 0; I < Call->getNumArgs(); ++I)
+          if (value(Call->getArg(I)) == Base &&
+              mayWriteFieldThroughParam(Callee, I, Field, Visiting,
+                                        TolerateAdvances))
+            return true;
+      }
+    }
+    if (const auto *Declaration = dyn_cast<DeclStmt>(Statement))
+      for (const Decl *Item : Declaration->decls())
+        if (const auto *Local = dyn_cast<VarDecl>(Item))
+          if (Local->getType()->isPointerType() &&
+              value(Local->getInit()) == Base)
+            return true; // Base's pointer value escapes to a fresh alias.
+    for (const Stmt *Child : Statement->children())
+      if (bodyMayWriteField(Child, Base, Field, Visiting, Ignore,
+                            TolerateAdvances))
+        return true;
+    return false;
+  }
+
+  /* std::nullopt: no virtual-slot relation applies (Source isn't a
+   * pointer to a struct with a tracked field, or the shape wasn't
+   * recognized).  false: the field demonstrably passes through this call
+   * with the exact same value it had on entry ('=').  true: it strictly
+   * advanced first ('<'), by the same escape-to-UB argument
+   * pointerObjectDistanceRank() already relies on for loops -- a
+   * monotonic pointer step through a finite object either meets its
+   * bound in finitely many steps or leaves defined C, which this proof
+   * is not responsible for. */
+  std::optional<bool> fieldProgressRelation(const CallExpr *Call,
+                                            const ParmVarDecl *Source,
+                                            const FunctionDecl *Callee,
+                                            unsigned Destination) const {
+    if (!Source->getType()->isPointerType() ||
+        Destination >= Callee->getNumParams())
+      return std::nullopt;
+    const ParmVarDecl *CalleeParam = Callee->getParamDecl(Destination);
+    const FieldDecl *Field = firstPointerField(Source->getType());
+    if (!Field || firstPointerField(CalleeParam->getType()) != Field)
+      return std::nullopt;
+    if (recordDeclaredGlobally(Field->getParent()) ||
+        containsGotoOrLabel(Current->getBody()) ||
+        writesVariable(Current->getBody(), Source))
+      return std::nullopt;
+    std::vector<const Stmt *> Preceding = precedingStatements(Call);
+    const Stmt *Witness = nullptr;
+    for (auto It = Preceding.rbegin(); It != Preceding.rend() && !Witness;
+        ++It) {
+      const auto *AsExpr = dyn_cast<Expr>(*It);
+      if (AsExpr && safeFieldAdvance(AsExpr, Source, Field))
+        Witness = *It;
+    }
+    /* Seeding with (Current, Source's own index) blocks re-descending
+     * into Current through this same parameter for the same reason a
+     * true cycle stops there -- see mayWriteFieldThroughParam(). */
+    FieldVisitSet Visiting{{Current, Source->getFunctionScopeIndex()}};
+    for (const Stmt *Statement : Preceding)
+      if (Statement != Witness &&
+          bodyMayWriteField(Statement, Source, Field, Visiting, nullptr,
+                            /*TolerateAdvances=*/Witness != nullptr))
+        return std::nullopt;
+    return Witness ? std::make_optional(true) : std::make_optional(false);
+  }
+
   std::string callRelations(const CallExpr *Call,
                             const FunctionDecl *Callee) const {
     std::string Result;
+    auto Append = [&Result](unsigned Destination, unsigned SourceIndex,
+                            char Relation) {
+      if (!Result.empty())
+        Result += ',';
+      Result += std::to_string(Destination) + ':' +
+                std::to_string(SourceIndex) + ':' + Relation;
+    };
     for (unsigned Destination = 0; Destination < Call->getNumArgs() &&
                                    Destination < Callee->getNumParams();
          ++Destination) {
@@ -710,10 +994,15 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
         ++SourceIndex;
       if (SourceIndex == Current->getNumParams())
         continue;
-      if (!Result.empty())
-        Result += ',';
-      Result += std::to_string(Destination) + ':' +
-                std::to_string(SourceIndex) + ':' + Relation;
+      Append(Destination, SourceIndex, Relation);
+      if (Relation == '=') {
+        std::optional<bool> FieldRelation =
+            fieldProgressRelation(Call, Source, Callee, Destination);
+        if (FieldRelation)
+          Append(Callee->getNumParams() + Destination,
+                Current->getNumParams() + SourceIndex,
+                *FieldRelation ? '<' : '=');
+      }
     }
     return Result.empty() ? "-" : Result;
   }
@@ -6038,11 +6327,18 @@ public:
     Current = Function;
     CurrentCFG = CFG::buildCFG(Function, Function->getBody(), &Context,
                                CFG::BuildOptions());
+    /* Twice the real parameter count reserves one virtual "field
+     * progress" slot per parameter -- see fieldProgressRelation() and
+     * callRelations() -- immediately after the real ones, at index
+     * NumParams+K for real parameter K.  lint-totality.py never assigns
+     * either half of the index space a meaning; it only needs an upper
+     * bound to validate indices against and a consistent size-change
+     * matrix to compose, both of which this doubled count still is. */
     llvm::outs() << "F\t" << key(Function) << '\t'
                  << file(Function->getLocation()) << '\t'
                  << line(Function->getLocation()) << '\t'
                  << (Function->isNoReturn() ? "noreturn" : "returns") << '\t'
-                 << Function->getNumParams() << '\n';
+                 << 2 * Function->getNumParams() << '\n';
     RecursiveASTVisitor<TotalityVisitor>::TraverseStmt(Function->getBody());
     CurrentCFG.reset();
     Current = Saved;
