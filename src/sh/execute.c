@@ -1607,15 +1607,9 @@ static char *slurp_fd(int fd, size_t *out_len)
 	return buf;
 }
 
-/* out and status are both required, matching src/internal/libc.h's own
- * documented contract for this function: "*out NULL and *status
- * untouched" on failure, "*out a __malloc'd ... capture" and "*status
- * the command's exit status" on success -- out is written on every
- * path (`*out = 0;` is this function's first statement), status only
- * on the success path, and no real caller (src/wordexp/wordexp.c's
- * command-substitution expansion) ever passes NULL for either. program
- * is left unmarked: only ever forwarded into __sh_parse(), never
- * dereferenced directly here. */
+/* libc.h's documented contract: *out NULL and *status untouched on
+ * failure; *out a __malloc'd capture and *status the exit status on
+ * success. */
 int __sh_cmdsub(const char *program, char **out, int *status)
 {
 	struct sh_list *list;
@@ -1801,12 +1795,6 @@ static int wire_stage_stdio(struct redir_state *rs, int (*pipes)[2], size_t n, s
 	return 0;
 }
 
-/* pl is required: `size_t n = pl->ncommands, i;` is this function's
- * first statement. status is required too: `*status = pl->bang ? ... :
- * rc;` near the end is unconditional on the only path that does not
- * already return -1 (the sh.h-wide "status left untouched" convention),
- * and every real caller (__sh_exec_andor() below) always passes a real
- * status. */
 // NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 {
@@ -1819,20 +1807,16 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 	int abort_unsupported = 0;
 	int rc;
 
-	/* The grammar (sh.h's sh_pipeline comment, XCU 2.10.2's pipeline
-	 * production) never produces an empty pipeline -- a pipe_sequence
-	 * is always one command at minimum -- so this cannot happen via
-	 * __sh_parse(). It is still checked explicitly, rather than left
-	 * as an unstated invariant: every allocation and index below is
-	 * sized off n or n-1, and a static analyzer (rightly) cannot see
-	 * the parser's guarantee across this function's own boundary --
-	 * only that an unchecked n==0 would underflow n-1 to SIZE_MAX. */
+	/* The grammar never produces an empty pipeline, but this is checked
+	 * explicitly rather than left an unstated invariant: every allocation
+	 * and index below is sized off n or n-1, and an unchecked n==0 would
+	 * underflow n-1 to SIZE_MAX. */
 	if (n == 0) return -1;
 
 	if (n == 1) {
 		/* Routes back through __sh_exec_command so a lone subshell or
-		 * brace group ("(echo hi)", "{ echo hi; }") still reports its
-		 * own -1 rather than this file assuming SH_CMD_SIMPLE. */
+		 * brace group still reports its own -1 rather than this file
+		 * assuming SH_CMD_SIMPLE. */
 		rc = __sh_exec_command(&pl->commands[0], status);
 		if (rc) return rc;
 		if (pl->bang) *status = (*status == 0);
@@ -1840,17 +1824,11 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		return 0;
 	}
 
-	/* Two compound-command stages directly adjacent, with no real
-	 * spawned stage between them, is the one case this file's header
-	 * comment above ("still no fork()") cannot make safe: neither side
-	 * can run concurrently with the other without a fork() this file
-	 * deliberately no longer uses, so whichever runs first could block
-	 * forever on more than one pipe buffer with nothing on the other
-	 * end to drain or fill it. Refused up front, before anything is
-	 * allocated or spawned, via the same -1 "not yet supported"
-	 * convention as an unexpanded command substitution -- a clean,
-	 * reported failure instead of a silent hang. Every other placement
-	 * of "(...)"/"{...}" in a pipeline is unaffected. */
+	/* Two compound-command stages directly adjacent, with no real spawned
+	 * stage between them, is the one case the "still no fork()" design
+	 * above can't make safe (see that discussion): refused up front,
+	 * before anything is allocated or spawned, via the usual -1
+	 * convention rather than risk a silent hang. */
 	for (i = 0; i + 1 < n; i++) {
 		if (pl->commands[i].kind != SH_CMD_SIMPLE && pl->commands[i + 1].kind != SH_CMD_SIMPLE)
 			return -1;
@@ -1866,10 +1844,9 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 	}
 	memset(deferred, 0, n * sizeof *deferred);
 
-	/* Every pipe is created up front, O_CLOEXEC (see this file's
-	 * header comment on why): if creation fails partway through, only
-	 * the ones already made need cleaning up -- nothing has been
-	 * spawned yet. */
+	/* Every pipe is created up front, O_CLOEXEC: if creation fails partway
+	 * through, only the ones already made need cleaning up -- nothing has
+	 * been spawned yet. */
 	for (i = 0; i + 1 < n; i++) {
 		if (pipe2(pipes[i], O_CLOEXEC) < 0) {
 			size_t j;
@@ -1879,14 +1856,11 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		}
 	}
 
-	/* Pass 1: spawn every real (SH_CMD_SIMPLE) stage, in order, so
-	 * that by the time pass 2 below runs any compound-command stage's
-	 * body, every stage that could possibly be on the other end of one
-	 * of its pipes already exists and is running concurrently. A
-	 * compound-command stage is left entirely untouched here -- no
-	 * fd 0/1 wiring, no redirections, no closing of its neighboring
-	 * pipe ends -- because it is not this process's turn to use them
-	 * yet; pass 2 below does all of that when it finally is. */
+	/* Pass 1: spawn every real (SH_CMD_SIMPLE) stage, in order, so that by
+	 * the time pass 2 runs any compound-command stage's body, every stage
+	 * that could be on the other end of one of its pipes already exists
+	 * and is running concurrently. A compound-command stage is left
+	 * entirely untouched here; pass 2 handles it once it's its turn. */
 	for (i = 0; i < n; i++) {
 		struct redir_state rs;
 		stage_result_t sr;
@@ -1905,14 +1879,10 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 
 		rs.saves = 0; rs.n = rs.cap = 0;
 		if (!abort_unsupported) {
-			/* "For each command but the last, the shell shall connect
-			 * the standard output of the command to the standard
-			 * input of the next command" (2.9.2), applied *before*
-			 * the command's own redirs list so that e.g. "cmd 2>&1 |
-			 * next" merges cmd's stderr into the pipe (2.7's
-			 * left-to-right ordering then makes the explicit "2>&1"
-			 * apply on top of this implicit hookup, which is what
-			 * makes that merge happen at all). */
+			/* 2.9.2's pipe hookup applied *before* the command's own
+			 * redirs list, so e.g. "cmd 2>&1 | next" merges cmd's stderr
+			 * into the pipe (2.7's left-to-right ordering then applies
+			 * the explicit "2>&1" on top). */
 			unsupported = wire_stage_stdio(&rs, pipes, n, i) ||
 			              apply_redirs(pl->commands[i].redirs, &rs, &failed);
 			if (!unsupported && !failed)
@@ -1920,29 +1890,20 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 			if (unsupported) {
 				abort_unsupported = 1;
 			} else if (failed) {
-				/* 2.8.1: this stage fails without running, same
-				 * as a lone command's redirection error -- but
-				 * the rest of the pipeline still runs normally
-				 * (its reader just sees an immediate EOF from
-				 * this stage's never-written pipe end). */
+				/* 2.8.1: this stage fails without running; the rest of
+				 * the pipeline still runs normally (its reader just sees
+				 * immediate EOF from this stage's never-written end). */
 				sr.special = 1;
 			}
 			restore_fds(&rs);
 		}
 
-		/* Close this process's own copies of the pipe ends this stage
-		 * has now handed off to a spawned child (or would have, had
-		 * one run): the write end pipes[i][1] is done with the moment
-		 * command i has been spawned, the read end pipes[i-1][0] the
-		 * moment command i has. Unconditional, whether or not this
-		 * stage actually ran -- an aborted or a redirection-failed
-		 * stage must free these exactly like a successful one, or the
-		 * pipeline hangs (this file's header comment's "leaked write
-		 * end" case) or leaks (a never-closed read end) regardless. A
-		 * deferred stage's own neighboring ends are deliberately left
-		 * open here (and skipped entirely, via the `continue` above,
-		 * before ever reaching this point) -- pass 2 below still needs
-		 * them. */
+		/* Close this process's own copies of the pipe ends handed off to
+		 * a spawned child, unconditionally -- an aborted or failed stage
+		 * must free these exactly like a successful one, or the pipeline
+		 * hangs or leaks regardless. A deferred stage's neighboring ends
+		 * are left open (skipped via the `continue` above); pass 2 still
+		 * needs them. */
 		if (i > 0) (void)close(pipes[i - 1][0]);
 		if (i + 1 < n) (void)close(pipes[i][1]);
 
@@ -1950,13 +1911,11 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		statuses[i] = sr.kind ? cmdsub_status_rule(&sr, gen0) : 0;
 	}
 
-	/* Pass 2: run every compound-command stage's body, left to right,
-	 * now that pass 1 has spawned every real stage in the pipeline.
-	 * See this file's header comment above for why left-to-right order
-	 * is what keeps this safe: whichever neighbor produces a deferred
-	 * stage's input or consumes its output is by now either a real,
-	 * already-running process, or an earlier deferred stage that (by
-	 * this same order) has already finished and closed its end. */
+	/* Pass 2: run every compound-command stage's body, left to right, now
+	 * that pass 1 has spawned every real stage. Whichever neighbor
+	 * produces a deferred stage's input or consumes its output is by now
+	 * either a real, already-running process, or an earlier deferred
+	 * stage that has already finished and closed its end. */
 	for (i = 0; i < n; i++) {
 		struct redir_state rs;
 		int st = 0;
@@ -1979,18 +1938,14 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		statuses[i] = st;
 	}
 
-	/* Every pipe end in this process has been closed by the two
-	 * passes above; what remains open is only each spawned child's own
-	 * inherited copy, which is exactly what lets a downstream reader
-	 * see EOF once its writers actually finish. */
+	/* Every pipe end in this process has been closed by the two passes
+	 * above; what remains open is only each spawned child's own inherited
+	 * copy, letting a downstream reader see EOF once its writers finish. */
 	for (i = 0; i < n; i++) {
 		if (pids[i] < 0) continue;
 		rc = wait_status(pids[i]);
-		statuses[i] = rc; /* -1 here would be a waitpid() failure on a
-		                   * pid this process itself just created --
-		                   * not expected, but if it somehow happens,
-		                   * propagating it as this stage's status is
-		                   * safer than fabricating a fake success. */
+		statuses[i] = rc; /* an unexpected waitpid() failure here propagates
+		                   * rather than fabricating a fake success */
 	}
 
 	rc = statuses[n - 1];
@@ -2018,16 +1973,9 @@ int __sh_exec_andor(const struct sh_andor *a, int *status)
 	int rc = __sh_exec_pipeline(&a->pipeline, status);
 	if (rc) return rc;
 	for (a = a->next; a; a = a->next) {
-		/* An `exit` -- or a `return` -- anywhere in the and-or list
-		 * ends it, whatever the status would have selected next; see
-		 * sh.h's control-flow comment.  Checked
-		 * before the short-circuit tests so that "exit 0 && cmd" runs
-		 * no cmd.  Through __sh_flow_pending() rather than reading
-		 * flow_exit_pending directly: this loop and the one in
-		 * __sh_exec_list() below were the only two places that read
-		 * the flag instead of asking, and a second kind of unwind
-		 * added later would have been silently ignored by exactly the
-		 * two loops whose job is to stop for one. */
+		/* An `exit` or `return` anywhere in the and-or list ends it,
+		 * whatever the status would have selected next. Checked before
+		 * the short-circuit tests so "exit 0 && cmd" runs no cmd. */
 		if (__sh_flow_pending()) return 0;
 		if (a->op == SH_AO_AND && *status != 0) continue;
 		if (a->op == SH_AO_OR && *status == 0) continue;
@@ -2037,22 +1985,13 @@ int __sh_exec_andor(const struct sh_andor *a, int *status)
 	return 0;
 }
 
-/* Nesting depth of __sh_exec_list().  A pending `exit` must survive
- * every *inner* return -- that is the whole point of the unwind -- but
- * must not survive the outermost one, or the next program this process
- * runs (a later system()/wordexp() command substitution, or a second
- * __sh_exec_list() in a test) would find the flag still set and execute
- * nothing at all, silently.  Clearing it exactly where the unwind has
- * nowhere left to unwind to is what makes the flag a control-flow
- * signal rather than a latch. */
+/* Nesting depth of __sh_exec_list(). A pending `exit` must survive every
+ * *inner* return but must not survive the outermost one, or the next
+ * program this process runs would find the flag still set and execute
+ * nothing, silently. Clearing it exactly where the unwind has nowhere
+ * left to go is what makes the flag a control-flow signal, not a latch. */
 static unsigned exec_list_depth;
 
-/* status is required: `*status = 0;` is this function's first statement,
- * unconditional. list is deliberately left unmarked -- `if (!list)
- * return 0;` right after is a real, working defensive check: an empty
- * compound-command body (e.g. cmd->u.ifcmd.else_body when there is no `else`)
- * genuinely passes list as NULL here, and every caller in this file
- * relies on that. */
 // NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 int __sh_exec_list(const struct sh_list *list, int *status)
 {
@@ -2065,17 +2004,14 @@ int __sh_exec_list(const struct sh_list *list, int *status)
 		rc = __sh_exec_andor(it->andor, status);
 		if (rc) break;
 		if (__sh_flow_pending()) break;
-		/* SH_SEP_AMP: true backgrounding is future work -- see this
-		 * file's header comment -- so an async item still just runs
-		 * synchronously for now, exactly like SH_SEP_SEQ/SH_SEP_END. */
+		/* SH_SEP_AMP: true backgrounding is future work, so an async item
+		 * still just runs synchronously, like SH_SEP_SEQ/SH_SEP_END. */
 	}
 	/* Back at the outermost list: no frame above can consume an unwind,
 	 * so neither flag may survive into whatever runs next in this
-	 * process (a second __sh_exec_list() from a test binary, a later
-	 * wordexp() command substitution).  A `return` that reached here
-	 * had no function to return from and has already been diagnosed by
-	 * the built-in; dropping it is what stops it from silently
-	 * truncating an unrelated later program. */
+	 * process. A `return` reaching here had no function to return from
+	 * and was already diagnosed by the built-in; dropping it stops it
+	 * from silently truncating an unrelated later program. */
 	if (--exec_list_depth == 0) { flow_exit_pending = 0; flow_return_pending = 0; }
 	return rc;
 }
