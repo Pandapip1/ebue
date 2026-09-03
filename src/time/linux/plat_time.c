@@ -51,7 +51,7 @@
 #include "libc.h"
 #include "plat_time.h"
 
-/* aarch64 Linux syscall numbers -- confirmed against this host's own
+/* Linux syscall numbers -- aarch64 confirmed against this host's own
  * <sys/syscall.h>/<time.h>/<sys/resource.h> via a throwaway host-glibc
  * oracle program (see src/mman/linux/plat_mem.c's banner for why they
  * cannot come from a host header in this file itself: this build is
@@ -60,27 +60,97 @@
  * SYS_getrusage=165, CLOCK_REALTIME=0, CLOCK_MONOTONIC=1,
  * sizeof(struct timespec)=16, sizeof(time_t)=sizeof(long)=8,
  * sizeof(struct rusage)=144 (matching include/sys/resource.h's own
- * layout exactly -- see below). */
+ * layout exactly -- see below). x86_64 confirmed against this host's
+ * own /nix/store linux-headers asm/unistd_64.h; also LP64, same
+ * bit-for-bit-compatible situation as aarch64.
+ *
+ * i386 is genuinely different, not just a number swap: its plain
+ * SYS_clock_gettime/_settime (265/264) are the LEGACY Y2038-unsafe
+ * 32-bit-time_t syscalls, writing an 8-byte kernel struct, while
+ * ntlibc's own struct timespec always carries a 64-bit time_t
+ * (include/alltypes.h.in's own `TYPEDEF _Int64 time_t`, the same
+ * Y2038-safe choice as off_t) -- handing that wider struct's address
+ * to the narrow legacy syscall would only let the kernel fill the
+ * first 8 of its 12 bytes, leaving stale/uninitialized high bits and a
+ * garbage tv_nsec. This file instead uses the real Y2038-safe *64
+ * syscalls on i386 (403/404), matching ntlibc's own 64-bit time_t
+ * choice, decoded through the __lx_timespec64/__lx_rusage32 kernel-ABI
+ * mirrors below rather than ntlibc's own wider structs. i386's
+ * SYS_getrusage (77) has no such split -- getrusage(2)'s own struct
+ * rusage was never widened for Y2038 on ANY arch (its timeval fields
+ * stay the kernel's native `long` width, 32-bit on i386 to this day),
+ * so it is ntlibc's own struct rusage (always 64-bit `time_t
+ * tv_sec`/`suseconds_t tv_usec` in its embedded timevals) that
+ * mismatches the raw i386 ABI here, the same shape of gap as
+ * clock_gettime's, addressed the same way (see __lx_rusage32 below). */
+#if defined(__aarch64__)
 #define SYS_clock_gettime 113
 #define SYS_clock_settime 112
 #define SYS_getrusage     165
+#elif defined(__x86_64__)
+#define SYS_clock_gettime 228
+#define SYS_clock_settime 227
+#define SYS_getrusage     98
+#elif defined(__i386__)
+#define SYS_clock_gettime64 403
+#define SYS_clock_settime64 404
+#define SYS_getrusage       77
+#else
+#error "plat_time.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
-/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
- * the call path at all. NOT `extern long syscall(long, ...)`: that
- * symbol is satisfied by the HOST's real glibc at link time (this
- * build is -nostdinc, not -nostdlib -- only compiling avoids the host
- * headers, the final link step still pulls in host libc), and glibc's
- * syscall() performs its own error translation: on failure it returns
- * exactly -1 and sets glibc's OWN errno (a different memory location
- * than ntlibc's own errno global, src/internal/errno.c) to the real
- * code -- it does NOT hand back the raw kernel -errno in [-4095,-1]
- * this file's is_sys_error()/`errno = (int)-ret` translation requires.
- * Confirmed both by inspecting the linked pilot binary (nm -D shows an
- * undefined `syscall@GLIBC_*`, resolved by ld-linux at runtime) and
- * independently by src/thread/linux/plat_thread.c's own port, which
- * hit the identical bug and is this fix's model. aarch64's syscall
- * calling convention: x8 = syscall number, x0..x5 = up to 6 arguments,
- * result (or -errno in [-4095,-1]) in x0. */
+#if defined(__i386__)
+/* Raw i386 kernel ABI mirrors -- see this file's own banner above for
+ * why ntlibc's own struct timespec/struct rusage cannot be used
+ * directly here the way they can on the two LP64 arches. Sizes
+ * confirmed against the real kernel uapi shapes (struct
+ * __kernel_timespec: two 8-byte fields, no gap regardless of i386's
+ * own 4-byte natural alignment for `long long`, since 8 is already a
+ * multiple of 4; struct __kernel_old_timeval/struct rusage: every
+ * field the kernel's native 32-bit `long`, matching this arch's own
+ * `long` exactly), sanity-checked below rather than trusted by
+ * inspection alone -- same discipline as src/dirent/linux/
+ * plat_dirent.c's own __lx_dirent64 _Static_assert. */
+struct __lx_timespec64 { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
+	long long tv_sec;
+	long long tv_nsec;
+};
+_Static_assert(sizeof(struct __lx_timespec64) == 16,
+               "__lx_timespec64 layout mismatch for i386");
+
+struct __lx_timeval32 { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
+	long tv_sec;
+	long tv_usec;
+};
+struct __lx_rusage32 { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
+	struct __lx_timeval32 ru_utime;
+	struct __lx_timeval32 ru_stime;
+	long ru_maxrss, ru_ixrss, ru_idrss, ru_isrss, ru_minflt, ru_majflt; // NOLINT(readability-isolate-declaration) -- mirrors the kernel's own flat field-list ABI shape
+	long ru_nswap, ru_inblock, ru_oublock, ru_msgsnd, ru_msgrcv; // NOLINT(readability-isolate-declaration) -- mirrors the kernel's own flat field-list ABI shape
+	long ru_nsignals, ru_nvcsw, ru_nivcsw; // NOLINT(readability-isolate-declaration) -- mirrors the kernel's own flat field-list ABI shape
+};
+_Static_assert(sizeof(struct __lx_rusage32) == 72,
+               "__lx_rusage32 layout mismatch for i386");
+#endif
+
+/* A minimal 6-argument raw syscall: no host libc in the call path at
+ * all. NOT `extern long syscall(long, ...)`: that symbol is satisfied
+ * by the HOST's real glibc at link time (this build is -nostdinc, not
+ * -nostdlib -- only compiling avoids the host headers, the final link
+ * step still pulls in host libc), and glibc's syscall() performs its
+ * own error translation: on failure it returns exactly -1 and sets
+ * glibc's OWN errno (a different memory location than ntlibc's own
+ * errno global, src/internal/errno.c) to the real code -- it does NOT
+ * hand back the raw kernel -errno in [-4095,-1] this file's
+ * is_sys_error()/`errno = (int)-ret` translation requires. Confirmed
+ * both by inspecting the linked pilot binary (nm -D shows an undefined
+ * `syscall@GLIBC_*`, resolved by ld-linux at runtime) and independently
+ * by src/thread/linux/plat_thread.c's own port, which hit the identical
+ * bug and is this fix's model. Three per-arch bodies, same "own syscall
+ * table per file" discipline this tree already uses (see
+ * src/dirent/linux/plat_dirent.c's own raw_syscall()): aarch64's
+ * `svc #0`, x86_64's `syscall`, i386's register-starved `int $0x80`. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
@@ -96,6 +166,47 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 		: "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#else
+#error "plat_time.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 /* A raw Linux syscall returns the result on success, or -errno (as an
  * unsigned value in [-4095, -1]) on failure -- see plat_mem.c's own
@@ -113,6 +224,11 @@ void __plat_realtime_get(long long *nt_ticks)
 	 * timespec behind rather than reading an uninitialized local, the
 	 * same "no documented failure mode ... never checked" contract
 	 * plat_time.h's own comment describes for this function. */
+#if defined(__i386__)
+	struct __lx_timespec64 raw = {0, 0};
+	raw_syscall(SYS_clock_gettime64, (long)CLOCK_REALTIME, (long)&raw, 0L, 0L, 0L, 0L);
+	__unix_to_ticks((time_t)raw.tv_sec, (long)raw.tv_nsec, nt_ticks);
+#else
 	struct timespec ts = {0, 0};
 	raw_syscall(SYS_clock_gettime, (long)CLOCK_REALTIME, (long)&ts, 0L, 0L, 0L, 0L);
 	/* __unix_to_ticks() can only reject an out-of-range input (a `sec` many
@@ -120,24 +236,43 @@ void __plat_realtime_get(long long *nt_ticks)
 	 * in that unreachable case, matching this function's own "never
 	 * checked" contract -- there is no error channel to report through. */
 	__unix_to_ticks(ts.tv_sec, ts.tv_nsec, nt_ticks);
+#endif
 }
 
 int __plat_realtime_set(long long nt_ticks)
 {
-	struct timespec ts;
 	long ret;
+#if defined(__i386__)
+	struct __lx_timespec64 raw;
+	raw.tv_sec = (long long)__ticks_to_unix_sec(nt_ticks);
+	raw.tv_nsec = (long long)__ticks_to_unix_nsec(nt_ticks);
+	ret = raw_syscall(SYS_clock_settime64, (long)CLOCK_REALTIME, (long)&raw, 0L, 0L, 0L, 0L);
+#else
+	struct timespec ts;
 	ts.tv_sec = (time_t)__ticks_to_unix_sec(nt_ticks);
 	ts.tv_nsec = __ticks_to_unix_nsec(nt_ticks);
 	ret = raw_syscall(SYS_clock_settime, (long)CLOCK_REALTIME, (long)&ts, 0L, 0L, 0L, 0L);
+#endif
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
 
 int __plat_perfcounter_get(long long *count, long long *freq) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; counter and frequency outputs have distinct roles
 {
+	long long sec, nsec;
+#if defined(__i386__)
+	struct __lx_timespec64 raw = {0, 0};
+	long ret = raw_syscall(SYS_clock_gettime64, (long)CLOCK_MONOTONIC, (long)&raw, 0L, 0L, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	sec = raw.tv_sec;
+	nsec = raw.tv_nsec;
+#else
 	struct timespec ts = {0, 0};
 	long ret = raw_syscall(SYS_clock_gettime, (long)CLOCK_MONOTONIC, (long)&ts, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	sec = ts.tv_sec;
+	nsec = ts.tv_nsec;
+#endif
 	/* Express CLOCK_MONOTONIC as a nanosecond counter running at a fixed
 	 * 1e9 Hz "frequency": src/internal/libc.h's __clock_qpc_to_timespec()
 	 * (sec = count/freq, nsec = (count%freq) scaled to a ns fraction)
@@ -146,12 +281,11 @@ int __plat_perfcounter_get(long long *count, long long *freq) // NOLINT(bugprone
 	 * monotonic_get()) recovers the original timespec bit-for-bit with
 	 * no translation loss, the same contract NT's QPC pair already
 	 * promises with its own arbitrary frequency. */
-	if (ts.tv_sec < 0 ||
-	    ts.tv_sec > (INT64_MAX - ts.tv_nsec) / 1000000000LL) {
+	if (sec < 0 || sec > (INT64_MAX - nsec) / 1000000000LL) {
 		errno = EOVERFLOW;
 		return -1;
 	}
-	*count = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+	*count = sec * 1000000000LL + nsec;
 	*freq = 1000000000LL;
 	return 0;
 }
@@ -162,23 +296,37 @@ int __plat_process_cpu_ticks(long long *kernel, long long *user) // NOLINT(bugpr
 	 * to reporting exactly the raw kernel ABI's fields, in the kernel's
 	 * own order, with no trailing padding (a deliberate choice recorded
 	 * there for the native-build symbol-preemption reason its comment
-	 * describes) -- so unlike plat_fd.c's SEEK_END comment (which had to
-	 * hand-roll a local struct because ntlibc's own headers had nothing
-	 * to reuse), this backend can and does use ntlibc's own
-	 * sys/resource.h struct rusage/getrusage() prototype directly. Its
-	 * 144-byte size was confirmed to match this host's raw
-	 * SYS_getrusage output exactly via the same oracle program. */
+	 * describes) -- so on the two LP64 arches (unlike plat_fd.c's
+	 * SEEK_END comment, which had to hand-roll a local struct because
+	 * ntlibc's own headers had nothing to reuse), this backend can and
+	 * does use ntlibc's own sys/resource.h struct rusage/getrusage()
+	 * prototype directly. Its 144-byte size was confirmed to match this
+	 * host's raw SYS_getrusage output exactly via the same oracle
+	 * program. i386 is the one arch where that no longer holds -- see
+	 * this file's own banner -- so it decodes through the raw
+	 * __lx_rusage32 kernel-ABI mirror above instead. */
+	long long user_us, kernel_us;
+#if defined(__i386__)
+	struct __lx_rusage32 ru = {{0, 0}, {0, 0}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+	long ret = raw_syscall(SYS_getrusage, (long)RUSAGE_SELF, (long)&ru, 0L, 0L, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	user_us = (long long)ru.ru_utime.tv_sec * 1000000LL + ru.ru_utime.tv_usec;
+	kernel_us = (long long)ru.ru_stime.tv_sec * 1000000LL + ru.ru_stime.tv_usec;
+#else
 	struct rusage ru = {0};
 	long ret = raw_syscall(SYS_getrusage, (long)RUSAGE_SELF, (long)&ru, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	user_us = (long long)ru.ru_utime.tv_sec * 1000000LL + ru.ru_utime.tv_usec;
+	kernel_us = (long long)ru.ru_stime.tv_sec * 1000000LL + ru.ru_stime.tv_usec;
+#endif
 	/* getrusage() reports microsecond resolution; the interface wants
 	 * 100ns ticks (__TICKS_PER_SEC == 1e7), so scale by 10 -- the same
 	 * "no extra validation, __clock_combine_cpu_ticks() is the trust
 	 * boundary every front door already applies" division of
 	 * responsibility src/time/nt/plat_time.c's own
 	 * __plat_process_cpu_ticks() keeps toward KERNEL_USER_TIMES. */
-	*user = ru.ru_utime.tv_sec * __TICKS_PER_SEC + ru.ru_utime.tv_usec * 10;
-	*kernel = ru.ru_stime.tv_sec * __TICKS_PER_SEC + ru.ru_stime.tv_usec * 10;
+	*user = user_us * 10;
+	*kernel = kernel_us * 10;
 	return 0;
 }
 
