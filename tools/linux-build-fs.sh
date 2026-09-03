@@ -109,10 +109,10 @@ FILES="
 # plat_thread.c's many is ever reached here: __plat_thread_spawn() (the
 # only other function in this file that references anything else
 # unresolved, __ntlibc_linux_clone() in src/thread/linux/
-# clone_aarch64.S) is never called by anything in this FILES list, so
+# aarch64/clone.S) is never called by anything in this FILES list, so
 # --gc-sections drops that whole function's own section, and its own
 # unresolved reference, before the link ever needs to satisfy it --
-# confirmed by linking successfully without clone_aarch64.S at all.
+# confirmed by linking successfully without aarch64/clone.S at all.
 
 echo "$TAG: compiling ($CC, native ELF)..."
 objs=""

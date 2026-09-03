@@ -129,10 +129,10 @@ FILES="
 #     ntlibc_malloc_lock(), reached for real by __malloc()/__free()
 #     above); __plat_thread_spawn() (this file's only OTHER function
 #     needing anything unresolved, __ntlibc_linux_clone() in
-#     src/thread/linux/clone_aarch64.S) is never called by anything in
+#     src/thread/linux/aarch64/clone.S) is never called by anything in
 #     this FILES list, so --gc-sections drops it before the link ever
 #     needs that symbol -- confirmed by linking successfully without
-#     clone_aarch64.S at all
+#     aarch64/clone.S at all
 #   - src/unistd/close.c: needed so this pilot's own eventfd close()s
 #     go through the SAME __fds[] table __fd_install() just registered
 #     them in, not a raw syscall that frees the real descriptor while

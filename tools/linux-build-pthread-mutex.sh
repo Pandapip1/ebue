@@ -50,7 +50,7 @@ FILES="
 	src/thread/pthread_mutex.c
 	src/thread/pthread.c
 	src/thread/linux/plat_thread.c
-	src/thread/linux/clone_aarch64.S
+	src/thread/linux/aarch64/clone.S
 	src/internal/linux/tls_setup.c
 	src/unistd/getpid.c
 	src/unistd/linux/plat_unistd.c

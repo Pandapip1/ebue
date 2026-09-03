@@ -20,7 +20,7 @@
  * instruction returns twice, once in the caller and once in the child on
  * the CHILD's own fresh stack, so the child must not unwind back into this
  * C function's stack frame. That's assembly-level work; see
- * clone_aarch64.S.
+ * aarch64/clone.S.
  *
  * One deliberate simplification remains:
  *
@@ -169,14 +169,16 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 }
 #endif
 
-/* clone_aarch64.S's hand-written trampoline -- see this file's banner for
- * why a raw syscall cannot do clone()'s job by itself.
- *
- * i386/x86_64 have no sibling trampoline file yet -- a real, disclosed
- * gap: neither is reachable from this project's curated build FILES
- * lists (so --gc-sections drops the dead reference), but a real port
- * needs its own clone(2) trampoline for the same double-return-into-
- * CLONE_VM-child reason clone_aarch64.S's own banner gives. */
+/* src/thread/linux/$(ARCH)/clone.S's hand-written trampoline -- see
+ * that file's own banner (aarch64/clone.S's in particular) for why a
+ * raw syscall cannot do clone()'s job by itself. All three arches this
+ * tree targets have a real sibling trampoline file now (aarch64/
+ * clone.S, x86_64/clone.S, i386/clone.S), each following its own
+ * arch's calling convention and clone(2) register ABI -- see
+ * x86_64/clone.S's and i386/clone.S's own banners for the real,
+ * genuinely-different-per-arch CLONE_BACKWARDS argument-ordering split
+ * this needed, confirmed against the kernel's own arch/x86/Kconfig and
+ * kernel/fork.c source rather than assumed. */
 extern long __ntlibc_linux_clone(__plat_thread_entry_t fn, void *stack_top, // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
                                  long flags, void *arg, void *tls);
 

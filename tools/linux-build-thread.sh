@@ -8,7 +8,7 @@
 # libc wrapper, -nostdinc against ntlibc's own generated headers,
 # aarch64-host-only syscall numbers).
 #
-# Builds src/thread/linux/plat_thread.c + clone_aarch64.S +
+# Builds src/thread/linux/plat_thread.c + src/thread/linux/aarch64/clone.S +
 # src/internal/linux/tls_setup.c (the real per-thread CLONE_SETTLS TLS
 # block builder plat_thread.c's __plat_thread_spawn() calls -- linked
 # here too since this pilot's whole point is exercising real clone()'d
@@ -62,7 +62,7 @@ $INC -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL -Wall -Wno-unused-func
 
 FILES="
 	src/thread/linux/plat_thread.c
-	src/thread/linux/clone_aarch64.S
+	src/thread/linux/aarch64/clone.S
 	src/internal/linux/tls_setup.c
 	src/internal/errno.c
 	fuzz/linux_pilot_test_thread.c

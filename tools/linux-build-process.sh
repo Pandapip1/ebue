@@ -87,7 +87,7 @@ FILES="
 	src/process/linux/plat_process.c
 	src/signal/linux/plat_signal.c
 	src/thread/linux/plat_thread.c
-	src/thread/linux/clone_aarch64.S
+	src/thread/linux/aarch64/clone.S
 	src/internal/linux/tls_setup.c
 	src/unistd/close.c
 	src/unistd/read.c
@@ -97,8 +97,9 @@ FILES="
 	fuzz/linux_pilot_harness_process.c
 	fuzz/linux_pilot_test_process.c
 "
-# src/thread/linux/plat_thread.c (plus its own clone_aarch64.S trampoline
-# and src/internal/linux/tls_setup.c dependency, the same trio
+# src/thread/linux/plat_thread.c (plus its own aarch64/clone.S trampoline
+# -- renamed from clone_aarch64.S when the clone(2) trampoline was ported
+# per-arch to x86_64/i386 -- and src/internal/linux/tls_setup.c dependency, the same trio
 # tools/linux-build-thread.sh already links) was missing until commit
 # 735db9c8 ("pthread_create(): give Linux a real create_suspended
 # primitive") moved __plat_thread_resume() out of

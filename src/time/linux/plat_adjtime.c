@@ -46,22 +46,43 @@
 #include <string.h>
 #include <errno.h>
 
-/* aarch64 Linux syscall number -- confirmed against this host's own
+/* Linux syscall number -- aarch64 confirmed against this host's own
  * <sys/syscall.h> via a throwaway host-glibc oracle program (the same
  * technique src/time/linux/plat_time.c's own banner describes; this
  * build is -nostdinc against ntlibc's own generated headers, never
  * glibc's, so the number cannot come from a host header in this file
- * itself). Oracle output on this host: SYS_adjtimex=171. */
+ * itself). x86_64/i386 confirmed against this host's own /nix/store
+ * linux-headers asm/unistd_64.h / asm/unistd_32.h. Oracle output on
+ * this host for aarch64: SYS_adjtimex=171. */
+#if defined(__aarch64__)
 #define SYS_adjtimex 171
+#elif defined(__x86_64__)
+#define SYS_adjtimex 159
+#elif defined(__i386__)
+#define SYS_adjtimex 124
+#else
+#error "plat_adjtime.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 #define ADJ_OFFSET_SINGLESHOT 0x8001
 #define ADJ_OFFSET_SS_READ    0xa001
 
-/* Raw kernel struct timex, LP64 layout -- see this file's own banner.
- * Only the fields adjtime() actually reads or writes are named
- * precisely; everything else is exactly as wide as the kernel's own
- * definition so the fields that come after line up, even though this
- * file never touches them. */
+/* Raw kernel struct timex -- see this file's own banner. Every wide
+ * field is declared as plain C `long`, matching the kernel uapi's own
+ * __kernel_long_t exactly: that typedef IS the compiler's native
+ * `long` on every one of aarch64/x86_64 (LP64) and i386 (ILP32) alike,
+ * so this single field-for-field layout, with no per-arch #if at all,
+ * is already correct on every arch this file targets -- the compiler's
+ * own `long` width does the per-arch adjustment for free. The kernel's
+ * own `struct timeval time` member (tv_sec/tv_usec, both also
+ * __kernel_long_t-sized) is flattened here into the two plain
+ * time_sec/time_usec fields below with no layout change either way:
+ * two consecutive same-width integers take the same space and
+ * alignment nested in a sub-struct as they do flattened directly into
+ * the parent. Only the fields adjtime() actually reads or writes are
+ * named precisely; everything else is exactly as wide as the kernel's
+ * own definition so the fields that come after line up, even though
+ * this file never touches them. */
 struct linux_timex {
 	unsigned int modes;
 	long offset;
@@ -86,10 +107,27 @@ struct linux_timex {
 	int tai;
 	int pad[11];
 };
+/* Sanity-checks the natural-alignment argument in this struct's own
+ * comment above, rather than trusting it by inspection alone -- same
+ * discipline as src/dirent/linux/plat_dirent.c's own __lx_dirent64
+ * _Static_assert. Hand-computed from the real kernel field list this
+ * struct mirrors (21 `long`/`int`-sized leading fields plus the
+ * trailing int pad[11], no sub-struct): LP64 (8-byte-aligned `long`)
+ * inserts 4 bytes of padding after `modes`, after `status`, and after
+ * `shift` to keep every following `long` 8-aligned, giving 208 bytes
+ * total; ILP32 (4-byte-aligned `long`, the same width as `int`) needs
+ * no padding anywhere, giving 128 bytes total. */
+_Static_assert(sizeof(struct linux_timex) == (sizeof(long) == 8 ? 208 : 128),
+               "linux_timex layout mismatch for this architecture");
 
-/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
- * the call path -- see src/time/linux/plat_time.c's own raw_syscall()
- * banner for why this file defines its own rather than sharing one. */
+/* A minimal 6-argument raw syscall: no host libc in the call path --
+ * see src/time/linux/plat_time.c's own raw_syscall() banner for why
+ * this file defines its own rather than sharing one. Three per-arch
+ * bodies, same "own syscall table per file" discipline this tree
+ * already uses (see src/dirent/linux/plat_dirent.c's own
+ * raw_syscall()): aarch64's `svc #0`, x86_64's `syscall`, i386's
+ * register-starved `int $0x80`. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
@@ -105,6 +143,47 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 		: "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#else
+#error "plat_adjtime.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 static int is_sys_error(long ret)
 {
