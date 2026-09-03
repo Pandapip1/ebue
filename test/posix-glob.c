@@ -10,15 +10,22 @@
  *
  * These headers now have real implementations (include/{fnmatch,glob,
  * wordexp,regex,search,ftw}.h and the matching src/ directories), so
- * most fences below have been lifted; the ones that remain use the
- * three conventions test/posix-sysmisc.c established, each an "if-zero"
- * fence guarding a block whose comment is tagged:
+ * most fences below have been lifted; the ones that remain still use
+ * the "if-zero" fence test/posix-sysmisc.c established, naming a case
+ * and a disposition tools/test-policy.py checks independently:
  *   BUG, followed by requirement + citation -- a real spec violation in
  *   code that exists; should pass once fixed.
  *   N/A, followed by requirement + citation + why NT can't -- genuinely
  *   impossible on this platform.
  *   UNIMPL, followed by requirement + citation -- not implemented here,
  *   but implementable; the fence names the mechanism.
+ *   PASS, a former BUG or UNIMPL case whose underlying defect has since
+ *   been fixed but that stays individually fenced rather than folded
+ *   into the always-run suite, so test-policy.py can keep validating it
+ *   on its own.
+ * Every fence left in this file today is PASS or N/A: each BUG/UNIMPL
+ * case this group once gated has, one at a time, been fixed and
+ * retagged rather than unfenced outright.
  *
  * One boundary worth stating: a clause whose CODE EXISTS but whose TEST
  * FIXTURE can't be built here is N/A, not UNIMPL (three fences got this
