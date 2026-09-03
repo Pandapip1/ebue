@@ -2,81 +2,44 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Linux's __fd_init(), replacing src/internal/fd.c's own (PLATFORM's
- * REPLACED_OBJS override, same mechanism crt/linux/crt1.c uses for
- * crt/crt1.c -- see Makefile's PLAT_GLOBS comment).
+ * REPLACED_OBJS override).
  *
- * NT's __fd_init() (fd.c) reads __peb->ProcessParameters for the three
- * standard handles and an optional RuntimeData blob describing every
- * OTHER descriptor a parent chose to hand down across CreateProcess --
- * both concepts specific to how NT starts a process; there is no PEB,
- * no ProcessParameters, and no such inheritance blob on Linux. A real
- * Linux process instead simply already HAS descriptors 0/1/2 open (a
- * shell or exec() sets them up before this program's first instruction
- * ever runs) and inherits every other still-open, non-close-on-exec
- * descriptor automatically, with the kernel itself as the only
- * bookkeeping authority for the raw numbers -- unlike NT, nothing here
- * needs to be TOLD which extra descriptors a parent meant to hand
- * down; a real fork()+execve() (src/process/linux/plat_process.c's own
- * __plat_process_spawn()) already carries every one of them across,
- * at the same real fd number, with no renumbering step this library
- * performs or could intercept.
+ * NT's __fd_init() reads __peb->ProcessParameters for the three standard
+ * handles and an optional RuntimeData blob describing every OTHER
+ * descriptor a parent chose to hand down across CreateProcess -- both
+ * concepts specific to how NT starts a process. A real Linux process
+ * instead already HAS descriptors 0/1/2 open and inherits every other
+ * still-open, non-close-on-exec descriptor automatically, with the
+ * kernel as the only bookkeeping authority for the raw numbers.
  *
- * What IS this library's own job, and was missing entirely until
- * install_inherited() below: ntlibc's own __fds[] table in a freshly
- * exec'd process is a brand new, zeroed array that has never heard of
- * any of them. A raw descriptor surviving exec is perfectly usable at
- * the syscall level from the moment this function returns (exactly
- * like one a Linux program opens with a raw syscall of its own,
- * bypassing this library entirely, already works today) -- but every
- * ntlibc-level operation on it (read()/write()/fcntl()/close()/dup(),
- * all of which resolve a small integer to a handle by indexing
- * __fds[], never by asking the kernel "is this open") returns EBADF
- * until the table itself knows the slot is occupied. install_inherited()
- * closes that gap the same way this file's own install_std() already
- * establishes fd 0/1/2: by asking the kernel what is really there
- * (fcntl(F_GETFD) as an existence probe, statx(2) via classify_fd() to
- * classify it, fcntl(F_GETFL) for its access mode) rather than being
- * told, since nothing on this backend ever tells it.
+ * What IS this library's own job: ntlibc's own __fds[] table in a
+ * freshly exec'd process is a brand new, zeroed array that has never
+ * heard of any of these descriptors. A raw descriptor surviving exec is
+ * perfectly usable at the syscall level, but every ntlibc-level
+ * operation on it (read()/write()/fcntl()/close()/dup(), which resolve a
+ * small integer to a handle by indexing __fds[], never by asking the
+ * kernel) returns EBADF until the table knows the slot is occupied.
+ * install_inherited() closes that gap by asking the kernel what is
+ * really there (fcntl(F_GETFD) as an existence probe, statx(2) via
+ * classify_fd() to classify it, fcntl(F_GETFL) for its access mode).
  *
- * One case this file alone does NOT cover, by design:
- * posix_spawn_file_actions_adddup2() targeting a descriptor above 2
- * (src/process/posix_spawn.c do_action()'s __SPAWN_DUP2 case) still
- * uses __plat_dup() -- an arbitrary-numbered duplicate -- rather than
- * __plat_dup_to(), because that call site's whole design (replay the
- * actions on the PARENT's own table, then undo them -- see
- * posix_spawn.c's own banner) only works because the duplicate's real
- * number does NOT have to match the target logical slot: forcing it to
- * would mean dup3(2) closing the PARENT's real descriptor at that exact
- * number as an unavoidable side effect, which is exactly the mutation
- * posix_spawn() promises not to leave behind, and which nothing could
- * then undo (the parent's original object at that number would simply
- * be gone). A descriptor reaching a child purely by not being
- * FD_CLOEXEC (this file's own subject) is unaffected by that and fully
- * handled by install_inherited() below.
- *
- * The target-fd wiring itself now happens where it has to: in the
- * CHILD, after clone(2) but before execve(2), the same window
- * __plat_process_spawn()'s own mv[]/dup3 staging loop (src/process/
- * linux/plat_process.c) already used for fd 0/1/2 -- generalized there
- * to whatever extra targets posix_spawn.c's build_dup2_targets() names,
- * carried over via __spawn_pending_dup2s() (struct __spawn_dup2_target,
- * src/internal/libc.h). This file plays no part in that: it only ever
- * runs after execve() has already replaced the child's image, by which
- * point every target above 2 the file actions named is already sitting
- * at the exact real number this file's own install_inherited() probe
- * loop expects it at, indistinguishable from a descriptor the child was
+ * One case this file does NOT cover, by design:
+ * posix_spawn_file_actions_adddup2() targeting a descriptor above 2 still
+ * uses __plat_dup() rather than __plat_dup_to(), because forcing the
+ * duplicate's real number to match the target slot would mean dup3(2)
+ * closing the PARENT's real descriptor at that number as a side effect,
+ * exactly the mutation posix_spawn() promises not to leave behind. The
+ * target-fd wiring instead happens in the CHILD, after clone(2) but
+ * before execve(2), in __plat_process_spawn()'s own mv[]/dup3 staging
+ * loop; by the time this file runs, every such target is already sitting
+ * at its real number, indistinguishable from a descriptor the child was
  * simply born with.
  *
- * Classification (below, shared between __fd_init() and this file's
- * own __handle_type()) reuses src/fcntl/linux/plat_fcntl.c's own
- * statx()-based approach and constants (see that file's __plat_open()
- * for the fuller rationale). __handle_type() itself is declared in
- * src/internal/libc.h and called from a few genuinely portable front
- * doors (src/fcntl/fadvise.c, src/select/select.c) that never see the
- * NT-vs-Linux split directly -- this is that split's Linux half, the
- * same way src/internal/nt/plat_fd_init.c's is the NT half (a raw
- * NtQueryVolumeInformationFile/NtQueryInformationFile pair there,
- * where here a single statx(2) answers the same question). */
+ * Classification below reuses src/fcntl/linux/plat_fcntl.c's own
+ * statx()-based approach and constants. __handle_type() is this split's
+ * Linux half of src/internal/nt/plat_fd_init.c's NT one (a raw
+ * NtQueryVolumeInformationFile/NtQueryInformationFile pair there, a
+ * single statx(2) here). */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
  * public-header contract; transitive ABI declarations are intentional,
@@ -101,11 +64,7 @@
 #endif
 
 /* fcntl(2) command numbers: F_GETFD/F_GETFL, unlike a syscall number,
- * have no per-architecture table to get wrong (uapi/asm-generic/
- * fcntl.h; none of aarch64/x86_64/i386 override either) -- the same
- * "no host-oracle probe needed" reasoning src/process/linux/
- * plat_process.c's own F_DUPFD_LX comment already gives for this
- * exact class of constant. */
+ * have no per-architecture table to get wrong (uapi/asm-generic/fcntl.h). */
 #define F_GETFD_LX 1
 #define F_GETFL_LX 3
 #define FD_CLOEXEC_LX 1
@@ -119,13 +78,9 @@
 #define S_IFCHR_LX  0020000
 #define S_IFIFO_LX  0010000
 
-/* Same 6-argument raw syscall trampoline every Linux backend defines
- * for itself (never the host's syscall(2) wrapper -- see plat_mem.c's
- * banner for why that collapses every failure's errno to the wrong
- * value). File-scoped by convention, not shared, the same as every
- * other Linux backend in this tree -- one body per arch's own calling
- * convention, see crt/linux/crt1.c's own raw_syscall() banner for the
- * fuller per-arch rationale. */
+/* Same 6-argument raw syscall trampoline every Linux backend defines for
+ * itself (never the host's syscall(2) wrapper -- see plat_mem.c's banner
+ * for why that collapses every failure's errno to the wrong value). */
 #if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
@@ -208,10 +163,9 @@ struct __lx_statx { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl
 };
 
 /* Returns __FD_UNKNOWN (never 0) on a closed/invalid fd, matching
- * __handle_type()'s own NT contract -- 0 is not a member of the __FD_*
- * enum (src/internal/libc.h: __FD_FILE starts at 1), so a caller like
- * src/internal/fd.c's __fd_install_at() (`type ? type : __handle_type(h)`)
- * cannot mistake this for "no override, fall through". */
+ * __handle_type()'s own NT contract: 0 is not a member of the __FD_*
+ * enum, so a caller like __fd_install_at() cannot mistake this for
+ * "no override, fall through". */
 static int classify_fd(int fd)
 {
 	struct __lx_statx stx;
@@ -231,11 +185,9 @@ static int classify_fd(int fd)
 	}
 }
 
-/* HANDLE here is always this backend's own boxed (fd + 1) encoding
- * (src/unistd/linux/plat_fd.c's banner) -- every caller of this
- * function already holds a __plat_handle_t this backend itself
- * produced, never a raw platform object the way NT's version queries
- * one. */
+/* HANDLE here is always this backend's own boxed (fd + 1) encoding --
+ * every caller already holds a __plat_handle_t this backend itself
+ * produced, never a raw platform object the way NT's version queries. */
 int __handle_type(HANDLE h)
 {
 	long fd = (long)h - 1;
@@ -248,38 +200,26 @@ static void install_std(int fd)
 	int type = classify_fd(fd);
 	if (type == __FD_UNKNOWN) return; /* fd not actually open -- leave the slot empty */
 
-	/* Boxed (fd + 1), same convention src/unistd/linux/plat_fd.c's own
-	 * banner documents (__PLAT_HANDLE_NULL is 0, and fd 0/stdin is a
-	 * real, valid descriptor that must not collide with "empty slot").
-	 * O_RDONLY for fd 0, O_WRONLY for 1/2: the same asymmetry NT's
-	 * install_std() encodes, and for the identical reason -- write()
-	 * refuses an O_RDONLY descriptor and O_RDONLY is 0, so getting this
-	 * wrong for an inherited stdout/stderr would silently break writes
-	 * to it. */
+	/* Boxed (fd + 1): __PLAT_HANDLE_NULL is 0, and fd 0/stdin is a real,
+	 * valid descriptor that must not collide with "empty slot". O_RDONLY
+	 * for fd 0, O_WRONLY for 1/2: write() refuses an O_RDONLY descriptor
+	 * and O_RDONLY is 0, so getting this wrong for an inherited
+	 * stdout/stderr would silently break writes to it. */
 	__fd_install_at(fd, (HANDLE)(long)(fd + 1), fd == 0 ? O_RDONLY : O_WRONLY, type);
 }
 
 /* Every descriptor above 2 that is still open when a freshly exec'd
- * process starts was inherited from whatever spawned it -- see this
- * file's own banner for why the raw number is already correct at the
- * kernel level and all that is missing is this library's OWN __fds[]
- * entry for it. Found by probing every candidate slot directly with
- * fcntl(F_GETFD) rather than by parsing /proc/self/fd/: this file's
- * own __fd_close_all_cloexec() (src/internal/fd.c) already loops the
- * identical FD_MAX bound at a comparable process-lifecycle boundary,
- * and a plain probe needs no directory-entry parsing and no procfs
- * mount to be present at all, unlike src/internal/linux/handle_path.c's
- * own (unrelated) use of /proc/self/fd for a different purpose.
+ * process starts was inherited from whatever spawned it, and the raw
+ * number is already correct at the kernel level -- all that is missing
+ * is this library's OWN __fds[] entry. Found by probing every candidate
+ * slot directly with fcntl(F_GETFD) rather than parsing /proc/self/fd/:
+ * a plain probe needs no directory-entry parsing and no procfs mount.
  *
- * fcntl(F_GETFD) alone answers two questions in one syscall: whether
- * the slot is open at all (EBADF if not), and -- since a descriptor
- * that reached this point with FD_CLOEXEC set would already have been
- * closed by the execve(2) that got this process running, never
- * surviving to be seen here -- confirms that bit really is clear
- * rather than merely assuming it. F_GETFL supplies the access mode/
- * O_APPEND/O_NONBLOCK bits that classify_fd()'s statx(2) cannot: see
- * struct __fd's own `flags` field comment (src/internal/libc.h) for
- * why the access mode in particular is load-bearing, not decorative. */
+ * fcntl(F_GETFD) answers two questions in one syscall: whether the slot
+ * is open at all, and confirms FD_CLOEXEC really is clear (a descriptor
+ * with it set would already have been closed by execve() before this
+ * ever ran). F_GETFL supplies the access mode/O_APPEND/O_NONBLOCK bits
+ * that classify_fd()'s statx(2) cannot. */
 static void install_inherited(void)
 {
 	int fd;

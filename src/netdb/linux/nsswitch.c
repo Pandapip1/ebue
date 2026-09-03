@@ -2,31 +2,22 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * __nsswitch_order(): a real /etc/nsswitch.conf(5) parser, Linux-only
- * (see src/internal/nsswitch.h's own banner for what it is shared by
- * and why it lives in this tree at all -- NSS as ntlibc's own
- * statically-linked "files"/"dns" backends, dispatched by a real
- * config file, rather than an attempt to dlopen() glibc's own
+ * (see src/internal/nsswitch.h's banner for why it lives here): NSS as
+ * ntlibc's own statically-linked "files"/"dns" backends, dispatched by
+ * a real config file, rather than dlopen()ing glibc's own
  * libnss_*.so.2 modules, which are built against glibc's private,
- * unstable internal ABI that ntlibc's own dlopen() (src/dlfcn/linux/
- * plat_dlfcn.c) has no reason to replicate. musl's real-world
- * precedent is the same call: musl supports only built-in
- * "files"/"dns", never dynamically loaded NSS modules, for the
- * identical ABI-instability reason.
+ * unstable internal ABI -- musl makes the identical call for the
+ * identical reason.
  *
  * What is genuinely NOT implemented, on purpose: the `[STATUS=action]`
- * qualifier glibc's own nsswitch.conf(5) supports after a service name
- * (e.g. `files [NOTFOUND=return] dns`, meaning "give up rather than
- * falling through to dns on a clean not-found"). This parser tokenizes
- * and skips any `[...]` group as an opaque unit -- so a line
- * containing one is not a parse error -- but never changes behavior
- * based on it: every recognized service in the line is simply tried in
- * order until one produces a result, which is nsswitch.conf's own
- * documented default action set anyway (SUCCESS=return,
- * UNAVAIL=continue, NOTFOUND=continue, TRYAGAIN=continue) for every
- * status this file's two backends can even produce. An admin who
- * writes an explicit non-default action list to get different
- * fallback behavior will not get it; documented here rather than
- * silently almost-right.
+ * qualifier glibc's nsswitch.conf(5) supports after a service name.
+ * This parser tokenizes and skips any `[...]` group as an opaque unit
+ * (not a parse error) but never changes behavior based on it: every
+ * recognized service is simply tried in order until one produces a
+ * result, which is nsswitch.conf's own documented default action set
+ * anyway for every status this file's two backends can produce. An
+ * admin relying on a non-default action list will not get it --
+ * documented here rather than silently almost-right.
  */
 #include <stdio.h>
 #include <string.h>
@@ -124,14 +115,12 @@ int __nsswitch_order(const char *db, enum __nss_service *out, int max)
 		char *nl;
 
 		if (hash) *hash = '\0';
-		/* fgets() keeps the trailing newline (and, for a CRLF
-		 * file, the \r before it); strip both so the LAST token
-		 * on the line is not silently corrupted into "dns\n" (or
-		 * "files\r\n") and dropped by next_service_token()'s own
-		 * plain strcmp-shaped lc_eq() match below -- caught by
-		 * this file's own scratch probe against a real fixture,
-		 * not by inspection: "hosts: files dns" was parsing as
-		 * files-only every time. */
+		/* fgets() keeps the trailing newline (and, for CRLF, the
+		 * \r before it); strip both so the LAST token is not
+		 * silently corrupted into "dns\n" and dropped by lc_eq()'s
+		 * exact match below -- a real, confirmed bug ("hosts:
+		 * files dns" parsed as files-only every time), not a
+		 * hypothetical one. */
 		nl = strchr(line, '\n');
 		if (nl) *nl = '\0';
 		nl = strchr(line, '\r');

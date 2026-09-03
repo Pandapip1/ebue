@@ -4,18 +4,15 @@
  * malloc on top of the NT heap.
  *
  * Every process has a heap ntdll made for it before the first instruction
- * of the program ran, and ntdll's own allocator is a serious one: size
- * classes, a low-fragmentation front end, coalescing, guard pages under
- * the debugger.  Writing another on top of NtAllocateVirtualMemory would
- * be more code for a worse result, so this is RtlAllocateHeap on the
- * process heap.  The heap lives in the address space, so it survives
- * fork the same way every other piece of memory does.
+ * ran, and ntdll's own allocator is a serious one (size classes, a
+ * low-fragmentation front end, coalescing, guard pages under the
+ * debugger), so this is RtlAllocateHeap on the process heap rather than a
+ * second allocator over NtAllocateVirtualMemory.
  *
- * RtlAllocateHeap(0) returns a usable pointer, which is what malloc(0)
- * is allowed to do.  Alignment is 8 on i386 and 16 on x86_64, which is
- * what the heap gives -- src/malloc/malloc.c's posix_memalign() over-
- * allocates for anything larger and remembers the real block itself,
- * entirely above this interface.
+ * RtlAllocateHeap(0) returns a usable pointer, which is what malloc(0) is
+ * allowed to do. Alignment is 8 on i386 and 16 on x86_64, which is what
+ * the heap gives -- src/malloc/malloc.c's posix_memalign() over-allocates
+ * for anything larger, entirely above this interface.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc

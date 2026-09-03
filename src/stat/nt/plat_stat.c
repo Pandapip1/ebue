@@ -2,27 +2,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * NT implementation of src/internal/plat_stat.h -- see that header for
- * the contract each function makes.  Everything here was, until this
- * file existed, inline inside src/stat/{chmod,lxmod,mkdir,stat,
- * statvfs,utimensat}.c; nothing changed in substance, only location and
- * the addition of a POSIX-shaped return (0/-1 with errno set) in place
- * of a raw NTSTATUS.
- *
- * __plat_chmodat()/__plat_mkdir()/__plat_fstatat()/__plat_statvfs_path()/
- * __plat_set_times_at() absorbed a second layer of what used to be their
- * front doors' own bodies: the __vfs_resolve_at() overlay check (where
- * the front door had one -- mkdirat(), fstatat(), statvfs(); fchmodat()
- * and utimensat() never called it) and the __ntpath_at()/__ntpath() path
- * resolution itself, exactly the same relocation src/fcntl/nt/
- * plat_fcntl.c's __plat_open() already got for open() (commit ce4763c).
- * This backend now owns the ENTIRE NT-specific path-to-handle journey
- * for each of these five, not just the tail that runs once a handle is
- * already open. __vfs_resolve_at()/__vfs_open_dir() themselves are
- * untouched -- see plat_stat.h's own banner for why they stay exactly
- * where they are (src/internal/vfs.c) and only their call sites moved.
- * Nothing in the moved logic changed in substance, only location -- this
- * is the identical sequence each front door used to run inline, verified
- * line for line against the pre-refactor version.
+ * the contract each function makes. __plat_chmodat()/__plat_mkdir()/
+ * __plat_fstatat()/__plat_statvfs_path()/__plat_set_times_at() own the
+ * ENTIRE NT-specific path-to-handle journey for each call, including the
+ * __vfs_resolve_at() overlay check and __ntpath_at()/__ntpath() path
+ * resolution, not just the tail that runs once a handle is already open.
+ * __vfs_resolve_at()/__vfs_open_dir() themselves stay in
+ * src/internal/vfs.c; only their call sites moved here.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -104,22 +90,19 @@ int __plat_chmod(__plat_handle_t h, mode_t mode)
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	lxmode = (bi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY ? S_IFDIR : S_IFREG) |
 	         (mode & 07777);
-	/* Unlike `bi` above (fully populated by the kernel's own query), `set`
-	 * is a fresh local this function fills itself: FILE_BASIC_INFORMATION
-	 * mixes four 8-byte LARGE_INTEGER fields with a trailing 4-byte ULONG,
-	 * so a target that pads the struct out to 8-byte alignment leaves
-	 * real uninitialized bytes after FileAttributes even once every named
-	 * field below is set. */
+	/* Unlike `bi` above, `set` is a fresh local this function fills itself:
+	 * FILE_BASIC_INFORMATION's trailing 4-byte ULONG after four 8-byte
+	 * LARGE_INTEGERs leaves real uninitialized padding bytes on a target
+	 * that aligns the struct to 8 bytes. */
 	memset(&set, 0, sizeof set);
 	set.CreationTime = set.LastAccessTime = set.LastWriteTime = set.ChangeTime = 0;
 	set.FileAttributes = bi.FileAttributes;
 	if (mode & 0222) set.FileAttributes &= ~FILE_ATTRIBUTE_READONLY;
 	else set.FileAttributes |= FILE_ATTRIBUTE_READONLY;
-	/* FILE_ATTRIBUTE_NORMAL is valid only by itself.  A queried plain file
-	 * commonly carries NORMAL, so adding READONLY without removing NORMAL
-	 * asks NT to ignore the very transition chmod() is making.  Conversely,
-	 * clearing READONLY from an archived file must leave ARCHIVE alone rather
-	 * than manufacture the invalid ARCHIVE|NORMAL pair. */
+	/* FILE_ATTRIBUTE_NORMAL is valid only by itself: adding READONLY without
+	 * removing NORMAL asks NT to ignore the transition chmod() is making,
+	 * and clearing READONLY from an archived file must leave ARCHIVE alone
+	 * rather than manufacture the invalid ARCHIVE|NORMAL pair. */
 	if (set.FileAttributes & ~FILE_ATTRIBUTE_NORMAL)
 		set.FileAttributes &= ~FILE_ATTRIBUTE_NORMAL;
 	else
@@ -127,21 +110,19 @@ int __plat_chmod(__plat_handle_t h, mode_t mode)
 	making_readonly = !(bi.FileAttributes & FILE_ATTRIBUTE_READONLY) &&
 	                  (set.FileAttributes & FILE_ATTRIBUTE_READONLY);
 	/* Wine refuses NtSetEaFile once FILE_ATTRIBUTE_READONLY is set on the
-	 * object, even when this already-open handle was granted FILE_WRITE_EA.
-	 * Persist the exact POSIX mode before making that one-way transition;
-	 * doing it in the old order made chmod(0700 -> 0500) report success via
-	 * the compatibility fallback below while stat() kept seeing the stale
-	 * 0700 $LXMOD record.  The inverse transition must retain the old order:
-	 * clearing READONLY first is what makes the EA writable again. */
+	 * object, even with FILE_WRITE_EA granted. Persist the exact POSIX mode
+	 * before making that one-way transition; the old order made
+	 * chmod(0700 -> 0500) report success via the fallback below while
+	 * stat() kept seeing the stale 0700 $LXMOD record. The inverse
+	 * transition must retain the old order: clearing READONLY first is
+	 * what makes the EA writable again. */
 	if (making_readonly) {
 		if (__plat_lxmod_set(h, lxmode) == 0) {
 			st = NtSetInformationFile(h, &io, &set, sizeof set,
 			                          FileBasicInformation);
 			if (NT_SUCCESS(st)) return 0;
-			/* Best-effort observable rollback.  A handle on which fstat failed
-			 * cannot supply an old mode, but that is already an exceptional
-			 * object for which chmod cannot promise a recoverable metadata
-			 * transaction. */
+			/* Best-effort observable rollback; a handle on which fstat
+			 * failed cannot supply an old mode. */
 			if (have_before)
 				__plat_lxmod_set(h,
 				    (bi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY ? S_IFDIR : S_IFREG) |
@@ -162,14 +143,14 @@ int __plat_chmod(__plat_handle_t h, mode_t mode)
 		if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	}
 	if (__plat_lxmod_set(h, lxmode) < 0) {
-		/* Wine through 10.x stubs NtSetEaFile as ACCESS_DENIED.  Preserve
+		/* Wine through 10.x stubs NtSetEaFile as ACCESS_DENIED. Preserve
 		 * the historical readonly-only chmod when the requested execute
-		 * bits already match what stat could report without $LXMOD; an
-		 * actual execute-bit change still fails honestly. */
+		 * bits already match; an actual execute-bit change still fails
+		 * honestly. */
 		if (have_before && (mode & 0111) == (before.st_mode & 0111))
 			return 0;
 		/* Do not leave the Windows read-only state changed after a mode
-		 * metadata failure.  The old $LXMOD value, if any, was untouched
+		 * metadata failure. The old $LXMOD value, if any, was untouched
 		 * because NtSetEaFile replaces its single entry atomically. */
 		if (set.FileAttributes != bi.FileAttributes)
 			NtSetInformationFile(h, &io, &bi, sizeof bi, FileBasicInformation);
@@ -193,18 +174,13 @@ int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode) // NOLIN
 	               FILE_READ_EA | FILE_WRITE_EA | SYNCHRONIZE,
 	               &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
 	if (st == STATUS_ACCESS_DENIED) {
-		/* chmod.html DESCRIPTION: the owner of a file "may always
-		 * change the permission of the file" -- a file's own mode
-		 * must never itself forbid chmod().  Wine's server denies
-		 * a FILE_WRITE_ATTRIBUTES open outright when the file
-		 * already carries FILE_ATTRIBUTE_READONLY (real NT does
-		 * not; see test/posix-unistd.c's test_open_umask_bug()),
-		 * which would otherwise make a 0444 file permanently
-		 * un-chmod-able by path.  Fall back to a handle that only
-		 * asks to read attributes -- Wine's NtSetInformationFile
-		 * does not itself require FILE_WRITE_ATTRIBUTES on the
-		 * handle, the same workaround test/unistd.c already applies
-		 * by hand via fchmod() on an O_RDONLY descriptor. */
+		/* chmod.html: a file's own mode must never itself forbid chmod().
+		 * Wine's server denies a FILE_WRITE_ATTRIBUTES open outright when
+		 * the file already carries FILE_ATTRIBUTE_READONLY (real NT does
+		 * not), which would otherwise make a 0444 file permanently
+		 * un-chmod-able by path. Fall back to a read-attributes-only
+		 * handle: Wine's NtSetInformationFile does not itself require
+		 * FILE_WRITE_ATTRIBUTES on the handle. */
 		st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_READ_EA | SYNCHRONIZE,
 		                &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
 	}
@@ -215,14 +191,9 @@ int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode) // NOLIN
 	return r;
 }
 
-/* NT has no OS-level umask concept of its own to push `m` out to --
- * see plat_stat.h's own comment on this function for the full
- * Linux-vs-NT contrast. Masking already happens once, in userspace,
- * via __umask_get() at every NT front door that needs it (src/fcntl/
- * nt/plat_fcntl.c's __plat_open(), __plat_mkdir() just below), which is
- * exactly what chmod.c's umask_value -- the value `m` here already is
- * -- already feeds. So there is nothing left for this call to do on
- * NT: a documented no-op, not a stub. */
+/* NT has no OS-level umask concept of its own to push `m` out to: masking
+ * already happens once, in userspace, via __umask_get() at every NT front
+ * door that needs it. A documented no-op, not a stub. */
 void __plat_umask_apply(mode_t m)
 {
 	(void)m;
@@ -258,40 +229,25 @@ int __plat_mkdir(int dirfd, const char *path, mode_t mode)
 	                          FILE_ATTRIBUTE_NORMAL, FILE_SHARE_VALID_FLAGS, FILE_CREATE,
 	                          FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT,
 	                          mode_ea, ea_len);
-	/* mkdir.html requires [EEXIST] when the named file exists, whatever
-	 * kind of file it is -- and this call reaches that case through NT's
-	 * *collision* status rather than through a type mismatch, which is
-	 * not obvious and is worth pinning down.
+	/* mkdir.html requires [EEXIST] when the named file exists, whatever kind
+	 * of file it is -- reached here through NT's *collision* status, not a
+	 * type mismatch. The call pairs FILE_CREATE with FILE_DIRECTORY_FILE,
+	 * so an existing plain file at `path` is both a name collision and a
+	 * create-option mismatch. Measured on Windows 11 Pro 22621 NTFS: NT
+	 * reports the collision (0xc0000035), NOT STATUS_NOT_A_DIRECTORY.
 	 *
-	 * The call pairs FILE_CREATE with FILE_DIRECTORY_FILE, so an existing
-	 * plain file at `path` is both a name collision and a create-option
-	 * mismatch, and NT has to pick one.  Measured on Windows 11 Pro 22621,
-	 * NTFS, by the Wine-divergence session: it reports the collision,
-	 * 0xc0000035, NOT STATUS_NOT_A_DIRECTORY.  So this arm fires and the
-	 * errno is right.
-	 *
-	 * NT is asymmetric here and there is no tidier rule to remember: the
-	 * mirror case -- FILE_NON_DIRECTORY_FILE against an existing
-	 * directory, which is what src/unistd/link.c's symlinkat() issues --
-	 * reports the *mismatch* first, 0xc00000ba, and link.c maps that to
-	 * EEXIST separately for the same POSIX reason.  Both are genuine
-	 * mismatches; only one beats the collision.
-	 *
-	 * So do not "simplify" by assuming the two call sites can share one
-	 * status arm, and do not add a STATUS_NOT_A_DIRECTORY case here on the
-	 * theory that NT is consistent about which it reports.  ReactOS's NTFS
-	 * driver had the opposite ordering and was corrected to match NT
-	 * (reactos-divergences 7ee3248c); had it instead been "fixed" to check
-	 * both options before the disposition -- the symmetric-looking change
-	 * -- this function would have started returning the wrong errno there. */
+	 * NT is asymmetric here: the mirror case (FILE_NON_DIRECTORY_FILE
+	 * against an existing directory, src/unistd/link.c's symlinkat())
+	 * reports the *mismatch* first (0xc00000ba) instead. Do not
+	 * "simplify" by assuming the two call sites share one status arm, or
+	 * add a STATUS_NOT_A_DIRECTORY case here on the theory that NT is
+	 * consistent about which it reports. */
 	__ntpath_free(&np);
 	if (st == STATUS_OBJECT_NAME_COLLISION) { errno = EEXIST; return -1; }
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	/* Wine 11 accepts the create-time EA buffer above but does not attach it
-	 * to a newly-created directory.  Repeat the write on the returned handle,
-	 * which now names the complete object.  Keep this best-effort like the
-	 * create-time EA itself: Wine versions whose NtSetEaFile is still stubbed
-	 * must retain mkdir's historical native-directory fallback. */
+	 * to a newly-created directory. Repeat the write on the returned
+	 * handle, best-effort like the create-time EA itself. */
 	{
 		int saved_errno = errno;
 		__plat_lxmod_set(h, S_IFDIR | mode);
@@ -304,23 +260,13 @@ int __plat_mkdir(int dirfd, const char *path, mode_t mode)
 /* ---- mkfifo/mknod (src/stat/chmod.c) ------------------------------------ */
 
 /* NT has no filesystem node type either mkfifo() or mknod() maps onto
- * (chmod.c's own comment: named pipes are real NTDLL objects but nobody
- * has mapped POSIX FIFO semantics -- blocking connect-on-open, byte
- * stream, no peer identity -- onto them, and NTFS has no device-node
- * concept at all), so this stays the unconditional stub both calls
- * always were before they were routed through plat_stat.h: dirfd/path/
- * dev are validated by nothing here and create nothing, matching every
- * *at()-call clause both pages state in identical words, "no [FIFO/new
- * file] shall be created". Which errno depends only on the requested
- * type, not on which POSIX entry point asked: S_IFIFO gets mkfifo()'s
- * own historical ENOSYS (not in mkfifo.html's ERRORS list, but no
- * listed errno is truthful for a stub either -- see chmod.c's own
- * comment); anything else gets mknod()'s own EPERM, POSIX's real answer
- * for "the invoking process does not have appropriate privileges and
- * the file type is not FIFO-special". Deciding it here from `mode`
- * alone is what lets one function serve both entry points, exactly like
- * this backend's mkfifoat()/mknod()/mknodat() front doors already
- * collapse into one call. */
+ * (named pipes are real NTDLL objects, but nobody has mapped POSIX FIFO
+ * semantics onto them, and NTFS has no device-node concept at all), so
+ * this is an unconditional stub: dirfd/path/dev are validated by nothing
+ * and nothing is created. Which errno depends only on the requested type:
+ * S_IFIFO gets mkfifo()'s historical ENOSYS; anything else gets mknod()'s
+ * EPERM, POSIX's real answer for a non-FIFO type the caller lacks
+ * privilege for. */
 int __plat_mknod(int dirfd, const char *path, mode_t mode, dev_t dev) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; mode and dev have distinct roles
 {
 	(void)dirfd; (void)path; (void)dev;
@@ -330,24 +276,15 @@ int __plat_mknod(int dirfd, const char *path, mode_t mode, dev_t dev) // NOLINT(
 
 /* ---- stat/fstat (src/stat/stat.c) --------------------------------------- */
 
-/* A real st_dev (below) is always vi.VolumeSerialNumber, a plain ULONG
- * assigned straight into the 64-bit dev_t -- so its top 32 bits are
- * always zero.  Setting all of ours gives values no real volume serial
- * number can ever equal, while still keeping __STAT_DEV_PIPE and
- * __STAT_DEV_CHAR distinct from each other -- so a pipe can never be
- * mistaken for a console/char device, or either for a real file. */
+/* A real st_dev is always vi.VolumeSerialNumber, a plain ULONG assigned
+ * into the 64-bit dev_t, so its top 32 bits are always zero. Setting all
+ * of ours gives values no real volume serial number can equal, while
+ * keeping the two distinct from each other. */
 #define __STAT_DEV_PIPE ((dev_t)0xFFFFFFFF00000001ULL) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 #define __STAT_DEV_CHAR ((dev_t)0xFFFFFFFF00000002ULL) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
-/* FNV-1a, a well-known 64-bit hash (offset basis and prime from the
- * canonical spec, http://www.isthe.com/chongo/tech/comp/fnv/), used
- * below to fold a variable-length NT object name into a fixed 64-bit
- * st_ino. */
-/* data is required despite the `for (i = 0; i < n; ...)` loop's own
- * n == 0 escape -- the same ISO 7.24.1p2 "still valid even at n == 0"
- * convention as the mem-family (this file's own call sites always
- * pass a real NT-provided name buffer, never a value that could
- * legitimately be null). */
+/* FNV-1a, a well-known 64-bit hash, used below to fold a variable-length
+ * NT object name into a fixed 64-bit st_ino. */
 static ino_t fnv1a64(const void *data, size_t n) __attribute__((nonnull(1)));
 static ino_t fnv1a64(const void *data, size_t n)
 {
@@ -358,47 +295,26 @@ static ino_t fnv1a64(const void *data, size_t n)
 	return h;
 }
 
-/* The identity source for a pipe/console/char/unknown handle, in order
- * of preference -- each candidate was checked, not assumed (see the
- * commit message for the empirical results and citations):
+/* The identity source for a pipe/console/char/unknown handle, in order of
+ * preference -- each candidate was checked, not assumed:
  *
  * 1. FileInternalInformation, the same NTFS-style file reference number
- *    the regular-file path below uses.  NPFS (the named-pipe file
- *    system) does not support it -- confirmed both under Wine (it
- *    answers STATUS_NOT_IMPLEMENTED) and by
- *    <https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle>,
- *    whose kernel32 GetFileInformationByHandle is built from this same
- *    query and whose docs say outright "This handle should not be a
- *    pipe handle" -- but a real ConDrv console handle answers it with a
- *    real, distinct-per-handle value (confirmed under Wine: stdin and
- *    stdout come back with two different nonzero IndexNumbers), so it
- *    is tried first and used whenever it succeeds with a nonzero value.
+ *    the regular-file path below uses. NPFS (the named-pipe filesystem)
+ *    does not support it (confirmed under Wine: STATUS_NOT_IMPLEMENTED),
+ *    but a real ConDrv console handle answers with a real, distinct-
+ *    per-handle value, so it is tried first.
  *
- * 2. NtQueryObject's ObjectNameInformation, hashed.  A console handle
- *    has no name (confirmed under Wine: empty every time), but a pipe
- *    does -- and, for this library's own pipe2() (src/unistd/pipe.c),
- *    the read and write ends of the *same* pipe are opens of the *same*
- *    NT path, so they hash to the same st_ino while a second pipe2()
- *    call (a different path) hashes to a different one.  That means
- *    stat()/fstat() on the two ends of one pipe report it as "the same
- *    file" by the st_dev/st_ino test -- defensible, since they are two
- *    handles to the same underlying NPFS file object, and the
+ * 2. NtQueryObject's ObjectNameInformation, hashed. A console handle has
+ *    no name, but a pipe does -- and for this library's own pipe2(), the
+ *    read and write ends of the *same* pipe are opens of the *same* NT
+ *    path, so they hash to the same st_ino, reporting the two ends of one
+ *    pipe as "the same file" by the st_dev/st_ino test. Defensible: the
  *    alternative (handle value) would make even the *same* end of the
- *    same pipe stop matching itself across dup() (see 3 below), which
- *    is the worse failure mode for the callers this matters to (see
- *    same_file()-shaped code, e.g. GNU diffutils).  An inherited or
- *    foreign anonymous pipe not created by pipe2() still has an NT path
- *    (kernel32's CreatePipe names them too) so this still applies to
- *    handles this library did not create itself.
+ *    same pipe stop matching itself across dup(), the worse failure mode.
  *
  * 3. The handle value itself, when neither of the above produced
- *    anything: unique within this process and stable for the handle's
- *    own lifetime, but NOT stable across dup() (a dup'd fd is a
- *    different NT handle to the same object) -- so two ends of the
- *    "same" file reached only through this fallback can wrongly compare
- *    as different files.  This only happens when both a
- *    FileInternalInformation query and an object-name query find
- *    nothing to work with, which nothing observed so far exercises. */
+ *    anything: unique within this process and stable for the handle's own
+ *    lifetime, but NOT stable across dup(). */
 static ino_t __fstat_synthetic_ino(HANDLE h) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 {
 	IO_STATUS_BLOCK io;
@@ -599,7 +515,7 @@ int __plat_fstatat(int dirfd, const char *path, int flags, struct stat *st)
 	               SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
 	               FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT |
 	               (flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0));
-	/* stat() must not require permission to read file data.  Reading is only
+	/* stat() must not require permission to read file data. Reading is only
 	 * needed for the metadata-free PE default, so retain the ordinary
 	 * attribute-only result when that extra access is denied. */
 	if (!NT_SUCCESS(s) && s != STATUS_IO_REPARSE_TAG_NOT_HANDLED)
@@ -751,23 +667,15 @@ int __plat_set_times(__plat_handle_t h, const struct timespec ts[2])
 		}
 	}
 
-	/* utime.html DESCRIPTION says only the access/modification times
-	 * change -- the mode must survive untouched.  FILE_BASIC_INFORMATION
-	 * documents FileAttributes==0 as "leave the attributes alone", and
-	 * real NT does honor that -- but stock Wine (the Wine CI actually
-	 * runs) does NOT: its NtSetInformationFile silently clears
-	 * FILE_ATTRIBUTE_READONLY on every timestamp-only call regardless of
-	 * what FileAttributes says.  We carry a local, unpushed Wine patch
-	 * that fixes this, but that patch exists only on this machine -- it
-	 * is not upstream and it is not what CI installs from apt.  "We
-	 * fixed it in our Wine" is therefore never sufficient justification
-	 * for relying on FileAttributes==0 here; test against an unpatched
-	 * Wine, not just the local one, before ever touching this again.  So
-	 * always query the current attributes and pass them back explicitly,
-	 * on every Wine and on real NT alike.  This round-trip needs
-	 * FILE_READ_ATTRIBUTES on the handle, which __plat_set_times_at()'s
-	 * primary open below requests specifically for this; see the
-	 * comment there. */
+	/* utime.html: only the access/modification times change, the mode must
+	 * survive untouched. FILE_BASIC_INFORMATION documents FileAttributes==0
+	 * as "leave the attributes alone", and real NT honors that -- but stock
+	 * Wine's NtSetInformationFile silently clears FILE_ATTRIBUTE_READONLY on
+	 * every timestamp-only call regardless. So always query the current
+	 * attributes and pass them back explicitly, on every Wine and on real
+	 * NT alike. This round-trip needs FILE_READ_ATTRIBUTES on the handle,
+	 * which __plat_set_times_at()'s primary open below requests
+	 * specifically for this. */
 	st = NtQueryInformationFile(h, &io, &bi, sizeof bi, FileBasicInformation);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	bi.CreationTime = bi.LastAccessTime = bi.LastWriteTime = bi.ChangeTime = 0;
@@ -796,34 +704,18 @@ int __plat_set_times_at(int dirfd, const char *path, int flags, const struct tim
 
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	/* FILE_READ_ATTRIBUTES is requested alongside FILE_WRITE_ATTRIBUTES
-	 * because __plat_set_times() above round-trips the current
-	 * attributes through NtQueryInformationFile before writing them
-	 * back (see the comment there for why that round-trip must stay).
-	 * NtQueryInformationFile(FileBasicInformation) requires
-	 * FILE_READ_ATTRIBUTES on real NT -- Wine doesn't enforce that
-	 * check, but real NT does, and omitting it here is exactly what
-	 * turned every ordinary utimensat() into STATUS_ACCESS_DENIED on
-	 * real Windows before. */
+	 * because __plat_set_times() above round-trips the current attributes
+	 * through NtQueryInformationFile before writing them back, which
+	 * requires FILE_READ_ATTRIBUTES on real NT (Wine doesn't enforce that
+	 * check). Omitting it here is exactly what turned every ordinary
+	 * utimensat() into STATUS_ACCESS_DENIED on real Windows before. */
 	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
 	if (st == STATUS_ACCESS_DENIED) {
-		/* utime.html DESCRIPTION: only write permission on the file
-		 * OR ownership is required, never "the file's own mode
-		 * forbids it" -- but Wine's server denies a
-		 * FILE_WRITE_ATTRIBUTES open outright when the file already
-		 * carries FILE_ATTRIBUTE_READONLY (real NT does not; see
-		 * src/stat/nt/plat_stat.c's __plat_chmodat(), which hits the
-		 * identical quirk and documents it against
-		 * test/posix-unistd.c's test_open_umask_bug()).  Fall back
-		 * to a read-attributes-only handle: Wine's
-		 * NtSetInformationFile does not itself require
-		 * FILE_WRITE_ATTRIBUTES on the handle, and this path is only
-		 * ever reached on Wine in the first place -- real NT never
-		 * denies the FILE_WRITE_ATTRIBUTES open above on a read-only
-		 * file, so real NT never falls back to this handle.  The
-		 * fallback handle keeps FILE_READ_ATTRIBUTES, which is all
-		 * __plat_set_times()'s query needs; it does not need
-		 * FILE_WRITE_ATTRIBUTES again because that's precisely the
-		 * access Wine already told us the file cannot grant. */
+		/* Wine's server denies a FILE_WRITE_ATTRIBUTES open outright when
+		 * the file already carries FILE_ATTRIBUTE_READONLY (real NT does
+		 * not, so real NT never falls back to this handle). The fallback
+		 * keeps FILE_READ_ATTRIBUTES, all __plat_set_times()'s query
+		 * needs. */
 		st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
 	}
 	__ntpath_free(&np);

@@ -31,18 +31,14 @@ static int looks_like_v6(const char *tok)
 	return strchr(tok, ':') != NULL;
 }
 
-/* parse_hosts_addr(): shared first half of every /etc/hosts(5) line
- * parse in this file (forward lookup, reverse lookup, sequential
- * enumeration) -- splits off the leading whitespace-delimited address
- * field (mutating `line` in place, same as every parser here), skips a
- * real IPv6 literal or an address inet_pton() cannot parse, and returns
- * a pointer to the remainder of the line (the name-tokens portion,
- * possibly empty). Returns NULL for a line this parser has nothing to
- * say about (blank, or an address field that is IPv6 or unparsable);
- * every caller's per-line loop just continues past that. Does NOT
- * strip a trailing '#' comment -- callers do that first, exactly as
- * this file's original __hosts_lookup() always has, since the comment
- * cut has to happen before ANY field is split out of the line. */
+/* Shared first half of every /etc/hosts(5) line parse in this file:
+ * splits off the leading address field (mutating `line` in place),
+ * skips a real IPv6 literal or an unparsable address, and returns a
+ * pointer to the remainder (the name-tokens portion, possibly empty).
+ * Returns NULL for a line with nothing to say (blank, IPv6, or a bad
+ * address); callers just continue past that. Does NOT strip a
+ * trailing '#' comment -- callers do that first, before any field is
+ * split out. */
 static char *parse_hosts_addr(char *line, struct in_addr *out)
 {
 	char *p = line;

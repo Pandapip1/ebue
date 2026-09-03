@@ -85,19 +85,14 @@ int __errno_from_status(NTSTATUS st)
 	case STATUS_DATA_ERROR: return EIO;
 	case STATUS_NOT_A_REPARSE_POINT:
 	case STATUS_IO_REPARSE_TAG_NOT_HANDLED: return EINVAL;
-	/* The object manager's own reparse-point resolution (distinct from
-	 * __ntpath()'s lexical "."/".." handling -- see src/internal/path.c)
-	 * gives up on a chain that never bottoms out in a real file and
-	 * answers this status; a symbolic link loop is exactly that case.
-	 * Previously unmapped entirely (fell through to the generic
-	 * RtlNtStatusToDosError() path, whose own default arm is EIO --
-	 * indistinguishable from a real I/O error on the same page's
-	 * shall-fail list). See test/posix-statvfs.c's statvfs_eloop fence
-	 * for the investigation that found this gap. */
+	/* The object manager's own reparse-point resolution gives up on a
+	 * chain that never bottoms out in a real file and answers this
+	 * status; a symbolic link loop is exactly that case. Previously
+	 * unmapped entirely, falling through to RtlNtStatusToDosError()'s
+	 * default EIO -- indistinguishable from a real I/O error. */
 	case STATUS_REPARSE_POINT_NOT_RESOLVED: return ELOOP;
-	/* AFD (src/internal/afd.h, src/socket/ (every .c there)): values confirmed against
-	 * mingw-w64's vendored copy of Microsoft's own ntstatus.h (see
-	 * src/internal/afd.h's banner for where that was checked). */
+	/* AFD (src/internal/afd.h, src/socket/): values confirmed against
+	 * mingw-w64's vendored copy of Microsoft's own ntstatus.h. */
 	case STATUS_CONNECTION_REFUSED: return ECONNREFUSED;
 	case STATUS_CONNECTION_RESET: return ECONNRESET;
 	case STATUS_CONNECTION_ABORTED: return ECONNABORTED;

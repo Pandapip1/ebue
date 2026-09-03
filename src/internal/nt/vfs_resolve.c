@@ -1,22 +1,14 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * __vfs_resolve_at()/__vfs_open_dir() -- moved verbatim out of
- * src/internal/vfs.c, which keeps only the genuinely platform-generic
- * pieces (__vfs_stat(), __vfs_cwd_get()/_set()). See that file's own
- * banner for why this split exists at all and stays this shape rather
- * than collapsing to "NT-only": the overlay these two functions
- * implement compensates for something specific to NT -- no real
- * filesystem rooted at / at all, so no real /dev, no real /dev/null --
- * that a future UEFI backend will share (UEFI has no POSIX filesystem
- * namespace either) but a real POSIX platform like Linux does not:
- * src/internal/linux/vfs_resolve.c's own version is a few lines
- * because a real Linux filesystem already IS the thing this file
- * exists to emulate.
- *
- * Nothing here changed in substance from vfs.c's original -- this
- * split is mechanical, verified by diff against vfs.c before this
- * file existed.
+ * __vfs_resolve_at()/__vfs_open_dir() -- moved out of src/internal/vfs.c,
+ * which keeps only the genuinely platform-generic pieces. The overlay
+ * these two functions implement compensates for something specific to
+ * NT -- no real filesystem rooted at / at all, so no real /dev, no real
+ * /dev/null -- that a future UEFI backend will share but a real POSIX
+ * platform like Linux does not: src/internal/linux/vfs_resolve.c's own
+ * version is a few lines because a real Linux filesystem already IS the
+ * thing this file exists to emulate.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc

@@ -1,39 +1,21 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Linux's half of the src/internal/nt/handle_path.c split -- see that
- * file's own banner for why __handle_path() needed one at all: it is
- * called unconditionally from portable front doors (src/stat/chmod.c's
- * fchmod() EACCES retry, src/unistd/chdir.c's fchdir(),
- * src/process/exec.c, src/stdlib/realpath.c), not from anything already
- * gated behind nt/, so a Linux build that reaches any of them needs a
- * real body here, not just a working NT one.
+ * Linux's half of the src/internal/nt/handle_path.c split -- called
+ * unconditionally from portable front doors (fchmod()'s EACCES retry,
+ * fchdir(), exec.c, realpath.c), so a Linux build needs a real body here.
  *
- * NT has no reverse mapping from a HANDLE back to a path at all -- that
- * is the whole reason src/internal/nt/handle_path.c has to ask the
- * object manager for the underlying device name and then search every
- * drive letter's symbolic link for a match. Linux does not need any of
- * that: the kernel already publishes exactly this mapping for every
- * open descriptor of the calling process, as the symlink target of
- * /proc/self/fd/<fd> (proc(5)), and readlinkat(2) reads a symlink's
- * target directly -- the same real primitive src/unistd/linux/
- * plat_unistd.c's __plat_readlink() already uses for readlink() itself.
- * No raw syscall trampoline is shared with that file (this tree's own
- * one-syscall-table-per-file discipline -- see this directory's other
- * files, e.g. plat_fd_init.c's banner), but the two are the identical
- * three-line SYS_readlinkat call.
+ * NT has no reverse mapping from a HANDLE back to a path, hence that
+ * file's device-name-plus-drive-letter search. Linux does not need any
+ * of that: the kernel already publishes this mapping for every open
+ * descriptor as the symlink target of /proc/self/fd/<fd> (proc(5)), and
+ * readlinkat(2) reads it directly.
  *
- * One honest gap, inherited from /proc/self/fd itself rather than
- * introduced here: if the descriptor's file was unlink()ed while still
- * open, the kernel appends " (deleted)" to the symlink target (proc(5),
- * "readlink(2) ... the deleted files are indicated by ' (deleted)'
- * appended to the pathname"), so the string this returns for such a
- * descriptor is not a path that can be reopened. That is a real
- * limitation of /proc/self/fd itself, not a shortcut taken here, and it
- * matches glibc's own realpath()/canonicalize_file_name() behaviour on
- * a deleted-but-open fd -- nothing in this tree's own OPTS-relevant
- * callers (fchmod's reopen, fchdir, realpath) reaches this path on a
- * file that was just created and is still linked.
+ * One honest gap, inherited from /proc/self/fd itself: if the
+ * descriptor's file was unlink()ed while still open, the kernel appends
+ * " (deleted)" to the symlink target, so the string returned is not a
+ * path that can be reopened -- matching glibc's own realpath() behaviour
+ * on a deleted-but-open fd.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -81,10 +63,7 @@ static int unbox(HANDLE h)
 
 /* "/proc/self/fd/" plus up to 10 decimal digits (a 32-bit fd never needs
  * more) plus the terminator. Written by hand rather than through
- * snprintf(): this file has no other reason to touch the stdio subsystem
- * at all, and a two's-complement int's decimal form is short enough that
- * pulling that whole chain in for it would be a needless dependency, not
- * a simplification. */
+ * snprintf() to avoid pulling in the stdio subsystem for this alone. */
 static void fd_path(int fd, char *out)
 {
 	static const char prefix[] = "/proc/self/fd/";

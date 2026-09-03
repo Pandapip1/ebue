@@ -2,47 +2,27 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Linux implementation of src/internal/plat_socket.h -- see
- * src/mman/linux/plat_mem.c's own banner for the general discipline this
- * file follows too (raw syscall(2), no host libc, -nostdinc against
- * ntlibc's own headers, aarch64 syscall numbers confirmed against this
- * host).
+ * src/mman/linux/plat_mem.c's own banner for the raw-syscall discipline
+ * this file follows too.
  *
- * __plat_sock_recv()/__plat_sock_send() are the genuine POSIX-shaped
- * half of plat_socket.h that predates the rest of it. Below them,
- * __plat_socket_{open,bind,connect,listen,accept}() are the socket-
- * CREATION half: real socket(2)/bind(2)/connect(2)/listen(2)/accept4(2)
- * syscalls -- much simpler than the NT backend's \Device\Afd wire
- * protocol (no EA-buffer-encoded open packets, no AFD_BIND_DATA/
- * AFD_CONNECT_INFO, no two-step wait-for-listen-then-accept dance),
- * since ntlibc's own AF_INET (2), SOCK_STREAM (1), IPPROTO_TCP (6) and
- * struct sockaddr_in layout (family at +0, port at +2, addr at +4, 16
- * bytes total) already match the real kernel socket ABI exactly
- * (confirmed against this host's real <sys/socket.h>/<netinet/in.h>).
+ * Much simpler than the NT backend's \Device\Afd wire protocol, since
+ * ntlibc's own AF_INET/SOCK_STREAM/IPPROTO_TCP values and struct
+ * sockaddr_in layout already match the real kernel socket ABI exactly.
  * SOL_SOCKET/SO_REUSEADDR are the one exception -- ntlibc's own
- * <sys/socket.h> gives them a private encoding (0xffff/0x0004) that
- * does NOT match the real kernel ABI (1/2), so __plat_socket_bind()'s
- * reuseaddr flag is translated to the kernel's own SOL_SOCKET/
- * SO_REUSEADDR via an explicit setsockopt(2) before bind(2) -- the
- * same LX_MSG_* translation pattern to_linux_flags() below uses for
- * send()/recv().
+ * <sys/socket.h> gives them a private encoding that does NOT match the
+ * real kernel ABI, so __plat_socket_bind()'s reuseaddr flag is translated
+ * explicitly via setsockopt(2) before bind(2), the same pattern
+ * to_linux_flags() below uses for send()/recv().
  *
- * __plat_handle_t encoding: matches src/unistd/linux/plat_fd.c's own
- * boxed-fd scheme exactly (a real fd is stored as fd+1, so
- * __PLAT_HANDLE_NULL/0 never collides with the valid fd 0) -- a Linux
- * socket fd lives in the very same descriptor space as a Linux file fd,
- * so there is no reason for this backend to invent a second encoding.
+ * __plat_handle_t encoding matches src/unistd/linux/plat_fd.c's boxed-fd
+ * scheme (fd+1) exactly, since a Linux socket fd lives in the same
+ * descriptor space as a Linux file fd.
  *
- * recv()/send()'s NT backend has real interpretation work to do here
- * (STATUS_*_DISCONNECTED -> a 0-byte recv() return, EPIPE/SIGPIPE
- * disambiguation on send() -- see src/socket/nt/plat_socket.c's own
- * comments) because NT's AFD ioctls hand back a raw NTSTATUS with no
- * native POSIX shape at all. None of that exists here: a Linux
- * recvfrom(2) already returns 0 on a clean peer shutdown natively, and
- * a Linux sendto(2) against a broken connection already returns -EPIPE
- * and already has the kernel raise real SIGPIPE against this process
- * as an ordinary side effect (unless MSG_NOSIGNAL) -- the signal is
- * real and kernel-delivered, not something ntlibc must synthesize
- * itself the way the NT backend's __raise_internal() does.
+ * recv()/send() need no NTSTATUS-style disconnect/SIGPIPE interpretation
+ * here (contrast src/socket/nt/plat_socket.c): a Linux recvfrom(2) already
+ * returns 0 on a clean peer shutdown, and sendto(2) against a broken
+ * connection already returns -EPIPE with the kernel raising real SIGPIPE
+ * as an ordinary side effect (unless MSG_NOSIGNAL).
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -54,37 +34,10 @@
 #include <errno.h>
 #include "plat_socket.h"
 
-/* aarch64 Linux syscall numbers -- see plat_mem.c's banner for why these
- * are hardcoded rather than pulled from a host header. Confirmed against
- * this host's own <sys/syscall.h> (SYS_recvfrom, SYS_sendto) via a
- * throwaway host-gcc oracle program; aarch64 (like every "generic modern
- * ABI" Linux port) has no separate SYS_recv/SYS_send at all -- glibc's
- * own recv()/send() are thin wrappers over these same two syscalls with
- * a NULL address argument, which is exactly what this file does too.
- *
- * SYS_getsockname/SYS_shutdown (added for __plat_socket_getsockname()/
- * __plat_socket_shutdown() below) were confirmed the same way, and slot
- * exactly where every other socket-family syscall above and below them
- * already does in both tables: aarch64's generic syscall table runs
- * socket=198, socketpair=199, bind=200, listen=201, accept=202,
- * connect=203, getsockname=204, getpeername=205, sendto=206,
- * recvfrom=207, setsockopt=208, getsockopt=209, shutdown=210 back to
- * back -- this file's own already-verified SYS_socket/SYS_bind/
- * SYS_listen/SYS_connect/SYS_sendto/SYS_recvfrom/SYS_setsockopt values
- * are exactly that run with getsockname/shutdown left out, so the two
- * new numbers are read off the same table rather than guessed.  x86_64's
- * unistd_64.h table is the same story: socket=41, connect=42, accept=43,
- * sendto=44, recvfrom=45, sendmsg=46, recvmsg=47, shutdown=48, bind=49,
- * listen=50, getsockname=51, getpeername=52, socketpair=53,
- * setsockopt=54, getsockopt=55 -- again contiguous with, and confirming,
- * this file's existing x86_64 numbers below. */
-/* SYS_getsockopt (added for __plat_socket_getsndbuf()/
- * __plat_socket_getrcvbuf() below, SOCK_DGRAM, 2026-09-01): slots into
- * the exact same two contiguous tables this file's own banner comment
- * above already lays out in full -- aarch64 getsockopt=209 (one past
- * this file's existing setsockopt=208), x86_64 getsockopt=55 (one past
- * this file's existing setsockopt=54) -- read off the same tables the
- * rest of this block already cites, not guessed. */
+/* aarch64/x86_64 Linux syscall numbers, confirmed against each host's own
+ * <sys/syscall.h>. Neither arch has a separate SYS_recv/SYS_send: glibc's
+ * own recv()/send() are thin wrappers over recvfrom/sendto with a NULL
+ * address argument, which is exactly what this file does too. */
 #if defined(__aarch64__)
 #define SYS_recvfrom     207
 #define SYS_sendto       206
@@ -115,22 +68,11 @@
 #error "plat_socket.c: unsupported architecture"
 #endif
 
-/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
- * the call path at all. NOT `extern long syscall(long, ...)`: that
- * symbol is satisfied by the HOST's real glibc at link time (this
- * build is -nostdinc, not -nostdlib -- only compiling avoids the host
- * headers, the final link step still pulls in host libc), and glibc's
- * syscall() performs its own error translation: on failure it returns
- * exactly -1 and sets glibc's OWN errno (a different memory location
- * than ntlibc's own errno global, src/internal/errno.c) to the real
- * code -- it does NOT hand back the raw kernel -errno in [-4095,-1]
- * this file's is_sys_error()/`errno = (int)-ret` translation requires.
- * Confirmed both by inspecting the linked pilot binary (nm -D shows an
- * undefined `syscall@GLIBC_*`, resolved by ld-linux at runtime) and
- * independently by src/thread/linux/plat_thread.c's own port, which
- * hit the identical bug and is this fix's model. aarch64's syscall
- * calling convention: x8 = syscall number, x0..x5 = up to 6 arguments,
- * result (or -errno in [-4095,-1]) in x0. */
+/* A minimal 6-argument raw syscall: `svc #0`/`syscall` directly, no host
+ * libc in the call path. NOT `extern long syscall(long, ...)`: that
+ * symbol resolves to the HOST's real glibc at link time, which sets
+ * glibc's OWN errno on failure rather than handing back the raw kernel
+ * -errno this file's `errno = (int)-ret` translation requires. */
 #if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
@@ -162,63 +104,38 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 }
 #endif
 
-/* A raw Linux syscall returns the result on success, or -errno (as an
- * unsigned value in [-4095, -1]) on failure -- see plat_mem.c's own
- * comment for the full explanation of this convention. */
 static int is_sys_error(long ret)
 {
 	return (unsigned long)ret >= (unsigned long)-4095L;
 }
 
-/* Matches src/unistd/linux/plat_fd.c's unbox() exactly -- see this
- * file's own banner for why the encoding is shared rather than
- * reinvented. */
+/* Matches src/unistd/linux/plat_fd.c's unbox() exactly. */
 static int unbox(__plat_handle_t h)
 {
 	return (int)((long)h - 1);
 }
 
 /* The other direction, for the two calls that hand back a brand new fd
- * (__plat_socket_open()'s socket(2), __plat_socket_accept()'s
- * accept4(2)) rather than operating on an already-boxed one -- matches
- * src/unistd/linux/plat_fd.c's __plat_dup() (`*out = (__plat_handle_t)
- * (newfd + 1);`), which does the same boxing inline rather than through
- * a named helper; named here because __plat_socket_open() and
- * __plat_socket_accept() both need it. */
+ * (socket(2), accept4(2)) rather than operating on an already-boxed one. */
 static __plat_handle_t box(int fd)
 {
 	return (__plat_handle_t)(long)(fd + 1);
 }
 
-/* ntlibc's own <sys/socket.h> SOL_SOCKET/SO_REUSEADDR are, like MSG_*
- * above, a private encoding (0xffff/0x0004) that does not match the
- * real Linux kernel ABI (1/2, confirmed against this host's own
- * <sys/socket.h> via a throwaway oracle program) -- so bind()'s
- * reuseaddr flag is translated to the kernel's own numbers explicitly,
- * never passed through. */
+/* ntlibc's own <sys/socket.h> SOL_SOCKET/SO_REUSEADDR are a private
+ * encoding that does not match the real Linux kernel ABI, so bind()'s
+ * reuseaddr flag is translated explicitly, never passed through. */
 #define LX_SOL_SOCKET   1
 #define LX_SO_REUSEADDR 2
-/* SO_SNDBUF/SO_RCVBUF (added for SOCK_DGRAM, 2026-09-01): 7/8 are the
- * real Linux kernel SOL_SOCKET option numbers (confirmed against this
- * host's own <sys/socket.h> via a throwaway host-gcc oracle program,
- * the same way LX_SO_REUSEADDR above was), not ntlibc's own 0x1001/
- * 0x1002 encoding -- so, like SO_REUSEADDR, these are translated rather
- * than passed through. */
+/* Real Linux kernel SOL_SOCKET option numbers, not ntlibc's own encoding. */
 #define LX_SO_SNDBUF    7
 #define LX_SO_RCVBUF    8
 
 /* ntlibc's own <sys/socket.h> MSG_* bits are a private encoding, not a
- * copy of any host ABI (see that header's own comment: they exist "so
- * e.g. socket(AF_INET6, ...) compiles", not because their numeric values
- * are load-bearing anywhere outside this library). MSG_OOB/MSG_PEEK/
- * MSG_DONTROUTE/MSG_NOSIGNAL happen to already match the Linux kernel's
- * own recvfrom(2)/sendto(2) flag bits (confirmed against this host's
- * <sys/socket.h>), but MSG_TRUNC/MSG_CTRUNC/MSG_EOR/MSG_WAITALL do NOT --
- * so, exactly like the NT backend translates MSG_OOB into
- * TDI_RECEIVE_EXPEDITED explicitly rather than assuming any bit
- * position, this backend translates each flag explicitly into the
- * Linux kernel's own bit rather than passing ntlibc's raw `flags` value
- * straight through. */
+ * copy of any host ABI. MSG_OOB/MSG_PEEK/MSG_DONTROUTE/MSG_NOSIGNAL
+ * happen to already match the Linux kernel's flag bits, but
+ * MSG_TRUNC/MSG_CTRUNC/MSG_EOR/MSG_WAITALL do NOT -- so every flag is
+ * translated explicitly rather than passed through. */
 #define LX_MSG_OOB       0x0001
 #define LX_MSG_PEEK      0x0002
 #define LX_MSG_DONTROUTE 0x0004
@@ -242,13 +159,8 @@ static int to_linux_flags(int flags)
 	return out;
 }
 
-/* recv(): recvfrom(2) with a NULL address -- this project's only
- * connected-socket use (src/socket/sendrecv.c's recv() already refused
- * anything not AFD_ST_CONNECTED before calling here), so there is no
- * peer address to capture. recv.html's "0 ... the peer has performed an
- * orderly shutdown" is already exactly what a Linux recvfrom() returns
- * on a clean peer close -- no separate disconnect-status table needed,
- * unlike the NT backend (see this file's banner). */
+/* recv(): recvfrom(2) with a NULL address -- always a connected socket
+ * here, so there is no peer address to capture. */
 ssize_t __plat_sock_recv(__plat_handle_t h, void *buf, size_t len, int flags)
 {
 	long ret = raw_syscall(SYS_recvfrom, (long)unbox(h), (long)buf, (long)len,
@@ -257,14 +169,9 @@ ssize_t __plat_sock_recv(__plat_handle_t h, void *buf, size_t len, int flags)
 	return (ssize_t)ret;
 }
 
-/* send(): sendto(2) with a NULL address, for the same "already connected"
- * reason __plat_sock_recv() has none either. send.html's EPIPE/SIGPIPE
- * pair is already exactly what a Linux sendto() against a broken
- * connection does on its own (real kernel-delivered SIGPIPE, suppressed
- * by MSG_NOSIGNAL, both already honored by the kernel before this
- * syscall even returns) -- nothing left for this backend to raise
- * itself, unlike the NT backend's explicit __raise_internal(SIGPIPE)
- * (see this file's banner). */
+/* send(): sendto(2) with a NULL address, same reason __plat_sock_recv()
+ * has none. The kernel raises EPIPE/SIGPIPE on its own; nothing left for
+ * this backend to raise itself (contrast the NT backend). */
 ssize_t __plat_sock_send(__plat_handle_t h, const void *buf, size_t len, int flags)
 {
 	long ret = raw_syscall(SYS_sendto, (long)unbox(h), (long)buf, (long)len,
@@ -274,14 +181,8 @@ ssize_t __plat_sock_send(__plat_handle_t h, const void *buf, size_t len, int fla
 }
 
 /* socket(): a real socket(2), always AF_INET -- this project's only
- * supported wire address family (src/socket/socket.c's front door has
- * already rejected anything else before calling here; an anonymous
- * AF_UNIX socket is one of these two AF_INET transports wearing a
- * different sa_family at the front door, see socket.c/socketpair.c).
- * `type` (SOCK_STREAM or SOCK_DGRAM) picks SOCK_STREAM/IPPROTO_TCP or
- * SOCK_DGRAM/IPPROTO_UDP -- added for SOCK_DGRAM (2026-09-01); before
- * that this was the same fixed pair the NT backend's __afd_open() bakes
- * into its own open packet rather than taking as a parameter. */
+ * supported wire address family. `type` picks SOCK_STREAM/IPPROTO_TCP or
+ * SOCK_DGRAM/IPPROTO_UDP. */
 int __plat_socket_open(__plat_handle_t *out, int type)
 {
 	int dgram = type == SOCK_DGRAM;
@@ -294,13 +195,9 @@ int __plat_socket_open(__plat_handle_t *out, int type)
 }
 
 /* bind(): SO_REUSEADDR (if requested) via a real setsockopt(2), then a
- * real bind(2) -- unlike the NT backend, which folds the equivalent
- * choice (AFD_SHARE_REUSE vs AFD_SHARE_UNIQUE) into the bind request
- * itself, Linux's socket ABI has no such share-mode field on bind(2): the
- * option must already be set on the fd before bind(2) runs. addr/len are
- * passed straight through -- ntlibc's struct sockaddr_in is already
- * byte-identical to the kernel's (see this file's banner), so no
- * marshaling is needed the way AFD's TDI_ADDRESS_IP translation needs. */
+ * real bind(2) -- Linux's socket ABI has no share-mode field on bind(2)
+ * itself; the option must already be set on the fd first. addr/len are
+ * passed straight through, no marshaling needed. */
 int __plat_socket_bind(__plat_handle_t h, int reuseaddr, const struct sockaddr *addr, socklen_t len)
 {
 	int fd = unbox(h);
@@ -318,12 +215,9 @@ int __plat_socket_bind(__plat_handle_t h, int reuseaddr, const struct sockaddr *
 	return 0;
 }
 
-/* connect(): a real connect(2).  The front door's implicit
- * wildcard-bind-before-connect step (POSIX's own "if the initiating
- * socket is not bound, it will be bound to an address selected by the
- * transport layer") stays in src/socket/connect.c, unchanged -- by the
- * time this function runs, the socket is always already bound, so there
- * is nothing left for connect(2) itself to do implicitly. */
+/* connect(): a real connect(2). The front door's implicit wildcard-
+ * bind-before-connect step stays in src/socket/connect.c; the socket is
+ * always already bound by the time this function runs. */
 int __plat_socket_connect(__plat_handle_t h, const struct sockaddr *addr, socklen_t len)
 {
 	long ret = raw_syscall(SYS_connect, (long)unbox(h), (long)addr, (long)len, 0L, 0L, 0L);
@@ -340,20 +234,10 @@ int __plat_socket_listen(__plat_handle_t h, unsigned long backlog)
 	return 0;
 }
 
-/* accept(): a real accept4(2) (flags 0 -- this project has no
- * SOCK_NONBLOCK/SOCK_CLOEXEC wiring for sockets yet, same as the NT
- * backend's blocking-only accept()).  One syscall does the whole job
- * natively: no separate wait-for-a-pending-connection step, and no
- * separately opened endpoint to bind the connection onto afterward --
- * Linux's accept4(2) already returns a live, connected fd for the new
- * peer in one call, unlike AFD's two-step WAIT_FOR_LISTEN + fresh
- * __afd_open() + ACCEPT dance.  addr/len are the front door's own
- * full-sized local buffer, passed straight through: accept4(2) already
- * implements accept.html's own truncate-if-too-small contract natively
- * (SUSv4 accept(): "If the actual length of the address is greater than
- * the length of the supplied sockaddr structure, the stored address
- * shall be truncated"), so there is nothing left for this backend to
- * interpret. */
+/* accept(): a real accept4(2) (flags 0 -- no SOCK_NONBLOCK/SOCK_CLOEXEC
+ * wiring for sockets yet). One syscall does the whole job natively,
+ * unlike AFD's two-step WAIT_FOR_LISTEN + fresh endpoint + ACCEPT dance.
+ * addr/len pass straight through: accept4(2) already truncates natively. */
 int __plat_socket_accept(__plat_handle_t h, struct sockaddr *addr, socklen_t *len, __plat_handle_t *out)
 {
 	long fd = raw_syscall(SYS_accept4, (long)unbox(h), (long)addr, (long)len, 0L, 0L, 0L);
@@ -362,16 +246,9 @@ int __plat_socket_accept(__plat_handle_t h, struct sockaddr *addr, socklen_t *le
 	return 0;
 }
 
-/* getsockname(): a real getsockname(2).  addr/len are passed straight
- * through -- a real getsockname(2) already implements the truncate-if-
- * too-small contract this project's own front door needs
- * (getsockname.html's clause, identical to accept.html's), and ntlibc's
- * struct sockaddr_in is already byte-identical to the kernel's (see this
- * file's banner), so there is no marshaling step the way AFD's
- * TDI_ADDRESS_INFO reply needs on the NT backend. The front door's own
- * unbound-socket wildcard-address short-circuit (getsockname.c) means
- * this is only ever reached for an already-bound socket, so there is no
- * "unbound" case here to special-case either. */
+/* getsockname(): a real getsockname(2). addr/len pass straight through,
+ * no marshaling needed. The front door's own unbound-socket short-circuit
+ * means this is only ever reached for an already-bound socket. */
 int __plat_socket_getsockname(__plat_handle_t h, struct sockaddr *addr, socklen_t *len)
 {
 	long ret = raw_syscall(SYS_getsockname, (long)unbox(h), (long)addr, (long)len, 0L, 0L, 0L);
@@ -379,11 +256,9 @@ int __plat_socket_getsockname(__plat_handle_t h, struct sockaddr *addr, socklen_
 	return 0;
 }
 
-/* shutdown(): a real shutdown(2).  `how` is passed straight through --
- * Linux's SHUT_RD/SHUT_WR/SHUT_RDWR are the same POSIX-standard values
- * (0/1/2) ntlibc's own <sys/socket.h> already uses, unlike the NT
- * backend's AFD_DISCONNECT_RECV/SEND bitmask translation, so there is no
- * mapping step here at all. */
+/* shutdown(): a real shutdown(2). `how` passes straight through: Linux's
+ * SHUT_RD/SHUT_WR/SHUT_RDWR are the same POSIX-standard values ntlibc's
+ * own <sys/socket.h> already uses. */
 int __plat_socket_shutdown(__plat_handle_t h, int how)
 {
 	long ret = raw_syscall(SYS_shutdown, (long)unbox(h), (long)how, 0L, 0L, 0L, 0L);
@@ -392,23 +267,15 @@ int __plat_socket_shutdown(__plat_handle_t h, int how)
 }
 
 /* getsockopt(SO_SNDBUF)/getsockopt(SO_RCVBUF): a real getsockopt(2)
- * against the real socket every fd this backend hands out is genuinely
- * backed by -- unlike the NT backend (see plat_socket.h's banner), this
- * is the kernel's own actual send/receive buffer size, not a stand-in,
- * so it both answers the caller honestly and governs the real blocking
- * behaviour third_party/ltp's aio_test.h setup_aio() depends on (it
- * sizes messages against exactly this number, then queues enough of
- * them to overflow the buffer this same number describes). */
+ * against a real socket -- unlike the NT backend's fixed stand-in, this
+ * is the kernel's actual buffer size. */
 static int getbuf(__plat_handle_t h, int optname)
 {
 	int fd = unbox(h);
 	int v = 0;
-	/* unsigned, not long: getsockopt(2)'s optlen out-parameter is a
-	 * kernel socklen_t (4 bytes), matching this project's own
-	 * socklen_t (include/bits/alltypes.h.in) -- a pointer to an 8-byte
-	 * long here would have the kernel write 4 bytes into what this
-	 * code then reads back as 8, the same class of ABI-width bug this
-	 * file's own banner warns against elsewhere. */
+	/* unsigned, not long: getsockopt(2)'s optlen out-parameter is a kernel
+	 * socklen_t (4 bytes) -- a pointer to an 8-byte long here would have
+	 * the kernel write 4 bytes into what this code reads back as 8. */
 	unsigned argsize = (unsigned)sizeof(v);
 	long ret = raw_syscall(SYS_getsockopt, (long)fd, (long)LX_SOL_SOCKET, (long)optname,
 	                       (long)&v, (long)&argsize, 0L);
@@ -426,17 +293,9 @@ int __plat_socket_getrcvbuf(__plat_handle_t h)
 	return getbuf(h, LX_SO_RCVBUF);
 }
 
-/* socketpair(): a real socketpair(2), AF_UNIX always -- the only domain
- * this project's own socketpair() front door ever accepts
- * (src/socket/socketpair.c).  `type` is handed straight through,
- * SOCK_CLOEXEC bit and all: unlike socket(2) (no equivalent bit) and
- * accept(2) (accept4(2) is the one that gained it), Linux's real
- * socketpair(2) has always accepted SOCK_CLOEXEC/SOCK_NONBLOCK OR'd
- * into `type` (confirmed against this host's own <sys/socket.h> via a
- * throwaway host-gcc oracle program, the same way every other flag
- * translation in this file was), so there is no separate fcntl()
- * dance needed the way socketpair.c's own fallback construction needs
- * for its accept()ed end. */
+/* socketpair(): a real socketpair(2), AF_UNIX always. `type` is handed
+ * straight through, SOCK_CLOEXEC bit and all: Linux's real socketpair(2)
+ * has always accepted SOCK_CLOEXEC/SOCK_NONBLOCK OR'd into `type`. */
 int __plat_socketpair(int type, __plat_handle_t out[2])
 {
 	int sv[2];

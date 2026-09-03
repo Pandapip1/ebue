@@ -37,12 +37,9 @@
 #define MAP_PRIVATE_LX 0x02
 #define MAP_ANONYMOUS_LX 0x20
 
-/* Same raw syscall trampoline every Linux backend in this tree defines
- * for itself -- see src/mman/linux/plat_mem.c's banner for why this is
- * never `extern long syscall(long, ...)` (resolves against the HOST's
- * glibc at link time), one body per arch's own calling convention (see
- * crt/linux/crt1.c's own raw_syscall() banner for the fuller per-arch
- * rationale). */
+/* Same raw syscall trampoline every Linux backend in this tree defines for
+ * itself -- see src/mman/linux/plat_mem.c's banner for why this is never
+ * `extern long syscall(long, ...)`. */
 #if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {

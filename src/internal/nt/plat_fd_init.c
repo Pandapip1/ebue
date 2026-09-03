@@ -1,20 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * NT's __handle_type()/__fd_init()/__fd_runtime_data() -- moved
- * verbatim out of src/internal/fd.c (which keeps only the genuinely
- * portable fd-table bookkeeping: __fds[], __fd_alloc/_install_at/_get,
- * __fd_close_all_cloexec) so PLATFORM=linux's own src/internal/linux/
- * plat_fd_init.c can supply its own __handle_type()/__fd_init()
- * without colliding at link time -- the same REPLACED_OBJS override
- * crt/linux/crt1.c already uses for crt/crt1.c (see Makefile's
- * PLAT_GLOBS comment).
- *
- * Nothing here changed in substance from fd.c's original -- see that
- * file's own remaining comments (the RuntimeData/_osfile format,
- * accmode_of()'s GrantedAccess measurements) for the rationale behind
- * any of this; this split is purely mechanical, verified by diff
- * against fd.c before this file existed.
+ * NT's __handle_type()/__fd_init()/__fd_runtime_data() -- moved out of
+ * src/internal/fd.c (which keeps only the genuinely portable fd-table
+ * bookkeeping) so PLATFORM=linux's own src/internal/linux/plat_fd_init.c
+ * can supply its own __handle_type()/__fd_init() without colliding at
+ * link time.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -41,18 +32,12 @@
 #define VFS_RUNTIME_MAGIC 0x32534656u /* "VFS2", little-endian */
 #define VFS_RUNTIME_CWD_NATIVE 0x80
 
-/* An ntlibc-specific trailer riding the same RuntimeData blob, past
- * both the fixed osfile/osfhnd table and the optional VFS trailer --
- * see __fd_runtime_data()/__fd_init() below for where each piece is
- * built and read.  Carries POSIX_SPAWN_SETSIGMASK's non-empty mask
- * (src/process/posix_spawn.c) to a child that has not run its own
- * first instruction yet, and so cannot be handed one any way this
- * library hands data to an *already running* process (there is no
- * "already running" to write into).  Independent of the VFS trailer's
- * own presence/absence -- its own magic+length make it self-describing
- * regardless of what came before it in the blob -- because a caller
- * with no descriptors worth inheriting and no VFS mount can still have
- * a mask worth delivering. */
+/* An ntlibc-specific trailer riding the same RuntimeData blob, past both
+ * the fixed osfile/osfhnd table and the optional VFS trailer. Carries
+ * POSIX_SPAWN_SETSIGMASK's non-empty mask (src/process/posix_spawn.c) to
+ * a child that has not run its own first instruction yet, so cannot be
+ * handed data any other way. Self-describing (own magic+length),
+ * independent of whether the VFS trailer is present. */
 #define SIG_RUNTIME_MAGIC 0x4D474953u /* "SIGM", little-endian */
 
 int __handle_type(HANDLE h)
@@ -94,43 +79,29 @@ int __handle_type(HANDLE h)
 /* The access mode of a handle this process did not open.
  *
  * The RuntimeData block a parent leaves for its child is msvcrt's
- * _osfile format -- the FOPEN/FAPPEND/FPIPE/FDEV bits above are that
- * format's, byte for byte, which is what lets an ntlibc program and an
- * msvcrt program inherit each other's descriptors.  That format has no
- * access-mode bit: all eight are spoken for, and msvcrt does not carry
- * the mode across inheritance either.  So the mode cannot be recovered
- * from the block, and it must not be added to the block -- a ninth bit
- * would be meaningless to every other CRT that reads this and would
- * make the payload a private extension rather than the interop format
- * it is.
+ * _osfile format, byte for byte -- what lets an ntlibc program and an
+ * msvcrt program inherit each other's descriptors. That format has no
+ * access-mode bit (all eight are spoken for), so the mode cannot be
+ * recovered from the block, and adding a ninth bit would make the
+ * payload a private extension rather than the interop format it is.
  *
- * It does not need to be.  The handle itself knows: the object manager
- * records the access the handle was opened with, and
- * NtQueryObject(ObjectBasicInformation) reports it in GrantedAccess.
- * That is authoritative rather than advisory -- it is the very mask the
- * kernel will check a read or write against -- and it works whatever
- * CRT the parent was built with, including one that never heard of
- * ntlibc.
+ * The handle itself knows instead: NtQueryObject(ObjectBasicInformation)
+ * reports GrantedAccess, the actual mask the kernel checks a read or
+ * write against.
  *
  * Measured (Wine, x86_64), GrantedAccess for handles this library opens:
  *   O_RDONLY          0x00120089  READ_DATA, no WRITE_DATA
  *   O_WRONLY          0x00120196  WRITE_DATA, no READ_DATA
  *   O_RDWR            0x0012019f  both
  *   O_WRONLY|O_APPEND 0x00120194  APPEND_DATA only, no WRITE_DATA
- * -- the last because open() maps O_APPEND by trading FILE_WRITE_DATA
- * for FILE_APPEND_DATA (src/fcntl/open.c), so "writable" here has to
- * mean either bit or an appending descriptor reads back as read-only.
+ * -- the last because open() maps O_APPEND by trading FILE_WRITE_DATA for
+ * FILE_APPEND_DATA, so "writable" here has to mean either bit.
  *
- * `fallback` is used only if the query fails, which is not expected:
- * ObjectBasicInformation needs no access rights of its own.  It is
- * O_RDWR for an inherited descriptor, deliberately, and NOT the
- * O_RDONLY that used to be assumed: assuming read-only is precisely
- * what produced the defect this fixes, and the two errors are not
- * symmetric.  Guessing too permissive is corrected by the kernel, which
- * refuses the operation on its own; guessing too restrictive is
- * corrected by nobody, because this library refuses the operation
- * before the kernel is ever asked, on a descriptor that would have
- * worked. */
+ * `fallback` is used only if the query fails, which is not expected. It
+ * is O_RDWR for an inherited descriptor, deliberately NOT the O_RDONLY
+ * that used to be assumed: guessing too permissive is corrected by the
+ * kernel refusing the operation; guessing too restrictive is corrected
+ * by nobody, since this library refuses before the kernel is ever asked. */
 static unsigned accmode_of(HANDLE h, unsigned fallback)
 {
 	OBJECT_BASIC_INFORMATION obi;
@@ -149,19 +120,14 @@ static unsigned accmode_of(HANDLE h, unsigned fallback)
 
 /* Descriptors 0-2, from the process parameters the creator left behind.
  *
- * Both guards below are load-bearing, and the second one is doing more
- * work than it looks like.  A parent cannot reliably say "this one is
- * closed" by writing 0 or -1 here: on real Windows both were measured to
- * arrive as a live, open handle instead (see the long accounting in
- * src/process/spawn.c, and test/spawn-stdhandle-attr.c, which prints the
- * raw arriving value).  Which actor rewrites the field is not known --
- * it is not kernel32 or kernelbase, neither of which is loaded in these
- * ntdll-only processes -- but it is value-blind, so the only thing the
- * receiving side can do is check what actually turned up.  That is what
- * __handle_type() is for here: whatever cannot be identified as a file,
- * console or pipe is not installed, which covers a dead-but-inheritable
- * handle, a duplicated pseudohandle, and the deliberate placeholder
- * __spawn writes for a closed standard descriptor. */
+ * A parent cannot reliably say "this one is closed" by writing 0 or -1
+ * here: on real Windows both were measured to arrive as a live, open
+ * handle instead. Which actor rewrites the field is not known, but it is
+ * value-blind, so the only thing the receiving side can do is check what
+ * actually turned up -- __handle_type() here: whatever cannot be
+ * identified as a file, console or pipe is not installed, covering a
+ * dead-but-inheritable handle, a duplicated pseudohandle, and the
+ * deliberate placeholder __spawn writes for a closed descriptor. */
 static void install_std(int fd, HANDLE h)
 {
 	if (!h || h == (HANDLE)(LONG_PTR)-1) return;
@@ -169,15 +135,8 @@ static void install_std(int fd, HANDLE h)
 	__fd_install_at(fd, h, fd == 0 ? O_RDONLY : O_WRONLY, 0);
 }
 
-/* pp's own dereferences below (pp->StandardInput and friends) are a
- * disclosed, deliberately unmarked residual, the same class crt/
- * crt1.c's own __libc_start_main() comment already established: pp is
- * a plain local, __peb->ProcessParameters -- a struct FIELD's own
- * value, distinct from __peb itself -- and __fd_init() takes no
- * parameters at all, so there is no signature for `nonnull` to
- * describe this on. See crt1.c's own comment for why this is verified
- * sound by hand regardless (RTL_USER_PROCESS_PARAMETERS is populated
- * by the NT loader before any user-mode instruction runs). */
+/* pp = __peb->ProcessParameters is populated by the NT loader before any
+ * user-mode instruction runs, so its dereferences below are sound. */
 void __fd_init(void)
 {
 	PRTL_USER_PROCESS_PARAMETERS pp = __peb->ProcessParameters;
@@ -245,15 +204,12 @@ void __fd_init(void)
 				}
 				if (!vk && __handle_type(h) == __FD_UNKNOWN) continue;
 				/* The access mode is NOT in osfile[i] -- see
-				 * accmode_of().  Without it every inherited
-				 * descriptor read back as O_RDONLY (because
-				 * O_RDONLY is 0), and src/unistd/write.c's
-				 * write()/pwrite() refuse an O_RDONLY descriptor
-				 * with EBADF -- so an inherited writable
-				 * descriptor could not be written to at all,
-				 * while ftruncate() and posix_fallocate() on the
-				 * very same descriptor succeeded, because they
-				 * ask the kernel instead of this field. */
+				 * accmode_of(). Without it every inherited descriptor
+				 * read back as O_RDONLY (O_RDONLY is 0), so
+				 * write()/pwrite() refused an inherited writable
+				 * descriptor with EBADF while ftruncate()/
+				 * posix_fallocate() on the same descriptor succeeded,
+				 * since they ask the kernel instead of this field. */
 				__fd_install_at(i, h, (osfile[i] & FAPPEND ? O_APPEND : 0) |
 				                      (vk == __VFS_ROOT || vk == __VFS_DEV ? O_RDONLY : accmode_of(h, O_RDWR)),
 				                vk == __VFS_ROOT || vk == __VFS_DEV ? __FD_DIR : 0);
@@ -269,10 +225,8 @@ void __fd_init(void)
 }
 
 /* Build the RuntimeData block describing the descriptors a child should
- * inherit: everything open and not close-on-exec.  Handles are made
- * inheritable as a side effect (NtCreateUserProcess copies only those).
- * Returns a malloc'd block and its length, or NULL and 0 with nothing to
- * pass. */
+ * inherit: everything open and not close-on-exec. Handles are made
+ * inheritable as a side effect (NtCreateUserProcess copies only those). */
 void *__fd_runtime_data(size_t *len, __plat_handle_t std[3])
 {
 	int count = 0, i, have_vfs = __vfs_cwd_get() != __VFS_NONE;
@@ -307,10 +261,10 @@ void *__fd_runtime_data(size_t *len, __plat_handle_t std[3])
 			if (__fds[i].flags & O_APPEND) fl |= FAPPEND;
 			if (__fds[i].type == __FD_PIPE) fl |= FPIPE;
 			if (__fds[i].type == __FD_CONSOLE || __fds[i].type == __FD_CHAR) fl |= FDEV;
-			/* Make the handle itself inheritable, in place.  The process
+			/* Make the handle itself inheritable, in place. The process
 			 * backend has already resolved descriptors 0-2 into `std`, so
-			 * keep that snapshot in step when this replacement invalidates
-			 * its old HANDLE value. */
+			 * keep that snapshot in step when this invalidates the old
+			 * HANDLE value. */
 			old = __fds[i].h;
 			if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), old, NtCurrentProcess(), &dup,
 			                                 0, OBJ_INHERIT, DUPLICATE_SAME_ACCESS | DUPLICATE_SAME_ATTRIBUTES))) {

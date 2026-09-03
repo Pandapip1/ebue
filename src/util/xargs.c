@@ -141,9 +141,9 @@ static int emit_token(struct tok **arrp, size_t *np, size_t *capp, struct buf *c
 }
 
 /* The Guideline grammar's tokenizer -- see this file's header comment.
- * *outp/*np are set to a malloc()'d array of *np tokens (each text
+ * *outp and *np are set to a malloc()'d array of *np tokens (each text
  * malloc()'d too) on success (0); on failure (-1, with a diagnostic
- * already written) *outp/*np are left untouched and everything
+ * already written) *outp and *np are left untouched and everything
  * allocated so far has been freed. */
 static int read_tokens(FILE *in, struct tok **outp, size_t *np) __attribute__((nonnull(1, 2, 3)));
 static int read_tokens(FILE *in, struct tok **outp, size_t *np)

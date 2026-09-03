@@ -1,26 +1,20 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * getnameinfo(): https://pubs.opengroup.org/onlinepubs/9699919799/
- * functions/getnameinfo.html, the reverse of getaddrinfo(). The node
- * side below does real, honest /etc/hosts reverse resolution via
- * __hosts_lookup_reverse() (src/netdb/linux/hosts.c) before ever
- * falling back to numeric. One real, disclosed gap remains: no PTR DNS
- * query is sent, so a name only in DNS (not in the local hosts file)
- * still falls back to its numeric form, exactly as if NI_NUMERICHOST
- * had been requested -- not a wrong answer (DESCRIPTION explicitly
- * allows a numeric fallback whenever the name "cannot be located", and
- * only requires an error when NI_NAMEREQD says fallback itself is
- * unacceptable), just an incomplete resolver.
+ * getnameinfo(): the reverse of getaddrinfo(). The node side does
+ * real /etc/hosts reverse resolution via __hosts_lookup_reverse()
+ * (hosts.c) before falling back to numeric. One disclosed gap: no PTR
+ * DNS query is sent, so a DNS-only name still falls back to numeric,
+ * as if NI_NUMERICHOST had been requested -- not wrong (DESCRIPTION
+ * allows numeric fallback whenever a name "cannot be located"), just
+ * incomplete.
  *
- * The service side asks services.c's getservbyport() for a name (a
- * database that DOES fully exist, unlike DNS-only hostnames), so a
- * non-numeric service request is fully resolved, not merely a numeric
- * fallback.
+ * The service side asks getservbyport() (services.c), a database that
+ * DOES fully exist, so a non-numeric service request is fully
+ * resolved, not a fallback.
  *
- * NI_NUMERICHOST | NI_NUMERICSERV -- test/posix-netdb.c's own
- * posix_netdb_getnameinfo_numeric fence -- needs neither database at
- * all and is unconditionally exact.
+ * NI_NUMERICHOST | NI_NUMERICSERV needs neither database and is
+ * unconditionally exact.
  */
 #include <netdb.h>
 #include <netinet/in.h>

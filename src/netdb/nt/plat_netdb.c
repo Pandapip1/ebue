@@ -3,29 +3,18 @@
  *
  * <netdb.h>'s Windows NT backend. The real implementation (a /etc/hosts
  * parser, an /etc/nsswitch.conf-driven dispatcher, and a UDP DNS stub
- * resolver) exists only for native Linux -- see src/netdb/linux/*.c.
- * include/netdb.h declares these functions on every platform, so NT
- * still needs a definition for each, or `make linkcheck` flags a public
- * declaration with no reachable definition (worse than no declaration:
- * a caller gets a confusing link error instead of a clear "not on this
- * platform").
+ * resolver) exists only for native Linux -- see src/netdb/linux/*.c. NT
+ * still needs a definition for each declared function, or `make
+ * linkcheck` flags a public declaration with no reachable definition.
  *
  * Every entry point here is an honest stand-in: it compiles, links, and
- * reports a real, specified failure -- EAI_FAIL ("a non-recoverable
- * failure in name resolution occurred", the exact DESCRIPTION wording
- * for "the implementation does not support name resolution on this
- * platform") -- rather than fabricating an answer or silently
- * succeeding with garbage. A real NT resolver (DnsQuery_, or the Linux
- * backend's /etc/hosts + resolv.conf approach ported to NT's own path
- * conventions) is future work.
+ * reports a real, specified failure (EAI_FAIL, the exact DESCRIPTION
+ * wording for "the implementation does not support name resolution on
+ * this platform") rather than fabricating an answer. A real NT resolver
+ * (DnsQuery_) is future work.
  *
- * getnameinfo() and the four enumerable database families (host/
- * network/protocol/service) follow the same honest-stand-in shape: NT
- * has no default per-machine database for any of them, and this
- * backend does not parse %SystemRoot%\system32\drivers\etc\* or any
- * other real NT path. getnameinfo() is the one partial exception, and
- * only because its numeric case needs no database at all (see its own
- * comment below). */
+ * getnameinfo() is the one partial exception, and only because its
+ * numeric case needs no database at all (see its own comment below). */
 #include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -48,14 +37,10 @@ int getaddrinfo(const char *__restrict node, const char *__restrict service,
 struct hostent *gethostbyname(const char *name)
 {
 	(void)name;
-	h_errno = 3 /* NO_RECOVERY, the traditional resolver value for
-	             * "a non-recoverable name server error occurred" --
-	             * <netdb.h> does not itself define the h_errno
-	             * constants (they are outside this edition of POSIX,
-	             * per this file's own banner in the Linux backend),
-	             * so this is the plain historical value every other
-	             * gethostbyname() implementation uses for the same
-	             * condition, not a value this tree invented. */;
+	h_errno = 3 /* NO_RECOVERY: the traditional resolver value for "a
+	             * non-recoverable name server error occurred", the
+	             * plain historical value every gethostbyname()
+	             * implementation uses for this condition. */;
 	return NULL;
 }
 
@@ -91,16 +76,12 @@ struct servent *getservbyport(int port, const char *proto)
 
 /* getnameinfo(): unlike every other entry point in this file, the
  * NI_NUMERICHOST | NI_NUMERICSERV case needs no database this platform
- * lacks -- it is pure number formatting (inet_ntop(), already real and
- * platform-shared, see src/socket/inet.c) -- so it is answered for
- * real rather than joining the honest-failure list above. Once either
- * flag is absent, this backend has no reverse-hosts database and no
- * services database to consult (see this file's own banner), so the
- * node/serv side falls back to its numeric form -- exactly what
- * DESCRIPTION already specifies for "the node's name cannot be located"
- * -- unless NI_NAMEREQD says that fallback itself is unacceptable, in
- * which case this honestly reports EAI_NONAME instead of a name it does
- * not have. */
+ * lacks -- it is pure number formatting (inet_ntop()) -- so it is
+ * answered for real. With no reverse-hosts or services database to
+ * consult, node/serv fall back to numeric form (exactly what
+ * DESCRIPTION specifies for "the node's name cannot be located") unless
+ * NI_NAMEREQD makes that fallback unacceptable, reporting EAI_NONAME
+ * instead. */
 int getnameinfo(const struct sockaddr *sa, socklen_t salen,
                  char *node, socklen_t nodelen,
                  char *serv, socklen_t servlen, int flags)

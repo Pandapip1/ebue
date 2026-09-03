@@ -1,38 +1,23 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * __ntpath()/__ntpath_at() and their supporting machinery -- moved
- * verbatim out of src/internal/path.c, which the OPTS shm_open/shm_unlink/
- * mmap link gap traced straight to (undefined NtOpenSymbolicLinkObject,
- * NtQueryAttributesFile, NtQueryObject, RtlDosPathNameToNtPathName_U_
- * WithStatus, __peb, ... pulled into a native-Linux build through
- * src/stat/chmod.c's fchmod(), which called this file's __handle_path()
- * unconditionally as its EACCES retry path).
- *
- * That fix (see src/internal/nt/handle_path.c and src/internal/linux/
- * handle_path.c) is NOT this file: turning a POSIX path into an NT one
- * is inherently NT's own object-manager encoding (UNICODE_STRING,
- * OBJECT_ATTRIBUTES, RtlDosPathNameToNtPathName_U's DOS->NT conversion),
- * not a POSIX-shaped interface that merely has an NT body today. Every
- * caller left standing once __handle_path() moved out (grep confirms:
- * src/internal/nt/vfs_resolve.c, plat_fcntl.c, plat_stat.c,
- * plat_unistd.c, plat_process.c, plat_stdio.c) already lives under nt/
- * itself. So unlike fdpos.c/vfs.c/sigdelivery.c before it, this file
- * gets no portable declaration and no Linux counterpart at all -- there
- * is nothing left calling it from outside nt/ for one to satisfy.
- *
- * Turning the paths programs use into the paths the object manager wants.
+ * __ntpath()/__ntpath_at() and their supporting machinery: turning a
+ * POSIX path into an NT one is inherently NT's own object-manager
+ * encoding (UNICODE_STRING, OBJECT_ATTRIBUTES, RtlDosPathNameToNtPathName_U's
+ * DOS->NT conversion), not a POSIX-shaped interface with an NT body, so
+ * this file has no Linux counterpart -- every caller already lives under
+ * nt/ itself.
  *
  * A program hands in UTF-8 with either kind of slash, relative or
  * absolute, possibly with a drive letter and possibly not; ntdll wants
  * UTF-16 in the \??\C:\... form, inside a UNICODE_STRING, inside an
- * OBJECT_ATTRIBUTES.  RtlDosPathNameToNtPathName_U does the hard part
+ * OBJECT_ATTRIBUTES. RtlDosPathNameToNtPathName_U does the hard part
  * (resolving relative paths against the current directory, . and ..,
  * per-drive current directories, UNC names); this file does the rest.
  *
  * A rooted path with no drive ("/usr/bin/sh") is taken relative to the
- * root of the current drive, which is the same thing Windows itself does
- * with "\usr\bin\sh".  Fixed POSIX objects are resolved before this layer;
+ * root of the current drive, the same thing Windows itself does with
+ * "\usr\bin\sh". Fixed POSIX objects are resolved before this layer;
  * native paths that win that resolution are passed through unchanged.
  */
 
@@ -47,52 +32,23 @@
 #include "libc.h"
 #include "ownership_stubs.h"
 
-/* XBD <limits.h> {NAME_MAX}: "Maximum number of bytes in a filename
- * (not including the terminating null of a string)."  BYTES, not
- * characters, and that distinction is the whole subtlety here.
+/* XBD <limits.h> {NAME_MAX}: BYTES, not characters. This is NOT the
+ * [ENAMETOOLONG] this library already had for the whole-path
+ * __US_MAX_WCHARS bound (~32k code units) -- that bound says nothing
+ * about a 300-byte component sitting inside a short path. This function
+ * implements the per-component shall-fail clause, boilerplate on
+ * open/stat/unlink/mkdir/link/rename/chmod/chdir/utimensat/opendir/etc.
  *
- * fchmodat.html ERRORS, shall fail -- and the identical clause is
- * boilerplate on open, openat, stat, fstatat, access, faccessat, unlink,
- * unlinkat, mkdir, mkdirat, link, linkat, symlink, symlinkat, rename,
- * renameat, chmod, chdir, utimensat, opendir, ... : "[ENAMETOOLONG] The
- * length of a component of a pathname is longer than {NAME_MAX}."
+ * MEASURED: NTFS bounds a component at 255 UTF-16 code units;
+ * {NAME_MAX} bounds it at 255 bytes. They part company on multi-byte
+ * UTF-8: 100 CJK characters are 300 bytes but only 100 code units, and
+ * before this check open()/openat()/mkdir() created such a name
+ * successfully; they now refuse it, matching glibc measured on ext4
+ * (same 255-byte limit).
  *
- * THIS IS NOT THE [ENAMETOOLONG] THIS LIBRARY ALREADY HAD.  Those same
- * pages list a SECOND, MAY-FAIL [ENAMETOOLONG] about the length of the
- * whole pathname, and that is the one __ntpath()/__ntpath_at()/chdir()
- * have always reported, as the __US_MAX_WCHARS bound -- a name a
- * UNICODE_STRING cannot describe.  The two are easy to conflate and the
- * difference matters: that bound is ~32k code units, so it says nothing
- * whatever about a 300-byte component sitting inside a short path.  This
- * function implements the shall-fail per-component clause; the
- * whole-path bound stays where it was.
- *
- * It lives here, in the one place __ntpath() and __ntpath_at()'s
- * relative branch both route through, rather than in any caller.  The
- * clause is on every path-taking interface in this library, not on
- * fchmodat() -- fchmodat is merely where it was noticed.
- *
- * WHAT THIS CHANGES, MEASURED RATHER THAN REASONED.  NTFS bounds a
- * component at 255 UTF-16 CODE UNITS; {NAME_MAX} bounds it at 255
- * BYTES.  On ASCII the two agree and nothing moves: measured under Wine
- * before this check, a 255-byte component opened and a 256-byte one
- * failed -- with [ENOENT], which is the bug, NT having answered about a
- * name it could not form.  They part company on multi-byte UTF-8: 100
- * CJK characters are 300 bytes but only 100 code units, and before this
- * commit open(), openat(), mkdir() and the rest CREATED such a name
- * successfully.  They now refuse it.
- *
- * That is deliberate, it is what POSIX asks for, and it is what glibc
- * does -- measured on ext4, whose own limit is likewise 255 bytes, where
- * the same 300-byte name fails with [ENAMETOOLONG] through open, openat
- * and chmod alike.  The cost is named here so nobody has to rediscover
- * it: a long non-ASCII filename NTFS would have accepted is no longer
- * reachable through this library.
- *
- * Zero-length pieces -- a doubled separator, the empty piece before a
- * leading slash -- are not components and are not measured.  Both
- * separators are recognised because dos_from_posix() has not yet run
- * when a caller's path reaches here and either may be present. */
+ * Zero-length pieces (a doubled separator, the empty piece before a
+ * leading slash) are not components and are not measured. Both
+ * separators are recognised since dos_from_posix() has not yet run. */
 int __name_too_long(const char *path)
 {
 	const char *p = path;
@@ -132,13 +88,11 @@ static WCHAR *dos_from_posix(const char *path, size_t *wlen, int *trailing)
 }
 
 /* access.html ERRORS ENOTDIR / open.html DESCRIPTION: a trailing slash
- * requires the resolved name to be a directory.  The slash itself is
+ * requires the resolved name to be a directory. The slash itself is
  * already stripped from *out (NtCreateFile does not accept one), so this
- * re-checks the object type with a handle-less attribute query.  A name
- * that does not exist yet, or that a query cannot be answered for some
- * other reason, is left to whatever real operation the caller goes on to
- * do -- this only rejects a trailing slash on something that positively
- * exists and is not a directory. */
+ * re-checks the object type with a handle-less attribute query. Only
+ * rejects a trailing slash on something that positively exists and is
+ * not a directory; leaves everything else to the real operation. */
 static int reject_if_not_dir(struct __ntpath *out)
 {
 	FILE_BASIC_INFORMATION bi;
@@ -151,24 +105,11 @@ static int reject_if_not_dir(struct __ntpath *out)
 	return 0;
 }
 
-/* Where __nt_prefix_not_dir() may start truncating an NT path.  A
- * drive path ("\??\C:\...") may lose everything below "\??\C:\"; a name
- * that is not of that shape -- "\??\NUL", a UNC name ("\??\UNC\server\
- * share\..."), whose leading components are not files at all -- has no
- * prefix this can say anything about, and is reported as having none. */
-/* b[0] below is a disclosed, deliberately unmarked residual: b is
- * `nt->Buffer`, a struct FIELD's own value, distinct from nt itself
- * (already required on this function's one real caller,
- * __nt_prefix_not_dir(), see src/internal/libc.h's own comment) --
- * `nonnull` can only describe nt_prefix_root's own nt parameter, not
- * a field reached through it, the same class of gap this tree's own
- * crt/crt1.c __libc_start_main() comment already established for
- * __peb->ProcessParameters. Verified sound by hand regardless: every
- * access here is short-circuit-guarded by `n < 7` first (a valid
- * UNICODE_STRING's own invariant -- NT itself, not this tree -- being
- * that Buffer is non-NULL whenever Length > 0), the same "real
- * invariant established by the type itself, not derivable from a
- * bound check alone" reasoning as crt/crt1.c's own split_cmdline. */
+/* Where __nt_prefix_not_dir() may start truncating an NT path. A drive
+ * path ("\??\C:\...") may lose everything below "\??\C:\"; a name that is
+ * not of that shape ("\??\NUL", a UNC name) has no prefix this can say
+ * anything about, and is reported as having none. Every access below is
+ * guarded by `n < 7` first. */
 static size_t nt_prefix_root(const UNICODE_STRING *nt)
 {
 	const WCHAR *b = nt->Buffer;
@@ -179,58 +120,44 @@ static size_t nt_prefix_root(const UNICODE_STRING *nt)
 	return 7;
 }
 
-/* open.html (and stat, access, unlink, mkdir, utime, ... -- the clause is
- * boilerplate across the file-system surface) ERRORS [ENOTDIR]: "A
- * component of the path prefix names an existing file that is neither a
- * directory nor a symbolic link to a directory."
+/* open.html (and stat, access, unlink, mkdir, utime, ... -- boilerplate
+ * across the filesystem surface) ERRORS [ENOTDIR]: "A component of the
+ * path prefix names an existing file that is neither a directory nor a
+ * symbolic link to a directory."
  *
  * NT gives no way to tell that apart from a prefix that simply is not
- * there: the object manager answers both with
- * STATUS_OBJECT_PATH_NOT_FOUND, which maps to ENOENT (right for the
- * second case, wrong for the first).  So the prefix is checked here, the
- * same way reject_if_not_dir() checks the last component for the
- * trailing-slash half of the very same clause: a handle-less attribute
- * query, and a verdict only when the answer is positive.
+ * there: the object manager answers both with STATUS_OBJECT_PATH_NOT_FOUND,
+ * which maps to ENOENT (right for "not there", wrong for "exists but not
+ * a directory"). So the prefix is checked here, the same way
+ * reject_if_not_dir() checks the last component: a handle-less attribute
+ * query, verdict only when the answer is positive.
  *
- * Cost is one query for a path that has a prefix at all; the deeper
- * ancestors are only ever looked at once a nearer one has come back
- * missing, i.e. on a path that was going to fail regardless.  The walk
- * runs from the nearest ancestor outwards, so the first one that exists
- * decides: if it is a directory the whole prefix is a directory chain (a
- * directory's own parents cannot be anything else) and there is nothing
- * to report; if it is not, that is the POSIX ENOTDIR case.  Anything
- * else -- a query that fails for some other reason, a name with no
- * prefix to speak of -- is left to the real operation, exactly as
- * reject_if_not_dir() leaves it.
+ * The walk runs from the nearest ancestor outwards, so the first one that
+ * exists decides: if it is a directory the whole prefix is a directory
+ * chain; if not, that is the ENOTDIR case. Cost is one query for a path
+ * that has a prefix at all; deeper ancestors are only checked once a
+ * nearer one comes back missing, on a path that was going to fail
+ * regardless.
  *
- * The walk is exposed rather than kept private to __ntpath() because
- * chdir() needs the same verdict but does not come through this file's
- * path builder: it hand-builds a UNICODE_STRING for
- * RtlSetCurrentDirectory_U(), so it reaches the walk with an NT path it
- * built itself.  Hence the arguments are the NT path and the
- * RootDirectory handle it is relative to (0 for an absolute one) rather
- * than a struct __ntpath.
- *
- * Where truncation may start follows from that handle: an NT path with
- * no root handle ("\??\C:\a\b") keeps everything up to and including
- * the drive's backslash, while every component of a name relative to a
- * RootDirectory handle is a prefix component and may be cut.
+ * Exposed rather than kept private to __ntpath() because chdir() needs
+ * the same verdict but hand-builds its own UNICODE_STRING for
+ * RtlSetCurrentDirectory_U() rather than going through this file's
+ * builder, so the arguments are the NT path and the RootDirectory handle
+ * it is relative to (0 for absolute) rather than a struct __ntpath. Where
+ * truncation may start follows from that handle: an absolute NT path
+ * keeps everything up to and including the drive's backslash, while every
+ * component of a RootDirectory-relative name may be cut.
  *
  * Returns 1 when a component of the path prefix positively exists and is
  * not a directory, 0 otherwise; errno is not touched.
  *
- * A caveat for anyone testing this under Wine rather than on NT: Wine's
- * NtQueryAttributesFile (dlls/ntdll/unix/file.c) passes the Unix name
- * lookup_unix_name() built relative to the root handle straight to
- * get_file_info(), i.e. to a plain stat() against the *process* working
- * directory, so a RootDirectory-relative query answers about the wrong
- * file -- "not found", or positively about a same-named file in the cwd
- * if one happens to exist.  That hits the pre-existing
- * reject_if_not_dir() the same way (under Wine, openat(dirfd, "file/",
- * ...) is not rejected either), and NT resolves such a name properly --
- * ObOpenObjectByName is handed the whole OBJECT_ATTRIBUTES, root handle
- * included -- so the dirfd-relative half of both checks is a
- * real-Windows question, not a Wine one. */
+ * Caveat for testing under Wine rather than real NT: Wine's
+ * NtQueryAttributesFile resolves a RootDirectory-relative query against
+ * the *process* working directory instead of the root handle, so it can
+ * answer about the wrong file entirely (and, symmetrically, does not
+ * reject openat(dirfd, "file/", ...) the way real NT does). The
+ * dirfd-relative half of both checks is a real-Windows question, not a
+ * Wine-testable one. */
 int __nt_prefix_not_dir(const UNICODE_STRING *nt, HANDLE root)
 {
 	FILE_BASIC_INFORMATION bi;
@@ -243,18 +170,6 @@ int __nt_prefix_not_dir(const UNICODE_STRING *nt, HANDLE root)
 	InitializeObjectAttributes(&oa, &cut, OBJ_CASE_INSENSITIVE, root, 0);
 	while (i > floor) {
 		NTSTATUS st;
-		/* nt->Buffer[--i] is a disclosed, deliberately unmarked
-		 * residual: nt->Buffer is a struct FIELD's own value,
-		 * distinct from nt itself (already required above), and
-		 * `nonnull` cannot describe a field reached through a
-		 * parameter, only the parameter itself -- the same class
-		 * nt_prefix_root()'s own b[0] comment (above) already
-		 * established for the identical field on the identical
-		 * type. Verified sound by hand the same way: this loop only
-		 * ever reaches this line when i > floor >= 0, i.e. i started
-		 * >= 1, i.e. nt->Length >= sizeof(WCHAR) -- a valid
-		 * UNICODE_STRING's own invariant (NT itself) is that Buffer
-		 * is non-NULL whenever Length > 0. */
 		if (nt->Buffer[--i] != '\\') continue;
 		/* `i` starts at nt->Length / sizeof(WCHAR) and only decreases. */
 		cut.Length = (USHORT)(i * sizeof(WCHAR));
@@ -304,13 +219,10 @@ static int ntpath_impl(const char *path, struct __ntpath *out, ULONG attributes,
 	dos = dos_from_posix(path, &n, &trailing);
 	if (!dos) return -1;
 
-	/* Same ceiling, and the same reason, as the hand-built UNICODE_STRING
-	 * in __ntpath_at() below: a name past __US_MAX_WCHARS code units
-	 * cannot be described by one at all.  POSIX wants ENAMETOOLONG for an
-	 * over-long name, and reporting it here rather than letting the Rtl's
-	 * failure fall into the catch-all ENOENT below is what makes every
-	 * caller of this layer agree with chdir(), which has always checked
-	 * its own hand-built string (src/unistd/chdir.c). */
+	/* Same ceiling as the hand-built UNICODE_STRING in __ntpath_at() below:
+	 * a name past __US_MAX_WCHARS code units cannot be described by one at
+	 * all. Reported here rather than falling into the catch-all ENOENT
+	 * below, agreeing with chdir()'s own check of its hand-built string. */
 	if (n > __US_MAX_WCHARS) { __free(dos); errno = ENAMETOOLONG; return -1; }
 
 	memset(out, 0, sizeof *out);
@@ -349,46 +261,28 @@ int __ntpath_native(const char *path, struct __ntpath *out, ULONG attributes)
 }
 
 /* Lexical resolution of "." and ".." in a RootDirectory-relative name.
- *
- * XBD 4.13 Pathname Resolution, which every page specifying an *at()
- * function invokes for its path argument: "The special filename dot
- * shall refer to the directory specified by its predecessor.  The
- * special filename dot-dot shall refer to the parent directory of its
- * predecessor directory."  The NT object manager does not implement
- * either in a name resolved against a RootDirectory handle -- it takes
- * the name as a literal sequence of components -- so without this pass
+ * The NT object manager does not implement XBD 4.13 pathname resolution
+ * in a name resolved against a RootDirectory handle -- it takes the name
+ * as a literal sequence of components -- so without this pass
  * openat(dfd, "./f", ...) failed with ENOENT while openat(dfd, "f", ...)
  * on the same file succeeded, and no spelling of ".." could reach a
  * parent at all.
  *
- * WHY LEXICAL, AND WHAT IT COSTS.  Resolving ".." by string surgery is
- * not what XBD 4.13 asks for: where a preceding component is a symbolic
- * link, the parent of the link's target is not the lexical parent, and
- * a lexical pass also collapses across components that do not exist or
- * are not directories, which 4.13 requires to fail.  This is done
- * anyway, deliberately, because it is what the REST OF THIS LIBRARY
- * already does: the AT_FDCWD and absolute branch resolves through
- * RtlDosPathNameToNtPathName_U, i.e. Windows path normalisation, which
- * Microsoft documents as a string pass performed before the file system
- * is consulted ("This function does not verify that the resulting path
- * and file name are valid, or that they see an existing file on the
- * associated volume" -- GetFullPathName Remarks).  Measured against this
- * tree through that branch: stat("d/nonexistent/../f") and
- * stat("d/regularfile/../f") both return 0.
- *
- * So the choice here is not "correct or lexical", it is "agree with the
- * other branch or disagree with it".  A library that answers the same
- * question two different ways depending on whether the caller passed
- * AT_FDCWD or a directory descriptor is worse than one that answers
- * consistently, because the inconsistency is undebuggable.  The gap
- * itself is fenced as its own finding; see test/posix-unreferenced.c,
+ * Resolving ".." by string surgery is not strictly what XBD 4.13 asks
+ * for (a preceding symlink component's target parent isn't the lexical
+ * parent), but this is what the REST OF THIS LIBRARY already does: the
+ * AT_FDCWD/absolute branch resolves through RtlDosPathNameToNtPathName_U,
+ * Windows path normalisation performed before the filesystem is
+ * consulted. Measured: stat("d/nonexistent/../f") and
+ * stat("d/regularfile/../f") both return 0 through that branch, so this
+ * pass agrees with it rather than being independently "more correct" and
+ * inconsistent. The gap is fenced in test/posix-unreferenced.c,
  * test_pathres_dotdot_over_nondir().
  *
  * Operates in place -- the result is never longer than the input.
  * Returns 0 with *np and *trailing updated, or 1 if the name escapes
- * above the RootDirectory (a leading ".." with nothing to pop), which
- * a RootDirectory-relative name cannot express and which the caller
- * resolves a different way. */
+ * above the RootDirectory (a leading ".." with nothing to pop), which a
+ * RootDirectory-relative name cannot express. */
 static int normalize_rel(WCHAR *w, size_t *np, int *trailing)
 {
 	size_t n = *np, out = 0, i = 0;
@@ -437,9 +331,8 @@ static int normalize_rel(WCHAR *w, size_t *np, int *trailing)
 /* THE {MAX_PATH} CEILING THE Rtl PUTS ON EVERY DOS NAME, AND WHY THIS
  * FUNCTION EXISTS.
  *
- * MEASURED ON REAL WINDOWS (GitHub windows-latest / Server 2025, CI run
- * 32822306367, all three windows-test legs agreeing), from a working
- * directory of "D:\a\ntlibc\ntlibc":
+ * MEASURED ON REAL WINDOWS (GitHub windows-latest / Server 2025), from a
+ * working directory of "D:\a\ntlibc\ntlibc":
  *
  *   open("chm.d/<255 bytes>")               -> -1, [ENAMETOOLONG]  (280)
  *   open("chm.d/<254 bytes>")               -> -1, [ENAMETOOLONG]  (279)
@@ -448,53 +341,35 @@ static int normalize_rel(WCHAR *w, size_t *np, int *trailing)
  *   openat(dirfd_of_chm.d, "<255 bytes>")   ->  ok
  *   open("\\?\D:\a\ntlibc\ntlibc\chm.d\<255 bytes>") -> ok
  *
- * The last two are what identify the culprit.  NTFS is happy with the
- * 255-code-unit component, and NtCreateFile is happy with the 284-byte
- * name -- the *same file*, created successfully, when the NT path is
- * handed over ready-made.  The only step that differs between the
- * failing and succeeding forms is RtlDosPathNameToNtPathName_U's
- * DOS->NT conversion, and the only route to [ENAMETOOLONG] through
- * __ntpath()'s Rtl branch is STATUS_NAME_TOO_LONG (the component check
- * in __name_too_long() and the __US_MAX_WCHARS ceiling are both ruled
- * out by the 254-byte and 274-byte cases above).  So: the Rtl applies
- * the Win32 {MAX_PATH} = 260 ceiling to any name it has to normalise,
- * and the "\\?\" local-device prefix -- which it copies through
- * verbatim rather than normalising -- is the documented way past it
- * (Microsoft, "Maximum Path Length Limitation":
- * https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation
- * #enable-long-paths-in-windows-10-version-1607-and-later).
+ * The last two identify the culprit: NTFS and NtCreateFile are both happy
+ * with the *same file*, created successfully, when the NT path is handed
+ * over ready-made. The only step that differs is RtlDosPathNameToNtPathName_U's
+ * DOS->NT conversion: the Rtl applies the Win32 {MAX_PATH} = 260 ceiling
+ * to any name it has to normalise, and the "\\?\" local-device prefix --
+ * copied through verbatim rather than normalised -- is the documented way
+ * past it.
  *
- * That ceiling is not this library's to keep.  <limits.h> says
- * PATH_MAX is 4096 and sysconf(_PC_PATH_MAX) reports it, so a caller is
- * entitled to a 4000-byte path; before this, every path-taking
- * interface silently stopped at 260 on real Windows.  NONE OF THIS IS
- * VISIBLE UNDER WINE: Wine's RtlDosPathNameToNtPathName_U has no such
- * ceiling, so all six lines above succeed there, which is why the gap
- * survived until a test happened to build a path past 260.
+ * That ceiling is not this library's to keep: PATH_MAX is 4096, so a
+ * caller is entitled to a 4000-byte path. NONE OF THIS IS VISIBLE UNDER
+ * WINE: Wine's RtlDosPathNameToNtPathName_U has no such ceiling, so all
+ * six lines above succeed there, which is why the gap survived until a
+ * test built a path past 260.
  *
- * Rather than route every name through a hand-built NT path -- which
- * would mean reimplementing Windows path normalisation (drive-relative
- * "C:foo", UNC, device names, the reserved names) for the 99.9% of
- * paths the Rtl already handles correctly -- this runs ONLY as a
- * fallback, after the Rtl has refused with STATUS_NAME_TOO_LONG, i.e.
- * only on names that until now returned -1 outright.  A name that works
- * today takes exactly the path it took before.
+ * Rather than route every name through a hand-built NT path, this runs
+ * ONLY as a fallback after the Rtl has refused with STATUS_NAME_TOO_LONG
+ * -- a name that works today takes exactly the path it took before.
  *
- * What it handles is correspondingly narrow: a drive-absolute name
- * ("X:\..."), a drive-rooted one ("\..." , taking the drive from the
- * current directory) and a plain relative one (joined onto the current
- * directory).  Drive-relative "X:rel", and a name whose ".." climbs
- * above the drive root, are declined -- the caller then reports the
- * Rtl's [ENAMETOOLONG] as before, which is no worse than what happened
- * before this existed.  "." and ".." are resolved lexically by
- * normalize_rel(), the same pass and the same documented caveat as the
- * __ntpath_at() branch below.
+ * What it handles is narrow: a drive-absolute name ("X:\..."), a
+ * drive-rooted one ("\...", taking the drive from the current directory)
+ * and a plain relative one (joined onto the current directory).
+ * Drive-relative "X:rel", and a name whose ".." climbs above the drive
+ * root, are declined -- the caller then reports the Rtl's [ENAMETOOLONG]
+ * as before. "." and ".." are resolved lexically by normalize_rel(), same
+ * as the __ntpath_at() branch below.
  *
  * Returns 0 with *out built (and *trailing possibly updated), or -1
- * without touching errno meaningfully -- the caller reports the Rtl's
- * own verdict in that case.  On success *out owns a single __malloc'd
- * buffer, held in ->dos exactly as the __ntpath_at() branch does, so
- * __ntpath_free() releases it. */
+ * without touching errno meaningfully -- the caller reports the Rtl's own
+ * verdict in that case. */
 static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
                                  struct __ntpath *out, ULONG attributes)
 {
@@ -582,38 +457,23 @@ static int ntpath_at_impl(int dirfd, const char *path, struct __ntpath *out,
 	int vfs;
 	if (!path) { errno = EFAULT; return -1; }
 	/* "path is an empty string" is [ENOENT] on every page that specifies
-	 * an *at() function -- open.html ("or path points to an empty
-	 * string"), stat.html, access.html, unlink.html, mkdir.html,
-	 * chmod.html, utimensat.html, readlink.html, link.html ("path1 or
-	 * path2"), symlink.html, rename.html ("either old or new") -- and no
-	 * page's *at()-specific ERRORS subsection carves out an exception.
-	 * __ntpath() has said so since it was written; this branch did not.
+	 * an *at() function, and no page's *at()-specific ERRORS subsection
+	 * carves out an exception.
 	 *
 	 * DO NOT "SIMPLIFY" THIS AWAY on the grounds that the object manager
-	 * copes with an empty name perfectly well.  It does, and that is
-	 * precisely the problem.  An empty UNICODE_STRING names the
+	 * copes with an empty name perfectly well. It does, and that is
+	 * precisely the problem: an empty UNICODE_STRING names the
 	 * RootDirectory handle itself, so without this guard every *at()
-	 * function silently operated on the descriptor's own directory:
+	 * function silently operated on the descriptor's own directory --
 	 * fchmodat(dfd, "", 0644, 0) changed that directory's mode and
-	 * returned 0, and openat/fstatat/faccessat/utimensat likewise
-	 * succeeded on the wrong object.  (The others reached NT and returned
-	 * some incidental errno -- EISDIR, EEXIST, EINVAL -- never ENOENT.)
-	 *
-	 * The comment that used to sit below this, on the relative branch,
-	 * read "An empty name (\"\") opens the directory itself".  That
-	 * sentence is TRUE about the NT object manager and FALSE as a
-	 * statement of what this function should do with a caller's empty
-	 * path: it described a mechanism and then let the mechanism decide
-	 * the policy, and the code faithfully implemented the comment.  Both
-	 * were wrong at the POSIX layer for the same reason.  The empty NT
-	 * name is correct as an ENCODING -- the branch below deliberately
-	 * produces one for "." -- and wrong as a POLICY for caller input.
-	 * Keep the two apart.
+	 * returned 0. The empty NT name is correct as an ENCODING (the branch
+	 * below deliberately produces one for ".") and wrong as a POLICY for
+	 * caller input; keep the two apart.
 	 *
 	 * This is not the AT_EMPTY_PATH case either: that flag is a Linux
-	 * extension, it is not in POSIX.1-2017, and this library neither
-	 * defines it nor has any caller that asks for it.  A caller meaning
-	 * "the directory itself" spells it ".". */
+	 * extension not in POSIX.1-2017, and this library neither defines it
+	 * nor has any caller that asks for it. A caller meaning "the
+	 * directory itself" spells it ".". */
 	if (!*path) { errno = ENOENT; return -1; }
 	if (overlay) {
 		vfs = __vfs_resolve_at(dirfd, path);
@@ -629,11 +489,10 @@ static int ntpath_at_impl(int dirfd, const char *path, struct __ntpath *out,
 
 	/* Relative to a directory handle: the object manager resolves a
 	 * relative name against RootDirectory, so the name is given as-is,
-	 * with slashes fixed and without the DOS->NT conversion.  "." becomes
-	 * the empty NT name, which is how the object manager spells "the
-	 * RootDirectory itself" -- that is this encoding's legitimate use.  A
-	 * caller's own empty path is a different thing and was rejected as
-	 * [ENOENT] above; see the note there. */
+	 * with slashes fixed and without the DOS->NT conversion. "." becomes
+	 * the empty NT name, how the object manager spells "the RootDirectory
+	 * itself" -- this encoding's legitimate use, unlike a caller's own
+	 * empty path, rejected as [ENOENT] above. */
 	{
 		struct __fd *f = __fd_get(dirfd);
 		WCHAR *w;
@@ -646,19 +505,13 @@ static int ntpath_at_impl(int dirfd, const char *path, struct __ntpath *out,
 		if (!w) return -1;
 		esc = normalize_rel(w, &n, &trailing);
 		if (esc) {
-			/* The name reaches above the descriptor's directory, which
-			 * a RootDirectory-relative name has no way to say.  Resolve
-			 * the descriptor to an absolute path and hand the whole
-			 * thing to __ntpath(), which normalises through the Rtl --
-			 * the same answer the AT_FDCWD branch would give.  One extra
-			 * query, and only in this case: a name that stays at or
-			 * below the descriptor never gets here.
-			 *
-			 * Deliberately NOT done for every relative name.  Resolving
-			 * by path would throw away what the *at() family exists for
-			 * -- the descriptor pins the directory even if it is renamed
-			 * out from under the caller -- so it is the fallback for the
-			 * one shape that cannot be expressed, not the strategy. */
+			/* The name reaches above the descriptor's directory, which a
+			 * RootDirectory-relative name has no way to say. Resolve the
+			 * descriptor to an absolute path and hand the whole thing to
+			 * __ntpath(), the same answer the AT_FDCWD branch would give
+			 * -- only in this case, since resolving by path for every
+			 * relative name would throw away what the *at() family
+			 * exists for: pinning the directory even if renamed. */
 			char *dir, *joined;
 			size_t dl, pl;
 			int rc;

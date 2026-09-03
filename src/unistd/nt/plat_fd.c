@@ -2,11 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * NT implementation of src/internal/plat_fd.h -- see that header for
- * the contract each function makes.  Everything here was, until this
- * file existed, inline inside src/unistd/{close,read,write,lseek,
- * dup}.c; nothing changed in substance, only location and the addition
- * of a POSIX-shaped return (errno already set) in place of a raw
- * NTSTATUS or a signal the caller had to raise itself.
+ * the contract each function makes.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -59,28 +55,11 @@ ssize_t __plat_pread(__plat_handle_t h, void *buf, size_t count, off_t off) // N
 	return (ssize_t)io.Information;
 }
 
-/* write.html, ERRORS, shall fail: "[EFBIG] The file is a regular file,
- * nbyte is greater than 0, and the starting position is greater than or
- * equal to the offset maximum established in the open file description
- * associated with fildes."  The starting position of a write() is the
- * file position, or the end of the file when `append` is set (that is
- * what FILE_WRITE_TO_END_OF_FILE below resolves to).
- *
- * WHY THIS IS ASKED ON THE FAILURE PATH rather than before the write.
- * The alternative is an unconditional NtQueryInformationFile in front of
- * every NtWriteFile -- one extra round trip on the hottest path in the
- * library, paid by every stdio flush, to evaluate a condition that no
- * successful write can ever satisfy.  A starting position at or past
- * __OFF_MAX cannot produce a successful transfer: there is nowhere for
- * the bytes to go.  So the query is only worth making once NT has
- * already refused, where it costs nothing and where its only effect is
- * to replace one error report with the one POSIX names.  A shall-fail
- * clause that turns an error into a *different* error is exactly the
- * shape that suits this placement.
- *
- * A query that cannot be answered reports 0 -- the caller then gets
- * NT's own status, translated normally, which is what it would have
- * got before. */
+/* write.html [EFBIG]: checked on the FAILURE path, not before the write,
+ * to avoid an unconditional NtQueryInformationFile round trip on the
+ * hottest path in the library for a condition no successful write can
+ * ever satisfy. A query that cannot be answered reports 0, so the caller
+ * gets NT's own status translated normally. */
 static int start_at_offset_max(__plat_handle_t h, int append)
 {
 	IO_STATUS_BLOCK io;
@@ -112,11 +91,9 @@ ssize_t __plat_write(__plat_handle_t h, const void *buf, size_t count, int appen
 	st = NtWriteFile(h, 0, 0, 0, &io, buf, (ULONG)count, pp, 0);
 	if (st == STATUS_PENDING) { NtWaitForSingleObject(h, 0, 0); st = io.Status; }
 	/* Raised here, not by the front door testing errno==EPIPE after the
-	 * fact: __errno_from_status()'s generic table also maps OTHER
-	 * statuses (STATUS_PIPE_NOT_AVAILABLE, some DOS codes) to EPIPE, and
-	 * SIGPIPE must not fire for those -- only a genuinely broken/
-	 * disconnected/closing pipe raises it.  Only this call, which still
-	 * has the real status in hand, can tell the two apart. */
+	 * fact: __errno_from_status()'s generic table also maps OTHER statuses
+	 * to EPIPE, and SIGPIPE must not fire for those -- only this call,
+	 * with the real status in hand, can tell them apart. */
 	if (st == STATUS_PIPE_BROKEN || st == STATUS_PIPE_DISCONNECTED || st == STATUS_PIPE_CLOSING) {
 		__sig_lock();
 		__raise_internal(SIGPIPE);

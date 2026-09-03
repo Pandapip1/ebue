@@ -2,12 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * NT implementation of src/internal/plat_thread.h -- see that header for
- * the contract each function makes.  Everything here was, until this file
- * existed, inline inside src/thread/{pthread,pthread_cancel,pthread_cond,
- * pthread_mutex,pthread_rwlock,pthread_signal,pthread_sync,pthread_tsd,
- * semaphore,mqueue,aio}.c; nothing changed in substance, only location and
- * the addition of a POSIX-shaped return (0/-1 with errno set, or the small
- * __PLAT_WAIT_* enum for a wait) in place of a raw NTSTATUS.
+ * the contract each function makes.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -21,16 +16,11 @@
 #include "plat_thread.h"
 
 /* Shared by every \BaseNamedObjects-rooted object this file creates or
- * opens: `ascii` is already the fully-qualified path, ASCII by
- * construction (a hash or a pid/sequence pair formatted by the front
- * door).  `openif` additionally clears OBJ_INHERIT and sets OBJ_OPENIF,
- * matching the one caller (the named-mutant lock) that needs create-or-
- * open object-manager semantics instead of plain inheritable-by-fork
- * creation. 128 WCHARs comfortably covers every name this subsystem
- * builds (the longest, a message queue's per-generation semaphore name,
- * is capped at 112 *bytes* -- see mqueue.c's struct mq_header -- well
- * under half this budget), so nothing that fit before can be truncated by
- * sharing one buffer size across every named-object call here. */
+ * opens. `openif` clears OBJ_INHERIT and sets OBJ_OPENIF, for the one
+ * caller (the named-mutant lock) that needs create-or-open semantics
+ * instead of plain inheritable-by-fork creation. 128 WCHARs comfortably
+ * covers every name this subsystem builds (the longest is capped at 112
+ * bytes -- mqueue.c's struct mq_header). */
 static void build_object_attributes(const char *ascii, OBJECT_ATTRIBUTES *oa,
 	UNICODE_STRING *us, WCHAR *wide, size_t cap, int openif) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
@@ -219,14 +209,8 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
 	return 0;
 }
 
-/* __plat_thread_resume() is declared above (this file's own header
- * comment) but defined in src/process/nt/plat_process.c, not here: both
- * this file (pthread_create()/pthread_cancel()'s deferred-cancellation
- * resume) and the process subsystem's own post-fork/post-spawn resume
- * independently arrived at an NtResumeThread()-wrapping implementation
- * during the platform-abstraction migration, and only one definition
- * may exist per the ODR. Kept where process/thread lifecycle otherwise
- * lives; this file just uses it. */
+/* __plat_thread_resume() is declared in this file's header but defined in
+ * src/process/nt/plat_process.c, to avoid a duplicate ODR definition. */
 
 int __plat_thread_suspend(__plat_handle_t h)
 {
@@ -257,18 +241,9 @@ int __plat_thread_redirect_ip(__plat_handle_t h, void *target) // NOLINT(bugpron
 	const size_t flags_offset = 0;
 	const size_t ip_offset = 0xb8;
 #elif defined(__aarch64__)
-	/* ARM64_NT_CONTEXT (winnt.h): ContextFlags (ULONG) at 0x000, Cpsr
-	 * (ULONG) at 0x004, X0..X28/Fp/Lr (31 * 8 bytes) at 0x008-0x0ff,
-	 * Sp at 0x100, Pc at 0x108, V[32] NEON128 (32*16 bytes) at
-	 * 0x110-0x30f, Fpcr/Fpsr at 0x310/0x314, Bcr[8]/Bvr[8]/Wcr[2]/
-	 * Wvr[2] (debug regs) filling out to a 0x390-byte total. Offsets
-	 * and the CONTEXT_ARM64* flag bits confirmed against Wine's
-	 * include/winnt.h (a real, current, independently-maintained
-	 * implementation of the documented Windows ARM64 ABI -- not
-	 * transcribed from memory) rather than assumed from the x86
-	 * layouts' shape. CONTEXT_CONTROL here also covers Sp, unlike
-	 * AMD64/i386's own CONTEXT_CONTROL, but only Pc is touched below,
-	 * matching those two branches' own scope. */
+	/* ARM64_NT_CONTEXT (winnt.h) offsets confirmed against Wine's
+	 * include/winnt.h rather than assumed from the x86 layouts' shape.
+	 * Only Pc (0x108) is touched, matching the other two branches' scope. */
 	unsigned char storage[0x390 + 15];
 	const ULONG flags = 0x400001; /* CONTEXT_ARM64 | CONTEXT_ARM64_CONTROL */
 	const size_t flags_offset = 0;
@@ -393,12 +368,8 @@ ssize_t __plat_thread_file_io(__plat_handle_t h, void *buf, size_t count, // NOL
 	return (ssize_t)io.Information;
 }
 
-/* src/internal/plat_thread.h's own banner explains why this pair needs
- * no creation step: the PEB lock is set up by the OS before any user
- * code runs, so these are trivial one-line wrappers, exactly what
- * src/thread/pthread_mutex.c's/pthread.c's own direct
- * RtlAcquirePebLock()/RtlReleasePebLock() calls already were before
- * being relocated here -- no behavior change, only relocation. */
+/* The PEB lock is set up by the OS before any user code runs, so this
+ * pair needs no creation step. */
 void __plat_fast_lock(void) { RtlAcquirePebLock(); }
 void __plat_fast_unlock(void) { RtlReleasePebLock(); }
 

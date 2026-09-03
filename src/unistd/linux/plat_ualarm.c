@@ -1,22 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * ualarm(): include/unistd.h's own declaration carries an "undefined-ok"
- * marker for exactly the same NT-specific reason getitimer()/setitimer()
- * used to (src/unistd/sleep.c's alarm() timer is an APC that only runs
- * during an alertable wait, so a repeating request coalesces). That
- * marker stays true of, and only checked against, the NT build.
- *
- * ualarm.html's own DESCRIPTION says outright what this function is:
- * "The ualarm() function shall set a timer to generate a SIGALRM signal
- * after the number of microseconds specified by useconds. ... If the
- * interval argument is non-zero, a SIGALRM signal shall be generated
- * every interval microseconds after the first" -- ITIMER_REAL, in
- * different units. This is built directly on this library's own
- * setitimer(ITIMER_REAL, ...) (src/time/linux/plat_itimer.c) rather
- * than a second raw mechanism: there is nothing ualarm() needs that
- * setitimer() does not already provide, real repeating delivery
- * included.
+ * ualarm(): "undefined-ok" on NT for the same reason getitimer()/
+ * setitimer() are. ualarm.html's DESCRIPTION is ITIMER_REAL in different
+ * units, so this is built directly on setitimer(ITIMER_REAL, ...)
+ * (src/time/linux/plat_itimer.c) rather than a second raw mechanism.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc

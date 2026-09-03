@@ -2,87 +2,42 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Linux implementation of src/internal/plat_unistd.h -- see src/mman/
- * linux/plat_mem.c's own banner for the general discipline this file
- * follows too (raw syscall(2), no host libc, -nostdinc against ntlibc's
- * own headers, aarch64 syscall numbers confirmed against this host's own
- * <sys/syscall.h> rather than assumed).
+ * linux/plat_mem.c's own banner for the raw-syscall discipline this file
+ * follows too.
  *
  * UNLIKE plat_fcntl.h's __plat_create_file(), which takes a `struct
- * __ntpath *` the front door (src/fcntl/open.c) has already resolved
- * through NT-only machinery -- an interface shape plat_fcntl.h's own
- * banner says "a non-NT backend will need an entirely different front
- * door" for -- every path-taking function plat_unistd.h declares
- * (__plat_unlink, __plat_chdir, __plat_link, __plat_readlink,
- * __plat_symlink, __plat_chown_probe) takes a plain `const char *path`
- * and, where relevant, a plain `int dirfd`.  Checked against every one
- * of their front doors (src/unistd/{unlink,chdir,link,ids}.c): none of
- * them calls __ntpath_at()/__ntpath() themselves -- that resolution
- * happens only inside the NT backend's own __plat_unlink()/__plat_link()/
- * etc. bodies (src/unistd/nt/plat_unistd.c).
+ * __ntpath *` already resolved through NT-only machinery, every
+ * path-taking function plat_unistd.h declares takes a plain `const char
+ * *path` and, where relevant, a plain `int dirfd` -- so this whole family
+ * ports directly onto Linux's own *at() syscalls, which take the
+ * identical (dirfd, path) shape POSIX already gives them.
  *
- * __plat_chdir() and __plat_readlink() are the two exceptions to "none
- * of them calls anything NT-only" in a different way: their front
- * doors (chdir.c, link.c's readlinkat()) do NOT themselves call
- * __vfs_resolve_at() (src/internal/vfs.c) -- the same fixed-POSIX-
- * namespace overlay machinery NT needs because it has no native concept
- * of `/`, `/dev`, `/dev/null` etc, and a future UEFI backend most likely
- * will too -- because that call lives inside the NT backend's own
- * __plat_chdir()/__plat_readlink() bodies instead (src/unistd/nt/
- * plat_unistd.c), the same place __plat_open() itself absorbs it. And
- * Linux, unlike NT or a hypothetical UEFI backend, has real native
- * devices and a real native root, so it
- * needs no overlay and no equivalent call at all: __plat_chdir() below
- * always reports __VFS_NONE via its *vfsout parameter (the plat_unistd.h
- * contract for a backend with nothing to report there), and
- * __plat_readlink() needs no vfs pre-check whatsoever -- Linux's own
- * readlinkat(2) already answers ENOENT/EINVAL correctly on its own.
+ * __plat_chdir() and __plat_readlink() need no __vfs_resolve_at()
+ * (src/internal/vfs.c) pre-check at all here, unlike on NT: Linux has
+ * real native devices and a real native root, so __plat_chdir() always
+ * reports __VFS_NONE, and Linux's own readlinkat(2) already answers
+ * ENOENT/EINVAL correctly on its own.
  *
- * So this whole family ports directly onto Linux's own *at() syscalls,
- * which take the identical (dirfd, path) shape POSIX already gives
- * them -- no second front door needed, unlike open().
- *
- * `dirfd` here may be ntlibc's own AT_FDCWD sentinel or an ntlibc fd-
- * table index (an int the POSIX front door received directly, e.g.
- * unlinkat()'s caller-supplied dirfd) -- never a raw Linux fd on its own.
- * resolve_dirfd() below turns either into what the raw *at() syscalls
- * need: AT_FDCWD passed straight through (ntlibc's own <fcntl.h> already
- * defines it as -100, confirmed against this host's own <fcntl.h> to be
- * numerically identical to Linux's, so no translation is needed for that
- * case), or the fd table's boxed handle (src/unistd/linux/plat_fd.c's
- * fd+1 encoding) unboxed back into the real fd it names.
+ * `dirfd` here may be ntlibc's own AT_FDCWD sentinel or an ntlibc fd-table
+ * index, never a raw Linux fd on its own. resolve_dirfd() below turns
+ * either into what the raw *at() syscalls need: AT_FDCWD passed straight
+ * through (numerically identical to Linux's own), or the fd table's boxed
+ * handle unboxed back into the real fd it names.
  *
  * ntlibc's own <fcntl.h> AT_FDCWD/AT_SYMLINK_NOFOLLOW/AT_REMOVEDIR/
- * AT_SYMLINK_FOLLOW/O_CLOEXEC values were checked against this host's
- * real <fcntl.h> (-100, 0x100, 0x200, 0x400, 0x80000 respectively) and
- * found numerically identical to the kernel ABI's own, unlike NT's flags
- * (which the NT backend translates from scratch): this header's own
- * POSIX flag namespace was already chosen to match Linux, so they are
- * used directly below rather than reintroduced under an _LX suffix the
- * way src/unistd/linux/plat_fd.c's fcntl(2)-command constants (F_SETFD,
- * FD_CLOEXEC -- values <fcntl.h> does not define at all) had to be.
+ * AT_SYMLINK_FOLLOW/O_CLOEXEC values are numerically identical to the
+ * kernel ABI's own, so they are used directly below rather than
+ * reintroduced under an _LX suffix.
  *
- * SCOPED OUT, deliberately: __plat_alarm_arm()'s SIGALRM/timer
- * machinery.  alarm()'s real semantics need a raw signal handler wired
- * through this process's signal-delivery machinery
- * (src/signal/sigdelivery.c's __raise_internal(), owned by
- * src/signal/linux/plat_signal.c, not this file) -- reimplementing
- * that here risks exactly the duplicate-__plat_* collision this tree's
- * own one-owner-per-function discipline exists to avoid (see
- * src/signal/linux/plat_signal.c's own comment on __plat_event_set()).
- * __plat_alarm_arm() below
- * always returns -1 ("could not arm"), which is the exact degraded mode
- * sleep.c's own alarm() already tolerates ("There is nothing to report a
- * failed arm with, so a request the system silently could not honour
- * just leaves alarm_due at 0, same as the cancelled case") -- alarm()
- * itself, and every other function in this file, is otherwise fully
- * implemented, including __plat_time_now(), the same realtime clock
- * alarm()'s deadline math runs on.
+ * SCOPED OUT, deliberately: __plat_alarm_arm()'s SIGALRM/timer machinery.
+ * alarm()'s real semantics need a raw signal handler wired through
+ * src/signal/linux/plat_signal.c's signal-delivery machinery, not this
+ * file. __plat_alarm_arm() below always returns -1 ("could not arm"),
+ * the exact degraded mode sleep.c's own alarm() already tolerates.
  *
  * getpid()/gettid() are implemented here too, via __plat_getpid()/
- * __plat_gettid() below: plat_unistd.h declares both, so
- * src/unistd/getpid.c's front door reaches this backend rather than
- * reading NT's TEB directly, giving pthread_mutex.c's own port a
- * working getpid() reachable on this backend.
+ * __plat_gettid() below, giving pthread_mutex.c's own port a working
+ * getpid() reachable on this backend.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -97,20 +52,13 @@
 #include "libc.h"
 #include "plat_unistd.h"
 
-/* Linux syscall numbers -- aarch64 (arch/arm64/include/uapi/asm/
- * unistd.h, via the generic modern ABI's asm-generic/unistd.h) confirmed
- * against this host's own <sys/syscall.h>, the same oracle src/mman/
- * linux/plat_mem.c's banner describes; x86_64/i386 confirmed against a
- * real x86_64-linux-gnu glibc's own asm/unistd_64.h/asm/unistd_32.h --
- * two genuinely different tables from aarch64's (and from each other),
- * not derived by any fixed offset -- see src/signal/linux/plat_signal.c's
- * own updated banner for the same warning. SYS_newfstatat has no i386
- * arm below: this macro is never actually called anywhere in this file
- * (confirmed by grep -- a pre-existing, harmless dead #define this
- * change does not try to explain or remove), and i386's own fstatat
- * syscall is a differently-named, differently-shaped one (fstatat64,
- * 32-bit stat layout) rather than a same-shaped newfstatat under a
- * different number, so there is no faithful i386 number to give it. */
+/* Linux syscall numbers, confirmed against this host's own
+ * <sys/syscall.h> (aarch64) / a real x86_64-linux-gnu glibc's asm/
+ * unistd_64.h and unistd_32.h (x86_64, i386) -- three genuinely
+ * different tables, not derived from each other by a fixed offset.
+ * SYS_newfstatat has no i386 arm: it's unused in this file, and i386's
+ * own fstatat syscall is a differently-shaped fstatat64 rather than a
+ * same-shaped newfstatat under a different number. */
 #if defined(__aarch64__)
 #define SYS_getcwd              17
 #define SYS_uname              160
@@ -175,8 +123,7 @@
 #define SYS_linkat             303
 #define SYS_readlinkat         305
 #define SYS_symlinkat          304
-#define SYS_newfstatat           0 /* unused on this arch -- see this
-                                    * block's own banner above. */
+#define SYS_newfstatat           0 /* unused on this arch -- see banner above */
 #define SYS_fchownat           298
 #define SYS_fchown               95
 #define SYS_ftruncate            93
@@ -200,34 +147,14 @@
 #error "plat_unistd.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
 #endif
 
-/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
- * the call path at all. NOT `extern long syscall(long, ...)`: that
- * symbol is satisfied by the HOST's real glibc at link time in a
- * non-freestanding build (this file's own -nostdinc only avoids the
- * host's headers, not its final link step), and glibc's syscall()
- * performs its own error translation: on failure it always returns
- * exactly -1 and sets glibc's OWN errno (a different memory location
- * than ntlibc's own errno global, src/internal/errno.c), never the
- * raw kernel -errno in [-4095,-1] this file's is_sys_error()/
- * `errno = (int)-ret` translation requires -- and, worse than a
- * merely-wrong errno, __plat_process_exists() below reads `-ret`
- * directly and compares it to EPERM to distinguish "exists, not
- * mine to signal" from "does not exist": under the glibc-wrapped
- * syscall(), every kill(2) failure collapses to ret==-1, so
- * `-ret==EPERM` would be true unconditionally and this function
- * would report every nonexistent pid as existing. Confirmed both by
- * inspecting a linked pilot binary (nm -D shows an undefined
- * `syscall@GLIBC_*`) and independently by five sibling Linux backends
- * (src/mman/linux/plat_mem.c, src/unistd/linux/plat_fd.c,
- * src/socket/linux/plat_socket.c, src/time/linux/plat_time.c,
- * src/process/linux/plat_process.c) and src/thread/linux/plat_thread.c,
- * each of which independently hit and fixed the identical bug; this
- * is the same fix applied here. aarch64's syscall calling convention:
- * x8 = syscall number, x0..x5 = up to 6 arguments, result (or -errno
- * in [-4095,-1]) in x0; x86_64/i386 branches below mirror crt/linux/
- * crt1.c's/src/fcntl/linux/plat_fcntl.c's own raw_syscall() bodies for
- * their arches, duplicated here per this tree's own "own syscall table
- * per file" discipline. */
+/* A minimal 6-argument raw syscall, one calling convention per arch
+ * below. NOT `extern long syscall(long, ...)`: that symbol resolves to
+ * the HOST's real glibc at link time, which sets glibc's OWN errno on
+ * failure rather than the raw kernel -errno this file's translation
+ * requires -- and __plat_process_exists() below reads `-ret` directly
+ * and compares it to EPERM, so under a glibc-wrapped syscall() every
+ * kill(2) failure would collapse to ret==-1 and every nonexistent pid
+ * would report as existing. */
 #if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
@@ -294,35 +221,13 @@ static int is_sys_error(long ret)
 	return (unsigned long)ret >= (unsigned long)-4095L;
 }
 
-/* syscall(): include/unistd.h's own declaration is marked "undefined-ok:
- * NT has no stable, numbered raw-syscall ABI exposed to user mode" --
- * true of NT, not of Linux, which has had exactly that ABI (a fixed
- * per-architecture syscall number in x8, up to six arguments in x0..x5,
- * `svc #0`, the result or -errno in x0) as public, stable interface
- * since long before this pilot existed. So unlike the rest of this file,
- * which exists to satisfy plat_unistd.h's own __plat_*() seam, this is
- * the plain POSIX front door itself: every argument this function's own
- * caller supplied is unknown in count (that is what "..." means), so all
- * six slots raw_syscall() always takes are read regardless of how many
- * the caller actually passed -- exactly the same unconditional six-slot
- * va_arg() extraction src/signal/linux/plat_signal.c's own file-local
- * `syscall()` trampoline already does for the identical reason (that
- * one is static and unrelated to this one beyond sharing a name and a
- * technique -- two independent files independently discovering they
- * both need a raw `svc #0` wrapper is the whole reason every Linux
- * backend in this tree defines its own rather than sharing one, per
- * src/mman/linux/plat_mem.c's own banner). A kernel syscall that takes
- * fewer than six arguments simply ignores the extra ones, so handing it
- * uninitialized register/stack content past what the caller actually
- * supplied is harmless in practice on this ABI, if formally
- * unspecified-but-not-undefined C (reading a va_arg the caller never
- * provided) -- exactly the same tradeoff already accepted at the sibling
- * call site.
- *
- * syscall(2)'s own contract for the return value: the raw kernel result
- * on success, or errno set plus -1 on failure -- is_sys_error()/
- * `errno = (int)-ret` above is that exact translation, already proven
- * correct by every other function in this file. */
+/* syscall(): unlike the rest of this file, which exists to satisfy
+ * plat_unistd.h's own __plat_*() seam, this is the plain POSIX front door
+ * itself, since Linux (unlike NT) has a real stable syscall ABI. Every
+ * argument's count is unknown ("..."), so all six slots raw_syscall()
+ * always takes are read regardless of how many the caller actually
+ * passed; a kernel syscall taking fewer than six simply ignores the
+ * extras, so this is harmless in practice. */
 long syscall(long number, ...)
 {
 	va_list ap;
@@ -347,14 +252,10 @@ static int unbox(__plat_handle_t h)
 	return (int)((long)h - 1);
 }
 
-/* syncfs(): include/unistd.h's own declaration is marked "undefined-ok:
- * ... NT has no per-volume sync primitive" -- true of NT, not of Linux,
- * which has had a real syncfs(2) syscall (sync every dirty inode/buffer
- * belonging to the filesystem `fd` is on, as opposed to fsync(2)'s
- * single-descriptor scope) since 2.6.39. Same "plain POSIX front door,
- * not a __plat_* seam" shape as syscall() above: NT has nothing this
- * could be implemented in terms of, so there is no plat_unistd.h
- * contract to satisfy, only a direct syscall. */
+/* syncfs(): NT has no per-volume sync primitive, so this is a plain POSIX
+ * front door, not a __plat_* seam -- just a direct syscall(2) (sync every
+ * dirty inode/buffer for the filesystem `fd` is on, unlike fsync(2)'s
+ * single-descriptor scope). */
 int syncfs(int fd)
 {
 	struct __fd *f = __fd_get(fd);
@@ -365,13 +266,8 @@ int syncfs(int fd)
 	return 0;
 }
 
-/* acct(): include/unistd.h's own declaration is marked "undefined-ok:
- * Unix process accounting is a kernel facility NT has no equivalent
- * of" -- true of NT, not of Linux, which has a real acct(2) syscall
- * (CONFIG_BSD_PROCESS_ACCT permitting; a kernel built without it
- * answers ENOSYS, a real and correctly-reported failure, not a silent
- * no-op). Same "plain POSIX front door" shape as syncfs() just above:
- * no NT-shaped concept to build a __plat_* seam out of. */
+/* acct(): same "plain POSIX front door" shape as syncfs() just above; a
+ * kernel built without CONFIG_BSD_PROCESS_ACCT answers ENOSYS honestly. */
 int acct(const char *filename)
 {
 	long ret = raw_syscall(SYS_acct, (long)filename, 0L, 0L, 0L, 0L, 0L);
@@ -379,11 +275,10 @@ int acct(const char *filename)
 	return 0;
 }
 
-/* See this file's own banner: turns ntlibc's own AT_FDCWD sentinel or
- * fd-table index into what the raw *at() syscalls need.  Returns -1 with
- * errno already set (by __fd_get()) only on a bad table index -- never a
- * legitimate result otherwise, since AT_FDCWD is -100 and every unboxed
- * real fd is >= 0 (plat_fd.c's fd+1 encoding never boxes a value <= 0). */
+/* Turns ntlibc's own AT_FDCWD sentinel or fd-table index into what the
+ * raw *at() syscalls need. Returns -1 with errno already set only on a
+ * bad table index -- never a legitimate result otherwise, since AT_FDCWD
+ * is -100 and every unboxed real fd is >= 0. */
 static int resolve_dirfd(int dirfd)
 {
 	struct __fd *f;
@@ -519,18 +414,12 @@ long __plat_nprocessors(void)
 
 long __plat_phys_pages(void)
 {
-	/* Raw uapi struct sysinfo layout on a 64-bit Linux kernel,
-	 * confirmed against this host's own <sys/sysinfo.h>: sizeof 112,
-	 * offsetof(totalram)==32 (8 bytes), offsetof(mem_unit)==104 (4
-	 * bytes).  Read by fixed byte offset out of a plain buffer, little-
-	 * endian (true of every architecture this library currently
-	 * targets), rather than through a locally-declared struct: this
-	 * file's -nostdinc build has no host header to check a hand-written
-	 * struct's compiler-computed layout against, and struct sysinfo's
-	 * historical `char _f[]` size-padding trailer (zero bytes wide on
-	 * every 64-bit kernel, nonzero on 32-bit ones) is exactly the kind
-	 * of detail that would silently drift between what this file
-	 * assumes and what the kernel actually writes. */
+	/* Raw uapi struct sysinfo layout on a 64-bit Linux kernel
+	 * (offsetof(totalram)==32, offsetof(mem_unit)==104), read by fixed
+	 * byte offset out of a plain buffer rather than a locally-declared
+	 * struct: struct sysinfo's historical `char _f[]` padding tail would
+	 * otherwise silently drift between what this file assumes and what
+	 * the kernel writes. */
 	unsigned char raw[128];
 	unsigned long long totalram;
 	unsigned int mem_unit;
@@ -562,21 +451,13 @@ int __plat_unlink(int dirfd, const char *path, int isdir)
 
 /* ======================================================================
  * getcwd.c: Linux's own getcwd(2) already answers exactly the plat_
- * unistd.h contract wants -- a NUL-terminated, forward-slash, absolute
- * path with no drive letter, DOS backslash, or UTF-16 anywhere in the
- * picture, since a Linux pathname is just bytes -- so this backend is
- * far simpler than the NT one (src/unistd/nt/plat_unistd.c's own
- * __plat_getcwd(), which has to fetch a UTF-16 DOS-form path first and
- * convert it) rather than equivalently complex: no RtlGetCurrentDirectory_U,
- * no __utf16_to_utf8_buf(), just the syscall.
+ * unistd.h contract wants (a NUL-terminated, forward-slash, absolute
+ * path, since a Linux pathname is just bytes), far simpler than the NT
+ * backend's UTF-16 DOS-form fetch-and-convert.
  *
  * getcwd(2)'s own return is the number of bytes written INCLUDING the
- * terminating NUL (unlike this file's raw_syscall() siblings, which
- * return a byte/entry count with no NUL of their own to count) -- one
- * less than that is the length plat_unistd.h's own contract asks for.
- * ERANGE (buffer too small) and EACCES (a path component not readable)
- * both already arrive as the correct -errno from the kernel, so nothing
- * here needs to remap either. */
+ * terminating NUL -- one less than that is the length plat_unistd.h's
+ * contract asks for. */
 ssize_t __plat_getcwd(char *buf, size_t bufsz)
 {
 	long ret = raw_syscall(SYS_getcwd, (long)buf, (long)bufsz, 0L, 0L, 0L, 0L);
@@ -586,26 +467,17 @@ ssize_t __plat_getcwd(char *buf, size_t bufsz)
 
 /* ======================================================================
  * gethostname.c: Linux has no standalone gethostname(2) syscall on the
- * modern generic ABI at all (glibc's own gethostname() is itself
- * implemented on top of uname(2) for exactly this reason) -- so this
- * backend answers the same real, kernel-known hostname __plat_uname()
- * (src/misc/linux/plat_misc.c) already reports as struct utsname's
- * nodename field, via the identical raw uname(2) call, rather than NT's
- * environment-variable indirection (src/unistd/nt/plat_unistd.c's own
- * __plat_hostname()). test/posix-tail.c's own uname()/gethostname()
- * cross-check ("nodename is the same thing gethostname() reports")
- * depends on this: the two calls must agree on this platform too, not
- * only on NT.
+ * modern generic ABI, so this backend answers the same hostname
+ * __plat_uname() (src/misc/linux/plat_misc.c) already reports as struct
+ * utsname's nodename field, via the identical raw uname(2) call, rather
+ * than NT's environment-variable indirection. test/posix-tail.c's
+ * uname()/gethostname() cross-check depends on the two calls agreeing.
  * ====================================================================== */
 
 void __plat_hostname(char *buf, size_t bufsz)
 {
-	/* Raw kernel struct new_utsname (uapi/linux/utsname.h): six 65-byte
-	 * NUL-terminated fields, nodename second -- see src/misc/linux/
-	 * plat_misc.c's own __plat_uname() comment for the fuller layout
-	 * account; duplicated here rather than shared, matching every other
-	 * Linux backend's own per-file syscall-number/raw-struct copies in
-	 * this tree (this file's own banner). */
+	/* Raw kernel struct new_utsname: six 65-byte NUL-terminated fields,
+	 * nodename second (see src/misc/linux/plat_misc.c's __plat_uname()). */
 	struct { char sysname[65]; char nodename[65]; char release[65];
 	         char version[65]; char machine[65]; char domainname[65]; } raw;
 	const char *h;
@@ -657,11 +529,9 @@ ssize_t __plat_readlink(int dirfd, const char *path, char *buf, size_t bufsz)
 	int rd = resolve_dirfd(dirfd);
 	long ret;
 	if (rd == -1 && dirfd != AT_FDCWD) return -1;
-	/* readlinkat(2)'s own truncate-silently behaviour (fill up to
-	 * bufsz, return the byte count, no NUL) already IS readlink.html's
-	 * contract verbatim -- unlike the NT backend, which has to build
-	 * that behaviour out of a reparse-point buffer by hand, nothing
-	 * here needs to special-case it. */
+	/* readlinkat(2)'s own truncate-silently behaviour already IS
+	 * readlink.html's contract verbatim, unlike the NT backend which has
+	 * to build it out of a reparse-point buffer by hand. */
 	ret = raw_syscall(SYS_readlinkat, (long)rd, (long)path, (long)buf, (long)bufsz, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return (ssize_t)ret;
@@ -700,13 +570,11 @@ gid_t __plat_detect_gid(void)
 
 void __plat_pgrp_publish_self(pid_t self)
 {
-	/* The NT backend publishes a named event because NT has nothing
-	 * else to hang "this process is a group leader" on; Linux actually
-	 * has the process group setpgid(0,0) asks for, and that real
-	 * operation supersedes the event trick entirely rather than
-	 * needing to be reimplemented alongside it.  Best-effort and
-	 * silent on failure, matching setpgrp.html's "no errors are
-	 * defined" the front door (src/unistd/ids.c) already relies on. */
+	/* The NT backend publishes a named event because NT has nothing else
+	 * to hang "this process is a group leader" on; Linux actually has the
+	 * process group setpgid(0,0) asks for, superseding the event trick
+	 * entirely. Best-effort and silent on failure, matching setpgrp.html's
+	 * "no errors are defined". */
 	(void)self;
 	raw_syscall(SYS_setpgid, 0L, 0L, 0L, 0L, 0L, 0L);
 }
@@ -721,34 +589,23 @@ int __plat_pgrp_is_leader(pid_t pid)
 int __plat_process_exists(pid_t pid)
 {
 	/* kill(pid, 0) is the standard POSIX existence probe: 0 means the
-	 * process exists and is signalable, EPERM means it exists and
-	 * merely is not ours to signal (the direct Linux analogue of the
-	 * NT backend's STATUS_ACCESS_DENIED-counts-as-existing rule), and
-	 * anything else (ESRCH first among them) means it does not. */
+	 * process exists and is signalable, EPERM means it exists but isn't
+	 * ours to signal, and anything else (ESRCH first) means it doesn't. */
 	long ret = raw_syscall(SYS_kill, (long)pid, 0L, 0L, 0L, 0L, 0L);
 	if (!is_sys_error(ret)) return 1;
 	return (int)-ret == EPERM;
 }
 
-/* There is real ownership to set on Linux (unlike NT, whose own
- * __plat_chown() stays a path-resolving probe -- see that backend's own
- * comment): fchownat(2) already takes the identical (dirfd, path, uid,
- * gid, flags) shape src/unistd/ids.c's fchownat() front door hands
- * down, uid/gid's (uid_t)-1/(gid_t)-1 "leave unchanged" sentinel and
- * all, so nothing here needs translating.
+/* There is real ownership to set on Linux (unlike NT, whose __plat_chown()
+ * stays a path-resolving probe): fchownat(2) already takes the identical
+ * (dirfd, path, uid, gid, flags) shape the front door hands down, the
+ * (uid_t)-1/(gid_t)-1 "leave unchanged" sentinel included.
  *
- * `flags` is masked to AT_SYMLINK_NOFOLLOW before the syscall rather
- * than passed through whole, matching resolve_dirfd()'s neighbours in
- * this file (__plat_chmodat() above does not need to, because
- * fchmodat2(2) is the one that takes a flags word here; classic
- * fchownat(2) has taken one since it was introduced and validates it
- * strictly -- confirmed against this host: an unrecognised bit is a
- * real EINVAL from the kernel, not silently ignored). ids.c's own
- * fchownat() front door treats an unrecognised flag bit as a *may*-fail
- * it chooses not to fail (chown.html's [EINVAL] for one is a may-fail,
- * unlike unlinkat()'s shall-fail -- see that file's own comment), so
- * this backend keeps that promise by only ever forwarding the one flag
- * bit chown.html defines at all. */
+ * `flags` is masked to AT_SYMLINK_NOFOLLOW before the syscall: classic
+ * fchownat(2) validates its flags word strictly (an unrecognised bit is a
+ * real EINVAL), and the front door treats an unrecognised bit as a
+ * may-fail it chooses not to fail, so only the one bit chown.html defines
+ * is ever forwarded. */
 int __plat_chown(int dirfd, const char *path, uid_t uid, gid_t gid, int flags) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; uid/gid/flags have distinct roles
 {
 	int rd = resolve_dirfd(dirfd);
@@ -760,9 +617,9 @@ int __plat_chown(int dirfd, const char *path, uid_t uid, gid_t gid, int flags) /
 	return 0;
 }
 
-/* fchown(2): the handle-taking sibling, same (uid_t)-1/(gid_t)-1
- * sentinel, no path or dirfd resolution needed -- `h` already names an
- * open Linux fd via this file's own fd+1 boxing (unbox() above). */
+/* fchown(2): the handle-taking sibling, no path or dirfd resolution
+ * needed -- `h` already names an open Linux fd via this file's fd+1
+ * boxing. */
 int __plat_fchown(__plat_handle_t h, uid_t uid, gid_t gid)
 {
 	long ret = raw_syscall(SYS_fchown, (long)unbox(h), (long)uid, (long)gid, 0L, 0L, 0L);
@@ -774,19 +631,12 @@ int __plat_fchown(__plat_handle_t h, uid_t uid, gid_t gid)
  * getentropy.c
  * ====================================================================== */
 
-/* getrandom(2), always with flags == 0: no GRND_NONBLOCK (getentropy()
- * has no non-blocking mode to honour -- src/unistd/getentropy.c's front
- * door blocks like any other caller of this backend would want) and no
- * GRND_RANDOM (that flag selects the legacy /dev/random-equivalent
- * behaviour, which can genuinely block for a long time on boot entropy;
- * the default source getrandom(2) otherwise draws from is the same
- * CSPRNG /dev/urandom uses once seeded, blocking only until the kernel
- * considers it seeded, which is what getentropy() -- BSD's non-blocking-
- * after-boot entropy call -- is specified to want). A short return
- * (interrupted by a signal, or more bytes requested than the kernel
- * fills in one call) is looped rather than surfaced, same as a short
- * read()/write() elsewhere in this tree is never handed back raw to a
- * caller who asked for an exact byte count. */
+/* getrandom(2), always with flags == 0: no GRND_NONBLOCK (getentropy() has
+ * no non-blocking mode) and no GRND_RANDOM (that selects the legacy
+ * /dev/random-equivalent behaviour, which can block for a long time on
+ * boot entropy; the default source blocks only until the kernel considers
+ * itself seeded, which is what getentropy() wants). A short return is
+ * looped rather than surfaced, same as elsewhere in this tree. */
 int __plat_getentropy(void *buf, size_t buflen)
 {
 	unsigned char *p = buf;

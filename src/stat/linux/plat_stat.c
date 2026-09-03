@@ -1,155 +1,57 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Linux implementation of src/internal/plat_stat.h -- see that header
- * for the contract each function makes, and src/mman/linux/plat_mem.c's
- * banner for the general discipline this file follows (raw syscall(2),
- * no host libc, -nostdinc against ntlibc's own headers, aarch64
- * syscall numbers confirmed against this host's own <sys/syscall.h> as
- * an oracle).
+ * Linux implementation of src/internal/plat_stat.h -- see that header for
+ * the contract each function makes, and src/mman/linux/plat_mem.c's
+ * banner for the raw-syscall discipline this file follows.
  *
- * Nine of the eleven functions plat_stat.h declares are implemented for
- * real here. __plat_chmod(), __plat_fstat(), __plat_statvfs(), and
- * __plat_set_times() all take only an already-open __plat_handle_t (the
- * front doors -- src/stat/chmod.c's fchmod(), stat.c's fstat(),
- * statvfs.c's fstatvfs(), utimensat.c's futimens() -- reach the fd
- * table directly, never a path), so those are fully portable.
- * __plat_chmodat(), __plat_mkdir(), __plat_fstatat(),
- * __plat_statvfs_path(), and __plat_set_times_at() are real too now
- * (see below) -- only __plat_lxmod_get()/__plat_lxmod_set() are not
- * defined here at all, for the reason the next paragraph explains.
+ * __plat_lxmod_get()/__plat_lxmod_set() are declared by the header but NOT
+ * defined here: grep across src/ confirms they are called only from
+ * within src/stat/nt/plat_stat.c itself, to read/write WSL's $LXMOD NTFS
+ * extended attribute -- a workaround for NT having no native POSIX mode
+ * bits at all. A real Linux filesystem already has real mode bits, so
+ * there is nothing for a Linux $LXMOD equivalent to do.
  *
- * __plat_lxmod_get()/__plat_lxmod_set() are declared by the header but
- * NOT defined here, and this is neither an oversight nor a gap: grep
- * across src/ confirms they are called ONLY from within
- * src/stat/nt/plat_stat.c itself (__plat_chmod() and __plat_fstat()
- * there call them internally to read/write WSL's $LXMOD NTFS extended
- * attribute) -- no portable front-door file (chmod.c, stat.c, mkdir.c)
- * calls either one directly. $LXMOD exists purely so NT, which has no
- * native POSIX mode bits at all, can persist one; a real Linux file
- * system already has real, native mode bits (this file's __plat_chmod()
- * and __plat_fstat() below read/write them directly via fchmod(2)/
- * statx(2)), so there is nothing for a Linux $LXMOD equivalent to do.
- * Since nothing outside the NT backend ever calls these two, the
- * linker never asks this file for them, and defining meaningless stub
- * bodies "for completeness" would only invite something depending on
- * them by accident later.
+ * The five path-taking functions (__plat_chmodat(), __plat_mkdir(),
+ * __plat_fstatat(), __plat_statvfs_path(), __plat_set_times_at()) need
+ * almost no translation: real Linux syscalls already take (dirfd, path)
+ * directly, and this backend never calls __vfs_resolve_at() at all, since
+ * Linux already has real, native `/dev/null` etc.
  *
- * __plat_chmodat(), __plat_mkdir(), __plat_fstatat(),
- * __plat_statvfs_path(), and __plat_set_times_at() are implemented here,
- * real: plat_stat.h hands each of these five a raw, unresolved (dirfd,
- * path) pair (see that header's own banner), the same shape
- * src/internal/plat_fcntl.h's __plat_open() takes (src/fcntl/linux/
- * plat_fcntl.c) -- and this backend needs almost the same amount of
- * translation __plat_open() needed: none. Real Linux syscalls already
- * take (dirfd, path) directly, and this backend never calls
- * __vfs_resolve_at() at all (see plat_stat.h's own banner for why
- * that call stays NT-only in practice
- * even though the function itself is shared, portable code) -- Linux
- * already has real, native `/dev/null` etc, so there is no synthetic
- * overlay to consult in the first place. `dirfd` is resolved the same
- * way src/fcntl/linux/plat_fcntl.c's resolve_dirfd() already does,
- * duplicated here per this tree's own-syscall-table-per-file
- * discipline.
+ * __plat_mkdir() passes `mode` straight to mkdirat(2) UNMASKED, mirroring
+ * __plat_open()'s Linux implementation: masking it here too would
+ * double-mask against the real kernel-level umask ntlibc's own umask()
+ * (src/stat/chmod.c) already pushes out via __plat_umask_apply() below.
  *
- * __plat_mkdir() takes the RAW mode (not yet umask-applied), unlike
- * __plat_open() (whose front door still builds an already-umask-applied
- * mode itself before calling in): this backend passes it straight to
- * mkdirat(2) UNMASKED, exactly mirroring __plat_open()'s own Linux
- * implementation, which passes O_CREAT's mode straight to openat(2)
- * unmasked too. Neither backend calls ntlibc's own __umask_get() at
- * all -- deliberately, not an oversight: masking `mode` by it here
- * would apply ntlibc's OWN tracked value on top of whatever the REAL
- * process's OS-level umask then also applies inside the kernel --
- * double-masking, not the single POSIX-specified mask.  Relying on the
- * real kernel umask instead (this file's actual choice, and
- * __plat_open()'s Linux implementation's choice before it) is exactly
- * right *because* ntlibc's umask() (src/stat/chmod.c) now pushes every
- * value it tracks out to the real kernel-level mask too, via
- * __plat_umask_apply() below -- so "whatever the REAL process's
- * OS-level umask then also applies inside the kernel" already IS the
- * caller's most recent umask() value by the time any of these syscalls
- * run, with no second, userspace-side masking needed or wanted here.
+ * __plat_chmodat()'s AT_SYMLINK_NOFOLLOW: the raw fchmodat(2) syscall
+ * takes NO flags argument at all. This backend tries fchmodat2(2) (Linux
+ * 6.6+) when AT_SYMLINK_NOFOLLOW is set, and reports ENOTSUP -- not
+ * silently following the symlink -- if the syscall is missing (ENOSYS) on
+ * an older kernel, matching what real glibc does.
  *
- * __plat_chmodat()'s AT_SYMLINK_NOFOLLOW deserves its own note: the raw
- * fchmodat(2) syscall (nr 53, confirmed against this host's own
- * <sys/syscall.h>) takes NO flags argument at all -- glibc's own
- * fchmodat() wrapper emulates AT_SYMLINK_NOFOLLOW at the library level,
- * and on a kernel with no fchmodat2(2) (Linux 6.6+, nr 452, ALSO
- * confirmed against this host's header, not assumed) it reports ENOTSUP
- * rather than silently chmod-ing the symlink's target -- POSIX
- * (fchmodat.html ERRORS) permits exactly that: "[ENOTSUP] The
- * implementation does not support changing the permissions on a
- * symbolic link." This backend does the same thing a real glibc would:
- * tries fchmodat2(2) when AT_SYMLINK_NOFOLLOW is set (this host's
- * kernel is new enough to have it, confirmed by the successful test
- * run below), and reports ENOTSUP -- not silently ignoring the flag,
- * the same "a bad flag must not silently succeed" judgment chmod.c's
- * own EINVAL check already makes -- if the syscall itself is missing
- * (ENOSYS) on an older kernel.
- *
- * __plat_fstat() uses statx(2) rather than a raw fstat(2)/newfstatat(2)
- * deliberately: unlike the classic kernel `struct stat`, whose raw
- * layout genuinely differs between architectures (x86_64's is not
- * aarch64's -- exactly the kind of per-arch landmine src/unistd/linux/
- * plat_fd.c's __plat_seek_query() comment says it chose to avoid rather
- * than hardcode), struct statx is a FIXED, architecture-independent ABI
- * (Linux 4.11+, stable by design). The local mirror below was
- * confirmed field-for-field against this host's own <linux/stat.h> via
- * offsetof()/sizeof(), not assumed: sizeof(struct statx) == 256,
- * stx_mode at 28, stx_ino at 32, stx_size at 40, stx_blocks at 48,
- * stx_{a,b,c,m}time at 64/80/96/112 (each a 16-byte {tv_sec:8,
- * tv_nsec:4,__reserved:4} struct statx_timestamp), stx_{rdev,dev}_
- * {major,minor} at 128/132/136/140.
- *
- * st_mode needs NO translation at all going from stx_mode into
- * ntlibc's own struct stat: ntlibc's <sys/stat.h> S_IF* and S_IR* etc.
- * values are the same standard POSIX/Linux octal bit values the kernel
- * itself uses, so a straight assignment is correct -- unlike NT's
- * backend, which has to synthesize a mode from FILE_ATTRIBUTE_* bits,
- * a $LXMOD EA, and a validated-PE-executable fallback (see src/stat/
- * nt/plat_stat.c's mode_from_attrs()/pe_executable()) because NT has no
- * native concept of a POSIX mode at all. Similarly `type` (the caller's
- * __FD_* classification, which NT's __plat_fstat() needs to synthesize
- * an identity for a pipe/console/char handle -- see that file's own
- * banner) goes UNUSED here: a real Linux statx(2) already reports the
- * correct S_IFIFO/S_IFCHR/S_IFREG/S_IFDIR and a real st_dev/st_ino for
- * every fd kind natively, so there is nothing left to synthesize.
+ * __plat_fstat() uses statx(2) rather than fstat(2)/newfstatat(2)
+ * deliberately: unlike the classic kernel `struct stat`, whose raw layout
+ * differs between architectures, struct statx is a fixed,
+ * architecture-independent ABI. st_mode needs NO translation into
+ * ntlibc's own struct stat, since ntlibc's S_IF*, S_IR* etc. values are
+ * the same standard bits the kernel uses -- unlike NT, which has to
+ * synthesize a mode from FILE_ATTRIBUTE_* bits. `type` goes unused here
+ * for the same reason: statx(2) already reports the correct type
+ * natively.
  *
  * st_dev/st_rdev are assembled from statx's separate major/minor pairs
- * via a simple, DOCUMENTED (not glibc-bit-compatible) packing: this
- * only needs to be internally self-consistent -- same device always
- * produces the same st_dev, different devices always differ -- which
- * is the entire property stat.html's DESCRIPTION asks of st_dev/st_ino
- * together (see also src/stat/nt/plat_stat.c's own __STAT_DEV_PIPE/
- * __STAT_DEV_CHAR comment on the same point). Reproducing glibc's exact
- * historical major/minor encoding is not needed for that and is not
- * attempted.
+ * via a simple, documented (not glibc-bit-compatible) packing that only
+ * needs to be internally self-consistent.
  *
- * __plat_statvfs() uses fstatfs(2), whose raw kernel struct statfs is
- * ALSO the same shape as glibc's own <sys/statfs.h> on every 64-bit
- * Linux architecture (no 32/64 largefile split exists there the way it
- * does on some 32-bit ABIs) -- confirmed against this host's own header
- * the same way, sizeof 120 bytes, f_type/f_bsize/.../f_flags at
- * 0/8/.../80, each field 8 bytes wide. Unlike NT, which reports zero
- * for f_files/f_ffree/f_favail because NTFS's MFT has no fixed inode
- * pool to count (see src/stat/nt/plat_stat.c's own long comment on
- * this), Linux genuinely has real numbers here and this file reports
- * them for real.
+ * __plat_statvfs() uses fstatfs(2); unlike NT (which reports zero for
+ * f_files/f_ffree/f_favail because NTFS's MFT has no fixed inode pool),
+ * Linux genuinely has real numbers here.
  *
  * __plat_set_times() is a single utimensat(2) syscall with a NULL
- * pathname -- the documented Linux idiom for "operate on this fd
- * directly" (glibc's own futimens() is implemented this exact way) --
- * and needs NO translation of `ts` at all: ntlibc's UTIME_NOW (0x3fffffff)
- * and UTIME_OMIT (0x3ffffffe) (<sys/stat.h>) are already the Linux
- * kernel's own values for the same sentinels, and ntlibc's struct
- * timespec already matches the kernel's raw 64-bit ABI on this
- * architecture, so `ts` is passed straight through unmodified. This is
- * dramatically simpler than NT's version (src/stat/nt/plat_stat.c's
- * __plat_set_times()), which needs a query/merge round-trip against
- * FileBasicInformation to work around a Wine quirk that clears
- * FILE_ATTRIBUTE_READONLY on any timestamp-only call -- nothing
- * analogous exists here.
+ * pathname (the documented Linux idiom for "operate on this fd
+ * directly"), needing no translation of `ts` at all -- dramatically
+ * simpler than NT's version, which needs a query/merge round-trip to
+ * work around a Wine quirk.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -164,8 +66,8 @@
 #include "libc.h"
 #include "plat_stat.h"
 
-/* aarch64 Linux syscall numbers -- see plat_mem.c's banner for why
- * these are hardcoded rather than pulled from a host header. */
+/* aarch64 Linux syscall numbers, confirmed against this host's own
+ * <sys/syscall.h>. */
 #define SYS_fchmod    52
 #define SYS_fchmodat  53
 #define SYS_fchmodat2 452
@@ -181,15 +83,10 @@
 #define STATX_BASIC_STATS_LX 0x7ff
 
 /* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
- * the call path at all -- NOT `extern long syscall(long, ...)`, which
- * is satisfied by the HOST's real glibc at link time in a non-
- * freestanding build and collapses every failure to exactly -1 with
- * glibc's OWN errno rather than the raw kernel -errno this file's
- * is_sys_error()/`errno = (int)-ret` translation requires -- see
- * src/mman/linux/plat_mem.c's fix for the fuller account, confirmed
- * independently across six other Linux backends.
- * aarch64's syscall calling convention: x8 = syscall number, x0..x5 =
- * up to 6 arguments, result (or -errno in [-4095,-1]) in x0. */
+ * the call path. NOT `extern long syscall(long, ...)`, which resolves to
+ * the HOST's real glibc at link time and sets glibc's OWN errno on
+ * failure rather than the raw kernel -errno this file's translation
+ * requires. */
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
@@ -218,11 +115,7 @@ static int unbox(__plat_handle_t h)
 
 /* See src/fcntl/linux/plat_fcntl.c's own resolve_dirfd() -- identical
  * logic, duplicated per this tree's own-syscall-table-per-file
- * discipline: turns ntlibc's own AT_FDCWD sentinel or fd-table index
- * into what the raw *at() syscalls need. Returns -1 with errno already
- * set (by __fd_get()) only on a bad table index -- never a legitimate
- * result otherwise, since AT_FDCWD is -100 and every unboxed real fd is
- * >= 0. */
+ * discipline. */
 static int resolve_dirfd(int dirfd)
 {
 	struct __fd *f;
@@ -267,11 +160,9 @@ struct __lx_statx { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl
 	unsigned long long __spare3[12]; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 };
 
-/* The kernel's raw struct statfs (fstatfs(2)): confirmed field-for-
- * field against this host's own <sys/statfs.h> via offsetof()/
- * sizeof() -- sizeof 120, each named field 8 bytes wide at the offset
- * given, f_fsid packed as two ints occupying one 8-byte slot. Identical
- * to glibc's own struct statfs on every 64-bit Linux architecture. */
+/* The kernel's raw struct statfs (fstatfs(2)), confirmed field-for-field
+ * against this host's own <sys/statfs.h>: identical to glibc's own struct
+ * statfs on every 64-bit Linux architecture. */
 struct __lx_statfs { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	long f_type;
 	long f_bsize;
@@ -302,12 +193,9 @@ int __plat_chmod(__plat_handle_t h, mode_t mode)
 	return 0;
 }
 
-/* fchmodat2(2) is Linux 6.6+ (confirmed against this host's own
- * <sys/syscall.h> -- see this file's own banner); AT_SYMLINK_NOFOLLOW
- * (0x100, <fcntl.h>) is already the real Linux value ntlibc's own
- * constant matches, so it is passed straight through with no
- * translation, the same "already matches the ABI" situation this file's
- * banner and plat_mem.c's describe for several other flag families. */
+/* fchmodat2(2) is Linux 6.6+. AT_SYMLINK_NOFOLLOW (0x100) is already the
+ * real Linux value ntlibc's own constant matches, so it passes through
+ * with no translation. */
 int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; flags and file mode have distinct roles
 {
 	int rd = resolve_dirfd(dirfd);
@@ -337,25 +225,17 @@ int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode) // NOLIN
 	return 0;
 }
 
-/* umask(2) (nr 166, confirmed against this host's own <sys/syscall.h>)
- * cannot fail -- it always sets the mask and returns the old one, the
- * same "no error return" shape src/stat/chmod.c's own umask() already
- * has -- so there is nothing for this to check or report; the caller
- * (chmod.c's umask()) already has the old value from its own
- * umask_value, and this call's only job is making that new value real
- * at the kernel level too. See plat_stat.h's own comment on this
- * function for why Linux (unlike NT) needs a real implementation here
- * at all. */
+/* umask(2) cannot fail -- it always sets the mask and returns the old
+ * one -- so there is nothing for this to check or report; its only job
+ * is making the new value real at the kernel level too. */
 void __plat_umask_apply(mode_t m)
 {
 	raw_syscall(SYS_umask, (long)(m & 07777), 0L, 0L, 0L, 0L, 0L);
 }
 
 /* `mode` arrives RAW (not umask-applied) and is passed straight to
- * mkdirat(2) unmasked -- the real kernel applies the real process
- * umask itself. See this file's own banner for why this backend never
- * calls ntlibc's own __umask_get() here, mirroring __plat_open()'s
- * Linux implementation's identical choice. */
+ * mkdirat(2) unmasked -- the real kernel applies the real process umask
+ * itself (see this file's banner). */
 int __plat_mkdir(int dirfd, const char *path, mode_t mode)
 {
 	int rd = resolve_dirfd(dirfd);
@@ -368,20 +248,12 @@ int __plat_mkdir(int dirfd, const char *path, mode_t mode)
 	return 0;
 }
 
-/* mkfifoat()/mknod()/mknodat() (src/stat/chmod.c): Linux's own
- * mknodat(2) already takes exactly this (dirfd, path, mode, dev) shape
- * -- `mode` carrying both the S_IF* node type and the permission bits
- * together is the real kernel ABI's own convention, not something this
- * function assembles -- so it needs no translation of its own, unlike
- * __plat_mkdir() just above it never calls ntlibc's own __umask_get()
- * either, for the identical reason that file's own comment gives: the
- * real kernel applies the real process umask itself. `dev` is passed
- * through exactly as given; see plat_stat.h's own comment on why a
- * device node with a real major/minor is not constructible through
- * this library at all today (no makedev()/major()/minor()), which
- * makes any translation here moot -- only S_IFIFO (dev always 0) and
- * the CAP_MKNOD-gated EPERM path for S_IFCHR/S_IFBLK are reachable
- * through this library's own callers. */
+/* mkfifoat()/mknod()/mknodat(): Linux's own mknodat(2) already takes
+ * exactly this (dirfd, path, mode, dev) shape, `mode` carrying both the
+ * S_IF* node type and the permission bits together, so it needs no
+ * translation. `dev` is passed through as given: this library cannot
+ * construct a device node with a real major/minor today (no makedev()),
+ * so only S_IFIFO and the CAP_MKNOD-gated EPERM path are reachable. */
 int __plat_mknod(int dirfd, const char *path, mode_t mode, dev_t dev) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; mode and dev have distinct roles
 {
 	int rd = resolve_dirfd(dirfd);
