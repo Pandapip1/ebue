@@ -4,21 +4,14 @@
  * posix_spawn_file_actions_t: the recorded open/close/dup2 list.
  *
  * This file is only the *recording* half -- a growable array of actions
- * in the order they were added, which is the order posix_spawn() is
- * required to replay them in
- * (https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_spawn.html
- * DESCRIPTION: "The file actions specified by the spawn file actions
- * object shall be performed in the order in which they were added").
- * The replay itself is in posix_spawn.c, which is where the interesting
- * part -- doing it without a fork() to do it in -- lives.
+ * in the order they were added, which is the order posix_spawn() must
+ * replay them in. The replay itself, and the interesting part (doing it
+ * without a fork() to do it in), lives in posix_spawn.c.
  *
- * Every function here returns an error number and does not set errno,
- * per each function's own RETURN VALUE section ("Upon successful
- * completion, ... shall return zero; otherwise, an error number shall
- * be returned to indicate the error").  malloc()/free()/strlen() are
- * the only calls made, and only malloc() can fail, so preserving the
- * caller's errno is a matter of not clobbering it: __spawn_fa_grow()
- * saves and restores it around the allocation.
+ * Every function here returns an error number, not errno. malloc()/
+ * free()/strlen() are the only calls made, and only malloc() can fail,
+ * so preserving the caller's errno is just a matter of not clobbering
+ * it: fa_push() saves and restores it around the allocation.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -55,14 +48,11 @@ static struct __spawn_action *fa_push(posix_spawn_file_actions_t *fa)
 		fa->__actions = n;
 		fa->__cap = cap;
 	}
-	/* fa->__actions is non-NULL here either way: either the growth
-	 * branch above just set it (realloc succeeded, checked above), or
-	 * fa->__len != fa->__cap already meant fa->__cap > 0, which by this
-	 * function's own invariant only ever holds after an earlier
-	 * successful growth already set fa->__actions. Not expressible via
-	 * nonnull on fa itself (already marked, and this is a fact about one
-	 * of fa's FIELDS, not fa) -- a local proof the checker cannot follow
-	 * through the conditional reassignment. */
+	/* fa->__actions is non-NULL here either way: either the growth branch
+	 * above just set it, or fa->__len != fa->__cap already meant
+	 * fa->__cap > 0, which only holds after an earlier successful growth
+	 * already set it. Not expressible via nonnull on fa itself -- a fact
+	 * about one of fa's fields, not fa. */
 	n = &fa->__actions[fa->__len++];
 	memset(n, 0, sizeof *n);
 	errno = e;
