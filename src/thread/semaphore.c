@@ -101,12 +101,8 @@ static char *sem_path(const char *name)
 	return path;
 }
 
-/* path is required: passed to strdup() unconditionally at entry. Same
- * "*slash not fixable here, and not a bug either" residual as
- * src/thread/mqueue.c's own ensure_dir() -- see that function's own
- * comment; this one's real call sites all pass a path built by
- * sem_path(), which likewise always embeds a literal "/ntlibc-sem/"
- * component. */
+/* Call sites all pass a path built by sem_path(), which always embeds a
+ * literal "/ntlibc-sem/" component, so strrchr() can't return NULL here. */
 static int ensure_dir(const char *path) __attribute__((nonnull(1)));
 static int ensure_dir(const char *path)
 {
@@ -123,19 +119,12 @@ static int ensure_dir(const char *path)
 	return 0;
 }
 
-/* A named semaphore's filesystem record is its publication point.  Creating
- * the file and filling it cannot be one filesystem operation, so serialize
- * that interval across processes.  Without this lock, two sem_open(O_CREAT)
- * callers can race as follows: one creates the empty record while the other
- * opens and reads it, then both abandon the name.  fork/1-1.c has exactly
- * that shape because parent and child open the same name immediately after
- * the clone.
- *
- * FNV-1a's unsigned wrap is the hash operation itself.  The full path is
- * used, rather than only the POSIX name, so processes with different temp
- * namespaces do not unnecessarily share a lock. */
-/* s required: dereferenced unconditionally in the loop condition
- * (`while (*s)`), even for an empty string. */
+/* Creating a named semaphore's file and filling it isn't one filesystem
+ * operation, so this lock serializes that interval: without it, two
+ * sem_open(O_CREAT) callers can race, one creating the empty record while
+ * the other reads it, and both abandon the name (fork/1-1.c hits this).
+ * The full path, not just the POSIX name, is hashed so processes with
+ * different temp namespaces don't unnecessarily share a lock. */
 __wraps static unsigned long long path_hash(const char *s)
     __attribute__((nonnull(1)));
 __wraps static unsigned long long path_hash(const char *s)
@@ -444,23 +433,15 @@ int sem_wait(sem_t *sem handle(semaphore))
 	for (;;) {
 		r = wait_handle(sem, slice);
 		__pthread_testcancel();
-		/* Cross-process delivery queues the signal for an application
-		 * thread; the listener must not run user handlers itself.  NT
-		 * semaphore waits are not part of that delivery path, so bounded
-		 * waits must explicitly run pending handlers before deciding
+		/* NT semaphore waits aren't part of cross-process signal delivery,
+		 * so pending handlers must be run explicitly before deciding
 		 * whether this operation was interrupted. */
 		__sig_drain_pending();
 		if (!r) return 0;
 		if (errno == EINTR) {
-			/* wait_handle() reports EINTR for ANY __PLAT_WAIT_INTR wake,
-			 * and a deferred pthread_cancel() causes exactly such a wake
-			 * when the cancellation cannot be delivered yet
-			 * (__pthread_cancel_defer_enter() is still active) -- see
-			 * src/thread/pthread_cancel.c's redirect_async_cancel().
-			 * That wake delivers no signal at all, so
-			 * restartable_interruption() reports zero delivered here,
-			 * not a negative count; only a genuine, non-restarting
-			 * signal earns the EINTR this call reports to its caller. */
+			/* A deferred pthread_cancel() also produces a __PLAT_WAIT_INTR
+			 * wake with no signal delivered (see pthread_cancel.c's
+			 * redirect_async_cancel()); only a genuine signal earns EINTR. */
 			if (restartable_interruption(&caught, &restarted) >= 0) continue;
 			return -1;
 		}
@@ -496,10 +477,7 @@ int sem_timedwait(sem_t *sem handle(semaphore), const struct timespec *abstime)
 		__sig_drain_pending();
 		if (!r) return 0;
 		if (errno == EINTR) {
-			/* See sem_wait()'s comment on this same check: a deferred
-			 * pthread_cancel()'s wake also delivers no signal, so a
-			 * zero (not negative) restartable_interruption() result
-			 * must retry too. */
+			/* See sem_wait()'s comment on this same check. */
 			if (restartable_interruption(&caught, &restarted) >= 0) continue;
 			return -1;
 		}

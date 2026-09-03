@@ -13,29 +13,11 @@
 
 _Noreturn void __pthread_cancel_trampoline(void); // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
-/* x86 branch: unchanged, still the literal `lock; cmpxchgl`/`lock;
- * xaddl` this project's pinned tcc (the only compiler the NT target
- * ever builds with) needs -- tcc has no __atomic_* builtins at all
- * (`'__atomic_compare_exchange_n' implicit declaration`, confirmed
- * against the actual pinned x86_64-win32-tcc), so those builtins are
- * only safe to reach on a target tcc never compiles for. On any other
- * arch (aarch64 today, always a real gcc/clang -- tcc is Windows/PE-
- * only) these unrecognized x86 instruction mnemonics would not even
- * assemble, so the builtin compiles to the correct native primitive
- * there instead (`cmpxchg`/`xadd` on x86, an LL/SC loop or `cas`/
- * `ldadd` on aarch64), same full-barrier semantics
- * (__ATOMIC_SEQ_CST).
- *
- * That "any other arch is always a real gcc/clang" premise held until
- * PLATFORM=nt ARCH=aarch64 (WOA, tcc on aarch64): a combination that
- * did not exist when it was written, and breaks it the same way x86
- * does (`'__ATOMIC_SEQ_CST' undeclared`, confirmed against the actual
- * pinned arm64-win32-tcc) -- for a more severe reason than x86, in
- * fact: that tcc target has no exclusive-access or LSE atomic
- * mnemonics AT ALL, not even the ones a hand LL/SC loop would use
- * directly, so src/thread/nt/aarch64/atomic32.S's own banner is where
- * the real story (raw `.word`-encoded instructions, independently
- * verified) lives; this branch just calls into it. */
+/* x86 branch stays literal asm because the pinned tcc (the only compiler the
+ * NT target builds with) has no __atomic_* builtins.  The NT/aarch64 tcc
+ * target has no atomic mnemonics at all either, so that branch calls into
+ * src/thread/nt/aarch64/atomic32.S's hand-encoded instructions instead. Any
+ * other target is a real gcc/clang and uses the builtins directly. */
 static int compare_exchange(volatile int *address, int old_value, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	int new_value)
 {
@@ -75,16 +57,12 @@ static int atomic_load(volatile int *address)
 	return compare_exchange(address, 0, 0);
 }
 
-/* POSIX only requires pthread_cancel(), pthread_setcancelstate(), and
- * pthread_setcanceltype() to be async-cancel-safe.  Redirecting a thread
- * out of any other function is therefore allowed to abandon an internal
- * lock half-acquired.  Mark the small set of ntlibc regions where that is
- * known to be destructive, and diagnose cancellation at delivery time.
- *
- * The write deliberately bypasses stdio and the fd table: the suspended
- * target may own either one's locks.  Termination likewise goes straight
- * to NT instead of abort()/__exit_internal(), whose signal and child
- * bookkeeping are not async-cancel-safe themselves. */
+/* POSIX only requires pthread_cancel/setcancelstate/setcanceltype to be
+ * async-cancel-safe, so redirecting a thread elsewhere can abandon an
+ * internal lock half-acquired; this diagnoses that at delivery time. The
+ * write bypasses stdio/the fd table, and termination goes straight to NT
+ * instead of abort()/__exit_internal(), since the suspended target may own
+ * either's locks. */
 static _Noreturn void cancel_unsafe_abort(const char *region)
 {
 	__plat_cancel_unsafe_abort(region);
@@ -116,12 +94,10 @@ int __pthread_cancel_unsafe_active(pthread_t thread)
 	return atomic_load(&thread->cancel_unsafe_depth) > 0;
 }
 
-/* Internal locks are not cancellation boundaries.  If an asynchronous
- * request arrives while one is owned, remember it and act immediately after
- * the outermost protected transaction commits.  This is separate from the
- * unsafe-region diagnostic: the three POSIX async-cancel-safe operations use
- * this mechanism around their entire transaction, so cancellation cannot
- * expose their intermediate state. */
+/* Internal locks aren't cancellation boundaries: a pending async request is
+ * remembered and acted on after the outermost protected transaction commits,
+ * so the three POSIX async-cancel-safe operations never expose intermediate
+ * state. */
 void __pthread_cancel_defer_enter(void)
 {
 	struct __pthread *self = __pthread_self_control;
@@ -232,8 +208,6 @@ void __pthread_testcancel(void)
 	if (cancel) __pthread_cancel_current();
 }
 
-/* argument required: aliased into self and dereferenced unconditionally
- * (`self->cancel_queued = 0;`) right after the lock, on every call. */
 static void __PLAT_APC_CALL cancel_apc(void *argument, void *unused1, void *unused2)
     __attribute__((nonnull(1)));
 static void __PLAT_APC_CALL cancel_apc(void *argument, void *unused1, void *unused2) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles

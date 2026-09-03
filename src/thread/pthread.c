@@ -56,17 +56,9 @@ struct __pthread *__pthread_current(void)
 	self->cancel_type = PTHREAD_CANCEL_DEFERRED;
 	self->sched_policy = SCHED_OTHER;
 	__sig_current_mask_copy(&self->sigmask);
-	/* Only this one call site (of the many __plat_fast_lock()/
-	 * __plat_fast_unlock() pairs elsewhere in this file) was relocated to
-	 * the portable __plat_fast_lock()/__plat_fast_unlock() (src/internal/
-	 * plat_thread.h) -- __pthread_current() is a hard dependency of
-	 * pthread_mutex.c's own mutex_ready()/mutex_acquire(), which now
-	 * needs to work on a non-NT backend; the REST of this file
-	 * (pthread_create()/join()/detach()/exit()/cancel()/tsd internals)
-	 * is a separate, larger task deliberately left untouched and NT-only
-	 * for now, not silently ignored -- see this project's own standard
-	 * of disclosing a gap rather than forcing a fix past what a single
-	 * pass can verify carefully. */
+	/* Uses the portable lock, unlike the rest of this (still NT-only) file,
+	 * because pthread_mutex.c's mutex_ready()/mutex_acquire() depend on
+	 * __pthread_current() working on non-NT backends too. */
 	__plat_fast_lock();
 	live_threads++;
 	__plat_fast_unlock();
@@ -138,11 +130,6 @@ static void finish(struct __pthread *self, void *result)
 	}
 }
 
-/* argument required: aliased straight into self and dereferenced
- * unconditionally (`self->start(...)`) once __pthread_adopt_current()
- * returns, on every call -- its one real call site
- * (__plat_thread_spawn() in pthread_create()) always passes the
- * freshly allocated, already null-checked struct __pthread. */
 static unsigned __PLAT_APC_CALL thread_entry(void *argument)
     __attribute__((nonnull(1)));
 static unsigned __PLAT_APC_CALL thread_entry(void *argument)
@@ -241,12 +228,9 @@ int pthread_join(pthread_t thread, void **result)
 	}
 	thread->joining = 1;
 	__plat_fast_unlock();
-	/* __PLAT_WAIT_INTR (NT's STATUS_USER_APC/STATUS_ALERTED) is treated
-	 * as a completed wait below, matching the original NTSTATUS check
-	 * exactly: both statuses satisfy NT_SUCCESS(), so the original
-	 * `!NT_SUCCESS(status)` guard never actually reached its own
-	 * USER_APC/ALERTED sub-case either -- only a genuine wait failure
-	 * (__PLAT_WAIT_ERROR here) took this branch. */
+	/* __PLAT_WAIT_INTR (NT's STATUS_USER_APC/STATUS_ALERTED) counts as
+	 * completed below: both statuses satisfy NT_SUCCESS(), so only a
+	 * genuine wait failure takes this branch. */
 	wait_result = __plat_wait_one(thread->handle, 1, 0, 0);
 	if (wait_result == __PLAT_WAIT_ERROR) {
 		__plat_fast_lock();
@@ -482,11 +466,8 @@ int pthread_getattr_np(pthread_t thread, pthread_attr_t *attr)
 	return 0;
 }
 
-/* True if `thread` still names a live control block one of the
- * scheduling accessors below may act on: not a stale/foreign pointer,
- * not already join()ed away, and not a fully reclaimed (joined-in-
- * spirit, handle closed) exited thread. Every accessor below opens with
- * this same gate before touching `thread`'s fields. */
+/* True if `thread` is a live control block: not stale/foreign, not
+ * already joined, and not a fully reclaimed exited thread. */
 static int thread_usable(pthread_t thread)
 {
 	return thread && thread->magic == PTHREAD_MAGIC && !thread->joined &&

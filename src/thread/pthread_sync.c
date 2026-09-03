@@ -159,10 +159,8 @@ static const struct barrierattr_data *const_barrierattr_data(
 	return (const struct barrierattr_data *)(const void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_barrierattr_t is opaque storage for this ABI-defined internal layout
 }
 
-/* Process-private barrier state is serialized by the PEB lock. Each caller
- * waits on its own event so releasing a generation is a broadcast rather than
- * an auto-reset wake that one peer can steal. Process-shared barriers retain
- * their address-only atomic algorithm below because handles are process-local. */
+/* Each caller waits on its own event so releasing a generation broadcasts,
+ * rather than an auto-reset wake one peer could steal. */
 static void wake_barrier_waiters_locked(struct barrier_data *data,
 	unsigned generation)
 {
