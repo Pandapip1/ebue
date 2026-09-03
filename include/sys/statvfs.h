@@ -6,15 +6,9 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-/* <sys/statvfs.h> -- see
- * https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/sys_statvfs.h.html
- *
- * Which members carry a meaningful value on this platform, and which
- * cannot: see the banner of src/stat/statvfs.c, which derives each one
- * from a named NtQueryVolumeInformationFile class and says so where NT
- * has no equivalent at all.  fstatvfs.html's DESCRIPTION explicitly
- * allows for this -- "It is unspecified whether all members of the
- * statvfs structure have meaningful values on all file systems." */
+/* Which members carry a meaningful value on this platform, and which
+ * cannot, is documented in src/stat/statvfs.c's banner (POSIX leaves
+ * this unspecified per file system). */
 
 #ifndef _SYS_STATVFS_H
 #define _SYS_STATVFS_H

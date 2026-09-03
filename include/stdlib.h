@@ -68,13 +68,9 @@ _Noreturn void _Exit (int);
 int at_quick_exit (void (*) (void));
 _Noreturn void quick_exit (int);
 
-/* getenv's name is required (POSIX: behaviour undefined if name is a
- * null pointer), and src/env/getenv.c never checks it -- unlike
- * setenv()/unsetenv() below, which deliberately DO check their own name
- * argument and return EINVAL on NULL (a defensive convention beyond what
- * POSIX requires), so those two are left unmarked: a nonnull attribute
- * there would tell the compiler their own `if (!name ...)` guard is dead
- * code, which is false. */
+/* Unlike getenv, setenv()/unsetenv() below deliberately check their own
+ * name argument and return EINVAL on NULL, so they are left unmarked --
+ * nonnull there would tell the compiler that live guard is dead code. */
 withtok(null_terminated)
 char *getenv (const char * withtok(null_terminated)) __attribute__((nonnull(1)));
 
@@ -83,12 +79,6 @@ int system (const char *);
 void *bsearch (const void *, const void *, size_t, size_t, int (*)(const void *, const void *));
 void qsort (void *, size_t, size_t, int (*)(const void *, const void *));
 
-/* abs/labs/llabs (src/stdlib/abs.c): `a > 0 ? a : -a`, a total
- * function of the one argument with no writes, no errno, no globals.
- * (abs(INT_MIN) etc. is signed-overflow UB, exactly like strlen(NULL)
- * is UB for nonnull-annotated strlen -- pure does not require the
- * function be defined on every representable input, only that it have
- * no side effects and be deterministic where it is defined.) */
 int abs (int) __attribute__((__pure__));
 long labs (long) __attribute__((__pure__));
 long long llabs (long long) __attribute__((__pure__));
@@ -97,14 +87,6 @@ typedef struct { int quot, rem; } div_t;
 typedef struct { long quot, rem; } ldiv_t;
 typedef struct { long long quot, rem; } lldiv_t;
 
-/* div/ldiv/lldiv (src/stdlib/div.c): `n / d`, `n % d` into a struct
- * returned by value -- the hidden pointer real ABIs use to return a
- * large struct is a calling-convention detail invisible to the C
- * abstract machine, not a pointer *argument* the C source itself
- * writes through, so it does not trip the "writes through a pointer
- * argument" disqualifier. No errno (integer division does not set it
- * in C), no globals, no I/O; d == 0 or n == INT_MIN/-1-shaped overflow
- * is UB, same caveat as abs() above. */
 div_t div (int, int) __attribute__((__pure__));
 ldiv_t ldiv (long, long) __attribute__((__pure__));
 lldiv_t lldiv (long long, long long) __attribute__((__pure__));
@@ -143,17 +125,7 @@ int unsetenv (const char *);
 int mkstemp (char *);
 int mkostemp (char *, int);
 char *mkdtemp (char *);
-/* All three required: src/stdlib/getsubopt.c dereferences *opt
- * unconditionally as its first statement (`char *s = *opt;`), writes
- * *val unconditionally next (`*val = 0;`), and dereferences keys[i] in
- * its own loop condition (evaluated even for i == 0), with no NULL
- * check on any of them; every real call site in this tree passes real
- * addresses/arrays, never NULL. */
 int getsubopt (char **, char *const *, char **) __attribute__((nonnull(1, 2, 3)));
-/* s is required: src/stdlib/rand.c's rand_r() dereferences `*s`
- * unconditionally as its very first statement and writes through it
- * unconditionally next, with no NULL check anywhere; every real caller
- * in this tree passes the address of a real on-stack seed. */
 int rand_r (unsigned *) __attribute__((nonnull(1)));
 
 #endif
@@ -167,32 +139,19 @@ long int random (void);
 void srandom (unsigned int);
 char *initstate (unsigned int, char *, size_t);
 char *setstate (char *);
-/* Like getenv, putenv's argument is required and src/env/setenv.c's
- * putenv() never null-checks it -- POSIX again leaves NULL undefined
- * rather than specifying an error return, and unlike setenv/unsetenv
- * this function does not opt into the defensive EINVAL convention
- * either. */
+/* Unlike setenv/unsetenv, putenv does not opt into the defensive
+ * EINVAL-on-NULL convention. */
 int putenv (char *) __attribute__((nonnull(1)));
-int posix_openpt (int);  /* undefined-ok: Unix98 pseudo-terminal allocation
-	has no NT counterpart (NT's console/pipe model is a different shape
-	entirely); grantpt/unlockpt/ptsname[_r] below are the rest of the
-	same PTY API and share this reason -- the marker stays because it is
-	still true of, and only checked against, the NT build. Linux has a
-	completely real, well-defined one (/dev/ptmx plus the TIOCGPTN/
-	TIOCSPTLCK ioctls), and does define all five, in
-	src/stdlib/linux/plat_pty.c. */
+int posix_openpt (int);  /* undefined-ok on NT: Unix98 PTY allocation has
+	no NT counterpart; grantpt/unlockpt/ptsname[_r] below share this
+	reason. Real on Linux (/dev/ptmx plus TIOCGPTN/TIOCSPTLCK). */
 int grantpt (int);  /* undefined-ok: see posix_openpt */
 int unlockpt (int);  /* undefined-ok: see posix_openpt */
 char *ptsname (int);  /* undefined-ok: see posix_openpt */
 char *l64a (long);
-/* s is required: src/stdlib/a64l.c's a64l() dereferences s[i] in its
- * own loop condition (`for (i = 0; i < 6 && s[i]; i++)`), evaluated even
- * for i == 0, with no NULL check -- every real caller passes a real
- * string. */
 long a64l (const char *) __attribute__((nonnull(1)));
-/* key required: src/unistd/crypt.c's setkey() reads all 64 elements of
- * key unconditionally -- same DES machinery as crypt()/encrypt() in
- * unistd.h, see that file's own banner. */
+/* setkey() reads all 64 elements of key unconditionally -- same DES
+ * machinery as crypt()/encrypt() in unistd.h. */
 void setkey (const char *) __attribute__((nonnull(1)));
 double drand48 (void);
 double erand48 (unsigned short [3]);
@@ -207,16 +166,8 @@ void lcong48 (unsigned short [7]);
 
 #if defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 #include <alloca.h>
-/* tmpl is required: src/stdlib/mktemp.c's mktemp() dereferences it
- * directly itself (`tmpl[0] = 0;` on every failure return, in addition
- * to forwarding it into fill(), itself now marked nonnull(1)), with no
- * NULL check anywhere. mkstemps()/mkostemps() are deliberately left
- * unmarked: neither dereferences tmpl directly in its own body (both
- * simply forward it into mkostemps()/fill()/open()), so there is
- * nothing in either's OWN body for the attribute to describe -- the
- * same "forwarded, callee already owns the contract" shape as time.h's
- * own ctime_r()/clock_gettime() comments; mkostemps() itself is not
- * flagged either, for the same reason. */
+/* mkstemps()/mkostemps() are deliberately left unmarked: neither
+ * dereferences tmpl directly, only forwarding it onward. */
 char *mktemp (char *) __attribute__((nonnull(1)));
 int mkstemps (char *, int);
 int mkostemps (char *, int, int);
@@ -225,11 +176,8 @@ void *valloc (size_t);
 withtok(heap_allocated)
 void *memalign(size_t, size_t);
 size_t malloc_usable_size(void *);
-/* getloadavg(): real on Linux (src/stdlib/linux/plat_getloadavg.c,
- * via /proc/loadavg -- src/util/atd.c's batch(1p) load gate uses it
- * for real); undefined-ok on NT (src/stdlib/nt/plat_getloadavg.c --
- * always fails, since NT's process model has no run-queue-length
- * average to report at all, not even approximately). */
+/* Real on Linux (/proc/loadavg); undefined-ok on NT, whose process
+ * model has no run-queue-length average to report. */
 int getloadavg(double *, int);
 int clearenv(void);
 #define WCOREDUMP(s) ((s) & 0x80)
@@ -242,20 +190,9 @@ void qsort_r (void *, size_t, size_t, int (*)(const void *, const void *, void *
 #endif
 
 #ifdef _GNU_SOURCE
-int ptsname_r(int, char *, size_t);  /* undefined-ok: see posix_openpt in
-	the _XOPEN_SOURCE block above -- also defined for real on Linux, in
-	src/stdlib/linux/plat_pty.c */
-/* dp/sign are both required in ecvt()/fcvt() (src/stdlib/ecvt.c): sign
- * is dereferenced unconditionally as each function's first real
- * statement (`*sign = x < 0 || ...;`), and dp is written on every one
- * of that function's own return paths (the nan/inf early returns and
- * the normal completion), with no NULL check on either -- the checker's
- * own report names only *sign (one finding per function); dp's own
- * direct writes are exactly as unconditional, verified by hand.
- * gcvt()'s out is deliberately NOT marked: it is only ever forwarded
- * into sprintf(), never dereferenced by gcvt()'s own body, the same
- * "forwarded, callee already owns the contract" shape as time.h's own
- * ctime_r()/clock_gettime() comments -- and it is not flagged either. */
+int ptsname_r(int, char *, size_t);  /* undefined-ok: see posix_openpt */
+/* gcvt()'s out is deliberately NOT marked: it is only ever forwarded
+ * into sprintf(), never dereferenced by gcvt()'s own body. */
 char *ecvt(double, int, int *, int *) __attribute__((nonnull(3, 4)));
 char *fcvt(double, int, int *, int *) __attribute__((nonnull(3, 4)));
 char *gcvt(double, int, char *);

@@ -1,121 +1,49 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * __delayLoadHelper2(): the real, linker-driven delay-load helper --
- * as opposed to ntlibc_delayLoadHelper2() in src/internal/delayload.c,
- * which backs the hand-authored NTLIBC_DELAY_STUB macros for a tcc that
- * cannot emit delay-import thunks at all. A tcc built with
- * -Wl,--delay-all *can* (see the tinycc fork this targets): its linker
- * turns every ordinary `extern` call to an imported function into a
- * call through a generated thunk, and every such thunk's first call
- * goes through exactly one routine, looked up by this exact name --
- * __delayLoadHelper2(descriptor, &iat_slot) -- with no ntlibc-specific
- * declaration required at the call site. That is what makes an
- * *unmodified* program (plain extern, ordinary call) get $ORIGIN
- * resolution: nothing in this file is reachable from source code that
- * does not already exist in a normal program.
+ * __delayLoadHelper2(): the real, linker-driven delay-load helper for a
+ * tcc built with -Wl,--delay-all. That linker turns every ordinary
+ * `extern` call to an imported function into a call through a generated
+ * thunk, and every such thunk's first call goes through this exact
+ * routine name -- __delayLoadHelper2(descriptor, &iat_slot) -- with no
+ * ntlibc-specific declaration required at the call site, so an
+ * unmodified program gets $ORIGIN resolution for free.
  *
- * ---- Why this lives under crt/, not src/internal/ -----------------------
+ * Lives under crt/, not src/internal/: tinycc's pe_build_delay_imports()
+ * only invents the undefined reference to "__delayLoadHelper2" while
+ * *writing* the PE image, after tcc has already resolved undefined
+ * symbols against archive members -- so a plain `-lc` link never looks
+ * inside libc.a for it. This file is instead built to lib/delayload2.o
+ * and given to the linker as a plain object alongside crt1.o, the same
+ * way crt1.o itself is; the ntlibc-tcc wrapper adds it automatically
+ * whenever it sees --delay-all.
  *
- * Every other piece of the delay-load facility (rpath.c, pe.c,
- * delayload.c) is an ordinary archive member of lib/libc.a, pulled in
- * only when something actually references it -- the "a program that
- * never delay-loads anything never pays for it" property rpath.h
- * documents. __delayLoadHelper2 cannot work that way: tinycc's
- * pe_build_delay_imports() (tccpe.c) only invents the undefined
- * reference to "__delayLoadHelper2" while *writing* the PE image, well
- * after the point where tcc resolves undefined symbols against archive
- * members -- so a tcc link against `-lc` alone never even looks inside
- * libc.a for a symbol by that name, and reports it unresolved even
- * though delayload2.o (built from this file) sits right there in the
- * archive with exactly that definition. (Confirmed empirically against
- * the -Wl,--delay-all tinycc fork this targets: `-Llib -lc -lntdll`
- * alone fails with "unresolved reference to '__delayLoadHelper2'";
- * adding this file's .o directly to the link command succeeds.)
+ * The descriptor is RVA-based, not a native pointer: the linker emits a
+ * real IMAGE_DELAYLOAD_DESCRIPTOR (PE/COFF spec 4.3) with
+ * Attributes.RvaBased = 1, so DllNameRVA/ModuleHandleRVA/
+ * ImportAddressTableRVA/ImportNameTableRVA are offsets from
+ * __peb->ImageBaseAddress, not pointers -- unlike delayload.h's
+ * ntlibc_delay_descr_t, whose fields are plain native pointers by a
+ * separate, unrelated convention. The one exception is what an IAT slot
+ * *contains*: always a real absolute pointer, initially the thunk's own
+ * address, later the resolved function's. This file tells "still the
+ * thunk" from "already resolved" by range-checking the slot's value
+ * against the target DLL's mapped image (ntlibc_pe_dll_range()) rather
+ * than remembering the thunk's address, since the generated tail-merge
+ * stub calls this helper unconditionally on every call.
  *
- * The fix is the same shape as crt1.o itself: this file is built to
- * lib/delayload2.o (via the Makefile's existing crt/ handling -- see
- * CRT_OBJS/CRT_LIBS) and given to the linker as a plain object file
- * alongside crt1.o, not folded into libc.a, so it is never subject to
- * that archive-lookup gap. A program using -Wl,--delay-all links it in
- * explicitly, the same way it already links crt1.o explicitly (see
- * test/delayall.c and the Makefile's obj/test/delayall.exe rule); the
- * ntlibc-tcc wrapper (tools/ntlibc-tcc.in) also adds it automatically
- * whenever it sees --delay-all on its command line, so a program built
- * through the wrapper needs nothing extra at all. A normal (non-
- * --delay-all) program never references __delayLoadHelper2, so linking
- * this one extra object costs it nothing beyond what a program that
- * links crt1.o already pays.
- *
- * ---- The descriptor is RVA-based, not a native pointer -----------------
- *
- * The linker emits a real IMAGE_DELAYLOAD_DESCRIPTOR (PE/COFF spec 4.3)
- * with Attributes.RvaBased = 1: DllNameRVA, ModuleHandleRVA,
- * ImportAddressTableRVA and ImportNameTableRVA are all offsets from the
- * image base, not pointers -- see tinycc's pe_build_delay_imports()
- * (tccpe.c), which is authoritative here since it is the linker that
- * writes these images. This differs from delayload.h's
- * ntlibc_delay_descr_t, whose fields are plain native pointers by
- * ntlibc's own private convention (see that header's comment) -- the
- * two formats are unrelated in memory layout even though they play the
- * same role. __peb->ImageBaseAddress (set by crt1.c from the PEB it
- * reads out of the TEB -- see crt1.c's own comment on why it is read
- * from there, and not from an entry-point argument or an
- * RtlGetCurrentPeb() call) is the base every RVA here is relative to.
- *
- * The one field this file does *not* treat as an RVA is what an IAT
- * slot *contains*: even in the RVA-based descriptor format, the delay
- * import address table itself holds real (absolute) pointers -- initially
- * the thunk's own address (tccpe.c's pe_emit_delay_thunk points each
- * IAT slot at its own thunk via an ordinary base-relocated absolute
- * pointer, so the very first call has *something* jumpable to loop back
- * here), and the resolved function's address once this helper patches
- * it. Distinguishing "still the thunk" from "already resolved" is done
- * by range-checking the slot's current value against the target
- * module's own [base, base+SizeOfImage) (ntlibc_pe_dll_range(),
- * src/internal/pe.c) rather than by remembering the thunk's address
- * separately: a resolved function's address always lands inside its
- * owning DLL's mapped image, and the thunk itself never does (it lives
- * in this executable's own .text). This is also the fast path that
- * makes a second call through an already-patched slot cheap: the
- * generated tail-merge stub (tccpe.c's pe_emit_delay_tailmerge) calls
- * __delayLoadHelper2() unconditionally on *every* call, with no
- * resolved-or-not check of its own before doing so -- so this range
- * check is the only thing standing between "second call" and "walks
- * the export table again".
- *
- * ---- Why ntdll needs its own bootstrap, and how it gets one ------------
- *
- * -Wl,--delay-all means *all*: ntdll.dll is a real entry in this
- * image's own import directory (confirmed with objdump -p on an ntlibc
- * binary -- "DLL Name: ntdll.dll" with named imports), so calls this
- * library itself makes into ntdll -- LdrLoadDll, RtlAllocateHeap,
- * NtWriteFile, all of it -- are just as delay-loaded as anything a
- * program calls directly. Naively resolving *any* delay import by
- * calling LdrLoadDll()/LdrGetProcedureAddress() (as
- * ntlibc_rpath_load()/_sym() in rpath.c do) would, the first time
- * either of those two symbols itself needs resolving, call the very
- * import it is trying to resolve -- through its own not-yet-patched
- * slot, straight back into this function, forever.
- *
- * The fix used throughout this file: symbol resolution never calls
- * LdrGetProcedureAddress at all. ntlibc_pe_find_export()
- * (src/internal/pe.c) hand-parses a module's export directory directly
- * from its mapped image, and that works unconditionally for *any*
- * already-mapped module, ntdll included -- ntdll is mapped into every
- * NT process by the kernel before the entry point ever runs, so it
- * needs no LdrLoadDll call to find. find_mapped_module() below checks
- * the PEB's loader module list (__peb->Ldr->InMemoryOrderModuleList,
- * PEB_LDR_DATA/LDR_DATA_TABLE_ENTRY -- both already in src/internal/
- * nt.h, offsets cross-checked against Wine's include/winternl.h's
- * _PEB_LDR_DATA and _LDR_DATA_TABLE_ENTRY) for a case-insensitive
- * base-name match before ever considering an actual load, for exactly
- * this reason -- "any already-mapped module", not just ntdll, per the
- * design note in pe.h. Only a module *not* found there falls through to
- * ntlibc_rpath_load(), which does call LdrLoadDll -- safe by this
- * point because resolving *that* call's own ntdll.dll import never
- * reaches ntlibc_rpath_load() in the first place (ntdll is always
- * found by the PEB walk), so there is no cycle to break.
+ * ntdll itself is delay-loaded too under -Wl,--delay-all (it's a real
+ * import), so naively resolving via LdrLoadDll()/LdrGetProcedureAddress()
+ * would recurse into itself resolving those very symbols. The fix:
+ * symbol resolution never calls LdrGetProcedureAddress. ntlibc_pe_find_
+ * export() hand-parses a module's export directory directly from its
+ * mapped image, which works for any already-mapped module including
+ * ntdll (mapped by the kernel before the entry point runs).
+ * find_mapped_module() below walks the PEB's loader module list first,
+ * for exactly that reason; only a module not found there falls through
+ * to ntlibc_rpath_load(), which does call LdrLoadDll -- safe because
+ * resolving *that* call's own ntdll.dll import never reaches
+ * ntlibc_rpath_load() (ntdll is always found by the PEB walk first).
  *
  * NT-only, same guard and same reason as rpath.c/delayload.c/pe.c.
  */
@@ -136,11 +64,9 @@
 #include "rtlib.h"
 #include "ntlibc/rpath.h"
 
-/* Real (linker-built) delay-load descriptor -- PE/COFF spec 4.3,
- * cross-checked against tinycc's own pe_build_delay_imports() (tccpe.c),
- * which is the linker that emits it. Every *RVA field here is an offset
- * from the image base; see the file header comment for the one field
- * (an IAT slot's contents) that is not. */
+/* Real (linker-built) delay-load descriptor, PE/COFF spec 4.3. Every
+ * *RVA field is an offset from the image base; see the file header
+ * comment for the one field (an IAT slot's contents) that is not. */
 typedef struct _IMAGE_DELAYLOAD_DESCRIPTOR { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling follows the NT ABI
 	ULONG Attributes;
 	ULONG DllNameRVA;
@@ -157,24 +83,9 @@ typedef struct _IMAGE_DELAYLOAD_DESCRIPTOR { // NOLINT(bugprone-reserved-identif
  * C string against a UTF-16 buffer of known length `wn`, with no
  * conversion or allocation of any kind: deliberately, since this runs
  * inside the delay-load resolution path itself (see below). */
-/* ascii is required: the post-loop `return ascii[wn] == 0;` reads
- * ascii[wn] unconditionally on every path, including wn == 0 (the
- * loop body itself never runs then, but the final statement always
- * does). This function's one real caller, find_mapped_module()
- * below, always forwards its own now-required dllname (see that
- * function's own comment).
- *
- * w is required too, despite w[i] only ever being read inside the
- * loop, guarded by `i < wn`: this function's one real call site
- * always passes `e->BaseDllName.Buffer, e->BaseDllName.Length /
- * sizeof(WCHAR)` for (w, wn) -- BaseDllName is LDR_DATA_TABLE_ENTRY's
- * own UNICODE_STRING (populated by the NT loader for every loaded
- * module at LdrpAllocateDataTableEntry time), and a valid
- * UNICODE_STRING's own invariant (NT itself, not this tree) is that
- * Buffer is never NULL for a populated entry -- the same "genuine
- * invariant established by the real caller, not derivable from a
- * bound check alone" reasoning crt/crt1.c's own split_cmdline
- * already relies on for its own p. */
+/* w is nonnull per NT's UNICODE_STRING invariant (Buffer is never NULL
+ * for a populated LDR_DATA_TABLE_ENTRY), not derivable from the `i < wn`
+ * guard alone -- same reasoning as crt/crt1.c's split_cmdline. */
 static int name_eq_ci(const char *ascii, const WCHAR *w, size_t wn)
     __attribute__((nonnull(1, 2)));
 static int name_eq_ci(const char *ascii, const WCHAR *w, size_t wn)
@@ -191,37 +102,16 @@ static int name_eq_ci(const char *ascii, const WCHAR *w, size_t wn)
 	return ascii[wn] == 0; /* same length too */
 }
 
-/* Finds `dllname` (a plain ASCII/UTF-8 name, e.g. "ntdll.dll") already
- * mapped into this process by walking the PEB's loader module list.
+/* Finds `dllname` already mapped into this process by walking the PEB's
+ * loader module list.
  *
- * Deliberately does *no* heap allocation (name_eq_ci compares directly
- * against dllname, unconverted, rather than going through
- * __utf8_to_utf16()+__malloc() as every other caller of that pattern
- * does): __malloc() ultimately calls RtlAllocateHeap, itself an ntdll
- * import and therefore itself delay-loaded under --delay-all. The very
- * first delay-load resolution of *any* symbol in the whole program is,
- * in general, RtlAllocateHeap's own -- crt1.c's __libc_start_main()
- * allocates before main ever runs (build_environ(), split_cmdline()) --
- * so if resolving it (or resolving anything else, this early) needed to
- * allocate first, that allocation would itself need RtlAllocateHeap
- * resolved, which needs to allocate, forever: confirmed the hard way,
- * as a real stack overflow under Wine (virtual_setup_exception), not a
- * hang -- each recursion pushes another __delayLoadHelper2 frame until
- * the thread's stack is exhausted. Comparing without allocating
- * breaks that cycle: resolving ntdll's own exports (this function's
- * entire job) never itself needs anything resolved. */
-/* e->BaseDllName below is a disclosed, deliberately unmarked residual:
- * e is not a parameter of this function at all (it is CONTAINING_
- * RECORD-computed from `cur`, a pointer-arithmetic offset off a live
- * circular list walk), so there is no signature for `nonnull` to
- * describe this on -- the same "struct/local-derived-pointer, not a
- * parameter" class this tree already accepts elsewhere (e.g. wait.c's
- * discover_self_stops()). Verified sound by hand regardless:
- * PEB_LDR_DATA's own InMemoryOrderModuleList is a
- * genuinely circular, always-populated list for any live NT process
- * (ntdll.dll and the executable's own module are always entries), an
- * OS loader invariant, not something any guard in this function's own
- * body could add. */
+ * Deliberately does *no* heap allocation: __malloc() ultimately calls
+ * RtlAllocateHeap, itself an ntdll import and therefore delay-loaded --
+ * and RtlAllocateHeap is typically the very first symbol this program
+ * resolves at all (crt1.c allocates before main() runs). If resolving
+ * it needed to allocate first, that would recurse forever (confirmed
+ * as a real stack overflow under Wine). Comparing without allocating
+ * breaks that cycle. */
 static void *find_mapped_module(const char *dllname)
 {
 	PLIST_ENTRY head, cur;
@@ -255,12 +145,8 @@ void *__delayLoadHelper2(void *vdescr, void **piat)
 	void *proc;
 	void *rstart, *rend;
 
-	/* __peb is set by crt1.c's __libc_start_main() before main ever
-	 * runs (and, per this file's header comment, before any ntdll call
-	 * that could reach a delay-load stub at all) -- so this is not a
-	 * real runtime possibility, only a defensive, fail-loud guard
-	 * against computing every RVA below off a null base if it somehow
-	 * were. */
+	/* Defensive, fail-loud guard: __peb is always set by crt1.c before
+	 * any ntdll call could reach a delay-load stub at all. */
 	if (!__peb) ntlibc_rpath_fail("<ntlibc>", "__peb not initialized");
 
 	base = (unsigned char *)__peb->ImageBaseAddress;
@@ -271,21 +157,8 @@ void *__delayLoadHelper2(void *vdescr, void **piat)
 
 	index = (unsigned long)(piat - iat);
 	/* Each name-table entry is an RVA to a 2-byte "hint" (unused, always
-	 * 0 here -- tccpe.c never fills it in) followed by the NUL-terminated
-	 * import name; skip the hint the same way the real loader does.
-	 *
-	 * nametable[index] below is a disclosed, deliberately unmarked
-	 * residual, surfaced only after vdescr's own nonnull mark let this
-	 * checker explore further into this function than before: nametable
-	 * is `base + descr->ImportNameTableRVA`, a local computed by pointer
-	 * arithmetic, not a parameter of this function -- the same
-	 * "struct/local-derived pointer, not a parameter" class this
-	 * file's own find_mapped_module() comment already established.
-	 * Verified sound by hand regardless: base is always __peb-derived
-	 * and descr is now required (see above), and a real,
-	 * linker-emitted IMAGE_DELAYLOAD_DESCRIPTOR's own
-	 * ImportNameTableRVA always lands inside the same mapped image
-	 * (PE/COFF spec 4.3), never NULL. */
+	 * 0 here) followed by the NUL-terminated import name; skip the hint
+	 * the same way the real loader does. */
 	name = (const char *)(base + nametable[index]) + sizeof(USHORT);
 
 	dll = *modhandle;

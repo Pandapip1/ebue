@@ -6,39 +6,26 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-/* <spawn.h> -- see
- * https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/spawn.h.html
+/* <spawn.h> -- the _POSIX_SPAWN option.
  *
- * The _POSIX_SPAWN option (SPN).  Every one of the 21 interfaces
- * basedefs/spawn.h.html lists is declared and defined here; what varies
- * is which spawn-*attributes* posix_spawn() can act on, and that is
- * spelled out in src/process/posix_spawn.c rather than papered over.
- * The short version, because it is the thing a caller has to know:
- *
- *   - the file actions (addopen/addclose/adddup2) are fully honoured,
- *     in the order added, and are the reason this header exists at all;
- *   - POSIX_SPAWN_SETSIGDEF, POSIX_SPAWN_RESETIDS and (GNU's, not
- *     POSIX's) POSIX_SPAWN_USEVFORK are satisfied by construction on NT;
+ * What each flag actually does (src/process/posix_spawn.c has the full
+ * accounting):
+ *   - file actions (addopen/addclose/adddup2) are fully honoured, in
+ *     order added;
+ *   - POSIX_SPAWN_SETSIGDEF, POSIX_SPAWN_RESETIDS and
+ *     POSIX_SPAWN_USEVFORK are satisfied by construction on NT;
  *   - POSIX_SPAWN_SETSIGMASK is honoured only for an *empty* mask,
- *     POSIX_SPAWN_SETPGROUP only for the one process group this
- *     platform has, and POSIX_SPAWN_SETSCHEDPARAM/POSIX_SPAWN_SETSCHEDULER
- *     not at all;
- *   - anything not honoured makes posix_spawn() *fail*, with the errno
- *     POSIX's ERRORS section routes that flag to, rather than being
- *     accepted and quietly dropped.
+ *     POSIX_SPAWN_SETPGROUP only for this platform's one process group,
+ *     and POSIX_SPAWN_SETSCHEDPARAM/SETSCHEDULER not at all;
+ *   - anything not honoured makes posix_spawn() *fail*, rather than
+ *     being silently dropped.
  *
- * struct sched_param is defined here rather than in <sched.h>.  POSIX
- * puts it in <sched.h> and has this header make it visible; ntlibc's
- * <sched.h> deliberately declares nothing from the
- * _POSIX_PRIORITY_SCHEDULING option group (see its header comment: a
- * configure probe that finds sched_setscheduler() concludes the option
- * group is present, and NT cannot honestly support it).  The type
- * itself is not part of that option group's *functionality* -- it is
- * just the shape posix_spawnattr_setschedparam() takes an argument in,
- * and a caller of that function needs a complete type to build one --
- * so it comes from bits/alltypes.h with its own __NEED guard, which is
- * exactly the mechanism that lets <sched.h> start defining it later
- * without a redefinition.
+ * struct sched_param is defined here, not in <sched.h>, because
+ * ntlibc's <sched.h> deliberately declares nothing from the
+ * _POSIX_PRIORITY_SCHEDULING option group (a configure probe that
+ * finds sched_setscheduler() would conclude it's present, which NT
+ * can't honestly support) -- but posix_spawnattr_setschedparam() still
+ * needs the complete type.
  */
 
 #ifndef _SPAWN_H
@@ -67,12 +54,9 @@ extern "C" {
 #define POSIX_SPAWN_SETSIGMASK     0x08
 #define POSIX_SPAWN_SETSCHEDPARAM  0x10
 #define POSIX_SPAWN_SETSCHEDULER   0x20
-/* Not POSIX: a GNU extension every consumer that uses posix_spawn at
- * all probes for (GNU make's src/job.c sets it unconditionally when the
- * macro exists).  It is a hint about *how* the new process image comes
- * into being -- "the implementation may use vfork() instead of fork()"
- * -- and __spawn() never copies the parent's address space in the first
- * place, so it is satisfied by construction here. */
+/* Not POSIX: a GNU extension hinting the implementation may use
+ * vfork(). __spawn() never copies the parent's address space, so it's
+ * satisfied by construction here. */
 #define POSIX_SPAWN_USEVFORK       0x40
 
 /* Both objects are opaque: POSIX specifies no member and no
@@ -110,13 +94,8 @@ int posix_spawnp(pid_t *__restrict, const char *__restrict,
 	const posix_spawnattr_t *__restrict,
 	char *const *__restrict, char *const *__restrict);
 
-/* init()/destroy() both dereference fa unconditionally
- * (`fa->__len = 0;` / the `for (i = 0; i < fa->__len; ...)` loop
- * condition). The add*() functions are deliberately NOT marked for fa:
- * each only ever forwards it into fa_push() (itself required there,
- * see src/process/spawn_file_actions.c's own comment), never
- * dereferencing it directly itself. addopen()'s path IS marked: it is
- * passed to strlen() unconditionally before fa is ever touched. */
+/* The add*() functions are deliberately NOT marked for fa: each only
+ * forwards it into fa_push(), never dereferencing it directly. */
 int posix_spawn_file_actions_init(posix_spawn_file_actions_t *) __attribute__((nonnull(1)));
 int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *) __attribute__((nonnull(1)));
 int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t *, int);
@@ -125,16 +104,8 @@ int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t *__restrict,
 	int, const char *__restrict withtok(null_terminated), int, mode_t)
 	__attribute__((nonnull(3)));
 
-/* Every one of these (destroy() excepted) unconditionally dereferences
- * its posix_spawnattr_t *a -- a plain read/write of one of a's own
- * fields, no NULL check anywhere in src/process/spawnattr.c. The
- * getters' out/set/param arguments are equally unconditional (a bare
- * `*out = a->__field;` or `a->__field = *set;`, nothing else in the
- * body). destroy() is deliberately NOT marked: its own body is
- * `(void)a;` -- it never dereferences a at all, so there is nothing
- * here for the attribute to describe (the same "nothing left in this
- * function's own body" reasoning as 9be895e's feholdexcept/
- * feupdateenv). */
+/* destroy() is deliberately NOT marked: its body is `(void)a;`, never
+ * dereferencing a at all. */
 int posix_spawnattr_init(posix_spawnattr_t *) __attribute__((nonnull(1)));
 int posix_spawnattr_destroy(posix_spawnattr_t *);
 int posix_spawnattr_getflags(const posix_spawnattr_t *__restrict, short *__restrict)
