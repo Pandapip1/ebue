@@ -89,7 +89,8 @@ int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *fa)
 	 * field invariant as fa_push()'s own comment above establishes; not
 	 * expressible via nonnull on fa (already marked in spawn.h) since
 	 * this is about one of fa's fields, not fa itself. */
-	for (i = 0; i < fa->__len; i++) free(fa->__actions[i].path);
+	for (i = 0; i < fa->__len; i++)
+		if (fa->__actions[i].kind == __SPAWN_OPEN) free(fa->__actions[i].u.open.path);
 	free(fa->__actions);
 	fa->__actions = 0;
 	fa->__len = fa->__cap = 0;
@@ -104,7 +105,7 @@ int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t *fa, int fd)
 	a = fa_push(fa);
 	if (!a) return ENOMEM;
 	a->kind = __SPAWN_CLOSE;
-	a->fd = fd;
+	a->u.close.fd = fd;
 	return 0;
 }
 
@@ -115,8 +116,8 @@ int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *fa, int fd, int
 	a = fa_push(fa);
 	if (!a) return ENOMEM;
 	a->kind = __SPAWN_DUP2;
-	a->fd = fd;
-	a->newfd = newfd;
+	a->u.dup2.fd = fd;
+	a->u.dup2.newfd = newfd;
 	return 0;
 }
 
@@ -139,10 +140,10 @@ int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t *__restrict fa,
 	a = fa_push(fa);
 	if (!a) { free(copy); errno = e; return ENOMEM; }
 	a->kind = __SPAWN_OPEN;
-	a->fd = fd;
-	a->path = copy;
-	a->oflag = oflag;
-	a->mode = mode;
+	a->u.open.fd = fd;
+	a->u.open.path = copy;
+	a->u.open.oflag = oflag;
+	a->u.open.mode = mode;
 	errno = e;
 	return 0;
 }

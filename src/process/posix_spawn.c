@@ -329,7 +329,7 @@ static int do_action(const struct __spawn_action *a, struct saved_slot *sv, int 
 		 * postcondition already holds, and a caller that lists every
 		 * descriptor it wants shut has no way to know which of them
 		 * happen to be open.  glibc's posix_spawn does the same. */
-		if (take_slot(sv, nsv, cap, a->fd) < 0) return ENOMEM;
+		if (take_slot(sv, nsv, cap, a->u.close.fd) < 0) return ENOMEM;
 		return 0;
 
 	case __SPAWN_DUP2: {
@@ -348,13 +348,13 @@ static int do_action(const struct __spawn_action *a, struct saved_slot *sv, int 
 		__plat_handle_t h;
 		unsigned flags;
 		int type;
-		struct __fd *f = __fd_get(a->fd);
+		struct __fd *f = __fd_get(a->u.dup2.fd);
 		if (!f) return EBADF;
 		flags = f->flags & ~(unsigned)O_CLOEXEC;
 		type = f->type;
 		if (__plat_dup(f->h, 1, &h) < 0) return errno;
-		if (take_slot(sv, nsv, cap, a->newfd) < 0) { __plat_close(h); return ENOMEM; }
-		__fd_install_at(a->newfd, h, flags, type);
+		if (take_slot(sv, nsv, cap, a->u.dup2.newfd) < 0) { __plat_close(h); return ENOMEM; }
+		__fd_install_at(a->u.dup2.newfd, h, flags, type);
 		return 0;
 	}
 
@@ -365,11 +365,11 @@ static int do_action(const struct __spawn_action *a, struct saved_slot *sv, int 
 		 * hands back the lowest free slot, which may or may not be
 		 * fildes; the slot has just been vacated, so it often is. */
 		int t;
-		if (take_slot(sv, nsv, cap, a->fd) < 0) return ENOMEM;
-		t = open(a->path, a->oflag, a->mode);
+		if (take_slot(sv, nsv, cap, a->u.open.fd) < 0) return ENOMEM;
+		t = open(a->u.open.path, a->u.open.oflag, a->u.open.mode);
 		if (t < 0) return errno;
-		if (t != a->fd) {
-			if (dup2(t, a->fd) < 0) { int e = errno; (void)close(t); return e; }
+		if (t != a->u.open.fd) {
+			if (dup2(t, a->u.open.fd) < 0) { int e = errno; (void)close(t); return e; }
 			(void)close(t);
 		}
 		return 0;
@@ -469,12 +469,12 @@ static int build_dup2_targets(const posix_spawn_file_actions_t *fa, struct __spa
 		const struct __spawn_action *a = &fa->__actions[i];
 		struct __fd *f;
 		int j, dup = 0;
-		if (a->kind != __SPAWN_DUP2 || a->newfd <= 2) continue;
-		for (j = 0; j < n; j++) if (out[j].fd == a->newfd) { dup = 1; break; }
+		if (a->kind != __SPAWN_DUP2 || a->u.dup2.newfd <= 2) continue;
+		for (j = 0; j < n; j++) if (out[j].fd == a->u.dup2.newfd) { dup = 1; break; }
 		if (dup) continue;
-		f = __fd_get(a->newfd);
+		f = __fd_get(a->u.dup2.newfd);
 		if (!f) continue; /* final state: closed -- nothing to re-home */
-		out[n].fd = a->newfd;
+		out[n].fd = a->u.dup2.newfd;
 		out[n].h = f->h;
 		n++;
 	}
