@@ -19,32 +19,32 @@
 #include "plat_malloc.h"
 
 withtok(heap_allocated)
-withtok(writable_span(n))
-void *malloc(size_t n)
+withtok(writable_span(size))
+void *malloc(size_t size)
 {
-	void *p = __plat_alloc(n, 0);
+	void *p = __plat_alloc(size, 0);
 	if (!p) errno = ENOMEM;
 	return p;
 }
 
 withtok(heap_allocated)
-withtok(writable_span(m * n))
-void *calloc(size_t m, size_t n)
+withtok(writable_span(count * size))
+void *calloc(size_t count, size_t size)
 {
 	void *p;
-	if (n && m > (size_t)-1 / n) { errno = ENOMEM; return 0; }
-	p = __plat_alloc(m * n, 1);
+	if (size && count > (size_t)-1 / size) { errno = ENOMEM; return 0; }
+	p = __plat_alloc(count * size, 1);
 	if (!p) errno = ENOMEM;
 	return p;
 }
 
 withtok(heap_allocated)
-withtok(writable_span(n))
-void *realloc(void *p consume_if_nonnull_return(heap_allocated), size_t n)
+withtok(writable_span(size))
+void *realloc(void *p consume_if_nonnull_return(heap_allocated), size_t size)
 {
 	void *q;
-	if (!p) return malloc(n);
-	q = __plat_realloc(p, n);
+	if (!p) return malloc(size);
+	q = __plat_realloc(p, size);
 	if (!q) errno = ENOMEM;
 	return q;
 }
@@ -59,11 +59,11 @@ size_t malloc_usable_size(void *p)
 }
 
 withtok(heap_allocated)
-withtok(writable_span(m * n))
-void *reallocarray(void *p consume_if_nonnull_return(heap_allocated), size_t m, size_t n)
+withtok(writable_span(count * size))
+void *reallocarray(void *p consume_if_nonnull_return(heap_allocated), size_t count, size_t size)
 {
-	if (n && m > (size_t)-1 / n) { errno = ENOMEM; return 0; }
-	return realloc(p, m * n); // NOLINT(clang-analyzer-optin.portability.UnixAPI) -- realloc(p, 0) is a deliberate, defined passthrough here
+	if (size && count > (size_t)-1 / size) { errno = ENOMEM; return 0; }
+	return realloc(p, count * size); // NOLINT(clang-analyzer-optin.portability.UnixAPI) -- realloc(p, 0) is a deliberate, defined passthrough here
 }
 
 /* Blocks with alignment above the heap's own are carved out of a larger
@@ -96,11 +96,11 @@ int posix_memalign(void **res, size_t align, size_t len)
 }
 
 withtok(heap_allocated)
-withtok(writable_span(len))
-void *aligned_alloc(size_t align, size_t len)
+withtok(writable_span(size))
+void *aligned_alloc(size_t alignment, size_t size)
 {
 	void *p;
-	int e = posix_memalign(&p, align < sizeof(void *) ? sizeof(void *) : align, len);
+	int e = posix_memalign(&p, alignment < sizeof(void *) ? sizeof(void *) : alignment, size);
 	if (e) { errno = e; return 0; }
 	return p;
 }

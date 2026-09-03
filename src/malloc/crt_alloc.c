@@ -20,10 +20,10 @@
 #include "plat_malloc.h"
 
 withtok(internal_heap_allocated)
-withtok(writable_span(n))
-void *__malloc(size_t n)
+withtok(writable_span(size))
+void *__malloc(size_t size)
 {
-	return __plat_alloc(n, 0);
+	return __plat_alloc(size, 0);
 }
 
 void __free(void *p consume(internal_heap_allocated))
