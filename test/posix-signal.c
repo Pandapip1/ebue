@@ -391,6 +391,62 @@ static void test_sigsetops(void)
 	CHECK(sigismember(&s, _NSIG - 1) == 1);
 }
 
+/* sigorset(3) (glibc/BSD, not POSIX -- src/signal/signal.c's own
+ * comment: "sigorset() would do this in one call" describing the very
+ * loop it replaces): "the union of the sets ... is stored in dest".
+ * Checked directly, plus its two-sided special cases: ORing with an
+ * empty set is a no-op, and ORing with a full set gives a full set. */
+static void test_sigorset(void)
+{
+	sigset_t a, b, dest;
+
+	sigemptyset(&a);
+	sigemptyset(&b);
+	CHECK(sigaddset(&a, SIGTERM) == 0);
+	CHECK(sigaddset(&b, SIGINT) == 0);
+
+	sigemptyset(&dest);
+	CHECK(sigorset(&dest, &a, &b) == 0);
+	CHECK(sigismember(&dest, SIGTERM) == 1);
+	CHECK(sigismember(&dest, SIGINT) == 1);
+	CHECK(sigismember(&dest, SIGHUP) == 0);
+
+	/* union with an empty set changes nothing */
+	sigemptyset(&b);
+	sigemptyset(&dest);
+	CHECK(sigorset(&dest, &a, &b) == 0);
+	CHECK(sigismember(&dest, SIGTERM) == 1);
+	CHECK(sigismember(&dest, SIGINT) == 0);
+
+	/* union with a full set is full */
+	sigfillset(&b);
+	CHECK(sigorset(&dest, &a, &b) == 0);
+	CHECK(sigisemptyset(&dest) == 0);
+	CHECK(sigismember(&dest, _NSIG - 1) == 1);
+}
+
+/* <signal.h>: "SIGRTMAX A symbolic constant that expands to a positive
+ * integer, of type int, that is the highest number of a realtime
+ * signal" -- defined here (include/signal.h) as a call through
+ * __libc_current_sigrtmax(), the same indirection glibc itself uses so
+ * the value can be computed rather than hardcoded. Checked against
+ * SIGRTMIN and against sig_valid()'s own upper bound (_NSIG - 1, per
+ * sigismember() accepting it above), since those are the two facts a
+ * caller building an RT signal set actually relies on. */
+static void test_sigrtmax(void)
+{
+	CHECK(SIGRTMAX == __libc_current_sigrtmax());
+	CHECK(SIGRTMAX >= SIGRTMIN);
+	CHECK(SIGRTMAX == _NSIG - 1);
+
+	{
+		sigset_t s;
+		sigemptyset(&s);
+		CHECK(sigaddset(&s, SIGRTMAX) == 0);
+		CHECK(sigismember(&s, SIGRTMAX) == 1);
+	}
+}
+
 /* ================================================================== *
  * sigprocmask.html
  * ================================================================== */
@@ -1965,6 +2021,8 @@ int main(int argc, char **argv)
 	test_sa_resethand();
 	test_sigaction_implicit_mask();
 	test_sigsetops();
+	test_sigorset();
+	test_sigrtmax();
 	test_sigprocmask();
 	test_sigpending();
 	test_new_thread_pending_empty();
