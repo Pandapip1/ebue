@@ -223,6 +223,14 @@ static void test_posix_complex_cexp_clog_cpow_csqrt(void)
 	CHECK(fabsl(creall(clogl(1.0L + 0.0L * I))) < 1e-9L);
 	CHECK(fabsl(creall(cpowl(2.0L + 0.0L * I, 10.0L + 0.0L * I))
 		    - 1024.0L) < 1e-6L);
+	/* The other precision of each of the same four functions, so all
+	 * eight of cexp/clog/cpow/csqrt's f and l forms are exercised, not
+	 * just one of each pair. */
+	CHECK(fabsl(creall(cexpl(0.0L + 0.0L * I)) - 1.0L) < 1e-9L);
+	CHECK(fabsf(crealf(clogf(1.0f + 0.0f * I))) < 1e-5f);
+	CHECK(fabsf(crealf(cpowf(2.0f + 0.0f * I, 10.0f + 0.0f * I))
+		    - 1024.0f) < 1e-2f);
+	CHECK(fabsl(cimagl(csqrtl(-1.0L + 0.0L * I)) - 1.0L) < 1e-9L);
 }
 #endif
 
@@ -290,6 +298,14 @@ static void test_posix_complex_ctrig_and_chyperbolic(void)
 	CHECK(fabsf(crealf(ccoshf(0.0f + 0.0f * I)) - 1.0f) < 1e-5f);
 	CHECK(fabsf(crealf(ctanf(0.0f + 0.0f * I))) < 1e-5f);
 	CHECK(fabsl(creall(csinl(0.0L + 0.0L * I))) < 1e-9L);
+	/* The other precision of ccos/csin/csinh/ctanh, so all four have
+	 * both their f and l forms exercised here alongside their d forms
+	 * above, the same completeness ccosh/ctanh/csin got below except
+	 * they were the missing half in each pair. */
+	CHECK(fabsl(creall(ccosl(0.0L + 0.0L * I)) - 1.0L) < 1e-9L);
+	CHECK(fabsf(crealf(csinf(0.0f + 0.0f * I))) < 1e-5f);
+	CHECK(fabsl(creall(csinhl(0.0L + 0.0L * I))) < 1e-9L);
+	CHECK(fabsf(crealf(ctanhf(0.0f + 0.0f * I))) < 1e-5f);
 }
 #endif
 
