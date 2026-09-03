@@ -43,7 +43,7 @@
 # compile/link evidence (and, where noted, a native aarch64-linux run of
 # the unmodified upstream source), not an observed Wine run.
 #
-# COUNTS PASS=115 BUG=2 UNIMPL=7 NA=21 FLAKY=1
+# COUNTS PASS=116 BUG=2 UNIMPL=6 NA=21 FLAKY=1
 clocale_mbfuncs	runtime=wine,target_arch=x86_64,kernel32=no	NA	Design difference: this library's only encoding is UTF-8 (MB_CUR_MAX=4), but the test opens setlocale(LC_CTYPE, "C") and requires the single-byte-C-locale invariant MB_CUR_MAX==1.
 crypt	runtime=wine,target_arch=x86_64,kernel32=no	NA	Design difference: this library implements only POSIX-mandatory DES crypt(3); every test case uses a glibc/BSD extension hash format ($1$/$2a$/$2x$/$2y$/$5$/$6$), which correctly fails with EINVAL.
 daemon-failure	runtime=wine,target_arch=x86_64,kernel32=no	NA	The test needs the shim's t_fdfill() to exhaust the fd table so daemon()'s open("/dev/null") fails with EMFILE, but t_fdfill() is stubbed (no enforced RLIMIT_NOFILE), so daemon() succeeds instead.
@@ -61,7 +61,6 @@ pthread_exit-dtor	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	Patched Wine
 pthread_robust	runtime=wine,target_arch=x86_64,kernel32=no	NA	Design difference: pthread_mutex_destroy() returns EBUSY for any locked mutex, which POSIX's ERRORS section sanctions, but this test (a musl-specific choice, not a POSIX requirement) expects destroying a self-held robust mutex mid-EOWNERDEAD-recovery to succeed.
 setenv-oom	runtime=wine,target_arch=x86_64,kernel32=no	NA	t_setrlim(RLIMIT_DATA, 0) is not enforced, so the NT process heap's existing reserve is never exhausted and setenv() succeeding is not an OOM defect.
 sigprocmask-internal	runtime=wine,target_arch=x86_64,kernel32=no	NA	Design difference: __libc_current_sigrtmin() is 35 here, so signals 32-34 are not reserved and are blockable.
-socket	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	SOCK_CLOEXEC now works, but socket.c:46 next requires SOCK_NONBLOCK, which is out of scope: ntlibc's fds have no nonblocking-I/O mode for socket() to set.
 spawn	runtime=wine,target_arch=x86_64,kernel32=no	NA	posix_spawnp() spawns "echo", which has no NT executable image (echo is a cmd.exe builtin, not on PATH), so it correctly answers ENOENT; ntlibc's own posix_spawnp() coverage (test/posix-spawn.c) resolves a name that does exist.
 sscanf_long	runtime=wine,target_arch=x86_64,kernel32=no	NA	Unverifiable in this environment: the test needs an enforced RLIMIT_STACK, but t_setrlim is stubbed.
 syscall-sign-extend	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	syscall-sign-extend.c:7: error: include file 'sys/syscall.h' not found

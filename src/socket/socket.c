@@ -20,13 +20,16 @@
  * accept()ed/connect()ed peers reporting AF_INET addresses rather than
  * AF_UNIX ones -- not a new kind of shortcut.
  *
- * SOCK_CLOEXEC (same page, DESCRIPTION's "type" paragraph): the bit
- * lives in `type` alongside the socket type itself, so it is masked
- * off before the SOCK_STREAM/SOCK_DGRAM comparison and folded into the
- * new fd's flags word instead -- the same close-on-exec plumbing open()
- * already uses (src/fcntl/open.c, src/internal/fd.c's exec-time sweep),
- * just reached from socket() instead of open().  See <sys/socket.h>'s
- * own comment on the macro for why it reuses O_CLOEXEC's bit value.
+ * SOCK_CLOEXEC/SOCK_NONBLOCK (same page, DESCRIPTION's "type"
+ * paragraph): both bits live in `type` alongside the socket type
+ * itself, so both are masked off before the SOCK_STREAM/SOCK_DGRAM
+ * comparison and folded into the new fd's flags word instead -- the
+ * same close-on-exec and nonblocking-mode plumbing open() already uses
+ * (src/fcntl/open.c, src/internal/fd.c's exec-time sweep for
+ * O_CLOEXEC), just reached from socket() instead of open().  See
+ * <sys/socket.h>'s own comments on the macros for why each reuses its
+ * O_ bit value, and SOCK_NONBLOCK's in particular for what storing the
+ * bit does and does not change about socket I/O.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -46,7 +49,8 @@ int socket(int domain, int type, int protocol) // NOLINT(bugprone-easily-swappab
 	__plat_handle_t h;
 	int fd;
 	int cloexec = type & SOCK_CLOEXEC;
-	int t = type & ~SOCK_CLOEXEC;
+	int nonblock = type & SOCK_NONBLOCK;
+	int t = type & ~(SOCK_CLOEXEC | SOCK_NONBLOCK);
 
 	if (domain != AF_INET && domain != AF_UNIX) { errno = EAFNOSUPPORT; return -1; }
 	if (t != SOCK_STREAM && t != SOCK_DGRAM) { errno = EPROTOTYPE; return -1; }
@@ -64,7 +68,7 @@ int socket(int domain, int type, int protocol) // NOLINT(bugprone-easily-swappab
 
 	if (__plat_socket_open(&h, t) < 0) return -1;
 
-	fd = __fd_install(h, cloexec ? O_CLOEXEC : 0, __FD_SOCKET);
+	fd = __fd_install(h, (cloexec ? O_CLOEXEC : 0) | (nonblock ? O_NONBLOCK : 0), __FD_SOCKET);
 	if (fd < 0) { __plat_close(h); return -1; }
 	/* Same residual as src/socket/accept.c's own __fd_get(newfd)->pad:
 	 * not expressible via nonnull (fd is not a pointer, and __fd_get()'s

@@ -22,9 +22,11 @@
  *      reusing the AF_INET transport the rest of this directory
  *      already implements.
  *
- * SOCK_CLOEXEC (sys_socket.h.html's DESCRIPTION carries the same "type
- * argument may set SOCK_CLOEXEC" text socket() cites): both ends of the
- * pair get it if the caller asked for it, on every path.
+ * SOCK_CLOEXEC/SOCK_NONBLOCK (sys_socket.h.html's DESCRIPTION carries
+ * the same "type argument may set SOCK_CLOEXEC"/SOCK_NONBLOCK text
+ * socket() cites): both ends of the pair get whichever bits the caller
+ * asked for, on every path.  See <sys/socket.h>'s own comment on
+ * SOCK_NONBLOCK for what storing the bit does and does not change.
  */
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -54,11 +56,11 @@
  * the slot in -- honest (matches what a real unnamed peer looks like)
  * rather than a fabricated AF_INET address the way the loopback
  * fallback's peer already is. */
-static int install_pair_handle(__plat_handle_t h, int dgram, int cloexec)
+static int install_pair_handle(__plat_handle_t h, int dgram, int cloexec, int nonblock)
 {
 	struct __fd *f;
 	struct sockaddr peer;
-	int fd = __fd_install(h, cloexec ? O_CLOEXEC : 0, __FD_SOCKET);
+	int fd = __fd_install(h, (cloexec ? O_CLOEXEC : 0) | (nonblock ? O_NONBLOCK : 0), __FD_SOCKET);
 
 	if (fd < 0) { __plat_close(h); return -1; }
 	f = __fd_get(fd);
@@ -70,15 +72,18 @@ static int install_pair_handle(__plat_handle_t h, int dgram, int cloexec)
 	return fd;
 }
 
-/* SOCK_STREAM: pair[0] gets SOCK_CLOEXEC for free -- it comes from this
- * file's own socket() call below, which already honors the bit.
- * pair[1] does not: it comes from accept(), and this project has no
- * accept4() to pass the bit through, so it is applied with a separate
- * fcntl(F_SETFD) once the fd exists.  A window exists between that
- * accept() and this fcntl() in which a concurrent exec() in another
- * thread would leak the fd -- the same window accept4() exists to close
- * everywhere it is missing; nothing narrower is available without it. */
-static int socketpair_stream(int cloexec, int pair[2])
+/* SOCK_STREAM: pair[0] gets SOCK_CLOEXEC/SOCK_NONBLOCK for free -- it
+ * comes from this file's own socket() call below, which already honors
+ * both bits.  pair[1] does not: it comes from accept(), and this
+ * project has no accept4() to pass either bit through, so both are
+ * applied with separate fcntl() calls once the fd exists (F_SETFD for
+ * SOCK_CLOEXEC, F_SETFL for SOCK_NONBLOCK).  A window exists between
+ * that accept() and those fcntl() calls in which a concurrent exec() in
+ * another thread would leak the fd, or a concurrent I/O call would
+ * block when the caller asked for non-blocking -- the same window
+ * accept4() exists to close everywhere it is missing; nothing narrower
+ * is available without it. */
+static int socketpair_stream(int cloexec, int nonblock, int pair[2])
 {
 	struct sockaddr_in address;
 	socklen_t length;
@@ -95,13 +100,14 @@ static int socketpair_stream(int cloexec, int pair[2])
 	length = sizeof address;
 	if (getsockname(listener, (struct sockaddr *)&address, &length) < 0) goto fail;
 
-	client = socket(AF_INET, SOCK_STREAM | cloexec, 0);
+	client = socket(AF_INET, SOCK_STREAM | cloexec | nonblock, 0);
 	if (client < 0 ||
 	    connect(client, (struct sockaddr *)&address, sizeof address) < 0)
 		goto fail;
 	server = accept(listener, 0, 0);
 	if (server < 0) goto fail;
 	if (cloexec && fcntl(server, F_SETFD, FD_CLOEXEC) < 0) goto fail;
+	if (nonblock && fcntl(server, F_SETFL, O_NONBLOCK) < 0) goto fail;
 	(void)close(listener);
 	pair[0] = client;
 	pair[1] = server;
@@ -128,18 +134,19 @@ fail:
  * UDP peers on real loopback addresses would rendezvous.
  *
  * Both ends come from this file's own socket() calls, unlike the
- * SOCK_STREAM path's pair[1] (from accept()) -- so SOCK_CLOEXEC applies
- * to both directly through socket()'s own flag, and the fcntl(F_SETFD)
- * window socketpair_stream() has to accept does not exist here at all. */
-static int socketpair_dgram(int cloexec, int pair[2])
+ * SOCK_STREAM path's pair[1] (from accept()) -- so SOCK_CLOEXEC/
+ * SOCK_NONBLOCK apply to both directly through socket()'s own flags,
+ * and the fcntl() window socketpair_stream() has to accept does not
+ * exist here at all. */
+static int socketpair_dgram(int cloexec, int nonblock, int pair[2])
 {
 	struct sockaddr_in addr_a, addr_b;
 	socklen_t length;
 	int a = -1, b = -1;
 	int saved;
 
-	a = socket(AF_INET, SOCK_DGRAM | cloexec, 0);
-	b = socket(AF_INET, SOCK_DGRAM | cloexec, 0);
+	a = socket(AF_INET, SOCK_DGRAM | cloexec | nonblock, 0);
+	b = socket(AF_INET, SOCK_DGRAM | cloexec | nonblock, 0);
 	if (a < 0 || b < 0) goto fail;
 
 	memset(&addr_a, 0, sizeof addr_a);
@@ -174,7 +181,8 @@ fail:
 int socketpair(int domain, int type, int protocol, int pair[2]) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int cloexec = type & SOCK_CLOEXEC;
-	int t = type & ~SOCK_CLOEXEC;
+	int nonblock = type & SOCK_NONBLOCK;
+	int t = type & ~(SOCK_CLOEXEC | SOCK_NONBLOCK);
 	__plat_handle_t native[2];
 
 	if (domain != AF_UNIX) { errno = EAFNOSUPPORT; return -1; }
@@ -183,11 +191,11 @@ int socketpair(int domain, int type, int protocol, int pair[2]) // NOLINT(bugpro
 	if (!pair) { errno = EINVAL; return -1; }
 
 	if (__plat_socketpair(type, native) == 0) {
-		int a = install_pair_handle(native[0], t == SOCK_DGRAM, cloexec);
+		int a = install_pair_handle(native[0], t == SOCK_DGRAM, cloexec, nonblock);
 		int b;
 
 		if (a < 0) { __plat_close(native[1]); return -1; }
-		b = install_pair_handle(native[1], t == SOCK_DGRAM, cloexec);
+		b = install_pair_handle(native[1], t == SOCK_DGRAM, cloexec, nonblock);
 		if (b < 0) { int saved = errno; (void)close(a); errno = saved; return -1; }
 		pair[0] = a;
 		pair[1] = b;
@@ -195,5 +203,5 @@ int socketpair(int domain, int type, int protocol, int pair[2]) // NOLINT(bugpro
 	}
 	if (errno != ENOSYS) return -1; /* a real failure, not "no native primitive" */
 
-	return t == SOCK_DGRAM ? socketpair_dgram(cloexec, pair) : socketpair_stream(cloexec, pair);
+	return t == SOCK_DGRAM ? socketpair_dgram(cloexec, nonblock, pair) : socketpair_stream(cloexec, nonblock, pair);
 }

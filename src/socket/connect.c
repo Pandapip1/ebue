@@ -7,11 +7,13 @@
  * the AF_UNIX exception does not apply here) -- implemented as an
  * explicit wildcard bind() first, matching ReactOS's WSPConnect
  * (dll/win32/msafd/misc/dllmain.c: "Bind us First" / WSHGetWildcardSockaddr)
- * doing the same before IOCTL_AFD_CONNECT.  This project only ever opens
- * sockets non-blocking-unaware (no O_NONBLOCK/fcntl wiring for sockets
- * yet -- left for a later stage, see the top-level report), so this is
- * always the blocking form: the ioctl is waited to completion, never
- * returning EINPROGRESS/EALREADY.
+ * doing the same before IOCTL_AFD_CONNECT.  SOCK_NONBLOCK's O_NONBLOCK
+ * bit is stored and reported honestly on the fd (<sys/socket.h>'s own
+ * comment on the macro), but this function does not yet consult it: the
+ * ioctl is always waited to completion here, never returning
+ * EINPROGRESS/EALREADY, whether or not the socket was opened
+ * non-blocking. A disclosed scope boundary, not a bug -- making
+ * connect() itself honor the bit is later work.
  *
  * SOCK_DGRAM (2026-09-01): connect() applies to a datagram socket too
  * (connect.html DESCRIPTION: "If the socket ... is of type SOCK_DGRAM

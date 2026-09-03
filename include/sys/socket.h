@@ -126,6 +126,19 @@ struct linger {
  * src/socket/socketpair.c both honor it. */
 #define SOCK_CLOEXEC   02000000
 
+/* SOCK_NONBLOCK: same DESCRIPTION paragraph as SOCK_CLOEXEC, cross-
+ * referencing open.html's O_NONBLOCK for the effect (non-blocking I/O).
+ * Shares <fcntl.h>'s O_NONBLOCK bit value (04000) for the same reason
+ * SOCK_CLOEXEC shares O_CLOEXEC's: socket()/socketpair() strip it out of
+ * the type argument and fold it straight into the new fd's flags word
+ * (struct __fd's `flags`), which fcntl(F_GETFL/F_SETFL) and
+ * ioctl(FIONBIO) already read and write honestly for any fd. What is
+ * NOT true yet: no socket I/O call (connect(), send(), recv(), accept())
+ * actually consults the bit -- it is stored and reported, not acted on,
+ * so a socket created with this flag still blocks to completion exactly
+ * as one without it does. */
+#define SOCK_NONBLOCK  04000
+
 #define SOL_SOCKET 0xffff
 
 #define SO_REUSEADDR  0x0004
