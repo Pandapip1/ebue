@@ -22,6 +22,7 @@
  * concurrent test runs cannot collide on a shared path).
  */
 #include <aio.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
@@ -43,7 +44,18 @@ int main(int argc, char **argv)
 	cb.aio_nbytes = sizeof payload - 1;
 	cb.aio_offset = 0;
 
+	/* This is this process's first-ever AIO call, so it is also the one
+	 * that runs src/thread/aio.c's start_worker() for the first time --
+	 * exactly the call that used to release the freshly spawned worker's
+	 * thread handle via the generic, fd-domain __plat_close() instead of
+	 * __plat_thread_close(), silently clobbering this thread's own errno
+	 * with a bogus EBADF (see plat_thread.h's __plat_thread_close()
+	 * banner). Confirms the fix the same way test/pthread-surface.c's
+	 * test_errno_thread_isolation() confirms pthread_join()'s: errno must
+	 * still read back exactly what was set beforehand. */
+	errno = EACCES;
 	if (aio_write(&cb) != 0) return 3;
+	if (errno != EACCES) return 5;
 	list[0] = &cb;
 	aio_suspend(list, 1, NULL);
 	if (aio_return(&cb) != (ssize_t)(sizeof payload - 1)) return 4;
