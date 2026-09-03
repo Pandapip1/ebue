@@ -58,68 +58,49 @@ class ErrnoDisciplineChecker
 
   /* Functions this codebase's own implementation proves capable of
    * setting errno as a side effect, grounded against this tree (not
-   * glibc convention) via `grep -rn "errno = " src/` and its callers,
-   * plus src/internal/libc.h's own "-1 with errno"/"NULL with errno"
-   * doc comments.  Almost everything here is an ntlibc-internal
-   * NT-syscall-wrapping helper; close() and munmap() are kept as the
-   * two POSIX-named "cleanup after a diagnosed failure" calls the CERT
-   * ERR30-C pattern this checker looks for actually uses in this tree. */
+   * glibc convention) via `grep -rn "errno = " src/` and each callee's
+   * own doc comment in src/internal/libc.h.  close() and munmap() are
+   * kept as the two POSIX-named calls the CERT ERR30-C "cleanup after a
+   * diagnosed failure" pattern this checker looks for actually uses. */
   static bool isErrnoCapable(const CallEvent &Call) {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
     if (!Function || !Function->getIdentifier())
       return false;
     static constexpr llvm::StringLiteral Names[] = {
-        /* The canonical NTSTATUS -> errno mapper; most entries below
-         * either call this directly or duplicate its "errno = map(st);
-         * return -1" shape inline. */
+        // NTSTATUS -> errno mapper
         "__set_errno_status",
-        /* Path translation: POSIX path -> UNICODE_STRING/OBJECT_ATTRIBUTES.
-         * "Returns 0 or -1 with errno." */
+        // path translation
         "__ntpath", "__ntpath_native", "__ntpath_at", "__ntpath_at_native",
-        /* The guts of open()/openat(), unlink()/rmdir(), stat()/fstat():
-         * each documented "Returns 0, or -1 with errno." */
+        // open/unlink/rmdir/stat internals
         "__open_handle", "__unlink_at", "__fstat_handle",
-        /* The descriptor table: each documented "-1 with errno" or
-         * "NULL with errno=EBADF". */
+        // descriptor table
         "__fd_alloc", "__fd_install", "__fd_get", "__fd_handle",
         "__fd_pos_save", "__fd_runtime_data",
-        /* The fixed POSIX namespace resolver: "-1 is a path error with
-         * errno set." */
+        // POSIX namespace resolver
         "__vfs_resolve_at", "__vfs_open_dir", "__vfs_stat",
-        /* Process/exec and WSL mode-attribute helpers: "-1 with errno." */
+        // process/exec and WSL mode-attribute helpers
         "__spawn", "__lxmod_set", "__find_program", "__plat_dup",
-        /* nanosleep()/sleep()/clock_nanosleep()'s shared alertable wait:
-         * "-1 with errno=EINTR". */
+        // alertable wait shared by nanosleep/sleep/clock_nanosleep
         "__alertable_delay", "wait_handle", "sem_trywait",
-        /* RLIMIT_FSIZE enforcement: "sets errno to EFBIG". */
+        // RLIMIT_FSIZE enforcement
         "__fsize_exceeded",
-        /* UTF-8/UTF-16 conversion: "NULL with errno" / "-1 with errno". */
+        // UTF-8/UTF-16 conversion
         "__utf8_to_utf16", "__utf16_to_utf8_buf",
-        /* AFD (Winsock) helpers and the directory-stream cursor, plus the
-         * handle-to-path resolver: each contains its own "errno = ..."
-         * assignment. */
+        // AFD/Winsock helpers, dirstream cursor, handle-to-path resolver
         "__afd_open", "__afd_addr_from_sockaddr", "__dirstream_next",
         "__handle_path", "raw_mmap",
-        /* close() sets errno via __fd_get()/__set_errno_status()
-         * internally; munmap() sets it directly.  Both are exactly the
-         * "cleanup after a diagnosed failure" call that clobbers errno. */
+        // close()/munmap(): the two POSIX-named "cleanup after a
+        // diagnosed failure" calls this checker's pattern actually uses
         "close", "munmap",
-        /* The remaining POSIX-named entries below are each grounded the
-         * same way: read directly, in this project's own implementation
-         * under src/unistd, src/fcntl/open.c and src/stat, confirming
-         * each really does set errno on its own failure return rather
-         * than assumed from glibc convention. */
+        // remaining POSIX entries, each confirmed directly in this
+        // tree's own src/unistd, src/fcntl/open.c and src/stat
         "read", "write", "open", "unlink", "mkdir", "mkfifo", "stat",
         "lstat", "statvfs", "nftw", "rmdir", "readlink", "utimensat",
         "chmod", "realpath", "link", "symlink", "isatty", "getcwd",
-        /* stdio entry points whose failure paths in this implementation
-         * set errno, plus utility-local wrappers that preserve those
-         * failure returns for their callers. */
+        // stdio entry points and the utility wrappers preserving them
         "fopen", "fread", "fwrite", "fclose", "fflush",
         "cksum_stream", "read_all", "write_all", "link_one", "mkdir_p",
-        /* src/stdio/buf.c's own fd-and-buffer-position seek helper,
-         * shared by fflush()/fseek()/rewind(); each of its own failure
-         * returns sets errno directly. */
+        // src/stdio/buf.c's shared fd-and-buffer-position seek helper
         "__file_seek",
     };
     StringRef Name = Function->getName();
