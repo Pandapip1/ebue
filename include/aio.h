@@ -32,10 +32,7 @@ struct aiocb {
 	struct sigevent aio_sigevent;
 	int aio_lio_opcode;
 	off_t aio_offset;
-	/* Private request identity.  Applications initialize an aiocb to zero
-	 * and must not alter it while an operation is outstanding, so keeping
-	 * the identity here makes aio_error()/aio_return() an exact lookup
-	 * without imposing a second, pointer-keyed allocation. */
+	/* Request identity used by aio_error()/aio_return() to look up this op. */
 	void *__opaque;
 };
 
@@ -57,12 +54,7 @@ int aio_read(struct aiocb *);
 ssize_t aio_return(struct aiocb *);
 int aio_suspend(const struct aiocb *const [], int, const struct timespec *);
 int aio_write(struct aiocb *);
-/* list is required: src/thread/aio.c's own lio_listio() subscripts it
- * directly (`list[i]`) whenever count >= 1, with no NULL check of its
- * own. event is left unmarked -- it is genuinely optional per
- * lio_listio.html ("If sig is NULL, then no signal is queued"), and
- * `(event && !valid_event(event))` there is a real, load-bearing check
- * of exactly that. */
+/* event is unmarked nonnull: a NULL sigevent is valid, meaning no signal. */
 int lio_listio(int, struct aiocb *const [], int, struct sigevent *)
     __attribute__((nonnull(2)));
 

@@ -7,27 +7,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * <complex.h> -- C99 complex arithmetic, Annex G (ISO/IEC 9899:1999).
- * POSIX.1-2017 defers every c*() function to this same ISO C text; see
- * test/posix-complex.c's banner for the full inventory and clause
- * citations.
  *
- * Under __TINYC__ this header defines only __STDC_NO_COMPLEX__ and
- * nothing else: tcc's parser rejects `_Complex` outright at parse time
- * on every tcc build this tree targets, which is a gap in the
- * compiler's own grammar (not a missing runtime symbol) that no
- * library code can work around. A caller that never names
- * `complex`/`_Complex` sees no difference from including this header;
- * one who does gets tcc's own parse error at their own use site.
- * Since the type never compiles under tcc, this header also never
- * needs __muldc3/__divdc3-style compiler-rt fallbacks for complex
- * multiply/divide there.
- *
- * Under every other compiler this tree builds with (clang, the native
- * Linux/aarch64 target; mingw-w64 gcc, the NT fallback), _Complex is a
- * real, hardware-ABI-backed language feature, and every function below
- * has a real algorithm in src/complex/ (adapted from musl, itself
- * largely adapted from FreeBSD/OpenBSD libm; see that directory's file
- * banners for the clause and reference each is adapted from).
+ * tcc's parser rejects `_Complex` outright (a gap in its grammar, not a
+ * missing runtime symbol), so under __TINYC__ this header defines only
+ * __STDC_NO_COMPLEX__ and nothing else.
  */
 #ifndef _COMPLEX_H
 #define _COMPLEX_H
@@ -44,32 +27,21 @@ extern "C" {
 
 #define complex _Complex
 
-/* __builtin_complex(re, im) constructs a complex value componentwise,
- * exactly -- unlike the expression `re + im*I`, which is complex
- * addition and multiplication and can, per Annex G's rules for
- * operands involving an infinity or a NaN, produce a different value
- * than the componentwise construction the CMPLX macros below promise.
- * _Complex_I is built the same way rather than as a literal `1.0i` so
- * construction goes through exactly one mechanism everywhere in this
- * header and in src/complex/. */
+/* __builtin_complex(re, im) constructs componentwise; `re + im*I` is complex
+ * multiplication and addition instead, which can differ per Annex G's rules
+ * when an operand is infinite or NaN. */
 #define _Complex_I (__builtin_complex(0.0, 1.0))
 #define I _Complex_I
 
-/* CMPLX/CMPLXF/CMPLXL (C11 7.3.9.1, adopted here a standard early since
- * every compiler this branch targets already implements the builtin
- * they compile to): every branch-cut-sensitive function in
- * src/complex/ returns through one of these three, never through +, -,
- * or * on two already-complex operands -- see
- * src/complex/complex_impl.h's own banner for why that second style is
- * the one Annex G functions cannot safely use. */
+/* Branch-cut-sensitive functions in src/complex/ build results through one
+ * of these rather than +, -, or * on two complex operands, for the same
+ * infinity/NaN reason as _Complex_I above. */
 #define __CMPLX(x, y, t) (__builtin_complex((t)(x), (t)(y)))
 #define CMPLX(x, y)  __CMPLX(x, y, double)
 #define CMPLXF(x, y) __CMPLX(x, y, float)
 #define CMPLXL(x, y) __CMPLX(x, y, long double)
 
-/* ---- creal/cimag/conj/cproj/carg/cabs (src/complex/complex_parts.c) --
- * decomposition, sign flips and one hypot()/atan2() call each; see that
- * file's own banner. */
+/* ---- creal/cimag/conj/cproj/carg/cabs (src/complex/complex_parts.c) ---- */
 double      creal(double complex);
 float       crealf(float complex);
 long double creall(long double complex);

@@ -6,11 +6,9 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * <crypt.h>: the traditional (glibc/BSD, not POSIX-standardized) home
- * for crypt()'s declaration, separate from crypt()'s own XSI listing in
- * <unistd.h> (both declare the same function; a translation unit is
- * free to pick up either or both). src/unistd/crypt.c has the
- * implementation and algorithm notes.
+ * <crypt.h>: the traditional (glibc/BSD, not POSIX) home for crypt()'s
+ * declaration, alongside its XSI listing in <unistd.h>; both declare the
+ * same function.
  */
 #ifndef _CRYPT_H
 #define _CRYPT_H

@@ -11,11 +11,8 @@
 
 #include <features.h>
 
-/* basedefs/ctype.h.html DESCRIPTION: "The <ctype.h> header shall define
- * the locale_t type as described in <locale.h>."  That sentence is
- * unconditional -- not gated behind any of the _POSIX_SOURCE/XOPEN/GNU
- * feature-test macros locale.h itself gates newlocale() et al. behind
- * -- so the request for the type is unconditional here too. */
+/* POSIX requires locale_t here unconditionally, unlike locale.h's own
+ * feature-test gating of newlocale() et al. */
 #define __NEED_locale_t
 
 #include <bits/alltypes.h>
@@ -24,28 +21,13 @@
 extern "C" {
 #endif
 
-/* Every function in this header is pure arithmetic on `(unsigned)c`
- * (see the .c files under src/ctype/): no table lookup, no locale
- * read (src/misc/locale.c's setlocale() never accepts any locale but
- * "C"/"POSIX", so there is no second classification table this could
- * ever pick), no errno, no global/static state, no I/O.  Each is a
- * total function of its one int argument -- calling any of them twice
- * with the same c always gives the same answer, with nothing else
- * observable in between.  Marked __attribute__((__pure__)) accordingly.
+/* Pure arithmetic on `(unsigned)c`: no locale read, errno, or state, hence
+ * __attribute__((__pure__)).
  *
- * Deliberately ASCII-only for c in 0x80-0xff, even though wctype.h's
- * isw*() family is now backed by real Unicode data (see that header's
- * own banner comment): this is not a limitation these two families
- * happen to still share, it is the UTF-8-correct answer. ntlibc's char*
- * strings are UTF-8 (src/internal/utf.c), and in UTF-8 a single byte in
- * 0x80-0xff is never a complete character on its own -- it is always
- * either a continuation byte (0x80-0xbf) or a multi-byte sequence's
- * lead byte (0xc0-0xf4), and isalpha(int) et al. only ever see one byte
- * at a time, with no way to look at its neighbours. There is no decoded
- * code point for that lone byte to classify: "false" is correct, not
- * merely consistent with a locale position. Handing these functions a
- * decoded code point instead -- e.g. isalpha(0xe9) for "é" -- is exactly
- * the case iswalpha(0xe9) exists to answer instead. */
+ * Deliberately ASCII-only for c in 0x80-0xff. ntlibc's char* strings are
+ * UTF-8, where a lone byte in that range is always a continuation or lead
+ * byte, never a complete character -- so "false" is the correct answer, not
+ * a limitation. A decoded code point (e.g. "é") is what iswalpha() is for. */
 int   isalnum(int) __attribute__((__pure__));
 int   isalpha(int) __attribute__((__pure__));
 int   isblank(int) __attribute__((__pure__));
@@ -61,21 +43,10 @@ int   isxdigit(int) __attribute__((__pure__));
 int   tolower(int) __attribute__((__pure__));
 int   toupper(int) __attribute__((__pure__));
 
-/* The _l family (isalnum_l() ... toupper_l(), CX in this edition):
- * ctype.h.html's own DESCRIPTION says each "shall be equivalent to
- * ... except that the effect ... in the locale represented by locale
- * is used instead of the current locale."  ntlibc's locale.c accepts
- * exactly one locale ("C"/"POSIX" -- setlocale() rejects every other
- * name, and newlocale() in locale.h hands out the address of that same
- * one static object for every valid request), so "the locale
- * represented by locale" and "the current locale" are always the same
- * classification table.  Each _l function below is therefore its
- * non-_l sibling above, taking and ignoring a locale_t argument --
- * documented, not silent, exactly the strcasecmp_l()/strncasecmp_l()
- * precedent in strings.h (see src/ctype/isalpha.c etc. for the `(void)
- * loc;` bodies).  Still __pure__: the ignored locale_t is never
- * dereferenced, so nothing changes about totality or the absence of
- * side effects. */
+/* ntlibc's locale.c accepts only "C"/"POSIX", so each _l function is
+ * equivalent to its non-_l sibling and ignores its locale_t argument
+ * (same precedent as strcasecmp_l() in strings.h). Still __pure__ since
+ * the ignored argument is never dereferenced. */
 int   isalnum_l(int, locale_t) __attribute__((__pure__));
 int   isalpha_l(int, locale_t) __attribute__((__pure__));
 int   isblank_l(int, locale_t) __attribute__((__pure__));
