@@ -181,13 +181,18 @@
  * across this tree (src/stdlib/linux/plat_pty.c, src/ioctl/linux/
  * plat_ioctl.c); x86_64's SYS_ioctl==16 is the fixed, decades-stable
  * entry in arch/x86/entry/syscalls/syscall_64.tbl, the same oracle
- * src/exit/linux/plat_exit.c's own banner cites for its x86_64 numbers. */
+ * src/exit/linux/plat_exit.c's own banner cites for its x86_64 numbers;
+ * i386's SYS_ioctl==54 is confirmed against this host's own /nix/store
+ * linux-headers asm/unistd_32.h and already reused identically in
+ * src/stdlib/linux/plat_pty.c and src/ioctl/linux/plat_ioctl.c. */
 #if defined(__aarch64__)
 #define SYS_ioctl 29
 #elif defined(__x86_64__)
 #define SYS_ioctl 16
+#elif defined(__i386__)
+#define SYS_ioctl 54
 #else
-#error "plat_termios.c: unsupported architecture"
+#error "plat_termios.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
 #endif
 
 /* A minimal 6-argument raw syscall -- see src/socket/linux/
@@ -198,7 +203,11 @@
  * detail (aarch64: x8=nr, x0..x5=args, result/-errno in x0; x86_64:
  * rax=nr, rdi/rsi/rdx/r10/r8/r9=args, result/-errno in rax -- note r10,
  * not rcx, for the 4th argument: the `syscall` instruction itself
- * clobbers rcx). */
+ * clobbers rcx; i386: `int $0x80`, eax=nr, ebx/ecx/edx/esi/edi/ebp=args,
+ * result/-errno in eax -- register-starved relative to the other two
+ * arches (no free register left for a 7th operand), so args are staged
+ * through memory the same way src/stdlib/linux/plat_pty.c's own i386
+ * raw_syscall() already does). */
 #if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
@@ -228,6 +237,33 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 	                 : "rcx", "r11", "memory");
 	return ret;
 }
+#elif defined(__i386__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#else
+#error "plat_termios.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
 #endif
 
 static int is_sys_error(long ret)
