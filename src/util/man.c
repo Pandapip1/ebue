@@ -19,9 +19,10 @@
  * helper), .RS/.RE, .nf/.fi, .br (real pages routinely need it to keep
  * alternate SYNOPSIS forms on separate lines), .ds/.nr/.rn (string/
  * number registers -- see "REGISTERS" below), .de/.de1/.am/.am1/.ig/
- * .rm/.als (user-defined macros -- see "MACROS" below), and a common
- * subset of escape sequences. This file IS that engine, not a wrapper
- * around a real one.
+ * .rm/.als (user-defined macros -- see "MACROS" below), .if/.ie/.el
+ * (conditionals -- see "CONDITIONALS" below), and a common subset of
+ * escape sequences. This file IS that engine, not a wrapper around a
+ * real one.
  *
  * ---- WHAT IS DELIBERATELY NOT IMPLEMENTED, AND WHY --------------------
  *
@@ -29,12 +30,6 @@
  *    language comparable in size to this whole file. Skipped like any
  *    unknown macro (see "UNKNOWN-MACRO DEGRADATION" below): that one
  *    table or equation is lost, the rest of the page still renders.
- *  - .if/.ie/.el (conditionals): real condition evaluation is its own
- *    expression language, same reason as .TS/.EQ. Unlike .de, not
- *    tracking a conditional's `\{ ... \}` span doesn't corrupt output
- *    -- guarded text just always shows, since every line inside still
- *    parses as a normal request or text line on its own. That's why
- *    .de gets real span-tracking and .if doesn't.
  *  - \k (mark register) and \s (point-size change): recognised and
  *    consumed only -- no horizontal-motion tracking or point-size
  *    concept exists here for them to act on.
@@ -51,11 +46,13 @@
  * Any `.xx` request this file doesn't implement is silently skipped:
  * one line consumed, nothing emitted, no following lines swallowed.
  * This matches real troff's own behaviour for a macro with no defined
- * body (a no-op, not an error) -- .de/.am/.ig above are the one
- * deliberate exception, because only they can corrupt output
- * otherwise. Passing the raw request line through as text was
- * rejected on purpose: a stray ".ie \n(.g \{\" line printed into the
- * middle of a paragraph is more confusing than a silent no-op.
+ * body (a no-op, not an error) -- .de/.am/.ig/.if/.ie/.el above are the
+ * deliberate exceptions, because only they can corrupt output
+ * otherwise (a `\{ ... \}` conditional span left untracked would leak
+ * its guarded lines into the page regardless of the condition's real
+ * outcome). Passing the raw request line through as text was rejected
+ * on purpose: a stray ".TS" line printed into the middle of a
+ * paragraph is more confusing than a silent no-op.
  *
  * ============================================================
  * MACROS: .de/.de1/.am/.am1/.ig, INVOCATION, AND $1.. ARGUMENTS
@@ -166,6 +163,89 @@
  * dummy values (10, 1): this file has no real point-size concept and
  * only a depth-1 font "stack" (see \fP below), so there's nothing real
  * to report.
+ *
+ * ============================================================
+ * CONDITIONALS: .if/.ie/.el
+ * ============================================================
+ *
+ * A real recursive-descent evaluator for troff's condition-expression
+ * grammar (see man_eval_condition() and the numeric-expression parsers
+ * above it), not a stub that always shows or always hides the guarded
+ * text. `.if COND anything` runs `anything` (itself processed exactly
+ * like any other source line, so it may be a further request, another
+ * `.if`, or plain text) when COND is true, and discards it silently
+ * when false. `.ie COND anything` is identical but additionally
+ * remembers COND's outcome for the NEXT `.el`, which runs its own
+ * `anything` exactly when that remembered outcome was false -- matching
+ * real troff's own if/else-if/else chaining. Unlike real troff, only
+ * the SINGLE most recently seen `.ie` outcome is remembered (no nesting
+ * stack); a page whose `.el` pairs with something other than the
+ * innermost preceding `.ie` -- vanishingly rare in practice -- would
+ * see the wrong branch, a documented simplification.
+ *
+ * `COND` is one of:
+ *  - `!COND`: negates whatever COND (recursively, same grammar) says.
+ *  - `n`/`t`/`o`/`e`: the four built-in device/page-parity tests. `n`
+ *    (is this nroff, i.e. terminal/non-typeset output) is always true
+ *    and `t` (is this troff, i.e. real typeset output) always false --
+ *    this file only ever produces nroff-style output, never real
+ *    typesetting. `o`/`e` (odd/even page) have no real pagination to
+ *    answer from, so this file gives a stable, documented answer: page
+ *    1 is treated as odd (`o` true, `e` false), matching what a real
+ *    single-page nroff run would report.
+ *  - `Dstr1Dstr2D` (D = whatever single, non-alphanumeric character
+ *    immediately follows -- almost always `'` in practice, per the
+ *    plan's own `'a'b'` example, but any character works, matching
+ *    real troff): true if str1 equals str2 after both are escape-
+ *    decoded the same way any other text is (so `\*(xx`/`\(xx`/etc all
+ *    interpolate inside a comparison operand).
+ *  - a numeric expression, optionally followed by one relational
+ *    operator (`<`/`>`/`<=`/`>=`/`=`/`==`) and a second numeric
+ *    expression: true if the comparison holds, or (no relop) if the
+ *    expression alone is nonzero. Numeric expressions support the
+ *    standard arithmetic grammar (`+ - * / %`, unary minus, parens)
+ *    plus `\n` register interpolation -- the "shared .nr/.if numeric
+ *    evaluator" man_parse_plain_number()'s own comment named as this
+ *    tier's own future work (`.nr` itself still only accepts a plain
+ *    literal or a register-interpolated one, unchanged -- widening it
+ *    to share this same arithmetic grammar is easy but out of THIS
+ *    tier's own named scope, .if/.ie/.el). `\w`/`\k`/`\s`/`\h`/`\v`/
+ *    `\x`/`\X`/`\H`/`\V` inside a numeric expression evaluate to 0 --
+ *    same "recognised and consumed only" precedent as everywhere else
+ *    in this file those escapes appear (see "ESCAPE SEQUENCES
+ *    IMPLEMENTED" below); a string register used numerically (`\*(xx`)
+ *    is likewise always 0, since this file has no numeric-parse-a-
+ *    string fallback.
+ *
+ * `.if`/`.ie`'s own condition is parsed directly off the RAW source
+ * line (never man_tokenize()'d -- a quoted string-comparison operand
+ * with an embedded space would otherwise get split in two) and, unlike
+ * everywhere else escapes are decoded, register interpolation happens
+ * INLINE as each numeric atom is scanned rather than via one up-front
+ * decode_text() pass -- decoding first would already have turned a
+ * literal `\{`/`\}` block marker into plain `{`/`}`, indistinguishable
+ * from ordinary text, before this code ever got a chance to recognise
+ * it as one.
+ *
+ * A condition (or, for `.el`, no condition at all) can be followed
+ * either by a single-line action (everything remaining on that line,
+ * run/discarded exactly once) or by `\{ ... \}`: a multi-line true-
+ * branch block, collected verbatim (c->cond_active/cond_body, the same
+ * "verbatim raw-line collection, terminator recognised at the very top
+ * of man_process_line() before normal dispatch" shape .de's own
+ * c->def_active collection already uses) up to a matching `\}`, tracked
+ * with a nesting-depth counter (c->cond_depth) since `\{ ... \}` blocks
+ * nest in real pages (this project's own GREP1_EXCERPT test fixture
+ * included) -- only a `\}` at depth 0 is OUR terminator; any `\{`/`\}`
+ * pair seen while collecting just adjusts the depth and is stored
+ * verbatim like any other body line, to be re-parsed for real (with its
+ * own fresh c->cond_active collection) when this block's own lines are
+ * replayed through man_process_line() after the fact, if COND was true.
+ * A `\}` is only ever recognised as a WHOLE (trimmed, optionally `.`-
+ * prefixed) line by itself, never embedded elsewhere -- matching every
+ * real page this file has been tested against, and a documented
+ * simplification of troff's fully general "anywhere in the input"
+ * rule.
  *
  * ============================================================
  * ESCAPE SEQUENCES IMPLEMENTED
@@ -837,6 +917,299 @@ static int decode_text(struct man_regtab *regs, struct man_buf *out, const char 
 	return 1;
 }
 
+/* ==== conditional evaluator: .if/.ie/.el's condition syntax =========== *
+ * See this file's own header comment ("CONDITIONALS") for the full
+ * design rationale -- summary: a real recursive-descent evaluator for
+ * troff's `.if`/`.ie` condition grammar, operating directly on RAW
+ * (undecoded) source text rather than pre-decoded text, since decoding
+ * ahead of time would already have turned a literal `\{`/`\}` block
+ * marker into `{`/`}` and made it indistinguishable from ordinary text
+ * -- the block marker has to be recognised before any decoding happens.
+ * Register interpolation (`\n(xx` etc.) is instead performed inline, as
+ * each numeric atom is scanned, by calling the same man_lookup_number()/
+ * man_reg_find() this file's \n escape-decoding already uses. */
+
+static size_t man_cond_skip_ws(const char *s, size_t n, size_t i)
+{
+	while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+	return i;
+}
+
+/* Skips a `\w`/`\k`/`\s`/`\h`/`\v`/`\x`/`\X`/`\H`/`\V`-style delimited
+ * argument starting at s[i] (the delimiter itself), for the numeric
+ * evaluator below -- these escapes are documented (this file's own
+ * header comment, "ESCAPE SEQUENCES IMPLEMENTED") as recognised-and-
+ * consumed only, so their numeric value is always 0, but the argument
+ * still has to be skipped correctly to keep parsing in sync. Unlike
+ * man_skip_delim_arg() above (used by decode_text(), `'`/`[` only),
+ * troff condition syntax lets these take ANY single character as their
+ * own delimiter (`\w@...@` is exactly what real groff tmac sources use
+ * -- see GREP1_EXCERPT's own `\w@\*(lq@` in test/util-man.c), so this
+ * is a separate, more general helper rather than reusing that one. */
+static size_t man_cond_skip_delim(const char *s, size_t n, size_t i)
+{
+	char delim, close;
+	if (i >= n) return i;
+	delim = s[i]; i++;
+	close = (delim == '[') ? ']' : delim;
+	while (i < n && s[i] != close) i++;
+	if (i < n) i++;
+	return i;
+}
+
+static long man_cond_parse_expr(struct man_regtab *regs, const char *s, size_t n, size_t *i);
+
+/* One numeric primary: a parenthesized sub-expression, `\n` register
+ * interpolation (including the `\n+xx`/`\n-xx` auto-increment forms,
+ * same semantics as decode_text()'s own `\n` case), an unsupported
+ * escape contributing 0 (see man_cond_skip_delim()'s own comment), or a
+ * plain signed decimal literal. */
+static long man_cond_parse_atom(struct man_regtab *regs, const char *s, size_t n, size_t *i)
+{
+	size_t k = man_cond_skip_ws(s, n, *i);
+
+	if (k < n && s[k] == '(') {
+		long v;
+		k++;
+		v = man_cond_parse_expr(regs, s, n, &k);
+		k = man_cond_skip_ws(s, n, k);
+		if (k < n && s[k] == ')') k++;
+		*i = k;
+		return v;
+	}
+
+	if (k < n && s[k] == '\\' && k + 1 < n) {
+		char ec = s[k + 1];
+		if (ec == '\\') {
+			/* `\\` is troff's own "one literal backslash" escape --
+			 * real macro packages routinely write `\\n(xx` inside a
+			 * `.if` expression (this project's own GREP1_EXCERPT test
+			 * fixture's `.if \\n(.g-\\n(mG \{\` included) so that the
+			 * SECOND backslash is what the expression scanner actually
+			 * sees as a fresh, real `\n` escape -- collapsing one level
+			 * and re-scanning from there is what makes that idiom
+			 * resolve to a real register value instead of the generic
+			 * unrecognised-escape fallback below. */
+			k++;
+			*i = k;
+			return man_cond_parse_atom(regs, s, n, i);
+		}
+		if (ec == 'n') {
+			char regname[64];
+			int autoincr = 0, decr = 0;
+			long v;
+			k += 2;
+			if (k < n && (s[k] == '+' || s[k] == '-')) { autoincr = 1; decr = (s[k] == '-'); k++; }
+			k = man_read_reg_name(s, n, k, regname, sizeof regname);
+			if (autoincr) {
+				struct man_reg *r = man_reg_find(regs, regname);
+				if (r && r->kind == MAN_REG_NUMBER) { r->num += decr ? -r->incr : r->incr; v = r->num; }
+				else v = 0;
+			} else {
+				v = man_lookup_number(regs, regname);
+			}
+			*i = k;
+			return v;
+		}
+		if (ec == '*') { /* string register in numeric context: not a real number, 0 */
+			char regname[64];
+			k += 2;
+			k = man_read_reg_name(s, n, k, regname, sizeof regname);
+			*i = k;
+			return 0;
+		}
+		if (ec == 'w' || ec == 'k' || ec == 's' || ec == 'h' ||
+		    ec == 'v' || ec == 'x' || ec == 'X' || ec == 'H' || ec == 'V') {
+			k += 2;
+			k = man_cond_skip_delim(s, n, k);
+			*i = k;
+			return 0;
+		}
+		if (ec == '(') { /* \(xx glyph name: not numeric, 0 */
+			k += 2;
+			if (k < n) k++;
+			if (k < n) k++;
+			*i = k;
+			return 0;
+		}
+		/* Any other unrecognised escape: consume it, contribute 0 --
+		 * the same "protect this character" fallback decode_text()'s
+		 * own default case documents, adapted to a numeric context. */
+		k += 2;
+		*i = k;
+		return 0;
+	}
+
+	{
+		char *end;
+		long v = strtol(s + k, &end, 10);
+		if (end == s + k) { *i = k; return 0; } /* unparseable: honest 0, not a guess */
+		*i = k + (size_t)(end - (s + k));
+		return v;
+	}
+}
+
+/* Unary +/- wraps the atom above; real troff numeric expressions allow
+ * a sign before a parenthesized sub-expression too (`-(\n(x+1)`), not
+ * just before a bare literal, so this is its own grammar level rather
+ * than folded into strtol()'s own sign handling. */
+static long man_cond_parse_factor(struct man_regtab *regs, const char *s, size_t n, size_t *i)
+{
+	size_t k = man_cond_skip_ws(s, n, *i);
+	if (k < n && (s[k] == '+' || s[k] == '-')) {
+		int neg = (s[k] == '-');
+		long v;
+		k++;
+		*i = k;
+		v = man_cond_parse_factor(regs, s, n, i);
+		return neg ? -v : v;
+	}
+	*i = k;
+	return man_cond_parse_atom(regs, s, n, i);
+}
+
+static long man_cond_parse_term(struct man_regtab *regs, const char *s, size_t n, size_t *i)
+{
+	long v = man_cond_parse_factor(regs, s, n, i);
+	for (;;) {
+		size_t k = man_cond_skip_ws(s, n, *i);
+		if (k < n && (s[k] == '*' || s[k] == '/' || s[k] == '%')) {
+			char op = s[k];
+			long rhs;
+			k++;
+			*i = k;
+			rhs = man_cond_parse_factor(regs, s, n, i);
+			if (op == '*') v *= rhs;
+			else if (rhs != 0) v = (op == '/') ? v / rhs : v % rhs;
+			else v = 0; /* division/modulo by zero: honest 0, not a crash */
+		} else break;
+	}
+	return v;
+}
+
+static long man_cond_parse_expr(struct man_regtab *regs, const char *s, size_t n, size_t *i)
+{
+	long v = man_cond_parse_term(regs, s, n, i);
+	for (;;) {
+		size_t k = man_cond_skip_ws(s, n, *i);
+		if (k < n && (s[k] == '+' || s[k] == '-')) {
+			char op = s[k];
+			long rhs;
+			k++;
+			*i = k;
+			rhs = man_cond_parse_term(regs, s, n, i);
+			v = (op == '+') ? v + rhs : v - rhs;
+		} else break;
+	}
+	return v;
+}
+
+/* A numeric expression, optionally followed by one relational operator
+ * and a second numeric expression -- true if the comparison holds, or
+ * (no relop present) if the expression alone is nonzero. */
+static int man_cond_parse_relation(struct man_regtab *regs, const char *s, size_t n, size_t *i)
+{
+	long lhs = man_cond_parse_expr(regs, s, n, i);
+	size_t k = man_cond_skip_ws(s, n, *i);
+
+	if (k < n && (s[k] == '<' || s[k] == '>' || s[k] == '=')) {
+		char op = s[k];
+		int op_eq = 0;
+		long rhs;
+		k++;
+		if (k < n && s[k] == '=') { op_eq = 1; k++; }
+		*i = k;
+		rhs = man_cond_parse_expr(regs, s, n, i);
+		if (op == '=') return lhs == rhs;
+		if (op == '<') return op_eq ? lhs <= rhs : lhs < rhs;
+		return op_eq ? lhs >= rhs : lhs > rhs; /* op == '>' */
+	}
+	*i = k;
+	return lhs != 0;
+}
+
+/* Top-level condition grammar: `!` negation, the four built-in device/
+ * page-parity tests, a delimiter-quoted string-equality test, or (the
+ * default) a numeric relation. See this file's own header comment
+ * ("CONDITIONALS") for why n/t/o/e answer the way they do. */
+static int man_eval_condition(struct man_regtab *regs, const char *s, size_t n, size_t *i)
+{
+	size_t k = man_cond_skip_ws(s, n, *i);
+
+	if (k < n && s[k] == '!') {
+		int r;
+		k++;
+		r = man_eval_condition(regs, s, n, &k);
+		*i = k;
+		return !r;
+	}
+
+	if (k < n && (s[k] == 'n' || s[k] == 't' || s[k] == 'o' || s[k] == 'e') &&
+	    (k + 1 >= n || s[k + 1] == ' ' || s[k + 1] == '\t' || s[k + 1] == '\\')) {
+		int result = 0;
+		switch (s[k]) {
+		case 'n': result = 1; break; /* this file only ever produces nroff/terminal-style output */
+		case 't': result = 0; break; /* never real typeset troff output */
+		case 'o': result = 1; break; /* no real pagination: a stable "page 1, odd" answer */
+		case 'e': result = 0; break; /* the exact complement of 'o' above */
+		}
+		*i = k + 1;
+		return result;
+	}
+
+	if (k < n && !isalnum((unsigned char)s[k]) && s[k] != '\\' && s[k] != '(' &&
+	    s[k] != '!' && s[k] != '+' && s[k] != '-') {
+		char delim = s[k];
+		struct man_buf s1, s2;
+		size_t start;
+		int result;
+		k++;
+		memset(&s1, 0, sizeof s1); memset(&s2, 0, sizeof s2);
+		start = k;
+		while (k < n && s[k] != delim) k++;
+		decode_text(regs, &s1, s + start, k - start, 0);
+		if (k < n) k++;
+		start = k;
+		while (k < n && s[k] != delim) k++;
+		decode_text(regs, &s2, s + start, k - start, 0);
+		if (k < n) k++;
+		result = !strcmp(s1.data ? s1.data : "", s2.data ? s2.data : "");
+		mbuf_free(&s1); mbuf_free(&s2);
+		*i = k;
+		return result;
+	}
+
+	*i = k;
+	return man_cond_parse_relation(regs, s, n, i);
+}
+
+/* Does `s` (already comment-stripped, and for the .if/.ie/.el dispatch
+ * itself already past the parsed condition) end in a `\{ ... \}`
+ * multi-line-block opener -- `\{` alone, or `\{\` (the trailing
+ * backslash is troff's own line-continuation escape; this file never
+ * joins lines across a physical newline anywhere, so it is treated
+ * identically to the plain `\{` form, a documented simplification). */
+static int man_line_ends_block_open(const char *s, size_t n)
+{
+	if (n >= 3 && s[n - 3] == '\\' && s[n - 2] == '{' && s[n - 1] == '\\') return 1;
+	if (n >= 2 && s[n - 2] == '\\' && s[n - 1] == '{') return 1;
+	return 0;
+}
+
+/* Does raw line `line` close a `\{ ... \}` block -- real troff lets
+ * `\}` appear anywhere, but real-world macro packages (this project's
+ * own GREP1_EXCERPT test fixture included) always give it a line of
+ * its own, optionally indented and/or preceded by a null `.` control
+ * character; requiring the whole (trimmed) line to be exactly `\}` is
+ * an honest, documented simplification of that general rule. */
+static int man_line_is_block_close(const char *line)
+{
+	const char *p = line;
+	while (*p == ' ' || *p == '\t') p++;
+	if (*p == '.') { p++; while (*p == ' ' || *p == '\t') p++; }
+	return p[0] == '\\' && p[1] == '}' && p[2] == 0;
+}
+
 /* ==== macro-argument tokenizer: whitespace-separated, "quoted strings" == */
 
 struct man_argv { char **v; size_t n, cap; };
@@ -954,6 +1327,12 @@ struct man_ctx {
 	struct man_macro *def_target; /* macro def_active is writing lines into (NULL if def_discard) */
 	int macro_depth;         /* current user-macro invocation nesting, bounded by MAN_MAX_MACRO_DEPTH */
 	int suppress_join;       /* \c seen: skip the next join-space between accumulated fragments */
+	int cond_active;          /* collecting a .if/.ie \{ ... \} block body right now */
+	int cond_depth;            /* nested \{ \} opens seen while collecting, below our own -- see "CONDITIONALS" */
+	int cond_result;           /* the block's already-evaluated condition, applied once collection finishes */
+	struct man_macro cond_body; /* raw lines collected for that block (struct man_macro reused as a plain growable line list -- .name is never set) */
+	int last_ie_result;        /* most recent .ie's outcome, for a following .el -- see "CONDITIONALS" */
+	int have_last_ie;          /* 0 until the first .ie runs, and after each .el consumes it */
 };
 
 static int man_ctx_init(struct man_ctx *c, int width)
@@ -973,6 +1352,7 @@ static void man_ctx_free(struct man_ctx *c)
 	man_regtab_free(&c->regs);
 	man_mactab_free(&c->macros);
 	free(c->def_end);
+	man_macro_free_lines(&c->cond_body);
 }
 
 /* Blank-line-before-a-new-block bookkeeping: exactly one blank line
@@ -1503,6 +1883,42 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 		return 1;
 	}
 
+	if (c->cond_active) {
+		int opens = man_line_ends_block_open(line, strlen(line));
+		int closes = man_line_is_block_close(line);
+
+		if (closes && c->cond_depth == 0) {
+			/* Move c->cond_body out to a local copy before replaying:
+			 * a NESTED `.if ... \{` among these very lines (this
+			 * project's own GREP1_EXCERPT test fixture has exactly
+			 * this shape) re-enters this same dispatch during replay
+			 * and reuses c->cond_body for ITS OWN collection -- iterating
+			 * the shared field directly here would have that nested
+			 * collection's man_macro_free_lines() clear the array out
+			 * from under this loop mid-replay, truncating it. */
+			struct man_macro body = c->cond_body;
+			int result = c->cond_result;
+			int ok = 1;
+			memset(&c->cond_body, 0, sizeof c->cond_body);
+			c->cond_active = 0;
+			if (result) {
+				size_t i;
+				for (i = 0; i < body.n && ok; i++) {
+					char *lc = strdup(body.lines[i]);
+					if (!lc) { ok = 0; break; }
+					ok = man_process_line(c, r, lc);
+					free(lc);
+				}
+			}
+			man_macro_free_lines(&body);
+			return ok;
+		}
+		if (closes) c->cond_depth--;
+		else if (opens) c->cond_depth++;
+		if (!man_macro_add_line(&c->cond_body, line)) return 0;
+		return 1;
+	}
+
 	if (line[0] != '.') {
 		/* Plain text line. */
 		if (!c->fill) {
@@ -1554,6 +1970,44 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 			if (!man_tokenize(rest, &da)) return 0;
 			ok = man_begin_macro_def(c, name, &da);
 			man_argv_free(&da);
+			return ok;
+		}
+
+		if (!strcmp(name, "if") || !strcmp(name, "ie") || !strcmp(name, "el")) {
+			/* See this file's own header comment ("CONDITIONALS") --
+			 * operates on raw `rest` directly, never man_tokenize()'d:
+			 * a condition/action can contain quoting and spacing
+			 * man_tokenize()'s whitespace/quote splitting would
+			 * corrupt (a string-equality operand with an embedded
+			 * space, for one). */
+			int is_el = !strcmp(name, "el");
+			int result;
+			size_t rn = strlen(rest);
+			size_t pos = man_cond_skip_ws(rest, rn, 0);
+
+			if (is_el) {
+				result = c->have_last_ie ? !c->last_ie_result : 0;
+				c->have_last_ie = 0;
+			} else {
+				result = man_eval_condition(&c->regs, rest, rn, &pos);
+				if (!strcmp(name, "ie")) { c->last_ie_result = result; c->have_last_ie = 1; }
+				pos = man_cond_skip_ws(rest, rn, pos);
+			}
+
+			if (man_line_ends_block_open(rest + pos, rn - pos)) {
+				c->cond_active = 1;
+				c->cond_depth = 0;
+				c->cond_result = result;
+				man_macro_free_lines(&c->cond_body);
+				return 1;
+			}
+
+			if (result && pos < rn) {
+				char *action = strdup(rest + pos);
+				if (!action) return 0;
+				ok = man_process_line(c, r, action);
+				free(action);
+			}
 			return ok;
 		}
 
@@ -1763,9 +2217,9 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 			struct man_macro *m = man_mac_find(&c->macros, name);
 			/* Checked only here, after every built-in request name
 			 * above -- a page can never shadow a built-in by defining
-			 * a same-named macro. Anything still unmatched (.if, .ie,
-			 * .el, .TS, .EQ, .ad, .na, .hy, .sp, .ce, .in, .ll, ...):
-			 * unimplemented, silently skipped -- see this file's own
+			 * a same-named macro. Anything still unmatched (.TS, .EQ,
+			 * .ad, .na, .hy, .sp, .ce, .in, .ll, ...): unimplemented,
+			 * silently skipped -- see this file's own
 			 * "UNKNOWN-MACRO DEGRADATION" header comment. */
 			if (m) ok = man_invoke_macro(c, r, m, name, &a);
 		}
