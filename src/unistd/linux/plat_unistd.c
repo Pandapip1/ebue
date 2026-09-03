@@ -97,10 +97,21 @@
 #include "libc.h"
 #include "plat_unistd.h"
 
-/* aarch64 Linux syscall numbers (arch/arm64/include/uapi/asm/unistd.h,
- * via the generic modern ABI's asm-generic/unistd.h) -- confirmed
+/* Linux syscall numbers -- aarch64 (arch/arm64/include/uapi/asm/
+ * unistd.h, via the generic modern ABI's asm-generic/unistd.h) confirmed
  * against this host's own <sys/syscall.h>, the same oracle src/mman/
- * linux/plat_mem.c's banner describes, rather than assumed. */
+ * linux/plat_mem.c's banner describes; x86_64/i386 confirmed against a
+ * real x86_64-linux-gnu glibc's own asm/unistd_64.h/asm/unistd_32.h --
+ * two genuinely different tables from aarch64's (and from each other),
+ * not derived by any fixed offset -- see src/signal/linux/plat_signal.c's
+ * own updated banner for the same warning. SYS_newfstatat has no i386
+ * arm below: this macro is never actually called anywhere in this file
+ * (confirmed by grep -- a pre-existing, harmless dead #define this
+ * change does not try to explain or remove), and i386's own fstatat
+ * syscall is a differently-named, differently-shaped one (fstatat64,
+ * 32-bit stat layout) rather than a same-shaped newfstatat under a
+ * different number, so there is no faithful i386 number to give it. */
+#if defined(__aarch64__)
 #define SYS_getcwd              17
 #define SYS_uname              160
 #define SYS_chdir              49
@@ -128,6 +139,66 @@
 #define SYS_syncfs            267
 #define SYS_acct               89
 #define SYS_getrandom         278
+#elif defined(__x86_64__)
+#define SYS_getcwd              79
+#define SYS_uname               63
+#define SYS_chdir               80
+#define SYS_unlinkat           263
+#define SYS_linkat             265
+#define SYS_readlinkat         267
+#define SYS_symlinkat          266
+#define SYS_newfstatat         262
+#define SYS_fchownat           260
+#define SYS_fchown              93
+#define SYS_ftruncate           77
+#define SYS_fsync               74
+#define SYS_pipe2              293
+#define SYS_getppid            110
+#define SYS_getpid              39
+#define SYS_gettid             186
+#define SYS_getuid             102
+#define SYS_getgid             104
+#define SYS_clock_gettime      228
+#define SYS_sched_getaffinity  204
+#define SYS_sysinfo             99
+#define SYS_kill                62
+#define SYS_setpgid            109
+#define SYS_getpgid            121
+#define SYS_syncfs             306
+#define SYS_acct               163
+#define SYS_getrandom          318
+#elif defined(__i386__)
+#define SYS_getcwd             183
+#define SYS_uname              122
+#define SYS_chdir                12
+#define SYS_unlinkat           301
+#define SYS_linkat             303
+#define SYS_readlinkat         305
+#define SYS_symlinkat          304
+#define SYS_newfstatat           0 /* unused on this arch -- see this
+                                    * block's own banner above. */
+#define SYS_fchownat           298
+#define SYS_fchown               95
+#define SYS_ftruncate            93
+#define SYS_fsync               118
+#define SYS_pipe2              331
+#define SYS_getppid              64
+#define SYS_getpid               20
+#define SYS_gettid              224
+#define SYS_getuid               24
+#define SYS_getgid               47
+#define SYS_clock_gettime      265
+#define SYS_sched_getaffinity  242
+#define SYS_sysinfo            116
+#define SYS_kill                 37
+#define SYS_setpgid              57
+#define SYS_getpgid            132
+#define SYS_syncfs             344
+#define SYS_acct                 51
+#define SYS_getrandom          355
+#else
+#error "plat_unistd.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 /* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
  * the call path at all. NOT `extern long syscall(long, ...)`: that
@@ -153,7 +224,11 @@
  * each of which independently hit and fixed the identical bug; this
  * is the same fix applied here. aarch64's syscall calling convention:
  * x8 = syscall number, x0..x5 = up to 6 arguments, result (or -errno
- * in [-4095,-1]) in x0. */
+ * in [-4095,-1]) in x0; x86_64/i386 branches below mirror crt/linux/
+ * crt1.c's/src/fcntl/linux/plat_fcntl.c's own raw_syscall() bodies for
+ * their arches, duplicated here per this tree's own "own syscall table
+ * per file" discipline. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
@@ -169,6 +244,47 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 		: "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#else
+#error "plat_unistd.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 /* A raw Linux syscall returns the result on success, or -errno (an
  * unsigned value in [-4095, -1]) on failure -- see plat_mem.c's banner
