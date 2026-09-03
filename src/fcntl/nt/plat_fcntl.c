@@ -1,24 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * NT implementation of src/internal/plat_fcntl.h -- see that header
- * for the contract each function makes.  Everything here was, until
- * this file existed, inline inside src/fcntl/{open,fcntl,fadvise}.c;
- * nothing changed in substance, only location and the addition of a
- * POSIX-shaped return (0/-1 with errno set, or a POSIX error number
- * directly for __plat_fallocate() -- see its own comment) in place of
- * a raw NTSTATUS.
- *
- * __plat_open() absorbed the rest of what used to be src/fcntl/open.c's
- * __open_handle() (everything past its portable /dev/std* special case:
- * VFS-overlay resolution, __ntpath_at(), the $LXMOD extended-attribute
- * buffer) on top of what was already here as __plat_create_file() --
- * this backend now owns the ENTIRE NT-specific path-to-handle journey,
- * not just the NtCreateFile call at the end of it, matching
- * plat_fcntl.h's own updated banner. Nothing in the moved logic
- * changed in substance, only location -- this is the identical
- * sequence __open_handle() used to run inline, verified line for line
- * against the pre-refactor version.
+ * NT implementation of src/internal/plat_fcntl.h -- see that header for
+ * the contract each function makes. __plat_open() owns the ENTIRE
+ * NT-specific path-to-handle journey (VFS-overlay resolution,
+ * __ntpath_at(), the $LXMOD extended-attribute buffer), not just the
+ * NtCreateFile call at the end of it.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -91,18 +78,11 @@ int __plat_open(int dirfd, const char *path, int flags, unsigned mode, // NOLINT
 	case O_RDONLY: access |= FILE_GENERIC_READ; break;
 	case O_WRONLY: access |= FILE_GENERIC_WRITE; break;
 	case O_RDWR:   access |= FILE_GENERIC_READ | FILE_GENERIC_WRITE; break; // NOLINT(misc-redundant-expression) -- both masks include SYNCHRONIZE, harmless ORed twice
-	/* The fourth access mode, 03, is O_EXEC and O_SEARCH -- equal
-	 * values, as fcntl.h.html permits.  Refused, not served: each asks
-	 * for a handle that can do LESS than a read handle (execute-only on
-	 * a file, traverse-only on a directory), so quietly widening either
-	 * to O_RDONLY would grant more access than the caller asked for and
-	 * return success -- the one way a request to be restricted must not
-	 * fail.  [EINVAL] "The value of the oflag argument is not valid" is
-	 * also what this arm answered before those two names existed, so
-	 * naming them changed no behaviour.  Serving them for real means
-	 * FILE_EXECUTE / FILE_TRAVERSE access masks and the fd-table and
-	 * read()/write() checks that go with a mode neither reads nor
-	 * writes; that is not done here. */
+	/* The fourth access mode, 03, is O_EXEC and O_SEARCH -- equal values.
+	 * Refused, not served: each asks for a handle that can do LESS than a
+	 * read handle, so quietly widening to O_RDONLY would grant more access
+	 * than requested. Serving them for real needs FILE_EXECUTE/
+	 * FILE_TRAVERSE and matching fd-table checks; not done here. */
 	default: __ntpath_free(&np); errno = EINVAL; return -1;
 	}
 	if (flags & O_APPEND) access = (access & ~FILE_WRITE_DATA) | FILE_APPEND_DATA;
@@ -234,13 +214,12 @@ int __plat_file_extent(__plat_handle_t h, long long *alloc_size, long long *eof)
 
 /* Wine versions without FileAllocationInformation can still honour the
  * useful, non-destructive part of an extending posix_fallocate() request:
- * every byte from the old EOF to the requested end is specified to read as
- * zero already, so writing zeroes there changes no file data while forcing
- * the host file system to back the new tail with storage.  Use positioned
- * I/O so the caller's file offset is left alone, just as posix_fallocate()
- * requires.  This is deliberately not used for an extent wholly inside the
- * file: without an allocation-range query, rewriting that range would need
- * read access which a valid write-only descriptor need not have. */
+ * every byte from the old EOF to the requested end already reads as zero,
+ * so writing zeroes there changes no file data while forcing the host
+ * filesystem to back the new tail with storage. Positioned I/O, so the
+ * caller's file offset is left alone. Not used for an extent wholly
+ * inside the file: rewriting that range would need read access a valid
+ * write-only descriptor need not have. */
 static int materialize_zero_tail(HANDLE h, long long from, long long to)
 {
 	static const unsigned char zeroes[64 * 1024];
@@ -267,63 +246,30 @@ static int materialize_zero_tail(HANDLE h, long long from, long long to)
 	return 0;
 }
 
-/* `grow_alloc` decides whether the AllocationSize step below runs at
- * all -- the front door (fadvise.c's posix_fallocate()) computes it as
- * `want > alloc_size && want >= eof`, and here is why both conjuncts
- * are load-bearing, moved here verbatim from where this logic used to
- * live inline in posix_fallocate() itself:
+/* `grow_alloc` decides whether the AllocationSize step below runs at all
+ * -- the front door computes it as `want > alloc_size && want >= eof`,
+ * and BOTH conjuncts are load-bearing:
  *
- * ZwSetInformationFile(FileAllocationInformation) is documented (ntifs.h
- * FILE_ALLOCATION_INFORMATION, "Remarks") as: "If the allocation size is
- * set to a value that is less than the end-of-file position, the
- * end-of-file position is automatically adjusted to match the
- * allocation size."  The requested size is also rounded up to the
- * filesystem's cluster size first, so the value that is compared
- * against EndOfFile is not the one passed in.
+ * ZwSetInformationFile(FileAllocationInformation) automatically adjusts
+ * EndOfFile down to match a requested AllocationSize below it, and the
+ * requested size is rounded up to the cluster size first. `want >
+ * alloc_size` alone is only safe while alloc_size >= eof -- exactly what
+ * a sparse or compressed file breaks (its allocation is deliberately
+ * smaller than its size), so without the second conjunct a small
+ * posix_fallocate() request on such a file could truncate it. POSIX
+ * never shrinks a file.
  *
- * `want > alloc_size` alone is safe only while alloc_size >= eof, which
- * is the ordinary NTFS case but is exactly what a sparse or compressed
- * file breaks: such a file's allocation is deliberately smaller than
- * its size.  On one -- EndOfFile 16384, AllocationSize 0 --
- * posix_fallocate(fd, 0, 100) would have passed the guard, requested an
- * allocation of 100, had it rounded to one cluster, and had the file
- * truncated to that cluster.  POSIX (posix_fallocate) never shrinks a
- * file: "If the offset+len is beyond the current file size, then
- * posix_fallocate() shall adjust the file size"; below that it changes
- * no size at all.  So requesting an allocation smaller than the current
- * EndOfFile is never something this function may do.
+ * Skipping the call (rather than clamping the request up to eof) avoids
+ * de-sparsifying the whole file: clamping a 1-byte request against a
+ * terabyte-sized sparse file would request a terabyte of clusters.
  *
- * Skipping the call is preferred to clamping the request up to eof.
- * Clamping would satisfy the allocation guarantee for the requested
- * range, but it would also de-sparsify the entire file:
- * posix_fallocate(fd, 0, 1) on a terabyte-sized sparse file would ask
- * for a terabyte of clusters and most likely return ENOSPC.  Turning a
- * hundred-byte request into a whole-file materialisation -- or into a
- * hard failure -- is a worse outcome than under-delivering an
- * allocation guarantee on a file shape whose whole purpose is to not
- * have that allocation.  Nothing is destroyed either way.
- *
- * DO NOT DELETE THE SECOND CONJUNCT AS REDUNDANT.  It reads that way
- * from here -- on a file whose alloc_size >= eof, want > alloc_size
- * already implies want > eof -- and that is true of real NTFS, where a
- * file extended with SetEndOfFile gets real clusters.  It is not true
- * under Wine, which implements extension with ftruncate(), producing a
- * hole: st_blocks is 0, so AllocationSize reads 0 for an ORDINARY file
- * created the normal way, not merely for one deliberately marked
- * sparse.  Under Wine the first test is therefore trivially true in the
- * common case and this conjunct is the only thing preventing the
- * truncation.  Measured on Windows 11 22621 by the Wine-divergence
- * session: a non-sparse file of EndOfFile 16384 reports AllocationSize
- * 16384 on NTFS, and 0 under Wine.  (A genuinely sparse file reports 0
- * on both -- that part Wine gets right.)
- *
- * Not reproduced from inside this tree: ntlibc has no FSCTL_SET_SPARSE
- * and Wine's FSCTL_SET_ZERO_DATA returns STATUS_NOT_SUPPORTED, so a
- * deliberately sparse file cannot be built here.  That negative result
- * is what the interlock was written without -- it rests on the
- * documented FileAllocationInformation rule above.  The Wine finding
- * arrived afterwards and says the guard is exercised in practice
- * anyway, by ordinary files, without anyone creating a sparse one. */
+ * DO NOT DELETE THE SECOND CONJUNCT AS REDUNDANT: on real NTFS, `want >
+ * alloc_size` already implies `want > eof` when alloc_size >= eof, but
+ * under Wine (which implements extension via ftruncate(), producing a
+ * hole) AllocationSize reads 0 for an ORDINARY file too -- measured on
+ * Windows 11 22621: a non-sparse EndOfFile-16384 file reports
+ * AllocationSize 16384 on NTFS and 0 under Wine. The second conjunct is
+ * the only thing preventing truncation there. */
 int __plat_fallocate(__plat_handle_t h, long long want, long long eof, int grow_alloc) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
@@ -335,30 +281,17 @@ int __plat_fallocate(__plat_handle_t h, long long want, long long eof, int grow_
 	if (grow_alloc) {
 		ai.AllocationSize = want;
 		st = NtSetInformationFile(h, &io, &ai, sizeof ai, FileAllocationInformation);
-		/* Real Windows honours this; older Wine ntdll did not implement
-		 * FileAllocationInformation at all (it appears only in the
-		 * set-info size table in dlls/ntdll/unix/file.c and falls
-		 * through to the default arm) and every other failure short of
-		 * that is a real error worth reporting (e.g. ENOSPC).  An
-		 * unsupported class takes materialize_zero_tail() below, which
-		 * supplies the storage guarantee for an extending request rather
-		 * than merely growing a sparse EOF.  A request wholly inside an
-		 * existing file retains the old degraded no-op: emulating that
-		 * safely would require reading and rewriting caller data, but a
-		 * valid O_WRONLY descriptor deliberately grants no read access.
+		/* Real Windows honours this; older Wine ntdll does not implement
+		 * FileAllocationInformation at all. An unsupported class takes
+		 * materialize_zero_tail() below instead.
 		 *
-		 * Branch on the *status*, not on __errno_from_status().  The
-		 * errno mapping is a lossy projection: it folds many distinct
-		 * statuses onto one value, so a test against it silently
-		 * widens.  Concretely, Wine reports the same missing set-info
-		 * case as STATUS_NOT_IMPLEMENTED natively but as
-		 * STATUS_INVALID_INFO_CLASS under WOW64; the latter maps to
-		 * EINVAL, so an ENOSYS test tolerated the gap on x86_64 and
-		 * rejected it on i386.  Widening the test to EINVAL would be
-		 * worse still -- EINVAL also carries STATUS_INVALID_PARAMETER,
-		 * STATUS_INFO_LENGTH_MISMATCH and STATUS_DATATYPE_MISALIGNMENT,
-		 * turning this fallback into a bug-hider.  Whenever the status
-		 * is in hand, decide from it. */
+		 * Branch on the *status*, not on __errno_from_status(): that
+		 * mapping is a lossy projection that folds many distinct statuses
+		 * onto one value. Concretely, Wine reports the same missing
+		 * set-info case as STATUS_NOT_IMPLEMENTED natively but as
+		 * STATUS_INVALID_INFO_CLASS under WOW64 -- an ENOSYS test on the
+		 * mapped errno would tolerate the gap on x86_64 and reject it on
+		 * i386. Whenever the status is in hand, decide from it. */
 		if (!NT_SUCCESS(st)) {
 			missing_allocation_api = st == STATUS_NOT_IMPLEMENTED
 			                      || st == STATUS_NOT_SUPPORTED
