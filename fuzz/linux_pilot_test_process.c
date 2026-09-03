@@ -15,7 +15,7 @@
  *
  * Three things this test does NOT go through ntlibc for, each raw-
  * syscall scaffolding standing in for a subsystem this pilot deliberately
- * does not port (see the report): pipe(2) itself (src/unistd/pipe.c
+ * does not port: pipe(2) itself (src/unistd/pipe.c
  * still calls the NT-only __pipe_handles(), never ported here -- a raw
  * pipe2(2) stands in, exactly the way linux_pilot_test.c's raw openat(2)
  * stands in for open()); _exit() (src/exit/exit.c, another unported
