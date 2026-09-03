@@ -47,14 +47,17 @@ int host_provided_value(void) { return 7; }
 
 static int fails;
 
-/* The curated link includes resource.c because write.c's RLIMIT_FSIZE
- * path references it.  This pilot never exercises signals or that public
- * write() path (report() deliberately uses __plat_write()), so pulling in
- * the complete signal-delivery and pthread substrate would test unrelated
- * code.  Supply the two lock hooks resource.c needs, just as this pilot
- * supplies only the other support needed by the loader under test. */
-void __sig_lock(void) { }
-void __sig_unlock(void) { }
+/* __sig_lock()/__sig_unlock() USED TO be stubbed here for resource.c's
+ * RLIMIT_FSIZE path (write.c's own front door references it, even
+ * though this pilot's own report() bypasses it via __plat_write()) --
+ * standing in for the real signal-delivery substrate tools/linux-build-
+ * dlfcn-cross.sh's own FILES list did not yet link. It does now
+ * (src/signal/signal.c + src/signal/linux/sigdelivery.c +
+ * src/signal/linux/plat_signal.c + src/signal/$arch/altstack.S, once
+ * plat_signal.c's real x86_64/i386 port landed), so these two stubs
+ * were removed rather than left duplicating sigdelivery.c's own real
+ * __sig_lock()/__sig_unlock() (a real, reproduced `duplicate symbol`
+ * otherwise). */
 
 static size_t rawlen(const char *s) { size_t n = 0; while (s[n]) n++; return n; }
 

@@ -126,9 +126,24 @@ FILES="
 	src/thread/pthread_tsd.c
 	src/thread/linux/plat_thread.c
 	src/misc/sched.c
+	src/unistd/getpid.c
+	src/unistd/ids.c
+	src/unistd/linux/plat_unistd.c
+	src/signal/signal.c
+	src/signal/linux/sigdelivery.c
 	src/signal/linux/plat_signal.c
+	src/signal/$arch/altstack.S
 	arch/$arch/src/sigreturn_trampoline.S
 "
+# src/unistd/getpid.c (getpid()/getppid()/gettid()) and src/unistd/ids.c
+# (getuid()/getgid()/getpgrp()/...) join the list alongside signal.c:
+# sigdelivery.c's own __sig_lock() calls gettid(), and signal.c's own
+# make_siginfo()/kill()/__sigchld_job_control() call getpid()/getuid()/
+# getpgrp() directly. src/unistd/linux/plat_unistd.c backs both
+# (__plat_getpid()/__plat_gettid()/__plat_detect_uid()). All three are
+# already-portable/already-ported files, already proven multi-arch by
+# tools/linux-build-crt-cross.sh's own FILES list, just missing from
+# this script's own curated subset until signal.c itself was added.
 # This list was stale since before crt/linux/crt1.c grew its own
 # `__fd_init(); __signal_init(); __fenv_init();` sequence (unconditional
 # in __linux_start_main(), same as tools/linux-build-crt.sh's own
@@ -163,28 +178,20 @@ FILES="
 # cross_yield.c's own former __plat_thread_alertable_yield() stand-in was
 # removed for the identical reason (a real, reproduced `duplicate
 # symbol` once the real plat_thread.c version was linked alongside it);
-# its __mq_fd_closed()/__raise_internal() stand-ins were NOT, for the
-# reason given next.
+# its __mq_fd_closed()/__raise_internal() stand-ins were NOT closed at
+# the same time, since plat_signal.c's own x86_64/i386 port landed
+# separately and later -- see below.
 #
 # src/signal/signal.c itself (kill(), __sig_current_mask_copy(),
-# __signal_init()) is STILL deliberately NOT added, for the identical
-# reason as before: it would collide with fuzz/linux_pilot_dlfcn_cross_
-# yield.c's own still-necessary __raise_internal() stub (a real,
-# reproduced `duplicate symbol: __raise_internal`, checked when this
-# comment was updated, not guessed) -- signal.c is genuinely portable
-# front-end code, not a platform backend, and was never one of the four
-# files this pass ported; pulling in the whole real signal-dispatch
-# subsystem just to satisfy these three symbols is separate, larger
-# scope than a platform-backend raw-syscall port, matching this file's
-# own __raise_internal() comment above almost verbatim.
-#
-# Net result: this script's link now fails on EXACTLY three symbols,
-# ALL rooted in src/signal/signal.c itself (__sig_current_mask_copy,
-# kill, __signal_init) -- confirmed by a real clean build, down from the
-# eleven-symbol, three-backend-file gap this comment used to describe.
-# This is real, disclosed, pre-existing scope, not a FILES= omission
-# this list can close without pulling in signal.c's own much larger
-# front-end.
+# __signal_init()), src/signal/linux/sigdelivery.c and src/signal/$arch/
+# altstack.S are now added too: plat_signal.c's real x86_64/i386 port
+# (proved by tools/linux-build-crt-cross.sh) closed the reason signal.c
+# used to be left out (it would have collided with fuzz/linux_pilot_
+# dlfcn_cross_yield.c's own __raise_internal() stub, which stood in for
+# exactly this still-unported subsystem). That stub is removed from
+# that file now that the real definition is linked instead.
+# __mq_fd_closed() stays: mqueue.c's own much larger subsystem is still
+# genuinely out of this pass's scope.
 
 INC="-I$srcdir/src/internal -I$BUILD/obj/include -I$srcdir/include -I$srcdir/arch/$arch -I$srcdir/arch/generic"
 CFLAGS="-std=c99 -nostdinc -fno-builtin -fno-stack-protector -g -O0 -ffunction-sections -fdata-sections \
