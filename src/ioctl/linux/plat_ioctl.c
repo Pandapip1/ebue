@@ -68,25 +68,42 @@
 #include <sys/ioctl.h>
 #include "plat_ioctl.h"
 
-/* aarch64 Linux syscall numbers -- see plat_mem.c's banner for why
- * these are hardcoded rather than pulled from a host header. */
+/* Linux syscall numbers -- aarch64 confirmed against this host's own
+ * <sys/syscall.h>; x86_64/i386 confirmed against this host's own
+ * /nix/store linux-headers asm/unistd_64.h / asm/unistd_32.h -- see
+ * plat_mem.c's banner for why these are hardcoded rather than pulled
+ * from a host header. */
+#if defined(__aarch64__)
 #define SYS_ioctl 29
 #define SYS_statx 291
 #define SYS_lseek 62
+#elif defined(__x86_64__)
+#define SYS_ioctl 16
+#define SYS_statx 332
+#define SYS_lseek 8
+#elif defined(__i386__)
+#define SYS_ioctl 54
+#define SYS_statx 383
+#define SYS_lseek 19
+#else
+#error "plat_ioctl.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 #define AT_EMPTY_PATH_LX     0x1000
 #define STATX_BASIC_STATS_LX 0x7ff
 
-/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
- * the call path at all -- NOT `extern long syscall(long, ...)`, which
- * is satisfied by the HOST's real glibc at link time in a non-
- * freestanding build and collapses every failure to exactly -1 with
- * glibc's OWN errno rather than the raw kernel -errno this file's
- * is_sys_error()/`errno = (int)-ret` translation requires -- see
- * src/mman/linux/plat_mem.c's fix for the fuller account, confirmed
- * independently across six other Linux backends.
- * aarch64's syscall calling convention: x8 = syscall number, x0..x5 =
- * up to 6 arguments, result (or -errno in [-4095,-1]) in x0. */
+/* A minimal 6-argument raw syscall: no host libc in the call path at
+ * all -- NOT `extern long syscall(long, ...)`, which is satisfied by
+ * the HOST's real glibc at link time in a non-freestanding build and
+ * collapses every failure to exactly -1 with glibc's OWN errno rather
+ * than the raw kernel -errno this file's is_sys_error()/
+ * `errno = (int)-ret` translation requires -- see src/mman/linux/
+ * plat_mem.c's fix for the fuller account, confirmed independently
+ * across six other Linux backends. Three per-arch bodies, same "own
+ * syscall table per file" discipline this tree already uses (see
+ * src/dirent/linux/plat_dirent.c's own raw_syscall()): aarch64's
+ * `svc #0`, x86_64's `syscall`, i386's register-starved `int $0x80`. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
@@ -102,6 +119,47 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 		: "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#else
+#error "plat_ioctl.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 static int is_sys_error(long ret)
 {
