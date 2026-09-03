@@ -259,6 +259,27 @@ void __plat_named_mutant_release(__plat_handle_t lock);
 int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
                         size_t stack_size, int create_suspended,
                         __plat_handle_t *out) __attribute__((nonnull(5)));
+/* Releases a thread handle once it will never be waited on or resumed
+ * again (pthread_join(), pthread_detach()'s already-exited case,
+ * finish()'s own detached self-cleanup, and pthread_create()'s
+ * error-unwind when __plat_thread_resume() fails) -- deliberately its
+ * own call, NOT plat_fd.h's generic __plat_close(): on NT a thread
+ * handle IS a real NtClose()-able HANDLE, so that backend's
+ * implementation just forwards to __plat_close(). On Linux, though, a
+ * thread handle is a boxed pid+1 (see src/thread/linux/plat_thread.c's
+ * own banner) that shares its small-integer ENCODING with plat_fd.c's
+ * boxed fd+1 file handles despite being a completely different KERNEL
+ * namespace -- calling __plat_close() on one is a real, confirmed bug:
+ * it issues close(2) on whatever fd number the pid happens to equal,
+ * which either fails with a bogus EBADF (silently clobbering the
+ * calling thread's own errno right after a successful pthread_join(),
+ * confirmed via test/pthread-surface.c's test_errno_thread_isolation())
+ * or, worse, actually closes a real, unrelated, currently-open file
+ * descriptor if the numbers collide. The Linux backend's own
+ * implementation is a real no-op: __plat_wait_one()'s wait4(2) (the
+ * join path) already reaps the exited thread-group-leader process, and
+ * there is no Linux-side resource left for this call to release. */
+int __plat_thread_close(__plat_handle_t h);
 int __plat_thread_resume(__plat_handle_t h);
 int __plat_thread_suspend(__plat_handle_t h);
 /* Queue `fn(arg1, arg2, 0)` to run the next time `h` becomes alertable

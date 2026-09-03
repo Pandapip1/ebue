@@ -14,6 +14,7 @@
 #include <errno.h>
 #include "libc.h"
 #include "plat_thread.h"
+#include "plat_fd.h"
 
 /* Shared by every \BaseNamedObjects-rooted object this file creates or
  * opens. `openif` clears OBJ_INHERIT and sets OBJ_OPENIF, for the one
@@ -207,6 +208,16 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
 	if (status == STATUS_NOT_IMPLEMENTED) return -2;
 	if (!NT_SUCCESS(status)) return __set_errno_status(status);
 	return 0;
+}
+
+/* See plat_thread.h's own __plat_thread_close() banner for why this call
+ * exists separately from plat_fd.h's __plat_close() at all: on NT a
+ * thread handle IS a real NtClose()-able HANDLE like any other, so this
+ * backend's implementation is exactly that generic close, unlike
+ * Linux's (a real no-op there -- see that backend's own comment). */
+int __plat_thread_close(__plat_handle_t h)
+{
+	return __plat_close(h);
 }
 
 /* __plat_thread_resume() is declared in this file's header but defined in

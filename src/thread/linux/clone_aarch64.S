@@ -25,8 +25,17 @@
  * passed in from plat_thread.c -- see that file's own banner for why.
  *
  *   long __ntlibc_linux_clone(unsigned (*fn)(void *), void *stack_top,
- *                             long flags, void *arg);
- *   x0 = fn, x1 = stack_top, x2 = flags, x3 = arg
+ *                             long flags, void *arg, void *tls);
+ *   x0 = fn, x1 = stack_top, x2 = flags, x3 = arg, x4 = tls
+ *
+ *   `tls` is clone(2)'s own tls argument: when `flags` carries
+ *   CLONE_SETTLS, the kernel sets the CHILD's TPIDR_EL0 to this value
+ *   before it ever runs a single instruction, which is what gives it
+ *   real, independent `__thread` storage instead of aliasing the
+ *   caller's (see plat_thread.c's __plat_thread_spawn(), the only
+ *   caller, for how `tls` is built). A caller that does not want
+ *   CLONE_SETTLS at all passes tls=0 with the flag bit clear, same as
+ *   before this parameter existed.
  *
  * Returns, in the CALLING thread, whatever the parent's clone(2) branch
  * of the underlying syscall returns: the new thread's pid, or a raw
@@ -48,9 +57,11 @@ __ntlibc_linux_clone:
 	// x1 already holds the (adjusted) child stack pointer -- clone(2)'s
 	// second kernel argument, matches without moving it again.
 	mov	x2, #0			// parent_tidptr -- unused by this port
-	mov	x3, #0			// tls -- deliberately not set, see
-					// plat_thread.c's banner on why this is
-					// not a full CLONE_SETTLS pthread
+	mov	x3, x4			// tls -- the incoming 5th argument (x4
+					// on entry, clobbered above only in the
+					// x1/child-stack-pointer computation,
+					// never written), passed through
+					// unchanged; see this file's own banner
 	mov	x4, #0			// child_tidptr -- unused by this port
 	mov	x8, #220		// SYS_clone (aarch64; confirmed against
 					// this host's own <sys/syscall.h>, same

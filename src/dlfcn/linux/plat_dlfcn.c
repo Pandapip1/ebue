@@ -843,14 +843,18 @@ static int resolve_symref(struct dlobj *obj, uint32_t symidx, uint64_t *out)
  * reused across dlclose(): see setup_object_tls()'s own comment. */
 static unsigned int next_tls_module_id = 2;
 
-/* Must equal crt/linux/crt1.c's own aarch64 linux_setup_tls()'s initial
- * DTV allocation size -- a numeric contract duplicated across the two
- * files rather than shared through a header, the same discipline this
- * tree already applies to e.g. raw syscall numbers duplicated per
- * translation unit (see this file's own raw_syscall() banner). Tracked
- * here (not re-read from crt1.c, which has no way to report it back)
- * purely so tls_dtv_ensure_capacity() below knows when it must grow the
- * array rather than just index into it. */
+/* Must equal src/internal/linux/tls_setup.c's own
+ * __ntlibc_linux_tls_block_create() initial DTV allocation size (the
+ * real block builder crt/linux/crt1.c's linux_setup_tls() calls for the
+ * initial thread, and src/thread/linux/plat_thread.c's
+ * __plat_thread_spawn() calls for every later pthread_create()'d one)
+ * -- a numeric contract duplicated across the two files rather than
+ * shared through a header, the same discipline this tree already
+ * applies to e.g. raw syscall numbers duplicated per translation unit
+ * (see this file's own raw_syscall() banner). Tracked here (not re-read
+ * from tls_setup.c, which has no way to report it back) purely so
+ * tls_dtv_ensure_capacity() below knows when it must grow the array
+ * rather than just index into it. */
 #define TLS_DTV_INITIAL_CAPACITY 8
 static size_t dtv_capacity = TLS_DTV_INITIAL_CAPACITY;
 

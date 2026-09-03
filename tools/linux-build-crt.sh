@@ -89,6 +89,7 @@ FILES="
 	src/unistd/linux/plat_fd.c
 	src/internal/fd.c
 	src/internal/linux/plat_fd_init.c
+	src/internal/linux/tls_setup.c
 	src/internal/errno.c
 	src/internal/ldbl_layout_check.c
 	src/exit/linux/plat_exit.c
