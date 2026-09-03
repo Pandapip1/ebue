@@ -46,7 +46,8 @@
 #include "util.h"
 #include "ownership_stubs.h"
 
-static int parse_delim_list(const char *spec, char **out, size_t *out_n)
+static int parse_delim_list(const char *spec, char **out withtok(heap_allocated),
+                            size_t *out_n)
 {
 	char *buf;
 	size_t n = 0;

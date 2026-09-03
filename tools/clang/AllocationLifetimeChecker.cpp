@@ -294,6 +294,15 @@ class AllocationLifetimeChecker
     return State->assume(Value, true) != nullptr;
   }
 
+  /* `*outParam = allocation` is the ordinary C out-parameter idiom: the
+   * caller's slot lives behind one pointer indirection from the callee's
+   * own parameter variable.  This is recognized only for a parameter
+   * dereferenced directly (not through an intervening local alias, which
+   * this checker cannot distinguish from an unrelated pointer), and the
+   * same withtok annotation already required of every other destination
+   * kind still gates the transfer below -- an unannotated out-parameter
+   * is not treated as proof of anything, exactly as an unannotated field
+   * or local is not. */
   static const ValueDecl *destinationDeclaration(const Expr *Expression) {
     if (!Expression)
       return nullptr;
@@ -304,6 +313,12 @@ class AllocationLifetimeChecker
       return Member->getMemberDecl();
     if (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(Expression))
       return destinationDeclaration(Subscript->getBase());
+    if (const auto *Unary = dyn_cast<UnaryOperator>(Expression))
+      if (Unary->getOpcode() == UO_Deref) {
+        const Expr *Pointer = Unary->getSubExpr()->IgnoreParenImpCasts();
+        if (const auto *Reference = dyn_cast<DeclRefExpr>(Pointer))
+          return dyn_cast<ParmVarDecl>(Reference->getDecl());
+      }
     return nullptr;
   }
 

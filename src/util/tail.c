@@ -88,7 +88,7 @@ static int write_all(const char *buf withtok(readable_span(len)), size_t len)
  * needed.  *out is set regardless of success (freeing it is always the
  * caller's job on a non-NULL result); returns the number of bytes read,
  * or (size_t)-1 on a read failure. */
-static size_t read_all(int fd, char **out)
+static size_t read_all(int fd, char **out withtok(heap_allocated))
 {
 	size_t cap = 65536, len = 0;
 	char *buf = malloc(cap);

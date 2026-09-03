@@ -144,3 +144,17 @@ void sentinel_result(int fail)
 	if (object != (void *)-1)
 		sentinel_release(object);
 }
+
+/* The ordinary out-parameter idiom: the caller's slot is reached through
+ * one dereference of a parameter, not by name or member access. */
+void out_param_transfer(void **out withtok(heap_allocated))
+{
+	*out = malloc(8);
+}
+
+void use_out_param_transfer(void)
+{
+	void *object;
+	out_param_transfer(&object);
+	free(object);
+}

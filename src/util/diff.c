@@ -91,7 +91,8 @@
 
 struct dline { const char *s; size_t len; };
 
-static int read_whole_stream(FILE *f, char **out, size_t *outlen)
+static int read_whole_stream(FILE *f, char **out withtok(heap_allocated),
+                             size_t *outlen)
 {
 	size_t cap = 65536, len = 0;
 	char *buf = malloc(cap);
@@ -237,8 +238,8 @@ static int lines_equal_final(const struct dline *a, long ai, long na, int noeol_
 enum optype { OP_MATCH, OP_DEL, OP_INS };
 struct editop { unsigned char type; size_t ai, bi; };
 
-static int editop_push(struct editop **ops, size_t *cap, size_t *n,
-	unsigned char type, size_t ai, size_t bi)
+static int editop_push(struct editop **ops withtok(heap_allocated), size_t *cap,
+	size_t *n, unsigned char type, size_t ai, size_t bi)
 {
 	if (*n >= *cap) {
 		size_t newcap;
@@ -265,7 +266,7 @@ static int editop_push(struct editop **ops, size_t *cap, size_t *n,
  * line consumed from whichever file it came from). */
 static int myers_build_ops(const struct dline *a, long n, int noeol_a,
 	const struct dline *b, long m, int noeol_b,
-	int bflag, struct editop **out_ops, size_t *out_nops)
+	int bflag, struct editop **out_ops withtok(heap_allocated), size_t *out_nops)
 {
 	long max = n + m;
 	long vsize, off, d, found_d = -1;
@@ -585,8 +586,9 @@ static void print_falt(FILE *out, const struct hunk *hunks, size_t nh, const str
 
 struct group { size_t hstart, hend; size_t ga0, ga1, gb0, gb1; };
 
-static int group_push(struct group **groups, size_t *cap, size_t *n,
-	size_t hstart, size_t hend, size_t ga0, size_t ga1, size_t gb0, size_t gb1)
+static int group_push(struct group **groups withtok(heap_allocated), size_t *cap,
+	size_t *n, size_t hstart, size_t hend, size_t ga0, size_t ga1, size_t gb0,
+	size_t gb1)
 {
 	if (*n >= *cap) {
 		size_t newcap;

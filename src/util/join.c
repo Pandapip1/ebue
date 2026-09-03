@@ -103,7 +103,8 @@ static struct field *fields_grow(
  * fields_grow() first if not; on failure `*out` is freed and cleared so
  * every caller can propagate a single false return without repeating
  * fields_grow()'s own free-on-failure contract at each call site. */
-static int field_reserve(struct field **out, size_t *cap, size_t n)
+static int field_reserve(struct field **out withtok(heap_allocated), size_t *cap,
+                         size_t n)
 {
 	struct field *g;
 
@@ -185,7 +186,8 @@ static int read_all_failure(FILE *f, int error)
  * call (*nout reflects exactly how many) -- every caller below frees
  * that partial result via free_jlines() rather than treating a
  * negative return as "*out is untouched". */
-static int read_all(const char *path, struct jline **out, size_t *nout, int have_delim, char delim)
+static int read_all(const char *path, struct jline **out withtok(heap_allocated),
+                    size_t *nout, int have_delim, char delim)
 {
 	FILE *f;
 	char *buf = 0;
@@ -349,7 +351,8 @@ static void print_o(const struct outspec *specs, size_t nspecs, const struct jli
 	join_putc('\n');
 }
 
-static int parse_o_list(const char *val, struct outspec **specs, size_t *nspecs, size_t *cap)
+static int parse_o_list(const char *val, struct outspec **specs withtok(heap_allocated),
+                        size_t *nspecs, size_t *cap)
 {
 	const char *p = val;
 	while (*p) {
