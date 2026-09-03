@@ -4,41 +4,36 @@
  * Real Linux dlopen()/dlsym()/dlclose()/dlerror() coverage against
  * src/dlfcn/linux/plat_dlfcn.c -- the from-scratch ELF64 loader that
  * file's own header banner documents in full. test/posix-dl.c (the
- * existing <dlfcn.h> clause audit) has ZERO Linux coverage: every
- * single test in it hardcodes "C:\Windows\System32\ntdll.dll" as its
- * fixture and is entirely NT-specific, and its own file-level design
- * (one shared clause audit across four originally-unimplemented
- * headers, exercised through NT-only fixtures throughout) does not
- * bend cleanly onto a second, unrelated loader backend with entirely
- * different (real ELF .so) fixtures of its own -- hence a new, Linux-
- * only file here rather than a Linux section grafted into that one.
+ * existing <dlfcn.h> clause audit) has zero Linux coverage: every test
+ * in it hardcodes "C:\Windows\System32\ntdll.dll" as its fixture and is
+ * entirely NT-specific, and its one-shared-audit-across-NT-only-
+ * fixtures design does not bend cleanly onto a second, unrelated loader
+ * backend with its own real-ELF-.so fixtures -- hence a new, Linux-only
+ * file rather than a section grafted into that one.
  *
- * This file is deliberately NOT wrapped in test/posix-dl.c's own three-
- * way BUG/N-A/UNIMPL fencing convention (see that file's own header
- * comment for what each fence means): every gap this file tests --
- * DT_NEEDED chasing, DT_INIT_ARRAY constructor execution, per-object
- * TLS (aarch64), PT_GNU_RELRO hardening, R_AARCH64_IRELATIVE/
- * R_X86_64_IRELATIVE ("ifunc") dispatch -- is REAL, LANDED, WORKING
- * code (see plat_dlfcn.c's own updated banner sections), so every
- * test below runs unfenced, the same as this
- * file's NT sibling's own "what already works" section.
+ * Deliberately NOT wrapped in test/posix-dl.c's three-way BUG/N-A/UNIMPL
+ * fencing (see that file's header for what each fence means): every gap
+ * this file tests -- DT_NEEDED chasing, DT_INIT_ARRAY constructor
+ * execution, per-object TLS (aarch64), PT_GNU_RELRO hardening,
+ * R_AARCH64_IRELATIVE/R_X86_64_IRELATIVE ("ifunc") dispatch -- is real,
+ * landed, working code (see plat_dlfcn.c's own banner), so every test
+ * below runs unfenced, like that sibling's own "what already works"
+ * section.
  *
- * Fixtures: the sources under test/dl-linux-fixtures/, real Linux .so's built by the
- * host's own $(CC) (see Makefile's own PLATFORM=linux-gated rules,
- * right next to test/rpath-plugin.dll's -- the closest existing
- * precedent this tree had for "a test needs a real loadable image
- * built alongside it", extended here to real ELF .so's instead of PE
- * DLLs) to obj/test/dlfix_*.so, alongside this test's own .exe. Located
- * at runtime via THIS PROGRAM's own argv[0] directory (fixture_dir()
- * below), not the process's current working directory: `make check`'s
- * own tools/run-tests.py runs every test from a freshly created temp
- * directory (see that script's own run_one()), so a plain "./dlfix_
- * dep.so" relative-to-cwd path would not resolve there even though
- * `make check` never actually runs this file -- it is Wine/NT-only,
- * and this file is Linux-only, see the Makefile's own PLATFORM=linux
- * gate -- making the lookup argv[0]-relative instead costs nothing and
- * means this test is not silently relying on being run from exactly
- * one particular directory.
+ * Fixtures: the sources under test/dl-linux-fixtures/, real Linux .so's
+ * built by the host's own $(CC) (Makefile's PLATFORM=linux-gated rules,
+ * next to test/rpath-plugin.dll's -- the closest existing precedent for
+ * "a test needs a real loadable image built alongside it", extended
+ * here to ELF .so's instead of PE DLLs) to obj/test/dlfix_*.so,
+ * alongside this test's own .exe. Located at runtime via this program's
+ * own argv[0] directory (fixture_dir() below), not cwd: `make check`'s
+ * tools/run-tests.py runs every test from a freshly created temp
+ * directory, so a plain "./dlfix_dep.so" relative-to-cwd path would not
+ * resolve there -- even though `make check` never actually runs this
+ * file, since it is Wine/NT-only and this file is Linux-only (Makefile's
+ * PLATFORM=linux gate) -- making the lookup argv[0]-relative costs
+ * nothing and keeps this test from silently depending on one particular
+ * working directory.
  */
 #include "test-policy.h"
 #include <stdio.h>
