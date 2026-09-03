@@ -180,7 +180,7 @@ void swab(const void *__restrict, void *__restrict, ssize_t) __attribute__((nonn
 #if (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE+0 < 700) \
  || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 int usleep(unsigned);
-unsigned ualarm(unsigned, unsigned);  /* undefined-ok on NT: its second
+unsigned ualarm(unsigned, unsigned);  /* undefined-ok: its second
 	(repeating-interval) argument can't be honoured -- NT's SIGALRM timer
 	is an APC delivered only during an alertable wait, so a missed expiry
 	is a single delivery, not a series. Real on Linux via setitimer(). */
@@ -190,7 +190,7 @@ unsigned ualarm(unsigned, unsigned);  /* undefined-ok on NT: its second
 #define L_SET 0
 #define L_INCR 1
 #define L_XTND 2
-int brk(void *);  /* undefined-ok on NT: allocator is NT's private heap
+int brk(void *);  /* undefined-ok: allocator is NT's private heap
 	(RtlAllocateHeap), not a growable brk-style arena. Real on Linux
 	(brk(2)), independent of this library's own mmap-based malloc(). */
 void *sbrk(intptr_t);  /* undefined-ok: see brk */
@@ -210,13 +210,13 @@ char *getpass(const char *);  /* undefined-ok: needs echo-off terminal
 	input; this library has no termios-style tty control */
 int daemon(int, int);  /* implemented as fork()+setsid(), the standard
 	BSD idiom; fork() itself is real on NT (RtlCloneUserProcess-backed) */
-void setusershell(void);  /* undefined-ok on NT: /etc/shells enumeration,
-	no such file or concept there. Real on Linux (reads /etc/shells). */
+void setusershell(void);  /* undefined-ok: /etc/shells enumeration,
+	no such file or concept on NT. Real on Linux (reads /etc/shells). */
 void endusershell(void);  /* undefined-ok: see setusershell */
 char *getusershell(void);  /* undefined-ok: see setusershell */
-int acct(const char *);  /* undefined-ok on NT: Unix process accounting is
+int acct(const char *);  /* undefined-ok: Unix process accounting is
 	a kernel facility NT has no equivalent of. Real on Linux (acct(2)). */
-long syscall(long, ...);  /* undefined-ok on NT: no stable, numbered
+long syscall(long, ...);  /* undefined-ok: no stable, numbered
 	raw-syscall ABI exposed to user mode; the Nt* entry points this
 	library calls directly are the closest analogue. Real on Linux. */
 int execvpe(const char *, char *const [], char *const []);
@@ -229,7 +229,7 @@ extern int optreset;
 
 #ifdef _GNU_SOURCE
 extern char **environ;
-int setresuid(uid_t, uid_t, uid_t);  /* undefined-ok on NT: real/effective/
+int setresuid(uid_t, uid_t, uid_t);  /* undefined-ok: real/effective/
 	saved IDs are a Linux-specific refinement; NT's getuid()/geteuid()
 	already report a single fixed identity, so there's nothing to select
 	between. Real on Linux (setresuid(2)/setresgid(2)/getresuid(2)/
@@ -239,10 +239,10 @@ int getresuid(uid_t *, uid_t *, uid_t *);  /* undefined-ok: see setresuid */
 int getresgid(gid_t *, gid_t *, gid_t *);  /* undefined-ok: see setresuid */
 withtok(heap_allocated)
 char *get_current_dir_name(void);
-int syncfs(int);  /* undefined-ok on NT: no per-volume sync primitive;
+int syncfs(int);  /* undefined-ok: no per-volume sync primitive;
 	fsync() already covers the per-descriptor case. Real on Linux. */
-int euidaccess(const char *, int);  /* undefined-ok on NT: distinguishes
-	real from effective uid, which are not distinct there (see
+int euidaccess(const char *, int);  /* undefined-ok: distinguishes
+	real from effective uid, which are not distinct on NT (see
 	setresuid). Real on Linux (faccessat2(2)'s AT_EACCESS). */
 int eaccess(const char *, int);  /* undefined-ok: glibc alias of
 	euidaccess(); see euidaccess */

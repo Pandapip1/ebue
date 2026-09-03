@@ -142,7 +142,7 @@ char *setstate (char *);
 /* Unlike setenv/unsetenv, putenv does not opt into the defensive
  * EINVAL-on-NULL convention. */
 int putenv (char *) __attribute__((nonnull(1)));
-int posix_openpt (int);  /* undefined-ok on NT: Unix98 PTY allocation has
+int posix_openpt (int);  /* undefined-ok: Unix98 PTY allocation has
 	no NT counterpart; grantpt/unlockpt/ptsname[_r] below share this
 	reason. Real on Linux (/dev/ptmx plus TIOCGPTN/TIOCSPTLCK). */
 int grantpt (int);  /* undefined-ok: see posix_openpt */
