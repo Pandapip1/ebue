@@ -49,6 +49,7 @@ $INC -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL -Wall -Wno-unused-func
 FILES="
 	src/thread/pthread_mutex.c
 	src/thread/pthread.c
+	src/thread/pthread_cancel.c
 	src/thread/linux/plat_thread.c
 	src/thread/linux/aarch64/clone.S
 	src/internal/linux/tls_setup.c
@@ -63,6 +64,16 @@ FILES="
 	fuzz/linux_pilot_harness_pthread_mutex.c
 	fuzz/linux_pilot_test_pthread_mutex.c
 "
+# src/thread/pthread_cancel.c: pthread.c's pthread_join() calls
+# __pthread_testcancel() (a real cancellation-point check, not previously
+# there), defined only in this file. Linking the whole object pulls in
+# every symbol it references, same as pthread.c's own functions already
+# did (see fuzz/linux_pilot_harness_pthread_mutex.c's own comment) --
+# redirect_async_cancel()'s arch/$(ARCH)/src/cancel_trampoline.S
+# dependency is stubbed there rather than added here, since it is real
+# assembly this pilot never actually reaches (pthread_cancel() itself is
+# never called).
+#
 # src/internal/fd.c + src/internal/linux/plat_fd_init.c were missing:
 # src/unistd/linux/plat_unistd.c's syncfs() calls the real __fd_get(),
 # a real, previously-hidden gap CI never reached (tools/
