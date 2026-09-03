@@ -33,8 +33,8 @@
  * deliberately: unlike the classic kernel `struct stat`, whose raw layout
  * differs between architectures, struct statx is a fixed,
  * architecture-independent ABI. st_mode needs NO translation into
- * ntlibc's own struct stat, since ntlibc's S_IF*/S_IR* values are the
- * same standard bits the kernel uses -- unlike NT, which has to
+ * ntlibc's own struct stat, since ntlibc's S_IF*, S_IR* etc. values are
+ * the same standard bits the kernel uses -- unlike NT, which has to
  * synthesize a mode from FILE_ATTRIBUTE_* bits. `type` goes unused here
  * for the same reason: statx(2) already reports the correct type
  * natively.

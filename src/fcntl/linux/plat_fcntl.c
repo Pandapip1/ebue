@@ -21,7 +21,7 @@
  * function), not in the public header, to keep the blast radius small.
  *
  * Linux already has real, native `/dev/null` etc, so the VFS-overlay
- * machinery this interface's *vfsout/*vfsnativeout report is never
+ * machinery this interface's *vfsout / *vfsnativeout report is never
  * invoked here -- left at whatever the front door already initialized.
  *
  * *typeout cannot be decided from the O_ flags alone: Linux, like NT
