@@ -1,25 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * wcsstr(): the wchar_t mirror of strstr() (src/string/strstr.c), per
- * https://pubs.opengroup.org/onlinepubs/9699919799/functions/wcsstr.html
- * DESCRIPTION/RETURN VALUE -- "locate the first occurrence in the
- * wide-character string pointed to by ws1 of the sequence of wide
- * characters ... in the string pointed to by ws2", returning a pointer
- * to it, a null pointer if absent, and ws1 when ws2 has zero length.
- *
- * The search is over wchar_t units, not code points, which is exactly
- * right for this target's UTF-16 wchar_t: a supplementary character is
- * a surrogate pair, and matching the pair as two consecutive units
- * matches the character and nothing else -- a lone surrogate half can
- * never be confused with any BMP unit, because the 0xd800-0xdfff range
- * is reserved and never appears in well-formed text on its own.  Same
- * reasoning the already-implemented wcschr()/wcsncmp() rely on.
- *
- * strstr.c's byte version is reused in shape rather than in code: it
- * calls strchr()/strncmp(), and the wide equivalents wcschr()/wcsncmp()
- * are right here, so this is the same naive-search-after-first-unit-hit
- * algorithm with the two calls swapped.
+ * Matches wchar_t units, not code points: a supplementary character is a
+ * surrogate pair, matched as two consecutive units, and a lone surrogate
+ * half never collides with a BMP unit since 0xd800-0xdfff never appears
+ * standalone in well-formed text.
  */
 #include <wchar.h>
 
