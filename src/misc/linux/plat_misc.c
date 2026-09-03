@@ -76,6 +76,27 @@
 #define SYS_sched_setscheduler      144
 #define SYS_sched_getscheduler      145
 #define SYS_sched_rr_get_interval   148
+#elif defined(__i386__)
+/* i386 Linux syscall numbers, confirmed against this host's own
+ * /nix/store linux-headers asm/unistd_32.h (the pre-"generic table"
+ * legacy i386 numbering -- pidfd_open/pidfd_send_signal are the two
+ * exceptions, added long after i386 adopted the shared cross-arch
+ * numbering scheme, so they match the aarch64/x86_64 values above). */
+#define SYS_uname                   122
+#define SYS_sched_yield             158
+#define SYS_kill                    37
+#define SYS_setpriority             97
+#define SYS_getpriority             96
+#define SYS_getrusage               77
+#define SYS_lseek                   19
+#define SYS_prlimit64               340
+#define SYS_pidfd_open              434
+#define SYS_pidfd_send_signal       424
+#define SYS_sched_setparam          154
+#define SYS_sched_getparam          155
+#define SYS_sched_setscheduler      156
+#define SYS_sched_getscheduler      157
+#define SYS_sched_rr_get_interval   161
 #else
 #error "plat_misc.c: unsupported architecture"
 #endif
@@ -141,6 +162,42 @@ static long syscall(long number, ...)
 	                 : "=a"(ret)
 	                 : "a"(number), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
 	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+/* i386 has no spare general register left for a 6th syscall argument
+ * (unlike aarch64/x86_64's register-passing ABI) -- same "point %eax at
+ * an explicit args array, int $0x80" technique as src/unistd/linux/
+ * plat_fd.c's own i386 raw_syscall(), just wrapped in a variadic
+ * function to match this file's own syscall(number, ...) call sites. */
+static long syscall(long number, ...)
+{
+	va_list ap;
+	long args[7];
+	long ret;
+
+	va_start(ap, number);
+	args[0] = number;
+	args[1] = va_arg(ap, long); args[2] = va_arg(ap, long); args[3] = va_arg(ap, long);
+	args[4] = va_arg(ap, long); args[5] = va_arg(ap, long); args[6] = va_arg(ap, long);
+	va_end(ap);
+
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
 	return ret;
 }
 #endif

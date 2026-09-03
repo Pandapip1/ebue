@@ -64,6 +64,24 @@
 #define SYS_getsockopt   55
 #define SYS_accept4      288
 #define SYS_socketpair   53
+#elif defined(__i386__)
+/* i386 Linux syscall numbers, confirmed against this host's own
+ * /nix/store linux-headers asm/unistd_32.h -- the "direct syscalls"
+ * table (each socket op has its own number), not the legacy
+ * socketcall(2) multiplexer (102) glibc itself no longer uses on a
+ * modern kernel either. */
+#define SYS_recvfrom     371
+#define SYS_sendto       369
+#define SYS_socket       359
+#define SYS_bind         361
+#define SYS_listen       363
+#define SYS_connect      362
+#define SYS_getsockname  367
+#define SYS_setsockopt   366
+#define SYS_getsockopt   365
+#define SYS_shutdown     373
+#define SYS_accept4      364
+#define SYS_socketpair   360
 #else
 #error "plat_socket.c: unsupported architecture"
 #endif
@@ -100,6 +118,35 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 	                 : "=a"(ret)
 	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
 	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+/* Same "point %eax at an explicit args array" technique as
+ * src/unistd/linux/plat_fd.c's own i386 raw_syscall() -- see that
+ * file's banner (%ebp is both cdecl's frame-pointer register and the
+ * only place left for a 6th arg). */
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
 	return ret;
 }
 #endif

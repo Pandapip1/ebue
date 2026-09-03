@@ -12,6 +12,11 @@
  * Alignment: %esp must be 16-byte aligned immediately before the call so
  * the callee sees %esp+4 aligned.  The `sub $12` plus the 4-byte push of
  * arg is what lands it there.
+ *
+ * No __linux__ branch, unlike this file's x86_64 sibling: i386 SysV
+ * Linux's own default calling convention for an extern "C" function is
+ * this same cdecl (args on the caller's stack, callee does not pop
+ * them), so one body already serves both OSes correctly.
  */
 
 #ifdef __leading_underscore

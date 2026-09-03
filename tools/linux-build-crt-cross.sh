@@ -99,7 +99,28 @@ FILES="
 	src/string/strlen.c
 	src/string/strcmp.c
 	src/string/strncmp.c
+	src/misc/linux/plat_misc.c
+	src/socket/linux/plat_socket.c
+	src/signal/$arch/altstack.S
 "
+# arch/i386/src/int64.c: i386 has no hardware 64-bit divide, so clang's
+# own code generator emits calls to __divdi3/__umoddi3/etc for a plain
+# `long long / long long` on this arch alone (x86_64/aarch64 both have a
+# native 64-bit divide instruction, no such calls). src/thread/linux/
+# plat_thread.c's own __plat_wait_one() does exactly that (relative_ticks
+# -> struct timespec), unconditionally compiled into this FILES list
+# above -- a real, not merely potential, link requirement for i386,
+# confirmed by first trying without this file and getting real
+# "undefined symbol: __divdi3"/"__umoddi3" from this exact script. This
+# project's own Makefile picks this file up automatically for any real
+# ARCH=i386 build (ARCH_GLOBS globs arch/$(ARCH)/src/*.[csS]); this
+# script's own curated FILES list has no such globbing, so it needs
+# naming here explicitly like every other file above.
+if [ "$arch" = "i386" ]; then
+	FILES="$FILES
+	arch/i386/src/int64.c
+"
+fi
 # arch/$arch/src/sigreturn_trampoline.S: the real SA_RESTORER trampoline
 # src/signal/linux/plat_signal.c's own __plat_sig_install_real_handler()
 # unconditionally references (by name, k_restorer = __ntlibc_sigreturn_
@@ -118,39 +139,12 @@ FILES="
 FILES="$FILES
 	arch/$arch/src/sigreturn_trampoline.S
 "
-# src/misc/linux/plat_misc.c is NOT in the common list above: unlike the
-# other Linux backend files, it DOES try to be multi-arch (its own
-# raw_syscall()-adjacent SYS_* block is `#if defined(__aarch64__) ...
-# #elif defined(__x86_64__) ... #else #error "plat_misc.c: unsupported
-# architecture" #endif`) but was only ever carried through for two of
-# this project's three arches -- confirmed empirically, the same way as
-# every other file in this comment block: it compiles clean for
-# x86_64-linux-gnu and hits that #error, plus a cascade of "undeclared
-# identifier SYS_kill"/etc from the arch-less syscall() calls below the
-# guard, for i386-linux-gnu. src/misc/resource.c's own __fsize_clamp()/
-# __fsize_room_at() (write()'s own RLIMIT_FSIZE check, itself
-# unconditionally compiled into write()'s reachable body) call into it
-# via fsize_start() -- so resource.c stays in the common list above
-# (real, needed, and it compiles fine on both), while plat_misc.c joins
-# the aarch64-only backend files below as an i386-specific extra gap this
-# list cannot close either.
-# src/socket/linux/plat_socket.c: the identical situation, one file
-# down -- its own SYS_* block is also `#if defined(__aarch64__) ...
-# #elif defined(__x86_64__) ... #else #error "plat_socket.c: unsupported
-# architecture" #endif`, so it compiles clean for x86_64-linux-gnu and
-# fails outright for i386-linux-gnu. write()'s own __FD_SOCKET branch
-# (again, unconditionally compiled into write()'s reachable body) calls
-# send() (src/socket/sendrecv.c, common list above -- portable itself)
-# which calls into this file's __plat_sock_send() -- so, like
-# plat_misc.c above, this is an i386-specific extra gap alongside the
-# four aarch64-only backend files, not a reason to drop sendrecv.c from
-# the common list.
-if [ "$arch" = "x86_64" ]; then
-	FILES="$FILES
-	src/misc/linux/plat_misc.c
-	src/socket/linux/plat_socket.c
-"
-fi
+# src/misc/linux/plat_misc.c and src/socket/linux/plat_socket.c are now
+# genuinely multi-arch (real `#elif defined(__i386__)` syscall-number and
+# raw-syscall() branches, same as every other backend file above) and
+# live in the common FILES list above for all three arches -- they used
+# to be x86_64-only (i386 hit `#error "...: unsupported architecture"`),
+# closed the same way as the four raw-syscall files below were.
 # exit.c/crt_alloc.c/fenv.c and everything else added above (matching
 # tools/linux-build-crt.sh's own FILES -- see its own comments for what
 # each one resolves): all genuinely multi-arch C, confirmed by actually
@@ -182,50 +176,23 @@ fi
 # only happens to be on the two LP64 arches -- i386 needs a real two-word
 # array plus a fixed RT_SIGSETSIZE, not sizeof(unsigned long)).
 #
-# One more, for i386 only, of a different KIND than the files
-# above: src/signal/signal.c's own sig_dispatch() calls
-# __sig_call_on_altstack() for SA_ONSTACK delivery on `#if defined(_WIN32)
-# || defined(__linux__)`, same as aarch64 -- but unlike aarch64's own
-# src/signal/aarch64/altstack.S (AAPCS64 argument registers, already
-# right for both NT and SysV Linux, per that file's own banner),
-# src/signal/i386/altstack.S and src/signal/x86_64/altstack.S both
-# implement the WINDOWS calling convention (x86_64's own header comment
-# says so outright: "Windows x64 ABI: sp arrives in %rcx, fn in %rdx, arg
-# in %r8"; i386's is cdecl, also NT's convention there). Both assemble
-# clean for an i386-linux-gnu/x86_64-linux-gnu target -- they are bare
-# instructions, nothing OS-specific -- so adding either here would not
-# fail this script's own compile step at all; it would link clean and be
-# a genuine, silent ABI-mismatch bug the very first time a real SysV
-# Linux caller's arguments got read out of the wrong registers. Left out
-# for that reason, not because it fails to build.
+# src/signal/signal.c's own sig_dispatch() calls __sig_call_on_altstack()
+# for SA_ONSTACK delivery on `#if defined(_WIN32) || defined(__linux__)`.
+# src/signal/aarch64/altstack.S already worked unmodified for both OSes
+# (AAPCS64 argument registers are the same either way). x86_64's did NOT
+# -- it hardcoded the Windows x64 ABI (sp/%rcx, fn/%rdx, arg/%r8), a real
+# ABI mismatch against a genuine SysV Linux caller (sp/%rdi, fn/%rsi,
+# arg/%rdx), now closed with a real `#if defined(__linux__)` branch in
+# that file. i386's did NOT need a branch at all: i386 SysV Linux's own
+# default calling convention for an extern "C" function is the same
+# cdecl NT already used, confirmed by this same script's own real
+# qemu-i386 execution of fuzz/linux_pilot_test_crt.c's SA_ONSTACK check
+# below, not just successful assembly.
 #
-# Real SysV __sig_call_on_altstack is still real, disclosed, pre-existing
-# scope, not a curated-list omission: .github/workflows/ci.yml's own
-# Linux-build-matrix comment still says "Linux is complete on aarch64;
-# x86_64 and i386 currently have curated CRT build/run coverage", and
-# commit 66367136's own title ("Install real cross-process signal
-# delivery on Linux/aarch64 (Tier 2)") names the one arch it landed for.
-# Confirmed by a real clean build, both arches: with the four raw-syscall
-# backend files above now genuinely ported (see the FILES list itself
-# and each new #elif branch's own comments), this script's link ends on
-# EXACTLY ONE remaining undefined symbol for x86_64 -- __sig_call_on_
-# altstack, precisely the gap this comment already named -- and, for
-# i386, that same symbol plus three more that are ALSO real, disclosed,
-# pre-existing gaps unrelated to this task's own four files: __divdi3/
-# __moddi3 (i386 has no native 64-bit divide instruction; src/thread/
-# linux/plat_thread.c's own __plat_wait_one() -- pre-existing arithmetic,
-# not touched by this pass -- does a real `long long / long long`
-# converting relative_ticks to a struct timespec, which a -nostdlib
-# freestanding build has no libgcc/compiler-rt to supply the routine
-# for; a real fix needs a genuine, carefully-derived 64-bit software
-# division implementation, out of scope for a raw-syscall/struct-layout
-# port and not attempted here), __plat_write_start_offset and
-# __plat_sock_send (src/misc/linux/plat_misc.c and src/socket/linux/
-# plat_socket.c -- the two files this script's OWN pre-existing comment,
-# a few paragraphs up, already names as x86_64-only, unrelated to the
-# four backend files this pass ported). Porting a real SysV __sig_call_
-# on_altstack, writing real __divdi3/__moddi3, and porting plat_misc.c/
-# plat_socket.c to i386 are each separate, disclosed follow-up work.
+# arch/i386/src/int64.c (__divdi3/__moddi3/etc, i386 has no hardware
+# 64-bit divide) and the plat_misc.c/plat_socket.c i386 ports are the
+# other two disclosed gaps this script used to stop short of; both are
+# now closed too -- see this FILES list's own comments above for each.
 
 INC="-I$srcdir/src/internal -I$BUILD/obj/include -I$srcdir/include -I$srcdir/arch/$arch -I$srcdir/arch/generic"
 CFLAGS="-std=c99 -nostdinc -fno-builtin -fno-stack-protector -g -O0 -ffunction-sections -fdata-sections \

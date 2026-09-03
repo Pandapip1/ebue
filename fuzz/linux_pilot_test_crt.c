@@ -36,6 +36,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <signal.h>
 #include "plat_fd.h"
 
 static int failures;
@@ -50,6 +51,27 @@ static void report(int ok, const char *msg)
 }
 
 static __thread int tls_marker = -1;
+
+/* SA_ONSTACK proof: this backs both the altstack sigaltstack() installs
+ * and the range __sig_call_on_altstack() (src/signal/$arch/altstack.S)
+ * is expected to move the stack pointer into for the duration of the
+ * handler below -- the one real way to tell a correct SysV altstack
+ * switch apart from a silent ABI mismatch that happens to link and even
+ * happens to run (e.g. reading the wrong incoming registers as sp/fn/arg
+ * and using whatever garbage was there instead), rather than trusting
+ * that a clean qemu exit alone proves the switch itself was correct. */
+static char altstack_buf[SIGSTKSZ];
+static int handler_ran;
+static int handler_on_altstack;
+
+static void onstack_handler(int sig)
+{
+	char local;
+	(void)sig;
+	handler_ran = 1;
+	handler_on_altstack = (&local >= altstack_buf &&
+	                        &local < altstack_buf + sizeof altstack_buf);
+}
 
 int main(int argc, char **argv, char **envp)
 {
@@ -80,6 +102,36 @@ int main(int argc, char **argv, char **envp)
 	fd = open("/no/such/path/ntlibc-linux-crt-test", O_RDONLY);
 	report(fd == -1, "open() of a nonexistent path fails");
 	report(errno == ENOENT, "errno reads back ENOENT through the real open()/openat() front door");
+
+	/* SA_ONSTACK: proves __sig_call_on_altstack() (src/signal/$arch/
+	 * altstack.S) reads sp/fn/arg out of the right registers for THIS
+	 * OS's own calling convention -- see that file's own banner. A wrong
+	 * register mapping is not guaranteed to crash; it can just as easily
+	 * read a plausible-looking garbage pointer and run anyway, which is
+	 * exactly why this checks the handler's own stack address landed
+	 * inside altstack_buf, not just that raise() returned 0. */
+	{
+		stack_t ss;
+		struct sigaction sa;
+		int rc;
+
+		ss.ss_sp = altstack_buf;
+		ss.ss_size = sizeof altstack_buf;
+		ss.ss_flags = 0;
+		rc = sigaltstack(&ss, 0);
+		report(rc == 0, "sigaltstack() installs an alternate signal stack");
+
+		sa.sa_handler = onstack_handler;
+		sa.sa_flags = SA_ONSTACK;
+		__builtin_memset(&sa.sa_mask, 0, sizeof sa.sa_mask);
+		rc = sigaction(SIGUSR1, &sa, 0);
+		report(rc == 0, "sigaction() installs an SA_ONSTACK handler");
+
+		rc = raise(SIGUSR1);
+		report(rc == 0, "raise(SIGUSR1) succeeds");
+		report(handler_ran, "the SA_ONSTACK handler actually ran");
+		report(handler_on_altstack, "the handler's own stack frame landed inside the alternate stack");
+	}
 
 	report(1, "reached the end of main() -- __plat_terminate() next");
 
