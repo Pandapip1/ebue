@@ -1848,23 +1848,69 @@ class ArithmeticContractChecker
     return !Visitor.AddressTaken;
   }
 
+  static bool matchesFreedParameter(const Expr *Argument,
+                                    const ParmVarDecl *Param) {
+    const auto *Reference =
+        dyn_cast<DeclRefExpr>(Argument->IgnoreParenImpCasts());
+    return Reference && Reference->getDecl() == Param;
+  }
+
+  static bool isTrustedDeallocCall(const Stmt *Statement,
+                                   const ParmVarDecl *Param) {
+    const auto *Call = dyn_cast<CallExpr>(Statement);
+    if (!Call || Call->getNumArgs() != 1)
+      return false;
+    const FunctionDecl *Callee = Call->getDirectCallee();
+    if (!Callee)
+      return false;
+    StringRef Name = Callee->getName();
+    // free() is the public allocator's release primitive; __plat_dealloc()
+    // is the same primitive one layer down -- src/malloc/malloc.c's free()
+    // itself bottoms out in __plat_dealloc(), and src/malloc/crt_alloc.c's
+    // __free() calls it directly to avoid linking free()'s translation
+    // unit into crt1.o. Both are already-vetted release calls, not new
+    // surface this checker takes on faith.
+    if (Name != "free" && Name != "__plat_dealloc")
+      return false;
+    return matchesFreedParameter(Call->getArg(0), Param);
+  }
+
+  // `if (!param) return;` reads and branches on the parameter but writes
+  // nothing, so a wrapper may open with one before its trusted release call
+  // and still be a scalar no-op.
+  static bool isNullGuardReturn(const Stmt *Statement,
+                                const ParmVarDecl *Param) {
+    const auto *If = dyn_cast<IfStmt>(Statement);
+    if (!If || If->getElse())
+      return false;
+    const auto *Return = dyn_cast<ReturnStmt>(If->getThen());
+    if (!Return || Return->getRetValue())
+      return false;
+    const auto *Not =
+        dyn_cast<UnaryOperator>(If->getCond()->IgnoreParenImpCasts());
+    if (!Not || Not->getOpcode() != UO_LNot)
+      return false;
+    return matchesFreedParameter(Not->getSubExpr(), Param);
+  }
+
   static bool verifiedScalarNoop(const FunctionDecl *Function) {
     const FunctionDecl *Definition = Function->getDefinition();
     if (!Definition)
       return true; // The annotated declaration's defining TU is linted too.
     const auto *Body = dyn_cast_or_null<CompoundStmt>(Definition->getBody());
-    if (!Body || Body->size() != 1 || Definition->getNumParams() != 1)
+    if (!Body || Definition->getNumParams() != 1)
       return false;
-    const auto *Call = dyn_cast<CallExpr>(*Body->body_begin());
-    if (!Call || Call->getNumArgs() != 1)
+    const ParmVarDecl *Param = Definition->getParamDecl(0);
+    Stmt *const *Statements = Body->body_begin();
+    unsigned CallIndex;
+    if (Body->size() == 1) {
+      CallIndex = 0;
+    } else if (Body->size() == 2 && isNullGuardReturn(Statements[0], Param)) {
+      CallIndex = 1;
+    } else {
       return false;
-    const FunctionDecl *Callee = Call->getDirectCallee();
-    if (!Callee || Callee->getName() != "free")
-      return false;
-    const auto *Argument = dyn_cast<DeclRefExpr>(
-        Call->getArg(0)->IgnoreParenImpCasts());
-    return Argument &&
-           Argument->getDecl() == Definition->getParamDecl(0);
+    }
+    return isTrustedDeallocCall(Statements[CallIndex], Param);
   }
 
   static std::optional<OutputContract>
