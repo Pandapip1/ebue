@@ -324,6 +324,43 @@ static void test_setvbuf(const char *name)
 		}
 		CHECK(fclose(f) == 0);
 	}
+
+	/* setlinebuf(3) (BSD, not POSIX -- src/stdio/buf.c's own comment:
+	 * "BSD's void wrapper" over setvbuf()): "equivalent to
+	 * setvbuf(stream, NULL, _IOLBF, 0)".  Checked the same observable
+	 * way test/stdio.c checks _IOLBF directly a few lines above this
+	 * test's own file: a complete line lands without an explicit
+	 * fflush(), while a trailing partial line does not, until one is
+	 * given. */
+	f = fopen(name, "w");
+	CHECK(f != 0);
+	if (f) {
+		FILE *g;
+		char buf[32];
+
+		setlinebuf(f);
+		CHECK(fputs("one\ntwo", f) == 0);
+
+		g = fopen(name, "r");
+		CHECK(g != 0);
+		if (g) {
+			memset(buf, 0, sizeof buf);
+			CHECK(fread(buf, 1, sizeof buf, g) >= 4);
+			CHECK(strncmp(buf, "one\n", 4) == 0);
+			CHECK(fclose(g) == 0);
+		}
+
+		CHECK(fflush(f) == 0);
+		g = fopen(name, "r");
+		CHECK(g != 0);
+		if (g) {
+			memset(buf, 0, sizeof buf);
+			CHECK(fread(buf, 1, sizeof buf, g) == 7);
+			CHECK(strcmp(buf, "one\ntwo") == 0);
+			CHECK(fclose(g) == 0);
+		}
+		CHECK(fclose(f) == 0);
+	}
 }
 
 /* ungetc.html RETURN VALUE: "Otherwise, it shall return EOF" -- e.g. for
@@ -848,6 +885,20 @@ static int via_vdprintf(int fd, const char *fmt, ...)
 	return r;
 }
 
+/* vasprintf(3) (glibc/BSD, not POSIX -- asprintf()'s v-form, same
+ * relationship vfprintf() has to fprintf()): allocates and returns the
+ * formatted string itself, sized exactly, rather than writing into a
+ * caller-supplied buffer. */
+static int via_vasprintf(char **s, const char *fmt, ...)
+{
+	int r;
+	va_list ap;
+	va_start(ap, fmt);
+	r = vasprintf(s, fmt, ap);
+	va_end(ap);
+	return r;
+}
+
 static void test_v_forms(const char *name)
 {
 	FILE *f;
@@ -901,6 +952,19 @@ static void test_v_forms(const char *name)
 	CHECK(fread(buf, 1, sizeof buf - 1, f) == 9);
 	CHECK(strcmp(buf, "abcd12345") == 0);
 	CHECK(fclose(f) == 0);
+
+	/* vasprintf.html-equivalent (see asprintf(3)): the returned byte
+	 * count matches strlen() of the allocated string, mirroring
+	 * test/stdio.c's own asprintf() coverage but reached through a
+	 * real va_list, the same distinction every other via_v*() helper
+	 * in this function makes for its non-v sibling. */
+	{
+		char *out = 0;
+		got = via_vasprintf(&out, "%s=%d", "va", 99);
+		CHECK(got == 5);
+		CHECK(out && strcmp(out, "va=99") == 0);
+		free(out);
+	}
 }
 
 /* getc_unlocked.html.  DESCRIPTION: the _unlocked forms "shall be
