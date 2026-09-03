@@ -158,7 +158,10 @@ static int child_ill_handler(void)
 }
 
 /* See this file's own header comment for why this, not integer division,
- * is what actually traps on AArch64. */
+ * is what actually traps on AArch64. x86_64 needs no such justification --
+ * integer division by zero already traps there -- but shares this FP path
+ * so both arches drive the exact same child_fpe_*() bodies below. */
+#if defined(__aarch64__)
 static void enable_fpe_divide_by_zero_trap(void)
 {
 	unsigned long fpcr;
@@ -166,6 +169,17 @@ static void enable_fpe_divide_by_zero_trap(void)
 	fpcr |= 1UL << 9;   /* DZE */
 	__asm__ volatile("msr fpcr, %0" :: "r"(fpcr));
 }
+#elif defined(__x86_64__)
+static void enable_fpe_divide_by_zero_trap(void)
+{
+	unsigned int mxcsr;
+	__asm__ volatile("stmxcsr %0" : "=m"(mxcsr));
+	mxcsr &= ~0x200u;   /* clear ZM (bit 9): unmask divide-by-zero in SSE */
+	__asm__ volatile("ldmxcsr %0" :: "m"(mxcsr));
+}
+#else
+#error "enable_fpe_divide_by_zero_trap: unsupported architecture"
+#endif
 
 static void trigger_float_divide_by_zero(void)
 {
