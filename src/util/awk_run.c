@@ -861,7 +861,7 @@ static int advance_to_next_argv_file(struct awk_interp *ip)
 			}
 			return 0;
 		}
-		snprintf(key, sizeof key, "%ld", ip->argi);
+		snprintf(key, sizeof key, "%ld", (long)ip->argi);
 		ip->argi++;
 		slot = argv_cell->is_array ? awk_htab_get(argv_cell->arr, key) : NULL;
 		s = slot ? cell_str(ip, slot) : "";
