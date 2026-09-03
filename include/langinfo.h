@@ -8,34 +8,11 @@
  *
  * <langinfo.h>: names for locale data.  See src/misc/langinfo.c.
  *
- * langinfo.h.html DESCRIPTION, the four sentences that fix this file's
- * contents, verbatim:
- *
- *   "The <langinfo.h> header shall define the symbolic constants used
- *    to identify items of langinfo data (see nl_langinfo())."
- *   "The <langinfo.h> header shall define the locale_t type as
- *    described in <locale.h>."
- *   "The <langinfo.h> header shall define the nl_item type as
- *    described in <nl_types.h>."
- *   "The <langinfo.h> header shall define the following symbolic
- *    constants with type nl_item."
- *
- * The table that last sentence introduces has fifty-five entries and
- * they are exactly the fifty-five below: 49 LC_TIME + 2 LC_NUMERIC +
- * 1 LC_MONETARY + 1 LC_CTYPE + 2 LC_MESSAGES.
- *
- * The values are implementation-defined and are assigned here as a
- * dense range 0..54, in the page's own table order, so that
- * src/misc/langinfo.c can index one array with the item and so that an
- * item outside the range -- including the (nl_item)-1 a caller is
- * entitled to probe with -- is rejected by a single bounds test.  Three
- * runs must stay contiguous and ascending because callers index into
- * them: DAY_1..DAY_7, ABDAY_1..ABDAY_7, MON_1..MON_12, ABMON_1..ABMON_12.
- *
- * "Inclusion of the <langinfo.h> header may also make visible all
- * symbols from <nl_types.h>."  It does here, because that is where
- * nl_item's typedef is described and pulling in the same
- * bits/alltypes.h guard is the only way to define it once.
+ * Values are implementation-defined and assigned as a dense range 0..54 so
+ * src/misc/langinfo.c can index one array and reject any out-of-range item
+ * (including the (nl_item)-1 a caller may probe with) with one bounds
+ * test. DAY_1..DAY_7, ABDAY_1..ABDAY_7, MON_1..MON_12 and ABMON_1..ABMON_12
+ * must each stay contiguous and ascending, since callers index into them.
  */
 #ifndef _LANGINFO_H
 #define _LANGINFO_H

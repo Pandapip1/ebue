@@ -21,9 +21,6 @@ extern "C" {
 
 typedef struct { intmax_t quot, rem; } imaxdiv_t;
 
-/* imaxabs/imaxdiv (src/stdlib/abs.c, div.c): same reasoning as
- * abs()/div() in stdlib.h -- total, side-effect-free arithmetic on
- * their argument(s), struct-by-value return included. */
 intmax_t imaxabs(intmax_t) __attribute__((__pure__));
 imaxdiv_t imaxdiv(intmax_t, intmax_t) __attribute__((__pure__));
 
