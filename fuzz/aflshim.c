@@ -1,173 +1,81 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Built only for ENGINE=afl (see fuzz/Makefile).  AFL++'s runtime object,
- * afl-compiler-rt.o -- which afl-clang-fast links into every instrumented
- * binary automatically -- calls open()/read()/write()/close()/shmat()/
- * shmdt()/getenv()/fork()/waitpid()/sigaction()/signal() to talk to
- * afl-fuzz and to run its persistent-mode fast path: it maps the coverage
- * bitmap afl-fuzz allocated (shmat, keyed by the __AFL_SHM_ID environment
- * variable), reads/writes the FORKSRV_FD control pipes afl-fuzz set up
- * before execve(), and fork()s a fresh child in this very process for
- * every test case rather than paying execve() each time -- the whole
- * point of a forkserver.
+ * Built only for ENGINE=afl (see fuzz/Makefile). AFL++'s runtime object,
+ * afl-compiler-rt.o, calls open/read/write/close/shmat/shmdt/getenv/
+ * fork/waitpid/sigaction/signal to talk to afl-fuzz and run its
+ * persistent-mode forkserver. Every one of those names is also a strong
+ * symbol in ntlibc, and ntlibc's wins the ordinary ELF override (the
+ * same class of bug STATRENAME fixes for stat()) -- so unpatched,
+ * afl-compiler-rt.o reaches ntlibc's versions instead of the host's.
+ * Six failure modes were found by measurement, not anticipated:
  *
- * Every one of those names is also a strong symbol in ntlibc itself, and
- * in this link ntlibc's wins (ordinary "the executable's own definition
- * beats a shared library's" ELF override -- the identical mechanism, and
- * exactly the class of bug, that STATRENAME in fuzz/Makefile exists to
- * fix for stat()).  Unpatched, afl-compiler-rt.o's calls reach ntlibc's
- * versions instead of the host's, and each failure mode had to be found
- * by measurement, not anticipated up front:
+ *   1. read/write/close look fds up in ntlibc's own table (which never
+ *      heard of FORKSRV_FD), getenv() searches ntlibc's environ (emptied
+ *      by ntstubs.c for every native test), shmat/shmdt would attach
+ *      ntlibc's simulated address space. Measured: afl-showmap showed the
+ *      harness never touching FORKSRV_FD, exiting 0 silently.
+ *   2. fork(), once fixed, turned out to be RtlCloneUserProcess, cloning
+ *      an entire simulated NT process per test case -- slow enough to
+ *      look like a hang (fuzz_string.c took over a second, tripping
+ *      afl-fuzz's dry-run timeout).
+ *   3. The forkserver child never exits on SIGTERM: ntlibc's SIGTERM
+ *      handler (layered on simulated-NT signal delivery) does a couple
+ *      of close()s and returns straight back into the blocking
+ *      read(FORKSRV_FD) (measured with strace) -- so shutdown hangs.
+ *      __real_sigaction()/signal() below are deliberate no-ops rather
+ *      than raw-syscall reimplementations: they report success without
+ *      installing anything, leaving SIGTERM's kernel default ("terminate
+ *      the process") in effect. This loses AFL++'s own crash diagnostics
+ *      message (the crash itself is still seen via wait4()) and an
+ *      in-process SIGALRM timeout (every caller already wraps `timeout`
+ *      around the whole run) -- both already covered elsewhere, a better
+ *      trade than a hand-rolled kernel ABI shim with no way to be sure
+ *      it's right (kernel sigset_t is 8 bytes, not glibc's 128, and a
+ *      real handler needs a correct SA_RESTORER trampoline).
+ *   4. Once (1)-(3) were fixed, fork() succeeded and reported to
+ *      afl-fuzz, then waitpid() on the new child hit ntlibc's own
+ *      process table, which knew nothing about a bare-syscall child and
+ *      answered ECHILD -- afl-compiler-rt.o's error path then exit()s,
+ *      which afl-fuzz sees as "Unable to communicate with fork server"
+ *      (measured with strace: fork() and write() both succeed, then
+ *      waitpid() ECHILD and exit_group).
+ *   5-6. Two failures sharing one cause, in two objects, costliest to
+ *      find because the symptom (afl-fuzz's dry run timing out) looked
+ *      like a performance problem: once the persistent loop started,
+ *      the forked child did nothing until the watchdog SIGKILLed it.
+ *      AFL++'s testcase shared-memory transfer is gated by
+ *      `__afl_sharedmem_fuzzing`, cleared whenever a check calls
+ *      fcntl(FORKSRV_FD, F_GETFD) unredirected: fuzz/Makefile's
+ *      AFL_RTDIR loop redirected getenv/fork/sigaction but not fcntl,
+ *      and aflpp_driver.o (a separate archive, needing its own
+ *      copy-and-patch step) does the identical check a second time and
+ *      also needed getenv redirected, since its `||` chain
+ *      short-circuited before reaching fcntl().
  *
- *   - read()/write()/close() look the fd up in ntlibc's own fd table,
- *     which was never told about a host-inherited fd like FORKSRV_FD,
- *     and fail as though it does not exist; getenv() searches ntlibc's
- *     `environ`, which fuzz/ntstubs.c's __ntshim_init() deliberately
- *     empties for every native test; shmat()/shmdt() would attach
- *     ntlibc's simulated address space's idea of a segment, not a real
- *     SysV one.  Measured directly: afl-showmap against an unpatched
- *     binary shows the harness read its own /proc/self/cmdline and
- *     /proc/self/environ, then exited 0 without ever touching
- *     FORKSRV_FD -- afl-compiler-rt.o's own "am I running under
- *     afl-fuzz" checks came back negative, silently, because the ones
- *     they depend on (fd and env lookups) were answered by ntlibc rather
- *     than failing loudly.
+ * The fix mirrors STATRENAME: local, objcopied copies of the two objects
+ * that need it, redirecting exactly the undefined references below to
+ * the __real_* names here, so only those two objects reach the host's
+ * real kernel/environment (or a real no-op, for sigaction/signal). pipe
+ * is left alone -- the forkserver reaches this point through ntlibc's
+ * version without issue. Patch what measurement shows is broken, not
+ * everything that could plausibly be: kill() was reasoned safe right up
+ * until the SIGCONT hang showed it wasn't.
  *
- *   - fork(), once the above were fixed and the faux forkserver started
- *     actually calling it, turned out to be ntlibc's -- RtlCloneUserProcess,
- *     which clones an entire simulated NT process (see
- *     [[ntlibc-fork-userspace-state]]) -- and paying that cost on every
- *     single test case is not merely wasteful, it is slow enough to look
- *     like a hang: a trivial input to fuzz_string.c took over a second
- *     and tripped afl-fuzz's dry-run timeout outright.
+ * Raw syscall()s throughout, for the same reason ntstubs.c uses them: a
+ * plain read()/write()/... call here would hit the ntlibc symbol this
+ * file exists to route around. syscall() itself isn't redirected, so it
+ * still reaches glibc's thin ABI-stable wrapper.
  *
- * A third failure, found the same way once the first two were fixed and
- * the persistent-mode fast path actually started running: the
- * long-lived forkserver child never terminates when afl-fuzz sends it
- * SIGTERM at the end of a run.  AFL++'s runtime installs its own
- * SIGTERM/SIGCHLD handlers via sigaction(), which -- unpatched -- is
- * ntlibc's, layered on this codebase's own simulated-NT signal delivery
- * (see [[wine-clone-process-hazards]] and the cross-process signal work
- * in HEAD's history).  Measured with strace: the handler ntlibc actually
- * runs on SIGTERM does a couple of close()s and returns via
- * rt_sigreturn straight back into the blocking read(FORKSRV_FD) --
- * never exiting -- so afl-fuzz's own dry run, and any real campaign's
- * shutdown, hangs until something outside the process kills it.
- *
- * __real_sigaction() below is a deliberate no-op, not a raw-syscall
- * reimplementation: it reports success without installing anything, so
- * the signals AFL++ wanted to catch (SIGTERM chief among them) keep
- * their kernel default disposition -- which for SIGTERM already IS
- * "terminate the process", exactly the behaviour that was missing. Two
- * things this gives up, both already covered elsewhere: AFL++'s own
- * crash diagnostics (a message before dying) are lost, but the crash
- * itself is unaffected and afl-fuzz already learns of it from the
- * child's wait4() status the same way it always did; and a custom
- * SIGALRM-based timeout inside this process never fires, but every
- * caller here (tools/afl-fuzz.sh, and the outer harness scripts before
- * it) already wraps its own `timeout` around the whole run for exactly
- * this reason.  Getting a raw rt_sigaction() right by hand -- kernel
- * sigset_t is 8 bytes, not glibc's 128, and a real handler needs a
- * correct SA_RESTORER trampoline to return through -- would trade a
- * measured, well-understood limitation for an unmeasured ABI risk to
- * fix a case nothing here depends on.  signal() gets the same no-op
- * treatment, for the same reason and by the same reasoning: on this
- * codebase's own terms (see [[test-cant-discriminate-vs-not-worth-adding]]),
- * a correctly-behaving no-op beats a hand-rolled kernel ABI shim with no
- * way to be sure it is right.
- *
- * A fourth failure, found only once the first three no longer masked it:
- * the persistent forkserver would fork() correctly (raw syscall, by
- * then) and report success to afl-fuzz over FORKSRV_FD -- and then
- * immediately call waitpid() on the child it had just created, which
- * -- unpatched -- is ntlibc's, consulting ntlibc's own process table.
- * That table knows nothing about a child __real_fork() created with a
- * bare syscall, so it answers ECHILD ("No child process"), and
- * afl-compiler-rt.o's own error path
- * (instrumentation/afl-compiler-rt.o.c:1307, `Error(waitpid): No child
- * process`) exit()s the forkserver on the spot -- which afl-fuzz sees,
- * from its side of FORKSRV_FD, as the connection simply going away:
- * "Unable to communicate with fork server", indistinguishable at that
- * remove from a crash, a hang, or the forkserver never having started
- * at all.  Measured with strace, not guessed from the message: the
- * fork() and the first write(199, ...) both succeed, and the very next
- * line is waitpid()'s ECHILD followed by the error print and exit_group.
- *
- * A fifth and sixth failure share one cause, in two different objects,
- * and cost the most time to find because the symptom -- afl-fuzz's dry
- * run timing out rather than erroring -- looked like a real performance
- * problem instead of a wiring one.  Once the fork()/waitpid() fix above
- * let the persistent loop actually start, the forked child that runs
- * each test case did nothing at all (not even a syscall) until afl-fuzz's
- * own watchdog SIGKILLed it a second later.  The cause: AFL++'s
- * shared-memory *testcase* transfer (as opposed to the coverage bitmap,
- * which already worked) is opt-in, gated by
- * `__afl_sharedmem_fuzzing`, a flag three different places check and
- * can clear, and every one of those places calls fcntl(FORKSRV_FD,
- * F_GETFD) as part of deciding "am I really running under afl-fuzz":
- *
- *   - fuzz/Makefile's own AFL_RTDIR loop already redirected
- *     afl-compiler-rt.o's getenv()/fork()/sigaction()/etc., but not its
- *     fcntl() -- so its own is-this-afl-fuzz check
- *     (instrumentation/afl-compiler-rt.o.c, the constructor that also
- *     handles the coverage map) saw ntlibc's fcntl() answer -1 for a
- *     host-inherited fd it does not recognise, concluded "not really
- *     under afl-fuzz", and cleared the flag before main() ever ran.
- *   - aflpp_driver.o (libAFLDriver.a) does the identical check a second
- *     time, in its own LLVMFuzzerRunDriver(), and needed the identical
- *     fcntl() redirect -- plus getenv(), whose absence made the check's
- *     `||` chain short-circuit before fcntl() was even reached, so
- *     fixing fcntl() alone here changed nothing until getenv() was
- *     fixed too.  This object ships in its own archive, not under
- *     $(AFL_SYSDIR), so it needed its own copy-and-patch step
- *     (AFL_DRIVER, extracted and objcopied from AFL_DRIVER_SYS) rather
- *     than falling out of the loop that already handles
- *     afl-compiler-rt.o.
- *
- * With the flag correctly staying set in both places, afl-compiler-rt.o's
- * own __afl_map_shm_fuzz() attaches the testcase shared-memory segment
- * (a second, smaller shmat -- confirmed by strace, distinct from the
- * coverage bitmap's) and the persistent loop's forked child has real
- * input to read instead of spinning on memory nothing ever populated.
- *
- * The fix mirrors STATRENAME throughout: local, objcopied copies of the
- * two objects that need it, redirecting exactly the undefined
- * references below to the __real_* names in this file, so only those
- * two objects -- never the harness or the library under test -- reach
- * the host's real kernel and real environment (or, for sigaction/
- * signal, a real no-op).  pipe is left alone: the forkserver evidently
- * reaches the point above using ntlibc's version of it without issue.
- * Patch what measurement shows is actually broken, not everything that
- * could plausibly be -- which is also this comment's own history in
- * miniature: kill() was reasoned to be one of the safe, untouched ones
- * right up until the SIGCONT hang above showed it was not.
- *
- * Raw syscall()s throughout, for the same reason fuzz/ntstubs.c already
- * uses them in several places (its xstatus_init(), for one): a plain
- * call to read()/write()/... from this file would hit the very same
- * ntlibc symbol this file exists to route around.  syscall() itself is
- * not one of the redirected names, so it still reaches glibc's, which is
- * the thin, ABI-stable wrapper this file wants.
- *
- * __real_getenv() reads /proc/self/environ instead of taking a pointer
- * to the process's real envp from fuzz/ntstubs.c, which is the more
- * obvious-looking design and was tried first: ntstubs.c's __ntshim_init()
- * runs as a constructor at priority 200, but AFL++'s own coverage-bitmap
- * constructor (in the object being patched here) needs __AFL_SHM_ID
- * before *that* -- constructor priorities 0-100 are reserved to the
- * implementation, AFL++'s runtime plausibly claims one of those, and no
- * priority a user constructor is allowed to request (101 and up) can run
- * before it.  Measured, not just reasoned about: with ntstubs.c handing
- * this file a saved envp pointer instead, afl-showmap still reported "No
- * instrumentation detected" and the coverage hash changed between runs
- * (ASLR noise over an unwritten map) -- i.e. __afl_area_ptr was never
- * attached to afl-fuzz's segment, because by the time our constructor
- * had run, AFL++'s had already asked ntlibc's (still-empty) `environ`
- * and given up.  /proc/self/environ has no such ordering dependency: the
- * kernel populates it from the process's real, execve-time envp before
- * *any* constructor runs, so it answers correctly no matter which one
- * of this file's own callers gets there first.
+ * __real_getenv() reads /proc/self/environ rather than taking a saved
+ * envp pointer from ntstubs.c (tried first): ntstubs.c's constructor
+ * runs at priority 200, but AFL++'s own coverage-bitmap constructor
+ * needs __AFL_SHM_ID before that (implementation-reserved priorities
+ * 0-100, which a user constructor can't request). Measured: with a saved
+ * envp pointer, afl-showmap still reported "No instrumentation detected"
+ * because AFL++'s constructor ran first and found ntlibc's still-empty
+ * environ. /proc/self/environ has no such ordering dependency -- the
+ * kernel populates it before any constructor runs.
  */
 #include <fcntl.h>
 #include <stdarg.h>
