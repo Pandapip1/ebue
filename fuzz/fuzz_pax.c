@@ -2,97 +2,74 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * __util_pax_main() -- src/util/pax.c, a from-scratch reader/writer for
- * two archive formats (ustar and octet-oriented/"odc" cpio; see that
- * file's own header on why pax's own extended-header format is the one
- * deliberately not implemented). This harness fuzzes the READ side only:
- * pax_reader_open()'s format-detection peek (6-byte cpio magic vs. a
- * full 512-byte block checked for ustar's "ustar" tag at offset 257),
- * parse_ustar_block()'s fixed-width octal field parsing
- * (parse_octal_field()) and name-prefix-joining, and read_cpio_header()'s
- * own octal-field/namesize/filesize parsing -- a tar/cpio-family archive
- * parser is exactly the "parse untrusted, attacker-shaped bytes" surface
- * this project's fuzz harnesses target first (see fuzz_sed.c's and
- * fuzz_patch.c's own headers on the same theme), and unlike patch(1p)'s
- * text-line grammar, this one is entirely fixed-width binary fields with
- * their own overflow/desync failure modes (a corrupt or adversarial
- * `size`/`namesize` field, a missing "ustar" tag, a cpio member whose
- * magic doesn't repeat).
+ * two archive formats (ustar and octet-oriented/"odc" cpio). This harness
+ * fuzzes the READ side only: pax_reader_open()'s format-detection peek,
+ * parse_ustar_block()'s fixed-width octal field parsing and
+ * name-prefix-joining, and read_cpio_header()'s octal-field/namesize/
+ * filesize parsing -- unlike patch(1p)'s text-line grammar, this is
+ * entirely fixed-width binary fields with their own overflow/desync
+ * failure modes (a corrupt `size`/`namesize` field, a missing "ustar"
+ * tag, a cpio member whose magic doesn't repeat).
  *
- * WHY LIST MODE (neither -r nor -w), AND WHY THAT MEANS ZERO FILESYSTEM
- * SIDE EFFECTS BEYOND THIS HARNESS'S OWN FIXED SINK FILES. -r (extract)
- * and -r -w (copy) both end in materialize() (src/util/pax.c), which
- * calls mkdir()/symlink()/link()/mkfifo()/mknod()/open()-with-O_CREAT
- * against a *member-supplied* destination path -- exactly the class of
- * "untrusted archive writes arbitrary files" risk name_is_safe() (same
- * file) blunts but does not eliminate. List mode (do_extract == 0 inside
- * do_list_or_read()) never calls materialize(): a matched member goes to
- * print_listing() (stdout only, redirected below) and
- * pax_reader_copy_data(&r, &m, -1), whose `out < 0` means "discard,
- * never write anywhere". The only real file this harness ever opens is
- * the fixed archive path it writes and then hands pax via `-f`,
- * read-only from pax's side. -w (write) is not exercised either, for the
- * unrelated reason that its whole input is real filesystem trees
- * (walk_operands()/nftw()), not fuzzer bytes.
+ * List mode only (neither -r nor -w): -r (extract) and -r -w (copy) both
+ * end in materialize(), which calls mkdir()/symlink()/link()/mknod()/
+ * open()-with-O_CREAT against a *member-supplied* destination path --
+ * exactly the "untrusted archive writes arbitrary files" risk
+ * name_is_safe() blunts but does not eliminate. List mode never calls
+ * materialize(): a matched member goes to print_listing() (stdout,
+ * redirected below) and pax_reader_copy_data(&r, &m, -1), whose
+ * `out < 0` means discard. The only real file this harness ever opens is
+ * the fixed archive path it writes and hands pax via `-f`, read-only
+ * from pax's side. -w is not exercised for the unrelated reason that its
+ * whole input is real filesystem trees (walk_operands()/nftw()), not
+ * fuzzer bytes.
  *
- * THE FUZZ INPUT IS THE ARCHIVE BYTES, verbatim. `-f` takes a real
- * pathname (stdin/stdout/stderr are `FILE *const`, so there is no
- * fmemopen()-onto-stdin trick available), so every fuzzer byte is
- * written to a fixed path under /tmp and pax reads it back with plain
- * fread(), which is binary-safe. Every `struct pax_member` field this
- * harness's oracle check touches is built from the raw archive bytes
- * through a fixed-size, NUL-terminated snprintf()/memcpy() copy first
- * (parse_ustar_block()/read_cpio_header()), so an embedded NUL or a
- * too-long name is truncated the same way any other malformed field is,
- * not a memory-safety hazard.
+ * The fuzz input is the archive bytes, verbatim: `-f` takes a real
+ * pathname (stdin/stdout/stderr are `FILE *const`, no fmemopen() trick
+ * available), so every fuzzer byte is written to a fixed path under /tmp
+ * and pax reads it back with fread(). Every `struct pax_member` field
+ * this harness's oracle check touches is built from the raw archive
+ * bytes through a fixed-size, NUL-terminated snprintf()/memcpy() copy
+ * first, so an embedded NUL or too-long name truncates the same way any
+ * other malformed field does, not a memory-safety hazard.
  *
- * OPTIONS FUZZED: byte 0 bit 0 selects -v (the ls -l-style listing:
- * gmtime()/strftime() over the member's raw, possibly-out-of-range
- * `mtime` field, plus the symlink "-> target" arm); bit 1 selects -c
- * (pattern-complement, harmless here since no pattern operand is ever
- * given, so pax_name_matches()'s own `npat == 0` short-circuit always
- * wins regardless -- fuzzing this bit still costs nothing and exercises
- * the flag's own argv-parsing arm). No pattern operand is supplied: an
- * empty pattern list means every member matches, maximizing how much of
- * do_list_or_read()'s per-member body a single input reaches.
+ * Options fuzzed: byte 0 bit 0 selects -v (gmtime()/strftime() over the
+ * member's raw, possibly-out-of-range `mtime` field, plus the symlink
+ * "-> target" arm); bit 1 selects -c (pattern-complement, harmless here
+ * since no pattern operand is given, so pax_name_matches()'s `npat == 0`
+ * short-circuit always wins -- still exercises the flag's argv-parsing
+ * arm). No pattern operand: an empty pattern list means every member
+ * matches, maximizing how much of do_list_or_read()'s per-member body a
+ * single input reaches.
  *
- * BOUNDING RUNAWAY COMPUTATION: not needed here. do_list_or_read()'s
- * only loop is `for (;;) { ... pax_reader_next() ... }`, and every path
- * through pax_reader_next() either consumes real, already-capped input
- * or returns 0/-1 and ends the loop: a short fread() of the ustar
- * 512-byte block (inevitable once the PAX_CAP-capped archive file runs
- * out) returns 0 cleanly; a missing/short cpio "070707" resync magic
- * returns -1 immediately; and read_cpio_header()'s namesize/filesize
- * fields are read from the same capped file, so a header claiming a
- * huge size simply hits a short read on its first fread() of that field
- * and returns -1 the same call. pax_reader_copy_data()'s own discard
- * loop (`while (remain) { fread(...); ... }`) has the identical
- * property. PAX_CAP (below) still bounds the absolute number of
- * well-formed headers one input can pack in.
+ * No runaway-computation guard needed: do_list_or_read()'s only loop is
+ * `for (;;) { ... pax_reader_next() ... }`, and every path through
+ * pax_reader_next() either consumes real, already-capped input or
+ * returns 0/-1 and ends the loop (a short fread() once the PAX_CAP-capped
+ * archive runs out, a missing cpio resync magic, or a huge namesize/
+ * filesize field hitting a short read on its own fread()).
+ * pax_reader_copy_data()'s discard loop has the identical property.
+ * PAX_CAP still bounds the absolute number of well-formed headers one
+ * input can pack in.
  *
- * STDOUT/STDERR REDIRECTION: see fuzz_sed.c's header comment for the
- * freopen()-not-fopen() reasoning; the same applies here verbatim. List
- * mode's print_listing() writes every line to real stdout, and
- * pax_reader_open()/pax_reader_next()'s corrupt-archive diagnostics go
- * through __util_diagf() to stderr -- both redirected once per call to a
- * fixed sink file, truncated by freopen()'s "w" mode each time (millions
- * of calls with no fork; an un-redirected run would drown in its own
- * terminal output).
+ * Stdout/stderr redirection: see fuzz_sed.c's header on freopen()-not-
+ * fopen(); applies verbatim. print_listing() writes to real stdout, and
+ * pax_reader_open()/pax_reader_next()'s corrupt-archive diagnostics go to
+ * stderr via __util_diagf() -- both redirected to a fixed sink file,
+ * truncated each call (millions of calls with no fork).
  *
- * NO ORACLE: no reference pax(1p)/tar/cpio implementation this project
- * could differentially compare against without this file's own
- * documented scope narrowings (no pax extended headers, no cpio
- * hard-link detection, the lenient single-all-zero-block ustar
- * end-of-archive check) reading as a false mismatch. What IS checked:
+ * No oracle: no reference pax/tar/cpio implementation could be
+ * differentially compared without this file's own scope narrowings (no
+ * pax extended headers, no cpio hard-link detection, the lenient
+ * single-all-zero-block ustar end-of-archive check) reading as a false
+ * mismatch. Checked instead:
  *
- *   - src/internal/util.h's contract that __util_<name>_main() returns a
- *     real process exit status, never a raw errno or boolean. Every
- *     `return` in src/util/pax.c is 0 or 1 -- unlike patch.c/ar.c, this
- *     file has no ">1 real error" tier at all, so 0/1 is the whole
- *     contract, asserted as such below;
- *   - no exit()/_exit() call anywhere in src/util/pax.c -- libFuzzer's
- *     own atexit-based "an exit() was detected" defence is what would
- *     surface a violation, the same backstop every other harness in
- *     this tree relies on rather than a bespoke check in this file.
+ *   - __util_<name>_main() returns a real exit status: every `return` in
+ *     src/util/pax.c is 0 or 1 -- unlike patch.c/ar.c, no ">1 real
+ *     error" tier at all, so 0/1 is the whole contract;
+ *   - no exit()/_exit() call anywhere in src/util/pax.c -- caught for
+ *     free by libFuzzer's own atexit-based detection, same backstop
+ *     every other harness here relies on.
  */
 #include <stdio.h>
 #include <stdlib.h>
