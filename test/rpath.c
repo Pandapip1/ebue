@@ -98,22 +98,50 @@ int main(int argc, char **argv)
 		sym = ntlibc_rpath_sym(dll, "rpath_plugin_answer");
 		CHECK(sym != 0);
 		if (sym) CHECK(((int (*)(void))sym)() == 42);
+		/* ntlibc_rpath_unload.html-equivalent (rpath.h's own doc
+		 * comment): "releases one reference on dll ... Returns 0 on
+		 * success". */
+		CHECK(ntlibc_rpath_unload(dll) == 0);
 	}
 
 	/* ---- missing DLL ------------------------------------------------ */
-	dll = ntlibc_rpath_load("no-such-plugin-at-all.dll");
-	CHECK(dll == 0);
-	CHECK(strcmp(ntlibc_rpath_error(), "no error") != 0);
-	CHECK(strstr(ntlibc_rpath_error(), "no-such-plugin-at-all.dll") != 0);
+	{
+		/* ntlibc_rpath_error_seq.html-equivalent: "0 until the first
+		 * ever failure", then "bumped once per failure recorded".
+		 * Nothing above this line ever failed, so this is exactly the
+		 * first bump -- checked as a strict "it moved" rather than
+		 * pinning 0->1, since a future caller adding an earlier
+		 * failure elsewhere in this file should not have to renumber
+		 * this assertion. */
+		unsigned long seq_before = ntlibc_rpath_error_seq();
+		dll = ntlibc_rpath_load("no-such-plugin-at-all.dll");
+		CHECK(dll == 0);
+		CHECK(strcmp(ntlibc_rpath_error(), "no error") != 0);
+		CHECK(strstr(ntlibc_rpath_error(), "no-such-plugin-at-all.dll") != 0);
+		CHECK(ntlibc_rpath_error_seq() != seq_before);
+	}
 
 	/* ---- missing symbol in a DLL that does exist --------------------- */
-	dll = ntlibc_rpath_load("rpath-plugin.dll");
-	CHECK(dll != 0);
-	if (dll) {
-		sym = ntlibc_rpath_sym(dll, "no_such_symbol_at_all");
-		CHECK(sym == 0);
-		CHECK(strcmp(ntlibc_rpath_error(), "no error") != 0);
+	{
+		unsigned long seq_before = ntlibc_rpath_error_seq();
+		dll = ntlibc_rpath_load("rpath-plugin.dll");
+		CHECK(dll != 0);
+		if (dll) {
+			sym = ntlibc_rpath_sym(dll, "no_such_symbol_at_all");
+			CHECK(sym == 0);
+			CHECK(strcmp(ntlibc_rpath_error(), "no error") != 0);
+			CHECK(ntlibc_rpath_error_seq() != seq_before);
+			CHECK(ntlibc_rpath_unload(dll) == 0);
+		}
 	}
+
+	/* ---- ntlibc_rpath_unload() failure: NULL dll ---------------------- */
+	/* src/internal/rpath.c: "!dll" is reported through the same
+	 * diagnosable-error channel as every other failure here, with a
+	 * nonzero return -- checked directly rather than only through the
+	 * success path above. */
+	CHECK(ntlibc_rpath_unload(0) != 0);
+	CHECK(strcmp(ntlibc_rpath_error(), "no error") != 0);
 
 	/* ---- nothing about using this facility disturbs ordinary state -- */
 	CHECK(argc >= 1);
