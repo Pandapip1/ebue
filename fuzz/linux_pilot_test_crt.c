@@ -19,8 +19,7 @@
  * Deliberately does not use stdio (no fprintf/puts): the src/stdio
  * subsystem has not been audited for Linux safety the way src/fcntl
  * and src/unistd have this session (see crt/linux/crt1.c's own banner
- * for the same
- * caution about __signal_init()/__fenv_init()).
+ * for the same caution about __signal_init()/__fenv_init()).
  *
  * Also deliberately calls __plat_write() (src/internal/plat_fd.h)
  * directly rather than the public write() front door
@@ -103,13 +102,8 @@ int main(int argc, char **argv, char **envp)
 	report(fd == -1, "open() of a nonexistent path fails");
 	report(errno == ENOENT, "errno reads back ENOENT through the real open()/openat() front door");
 
-	/* SA_ONSTACK: proves __sig_call_on_altstack() (src/signal/$arch/
-	 * altstack.S) reads sp/fn/arg out of the right registers for THIS
-	 * OS's own calling convention -- see that file's own banner. A wrong
-	 * register mapping is not guaranteed to crash; it can just as easily
-	 * read a plausible-looking garbage pointer and run anyway, which is
-	 * exactly why this checks the handler's own stack address landed
-	 * inside altstack_buf, not just that raise() returned 0. */
+	/* SA_ONSTACK: see the banner above altstack_buf for why a wrong
+	 * register mapping can look correct without this check. */
 	{
 		stack_t ss;
 		struct sigaction sa;
