@@ -33,10 +33,6 @@
  *  - \k (mark register) and \s (point-size change): recognised and
  *    consumed only -- no horizontal-motion tracking or point-size
  *    concept exists here for them to act on.
- *  - gzip-compressed pages (the normal on-disk form under a real
- *    /usr/share/man): NOT decompressed -- needs a real DEFLATE
- *    implementation. find_page() reports this explicitly rather than
- *    a plain "no manual entry".
  *  - Hyphenation and full justification (real troff's fill+adjust
  *    spreads inter-word spaces to flush both margins): not
  *    implemented. Output is ordinary ragged-right greedy word-wrap.
@@ -248,6 +244,26 @@
  * rule.
  *
  * ============================================================
+ * GZIP-COMPRESSED (.gz) PAGES
+ * ============================================================
+ *
+ * Real `/usr/share/man` is almost entirely `.gz` pages. man_read_page()
+ * (below man_read_file()) transparently decompresses one: tried
+ * whenever the path itself ends in ".gz" OR (independent of the name)
+ * the file's own first two bytes are gzip's magic number -- real
+ * gzip(1) itself only ever looks at the magic, a page can be
+ * compressed without ".gz" in its name too. src/util/man_gz.c is a
+ * real, from-scratch RFC 1951 DEFLATE decompressor plus the RFC 1952
+ * gzip container around it (no zlib/libz anywhere in this tree, by
+ * design -- see that file's own header comment for the algorithm and
+ * every simplification it documents, e.g. only the FIRST gzip member
+ * of a multi-member stream is decompressed). A malformed/corrupt/
+ * truncated gzip page is diagnosed by name and treated exactly like
+ * any other unreadable file (had_error set, that one operand skipped,
+ * the rest of the command line still processed) -- never a crash, never
+ * silently-wrong output handed to the troff parser below.
+ *
+ * ============================================================
  * ESCAPE SEQUENCES IMPLEMENTED
  * ============================================================
  *
@@ -374,6 +390,7 @@
 #include <sys/wait.h>
 #include "util.h"
 #include "libc.h" /* __find_program()/__spawn() -- src/process/, the same primitives sh's own execute.c uses */
+#include "man_gz.h" /* man_gunzip()/man_looks_gzipped() -- Tier 4, see that file's own header comment */
 
 /* A whole page this large would be pathological (real man pages are a
  * few KB to a few hundred KB) -- this is a safety net against reading
@@ -2540,10 +2557,12 @@ static void man_free_strv(char **v)
 }
 
 /* Looks for <dir>/man<section>/<name>.<section> under every directory
- * in `manpath`. On success returns a malloc'd path; on "found, but
- * only as a .gz" sets *gz_only and returns NULL (see this file's own
- * header comment on why gzip decompression is out of scope). */
-static char *man_find_one(char **manpath, const char *section, const char *name, int *gz_only)
+ * in `manpath`, preferring an uncompressed page but falling back to
+ * its ".gz" sibling (man_read_page() below transparently decompresses
+ * it, Tier 4 -- see this file's own header comment, "GZIP-COMPRESSED
+ * (.gz) PAGES"). Returns a malloc'd path naming whichever one exists,
+ * or NULL if neither does. */
+static char *man_find_one(char **manpath, const char *section, const char *name)
 {
 	size_t i;
 	for (i = 0; manpath[i]; i++) {
@@ -2556,7 +2575,7 @@ static char *man_find_one(char **manpath, const char *section, const char *name,
 			char gzpath[4096 + 3];
 			int gn = snprintf(gzpath, sizeof gzpath, "%s.gz", path);
 			if (gn > 0 && (size_t)gn < sizeof gzpath && stat(gzpath, &st) == 0 && S_ISREG(st.st_mode))
-				*gz_only = 1;
+				return strdup(gzpath);
 		}
 	}
 	return 0;
@@ -2565,14 +2584,11 @@ static char *man_find_one(char **manpath, const char *section, const char *name,
 static char *man_find_page(char **manpath, char **sections, const char *name, char **out_section)
 {
 	size_t i;
-	int gz_only = 0;
 
 	for (i = 0; sections[i]; i++) {
-		char *p = man_find_one(manpath, sections[i], name, &gz_only);
+		char *p = man_find_one(manpath, sections[i], name);
 		if (p) { *out_section = sections[i]; return p; }
 	}
-	if (gz_only)
-		__util_diagf("man: %s: found but is gzip-compressed; this implementation does not decompress pages\n", name);
 	return 0;
 }
 
@@ -2599,6 +2615,58 @@ static int man_read_file(const char *path, char **out, size_t *outlen)
 	*out = b.data ? b.data : strdup("");
 	*outlen = b.len;
 	return *out != 0;
+}
+
+/* True iff `path` itself ends in ".gz" (case-sensitive, matching real
+ * gzip(1)'s own default suffix -- the only one this project's own
+ * man_find_one() ever appends). */
+static int man_path_has_gz_suffix(const char *path)
+{
+	size_t n = strlen(path);
+	return n >= 3 && !strcmp(path + n - 3, ".gz");
+}
+
+/* man_read_file() plus transparent gzip decompression (Tier 4 -- see
+ * this file's own header comment, "GZIP-COMPRESSED (.gz) PAGES"):
+ * decompression is attempted whenever `path` itself ends in ".gz" OR
+ * (independent of the name) the bytes just read start with gzip's own
+ * magic number, so a page compressed under a non-".gz" name is still
+ * caught. Unlike man_read_file() (which leaves diagnosing a failure to
+ * its own caller, since a bare "cannot read" needs strerror(errno)
+ * for a real reason), this function prints its own diagnostic on
+ * EITHER failure and simply returns 0 -- a corrupt/truncated gzip
+ * stream has no meaningful errno of its own to report, so folding
+ * both outcomes into one "diagnose here, caller just checks the
+ * return" contract avoids the caller needing to know which kind of
+ * failure it was. */
+static int man_read_page(const char *path, char **out, size_t *outlen)
+{
+	char *raw;
+	size_t rawlen;
+
+	if (!man_read_file(path, &raw, &rawlen)) {
+		__util_diagf("man: %s: %s\n", path, strerror(errno));
+		return 0;
+	}
+
+	if (man_path_has_gz_suffix(path) || man_looks_gzipped(raw, rawlen)) {
+		char *dec;
+		size_t declen;
+		const char *err = 0;
+		int ok = man_gunzip(raw, rawlen, &dec, &declen, &err);
+		free(raw);
+		if (!ok) {
+			__util_diagf("man: %s: gzip: %s\n", path, err ? err : "corrupt data");
+			return 0;
+		}
+		*out = dec;
+		*outlen = declen;
+		return 1;
+	}
+
+	*out = raw;
+	*outlen = rawlen;
+	return 1;
 }
 
 /* ==== -k: apropos-style NAME-line scan (see this file's own header ====
@@ -2817,8 +2885,7 @@ int __util_man_main(
 				had_error = 1;
 				continue;
 			}
-			if (!man_read_file(path, &text, &tlen)) {
-				__util_diagf("man: %s: %s\n", path, strerror(errno));
+			if (!man_read_page(path, &text, &tlen)) {
 				free(path);
 				had_error = 1;
 				continue;
