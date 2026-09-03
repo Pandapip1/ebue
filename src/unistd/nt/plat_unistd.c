@@ -2,12 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * NT implementation of src/internal/plat_unistd.h -- see that header for
- * the contract each function makes.  Everything here was, until this
- * file existed, inline inside the src/unistd/{sleep,getpid,ftruncate,
- * ids,link,fsync,pipe,sysconf,unlink,chdir}.c front doors it now serves;
- * nothing changed in substance, only location and the addition of a
- * POSIX-shaped return (0/-1 or a value with errno already set) in place
- * of a raw NTSTATUS/HANDLE for the front door to interpret.
+ * the contract each function makes.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -326,23 +321,13 @@ ssize_t __plat_getcwd(char *buf, size_t bufsz)
 }
 
 /* ======================================================================
- * chdir.c
- *
- * __plat_chdir() absorbed everything src/unistd/chdir.c's own chdir()
- * used to do between its NUL/empty-string check and the old bare
- * __plat_chdir(path) call: __vfs_resolve_at() (src/internal/vfs.c) --
- * the fixed POSIX namespace overlay NT needs because it has no native
- * concept of `/`/`/dev` as anything other than ordinary directories --
- * the kind/native checks, the "/" substitution for a non-native virtual
- * directory, and the {NAME_MAX}-per-component check ordinarily done by
- * src/internal/path.c's own builder (not used here: RtlSetCurrentDirectory_U
+ * chdir.c: __vfs_resolve_at() (src/internal/vfs.c) is the fixed POSIX
+ * namespace overlay NT needs because it has no native concept of `/`/`/dev`
+ * as anything other than ordinary directories. RtlSetCurrentDirectory_U
  * takes the DOS form directly, so this function hand-builds its own
- * UNICODE_STRING rather than routing through __ntpath()/__ntpath_at()).
- * Nothing below changed in substance from what chdir.c used to run
- * inline, only location -- the same relocation __plat_open() (src/fcntl/
- * nt/plat_fcntl.c) already got. *vfsout reports the resolved vfs kind
- * back to the front door for __vfs_cwd_set() (portable bookkeeping that
- * stays there, see chdir.c's own comment).
+ * UNICODE_STRING rather than routing through __ntpath()/__ntpath_at().
+ * *vfsout reports the resolved vfs kind back to the front door for
+ * __vfs_cwd_set().
  * ====================================================================== */
 
 int __plat_chdir(const char *path, int *vfsout)
@@ -365,14 +350,9 @@ int __plat_chdir(const char *path, int *vfsout)
 	/* Both virtual directories use the native drive root only as the
 	 * process-parameter carrier; pathname dispatch uses vfs above. */
 	if (kind != __VFS_NONE && !native) path = "/";
-	/* chdir.html ERRORS, shall fail: "[ENAMETOOLONG] The length of a
-	 * component of a pathname is longer than {NAME_MAX}."  chdir does
-	 * not go through src/internal/path.c's builder -- this function
-	 * hand-builds its own UNICODE_STRING for RtlSetCurrentDirectory_U --
-	 * so it has to ask for itself, or it would be the one path-taking
-	 * interface in the library without the check.  Distinct from the
-	 * whole-path bound __US_MAX_WCHARS applies to its own UNICODE_STRING
-	 * below; see __name_too_long()'s banner. */
+	/* chdir does not go through src/internal/path.c's builder, so it has
+	 * to ask for the {NAME_MAX} check itself, or it would be the one
+	 * path-taking interface in the library without it. */
 	if (__name_too_long(path)) { errno = ENAMETOOLONG; return -1; }
 
 	w = __utf8_to_utf16(path, &n);
@@ -386,20 +366,11 @@ int __plat_chdir(const char *path, int *vfsout)
 	us.Length = (USHORT)(n * sizeof(WCHAR));
 	us.MaximumLength = (USHORT)(us.Length + sizeof(WCHAR));
 	st = RtlSetCurrentDirectory_U(&us);
-	/* chdir.html ERRORS [ENOTDIR]: "A component of the path prefix names
-	 * an existing file that is neither a directory nor a symbolic link to
-	 * a directory."  RtlSetCurrentDirectory_U passes NtOpenFile's status
-	 * through, so a non-directory *last* component already arrives as
-	 * STATUS_NOT_A_DIRECTORY and needs nothing here; but a non-directory
-	 * *prefix* component and a missing one are byte-identical --
-	 * STATUS_OBJECT_PATH_NOT_FOUND for both, measured on Windows 11 Pro
-	 * 22621 on NTFS -- so no status remap can tell them apart and the
-	 * prefix has to be walked.  Only that one status is disambiguated, so
-	 * a successful chdir() is still the one call it always was.
-	 *
-	 * The walk wants an NT path, which is not otherwise built here
-	 * (RtlSetCurrentDirectory_U takes the DOS form), so it is converted
-	 * here, on a path that has already failed. */
+	/* [ENOTDIR]: a non-directory *last* component already arrives as
+	 * STATUS_NOT_A_DIRECTORY, but a non-directory *prefix* component and a
+	 * missing one are byte-identical (STATUS_OBJECT_PATH_NOT_FOUND for
+	 * both, measured on Windows 11), so the prefix has to be walked to
+	 * tell them apart. */
 	if (st == STATUS_OBJECT_PATH_NOT_FOUND) {
 		UNICODE_STRING nt;
 		if (NT_SUCCESS(RtlDosPathNameToNtPathName_U_WithStatus(w, &nt, 0, 0))) {
@@ -448,17 +419,11 @@ int __plat_link(int olddirfd, const char *oldpath, int newdirfd, const char *new
 	size_t sz;
 	ULONG opts;
 
-	/* link.html DESCRIPTION: "If path1 names a symbolic link, ... [if]
-	 * the AT_SYMLINK_FOLLOW flag is clear ... a new link is created for
-	 * the symbolic link path1 and not its target"; with the flag set,
-	 * "a new link is created for the file referred to by path1".  The
-	 * whole of that distinction is in this one create option: NT
-	 * resolves a reparse point on open unless FILE_OPEN_REPARSE_POINT
-	 * asks it not to, so the handle FileLinkInformation is set on -- and
-	 * therefore the file the new directory entry names -- is the link
-	 * itself with the option, and the target without it.  Nothing below
-	 * needs a second path: the attribute query, the [EPERM] decision and
-	 * the link all run against whichever file this open picked. */
+	/* link.html's AT_SYMLINK_FOLLOW distinction is entirely in this one
+	 * create option: NT resolves a reparse point on open unless
+	 * FILE_OPEN_REPARSE_POINT asks it not to, so the handle
+	 * FileLinkInformation is set on is the link itself with the option,
+	 * and the target without it. */
 	opts = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT;
 	if (!followsym) opts |= FILE_OPEN_REPARSE_POINT;
 
@@ -467,30 +432,14 @@ int __plat_link(int olddirfd, const char *oldpath, int newdirfd, const char *new
 	__ntpath_free(&np);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 
-	/* link.html ERRORS: "[EPERM] The file named by path1 is a directory
-	 * and either the calling process does not have appropriate
-	 * privileges or the implementation prohibits using link() on
-	 * directories."  NTFS prohibits them outright -- FileLinkInformation
-	 * on a directory handle is refused however privileged the caller is
-	 * -- so the clause's second branch applies to every directory and
-	 * the errno is decided here rather than left to the driver.  Asking
-	 * the open handle for its attributes settles it without depending on
-	 * which status a particular filesystem picks: left to
-	 * NtSetInformationFile, NTFS answers STATUS_FILE_IS_A_DIRECTORY,
-	 * which src/internal/errno.c maps to EISDIR -- correct where EISDIR
-	 * is a specified errno (open(), rename()), but link.html's ERRORS
-	 * list does not contain EISDIR at all.
-	 *
-	 * The predicate matches src/stdio/misc.c's isdir_attrs(), so
-	 * linkat(), renameat() and lstat() agree on what counts as a
-	 * directory: NT puts FILE_ATTRIBUTE_DIRECTORY on a symbolic link to
-	 * a directory, but POSIX classifies a symbolic link as a
-	 * non-directory file whatever it points at, and with
-	 * AT_SYMLINK_FOLLOW clear it is the link itself that is being
-	 * linked.  With the flag set the open above already followed the
-	 * link, so these are the target's attributes and the reparse-point
-	 * exemption cannot fire: a symbolic link to a directory is then
-	 * "path1 names a directory" and [EPERM] is right. */
+	/* link.html [EPERM]: NTFS prohibits link() on directories outright
+	 * (FileLinkInformation on a directory handle is refused regardless of
+	 * privilege), and link.html's ERRORS list has no EISDIR, so the errno
+	 * is decided here rather than left to NTFS's own STATUS_FILE_IS_A_
+	 * DIRECTORY -> EISDIR mapping. The predicate matches src/stdio/misc.c's
+	 * isdir_attrs() so linkat()/renameat()/lstat() agree on what counts as
+	 * a directory: a symbolic link to a directory is excluded unless
+	 * AT_SYMLINK_FOLLOW already resolved it. */
 	if (NT_SUCCESS(NtQueryInformationFile(h, &io, &ti, sizeof ti, FileAttributeTagInformation)) &&
 	    (ti.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
 	    !((ti.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
@@ -516,12 +465,9 @@ int __plat_link(int olddirfd, const char *oldpath, int newdirfd, const char *new
 	__ntpath_free(&np);
 	NtClose(h);
 	if (!NT_SUCCESS(st)) {
-		/* The same [EPERM] clause, for the volume whose driver cannot
-		 * answer the attribute query above (the check is skipped then)
-		 * or that reports a directory reparse point this way.  An
-		 * already-taken path2 does not arrive here as this status --
-		 * ReplaceIfExists is 0, so an existing name, directory
-		 * included, is STATUS_OBJECT_NAME_COLLISION, i.e. EEXIST. */
+		/* The same [EPERM] clause, for a volume whose driver reports a
+		 * directory reparse point this way instead of at the attribute
+		 * query above. */
 		if (st == STATUS_FILE_IS_A_DIRECTORY) { errno = EPERM; return -1; }
 		return __set_errno_status(st);
 	}
@@ -542,12 +488,8 @@ ssize_t __plat_readlink(int dirfd, const char *path, char *buf, size_t bufsz)
 	WCHAR *tmp;
 	int n, vfs;
 
-	/* Ruling out a virtual-fs path used to be src/unistd/link.c's own
-	 * readlinkat() front-door job; moved here for the same reason
-	 * __plat_open()/__plat_chdir() absorbed their own vfs pre-checks --
-	 * __vfs_resolve_at() (src/internal/vfs.c) is NT-only-overlay
-	 * machinery a backend with real native symlinks (Linux) has no use
-	 * for at all. */
+	/* __vfs_resolve_at() (src/internal/vfs.c) is NT-only-overlay machinery
+	 * a backend with real native symlinks (Linux) has no use for. */
 	vfs = __vfs_resolve_at(dirfd, path);
 	if (vfs < 0) return -1;
 	if (vfs & __VFS_NATIVE) vfs = __VFS_NONE;
@@ -559,15 +501,10 @@ ssize_t __plat_readlink(int dirfd, const char *path, char *buf, size_t bufsz)
 	                FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT | FILE_OPEN_FOR_BACKUP_INTENT);
 	__ntpath_free(&np);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	/* [EINVAL] "The path argument names a file that is not a symbolic
-	 * link".  Whether it is one is a file attribute, and asking for the
-	 * attribute answers that question directly.  Deciding it from
-	 * FSCTL_GET_REPARSE_POINT's status instead only works on a volume
-	 * whose driver implements the FSCTL at all: one that does not (FAT,
-	 * and several redirectors) refuses the request outright --
-	 * STATUS_INVALID_DEVICE_REQUEST, STATUS_NOT_SUPPORTED -- rather than
-	 * with STATUS_NOT_A_REPARSE_POINT, and every plain file on such a
-	 * volume then reported that refusal's errno in place of EINVAL. */
+	/* [EINVAL]: asking for the reparse-point attribute directly avoids
+	 * depending on FSCTL_GET_REPARSE_POINT's status, which a volume whose
+	 * driver doesn't implement the FSCTL (FAT, some redirectors) answers
+	 * with a refusal status instead of STATUS_NOT_A_REPARSE_POINT. */
 	st = NtQueryInformationFile(h, &io, &ti, sizeof ti, FileAttributeTagInformation);
 	if (NT_SUCCESS(st) && !(ti.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
 		NtClose(h);
@@ -664,29 +601,14 @@ int __plat_symlink(const char *target, int newdirfd, const char *linkpath)
 	                  FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT | (isdir ? FILE_DIRECTORY_FILE : FILE_NON_DIRECTORY_FILE), 0, 0);
 	__ntpath_free(&np);
 	if (!NT_SUCCESS(st)) {
-		/* symlink.html has one shall-fail clause for a name that is
-		 * already taken -- "[EEXIST] The path2 argument names an
-		 * existing file" -- and a directory is a file, so a directory
-		 * at linkpath has to reach it too.  FILE_CREATE over an
-		 * existing name is STATUS_OBJECT_NAME_COLLISION, which
-		 * src/internal/errno.c already maps to EEXIST; but the create
-		 * options just above also carry FILE_NON_DIRECTORY_FILE
-		 * whenever the target is not a directory *now* -- and a
-		 * symbolic link may point at something that does not exist
-		 * yet, so that is the common case -- and a filesystem is free
-		 * to report that mismatch instead of the collision.  The two
-		 * ReactOS drivers differ on exactly this ordering: fastfat
-		 * rejects the directory first
-		 * (drivers/filesystems/fastfat/create.c:1356), its NTFS driver
-		 * takes the disposition first
-		 * (drivers/filesystems/ntfs/create.c:429).
-		 *
-		 * STATUS_FILE_IS_A_DIRECTORY can only arise here from an
-		 * existing directory at linkpath -- FILE_CREATE means nothing
-		 * was opened, and a directory in the path *prefix* is not an
-		 * error -- so it proves the [EEXIST] condition exactly, and
-		 * EISDIR, which symlink.html does not list at all, would be a
-		 * report about NT's create options rather than about POSIX. */
+		/* [EEXIST]: FILE_CREATE over an existing name is
+		 * STATUS_OBJECT_NAME_COLLISION -> EEXIST already, but the create
+		 * options above also carry FILE_NON_DIRECTORY_FILE whenever the
+		 * target is not a directory now (the common case), and a
+		 * filesystem may report that mismatch as STATUS_FILE_IS_A_
+		 * DIRECTORY instead of the collision -- which can only arise here
+		 * from an existing directory at linkpath, so it proves [EEXIST]
+		 * exactly (symlink.html has no EISDIR). */
 		if (st == STATUS_FILE_IS_A_DIRECTORY) { errno = EEXIST; return -1; }
 		return __set_errno_status(st);
 	}
@@ -695,21 +617,11 @@ int __plat_symlink(const char *target, int newdirfd, const char *linkpath)
 	if (!wt) { NtClose(h); return -1; }
 	for (i = 0; i < tl; i++) if (wt[i] == '/') wt[i] = '\\';
 	off = relative ? 0 : 4;
-	/* Every length in a REPARSE_DATA_BUFFER is a USHORT counting bytes,
-	 * and ReparseDataLength -- the largest of them -- covers the target
-	 * twice, once as the substitute name and once as the print name.  A
-	 * target long enough to overflow it would wrap rather than truncate,
-	 * and the link would be created pointing somewhere else entirely, so
-	 * the bound is checked before any of them is narrowed.
-	 *
-	 * SL_HDR/RDB_HDR come from offsetof rather than from the wire
-	 * layout's 12 and 8: PathBuffer's distance from the start of the
-	 * struct is whatever the compiler in use puts it at, and writing
-	 * through the struct needs the allocation sized to that, not to the
-	 * on-the-wire figure.  They agree on the NT target (ULONG is 32-bit
-	 * there, so RDB_HDR is 8 and SL_HDR is 12); where ULONG is wider
-	 * the wire figures are too small and the second memcpy below ran a
-	 * WCHAR past the end of the buffer. */
+	/* Every length in a REPARSE_DATA_BUFFER is a USHORT counting bytes, and
+	 * ReparseDataLength covers the target twice (substitute name + print
+	 * name); a target long enough to overflow it would wrap rather than
+	 * truncate and the link would point somewhere else entirely, so the
+	 * bound is checked before any length is narrowed. */
 	if (SL_HDR + (off + 2 * tl) * sizeof(WCHAR) > 0xffffu) {
 		FILE_DISPOSITION_INFORMATION d = { 1 };
 		NtSetInformationFile(h, &io, &d, sizeof d, FileDispositionInformation);
@@ -755,12 +667,11 @@ int __plat_symlink(const char *target, int newdirfd, const char *linkpath)
  * ====================================================================== */
 
 /* NT has one immutable process identity, represented by the user SID in
- * its primary access token.  SAM and Active Directory account SIDs have
- * the shape S-1-5-21-X-Y-Z-RID.  The final subauthority is the account's
- * RID; the preceding subauthorities identify the issuing machine/domain.
+ * its primary access token. SAM and Active Directory account SIDs have the
+ * shape S-1-5-21-X-Y-Z-RID; the final subauthority is the account's RID.
  *
  * A RID alone is not a uid: a domain-joined machine can run a local SAM
- * account and an AD account with the same RID.  Use Cygwin's computational
+ * account and an AD account with the same RID. Use Cygwin's computational
  * mapping so the two namespaces do not alias:
  *
  *     local account domain       0x30000 + RID
@@ -769,16 +680,13 @@ int __plat_symlink(const char *target, int newdirfd, const char *linkpath)
  *                                trustPosixOffset is unavailable
  *
  * The NTLIBC_USE_KERNEL32 build asks LSA for the local and primary domain
- * SIDs and compares the complete domain part.  The default ntdll-only
- * build cannot call LsaQueryInformationPolicy (advapi32), so it uses the
- * system-provided USERDOMAIN/COMPUTERNAME pair: equal means SAM, unequal
- * means the logged-on domain.  If those values are unavailable it chooses
- * SAM, the only account database present on a non-domain machine.
+ * SIDs; the default ntdll-only build cannot call LsaQueryInformationPolicy,
+ * so it uses USERDOMAIN/COMPUTERNAME instead (equal means SAM, unequal
+ * means the logged-on domain, unavailable means SAM).
  *
- * Well-known SIDs use Cygwin's documented fixed mappings.  A failure to
- * open/query the token falls back to the old 1000: POSIX reserves no error
- * return from getuid(), so failure must still produce an ordinary uid_t and
- * must not touch errno. */
+ * Well-known SIDs use Cygwin's documented fixed mappings. A failure to
+ * open/query the token falls back to 1000: getuid() has no error return,
+ * so failure must still produce an ordinary uid_t without touching errno. */
 #define UID_FALLBACK               ((uid_t)1000)
 #define SAM_POSIX_OFFSET           ((uid_t)0x00030000)
 #define PRIMARY_POSIX_OFFSET       ((uid_t)0x00100000)
@@ -1019,10 +927,9 @@ uid_t __plat_detect_uid(void)
 
 /* Which ids exist at all is asked with a named, idempotent, cross-process
  * event keyed by pid: a process which becomes its own group leader
- * publishes that one bit of cross-process state this way.  NT has no
- * query for POSIX pgids, but this is enough to distinguish the
- * transition setpgrp()/setsid() make in another process without
- * inventing a central process registry -- see ids.c's banner. */
+ * publishes that one bit of cross-process state this way. NT has no query
+ * for POSIX pgids, but this is enough to distinguish the transition
+ * setpgrp()/setsid() make in another process without a central registry. */
 static HANDLE pgid_event;
 static pid_t pgid_event_owner;
 
@@ -1095,22 +1002,15 @@ int __plat_process_exists(pid_t p)
 	return 1;
 }
 
-/* There is nothing for the chown family to set -- NT has no POSIX owner
- * or group, and st_uid/st_gid report this process's current IDs -- but
- * "there is no ownership to change" is not "there is no path to
- * resolve".  So the path is resolved and the object opened for
- * FILE_READ_ATTRIBUTES, which is exactly the evidence chown.html's
- * shall-fail clauses ask for and nothing more; the handle is closed
- * again without a write of any kind.  uid/gid are accepted (the
- * plat_unistd.h contract every backend shares) and ignored, exactly as
- * before this function grew them: there is still nothing on this
- * backend to set them to.
+/* Nothing for the chown family to set -- NT has no POSIX owner or group --
+ * but "no ownership to change" is not "no path to resolve", so the path is
+ * still resolved and opened for FILE_READ_ATTRIBUTES (chown.html's
+ * shall-fail evidence) and the handle closed without any write. uid/gid
+ * are accepted and ignored.
  *
- * __ntpath_at() produces the empty-path [ENOENT], the dirfd [EBADF]/
- * [ENOTDIR] and the path-prefix [ENOTDIR] itself, so only the final open
- * is left to this function.  FILE_OPEN_FOR_BACKUP_INTENT, and neither
- * FILE_DIRECTORY_FILE nor FILE_NON_DIRECTORY_FILE, so that the call
- * works on a directory and on a regular file alike. */
+ * FILE_OPEN_FOR_BACKUP_INTENT, and neither FILE_DIRECTORY_FILE nor
+ * FILE_NON_DIRECTORY_FILE, so the call works on a directory and a regular
+ * file alike. */
 int __plat_chown(int dirfd, const char *path, uid_t uid, gid_t gid, int flags)
 {
 	struct __ntpath np;
@@ -1132,11 +1032,9 @@ int __plat_chown(int dirfd, const char *path, uid_t uid, gid_t gid, int flags)
 	return 0;
 }
 
-/* fchown(): src/unistd/ids.c's own front door already turned `f` into a
- * validated handle via __fd_get() before calling here, which is all
- * fchown.html's own [EBADF] asks for -- same "nothing to set, but
- * resolution still matters" split as __plat_chown() above, minus any
- * path resolution of its own since a handle needs none. */
+/* fchown(): the front door already turned `f` into a validated handle via
+ * __fd_get(), which is all fchown.html's [EBADF] asks for. Same "nothing
+ * to set" story as __plat_chown() above. */
 int __plat_fchown(__plat_handle_t h, uid_t uid, gid_t gid)
 {
 	(void)h; (void)uid; (void)gid;
@@ -1148,25 +1046,14 @@ int __plat_fchown(__plat_handle_t h, uid_t uid, gid_t gid)
  * ====================================================================== */
 
 /* No ntdll export answers "give me random bytes" at all: ntdll's own
- * RtlRandom/RtlRandomEx family are non-cryptographic PRNGs, documented
- * as unsuitable for security purposes.  A real source exists --
- * BCryptGenRandom, CNG's documented, still-supported entropy call --
- * but it lives in bcrypt.dll, not ntdll, which is exactly the situation
- * NTLIBC_USE_KERNEL32 exists for (configure --help: "allow the few
- * places that have no pure-NTDLL way to do something to fall back to
- * kernel32"; "kernel32" there is this project's name for the whole
- * class of higher-level-DLL fallbacks, not literally kernel32.dll only
- * -- src/unistd/ids.c's own lsa_domain_kind() above already loads
- * advapi32.dll the identical way, under the identical flag).  Reached
- * with LdrLoadDll()/LdrGetProcedureAddress() rather than linked against
- * bcrypt's import library, same reasoning as every other
- * NTLIBC_USE_KERNEL32 fallback in this tree (see src/signal/signal.c's
- * install_ctrl_handler() banner): a binary built with this flag still
- * only *links* against ntdll, and only pulls bcrypt.dll into its
- * address space if it actually runs on a build where this was
- * requested. Without the flag, there is no fallback to reach at all,
- * so __plat_getentropy() is not compiled in and the front door
- * (src/unistd/getentropy.c) reports ENOSYS itself. */
+ * RtlRandom/RtlRandomEx family are non-cryptographic PRNGs. The real
+ * source, BCryptGenRandom, lives in bcrypt.dll, not ntdll -- exactly the
+ * situation NTLIBC_USE_KERNEL32 exists for. Reached with LdrLoadDll()/
+ * LdrGetProcedureAddress() rather than a linked import library, so a
+ * binary built with this flag still only *links* against ntdll and only
+ * pulls bcrypt.dll into its address space if it actually runs on a build
+ * where this was requested. Without the flag, __plat_getentropy() is not
+ * compiled in and the front door reports ENOSYS itself. */
 #ifdef NTLIBC_USE_KERNEL32
 typedef NTSTATUS (NTAPI *bcrypt_gen_random_fn)(PVOID, unsigned char *, ULONG, ULONG);
 

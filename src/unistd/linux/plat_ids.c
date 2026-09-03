@@ -2,34 +2,18 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Real Linux backends for the four res*id() calls and euidaccess()/
- * eaccess(), all declared in include/unistd.h under _GNU_SOURCE and
- * marked "undefined-ok" there for NT specifically (see that header's
- * own comments, and syscall()'s comment in src/unistd/linux/
- * plat_unistd.c for the precedent this file follows): NT's single-
- * fixed-identity model (src/unistd/ids.c's own getuid()/geteuid()) has
- * no ruid/euid/suid triple to report, and no effective-vs-real access-
- * check distinction either -- both reasons stay true of, and are only
- * checked against, the NT build. Linux has real, distinct ruid/euid/
- * suid (setresuid(2)/getresuid(2)/setresgid(2)/getresgid(2)) and a real
- * effective-id access check (faccessat2(2)'s AT_EACCESS), so this
- * backend implements both for real rather than leaving Linux stuck with
- * NT's reasoning.
- *
- * Same discipline as every other Linux backend in this tree: raw
- * syscall(2) via `svc #0`, no host libc, aarch64 syscall numbers
- * confirmed against this host's own <asm-generic/unistd.h> (see
- * src/mman/linux/plat_mem.c's banner for the fuller rationale and why
- * `extern long syscall(long, ...)` cannot be reused here).
+ * eaccess(), marked "undefined-ok" for NT specifically: NT's single-
+ * fixed-identity model has no ruid/euid/suid triple to report and no
+ * effective-vs-real access-check distinction. Linux has both for real
+ * (setresuid(2)/getresuid(2)/setresgid(2)/getresgid(2), faccessat2(2)'s
+ * AT_EACCESS), so this backend implements them.
  *
  * getresuid()/getresgid() ask the kernel directly rather than going
- * through src/unistd/ids.c's own cached getuid()/getgid() (that cache
- * answers a single, front-door-modeled identity -- see ids.c's banner
- * -- and would give a stale or synthetic answer for the real ruid/euid/
- * suid triple this function has to report). setresuid()/setresgid(),
- * conversely, DO reach back into ids.c: a successful call can move this
- * process's real uid/gid out from under that cache, so both call
- * __ids_creds_cache_invalidate() (src/unistd/ids.c) on success -- see
- * that function's own comment.
+ * through src/unistd/ids.c's own cached getuid()/getgid(), which would
+ * give a stale or synthetic answer for the real triple. setresuid()/
+ * setresgid() call __ids_creds_cache_invalidate() (src/unistd/ids.c) on
+ * success, since they can move this process's real uid/gid out from
+ * under that cache.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -109,22 +93,14 @@ int getresgid(gid_t *rgid, gid_t *egid, gid_t *sgid)
 	return 0;
 }
 
-/* euidaccess()/eaccess(): faccessat2(2) with AT_EACCESS asks the kernel
- * to run its real permission check against the caller's EFFECTIVE ids,
- * rather than the real ones access()/faccessat() (src/unistd/access.c)
- * use -- and, being a genuine kernel check, it is also strictly more
- * correct than that front door's own simplified owner-blind rwx-bit
- * test (see access.c's own comment: it never distinguishes owner from
- * group from other, and never checks R_OK at all). This asks the real
- * thing instead of approximating it.
+/* euidaccess()/eaccess(): faccessat2(2) with AT_EACCESS asks the kernel to
+ * run its real permission check against the caller's EFFECTIVE ids, more
+ * correct than access.c's simplified owner-blind rwx-bit test.
  *
  * ENOSYS is real and reachable here: faccessat2(2) is a Linux 5.8+
- * addition, so a pre-5.8 kernel refuses the syscall outright rather
- * than merely mishandling AT_EACCESS. The fallback below reimplements
- * the same owner/group/other decision by hand against geteuid()/
- * getegid() (both real on this backend -- see src/unistd/linux/
- * plat_unistd.c's own __plat_detect_gid()) rather than getuid()/
- * getgid(), which is the entire point of the "e" in euidaccess(). */
+ * addition, so a pre-5.8 kernel refuses the syscall outright. The
+ * fallback reimplements the same decision by hand against geteuid()/
+ * getegid(), not getuid()/getgid() -- the entire point of the "e". */
 static int manual_eaccess(const char *path, int mode)
 {
 	struct stat st;

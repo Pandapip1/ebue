@@ -2,32 +2,20 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * brk()/sbrk() for native Linux: a real program-break, via the real
- * brk(2) syscall. include/unistd.h's own "undefined-ok" comment on
- * these two says NT's allocator (RtlAllocateHeap, src/malloc/malloc.c)
- * is not "a single growable brk-style arena" and NT has no primitive
- * shaped like brk() at all -- true, and that reasoning stays for NT
- * (same NT-reasoning-stays-Linux-gets-real-code split as this tree's
- * own syscall()/setresuid()/euidaccess()/syncfs() precedent).
+ * brk(2) syscall. NT has no primitive shaped like brk() at all, so that
+ * reasoning stays NT-only; Linux gets real code.
  *
  * Genuinely independent of ntlibc's own malloc(): src/malloc/linux/
  * plat_malloc.c's __plat_alloc() is built entirely on raw mmap(2)/
- * munmap(2) -- checked before writing this file, not assumed -- and
- * never calls brk(2) or touches the traditional data-segment program
- * break at all. musl and glibc both ship a real, independent brk()/
- * sbrk() pair on Linux for the identical reason: the traditional break
- * and a modern mmap-based allocator are two separate address-space
- * regions that do not interact, so a caller using brk()/sbrk() directly
- * (rare today, but a real POSIX/BSD API real programs still call)
- * cannot corrupt, or be corrupted by, this library's own malloc() no
- * matter how either one is implemented internally.
+ * munmap(2) and never touches the traditional data-segment break, so a
+ * caller using brk()/sbrk() directly cannot corrupt, or be corrupted by,
+ * this library's own malloc().
  *
  * Linux's raw brk(2) syscall does not use the usual [-4095,-1] "-errno"
- * failure convention every OTHER syscall wrapper in this tree's Linux
- * backends checks with an is_sys_error() helper: it always returns the
- * resulting break address, moved or not (glibc's and musl's own brk(2)
- * wrappers both use exactly the "did the break actually move" test
- * below, not an error code) -- so, uniquely among this tree's Linux
- * backends, this file has no is_sys_error() at all.
+ * failure convention every other syscall wrapper in this tree checks with
+ * is_sys_error(): it always returns the resulting break address, moved or
+ * not, so uniquely among this tree's Linux backends this file has no
+ * is_sys_error() at all.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -43,10 +31,8 @@
 #define SYS_brk 214
 
 /* A minimal 6-argument raw syscall -- see src/mman/linux/plat_mem.c's
- * banner for the fuller per-arch rationale (this file only ever needs
- * one argument, but keeps the same six-slot shape every other Linux
- * backend's own raw_syscall() uses, for the identical "one syscall
- * table per file" discipline). */
+ * banner; this file only ever needs one argument but keeps the same
+ * six-slot shape every other Linux backend uses. */
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;

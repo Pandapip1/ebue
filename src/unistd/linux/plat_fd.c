@@ -2,28 +2,20 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Linux implementation of src/internal/plat_fd.h -- see src/mman/linux/
- * plat_mem.c's own banner for the general discipline this file follows
- * too (raw syscall(2), no host libc, -nostdinc against ntlibc's own
- * headers, aarch64 syscall numbers confirmed against this host).
+ * plat_mem.c's own banner for the raw-syscall discipline this file
+ * follows too.
  *
- * __plat_handle_t encoding: NT's own HANDLE is already void*, so the NT
- * backend's __plat_handle_t is a direct pass-through -- but a Linux fd
- * is a small int, and fd 0 (stdin) is perfectly valid, while every
- * front door treats a NULL/zero __plat_handle_t as "no handle, empty
- * slot" (see struct __fd's own field comment in libc.h). Boxing fd 0
- * as literal 0 would make a valid stdin descriptor indistinguishable
- * from an empty slot. This file boxes a
- * real fd as (fd + 1) and unboxes by subtracting 1, so __PLAT_HANDLE_NULL
- * (0) never collides with any real fd -- entirely this backend's own
- * concern; the front door never sees or needs to know the encoding.
+ * __plat_handle_t encoding: a Linux fd is a small int, and fd 0 (stdin)
+ * is perfectly valid, while every front door treats a NULL/zero
+ * __plat_handle_t as "no handle, empty slot". This file boxes a real fd
+ * as (fd + 1) and unboxes by subtracting 1, so __PLAT_HANDLE_NULL (0)
+ * never collides with any real fd.
  *
- * Every NT-specific interpretation step plat_fd.h's own comment
- * describes -- STATUS_PENDING waits, broken-pipe-as-EOF, EFBIG's
- * offset-maximum query, SIGPIPE's status disambiguation -- collapses
- * to nothing here: a Linux read()/write() syscall already returns 0 at
- * EOF, already delivers SIGPIPE via the kernel's own default
- * disposition on a broken pipe (ntlibc's signal delivery still sees it
- * the normal POSIX way), and needs no offset-maximum probe at all.
+ * Every NT-specific interpretation step plat_fd.h describes -- STATUS_
+ * PENDING waits, broken-pipe-as-EOF, EFBIG's offset-maximum query,
+ * SIGPIPE's status disambiguation -- collapses to nothing here: a Linux
+ * read()/write() syscall already returns 0 at EOF and already delivers
+ * SIGPIPE via the kernel's own default disposition on a broken pipe.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -33,13 +25,10 @@
 #include <errno.h>
 #include "plat_fd.h"
 
-/* Linux syscall numbers -- see plat_mem.c's banner for why these are
- * hardcoded rather than pulled from a host header; x86_64/i386 numbers
- * confirmed against arch/x86/entry/syscalls/syscall_{64,32}.tbl. i386
- * has no plain SYS_dup argument-compatible... it does (dup takes one
- * fd, same as every arch) -- only pread64/pwrite64 differ in ARGUMENT
- * SHAPE on i386 (see __plat_pread()/__plat_pwrite() below), not in
- * having a syscall number at all. */
+/* Linux syscall numbers, confirmed against arch/x86/entry/syscalls/
+ * syscall_{64,32}.tbl (x86_64/i386) and this host's own headers
+ * (aarch64). Only pread64/pwrite64 differ in ARGUMENT SHAPE on i386 (see
+ * __plat_pread()/__plat_pwrite() below), not in having a syscall number. */
 #if defined(__aarch64__)
 #define SYS_close  57
 #define SYS_lseek  62
@@ -63,15 +52,10 @@
 #elif defined(__i386__)
 #define SYS_close  6
 /* Plain lseek(2) (19), not _llseek(140): i386's lseek(2) takes and
- * returns a 32-bit offset directly (no pointer-based 64-bit result the
- * way _llseek needs) -- a real, disclosed limitation matching this
- * project's own documentation culture, not a silent gap: seeking past
- * 2 GiB in a single file fails/wraps on THIS backend's __plat_seek_*()
- * below on i386 specifically, unlike aarch64/x86_64 where lseek(2)
- * already takes a native 64-bit offset. Fine for what this file needs
- * (the CRT/dlopen pilots below never seek at all); a real fix is
- * _llseek(2), separate future work should a 32-bit-Linux consumer ever
- * need large-file seeks. */
+ * returns a 32-bit offset directly, a disclosed limitation -- seeking
+ * past 2 GiB fails/wraps on i386 specifically, unlike aarch64/x86_64
+ * where lseek(2) already takes a native 64-bit offset. A real fix is
+ * _llseek(2), future work if a 32-bit-Linux consumer needs it. */
 #define SYS_lseek  19
 #define SYS_read   3
 #define SYS_write  4
@@ -84,37 +68,17 @@
 #error "plat_fd.c: unsupported architecture"
 #endif
 
-/* aarch64=24/x86_64=292/i386=330 above, confirmed against this system's
- * own vendored kernel UAPI headers the same way this file's own banner
- * already confirms SYS_dup/SYS_fcntl -- asm-generic/unistd.h's
- * __NR_dup3 for aarch64, asm/unistd_64.h's/unistd_32.h's __NR_dup3 for
- * the other two, none of which this host's own <sys/syscall.h> covers
- * since this host is aarch64-only. */
-
 #define F_SETFD_LX   2
 #define FD_CLOEXEC_LX 1
 #define O_CLOEXEC_LX  0x80000
 
 /* A minimal 6-argument raw syscall, one body per arch's own calling
- * convention -- no host libc in the call path at all. NOT `extern long
- * syscall(long, ...)`: that symbol is satisfied by the HOST's real
- * glibc at link time (this build is -nostdinc, not -nostdlib -- only
- * compiling avoids the host headers, the final link step still pulls
- * in host libc), and glibc's syscall() performs its own error
- * translation: on failure it returns exactly -1 and sets glibc's OWN
- * errno (a different memory location than ntlibc's own errno global,
- * src/internal/errno.c) to the real code -- it does NOT hand back the
- * raw kernel -errno in [-4095,-1] this file's is_sys_error()/`errno =
- * (int)-ret` translation requires. Confirmed both by inspecting the
- * linked pilot binary (nm -D shows an undefined `syscall@GLIBC_*`,
- * resolved by ld-linux at runtime) and independently by src/thread/
- * linux/plat_thread.c's own port, which hit the identical bug and is
- * this fix's model. See crt/linux/crt1.c's own raw_syscall() banner
- * for the fuller per-arch calling-convention rationale (x86_64's
- * syscall/rdi.../r10 shape, i386's int $0x80 + memory-array-of-args
- * shape for its one 6-argument syscall this file also needs -- pread64/
- * pwrite64 pass a 64-bit offset, so i386's version below needs a 7-word
- * array, not the 6-argument crt1.c uses for its own single mmap2 call). */
+ * convention -- no host libc in the call path. NOT `extern long
+ * syscall(long, ...)`: that symbol resolves to the HOST's real glibc at
+ * link time, which sets glibc's OWN errno on failure rather than handing
+ * back the raw kernel -errno this file's `errno = (int)-ret` translation
+ * requires. See crt/linux/crt1.c's own raw_syscall() banner for the
+ * per-arch calling-convention rationale. */
 #if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
@@ -146,10 +110,8 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 }
 #elif defined(__i386__)
 /* Same "point eax at an explicit args array" technique as crt/linux/
- * crt1.c's own i386 raw_syscall() -- see that file's banner for the
- * full rationale (ebp is both cdecl's frame-pointer register and the
- * only place left to put a 6th argument). Duplicated here per this
- * tree's own "own syscall table per file" discipline, not shared. */
+ * crt1.c's own i386 raw_syscall() -- see that file's banner (ebp is both
+ * cdecl's frame-pointer register and the only place left for a 6th arg). */
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
 {
 	long args[7];
@@ -205,14 +167,9 @@ ssize_t __plat_pread(__plat_handle_t h, void *buf, size_t count, off_t off)
 	long ret;
 #if defined(__i386__)
 	/* i386's pread64(2) takes a 64-bit offset as two SEPARATE 32-bit
-	 * argument registers (pos_low, pos_high -- confirmed against the
-	 * real kernel's fs/read_write.c SYSCALL_DEFINE5(pread64, ...)
-	 * signature on 32-bit longs), not one `long` the way every other
-	 * arg to this trampoline works: `(long)off` alone would silently
-	 * truncate off_t (always 64-bit in this project -- see include/
-	 * alltypes.h.in) to its low 32 bits. Little-endian, so "low"/
-	 * "high" below are the numeric halves, not a memory-layout
-	 * concern. */
+	 * argument registers (pos_low, pos_high), not one `long`: `(long)off`
+	 * alone would silently truncate off_t (always 64-bit) to its low
+	 * 32 bits. */
 	unsigned long long uoff = (unsigned long long)off;
 	ret = raw_syscall(SYS_pread64, (long)unbox(h), (long)buf, (long)count,
 	                  (long)(unsigned long)(uoff & 0xffffffffu),
@@ -227,12 +184,9 @@ ssize_t __plat_pread(__plat_handle_t h, void *buf, size_t count, off_t off)
 ssize_t __plat_write(__plat_handle_t h, const void *buf, size_t count, int append) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; byte count and append flag have distinct roles
 {
 	long ret;
-	/* `append` needs nothing here: on Linux, whether a write() goes to
-	 * the file's current end is decided by the underlying fd's own
-	 * O_APPEND bit (set when it was opened), not by any per-call
-	 * argument the way NT's FILE_WRITE_TO_END_OF_FILE token needs to be
-	 * -- the kernel already does the right thing for a plain write()
-	 * regardless of which case this is. */
+	/* `append` needs nothing here: on Linux, whether a write() goes to the
+	 * file's current end is decided by the fd's own O_APPEND bit, not by
+	 * any per-call argument the way NT's FILE_WRITE_TO_END_OF_FILE needs. */
 	(void)append;
 	ret = raw_syscall(SYS_write, (long)unbox(h), (long)buf, (long)count, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
@@ -267,14 +221,11 @@ long long __plat_seek_query(__plat_handle_t h, int at_eof)
 		if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 		return ret;
 	}
-	/* SEEK_END, unlike SEEK_CUR, WOULD move the descriptor's position
-	 * as a side effect -- something this "just a query" contract must
-	 * not do. Save and restore around it, the same pattern
-	 * src/internal/fdpos.c already uses for a different NT-only quirk.
-	 * A pure fstat(2) query would avoid the extra two syscalls, at the
-	 * cost of this file needing to hardcode aarch64's raw kernel
-	 * `struct stat` layout; not worth it for a pilot backend, and
-	 * documented here rather than silently assumed correct. */
+	/* SEEK_END, unlike SEEK_CUR, WOULD move the descriptor's position as a
+	 * side effect -- something this "just a query" contract must not do.
+	 * Save and restore around it. A pure fstat(2) query would avoid the
+	 * extra two syscalls, at the cost of hardcoding the raw kernel `struct
+	 * stat` layout; not worth it for a pilot backend. */
 	cur = raw_syscall(SYS_lseek, (long)fd, 0L, 1L /* SEEK_CUR */, 0L, 0L, 0L);
 	if (is_sys_error(cur)) { errno = (int)-cur; return -1; }
 	ret = raw_syscall(SYS_lseek, (long)fd, 0L, 2L /* SEEK_END */, 0L, 0L, 0L);
@@ -314,27 +265,18 @@ int __plat_dup_to(__plat_handle_t h, int newfd, __plat_handle_t old, int inherit
 	int oldfd = unbox(h);
 	long ret;
 
-	/* `old` needs no handling of its own here on purpose: dup3(2)
-	 * below (or the fixup path just below, when newfd already names
-	 * oldfd) already replaces whatever real descriptor NUMBER newfd
-	 * previously held, atomically, as an unavoidable part of what
-	 * dup3(2) IS -- see plat_fd.h's own comment on this parameter for
-	 * why a separate close here would, after dup3(2) has returned,
-	 * actually close the brand new duplicate this call just made
-	 * (`old`'s own boxed value already names that same real number). */
+	/* `old` needs no handling of its own here on purpose: dup3(2) below
+	 * already replaces whatever real descriptor NUMBER newfd previously
+	 * held, atomically -- a separate close here would, after dup3(2)
+	 * returns, actually close the brand new duplicate this call just made. */
 	(void)old;
 
 	if (oldfd == newfd) {
 		/* dup3(2) refuses this outright (EINVAL) where dup(2) simply
-		 * would not apply -- unlike plain dup2(oldfd, oldfd), which
-		 * the real syscall short-circuits to a true no-op, a caller
-		 * reaching this exact case wants
-		 * posix_spawn_file_actions_adddup2(fd, fd)'s meaning (src/
-		 * process/posix_spawn.c's do_action() comment; not currently
-		 * reachable through this function, see plat_fd.h's own note,
-		 * but handled correctly regardless): "keep this descriptor
-		 * across the child's exec" -- i.e. clear close-on-exec on the
-		 * SAME real fd, not duplicate it onto itself. */
+		 * would not apply: this case means
+		 * posix_spawn_file_actions_adddup2(fd, fd)'s "keep this
+		 * descriptor across the child's exec" -- clear close-on-exec on
+		 * the SAME real fd, not duplicate it onto itself. */
 		long fc = raw_syscall(SYS_fcntl, (long)oldfd, (long)F_SETFD_LX,
 		                      inheritable ? 0L : (long)FD_CLOEXEC_LX, 0L, 0L, 0L);
 		if (is_sys_error(fc)) { errno = (int)-fc; return -1; }
@@ -342,10 +284,9 @@ int __plat_dup_to(__plat_handle_t h, int newfd, __plat_handle_t old, int inherit
 		return 0;
 	}
 
-	/* dup3(2), unlike the dup(2) __plat_dup() above uses, forces the
-	 * new descriptor to be exactly `newfd` -- closing whatever was
-	 * already there first, atomically -- which is the entire reason
-	 * this function exists separately (see plat_fd.h's own comment). */
+	/* dup3(2), unlike the dup(2) __plat_dup() above uses, forces the new
+	 * descriptor to be exactly `newfd`, closing whatever was already there
+	 * first, atomically -- the entire reason this function exists. */
 	ret = raw_syscall(SYS_dup3, (long)oldfd, (long)newfd,
 	                  inheritable ? 0L : (long)O_CLOEXEC_LX, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
@@ -355,14 +296,10 @@ int __plat_dup_to(__plat_handle_t h, int newfd, __plat_handle_t old, int inherit
 
 void __plat_set_cloexec(__plat_handle_t h, int cloexec)
 {
-	/* A plain in-place fcntl(F_SETFD): unlike __plat_dup()'s own
-	 * `!inheritable` path, this never creates a new descriptor or
-	 * changes which real fd number `h` names -- see plat_fd.h's own
-	 * comment on why that distinction is the entire point here.
-	 * Failure is not reported (the header's own contract): F_SETFD on
-	 * a fd this process still has open does not fail in practice, and
-	 * there is no better fallback available to a caller here than
-	 * leaving the bit as it was. */
+	/* A plain in-place fcntl(F_SETFD): never creates a new descriptor or
+	 * changes which real fd number `h` names. Failure is not reported:
+	 * F_SETFD on a fd this process still has open does not fail in
+	 * practice. */
 	raw_syscall(SYS_fcntl, (long)unbox(h), (long)F_SETFD_LX,
 	           cloexec ? (long)FD_CLOEXEC_LX : 0L, 0L, 0L, 0L);
 }

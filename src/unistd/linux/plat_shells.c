@@ -2,21 +2,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * setusershell()/getusershell()/endusershell(): real, from-scratch
- * /etc/shells enumeration for native Linux. include/unistd.h's own
- * comment on these three says "no such file or concept on NT" -- true
- * of NT, where there genuinely is no /etc/shells (or any
- * registered-shell concept at all) to enumerate, and that reasoning
- * stays for NT; Linux has a real, simple, line-oriented /etc/shells
- * this backend can just read (same NT-reasoning-stays-Linux-gets-real-
- * code split as this tree's own syscall()/setresuid()/euidaccess()
- * precedent).
+ * /etc/shells enumeration for native Linux. NT has no such file or
+ * concept, so that reasoning stays NT-only; Linux has a real, simple,
+ * line-oriented /etc/shells this backend can just read.
  *
- * Ordinary FILE*-based line reading, not a raw syscall: getusershell()
- * has no fd-table-shaped contract to honor (unlike, say, syncfs(), which
- * needs an already-open descriptor) and no reason to avoid this
- * library's own stdio -- the same "public API is safe to call directly
- * once startup has run" reasoning src/dlfcn/linux/plat_dlfcn.c's own
- * banner gives for its own open()/pread()/close()/malloc() use.
+ * Ordinary FILE*-based line reading, not a raw syscall: getusershell() has
+ * no fd-table-shaped contract to honor and no reason to avoid this
+ * library's own stdio.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
