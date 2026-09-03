@@ -219,11 +219,9 @@ static pid_t fork_impl(int run_handlers)
 		if (r.job) __plat_close(r.job);
 	}
 	/* Still suspended: repair the WOW64-specific clone damage, if any,
-	 * before the child ever runs a single instruction of it.
-	 * __is_wow64()/__wow64_fixup_clone() are only ever defined for the
-	 * x86/x86_64 arches that WOW64 exists for at all (src/internal/
-	 * {i386,x86_64}/wow64.c) -- guarded here so aarch64 (which has
-	 * neither) never references either symbol. */
+	 * before the child runs a single instruction. Guarded to x86/x86_64
+	 * (src/internal/{i386,x86_64}/wow64.c) so aarch64, which has neither
+	 * symbol, never references them. */
 #if defined(__i386__) || defined(__x86_64__)
 	if (__is_wow64()) __wow64_fixup_clone(r.process, r.thread);
 #endif
@@ -238,22 +236,16 @@ pid_t fork(void)
 	return fork_impl(1);
 }
 
-/* _Fork(): kept deliberately, and no test references it -- so it will
- * keep surfacing on tools/lint-unreferenced.sh's list.  It is not an
- * unspecified extension.  POSIX.1-2024 specifies it
- * (`https://pubs.opengroup.org/onlinepubs/9799919799/functions/_Fork.html`,
- * CHANGE HISTORY: "Austin Group Defects 62, 1361, and 1383 are applied,
- * adding the _Fork() function and removing the requirement for fork() to
- * be async-signal-safe"), so this is an interface the project has early,
- * not one it invented; deleting it means re-adding it when the project
- * moves editions.  Same reasoning as posix_close().
+/* _Fork(): kept deliberately despite no test referencing it (so it will
+ * keep surfacing on tools/lint-unreferenced.sh's list) -- POSIX.1-2024
+ * specifies it (Austin Group Defects 62/1361/1383), so this is an
+ * interface the project has early, not one it invented. Same reasoning
+ * as posix_close().
  *
- * What POSIX asks of it beyond fork() is that it be async-signal-safe
- * and not run pthread_atfork() handlers.  Neither distinguishes it here:
- * there is no libpthread (see flockfile in src/stdio/file.c), so there
- * are no atfork handlers to skip, and fork() registers no handlers of
- * its own.  So it forwards, and will need revisiting only if this
- * library ever grows real threads. */
+ * POSIX asks it be async-signal-safe and skip pthread_atfork() handlers;
+ * neither distinguishes it here, since there is no libpthread and fork()
+ * registers no handlers of its own -- revisit only if real threads
+ * arrive. */
 pid_t _Fork(void)
 {
 	return fork_impl(0);
