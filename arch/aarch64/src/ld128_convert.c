@@ -3,72 +3,40 @@
  *
  * __extenddftf2()/__trunctfdf2()/__trunctfsf2() -- the compiler-rt/libgcc
  * software-float conversion routines between IEEE 754 binary128 ("quad",
- * what `long double` really is on aarch64 -- see arch/aarch64/bits/
- * float.h's own comment) and binary64/binary32 (`double`/`float`).
+ * what `long double` really is on aarch64) and binary64/binary32
+ * (`double`/`float`).
  *
- * WHY THIS FILE HAS TO EXIST: this build is -nostdlib (Makefile), so no
- * libgcc or compiler-rt is ever linked in, and clang emits calls to
- * these three exact symbols for any `long double` <-> `double`/`float`
- * conversion on a target where `long double` is not already the CPU's
- * native float register width -- true here, since aarch64 has hardware
- * for single/double precision only, none for quad. That is not a
- * hypothetical: it is exactly what src/math/ldbl_math.h's own
- * __x87_sqrt()/__x87_sin()/etc. wrappers do on this arch (their own
- * comment: "every long double argument/result is narrowed to/from
- * `double` at the boundary" -- src/math/aarch64_math.h's banner states
- * this as deliberate, permanent policy, not a shortcut to remove), and
- * what src/stdlib/strtod.c's strtox() does independently (it computes
- * every one of strtof/strtod/strtold through one `double`-precision
- * bignum-rounding algorithm and only WIDENS to `long double` at
- * strtold()'s own return, narrowing back down for strtof()/strtod()) --
- * neither file is avoidable or wrong to fix instead; both already made
- * a considered choice this file's job is to make LINK, not to second-
- * guess. Confirmed live: clock_nanosleep/1-3.c (third_party/ltp's OPEN
- * POSIX test suite) and a wide swath of sibling cases failed to link
- * with exactly these three symbols undefined, pulled in transitively
- * through strtod.o/scalbn.o once anything in a test touches
- * scanf/printf's number parsing or scalbnl()/ldexpl().
+ * WHY THIS FILE HAS TO EXIST: this build is -nostdlib, so no libgcc or
+ * compiler-rt is linked in, and clang emits calls to these three exact
+ * symbols for any `long double` <-> `double`/`float` conversion since
+ * aarch64 has no quad-precision hardware. src/math/ldbl_math.h's
+ * wrappers and src/stdlib/strtod.c's strtox() both narrow to `double`
+ * at their boundaries rather than computing in quad directly, and still
+ * need these three symbols to link (confirmed: multiple LTP tests
+ * failed to link without them, pulled in transitively through
+ * strtod.o/scalbn.o).
  *
  * SCOPE: only these three. __extendsftf2 (float -> long double) is not
- * needed anywhere in this tree today (nothing here promotes float
- * straight to long double without going through double first) and is
- * deliberately not added speculatively; real arithmetic on long double
- * values (__addtf3, __multf3, ...) is a much larger undertaking this
- * tree avoids entirely by construction -- see aarch64_math.h's own
- * "narrow to double, compute, widen back" policy again -- and is not
- * needed by anything that links today.
+ * needed anywhere in this tree; real arithmetic on long double values
+ * (__addtf3, __multf3, ...) is avoided entirely by the narrow-compute-
+ * widen policy above.
  *
- * LAYOUT: binary128 is 16 bytes, little-endian on this arch (matching
- * x86_64 SSE __float128, which is the same IEEE format): the low 8
+ * LAYOUT: binary128 is 16 bytes, little-endian on this arch: the low 8
  * bytes hold the low 64 bits of the 112-bit stored fraction; the high
  * 8 bytes hold [sign:1][exponent:15, bias 16383][fraction, high 48
- * bits]. binary64 (bias 1023, 11 exponent bits, 52 fraction bits) and
- * binary32 (bias 127, 8 exponent bits, 23 fraction bits) are the
- * ordinary, unremarkable IEEE formats every other file in src/math
- * already assumes.
+ * bits].
  *
- * VERIFICATION: the three functions below were checked against a real
- * IEEE binary128 oracle -- a host program using GCC's native
- * `_Float128` and its own real __extenddftf2/__trunctfdf2/__trunctfsf2
- * -- across every boundary worth checking by hand (1.0, values needing
- * round-to-nearest-even in both directions, DBL_MAX/DBL_MIN and the
- * double subnormal extremes, values that overflow double or float on
- * narrowing, +-0, +-Infinity, NaN) plus randomized fuzzing biased
- * toward each format's normal/subnormal/overflow boundaries, with zero
- * mismatches (NaN payload bits excepted -- see below).
- *
- * NaN payloads are deliberately NOT bit-matched against the host
- * compiler's own choice: IEEE 754 does not mandate how a NaN's payload
- * bits propagate across a precision change, only that the result is
- * still some NaN, and gcc/clang's own runtimes disagree on this beyond
- * the quiet bit -- any NaN result for a NaN input is accepted, exactly
- * as any real caller checking isnan() would.
+ * VERIFICATION: checked against a host oracle (GCC's native
+ * `_Float128` and its own real __extenddftf2/__trunctfdf2/__trunctfsf2)
+ * across hand-picked boundaries plus randomized fuzzing, zero mismatches
+ * (NaN payload bits excepted -- IEEE 754 doesn't mandate how those
+ * propagate across a precision change, only that the result is some
+ * NaN).
  */
 #include <stdint.h>
-#include "rtlib.h"   /* this file's own prototypes -- src/internal/rtlib.h's
-                      * own banner explains why a compiler-generated-call
-                      * function like this needs one even though nothing
-                      * in the tree calls it by name */
+#include "rtlib.h"   /* this file's own prototypes: nothing in the tree
+                      * calls these by name, but rtlib.h still declares
+                      * compiler-generated-call functions like these */
 
 union ntlibc_tf128 {
 	long double f;
