@@ -1,93 +1,51 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The calendar half of src/time/: tzset.c, mktime.c, timegm.c,
- * gmtime.c, localtime.c, asctime.c and ctime.c.  strftime and strptime
- * already have harnesses (fuzz_strftime, fuzz_strptime); everything
- * they call into did not.
+ * Fuzzes the calendar half of src/time/: tzset.c, mktime.c, timegm.c,
+ * gmtime.c, localtime.c, asctime.c, ctime.c (strftime/strptime already
+ * have their own harnesses). $TZ is untrusted input in the ordinary
+ * case, not the exotic one -- localtime()/ctime()/mktime() all call
+ * tzset() implicitly, so any program reaches this parser regardless of
+ * whether it mentions timezones. mktime()/timegm() are also REQUIRED to
+ * accept and normalize out-of-range struct tm fields (tm_mon==13,
+ * negative tm_sec), which is exactly the shape of code that overflows.
  *
- * WHY THIS SUBSYSTEM.  tzset() parses $TZ, and $TZ is untrusted input
- * in the ordinary case, not the exotic one: it is an environment
- * variable, so it arrives from whoever started the process, and it is
- * read implicitly -- localtime(), ctime() and mktime() all call tzset()
- * themselves, so a program that never mentions timezones at all still
- * runs this parser over whatever $TZ contained.  The rest of the module
- * is integer arithmetic on caller-supplied `struct tm` fields that
- * mktime() and timegm() are REQUIRED to accept out of range and
- * normalize (tm_mon == 13, tm_mday == 0, negative tm_sec), which is
- * exactly the shape of code that overflows.
+ * Input layout: byte 0 flags; bytes 1-24 six little-endian int32
+ * struct-tm fields; bytes 25-32 a little-endian time_t; the rest is the
+ * $TZ string. Short input is zero-padded rather than rejected.
  *
- * INPUT LAYOUT.  Byte 0 is flags; bytes 1..24 are six little-endian
- * int32 struct-tm fields; bytes 25..32 are a little-endian time_t.
- * Everything after that is the $TZ string.  A short input is
- * zero-padded rather than rejected, so the empty input and the
- * one-byte input both run the whole harness with zeroes -- which is
- * also the trivial-input smoke test.
+ * timegm() and gmtime_r() are oracled against glibc's (see
+ * host_timegm() in fuzz/host_oracle.c): both are pure proleptic-
+ * Gregorian UTC arithmetic with no zone database or "now" involved, so
+ * a disagreement is a real calendar bug. mktime()/localtime() are NOT
+ * oracled -- glibc reads /usr/share/zoneinfo and applies POSIX DST
+ * rules, while src/time/tzset.c documents this target has neither, so a
+ * differential check there would just report that difference forever.
+ * The oracle compares on fields folded into wide-but-not-overflowing
+ * ranges; the true extremes are still driven, by the unrestricted pass
+ * below, but through ASan/UBSan rather than comparison, since at the
+ * extremes POSIX only guarantees (time_t)-1/EOVERFLOW and the two
+ * libraries make different, both-defensible choices.
  *
- * WHAT IS ASSERTED, and what deliberately is not.
+ * mktime() is checked for idempotence instead (a POSIX contract
+ * property, not implementation-specific): normalizing *tm and feeding
+ * it back in must give the same instant. Checked only when `timezone`
+ * is small enough that the shift itself can't overflow -- that overflow
+ * is UBSan's to report directly, not this harness's to call a failed
+ * idempotence. asctime_r()'s 26-byte buffer is used only for a struct
+ * tm that is actually a valid four-digit-year time (the case the
+ * 26-byte POSIX guarantee covers); every other tm gets 64 bytes so an
+ * overrun beyond that is still caught. tzname[]'s pair is checked
+ * non-NULL and NUL-terminated within its 32-byte buffer after any $TZ.
  *
- *   - timegm() AND gmtime_r() ARE ORACLED against glibc's.  They are
- *     the two functions here whose answer depends on nothing but their
- *     arguments -- pure proleptic-Gregorian arithmetic on UTC, no zone
- *     database, no $TZ, no "now" -- so a disagreement is a calendar
- *     bug in one of the two and cannot be a configuration difference.
- *     See the block comment above host_timegm() in fuzz/host_oracle.c.
- *
- *     mktime() and localtime() are NOT oracled, for the same reason
- *     stated positively: glibc reads /usr/share/zoneinfo and applies
- *     POSIX DST rules, and src/time/tzset.c documents that this target
- *     has neither and that `daylight` is always 0.  A differential
- *     check there would report that documented difference over and
- *     over and would be evidence about nothing.
- *
- *   - THE ORACLE RUNS ON RESTRICTED FIELDS.  The comparison is made
- *     with fields folded into ranges (year +-4000 or so, month +-24,
- *     day +-60, ...) that are far out of range enough to drive every
- *     normalization branch, but nowhere near overflowing either
- *     library's arithmetic.  This is not the oracle being spared the
- *     hard cases: at the extremes the two libraries make different and
- *     both-defensible choices about a result POSIX only says "shall
- *     return (time_t)-1 ... [EOVERFLOW]" about, so a mismatch there
- *     would not be evidence of a defect.  The extremes are still
- *     driven, by the unrestricted pass below -- just by ASan and UBSan
- *     rather than by comparison.
- *
- *   - mktime() IS IDEMPOTENT.  mktime() normalizes *tm in place and
- *     returns the instant; feeding the normalized struct back in must
- *     give the same instant.  That is a property of the POSIX contract
- *     ("the original values of the other components are not restricted
- *     to the ranges described in <time.h>", and the returned tm is the
- *     normalized one), not of any particular implementation, so it is
- *     checkable without an oracle.  It is checked only when `timezone`
- *     is small enough that the shift cannot itself overflow -- an
- *     overflow there is a separate finding, and UBSan reports it
- *     directly rather than as a failed idempotence.
- *
- *   - asctime_r() FITS 26 BYTES.  asctime.html: "shall place the
- *     result in a user-supplied buffer of at least 26 bytes".  The
- *     buffer is therefore malloc'd at exactly 26 so ASan sees a 27th
- *     byte, and it is used only when the struct tm really is a valid
- *     time with a four-digit year -- the case the 26-byte guarantee is
- *     about.  Every other tm gets a 64-byte buffer, so an overrun
- *     beyond even that is still caught without the harness claiming a
- *     guarantee POSIX does not make.
- *
- *   - tzname[] IS A VALID PAIR.  Both entries non-NULL, NUL-terminated
- *     within the 32-byte buffer tzset.c allocates for them, after any
- *     $TZ at all.
- *
- * WHAT IS NOT HERE.  getdate() (src/time/getdate.c) is deliberately
- * left out even though it is the most parser-shaped function in the
- * module: it calls time(0) and seeds the working struct tm with
- * localtime_r()'s idea of "now", so the same input does not give the
- * same behaviour twice, and a crash it found might not reproduce.  A
- * harness for it needs a seam that makes "now" fixed, which is a change
- * to fuzz/ntstubs.c's clock, and that is its own piece of work.
+ * getdate() is deliberately not covered: it calls time(0) and seeds
+ * from localtime_r()'s idea of "now", so the same input doesn't
+ * reproduce the same behavior twice -- it needs a fixed-"now" seam in
+ * fuzz/ntstubs.c's clock first.
  */
-/* timegm() is a BSD/GNU extension, and include/time.h declares it only
- * under _BSD_SOURCE or _GNU_SOURCE.  The Makefile compiles every harness
- * with -D_XOPEN_SOURCE=700, which does not include it -- so ask for it
- * here rather than widening the flags for every other harness. */
+/* timegm() is a BSD/GNU extension; include/time.h gates it behind
+ * _BSD_SOURCE/_GNU_SOURCE, and the Makefile's -D_XOPEN_SOURCE=700 alone
+ * doesn't include it. */
 #define _BSD_SOURCE
 #include <time.h>
 #include <limits.h>
@@ -116,21 +74,16 @@ static long long rd64(const unsigned char *p)
 	return (long long)u;
 }
 
-/* Fold v into [lo, hi].  The width is computed in `unsigned`, not in
- * `int`: the widest range folded to here is the +-2e9 time_t one, and
- * hi - lo for that is 4e9, which overflows `int`.  UBSan reported it on
- * the very first run of this harness, on the empty input -- the harness
- * had the defect, not the library, which is the right way round for it
- * to be found. */
+/* Width computed in `unsigned`, not `int`: the +-2e9 time_t range folded
+ * here has hi - lo == 4e9, which overflows `int`. */
 static int fold(int v, int lo, int hi)
 {
 	unsigned span = ((unsigned)hi - (unsigned)lo) + 1u;
 	return (int)((unsigned)lo + (unsigned)v % span);
 }
 
-/* The harness's own decimal formatter.  Not ntlibc's snprintf, which is
- * itself under test, and not the host's, which this file cannot reach
- * (only fuzz/host_oracle.c is compiled against the host headers). */
+/* Not ntlibc's snprintf (itself under test) or the host's (unreachable
+ * from a file not compiled against host headers). */
 static char *put_i(char *p, char *end, long long v)
 {
 	char tmp[24];
@@ -190,11 +143,10 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 
 	flags = bin[0];
 	for (i = 0; i < 6; i++) raw[i] = rd32(bin + 1 + 4 * i);
-	tval = rd64(bin + 24);        /* bytes 24..31; 1..24 were the six fields */
+	tval = rd64(bin + 24);
 
-	/* The $TZ record.  Embedded NULs would truncate it at the first
-	 * one and waste the rest of the input, so they become '_': every
-	 * byte the fuzzer supplies then reaches the parser. */
+	/* Embedded NULs become '_' rather than truncating $TZ, so every
+	 * fuzzer byte reaches the parser. */
 	n = size < sizeof tz - 1 ? size : sizeof tz - 1;
 	memcpy(tz, data, n);
 	tz[n] = 0;
@@ -209,31 +161,18 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 	else if (strlen(tzname[0]) > 31 || strlen(tzname[1]) > 31)
 		oracle_mismatch_i("tzset produced an over-long tzname", tz,
 		                  (long long)strlen(tzname[0]), 31);
-	/* `timezone` IS A 32-BIT long ON THE TARGET, AND A 64-BIT ONE HERE.
-	 *
-	 * This is the one place in this harness where the native build is
-	 * not the platform, and it has to be compensated for explicitly
-	 * rather than trusted.  include/limits.h gives LONG_MAX as
-	 * 0x7fffffff because the target is LLP64; `long` in THIS build is
-	 * the host compiler's 64-bit one, because the width of a built-in
-	 * type is not something a header can change.  So tzset()'s
-	 * `h * 3600 + mn * 60 + s` -- with h coming straight out of
-	 * strtol(), which saturates at the header's LONG_MAX of
-	 * 2147483647 -- overflows a `long` on the target and does not
-	 * overflow one here.  UBSan running natively therefore cannot see
-	 * that overflow, no matter how long it runs.
-	 *
-	 * What CAN be checked natively is the value: whatever tzset()
-	 * computes has to be representable in the target's `long`, because
-	 * that is the type it is stored in there.  A result outside
-	 * [LONG_MIN, LONG_MAX] as this target's headers define them is the
-	 * defect, reported here as a value rather than as UB. */
+	/* `timezone` is a 32-bit long on the target (LLP64, per
+	 * include/limits.h's LONG_MAX) but a 64-bit one in this native
+	 * build, so an overflow of the target's `long` in tzset()'s
+	 * `h*3600+mn*60+s` is invisible to UBSan here. What's still checkable
+	 * natively is the value: it must fit the target's LONG_MIN/LONG_MAX,
+	 * since that's the type it's stored in there. */
 	if (timezone > (long long)LONG_MAX || timezone < (long long)LONG_MIN)
 		oracle_mismatch_i("tzset computed a timezone the target's long cannot hold",
 		                  tz, (long long)timezone, (long long)LONG_MAX);
 
 	/* ------------------------------------- timegm/gmtime, oracled */
-	f[0] = fold(raw[0], -5900, 4100);      /* tm_year: years -4000..6000 */
+	f[0] = fold(raw[0], -5900, 4100);
 	f[1] = fold(raw[1], -24, 35);
 	f[2] = fold(raw[2], -60, 90);
 	f[3] = fold(raw[3], -48, 71);
@@ -327,11 +266,7 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 		}
 	}
 
-	/* -------------------------------------------- asctime_r / ctime_r
-	 *
-	 * The 26-byte buffer is the POSIX guarantee and is used only where
-	 * POSIX makes it: a valid time whose year has four digits.  ASan
-	 * owns the 27th byte. */
+	/* -------------------------------------------- asctime_r / ctime_r */
 	{
 		struct tm v;
 		load(&v, f);
@@ -370,12 +305,7 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 		}
 	}
 
-	/* ------------------------------- the unrestricted pass, no oracle
-	 *
-	 * Whole-int32 fields straight from the input: the arithmetic
-	 * mktime.c and timegm.c widen to `long long` precisely so that a
-	 * caller's extreme value cannot overflow an `int`.  Nothing is
-	 * compared here -- ASan and UBSan are the assertion. */
+	/* ------------------------------- the unrestricted pass, no oracle */
 	if (flags & 2) {
 		struct tm w;
 		load(&w, raw);
