@@ -1091,8 +1091,15 @@ stage_arithub() {
 		-o "$algebra_test" $z3_flags || return 1
 	"$algebra_test" || return 1
 	# shellcheck disable=SC2046,SC2086
+	# -fexceptions must follow --cxxflags, not precede it: --cxxflags
+	# carries LLVM's own -fno-exceptions, and the later flag wins.  Without
+	# this (as stage_totality's identical build already has it), z3++.h's
+	# `throw exception(...)` calls fail to compile outright -- this stage
+	# could not build its plugin at all, on any machine, until this was
+	# added; confirmed by removing the flag and reproducing the same
+	# "cannot use 'throw' with exceptions disabled" error in isolation.
 	clang++-18 -fPIC -shared -DNTLIBC_ARITHMETIC_Z3 \
-		$(llvm-config-18 --cxxflags) \
+		$(llvm-config-18 --cxxflags) -fexceptions \
 		tools/clang/SizeCastChecker.cpp -o "$plugin" "$clang_cpp" \
 		$(llvm-config-18 --ldflags --libs --system-libs) $z3_flags || return 1
 
