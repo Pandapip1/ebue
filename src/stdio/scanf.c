@@ -3,42 +3,31 @@
  *
  * __vfscanf: the one parser every scanf/fscanf/sscanf variant calls
  * into.  sscanf/vsscanf hand it a throwaway read-only memory FILE (see
- * mem.c/fmemopen) instead of duplicating the character-at-a-time logic
- * against a plain string.
+ * mem.c/fmemopen) instead of duplicating the logic against a string.
  *
- * C99 7.19.6.2p12 and POSIX fscanf make an input item "the longest
- * sequence of input bytes (up to any specified maximum field width)
- * which is an initial subsequence of a matching sequence", and then:
- * "If the input item is not a matching sequence, the execution of the
- * conversion specification fails; this condition is a matching
- * failure."  Note *initial subsequence*, not *matching sequence*: a
- * half-spelled "infi", a "0x" with no hex digit behind it and a "1e"
- * with no exponent behind it are all input items, all consumed in full,
- * and all matching failures.  Only "the offending input" -- the single
- * byte that could not extend the item -- is left unread.
+ * An input item is "the longest sequence of input bytes ... which is an
+ * initial subsequence of a matching sequence" (C99 7.19.6.2p12); a
+ * matching failure consumes it in full.  Note *initial subsequence*: a
+ * half-spelled "infi", a bare "0x" or a "1e" with no exponent are all
+ * consumed whole as matching failures.  Only the single offending byte
+ * that could not extend the item is left unread.
  *
- * A matching sequence for %f has no length limit worth naming: leading
- * zeros, fraction digits and an exponent can run on forever, and a
- * correctly rounded result needs every one of them.  So the float
- * conversions walk the strtod grammar a character at a time, staging
- * the text of the field in a buffer that starts inside this frame and
- * moves to the heap when a field outgrows it.  A field that ends on a
- * matching sequence is handed to strtof/strtod/strtold, which round it
- * exactly; one that ends mid-spelling is a matching failure and is
- * simply dropped, its bytes already spent.  The integer conversions
- * need no buffer at all: they accumulate as they read, and saturate
- * rather than wrap when the digits run past the widest type.
+ * %f has no length limit worth naming, so the float conversions walk
+ * the strtod grammar a character at a time, staging the field's text in
+ * a buffer that starts in this frame and moves to the heap when it
+ * outgrows it, then hand a matching-sequence field to strtof/strtod/
+ * strtold for exact rounding.  Integer conversions need no buffer: they
+ * accumulate as they read and saturate rather than wrap on overflow.
  *
- * Because the item is never given back, the look-ahead is one byte
- * everywhere.  That one byte normally goes to the stream's own ungetc,
- * which C99 only promises for a single character and which can still
- * refuse it, so struct sc keeps a small stack behind it (see unrd
+ * The look-ahead is one byte everywhere, normally the stream's own
+ * ungetc -- which C99 only promises for a single character and can
+ * still refuse -- so struct sc keeps a small stack behind it (see unrd
  * below) and seeks back whatever is left over at the end.
  *
- * %[...] scansets, the usual conversions and POSIX's [CX]
- * assignment-allocation character 'm' (see struct abuf) are
- * implemented; positional arguments and vector-of-float %a/%A input
- * conversions are not, since nothing in this tree needs them.
+ * %[...] scansets and POSIX's [CX] 'm' assignment-allocation character
+ * (see struct abuf) are implemented; positional arguments and
+ * vector-of-float %a/%A input conversions are not, since nothing in
+ * this tree needs them.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -60,21 +49,17 @@
 
 enum { LM_NONE, LM_hh, LM_h, LM_l, LM_ll, LM_j, LM_z, LM_t, LM_L };
 
-/* Input cursor: every character actually taken from the stream bumps
- * nread, and every look-ahead character pushed back takes it off again,
- * so nread is exactly what %n has to report.
- *
- * A pushed-back character normally goes to the stream, but ungetc is
- * only guaranteed for one character and may refuse even that, so unrd
- * falls back to a stack of its own that rd drains before touching the
- * stream again.  Anything still on it when the whole scanf is over is
- * returned to the stream by seeking, the only way left to return it. */
+/* Input cursor: every character taken from the stream bumps nread, and
+ * every pushed-back one takes it off again, so nread is exactly what %n
+ * reports.  A pushed-back character normally goes to the stream's own
+ * ungetc, but that is only guaranteed for one character, so unrd falls
+ * back to a stack that rd drains first; anything left on it at the end
+ * is returned to the stream by seeking. */
 /* One pushed-back unit.  `nb` is how many BYTES of the stream it came
- * from: 1 for a byte, 1..4 for a wide character decoded from UTF-8, and
- * sizeof(wchar_t) for one read out of an open_wmemstream() buffer.
- * sc_done() hands the look-ahead back by seeking, which is a byte
- * offset, so the count cannot be recovered from the unit itself once a
- * variable-width encoding is in play. */
+ * from -- 1 for a byte, 1..4 for a UTF-8-decoded wide character,
+ * sizeof(wchar_t) for a wmemstream read -- since sc_done() hands the
+ * look-ahead back by seeking a byte offset, not recoverable from the
+ * unit itself once a variable-width encoding is in play. */
 struct pbent {
 	wchar_t wc;
 	unsigned char nb;
@@ -100,23 +85,16 @@ struct nbuf {
 	char init[128];
 };
 
-/* The destination of an 'm'-qualified %s, %c or %[.
+/* The destination of an 'm'-qualified %s, %c or %[: POSIX's [CX]
+ * assignment-allocation character allocates a buffer sized to the
+ * converted string plus a terminating null, and hands it back through
+ * a caller-owned pointer variable (fscanf.html).
  *
- * fscanf.html DESCRIPTION, the [CX] assignment-allocation character:
- * "The %c, %s, and %[ conversion specifiers shall accept an optional
- * assignment-allocation character 'm', which shall cause a memory
- * buffer to be allocated to hold the string converted including a
- * terminating null character.  In such a case, the argument
- * corresponding to the conversion specifier should be a reference to a
- * pointer variable that will receive a pointer to the allocated buffer
- * ... the caller is responsible for freeing the memory after usage."
- *
- * cap counts ELEMENTS, not bytes, because the destination is wchar_t
- * for an l-qualified conversion and char otherwise, and store_unit()
- * below indexes it in elements either way; esz says which.  The
- * caller's pointer is written only once the conversion has succeeded,
- * so a matching failure, an encoding error or an allocation failure all
- * leave it exactly as it was and free whatever had been built. */
+ * cap counts ELEMENTS, not bytes -- the destination is wchar_t for an
+ * l-qualified conversion, char otherwise, and store_unit() indexes it
+ * in elements either way; esz says which.  The caller's pointer is
+ * written only on success, so a matching failure, encoding error or
+ * allocation failure all leave it untouched and free what was built. */
 struct abuf {
 	void *p;
 	int cap;                /* elements allocated */
@@ -144,17 +122,12 @@ static void sc_init(struct sc *sc, FILE *f, int wide)
 }
 
 /* One input unit: a byte for fscanf(), a wide character for fwscanf().
- *
- * nread counts UNITS, not bytes, which is what both callers need: the
- * field width and %n are byte counts under fscanf.html and wide-character
- * counts under fwscanf.html, and in each mode a unit is the right thing.
- * That falls out of counting here rather than being special-cased at
- * ~15 call sites. */
-/* sc is required by every function below that takes one: each
- * dereferences it unconditionally, first statement in most cases, the
- * caller's own struct sc on the stack (vfscanf_st's own `struct sc
- * sc; sc_init(&sc, f, ...);`), never a value that could legitimately
- * be null. */
+ * nread counts UNITS, not bytes: the field width and %n are byte counts
+ * under fscanf.html and wide-character counts under fwscanf.html, and a
+ * unit is the right thing in each mode -- falls out of counting here
+ * rather than being special-cased at ~15 call sites. */
+/* sc is nonnull: every function below dereferences it unconditionally,
+ * always the caller's own struct sc on the stack. */
 static int rd(struct sc *sc) __attribute__((nonnull(1)));
 static int rd(struct sc *sc)
 {
@@ -174,9 +147,9 @@ static int rd(struct sc *sc)
 		int nb = 0;
 		wint_t w = __fgetwc_n(sc->f, &nb);
 		if (w == WEOF) {
-			/* Distinguish "no more input" from "the input is not a
-			 * character": the stream's error indicator is set only for
-			 * the second, by src/stdio/wide.c. */
+			/* Distinguish "no more input" from "not a character": the
+			 * stream's error indicator is set only for the latter, by
+			 * src/stdio/wide.c. */
 			if (ferror(sc->f)) sc->ilseq = 1;
 			return EOF;
 		}
@@ -190,12 +163,10 @@ static void unrd(struct sc *sc, int c) __attribute__((nonnull(1)));
 static void unrd(struct sc *sc, int c)
 {
 	if (c == EOF) return;
-	/* The stream first, and only in byte mode: while its own pushback
-	 * can hold the look-ahead, the cursor stays a plain wrapper around
-	 * it.  In wide mode this stack is always used instead, so that
-	 * sc_done() below knows the exact byte length of everything it
-	 * still owes the stream -- ungetwc() would take the character but
-	 * tell us nothing about how many bytes it stood for. */
+	/* The stream's own pushback first, and only in byte mode.  Wide mode
+	 * always uses this stack instead, so sc_done() below knows the exact
+	 * byte length still owed to the stream -- ungetwc() would take the
+	 * character but not say how many bytes it stood for. */
 	if (!sc->wide && sc->npb == 0 && c >= 0 && c <= UCHAR_MAX &&
 	    ungetc(c, sc->f) != EOF) { sc->nread--; return; }
 	if (sc->npb >= sc->pbcap) {
@@ -205,8 +176,7 @@ static void unrd(struct sc *sc, int c)
 		cap = sc->pbcap * 2;
 		q = sc->pb == sc->pbinit ? malloc((size_t)cap * sizeof *q)
 		                         : realloc(sc->pb, (size_t)cap * sizeof *q);
-		/* Nowhere to put it and nowhere to report it: the character
-		 * is lost, exactly as an over-read look-ahead always was. */
+		/* Nowhere to put it or report it: the character is lost. */
 		if (!q) return;
 		if (sc->pb == sc->pbinit) memcpy(q, sc->pbinit, (size_t)sc->npb * sizeof *q);
 		sc->pb = q;
@@ -220,17 +190,15 @@ static void unrd(struct sc *sc, int c)
 
 /* Hand back whatever look-ahead the stream's own pushback could not
  * take, and drop the stack.  A stream that cannot seek cannot be given
- * it back at all, which is the pre-existing cost of over-reading. */
+ * it back at all -- the pre-existing cost of over-reading. */
 static void sc_done(struct sc *sc) __attribute__((nonnull(1)));
 static void sc_done(struct sc *sc)
 {
 	if (sc->npb) {
-		/* A seek that cannot be done is not this call's failure to
-		 * report, so it does not get to leave errno behind either.
-		 * The offset is the BYTES the pushed-back units came from, not
-		 * their count: in byte mode every nb is 1 and this is the
-		 * previous expression exactly, and in wide mode it is the only
-		 * correct one. */
+		/* A failed seek is not this call's failure to report, so it
+		 * does not get to leave errno behind either.  The offset is
+		 * BYTES, not unit count, which matters once wide mode is in
+		 * play. */
 		int e = errno, i;
 		long bytes = 0;
 		for (i = 0; i < sc->npb; i++) bytes += sc->pb[i].nb;
@@ -250,9 +218,8 @@ static int skipspace(struct sc *sc)
 	return c;
 }
 
-/* b is required by every nbuf/abuf function below the same way sc is
- * above: unconditional first-statement dereference, always a real
- * local's address at every call site. */
+/* b is nonnull the same way sc is above: unconditional first-statement
+ * dereference, always a real local's address. */
 static void nb_init(struct nbuf *b) __attribute__((nonnull(1)));
 static void nb_init(struct nbuf *b)
 {
@@ -312,11 +279,9 @@ static void ab_free(struct abuf *b)
 }
 
 /* Room for `need` elements.  Doubling rather than growing by the field
- * width, which may be absent entirely and, when present, may be far
- * larger than the input: %1000000ms on a three-byte field should cost
- * three bytes.  0 is out of memory, which the caller turns into
- * [ENOMEM] -- including the two overflow guards, since a size this
- * arithmetic cannot even express is a size no allocator can serve. */
+ * width, which may be far larger than the input (%1000000ms on a
+ * three-byte field should cost three bytes).  0 is out of memory,
+ * which the caller turns into [ENOMEM]. */
 static int ab_room(struct abuf *b, int need) __attribute__((nonnull(1)));
 static int ab_room(struct abuf *b, int need)
 {
@@ -337,22 +302,15 @@ static int ab_room(struct abuf *b, int need)
 	return 1;
 }
 
-/* Hand the finished buffer to the caller.  `n` is the element count the
- * buffer has to keep -- including the terminator for %s and %[, and
- * without one for %c, which fscanf.html does not terminate -- so the
- * caller gets a block the size of what it holds rather than of whatever
- * the doubling above last landed on.  A shrink that fails is not a
- * failure of the conversion: the oversized block is just as usable, and
- * realloc leaves it untouched when it cannot satisfy the request.
+/* Hand the finished buffer to the caller.  `n` is the element count to
+ * keep -- including the terminator for %s/%[, none for %c, which
+ * fscanf.html does not terminate -- shrinking the block from whatever
+ * the doubling above landed on.  A failed shrink is not a failure: the
+ * oversized block is just as usable, and realloc leaves it untouched.
  *
  * The store is through void ** for the same reason the conversions
- * fetch their argument as a bare void *: it is char ** without the l
- * qualifier and wchar_t ** with it, and every object pointer has one
- * representation on this target. */
-/* arg is required too: `*(void **)arg = b->p;` is unconditional, the
- * caller's own now-validated destination pointer (never null -- every
- * conversion that reaches here has already checked its own argument
- * before calling ab_give()). */
+ * fetch their argument as a bare void *: char ** without the l
+ * qualifier, wchar_t ** with it, same representation either way. */
 static void ab_give(struct abuf *b, void *arg, int n) __attribute__((nonnull(1, 2)));
 static void ab_give(struct abuf *b, void *arg, int n)
 {
@@ -363,9 +321,8 @@ static void ab_give(struct abuf *b, void *arg, int n)
 	b->cap = 0;
 }
 
-/* fl is required by both functions below the same way: unconditional
- * first-statement dereference, always the address of a real local
- * `struct fld fl;` at every call site in vfscanf_st(). */
+/* fl is nonnull: unconditional first-statement dereference, always the
+ * address of a real local `struct fld fl;` in vfscanf_st(). */
 static int fld_get(struct fld *fl) __attribute__((nonnull(1)));
 static int fld_get(struct fld *fl)
 {
@@ -393,12 +350,10 @@ static int hexval(int c)
 }
 
 /* Match one of the spellings of a named value, case-insensitively:
- * least characters make the short spelling ("inf"), the whole word the
- * long one ("infinity").  Every character that keeps the item an
- * initial subsequence of one of them is consumed, so a spelling that
- * stops in between ("infi") is consumed in full and is a matching
- * failure.  1 if a spelling matched, 0 if not, -1 out of memory.  c is
- * the first character, already read. */
+ * `least` characters make the short spelling ("inf"), the whole word
+ * the long one ("infinity").  A spelling that stops in between ("infi")
+ * is still consumed in full and is a matching failure.  1 if matched, 0
+ * if not, -1 out of memory.  c is the first character, already read. */
 static int scanword(struct fld *fl, struct nbuf *b, const char *word, int least, int c) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int i = 0, ok = 0;
@@ -437,14 +392,9 @@ static int scannan(struct fld *fl, struct nbuf *b, int c)
 
 /* The digits of a mantissa, decimal or hexadecimal, with at most one
  * radix point.  Leading zeros are consumed but not staged: they say
- * nothing about the value, and a field of a hundred of them should not
- * cost a hundred bytes.  Returns the terminating character in *cp, 0 if
- * there was no digit at all, -1 out of memory. */
-/* cp is required (`int c = *cp;`, unconditional first statement); fl
- * and b are only actually touched once the loop runs past its first
- * `break` (a real, content-driven escape on what *cp holds, not a
- * documented "may be null" convention on either), so they are left to
- * a future pass rather than guessed at here. */
+ * nothing about the value, and a hundred of them should not cost a
+ * hundred bytes.  Returns the terminating character in *cp, 0 if there
+ * was no digit at all, -1 out of memory. */
 static int scandigits(struct fld *fl, struct nbuf *b, int base, int *cp) __attribute__((nonnull(4)));
 static int scandigits(struct fld *fl, struct nbuf *b, int base, int *cp)
 {
@@ -471,16 +421,10 @@ static int scandigits(struct fld *fl, struct nbuf *b, int base, int *cp)
 }
 
 /* An exponent, if one is there in full: "e" or "p", an optional sign,
- * and at least one decimal digit.  A half-written one ("1.5e+") is
- * still an initial subsequence of a matching sequence, so it stays
- * consumed and makes the item as a whole a matching failure.  1 for a
+ * and at least one decimal digit.  A half-written one ("1.5e+") stays
+ * consumed and makes the whole item a matching failure.  1 for a
  * complete exponent, 0 for a half-written one, -1 out of memory; the
  * terminating character comes back in *cp. */
-/* cp is required (`int c = *cp;`, unconditional first statement) and
- * b is required too: `if (!nb_put(b, c)) return -1;` right after is
- * unconditional, unlike scandigits() above where the equivalent call
- * is behind a real content-driven branch. fl is left unmarked -- it is
- * only touched once past that first nb_put(), inside fld_get(). */
 static int scanexp(struct fld *fl, struct nbuf *b, int *cp) __attribute__((nonnull(2, 3)));
 static int scanexp(struct fld *fl, struct nbuf *b, int *cp)
 {
@@ -500,14 +444,11 @@ static int scanexp(struct fld *fl, struct nbuf *b, int *cp)
 	return ok;
 }
 
-/* One floating-point field.  Consumes the whole input item -- the
- * longest prefix of the input that is an initial subsequence of a
- * strtod subject sequence, capped by the field width -- and returns 1
- * if that item is itself a subject sequence, with its text staged in b
- * ready to convert; 0 if it is not, which is a matching failure with
- * the item's bytes spent; -1 out of memory.  The one character handed
- * back is the offending input that ended the item, which POSIX leaves
- * unread. */
+/* One floating-point field.  Consumes the whole input item (capped by
+ * the field width) and returns 1 if it is a strtod subject sequence,
+ * staged in b ready to convert; 0 for a matching failure with the
+ * item's bytes already spent; -1 out of memory.  The one character
+ * handed back is the offending input that ended the item. */
 static int scanfloat(struct fld *fl, struct nbuf *b)
 {
 	int c, ok, any;
@@ -523,10 +464,9 @@ static int scanfloat(struct fld *fl, struct nbuf *b)
 	if (c == '0') {
 		int c2 = fld_get(fl);
 		if (c2 == 'x' || c2 == 'X') {
-			/* Past the prefix there must be a hex digit.  A "0x"
-			 * with none behind it is still an initial subsequence
-			 * of "0x1", so it is the item and a matching failure;
-			 * it is not a "0" with the "x" handed back. */
+			/* A "0x" with no hex digit behind it is still an initial
+			 * subsequence of "0x1" -- the whole "0x" is the item and a
+			 * matching failure, not a "0" with the "x" handed back. */
 			if (!nb_put(b, c)) return -1;
 			if (!nb_put(b, c2)) return -1;
 			c = fld_get(fl);
@@ -545,9 +485,8 @@ static int scanfloat(struct fld *fl, struct nbuf *b)
 
 	any = scandigits(fl, b, 10, &c);
 	if (any < 0) return -1;
-	/* Not even a digit: a lone sign or radix point is an initial
-	 * subsequence of a matching sequence and stays consumed, and if
-	 * nothing at all was staged then nothing was consumed either. */
+	/* A lone sign or radix point stays consumed; if nothing at all was
+	 * staged, nothing was consumed either. */
 	if (!any) { fld_unget(fl, c); return 0; }
 	ok = 1;
 	if (c == 'e' || c == 'E') {
@@ -572,40 +511,21 @@ static void scandrain(struct fld *fl)
 	fld_unget(fl, c);
 }
 
-/* One input byte through mbrtowc(), for the l-modified %s, %c and %[.
+/* One input byte through mbrtowc(), for the l-modified %s, %c and %[
+ * (fscanf.html: input "begins in the initial shift state" and is
+ * converted "as if by a call to the mbrtowc() function").  Fed one byte
+ * at a time, since a partial sequence lives in the mbstate_t between
+ * calls (mbrtowc's (size_t)-2).
  *
- * fscanf.html says the same sentence under all three: "If an l (ell)
- * qualifier is present, the input is a sequence of characters that
- * begins in the initial shift state.  Each character shall be converted
- * to a wide character as if by a call to the mbrtowc() function."
+ * SURROGATE PAIRS ARE THE SUBTLE PART.  wchar_t is 16-bit UTF-16 here,
+ * so a character above the BMP is TWO wchar_t from ONE multibyte
+ * character: src/stdlib/mbrtowc.c returns the high surrogate and holds
+ * the low one in state, delivered by a later zero-length call as
+ * (size_t)-3.  A loop assuming one wide character per call silently
+ * drops it; the n == 0 call here drains it (mbrtowc checks pending
+ * state before n, which is what makes n == 0 work).
  *
- * Fed one byte at a time because that is how this scanner reads: a
- * partial sequence lives in the mbstate_t between calls, which is
- * exactly what mbrtowc's (size_t)-2 return is for.
- *
- * SURROGATE PAIRS ARE THE SUBTLE PART.  wchar_t is a 16-bit UTF-16 code
- * unit on this target, so a character above the BMP is TWO wchar_t from
- * ONE multibyte character: src/stdlib/mbrtowc.c hands back the high
- * surrogate and keeps the low one in the state, to be returned by a
- * later call that consumes nothing, with (size_t)-3.  A loop that
- * assumes one wide character per mbrtowc() call silently drops the low
- * surrogate.  It is drained here with n == 0, which cannot consume input
- * and which returns -2 harmlessly when nothing is pending -- note
- * mbrtowc checks its pending-surrogate state BEFORE it checks n, which
- * is what makes the zero-length call work.
- *
- * Returns 0, or -1 for an encoding error ([EILSEQ]).
- *
- * nn is required: `(*nn)++;` runs unconditionally on every path through
- * this function (the initial store and the drain loop below both
- * increment it whether or not `assign` is set), the same "counts
- * regardless of whether anything is actually written" shape store_unit()
- * above documents for its own nn. ws is deliberately NOT required --
- * every store through it (`ws[*nn] = wc;`, both places) is behind `if
- * (assign)`, store_unit()'s own '*' assignment-suppression convention,
- * which store_unit() already established is a real, POSIX-documented
- * calling convention here, not an omitted check; st is only reached via
- * mbrtowc(), a different function's own proven obligation. */
+ * Returns 0, or -1 for an encoding error ([EILSEQ]). */
 static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign) __attribute__((nonnull(3)));
 static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
 {
@@ -617,8 +537,8 @@ static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
 	if (r == (size_t)-2) return 0;          /* incomplete; more bytes needed */
 	if (assign) ws[*nn] = wc;
 	(*nn)++;
-	/* mbrtowc can hold at most one queued low surrogate.  One check
-	 * drains it and the second observes the now-empty state. */
+	/* mbrtowc holds at most one queued low surrogate: one check drains
+	 * it, the second observes the now-empty state. */
 	for (unsigned checks_left = 2; checks_left > 0; checks_left--) {
 		if (mbrtowc(&wc, &ch, 0, st) != (size_t)-3) break;
 		if (assign) ws[*nn] = wc;
@@ -630,88 +550,51 @@ static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
 /* ------------------------------------------------------------------
  * FORMAT CURSOR
  *
- * The directive scanner below reads its format through gf() and steps
- * by `st` bytes rather than dereferencing a char*, so that one scanner
- * serves both fscanf() (st == 1, a byte format) and, once the wide
- * entry points exist, fwscanf() (st == sizeof(wchar_t)).  Every
- * character a conversion specification can contain is ASCII, and the
- * <ctype.h> functions used here are range tests that are false above
- * 0x7f (src/ctype/isspace.c and friends), so a wide format unit of
- * 0x1234 behaves exactly as a non-directive byte does -- no
- * wide-specific classification is needed or wanted.
+ * gf() reads through the cursor and steps by `st` bytes so one scanner
+ * serves both fscanf() (byte format) and fwscanf() (wide format).
+ * Every character a specification can contain is ASCII, and the
+ * <ctype.h> functions here are range tests false above 0x7f
+ * (src/ctype/isspace.c), so a wide format unit needs no special
+ * classification.
  *
- * The cursor was renamed from `p` to `fp` in the same change, and
- * deliberately: renaming it makes any site that still dereferences the
- * old pointer directly fail to COMPILE rather than silently read one
- * byte of a wide format unit.  A stride refactor whose misses are
- * invisible at st == 1 is exactly the kind that ships a latent bug.
+ * Named `fp`, not `p`: a stale dereference of the old name is then a
+ * compile error instead of a silent one-byte misread of a wide unit.
  *
- * `st` is a size_t, not an int, for the same reason src/stdlib/strtod.c
- * gives at its own cursor: it is a byte stride and every use of it is
- * pointer arithmetic.  As an int, the %[ range scanner's `fp += 2 * st`
- * computed the step in int and widened the product to ptrdiff_t
- * afterwards (clang-tidy
- * bugprone-implicit-widening-of-multiplication-result, on 64-bit
- * targets only, where ptrdiff_t is wider than int).  Nothing truncated
- * -- st is 1 or sizeof(wchar_t) -- but the type, not a cast at the one
- * site the analyzer happened to reach, is what makes the arithmetic
- * right.  gf() being a macro means the declared type of `st` is the
- * only thing that decides that width.
+ * `st` is a size_t, not an int (same reason as src/stdlib/strtod.c's
+ * own cursor): as an int, the %[ range scanner's `fp += 2 * st` widened
+ * to ptrdiff_t only after computing the step in int (clang-tidy
+ * bugprone-implicit-widening-of-multiplication-result on 64-bit
+ * targets).  Nothing truncated, but the declared type of `st` is what
+ * makes the arithmetic right rather than a cast at one site.
  * ------------------------------------------------------------------ */
-/* A MACRO, not a static function, and measured rather than assumed.
- * The shipped compiler for this target is tcc, which does no inlining
- * at all, so a fetch helper written as a function is a real call per
- * format character.  Benchmarked over 300000 iterations of eight
- * sscanf() calls: 0.79-0.82s with the pre-refactor scanner, 0.92-0.99s
- * with a function-call fetch -- about 17% -- and back to the
- * pre-refactor time with the macro below.  Nothing about the
- * abstraction changes; only whether the compiler is given the chance to
- * fold `st` away at each site. */
+/* A macro, not a function: tcc does no inlining, and a function-call
+ * fetch measured 17% slower (300000 iterations of eight sscanf()
+ * calls). */
 #define gf(q, s) ((s) == 1 ? (unsigned)(unsigned char)*(q) \
 	                           : (unsigned)*(const wchar_t *)(q))
-/* KNOWN RESIDUAL COST, measured, so nobody re-derives it: the `s == 1`
- * test above is a real branch per format character, and it is worth
- * about 3.8% of this scanner's time (0.790s -> 0.820s over 300000
- * iterations of eight sscanf() calls, uninstrumented, x86_64-win32-tcc
- * under Wine, variants interleaved and minima taken).  Writing the
- * fetch as a static function instead cost 17% -- tcc does no inlining
- * -- which is why it is a macro.  Removing the last 3.8% would mean
- * compiling this scanner twice from a template, one instantiation per
- * stride; that is a different design, it was considered, and it was
- * declined as not worth the structure. */
+/* MEASURED: the `s == 1` branch above costs ~3.8% of scanner time.
+ * Removing it would mean compiling this scanner twice from a template,
+ * one instantiation per stride -- considered and declined as not worth
+ * the structure. */
 
 /* One input unit into the caller's array, for %s, %c and %[.
  *
- * Four combinations, because BOTH sides vary: the input is bytes for
- * fscanf() and wide characters for fwscanf(), and the destination is
- * char for a plain conversion and wchar_t for an l-qualified one.  Two
- * of the four are conversions and two are copies:
+ * Four combinations, since BOTH sides vary -- input bytes or wide
+ * characters, destination char or wchar_t (l-qualified):
  *
  *   bytes  -> char     copy      (fscanf  "%s")
  *   bytes  -> wchar_t  mbrtowc   (fscanf  "%ls", wide_put above)
  *   wide   -> wchar_t  copy      (fwscanf "%ls")
  *   wide   -> char     wcrtomb   (fwscanf "%s")
  *
- * fwscanf.html says of the plain forms that the input wide characters
- * "shall be converted as if by repeated calls to the wcrtomb()
- * function", which is the fourth row, and the mirror image of the
- * sentence fscanf.html has for the l-qualified ones.
- *
- * *nn counts ELEMENTS STORED, which is not the number of units read
- * once either conversion is in play: one wide character can be four
- * bytes, and one multibyte character can be two wchar_t (a surrogate
- * pair on this target).  The field width counts units READ, and the
- * caller keeps that separately.
+ * *nn counts ELEMENTS STORED, not units read: one wide character can be
+ * four bytes, one multibyte character two wchar_t (a surrogate pair
+ * here).  The field width counts units read, kept separately.
  *
  * Returns 0, or -1 for an encoding error ([EILSEQ]). */
-/* nn is dereferenced unconditionally on every path (`(*nn)++;` /
- * `*nn += (int)r;`, one or the other in every branch). dst is
- * deliberately NOT required: every store through it is behind `if
- * (assign)`, and assign == 0 is a real, POSIX-documented calling
- * convention (fscanf.html's own '*' assignment-suppression conversion
- * -- "no corresponding argument shall be supplied"), not an omitted
- * check; mbs is likewise only reached on the branches that actually
- * convert, not on every path. */
+/* dst is deliberately not marked nonnull: every store through it is
+ * behind `if (assign)`, and assign == 0 is fscanf.html's own '*'
+ * assignment-suppression convention, not an omitted check. */
 static int store_unit(int wide_in, int c, void *dst, int *nn, mbstate_t *mbs,
                       int assign, int wide_out) __attribute__((nonnull(4)));
 static int store_unit(int wide_in, int c, void *dst, int *nn, mbstate_t *mbs, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
@@ -732,9 +615,8 @@ static int store_unit(int wide_in, int c, void *dst, int *nn, mbstate_t *mbs, //
 		char buf[MB_LEN_MAX];
 		size_t r = wcrtomb(buf, (wchar_t)c, mbs);
 		if (r == (size_t)-1) return -1;
-		/* r == 0 is a high surrogate held for its partner: nothing to
-		 * store yet, and mbsinit() will report the debt if the field
-		 * ends here. */
+		/* r == 0: a high surrogate held for its partner; mbsinit()
+		 * reports the debt if the field ends here. */
 		if (assign && r)
 			for (size_t i = 0; i < r; i++) ((char *)dst)[*nn + i] = buf[i];
 		*nn += (int)r;
@@ -743,21 +625,16 @@ static int store_unit(int wide_in, int c, void *dst, int *nn, mbstate_t *mbs, //
 }
 
 /* How many elements an allocating destination must have room for before
- * the next store_unit(), given that nn are already in it.
- *
- * One INPUT unit is not one stored element: the wide -> char row of
- * store_unit() emits up to MB_LEN_MAX bytes from a single wide
- * character, and the bytes -> wchar_t row emits two wchar_t when a
- * multibyte character above the BMP decodes to a surrogate pair.  So
- * the headroom is a whole unit's worth, not one element, plus the one
- * %s and %[ still owe their terminator. */
+ * the next store_unit(), given that nn are already in it.  One INPUT
+ * unit is not one stored element -- wide -> char emits up to
+ * MB_LEN_MAX bytes, bytes -> wchar_t up to two wchar_t (a surrogate
+ * pair) -- so the headroom is a whole unit's worth plus the terminator
+ * %s and %[ still owe. */
 #define ALLOC_HEAD(nn) ((nn) + MB_LEN_MAX + 1)
 
 /* The null that terminates %s and %[ (never %c), in the width the
- * destination actually has. */
-/* Unlike store_unit() above, dst here is dereferenced unconditionally
- * -- both branches of `if (wide_out) ... else ...` write through it,
- * with no `assign`-style guard on either. */
+ * destination actually has.  Unlike store_unit(), dst here is
+ * dereferenced unconditionally -- both branches write through it. */
 static void store_term(void *dst, int nn, int wide_out) __attribute__((nonnull(1)));
 static void store_term(void *dst, int nn, int wide_out) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
@@ -768,26 +645,17 @@ static void store_term(void *dst, int nn, int wide_out) // NOLINT(bugprone-easil
 /* Membership for a %[ scanset member the 256-entry table cannot hold.
  * Only reachable from a wide format, where a scanset may name
  * characters above 0xff; the table still answers everything below.
- *
- * The range rule is src/stdio/scanf.c's own, mirrored deliberately
- * rather than re-derived: a '-' that is neither the first character of
- * the set nor immediately before the closing ']' makes a range of the
+ * The range rule mirrors this file's own: a '-' that is neither first
+ * nor immediately before the closing ']' makes a range of the
  * characters either side of it.
  *
- * Takes the scanset's length rather than an end pointer, computed once
- * by the caller from `setend - setstart` -- both, within vfscanf_st()
- * (which vswscanf_impl() reaches this code through too, via its own
- * `st` step size), positions of the same format-string cursor `fp`,
- * so the subtraction is an ordinary, locally traceable derivation --
- * so that this function's own body does not need tools/lint.sh's
- * provenance stage to take on faith that a `b`/`e` pointer pair
- * arriving as two independent parameters share an object, an
- * invariant only true because of how the one caller happens to
- * construct them. */
-/* b is required: `e = b + blen;` needs a real pointer value even when
- * blen == 0 (the same ISO 7.24.1p2 "still valid at n == 0" convention
- * as the mem-family, since q == b is what the loop's own gf(q, st)
- * would dereference first were blen nonzero). */
+ * Takes the scanset's length rather than an end pointer -- computed
+ * once by the caller as `setend - setstart`, positions of the same
+ * cursor `fp` -- so this function's body is a locally traceable
+ * derivation rather than trusting that a `b`/`e` pair shares an
+ * object. */
+/* b is nonnull: `e = b + blen;` needs a real pointer value even at
+ * blen == 0 (ISO 7.24.1p2's "still valid at n == 0" convention). */
 static int wset_has(const char *b, size_t blen, size_t st, unsigned c) __attribute__((nonnull(1)));
 static int wset_has(const char *b, size_t blen, size_t st, unsigned c) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
@@ -805,11 +673,9 @@ static int wset_has(const char *b, size_t blen, size_t st, unsigned c) // NOLINT
 	return 0;
 }
 
-/* fmt is dereferenced unconditionally by the main loop's own gf(fp,
- * st). f is left unmarked here: this function only ever stores it
- * into sc.f via sc_init() without dereferencing it directly itself --
- * every real dereference of it happens inside rd()/unrd(), a
- * different function's own proven obligation. */
+/* fmt is nonnull (dereferenced by the main loop's own gf()); f is left
+ * unmarked -- this function only stores it via sc_init(), never
+ * dereferences it directly. */
 static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st) __attribute__((nonnull(2)));
 static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 {
@@ -849,16 +715,13 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 				else width = width * 10 + digit;
 				fp += st;
 			}
-			/* fscanf.html puts the assignment-allocation character
-			 * 'm' between the field width and the length modifier,
-			 * which is where this loop picks it up; taking it in the
-			 * same loop as the modifiers also accepts "%lms" for the
-			 * "%mls" the page spells out.  It means something only to
-			 * the s, c and [ conversions -- the page says the
-			 * application "shall ensure" it is used with no other and
-			 * not together with '*' -- and the other conversions
-			 * ignore it rather than inventing a diagnostic for
-			 * something the page leaves undefined. */
+			/* 'm' (fscanf.html's assignment-allocation character) sits
+			 * between the field width and length modifier; scanning it
+			 * in the same loop as the modifiers also accepts "%lms" for
+			 * the "%mls" the page spells out.  It means something only
+			 * to s/c/[; other conversions ignore it rather than
+			 * inventing a diagnostic for what the page leaves
+			 * undefined. */
 			for (;;) {
 				if (gf(fp, st) == 'm') { alloc = 1; fp += st; }
 				else if (gf(fp, st) == 'h') { lm = lm == LM_h ? LM_hh : LM_h; fp += st; }
@@ -892,11 +755,9 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 					int c2 = fld_get(&fl);
 					if (c2 == 'x' || c2 == 'X') {
 						int c3 = fld_get(&fl);
-						/* "0x" with no hex digit behind it is an
-						 * initial subsequence of "0x1" and nothing
-						 * shorter, so the item is the whole "0x" and
-						 * it is a matching failure -- not a "0" with
-						 * the "x" handed back. */
+						/* "0x" with no hex digit behind it is the
+						 * whole item and a matching failure, not a
+						 * "0" with the "x" handed back. */
 						if (hexval(c3) < 0) { fld_unget(&fl, c3); goto done; }
 						base = 16;
 						c = c3;
@@ -928,11 +789,9 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 					uv = issigned ? (neg ? (unsigned long long)LLONG_MIN
 					                     : (unsigned long long)LLONG_MAX)
 					              : ULLONG_MAX;
-				/* The negation is done on the unsigned value, never
-				 * on a signed one: -(long long)uv is undefined for
-				 * LLONG_MIN, whose magnitude a long long cannot hold,
-				 * while unsigned negation wraps modulo 2**64 (C99
-				 * 6.2.5p9) to exactly the bits wanted. */
+				/* Negation is on the unsigned value: -(long long)uv is
+				 * undefined for LLONG_MIN, while unsigned negation
+				 * wraps modulo 2**64 (C99 6.2.5p9) as wanted. */
 				else if (neg) uv = __neg_mag(uv);
 				if (assign) {
 					switch (lm) {
@@ -982,14 +841,11 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 				break;
 			}
 			case 's': {
-				/* One va_arg for both destination widths: char * without
-				 * the l qualifier and wchar_t * with it, both object
-				 * pointers of the same representation on this target.
-				 * With 'm' the argument is one indirection further out
-				 * -- char ** or wchar_t ** -- and names where to leave
-				 * the buffer this conversion allocates rather than the
-				 * array to write into, so `arg` and `dst` are two
-				 * different things from here on. */
+				/* One va_arg for both widths (char * / wchar_t *, same
+				 * representation here).  With 'm' the argument is one
+				 * indirection further out (char ** / wchar_t **),
+				 * naming where to leave the allocated buffer -- so
+				 * `arg` and `dst` differ from here on. */
 				void *arg = assign ? va_arg(ap, void *) : 0;
 				int wout = lm == LM_l;
 				int alc = alloc && assign;
@@ -1019,16 +875,12 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 				break;
 			}
 			case 'c': {
-				/* fscanf.html's c entry: "Matches a sequence of bytes of
-				 * the number specified by the field width (1 if no field
-				 * width is present)"; fwscanf.html's says wide characters
-				 * in the same place.  So the width counts INPUT UNITS in
-				 * both, and the l qualifier changes what is stored rather
-				 * than what the width counts.  (C99 is arguably read the
-				 * other way for %lc; POSIX is the spec this suite audits
-				 * against and it says bytes.)  No null is added, and an
-				 * 'm' buffer is therefore sized to exactly what was
-				 * stored, with no room for one. */
+				/* fscanf.html/fwscanf.html: the field width counts INPUT
+				 * UNITS (bytes or wide characters) in both, and the l
+				 * qualifier changes what is stored, not what the width
+				 * counts.  (C99 is arguably read the other way for %lc;
+				 * this suite audits against POSIX.)  No null is added,
+				 * so an 'm' buffer is sized to exactly what was stored. */
 				void *arg = assign ? va_arg(ap, void *) : 0;
 				int wout = lm == LM_l;
 				int alc = alloc && assign;
@@ -1056,12 +908,10 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 			}
 			case '[': {
 				unsigned char set[256] = {0};
-				/* One va_arg for both widths: the caller's pointer is
-				 * char * without the l qualifier and wchar_t * with it,
-				 * and both are object pointers of the same
-				 * representation on this target, so it is fetched once
-				 * and cast at the point of use -- and one further
-				 * indirection out again when 'm' is present. */
+				/* One va_arg for both widths (char * or wchar_t *, same
+				 * representation here), fetched once and cast at the
+				 * point of use, with a further indirection when 'm' is
+				 * present. */
 				void *arg = assign ? va_arg(ap, void *) : 0;
 				int wout = lm == LM_l;
 				int alc = alloc && assign;
@@ -1153,24 +1003,14 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 done:
 	if (sc.ilseq) ilseq = 1;
 	sc_done(&sc);
-	/* scanf.html ERRORS, shall fail: "[EILSEQ] Input byte sequence does
-	 * not form a valid character."  This is a READ error, not a matching
-	 * failure: RETURN VALUE says EOF "if an input failure occurs before
-	 * any conversion", and the stream's error indicator has to be set so
-	 * ferror() can tell it apart from end-of-file. */
+	/* [EILSEQ] is a READ error, not a matching failure: the stream's
+	 * error indicator must be set so ferror() can tell it apart from
+	 * plain end-of-file. */
 	if (ilseq) { f->err = 1; errno = EILSEQ; return EOF; }
-	/* fscanf.html ERRORS, shall fail: "[ENOMEM] Insufficient storage
-	 * space is available."  Two things allocate here: the 'm'
-	 * assignment-allocation character, which allocates on the caller's
-	 * behalf, and the numeric staging buffer, which allocates on this
-	 * function's own.  Either failing is the page's shall-fail, and
-	 * EOF-with-errno is the only channel RETURN VALUE gives an error.
-	 *
-	 * Unlike [EILSEQ] this does NOT set the stream's error indicator:
-	 * the stream is intact and nothing went wrong reading it, and
-	 * fgetc.html makes the indicator a statement about a *read* error.
-	 * A caller separates the two the way it always has -- ferror() for
-	 * an input failure, errno for this. */
+	/* [ENOMEM]: the 'm' assignment-allocation character or the numeric
+	 * staging buffer failed to allocate.  Unlike [EILSEQ], the stream's
+	 * error indicator is NOT set -- nothing went wrong reading it, only
+	 * with this function's own allocation. */
 	if (oom) { errno = ENOMEM; return EOF; }
 	return (nmatched == 0 && gotEOF) ? EOF : nmatched;
 }
@@ -1189,8 +1029,7 @@ int vscanf(const char *__restrict fmt, __isoc_va_list ap)
 	return __vfscanf(stdin, fmt, ap);
 }
 
-/* s is dereferenced unconditionally (`mf.mem_len = strlen(s);`); fmt
- * is forwarded into __vfscanf(), which itself requires it. */
+/* s is nonnull (`mf.mem_len = strlen(s);`). */
 static int vsscanf_impl(const char *s, const char *fmt, va_list ap) __attribute__((nonnull(1, 2)));
 static int vsscanf_impl(const char *s, const char *fmt, va_list ap) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
@@ -1205,9 +1044,8 @@ static int vsscanf_impl(const char *s, const char *fmt, va_list ap) // NOLINT(bu
 	mf.mem_len = strlen(s);
 	mf.mem_size = mf.mem_len;
 	r = __vfscanf(&mf, fmt, ap);
-	/* __fill gives even a memory-backed FILE a read buffer, and this
-	 * one is a local that never sees fclose, so releasing it is ours
-	 * to do -- otherwise every sscanf would leak a BUFSIZ block. */
+	/* __fill gives even a memory FILE a read buffer, and this local one
+	 * never sees fclose, so freeing it is ours to do. */
 	free(mf.buf);
 	return r;
 }
@@ -1243,11 +1081,8 @@ int sscanf(const char *__restrict s, const char *__restrict fmt, ...)
 }
 
 /* ------------------------------------------------------------------
- * The wide family: fwscanf.html.  "Equivalent to fscanf() ... except
- * that the argument format is a wide-character string [and] the input
- * ... is a sequence of wide characters."  Same scanner, stride
- * sizeof(wchar_t), and struct sc reading wide characters instead of
- * bytes.
+ * The wide family: fwscanf.html.  Same scanner, stride sizeof(wchar_t),
+ * struct sc reading wide characters instead of bytes.
  * ------------------------------------------------------------------ */
 
 int __vfwscanf(FILE *f, const wchar_t *fmt, va_list ap)
@@ -1255,17 +1090,12 @@ int __vfwscanf(FILE *f, const wchar_t *fmt, va_list ap)
 	return vfscanf_st(f, (const char *)fmt, ap, (int)sizeof(wchar_t));
 }
 
-/* swscanf() reads a wchar_t array, and reads it IN PLACE: the memory
- * FILE below points straight at the caller's string with the wmem flag
- * set, so src/stdio/wide.c's reader takes whole wchar_t out of it
- * rather than decoding bytes.  No copy and no allocation -- which
- * matters, because the alternative (converting the wide string to a
- * byte string first) needs a buffer whose size is the caller's input,
- * and the same objection that ruled it out for wcstod() applies here.
- * The cast away from const is safe for the same reason fmemopen()'s
- * read-only mode is: mf.writable is 0, so nothing can reach a write. */
-/* s is dereferenced unconditionally (`mf.mem_len = wcslen(s) * ...`);
- * fmt is forwarded into vfscanf_st(), which itself requires it. */
+/* swscanf() reads a wchar_t array IN PLACE: the memory FILE points
+ * straight at the caller's string with the wmem flag set, so
+ * src/stdio/wide.c's reader takes whole wchar_t out of it rather than
+ * decoding bytes -- no copy or allocation for a buffer sized by the
+ * caller's input.  The cast away from const is safe the same way
+ * fmemopen()'s read-only mode is: mf.writable is 0. */
 static int vswscanf_impl(const wchar_t *s, const wchar_t *fmt, va_list ap) __attribute__((nonnull(1, 2)));
 static int vswscanf_impl(const wchar_t *s, const wchar_t *fmt, va_list ap) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
