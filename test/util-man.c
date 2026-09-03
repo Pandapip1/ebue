@@ -574,6 +574,51 @@ static const char ADJUSTTEST_1[] =
 	"AdjustNXXX1 AdjustNXXX2 AdjustNXXX3 AdjustNXXX4 AdjustNXXX5 AdjustNXXX6 "
 	"AdjustNXXX7 AdjustNXXX8 AdjustNXXX9\n";
 
+/* ==== fixture page 1g: exercises Tier 7 hyphenation (.hy/.nh) -- see
+ * src/util/man.c's own "HYPHENATION" header comment. Four paragraphs, all
+ * at this file's documented 80-column default width (no $COLUMNS in this
+ * test's own environment) and MAN_BASE_INDENT of 7 (73 columns
+ * available), the same arithmetic ADJUSTTEST_1 above hand-verifies:
+ *
+ *  - P1 (.hy on): six 10-column filler words (60 cols + 5 mandatory
+ *    spaces = 65) leave only 8 columns before "understanding" (13
+ *    columns) -- it cannot fit whole (65+1+13 > 73), but man_hyph_
+ *    best_split() finds this file's own ".under3" prefix pattern's
+ *    break point (5 columns) fits the 6 columns left after reserving one
+ *    for the hyphen, so the line ends "...under-" and the very next line
+ *    starts with the remainder, "standing".
+ *  - P2 (.nh): the identical filler+word shape, hyphenation off --
+ *    "understanding" cannot split, so it is deferred whole to the next
+ *    line exactly as this file always did before this tier, proving
+ *    `.nh` actually suppresses the P1 behaviour rather than P1 being
+ *    coincidental.
+ *  - P3 (.hy on, but "understanding" is this paragraph's OWN LAST WORD):
+ *    proves this file's documented "never hyphenate a paragraph's last
+ *    word" rule -- despite `.hy` being on and the identical overflow
+ *    shape, the word is deferred whole, exactly like P2.
+ *  - P4 (.hy on, "understanding" placed where it comfortably fits):
+ *    proves hyphenation is only ever attempted when a word doesn't fit
+ *    -- the word must render intact, unsplit, on one line. */
+static const char HYPHTEST_1[] =
+	".TH HYPHTEST 1 \"2026\" \"ntlibc test\" \"ntlibc Test Suite\"\n"
+	".SH NAME\n"
+	"hyphtest \\- exercise hyphenation rendering\n"
+	".SH HYPHENATION\n"
+	".hy\n"
+	"P1FillerAA P1FillerBB P1FillerCC P1FillerDD P1FillerEE P1FillerFF "
+	"understanding continues afterward\n"
+	".PP\n"
+	".nh\n"
+	"P2FillerAA P2FillerBB P2FillerCC P2FillerDD P2FillerEE P2FillerFF "
+	"understanding continues afterward\n"
+	".PP\n"
+	".hy\n"
+	"P3FillerAA P3FillerBB P3FillerCC P3FillerDD P3FillerEE P3FillerFF "
+	"understanding\n"
+	".PP\n"
+	".hy\n"
+	"A short line with the word understanding placed early enough to fit.\n";
+
 /* ==== fixture page 2: a real, unmodified 210-line prefix of GNU grep's
  * own grep.1 (gzip -dc'd by hand from a real Linux system's
  * /nix/store copy of gnugrep-3.12) -- see this file's own header. */
@@ -1478,6 +1523,62 @@ static void test_adjustment(void)
 	}
 }
 
+static void test_hyphenation(void)
+{
+	const char *p1, *p1n, *p2, *p2n, *p3, *p3n, *p4;
+	char *argv[3];
+	argv[0] = (char *)"man"; argv[1] = (char *)"hyphtest"; argv[2] = 0;
+	CHECK(run(man_path, argv) == 0);
+	slurp_both();
+
+	p1 = find_line(plainbuf, "P1FillerFF");
+	CHECK(p1 != 0);
+	if (p1) {
+		p1n = p1 + line_len(p1) + 1;
+		/* `.hy`'s own real Knuth-Liang split: this file's own ".under3"
+		 * prefix pattern breaks "understanding" as "under-"/"standing"
+		 * -- see HYPHTEST_1's own comment for the column arithmetic
+		 * that forces this exact split point. */
+		CHECK(line_has_substr(p1, "under-"));
+		CHECK(!line_has_substr(p1, "understanding"));
+		CHECK(line_has_substr(p1n, "standing"));
+	}
+
+	p2 = find_line(plainbuf, "P2FillerFF");
+	CHECK(p2 != 0);
+	if (p2) {
+		p2n = p2 + line_len(p2) + 1;
+		/* `.nh`: the identical overflow shape as P1, but hyphenation
+		 * off -- the whole word is deferred to the next line, never
+		 * split, proving `.nh` actually suppresses P1's behaviour
+		 * rather than P1's split being some unrelated coincidence. */
+		CHECK(!line_has_substr(p2, "under-"));
+		CHECK(line_has_substr(p2n, "understanding"));
+	}
+
+	p3 = find_line(plainbuf, "P3FillerFF");
+	CHECK(p3 != 0);
+	if (p3) {
+		p3n = p3 + line_len(p3) + 1;
+		/* `.hy` is on and the overflow shape is identical to P1, but
+		 * "understanding" is this paragraph's own LAST word -- this
+		 * file's documented "never hyphenate a paragraph's last word"
+		 * rule means it is deferred whole, exactly like P2 above. */
+		CHECK(!line_has_substr(p3, "under-"));
+		CHECK(line_has_substr(p3n, "understanding"));
+	}
+
+	p4 = find_line(plainbuf, "with the word");
+	CHECK(p4 != 0);
+	if (p4) {
+		/* A word that already fits the line is never hyphenated, even
+		 * with `.hy` on -- hyphenation only ever answers "how do I
+		 * place a word that doesn't fit". */
+		CHECK(line_has_substr(p4, "understanding"));
+		CHECK(!line_has_substr(p4, "under-"));
+	}
+}
+
 static void test_section_operand_restricts_search(void)
 {
 	char *argv[4];
@@ -1696,6 +1797,11 @@ int main(int argc, char **argv)
 		write_file(adjpath, ADJUSTTEST_1);
 	}
 	{
+		char hyphpath[400];
+		snprintf(hyphpath, sizeof hyphpath, "%s/hyphtest.1", man1dir);
+		write_file(hyphpath, HYPHTEST_1);
+	}
+	{
 		char greppath[400];
 		snprintf(greppath, sizeof greppath, "%s/grep.1", man1dir);
 		write_grep1_excerpt(greppath);
@@ -1729,6 +1835,7 @@ int main(int argc, char **argv)
 	test_tables();
 	test_eqn();
 	test_adjustment();
+	test_hyphenation();
 	test_section_operand_restricts_search();
 	test_no_such_page();
 	test_apropos_dash_k();
