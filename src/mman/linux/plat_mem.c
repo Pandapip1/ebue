@@ -28,23 +28,57 @@
 #include <errno.h>
 #include "plat_mem.h"
 
-/* aarch64 Linux syscall numbers, confirmed against this host's own
- * <sys/syscall.h> rather than assumed; this file's -nostdinc build
- * cannot include that header itself, since it would pull in glibc's
- * conflicting type system alongside ntlibc's own. */
+/* Linux syscall numbers -- aarch64 confirmed against this host's own
+ * <sys/syscall.h> rather than assumed; x86_64/i386 confirmed against
+ * this host's own /nix/store linux-headers asm/unistd_64.h /
+ * asm/unistd_32.h. This file's -nostdinc build cannot include the
+ * host's own <sys/syscall.h> itself, since it would pull in glibc's
+ * conflicting type system alongside ntlibc's own.
+ *
+ * i386 uses SYS_mmap2 (192), not the legacy SYS_mmap (90): that old
+ * number is not a normal register-passing syscall at all -- it takes
+ * ONE pointer argument to a struct {addr,len,prot,flags,fd,offset}
+ * packed on the stack, incompatible with every other syscall's plain
+ * register-argument convention this file (and every other raw_syscall()
+ * in this tree) relies on. mmap2 is the real modern register-based
+ * i386 entry point every real libc (glibc, musl) actually uses, with
+ * one real ABI difference from mmap()/aarch64's SYS_mmap: its final
+ * argument is the offset in fixed 4096-byte units, not bytes --
+ * see mmap_off_arg() below, where that unit conversion happens. */
+#if defined(__aarch64__)
 #define SYS_mmap     222
 #define SYS_munmap   215
 #define SYS_mprotect 226
 #define SYS_msync    227
 #define SYS_mlock    228
 #define SYS_munlock  229
+#elif defined(__x86_64__)
+#define SYS_mmap     9
+#define SYS_munmap   11
+#define SYS_mprotect 10
+#define SYS_msync    26
+#define SYS_mlock    149
+#define SYS_munlock  150
+#elif defined(__i386__)
+#define SYS_mmap     192 /* really mmap2 -- see this block's own banner */
+#define SYS_munmap   91
+#define SYS_mprotect 125
+#define SYS_msync    144
+#define SYS_mlock    150
+#define SYS_munlock  151
+#else
+#error "plat_mem.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
-/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
- * the call path. NOT `extern long syscall(long, ...)`: that symbol
- * resolves to the HOST's real glibc at link time, which sets glibc's OWN
- * errno on failure rather than the raw kernel -errno this file's
- * translation requires. aarch64 calling convention: x8 = syscall number,
- * x0..x5 = up to 6 arguments, result (or -errno in [-4095,-1]) in x0. */
+/* A minimal 6-argument raw syscall: no host libc in the call path. NOT
+ * `extern long syscall(long, ...)`: that symbol resolves to the HOST's
+ * real glibc at link time, which sets glibc's OWN errno on failure
+ * rather than the raw kernel -errno this file's translation requires.
+ * Three per-arch bodies, same "own syscall table per file" discipline
+ * this tree already uses (see src/dirent/linux/plat_dirent.c's own
+ * raw_syscall()): aarch64's `svc #0`, x86_64's `syscall`, i386's
+ * register-starved `int $0x80`. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
@@ -60,6 +94,61 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 		: "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#else
+#error "plat_mem.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
+
+/* mmap2(2)'s own offset unit on i386 is a fixed 4096 bytes (documented
+ * in mmap2(2), NOT this build's/the target's actual page size --
+ * though the two coincide on every arch this tree targets anyway),
+ * matching src/mman/mman.c's own MMAP_PAGE=4096u front-door constant
+ * exactly: mman.c's mmap() already refuses any `off` that is not a
+ * multiple of MMAP_PAGE before __plat_mem_map_file() is ever called,
+ * so the shift below never silently drops low bits. aarch64/x86_64's
+ * plain mmap(2) instead wants a byte offset, unchanged. */
+#if defined(__i386__)
+static long mmap_off_arg(off_t off) { return (long)(off >> 12); }
+#else
+static long mmap_off_arg(off_t off) { return (long)off; }
+#endif
 
 /* A raw Linux syscall returns the result on success, or -errno (as an
  * unsigned value in [-4095, -1]) on failure -- the kernel's own ABI
@@ -79,6 +168,9 @@ int __plat_mem_reserve(void **base_inout, size_t len, int prot)
 	 * exactly (confirmed by reading include/sys/mman.h), so unlike
 	 * the NT backend's prot_to_page()/prot_to_view() this file needs no
 	 * translation table anywhere. */
+	/* Anonymous mapping: the offset argument is a fixed literal 0
+	 * either way, so it needs no mmap_off_arg() unit conversion --
+	 * 0 bytes and 0 pages are the same value. */
 	long ret = raw_syscall(SYS_mmap, (long)*base_inout, (long)len, (long)prot,
 	                       (long)(MAP_PRIVATE | MAP_ANONYMOUS), -1L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
@@ -144,7 +236,7 @@ int __plat_mem_map_file(__plat_handle_t fh, int prot, int flags, off_t off,
 	int fd = (int)((long)fh - 1);
 	long ret = raw_syscall(SYS_mmap, (long)*base_inout, (long)viewbytes, (long)prot,
 	                       (long)((flags & MAP_SHARED) ? MAP_SHARED : MAP_PRIVATE),
-	                       (long)fd, (long)off);
+	                       (long)fd, mmap_off_arg(off));
 	if (is_sys_error(ret)) {
 		/* mmap.html has no broader vocabulary for a failed file-backed
 		 * mapping than ENOMEM/ENOTSUP -- the same narrowing the NT
