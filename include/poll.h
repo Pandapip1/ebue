@@ -6,14 +6,9 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * poll(): https://pubs.opengroup.org/onlinepubs/9699919799/functions/
- * poll.html.  Implemented in src/select/poll.c, sharing its
- * per-descriptor readiness probe and wait-or-sleep primitive with
- * select()/pselect() (src/select/select.c has the full design
- * writeup: the wait-vs-poll split across this library's descriptor
- * shapes, the 20ms pipe-poll interval, and exact timeout semantics --
- * poll()'s millisecond timeout follows the same rules, just converted
- * to 100ns ticks instead of going through a struct timeval/timespec).
+ * poll(): implemented in src/select/poll.c, sharing its readiness probe
+ * and wait-or-sleep primitive with select()/pselect() (see
+ * src/select/select.c for the full design writeup).
  */
 #ifndef _POLL_H
 #define _POLL_H
