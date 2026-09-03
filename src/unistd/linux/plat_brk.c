@@ -101,15 +101,23 @@ int brk(void *addr)
 void *sbrk(intptr_t increment)
 {
 	char *oldbrk;
+	uintptr_t base;
 	init_brk();
 	if (increment == 0) return cur_brk;
 	oldbrk = cur_brk;
-	/* Overflow check on the pointer arithmetic itself, the same
-	 * direction-aware test glibc's own sbrk() uses. */
+	/* Same direction-aware overflow check glibc's own sbrk() uses, but
+	 * done in uintptr_t rather than on the pointers directly: comparing
+	 * pointers formed by an out-of-bounds addition is undefined
+	 * behaviour (C99 6.5.6p8), and an optimizer is entitled to assume
+	 * that overflow never happens and delete the check. Casting a
+	 * signed increment to uintptr_t wraps modulo 2^N (C99 6.3.1.3p2),
+	 * matching the pointer arithmetic bit-for-bit while staying inside
+	 * defined behaviour throughout. */
+	base = (uintptr_t)oldbrk;
 	if (increment > 0) {
-		if (oldbrk + increment < oldbrk) { errno = ENOMEM; return (void *)-1; }
+		if (base + (uintptr_t)increment < base) { errno = ENOMEM; return (void *)-1; }
 	} else {
-		if (oldbrk + increment > oldbrk) { errno = ENOMEM; return (void *)-1; }
+		if (base + (uintptr_t)increment > base) { errno = ENOMEM; return (void *)-1; }
 	}
 	if (brk(oldbrk + increment) < 0) return (void *)-1;
 	return oldbrk;
