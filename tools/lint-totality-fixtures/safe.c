@@ -171,6 +171,48 @@ unsigned bounded_index_through_pure_predicate(const unsigned char *p,
 	return i;
 }
 
+struct cursor_accessor {
+	const char **v;
+	size_t n;
+	size_t i;
+};
+
+static const char *cursor_peek(struct cursor_accessor *c)
+{
+	return c->i < c->n ? c->v[c->i] : (void *)0;
+}
+
+/* cursor_peek()'s own bound comparison (c->i < c->n) is entirely inside
+ * its body; the caller only ever passes the cursor itself.  Proving this
+ * terminates requires inlining cursor_peek() into the condition. */
+size_t truthy_call_wrapped_bound(struct cursor_accessor *c)
+{
+	while (cursor_peek(c))
+		c->i++;
+	return c->i;
+}
+
+struct byte_scanner {
+	const unsigned char *src;
+	size_t len;
+	size_t pos;
+};
+
+static int scanner_peek(struct byte_scanner *s)
+{
+	return s->pos < s->len ? (unsigned char)s->src[s->pos] : -1;
+}
+
+/* Same call-wrapped bound as truthy_call_wrapped_bound(), but the
+ * accessor signals "nothing left" with an explicit sentinel comparison
+ * (`!= -1`) rather than relying on pointer truthiness. */
+size_t compared_call_wrapped_bound(struct byte_scanner *s)
+{
+	while (scanner_peek(s) != -1)
+		s->pos++;
+	return s->pos;
+}
+
 unsigned countdown(unsigned n)
 {
 	while (n)
