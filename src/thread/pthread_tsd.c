@@ -11,7 +11,6 @@
 #include <stdlib.h>
 #include "pthread_impl.h"
 #include "plat_thread.h"
-#include "plat_fd.h"
 
 struct key_slot {
 	unsigned generation;
@@ -194,14 +193,14 @@ int pthread_once(pthread_once_t *control, void (*initialize)(void))
 		__plat_fast_lock();
 		if (*control == 2) {
 			__plat_fast_unlock();
-			if (event) __plat_close(event);
+			if (event) __plat_sync_close(event);
 			return 0;
 		}
 		if (*control == PTHREAD_ONCE_INIT) {
 			struct once_cleanup reset = { control };
 			*control = 1;
 			__plat_fast_unlock();
-			if (event) { __plat_close(event); event = 0; }
+			if (event) { __plat_sync_close(event); event = 0; }
 			pthread_cleanup_push(reset_once, &reset);
 			initialize();
 			pthread_cleanup_pop(0);
@@ -221,7 +220,7 @@ int pthread_once(pthread_once_t *control, void (*initialize)(void))
 			__plat_fast_lock();
 			remove_once_waiter_locked(&waiter);
 			__plat_fast_unlock();
-			__plat_close(event);
+			__plat_sync_close(event);
 			event = 0;
 			continue;
 		}

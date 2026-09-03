@@ -243,6 +243,44 @@ int __plat_named_mutant_acquire(const char *name, __plat_handle_t *out)
     __attribute__((nonnull(2)));
 void __plat_named_mutant_release(__plat_handle_t lock);
 
+/* Releases a handle from ANY of __plat_event_create()/
+ * __plat_semaphore_create()/__plat_named_semaphore_create()/
+ * __plat_named_semaphore_open()/__plat_named_semaphore_open_or_create()/
+ * __plat_named_mutant_acquire() once no caller will wait on, post, or set
+ * it again -- deliberately its own call, NOT plat_fd.h's generic
+ * __plat_close(), for exactly the class of reason __plat_thread_close()
+ * above is its own call: on NT every one of those handles IS a real
+ * NtClose()-able HANDLE, so that backend's implementation just forwards to
+ * __plat_close(). On Linux, though, every one of those handles is a raw
+ * `struct ntlibc_linux_sync *` -- an mmap(2)'d pointer (src/thread/linux/
+ * plat_thread.c's own banner and src/internal/linux/sync.h), not a boxed
+ * fd+1 -- so __plat_close() there truncates that pointer to a 32-bit "fd"
+ * and issues close(2) on it: a real, confirmed bug, generalizing
+ * __plat_thread_close()'s own banner to a second boxed-handle domain.
+ * Typically this just clobbers the caller's own errno with a bogus EBADF
+ * (the truncated pointer essentially never names a real open descriptor,
+ * but close(2) still fails and still sets errno) immediately after an
+ * otherwise-successful mutex/cond/rwlock/once/semaphore/mqueue teardown;
+ * in principle, if the truncated value ever did collide with a real open
+ * fd, it would close that unrelated descriptor instead. Worse than the
+ * thread-handle case in a second way even when errno is the only casualty:
+ * close(2) never releases the underlying mmap()'d page either way, so
+ * every wrongly-__plat_close()'d sync handle also leaks a full page --
+ * unbounded under sustained load from call sites (pthread_cond.c's
+ * cond_wait(), pthread_rwlock.c's rwlock_acquire(), pthread_sync.c's
+ * pthread_once()/pthread_barrier_wait()) that allocate a fresh one per
+ * wait, not once per object lifetime.
+ *
+ * h is required: neither backend dereferences it (NT forwards it opaquely
+ * to __plat_close(); Linux's munmap(2) takes the raw pointer value
+ * itself), but every real call site across pthread_cond.c/pthread_mutex.c/
+ * pthread_rwlock.c/pthread_sync.c/pthread_tsd.c/semaphore.c/mqueue.c either
+ * guards with an explicit `if (handle) ...` (where a degraded creation
+ * failure can legitimately leave it zero) or calls unconditionally on a
+ * handle already known non-null by construction (an object whose creation
+ * already succeeded) -- never a null one through either way. */
+int __plat_sync_close(__plat_handle_t h) __attribute__((nonnull(1)));
+
 /* ---- thread lifecycle ----------------------------------------------------
  * __plat_thread_spawn()'s -2 is explained in this file's banner.
  * `stack_size` 0 requests the image's own default (NtCreateThreadEx's own

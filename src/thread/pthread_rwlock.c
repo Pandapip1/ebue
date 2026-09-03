@@ -13,7 +13,6 @@
 #include "pthread_impl.h"
 #include "ownership_stubs.h"
 #include "plat_thread.h"
-#include "plat_fd.h"
 
 #define RWLOCK_MAGIC ((ULONG_PTR)0x52574c4bu)
 #define RWLOCK_DEAD ((ULONG_PTR)0x52574c58u)
@@ -217,7 +216,7 @@ static void wait_cleanup(void *argument)
 	}
 	__plat_fast_unlock();
 	if (waiter->semaphore) {
-		__plat_close(waiter->semaphore);
+		__plat_sync_close(waiter->semaphore);
 		waiter->semaphore = 0;
 	}
 	free(waiter);

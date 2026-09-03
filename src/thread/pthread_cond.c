@@ -12,7 +12,6 @@
 #include <time.h>
 #include "pthread_impl.h"
 #include "plat_thread.h"
-#include "plat_fd.h"
 
 #define COND_MAGIC ((ULONG_PTR)0x434f4e44u)
 #define COND_DEAD ((ULONG_PTR)0x434f4e58u)
@@ -149,7 +148,7 @@ static void cond_wait_cleanup(void *argument)
 		unlink_waiter(cleanup->cond, cleanup->waiter);
 	__plat_fast_unlock();
 	if (cleanup->waiter->semaphore) {
-		__plat_close(cleanup->waiter->semaphore);
+		__plat_sync_close(cleanup->waiter->semaphore);
 		cleanup->waiter->semaphore = 0;
 	}
 	if (!cleanup->mutex_held) {
@@ -241,7 +240,7 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 		pthread_setcancelstate(old_state, 0);
 	}
 	pthread_cleanup_pop(0);
-	if (waiter->semaphore) __plat_close(waiter->semaphore);
+	if (waiter->semaphore) __plat_sync_close(waiter->semaphore);
 	free(waiter);
 	if (error) return error;
 	return lock_error ? lock_error : result;

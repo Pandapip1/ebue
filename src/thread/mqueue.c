@@ -33,7 +33,6 @@
 #include <errno.h>
 #include "libc.h"
 #include "plat_thread.h"
-#include "plat_fd.h"
 
 #define MQ_MAGIC 0x4e544d51u
 #define MQ_VERSION 2
@@ -345,7 +344,7 @@ mqd_t mq_open(const char *name, int oflag, ...)
 		goto fail_qlocked;
 	give(lock);
 	give(ns);
-	__plat_close(ns);
+	__plat_sync_close(ns);
 
 	d = &mqds[fd];
 	memset(d, 0, sizeof *d);
@@ -379,10 +378,10 @@ fail_locked_saved:
 	give(ns);
 fail:
 	if (!saved) saved = errno;
-	if (spaces) __plat_close(spaces);
-	if (items) __plat_close(items);
-	if (lock) __plat_close(lock);
-	if (ns) __plat_close(ns);
+	if (spaces) __plat_sync_close(spaces);
+	if (items) __plat_sync_close(items);
+	if (lock) __plat_sync_close(lock);
+	if (ns) __plat_sync_close(ns);
 	free(path);
 	errno = saved;
 	return (mqd_t)-1;
@@ -628,9 +627,9 @@ void __mq_fd_closed(int fd)
 		}
 		give(d->lock);
 	}
-	__plat_close(d->spaces);
-	__plat_close(d->items);
-	__plat_close(d->lock);
+	__plat_sync_close(d->spaces);
+	__plat_sync_close(d->items);
+	__plat_sync_close(d->lock);
 	memset(d, 0, sizeof *d);
 }
 
@@ -663,10 +662,10 @@ int mq_unlink(const char *name)
 		return -1;
 	}
 	if (create_sem(nsname, 1, 1, &ns) < 0 || take(ns) < 0) {
-		saved = errno; if (ns) __plat_close(ns); free(path); errno = saved; return -1;
+		saved = errno; if (ns) __plat_sync_close(ns); free(path); errno = saved; return -1;
 	}
 	result = unlink(path); saved = errno;
-	give(ns); __plat_close(ns); free(path); errno = saved;
+	give(ns); __plat_sync_close(ns); free(path); errno = saved;
 	return result;
 }
 
