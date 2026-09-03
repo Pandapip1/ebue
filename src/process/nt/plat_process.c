@@ -2,12 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * NT implementation of src/internal/plat_process.h -- see that header for
- * the contract each function makes.  Everything here was, until this
- * file existed, inline inside src/process/{find_program,wait,fork,
- * spawn}.c; nothing changed in substance, only location and the addition
- * of a POSIX-shaped return (0/-1 with errno set, or the tri-state
- * __plat_process_fork() needs) in place of a raw NTSTATUS or NT struct
- * for the front door to interpret.
+ * the contract each function makes.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -69,28 +64,16 @@ int __plat_is_program(const char *path)
 	return 0;
 }
 
-/* A fresh job for one newly-created (still-suspended) child, with that
- * child as its sole initial member -- src/internal/libc.h's struct
- * __child.job and __plat_process_times()'s own comment explain what
- * this buys src/process/wait.c's fill_child_rusage(): ordinary job-
- * membership inheritance (not nesting, not anything this function has
- * to arrange itself) means every process this child goes on to spawn,
- * at any depth, automatically becomes a member of the very same job,
- * because each of them is created by a process that is already a
- * member of it. So this one job, queried after the child has been
- * reaped, already accounts for the child's own CPU time AND everything
- * it spawned before exiting -- exactly the recursive half of
- * times.html's tms_cutime/tms_cstime clause.
+/* A fresh job for one newly-created (still-suspended) child. Job-membership
+ * inheritance means every process this child goes on to spawn, at any
+ * depth, automatically becomes a member of the same job, so querying it
+ * after the child is reaped already accounts for the child's own CPU time
+ * plus everything it spawned -- the recursive half of times.html's
+ * tms_cutime/tms_cstime clause.
  *
- * Best-effort, like src/misc/resource.c's own job for setrlimit():
- * __PLAT_HANDLE_NULL on any failure (job creation, or assignment
- * failing because `process` is somehow already a member of a job of
- * its own -- RTL_CLONE_PROCESS_FLAGS_CREATE_SUSPENDED/
- * RtlCreateUserProcess hand back a brand new process with no job of its
- * own, so this is not expected, but nothing here depends on it never
- * happening).  A NULL result degrades __plat_process_times() back to
- * the bare per-process ProcessTimes query this whole mechanism exists
- * to improve on, never a spawn/fork failure. */
+ * Best-effort: __PLAT_HANDLE_NULL on any failure degrades
+ * __plat_process_times() back to a bare per-process ProcessTimes query,
+ * never a spawn/fork failure. */
 static HANDLE create_child_job(HANDLE process)
 {
 	OBJECT_ATTRIBUTES oa;
@@ -396,17 +379,11 @@ static WCHAR *build_env_block(char *const envp[])
 
 /* Hands back a real, valid, inheritable, non-NULL, non-pseudo HANDLE to
  * stand in for a *closed* standard descriptor -- see src/process/spawn.c's
- * file banner for the measurements establishing why plain 0 and
- * (HANDLE)(LONG_PTR)-1 both fail to come up closed in the child on real
- * Windows, and why this value-blind duplicate of the current-process
- * pseudohandle works.  *out receives this process's own copy of the
- * duplicate, which the caller must NtClose() once RtlCreateUserProcess is
- * done with the parameter block.  On failure (this process is nearly out
- * of handles) *out is left 0 and NULL is returned; nothing about a spawn
- * that can't even duplicate one handle is likely to succeed regardless,
- * so this deliberately does not disturb errno the way __plat_dup() would
- * (see plat_fd.h) -- any errno it might set would only be clobbered by
- * whatever RtlCreateUserProcess itself decides next. */
+ * file banner for why plain 0 and (HANDLE)(LONG_PTR)-1 both fail to come
+ * up closed in the child on real Windows. *out receives this process's own
+ * copy, which the caller must NtClose() once RtlCreateUserProcess is done
+ * with the parameter block. Deliberately does not disturb errno on
+ * failure: it would only be clobbered by RtlCreateUserProcess next. */
 /* out required: `*out = ...;` is written unconditionally at the end,
  * on every call (this function has no early-return path). */
 static HANDLE closed_placeholder(HANDLE *out) __attribute__((nonnull(1)));
