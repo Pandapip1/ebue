@@ -3,37 +3,36 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # linux-build-dlfcn-cross.sh -- tools/linux-build-dlfcn.sh's own sibling
-# for x86_64 (this dev host's own CPU is aarch64 -- see tools/linux-
+# for x86_64/i386 (this dev host's own CPU is aarch64 -- see tools/linux-
 # build-crt-cross.sh's own banner for the cross-build/qemu-user
 # discipline this script follows identically, just proving src/dlfcn/
-# linux/plat_dlfcn.c's x86_64 relocation support instead of the CRT).
+# linux/plat_dlfcn.c's x86_64/i386 relocation support instead of the CRT).
 #
 # Unlike tools/linux-build-dlfcn.sh (which links the target test program
 # against the REAL `make lib/libc.a`), this script uses a CURATED file
 # list -- the same one tools/linux-build-crt-cross.sh already proved,
 # plus exactly what dlopen()/dlsym()/dlclose()/dlerror() themselves need
-# (malloc, the dlfcn front door, plat_dlfcn.c). `make lib/libc.a` for
-# x86_64/i386 is not yet possible AT ALL: it would compile all ~20
-# src/*/linux/plat_*.c backends, most of which still contain hand-
-# written AARCH64 inline assembly with no x86_64/i386 port. A
-# curated list is not a lesser proof of THIS file's own relocation
-# support -- exactly the same reasoning tools/linux-build-crt.sh's own
-# banner already gives for why ITS curated list was a real, first-time
-# proof of the CRT layer specifically.
+# (malloc, the dlfcn front door, plat_dlfcn.c). A curated list is not a
+# lesser proof of THIS file's own relocation support -- exactly the same
+# reasoning tools/linux-build-crt.sh's own banner already gives for why
+# ITS curated list was a real, first-time proof of the CRT layer
+# specifically.
 #
-# Usage: tools/linux-build-dlfcn-cross.sh <x86_64>
-# Env:   NTLIBC_CLANG (default clang), NTLIBC_QEMU_X86_64 (default qemu-x86_64)
+# Usage: tools/linux-build-dlfcn-cross.sh <x86_64|i386>
+# Env:   NTLIBC_CLANG (default clang), NTLIBC_QEMU_X86_64 (default
+#        qemu-x86_64), NTLIBC_QEMU_I386 (default qemu-i386)
 
 set -eu
 
-arch=${1:?"usage: $0 <x86_64>"}
+arch=${1:?"usage: $0 <x86_64|i386>"}
 srcdir=$(cd "$(dirname "$0")/.." && pwd)
 CLANG=${NTLIBC_CLANG:-clang}
 TAG="linux-build-dlfcn-cross($arch)"
 
 case "$arch" in
 x86_64) target=x86_64-linux-gnu; qemu=${NTLIBC_QEMU_X86_64:-qemu-x86_64} ;;
-*) echo "$TAG: unsupported arch \"$arch\" (only x86_64 is implemented -- see src/dlfcn/linux/plat_dlfcn.c's own banner for why i386 is not)" >&2; exit 1 ;;
+i386)   target=i386-linux-gnu;   qemu=${NTLIBC_QEMU_I386:-qemu-i386} ;;
+*) echo "$TAG: unsupported arch \"$arch\" (expected x86_64 or i386)" >&2; exit 1 ;;
 esac
 
 BUILD=${NTLIBC_LINUX_DLFCN_CROSS_BUILD:-$srcdir/obj/linux-dlfcn-cross-build-$arch}
@@ -135,6 +134,18 @@ FILES="
 	src/signal/$arch/altstack.S
 	arch/$arch/src/sigreturn_trampoline.S
 "
+# arch/i386/src/int64.c: i386 has no hardware 64-bit divide, so clang's
+# own code generator emits calls to __divdi3/__umoddi3/etc for a plain
+# `long long / long long` on this arch alone -- the identical, real (not
+# hypothetical) link requirement tools/linux-build-crt-cross.sh's own
+# FILES list already documents in full for src/thread/linux/
+# plat_thread.c's __plat_wait_one(), linked into THIS script's own FILES
+# list too (pthread_once()'s deferral loop, see below).
+if [ "$arch" = "i386" ]; then
+	FILES="$FILES
+	arch/i386/src/int64.c
+"
+fi
 # src/unistd/getpid.c (getpid()/getppid()/gettid()) and src/unistd/ids.c
 # (getuid()/getgid()/getpgrp()/...) join the list alongside signal.c:
 # sigdelivery.c's own __sig_lock() calls gettid(), and signal.c's own
