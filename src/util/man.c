@@ -18,37 +18,21 @@
  * six alternating-font pairs (.BI/.BR/.IR/.IB/.RB/.RI, one shared
  * helper), .RS/.RE, .nf/.fi, .br (real pages routinely need it to keep
  * alternate SYNOPSIS forms on separate lines), .ad/.na (fill-and-adjust
- * justification -- see "ADJUSTMENT" below), .ds/.nr/.rn (string/
- * number registers -- see "REGISTERS" below), .de/.de1/.am/.am1/.ig/
- * .rm/.als (user-defined macros -- see "MACROS" below), .if/.ie/.el
- * (conditionals -- see "CONDITIONALS" below), .TS/.TE (tbl tables --
- * see "TABLES" below), .EQ/.EN (eqn equations, a documented linear-
- * approximation subset -- see "EQN" below), and a common subset of
- * escape sequences. This file IS that engine, not a wrapper around a
- * real one.
+ * justification -- see "ADJUSTMENT" below), .hy/.nh (hyphenation, a
+ * documented Knuth-Liang-algorithm subset -- see "HYPHENATION" below),
+ * .ds/.nr/.rn (string/number registers -- see "REGISTERS" below), .de/
+ * .de1/.am/.am1/.ig/.rm/.als (user-defined macros -- see "MACROS"
+ * below), .if/.ie/.el (conditionals -- see "CONDITIONALS" below), .TS/
+ * .TE (tbl tables -- see "TABLES" below), .EQ/.EN (eqn equations, a
+ * documented linear-approximation subset -- see "EQN" below), and a
+ * common subset of escape sequences. This file IS that engine, not a
+ * wrapper around a real one.
  *
  * ---- WHAT IS DELIBERATELY NOT IMPLEMENTED, AND WHY --------------------
  *
  *  - \k (mark register) and \s (point-size change): recognised and
  *    consumed only -- no horizontal-motion tracking or point-size
  *    concept exists here for them to act on.
- *  - Hyphenation: not implemented. A word too long to fit the
- *    remaining space on a filled line is never split at a hyphenation
- *    point -- it simply starts the next line whole (or, if it alone
- *    exceeds the full line width, overflows that one line, the same
- *    "any_word" first-word-always-placed carve-out man_wrap_emit() has
- *    always had). Real troff/groff hyphenation is pattern-based (the
- *    Knuth-Liang algorithm, the same one TeX uses, driven by a
- *    language-specific pattern table) -- a correct implementation is
- *    itself a real, bounded, but substantial sub-project, and this
- *    project's own troff-engine plan (.claude/plans/man-troff-
- *    engine.md, Tier 7's own text) explicitly names it as large enough
- *    to warrant a separately-dispatched follow-up patch rather than
- *    being folded blind into the justification work below. This is a
- *    scope line drawn by that plan itself, not a downgrade improvised
- *    here: justification (the smaller, more clearly-scoped half of
- *    Tier 7) is real and complete; hyphenation is real work not yet
- *    started, tracked separately.
  *
  * ---- UNKNOWN-MACRO DEGRADATION ------------------------------------------
  *
@@ -667,6 +651,76 @@
  * even under MAN_ADJ_BOTH.
  *
  * ============================================================
+ * HYPHENATION: .hy/.nh
+ * ============================================================
+ *
+ * Off by default -- same reasoning as ADJUSTMENT's own default above:
+ * this file never split a word before this tier existed at all, so
+ * defaulting hyphenation ON would silently reformat every page and every
+ * existing test that has never once mentioned `.hy`, for a purely
+ * cosmetic difference nothing downstream depends on. `.hy [N]` turns it
+ * on (any numeric argument, or none, all mean the same thing here -- see
+ * below); `.nh` turns it off. Both flush the current paragraph
+ * accumulator first, the identical reasoning `.ad`/`.na` give above.
+ *
+ * The algorithm (man_hyph_best_split()/man_hyph_find_points(), just
+ * above man_block_start() in this file) is the REAL Knuth-Liang pattern-
+ * matching algorithm -- the same mechanism TeX and real troff/groff use:
+ * digit-weighted letter patterns matched as substrings of the word (with
+ * `.` boundary anchors), one weight per inter-letter gap taken as the
+ * MAX over every pattern that matches there, and a gap is a legal break
+ * point exactly when that weight is ODD -- not a fixed-column or prose-
+ * guessing heuristic. What's genuinely scoped down from a real troff is
+ * the PATTERN TABLE itself (man_hyph_patterns[]): a small, hand-written
+ * set of common English prefixes, suffixes, doubled-consonant splits,
+ * and digraph/cluster deny rules (see that table's own header comment
+ * for the exact list), not the ~4500-pattern table real TeX/groff
+ * hyphenation data ships (machine-derived from a large pronouncing
+ * dictionary via Liang's own training algorithm -- a separate, much
+ * larger undertaking than hand-authoring rules, and this project's own
+ * troff-engine plan, .claude/plans/man-troff-engine.md's Tier 7 text,
+ * explicitly named the choice between the two as this pass's own open
+ * question). The chosen bias is precision over recall: this table
+ * deliberately has no general vowel-consonant-vowel fallback rule (the
+ * part of a real trained pattern set that covers a word with no
+ * recognised affix), so it finds real, defensible breaks for words
+ * carrying a recognised prefix/suffix/doubled-consonant and simply finds
+ * NONE for a long word it doesn't recognise -- an honest under-
+ * hyphenation, never a wrong break.
+ *
+ * MAN_HYPH_LEFT_MIN (2) / MAN_HYPH_RIGHT_MIN (3) bound every break to
+ * leave at least that many letters on each side, matching TeX's own
+ * \lefthyphenmin=2 \righthyphenmin=3 convention for US English patterns
+ * -- a word shorter than their sum can never be split at all.
+ *
+ * Only a PLAIN word is ever offered to the pattern matcher
+ * (man_hyph_word_ok()): ASCII letters only, no digits, punctuation,
+ * apostrophes, embedded MAN_M_BOLD/MAN_M_ITAL/MAN_M_ROMAN font markers,
+ * or multi-byte UTF-8 -- a word carrying any of those is never
+ * hyphenated, a documented simplification (splitting mid-marker or mid-
+ * multi-byte-sequence would risk corrupting the styled text stream
+ * man_wrap_emit() decodes; a styled/foreign-alphabet word is rare enough
+ * in the specific position "doesn't fit AND would otherwise overflow"
+ * that simply not hyphenating it is the honest, safe choice over adding
+ * that complexity here).
+ *
+ * man_wrap_emit() only ever ATTEMPTS a split when a word doesn't fit the
+ * remaining space on a line that already holds another word, AND more
+ * text follows it -- never the paragraph's own last word (real troff's
+ * own avoidance of leaving a hyphenated stub as the very last thing in a
+ * paragraph, where hyphenating it could not even save a line: there is
+ * no following word left to pull up), and never a word that already
+ * fits (hyphenation only ever answers "how do I place a word that
+ * doesn't fit", never "should I reformat one that does"). At most ONE
+ * split is attempted per word instance: if the leftover remainder still
+ * doesn't fit a whole fresh line (only possible at a pathologically
+ * narrow width), it falls through to this file's pre-existing "any_word
+ * first-word-always-placed" overflow carve-out unhyphenated, rather than
+ * this file attempting to chain multiple hyphenation splits across more
+ * than two lines -- a documented, deliberately narrow scope boundary,
+ * not an oversight.
+ *
+ * ============================================================
  * RENDERING: WHERE BOLD/ITALIC COME FROM, AND HOW WIDTH IS CHOSEN
  * ============================================================
  *
@@ -810,6 +864,18 @@
 #define MAN_ADJ_RIGHT  1
 #define MAN_ADJ_CENTER 2
 #define MAN_ADJ_BOTH   3  /* real justification: both margins flush */
+
+/* ==== `.hy`/`.nh` hyphenation -- see "HYPHENATION" in this file's header
+ * comment. Standard English left/right hyphenation minimums (matching
+ * TeX's own \lefthyphenmin=2 \righthyphenmin=3 for US English patterns):
+ * a break must leave at least this many letters on each side. */
+#define MAN_HYPH_LEFT_MIN  2
+#define MAN_HYPH_RIGHT_MIN 3
+#define MAN_HYPH_MAX_WORD  56  /* no real English word this file will ever
+                                 * see is anywhere near this long; a longer
+                                 * "word" (run-together text, a path, ...)
+                                 * is simply never offered to the pattern
+                                 * matcher -- see man_hyph_best_split(). */
 
 /* ==== growable byte buffer (src/util/m4.c's strbuf_append() idiom) ===== */
 
@@ -1713,6 +1779,7 @@ struct man_ctx {
 	int fill;               /* 1 = fill (wrap) mode, 0 = .nf no-fill mode */
 	int adjust;              /* MAN_ADJ_* -- .ad/.na, only meaningful while fill is on --
 	                            * see "ADJUSTMENT" in this file's header comment */
+	int hyphenate;           /* .hy/.nh -- see "HYPHENATION" in this file's header comment */
 	int nf_started;         /* has this .nf block emitted its first line yet */
 	int rs_indent;          /* current body indent, from base + RS/RE stack */
 	int rs_stack[MAN_MAX_RS_DEPTH];
@@ -1772,6 +1839,179 @@ static void man_ctx_free(struct man_ctx *c)
 	man_macro_free_lines(&c->eqn_body);
 }
 
+/* ==== HYPHENATION: a small, hand-curated Knuth-Liang pattern table =====
+ *
+ * See "HYPHENATION" in this file's own header comment for the full
+ * disclosure of what this subset covers and doesn't. Short version: this
+ * is the REAL Knuth-Liang pattern-matching algorithm (the same mechanism
+ * TeX/troff use -- digit-weighted letter patterns, matched as substrings,
+ * combined by taking the MAX weight at each inter-letter position, odd =
+ * legal break point), not a fixed-column or prose-guessing heuristic --
+ * but the pattern TABLE itself is a small, hand-written set of common
+ * English prefixes, suffixes, doubled-consonant splits, and digraph/
+ * cluster deny rules, not the full ~4500-pattern table a real TeX
+ * us-english hyphen.tex ships (that table is machine-derived from a
+ * large pronouncing dictionary via Liang's own training algorithm, a
+ * separate and much larger undertaking than hand-authoring rules).
+ *
+ * Pattern syntax (Liang's own notation): a pattern is letters and `.`
+ * (word-boundary anchor, matches only at the true start/end of the
+ * dotted word) with decimal digits inserted BETWEEN letters. A digit is
+ * the weight for the gap it appears in; an omitted gap defaults to 0. An
+ * ODD weight at a gap means "a hyphen may legally go here"; EVEN means
+ * "never break here", and when multiple patterns disagree about one gap
+ * the LARGEST weight wins (the standard Knuth-Liang combine rule) -- so
+ * an even, high-weight "never split this cluster" pattern (e.g. the "ck"
+ * entry below) reliably overrides a lower-weight odd pattern that would
+ * otherwise cut through it.
+ *
+ * This table deliberately never encodes a general vowel-consonant-vowel
+ * rule (the part of a real trained pattern set that covers arbitrary
+ * words with no recognised prefix/suffix) -- authoring that safely by
+ * hand, without a training corpus to validate it against, risks
+ * confidently-wrong breaks. The chosen bias is precision over recall:
+ * this table finds real, defensible break points for words carrying a
+ * recognised affix or a doubled consonant, and simply finds NONE for a
+ * long word it doesn't recognise (falling back to this file's pre-
+ * existing whole-word-deferred-to-next-line behaviour) rather than
+ * guessing. */
+static const char *const man_hyph_patterns[] = {
+	/* Digraphs/clusters that must never be split (even weight, wins
+	 * over any conflicting odd weight below regardless of match order). */
+	"c4k", "t4h", "s4h", "c4h", "p4h", "w4h", "q4u", "n4g", "g4h", "t4c4h",
+	/* A doubled consonant splits down the middle (run-ning, sum-mer,
+	 * hap-pen, mid-dle, sil-ly, traf-fic) -- a real, common English
+	 * hyphenation convention, not specific to any one suffix. */
+	"b3b", "d3d", "f3f", "g3g", "l3l", "m3m", "n3n",
+	"p3p", "r3r", "s3s", "t3t", "z3z",
+	/* Common prefixes: break right after the prefix. */
+	".con3", ".com3", ".dis3", ".pre3", ".pro3", ".sub3", ".trans3",
+	".super3", ".over3", ".under3", ".out3", ".non3", ".inter3",
+	".intra3", ".auto3", ".multi3", ".semi3", ".micro3", ".ex3",
+	".de3", ".re3", ".un3", ".in3",
+	/* Common suffixes: break right before the suffix. */
+	"3tion.", "3sion.", "3ation.", "3ment.", "3ness.", "3ful.", "3less.",
+	"3able.", "3ible.", "3ize.", "3ise.", "3ism.", "3ist.", "3ity.",
+	"3ous.", "3ive.", "3hood.", "3ship.", "3ward.", "3wise.", "3ing.",
+	"3er.", "3ed.", "3ly.", "3al.", "3ic.", "3ical.",
+	0
+};
+
+/* Parses one man_hyph_patterns[] entry into its letter skeleton
+ * (`letters`, `.` included literally) and the digit weight BEFORE each
+ * letter and one final weight AFTER the last letter (`vals[0..nletters]`,
+ * `vals[k]` is the gap immediately before `letters[k]`, `vals[nletters]`
+ * the gap after the last letter) -- see this table's own header comment
+ * above for the notation. Both output arrays must hold at least
+ * strlen(pat)+1 entries (a pattern with a leading digit still has that
+ * many letters at most). */
+static void man_hyph_parse_pattern(const char *pat, char *letters, int *vals, int *nletters)
+{
+	int li = 0;
+	vals[0] = 0;
+	for (; *pat; pat++) {
+		if (*pat >= '0' && *pat <= '9') {
+			vals[li] = *pat - '0';
+		} else {
+			letters[li++] = *pat;
+			vals[li] = 0;
+		}
+	}
+	*nletters = li;
+}
+
+/* True if `word` (wlen bytes) is eligible for hyphenation at all: plain
+ * ASCII letters only (no digits, punctuation, apostrophes, embedded
+ * MAN_M_BOLD/MAN_M_ITAL/MAN_M_ROMAN font markers, or multi-byte UTF-8 --
+ * see "HYPHENATION" in this file's header comment for why a styled or
+ * non-ASCII word is simply never split rather than risking a break
+ * inside a marker or a multi-byte sequence) and long enough that SOME
+ * break satisfying MAN_HYPH_LEFT_MIN/MAN_HYPH_RIGHT_MIN could even exist. */
+static int man_hyph_word_ok(const char *word, size_t wlen)
+{
+	size_t i;
+	if (wlen < (size_t)(MAN_HYPH_LEFT_MIN + MAN_HYPH_RIGHT_MIN)) return 0;
+	if (wlen > MAN_HYPH_MAX_WORD - 2) return 0;
+	for (i = 0; i < wlen; i++) {
+		unsigned char ch = (unsigned char)word[i];
+		if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z'))) return 0;
+	}
+	return 1;
+}
+
+/* Finds every legal Knuth-Liang break point in `word` (wlen bytes,
+ * already confirmed man_hyph_word_ok()), honouring MAN_HYPH_LEFT_MIN/
+ * MAN_HYPH_RIGHT_MIN. Each returned point is a byte offset `p` such that
+ * breaking between word[p-1] and word[p] (prefix word[0..p), suffix
+ * word[p..wlen)) is legal -- ascending order, up to `max_points` of
+ * them, actual count returned. */
+static int man_hyph_find_points(const char *word, size_t wlen, int *points, int max_points)
+{
+	char dotted[MAN_HYPH_MAX_WORD];
+	int vals[MAN_HYPH_MAX_WORD + 1]; /* one gap-weight slot per dotted-word
+	                                    * BYTE POSITION, 0..dlen inclusive
+	                                    * (dlen == wlen+2 can reach
+	                                    * MAN_HYPH_MAX_WORD exactly at the
+	                                    * longest word man_hyph_word_ok()
+	                                    * allows) -- one wider than
+	                                    * `dotted` itself, which only ever
+	                                    * needs indices 0..dlen-1. */
+	size_t dlen, i, p;
+	int n = 0;
+
+	dotted[0] = '.';
+	for (i = 0; i < wlen; i++) {
+		char ch = word[i];
+		if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+		dotted[1 + i] = ch;
+	}
+	dotted[1 + wlen] = '.';
+	dlen = wlen + 2;
+	for (i = 0; i <= dlen; i++) vals[i] = 0;
+
+	for (p = 0; man_hyph_patterns[p]; p++) {
+		char letters[MAN_HYPH_MAX_WORD];
+		int pvals[MAN_HYPH_MAX_WORD];
+		int nletters;
+		size_t s;
+
+		man_hyph_parse_pattern(man_hyph_patterns[p], letters, pvals, &nletters);
+		if ((size_t)nletters > dlen) continue;
+		for (s = 0; s + (size_t)nletters <= dlen; s++) {
+			int k;
+			if (memcmp(dotted + s, letters, (size_t)nletters) != 0) continue;
+			for (k = 0; k <= nletters; k++)
+				if (pvals[k] > vals[s + (size_t)k]) vals[s + (size_t)k] = pvals[k];
+		}
+	}
+
+	for (i = MAN_HYPH_LEFT_MIN; i + MAN_HYPH_RIGHT_MIN <= wlen; i++) {
+		size_t gap = i + 1; /* dotted[0] is the leading '.', so word[i] == dotted[i+1] */
+		if ((vals[gap] % 2) == 1) {
+			if (n < max_points) points[n++] = (int)i;
+		}
+	}
+	return n;
+}
+
+/* The single hyphenation decision man_wrap_emit() actually needs: the
+ * largest legal break point in `word` (wlen bytes) whose prefix is no
+ * wider than `max_prefix` columns (the caller has already reserved room
+ * for the hyphen itself), or 0 if the word isn't eligible or no legal
+ * break fits. */
+static int man_hyph_best_split(const char *word, size_t wlen, int max_prefix)
+{
+	int points[MAN_HYPH_MAX_WORD];
+	int n, i, best = 0;
+
+	if (max_prefix < MAN_HYPH_LEFT_MIN) return 0;
+	if (!man_hyph_word_ok(word, wlen)) return 0;
+	n = man_hyph_find_points(word, wlen, points, MAN_HYPH_MAX_WORD);
+	for (i = 0; i < n; i++)
+		if (points[i] <= max_prefix && points[i] > best) best = points[i];
+	return best;
+}
+
 /* Blank-line-before-a-new-block bookkeeping: exactly one blank line
  * between consecutive blocks (headings, paragraphs, .TP items), none
  * before the very first block, and none between a .TP/.IP tag and its
@@ -1789,11 +2029,16 @@ static int man_block_start(struct man_ctx *c)
 
 /* One word already located within a man_wrap_emit() call's `styled`
  * buffer -- start/len index into it directly rather than copying, wcols
- * is its pre-measured man_vislen() width. */
-struct man_wrapword { size_t start, len; int wcols; };
+ * is its pre-measured man_vislen() width. `hyphen` marks a word that is
+ * actually just the PREFIX of a longer word man_wrap_emit() split at a
+ * legal hyphenation point (see "HYPHENATION" in this file's header
+ * comment) -- man_wrap_flush_line() appends a literal '-' after it;
+ * `wcols` already includes that extra column so line-width/adjustment
+ * math needs no separate case for it. */
+struct man_wrapword { size_t start, len; int wcols; int hyphen; };
 
 static int man_wrapword_push(struct man_wrapword **v, size_t *n, size_t *cap,
-                              size_t start, size_t len, int wcols)
+                              size_t start, size_t len, int wcols, int hyphen)
 {
 	if (*n + 1 > *cap) {
 		size_t newcap;
@@ -1804,6 +2049,7 @@ static int man_wrapword_push(struct man_wrapword **v, size_t *n, size_t *cap,
 		*v = g; *cap = newcap;
 	}
 	(*v)[*n].start = start; (*v)[*n].len = len; (*v)[*n].wcols = wcols;
+	(*v)[*n].hyphen = hyphen;
 	(*n)++;
 	return 1;
 }
@@ -1863,6 +2109,7 @@ static int man_wrap_flush_line(struct man_ctx *c, const char *styled,
 			if (!mbuf_appendn(&c->doc, spaces, ' ')) return 0;
 		}
 		if (!mbuf_append(&c->doc, styled + words[i].start, words[i].len)) return 0;
+		if (words[i].hyphen) { if (!mbuf_appendc(&c->doc, '-')) return 0; }
 	}
 	return mbuf_appendc(&c->doc, '\n');
 }
@@ -1880,7 +2127,22 @@ static int man_wrap_flush_line(struct man_ctx *c, const char *styled,
  * MAN_ADJ_BOTH's inter-word spacing for that line can only be computed
  * once every word that belongs on it is known. A line is known-complete
  * either when the next word doesn't fit (more text follows -- `is_last`
- * false) or when the input runs out (this IS the last line). */
+ * false) or when the input runs out (this IS the last line).
+ *
+ * HYPHENATION (c->hyphenate, `.hy`/`.nh` -- see "HYPHENATION" in this
+ * file's header comment): when a word doesn't fit the remaining space on
+ * a line that already holds at least one word, and more text follows it
+ * (so it is NOT the very last word of this whole span -- real troff's
+ * own "don't hyphenate a paragraph's last word" avoidance), and it is a
+ * plain, unstyled ASCII word man_hyph_best_split() can find a legal
+ * break in that fits: the prefix (plus a trailing '-') is emitted as
+ * that line's own final word, and the suffix takes the prefix's place as
+ * `wstart`/`wlen` -- one iteration through the exact same fit check,
+ * now against a freshly emptied line, as if it had been read fresh.
+ * Splitting more than once per word instance is out of scope (see the
+ * header comment): a leftover remainder that still doesn't fit a whole
+ * fresh line just falls through to the pre-existing "any_word first-
+ * word-always-placed" overflow carve-out below, unhyphenated. */
 static int man_wrap_emit(struct man_ctx *c, const char *styled, int indent, const char *first_prefix)
 {
 	size_t n = strlen(styled);
@@ -1909,17 +2171,40 @@ static int man_wrap_emit(struct man_ctx *c, const char *styled, int indent, cons
 			int sep = any_word ? 1 : 0;
 
 			if (any_word && (size_t)(line_cols + sep) + wcols > (size_t)cols) {
-				if (!man_wrap_flush_line(c, styled, words, wn, indent, cols, 0,
-				                          c->adjust, first_line ? first_prefix : 0)) {
-					result = 0; break;
+				int p = 0;
+				if (c->hyphenate && i < n) {
+					int avail = cols - line_cols - sep - 1; /* -1 reserves the '-' column */
+					if (avail > 0) p = man_hyph_best_split(styled + wstart, wlen, avail);
 				}
-				first_line = 0;
-				wn = 0;
-				line_cols = 0;
-				any_word = 0;
-				sep = 0;
+				if (p > 0) {
+					if (!man_wrapword_push(&words, &wn, &wcap, wstart, (size_t)p, p + 1, 1)) {
+						result = 0; break;
+					}
+					if (!man_wrap_flush_line(c, styled, words, wn, indent, cols, 0,
+					                          c->adjust, first_line ? first_prefix : 0)) {
+						result = 0; break;
+					}
+					first_line = 0;
+					wn = 0;
+					line_cols = 0;
+					any_word = 0;
+					sep = 0;
+					wstart += (size_t)p;
+					wlen -= (size_t)p;
+					wcols = wlen; /* man_hyph_best_split() only accepts plain ASCII letters */
+				} else {
+					if (!man_wrap_flush_line(c, styled, words, wn, indent, cols, 0,
+					                          c->adjust, first_line ? first_prefix : 0)) {
+						result = 0; break;
+					}
+					first_line = 0;
+					wn = 0;
+					line_cols = 0;
+					any_word = 0;
+					sep = 0;
+				}
 			}
-			if (!man_wrapword_push(&words, &wn, &wcap, wstart, wlen, (int)wcols)) { result = 0; break; }
+			if (!man_wrapword_push(&words, &wn, &wcap, wstart, wlen, (int)wcols, 0)) { result = 0; break; }
 			line_cols += sep + (int)wcols;
 			any_word = 1;
 		}
@@ -3702,6 +3987,23 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 		} else if (!strcmp(name, "na")) {
 			ok = man_flush_paragraph(c);
 			c->adjust = MAN_ADJ_LEFT;
+		} else if (!strcmp(name, "hy")) {
+			/* `.hy [N]` -- see "HYPHENATION" in this file's header
+			 * comment. Real troff's optional numeric argument selects
+			 * finer-grained hyphenation-mode BITS (e.g. suppress
+			 * hyphenating the last word on a line, or within two
+			 * characters of a word's own start/end); this file has
+			 * exactly one on/off mode, so any argument (or none) just
+			 * turns hyphenation ON, the same "recognised, simplified,
+			 * disclosed" precedent `.ad`'s own bare-argument case sets
+			 * above. Flushed first, same reasoning as `.ad`/`.na`: a
+			 * mode change mid-paragraph must not backdate onto text
+			 * already accumulated under the old mode. */
+			ok = man_flush_paragraph(c);
+			c->hyphenate = 1;
+		} else if (!strcmp(name, "nh")) {
+			ok = man_flush_paragraph(c);
+			c->hyphenate = 0;
 		} else if (!strcmp(name, "br")) {
 			/* .br: force a line break WITHOUT starting a new block --
 			 * no blank line, no indent/tag-state reset, unlike .PP.
@@ -3810,12 +4112,12 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 			struct man_macro *m = man_mac_find(&c->macros, name);
 			/* Checked only here, after every built-in request name
 			 * above -- a page can never shadow a built-in by defining
-			 * a same-named macro. Anything still unmatched (.hy, .sp,
-			 * .ce, .in, .ll, ...): unimplemented, silently skipped --
-			 * see this file's own "UNKNOWN-MACRO DEGRADATION" header
+			 * a same-named macro. Anything still unmatched (.sp, .ce,
+			 * .in, .ll, ...): unimplemented, silently skipped -- see
+			 * this file's own "UNKNOWN-MACRO DEGRADATION" header
 			 * comment. (.EQ/.TS are handled earlier, before this
 			 * dispatch even runs -- see c->eqn_active/c->tbl_active
-			 * above; .ad/.na are handled above too.) */
+			 * above; .ad/.na/.hy/.nh are handled above too.) */
 			if (m) ok = man_invoke_macro(c, r, m, name, &a);
 		}
 		man_argv_free(&a);
