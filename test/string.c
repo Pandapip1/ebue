@@ -22,6 +22,8 @@ int main(void)
 	wchar_t wb[16];
 	static const wchar_t w1[] = { 'a', 'b', 'c', 0 };
 	static const wchar_t w2[] = { 'a', 'b', 'd', 0 };
+	static const wchar_t w3[] = { 0xffff, 0 };
+	static const wchar_t w4[] = { 'a', 0 };
 	size_t i;
 
 	/* mem* */
@@ -148,7 +150,7 @@ int main(void)
 	CHECK(wmemcpy(wb, w2, 4) == wb && !wmemcmp(wb, w2, 4) && wmemcmp(w1, w2, 3) < 0 && wmemcmp(w1, w2, 2) == 0);
 	wmemmove(wb + 1, wb, 3); CHECK(wb[1] == 'a' && wb[3] == 'd');
 	CHECK(wmemchr(w1, 'c', 3) == w1 + 2 && !wmemchr(w1, 'c', 2));
-	CHECK(wmemcmp(L"\xffff", L"a", 1) > 0);
+	CHECK(wmemcmp(w3, w4, 1) > 0);
 
 	if (fails) { wr("string: failures: "); wrnum(fails); wr("\n"); return 1; }
 	wr("string: all ok\n");
