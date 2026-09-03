@@ -2,37 +2,22 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Linux implementation of src/internal/plat_mem.h -- the second real
- * backend behind the platform-abstraction seam the NT pilot introduced,
- * proving the interface against an OS whose memory-mapping primitives
- * look nothing like NT's.
+ * backend behind the platform-abstraction seam the NT pilot introduced.
  *
- * Every call here is a single raw Linux syscall, issued directly via
- * syscall(2) rather than through any host libc wrapper -- ntlibc talks
- * to the kernel itself, the same discipline the NT side keeps toward
- * ntdll, and the same technique fuzz/ntstubs.c already uses for this
- * exact reason ("those names belong to ntlibc in this link"). This file
- * is compiled under -nostdinc against ntlibc's OWN generated headers
- * (obj/include/bits/alltypes.h, include/), never glibc's, so it cannot
- * include a host header for the syscall numbers or wrapper prototype
- * either -- both are declared/defined locally below.
+ * Every call here is a single raw Linux syscall via `svc #0`, not any
+ * host libc wrapper: this file is compiled under -nostdinc against
+ * ntlibc's OWN generated headers, never glibc's, so both the syscall
+ * numbers and the wrapper are declared locally below.
  *
- * NT's reserve/commit split, and the section-view-vs-anonymous-
- * reservation distinction mman.c's own banner describes at length, do
- * not exist on Linux at all: mmap()/munmap() are already page-granular
- * end to end, and every one of __plat_mem_decommit()/_release()/
- * _unmap_view() below is the identical munmap() call -- exactly what
- * that banner predicted a backend like this would look like ("a
- * backend whose native mmap/munmap are page-granular end to end would
- * not need this reservation-table strategy at all"). Likewise
+ * NT's reserve/commit split and section-view-vs-anonymous-reservation
+ * distinction do not exist on Linux: mmap()/munmap() are already
+ * page-granular end to end, so __plat_mem_decommit()/_release()/
+ * _unmap_view() are all the identical munmap() call. Likewise
  * __plat_mem_map_file() needs none of the NT backend's EOF-capture/
- * zero-fill-tail workaround (Linux's mmap already zero-fills the
- * partial page past a file's real end, correctly, natively) or its
- * read-only-section fallback dance (a Linux mmap() against a
- * insufficiently-open fd simply fails EACCES outright), and
- * __plat_mem_flush_view() needs no separate timestamp fix-up after
- * msync() (Linux updates the file's mtime as a normal side effect of
- * writing the dirty pages back) -- see plat_mem.h's own comment
- * anticipating exactly this backend for both of those simplifications.
+ * zero-fill-tail workaround (Linux's mmap already zero-fills the partial
+ * page past a file's real end natively) or its read-only-section fallback
+ * dance, and __plat_mem_flush_view() needs no separate timestamp fix-up
+ * after msync() (Linux updates mtime as a normal side effect).
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -43,12 +28,10 @@
 #include <errno.h>
 #include "plat_mem.h"
 
-/* aarch64 Linux syscall numbers (arch/arm64/include/uapi/asm/unistd.h,
- * via the generic modern ABI's asm-generic/unistd.h) -- confirmed
- * against this host's own <sys/syscall.h> rather than assumed, since
- * they are architecture-specific and this file's -nostdinc build
- * cannot include that header itself (it would pull in glibc's
- * conflicting type system alongside ntlibc's own). */
+/* aarch64 Linux syscall numbers, confirmed against this host's own
+ * <sys/syscall.h> rather than assumed; this file's -nostdinc build
+ * cannot include that header itself, since it would pull in glibc's
+ * conflicting type system alongside ntlibc's own. */
 #define SYS_mmap     222
 #define SYS_munmap   215
 #define SYS_mprotect 226
@@ -57,21 +40,11 @@
 #define SYS_munlock  229
 
 /* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
- * the call path at all. NOT `extern long syscall(long, ...)`: that
- * symbol is satisfied by the HOST's real glibc at link time (this
- * build is -nostdinc, not -nostdlib -- only compiling avoids the host
- * headers, the final link step still pulls in host libc), and glibc's
- * syscall() performs its own error translation: on failure it returns
- * exactly -1 and sets glibc's OWN errno (a different memory location
- * than ntlibc's own errno global, src/internal/errno.c) to the real
- * code -- it does NOT hand back the raw kernel -errno in [-4095,-1]
- * this file's is_sys_error()/`errno = (int)-ret` translation requires.
- * Confirmed both by inspecting the linked pilot binary (nm -D shows an
- * undefined `syscall@GLIBC_*`, resolved by ld-linux at runtime) and
- * independently by src/thread/linux/plat_thread.c's own port, which
- * hit the identical bug and is this fix's model. aarch64's syscall
- * calling convention: x8 = syscall number, x0..x5 = up to 6 arguments,
- * result (or -errno in [-4095,-1]) in x0. */
+ * the call path. NOT `extern long syscall(long, ...)`: that symbol
+ * resolves to the HOST's real glibc at link time, which sets glibc's OWN
+ * errno on failure rather than the raw kernel -errno this file's
+ * translation requires. aarch64 calling convention: x8 = syscall number,
+ * x0..x5 = up to 6 arguments, result (or -errno in [-4095,-1]) in x0. */
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;

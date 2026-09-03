@@ -2,10 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * NT implementation of src/internal/plat_mem.h -- see that header for
- * the contract each function makes.  Everything here was, until this
- * file existed, inline inside src/mman/mman.c; nothing changed in
- * substance, only location and the addition of a POSIX-shaped return
- * (0/-1 with errno set) in place of a raw NTSTATUS.
+ * the contract each function makes.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -22,12 +19,10 @@
 static size_t pground(size_t n) { return (n + MMAP_PAGE - 1) & ~(size_t)(MMAP_PAGE - 1); }
 
 /* NtQueryVirtualMemory() describes page/region boundaries in the process's
- * flat virtual address space.  A reported BaseAddress can precede the C
- * allocation containing the query pointer, so these comparisons and
- * distances are intentionally integer address operations rather than the
- * same-array pointer operations C's relational and subtraction operators
- * require.  This is the NT-backend counterpart of mman.c's identical
- * registry-range helpers. */
+ * flat virtual address space. A reported BaseAddress can precede the C
+ * allocation containing the query pointer, so these are intentionally
+ * integer address operations rather than same-array pointer operations
+ * C's relational/subtraction operators require. */
 static int addr_lt(const void *a, const void *b) { return (uintptr_t)a < (uintptr_t)b; }
 static int addr_le(const void *a, const void *b) { return (uintptr_t)a <= (uintptr_t)b; }
 static int addr_gt(const void *a, const void *b) { return (uintptr_t)a > (uintptr_t)b; }
@@ -274,15 +269,11 @@ int __plat_mem_unlock(void *addr, size_t len)
 	return 0;
 }
 
-/* Create a section over `fh` and map a view of it at *base_inout (a
- * hint, or NULL to let NT choose).  Tries the broadest section
- * protection the caller's prot/flags could need first, and falls back
- * to a read-only section on [STATUS_ACCESS_DENIED] -- a handle opened
- * O_RDONLY cannot back a PAGE_READWRITE section, but MAP_PRIVATE still
- * works against a PAGE_READONLY one via copy-on-write (see
- * prot_to_view).  The section handle is closed before returning either
- * way: the view holds its own reference, so nothing is leaked by not
- * keeping it. */
+/* Create a section over `fh` and map a view of it at *base_inout (a hint,
+ * or NULL to let NT choose). Tries the broadest section protection first,
+ * and falls back to a read-only section on [STATUS_ACCESS_DENIED]: a
+ * handle opened O_RDONLY cannot back a PAGE_READWRITE section, but
+ * MAP_PRIVATE still works against a PAGE_READONLY one via copy-on-write. */
 int __plat_mem_map_file(__plat_handle_t fh, int prot, int flags, off_t off, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                         size_t viewbytes, void **base_inout)
 {
@@ -319,20 +310,12 @@ int __plat_mem_map_file(__plat_handle_t fh, int prot, int flags, off_t off, // N
 	}
 	if (!NT_SUCCESS(st)) { errno = st == (NTSTATUS)STATUS_NO_MEMORY ? ENOMEM : ENOTSUP; return -1; }
 
-	/* ViewSize=0 means "map from SectionOffset to the end of the
-	 * section" -- NtCreateSection above set the section's size to the
-	 * file's own length (MaximumSize=NULL), so this maps exactly the
-	 * bytes the file has, and NT rounds the accessible range up to the
-	 * next page boundary and zero-fills the tail on its own (the same
-	 * behaviour mmap.html requires: "the system shall always zero-fill
-	 * any partial page at the end of an object").  An explicit ViewSize
-	 * of the caller's rounded `len` was tried first and rejected with
-	 * [STATUS_INVALID_VIEW_SIZE] whenever `len` rounds past the file's
-	 * exact byte length, which is every mapping that covers a whole
-	 * small file -- i.e. the common case, not an edge one. `viewbytes`
-	 * still bounds what mmap() tells its caller was mapped; NT's actual
-	 * view can only be smaller when the file is shorter than `len`
-	 * implies, which is the caller's own error to make. */
+	/* ViewSize=0 means "map from SectionOffset to the end of the section":
+	 * NT rounds the accessible range up to the next page boundary and
+	 * zero-fills the tail on its own (mmap.html's own requirement). An
+	 * explicit ViewSize of the caller's rounded `len` was tried first and
+	 * rejected with [STATUS_INVALID_VIEW_SIZE] whenever `len` rounds past
+	 * the file's exact byte length -- the common case, not an edge one. */
 	secoff = (LARGE_INTEGER)off;
 	viewsize = 0;
 	st = NtMapViewOfSection(section, NtCurrentProcess(), &base, 0, 0,
