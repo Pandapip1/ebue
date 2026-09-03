@@ -1184,14 +1184,24 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
       return {ExitsLoop, false};
     if (isa<ForStmt>(Statement) || isa<WhileStmt>(Statement) ||
         isa<DoStmt>(Statement)) {
-      /* Nested loops receive their own independent totality obligation.
-       * For the enclosing rank they are an ordinary falling-through
-       * statement when they do not mutate that rank; rejecting them
-       * outright made a proved inner scan poison an otherwise elementary
-       * outer index loop. */
-      return mutation(Statement, Expected) == Mutation::None
-                 ? Flow{FallWithoutProgress, false}
-                 : Flow{0, true};
+      /* Nested loops receive their own independent totality obligation, so
+       * this proof may assume one terminates and ask only what it leaves
+       * behind for Expected.  mutation() already recurses through the
+       * nested loop's own condition/increment/body: None means Expected
+       * is untouched, Good means every touch it found agrees with
+       * Expected's own direction and guards, and Bad means it found a
+       * reversal.  None and Good are therefore both, at worst, an
+       * ordinary falling-through statement for the enclosing rank --
+       * rejecting Good outright made a proved inner scan (a tokenizer's
+       * `while (isspace) p++;`, say) poison an otherwise elementary outer
+       * loop that only ever calls such scans.  A nested loop can still
+       * apply Expected's own update an unbounded number of times before
+       * it returns control, so a Good verdict carries the same repeated-
+       * step wrap risk as any other multi-step path. */
+      Mutation NestedResult = mutation(Statement, Expected);
+      if (NestedResult == Mutation::Bad)
+        return {0, true};
+      return {FallWithoutProgress, false, NestedResult == Mutation::Good};
     }
     if (isa<GotoStmt>(Statement))
       return ActiveLoop && Current &&
