@@ -1,83 +1,57 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * __attime_parse() -- src/util/attime.c, at(1p)'s TIME clause
- * `timespec` grammar, backing src/util/atbatch.c (`at`/`atd`/`batch`).
- * NOT a __util_*_main() entry point -- src/util/attime.h declares it
- * (`int __attime_parse(char *const *words, int n, time_t now, time_t
- * *out)`) with real external linkage, so, exactly as fuzz_modeparse.c's
- * and fuzz_crontime.c's own header comments explain for their targets,
- * this needs no #include of the .c file and no un-static-ing: attime.h
- * is included directly below.
+ * __attime_parse() -- src/util/attime.c, at(1p)'s TIME clause `timespec`
+ * grammar, backing src/util/atbatch.c (`at`/`atd`/`batch`). Not a
+ * __util_*_main() entry point: attime.h declares it with real external
+ * linkage, included directly below.
  *
- * GRAMMAR. attime.h's own header comment (read in full first) gives
- * the whole grammar and its DEVIATIONS section: `timespec := nowspec |
- * time [date] [increment]`, `time` any of 24-hour or wallclock-with-
- * am/pm, glued or colon-separated, plus "noon"/"midnight"; `date` a
- * month name + day (+ year), a day-of-week, "today"/"tomorrow", or
- * this implementation's own CCYY-MM-DD ISO extension; `increment` a
- * '+' count and period, or "next" period. timezone_name is a
- * documented, deliberate gap (parsed as far as `time`, then refused).
+ * Grammar (attime.h's own header comment, DEVIATIONS section included):
+ * `timespec := nowspec | time [date] [increment]`, `time` any of 24-hour
+ * or wallclock-with-am/pm, glued or colon-separated, plus "noon"/
+ * "midnight"; `date` a month name + day (+ year), a day-of-week,
+ * "today"/"tomorrow", or this implementation's own CCYY-MM-DD ISO
+ * extension; `increment` a '+' count and period, or "next" period.
+ * timezone_name is a documented, deliberate gap (parsed as far as
+ * `time`, then refused).
  *
- * WORDS, NOT A STRING. __attime_parse() takes an already
- * whitespace-split `words[]` array (exactly at(1p)'s own argv words,
- * per attime.h's own comment) rather than a raw string -- the same
- * "no separate lexer, the caller already did the word-splitting" shape
- * fuzz_test.c's and fuzz_crontime.c's own header comments give their
- * own targets, for the identical reason. The fuzz buffer, after byte 0
- * (OPTION BYTE, below), is split on NUL into up to CAP_WORDS words of
- * up to CAP_SCRATCH-1 bytes each, scratch-owned and NUL-terminated,
- * the same tokenizing fuzz_test.c's own header comment describes in
- * more detail (an embedded NUL is the delimiter, two consecutive ones
- * legitimately produce an empty-string word, which is itself
- * meaningful input here: parse_clocktime()'s and parse_date()'s own
- * `wlen == 0` / `strlen(w) < 3` guards are what an empty word exists
- * to reach).
+ * __attime_parse() takes an already whitespace-split `words[]` array
+ * (exactly at(1p)'s own argv words) rather than a raw string, so there's
+ * no separate lexer to fuzz here. The fuzz buffer, after byte 0 (option
+ * byte, below), is split on NUL into up to CAP_WORDS words of up to
+ * CAP_SCRATCH-1 bytes each. An embedded NUL is the delimiter; two
+ * consecutive ones legitimately produce an empty-string word, itself
+ * meaningful input since parse_clocktime()'s and parse_date()'s own
+ * `wlen == 0` / `strlen(w) < 3` guards are what an empty word reaches.
  *
- * OPTION BYTE. Bits 0-1 select one of four fixed `now` instants
- * (NOWTAB below), spread roughly a year apart so successive calls see
- * different weekdays, different days-in-month and both sides of a
- * year boundary -- relevant because __attime_parse()'s own "roll
- * forward" rules (attime.h's ROLLING A TIME THAT HAS ALREADY PASSED
- * FORWARD section) compare the parsed result against `now` itself, so
- * varying `now` against the same fuzzer-found words reaches both the
- * "already passed, roll forward" and "still in the future, don't"
- * branches of DATE_NONE/DATE_WEEKDAY/DATE_MONTHDAY without needing the
- * fuzzer to somehow encode a matching date itself. Not derived from
- * the fuzz input, for the same reason od's fixed fixture and
- * crontime's fixed NOWTAB are not: what varies here is `now`, held
- * fixed relative to the words under test, the same relationship
- * fuzz_getdate.c's frozen clock has to the date string it fuzzes
- * (though here there is no live clock to freeze -- __attime_parse()
- * takes `now` as a plain argument, never calling time() itself, so no
- * freezing seam is needed at all).
+ * Bits 0-1 of the option byte select one of four fixed `now` instants
+ * (nowtab below), spread roughly a year apart so successive calls see
+ * different weekdays, different days-in-month and both sides of a year
+ * boundary. This matters because __attime_parse()'s "roll forward" rules
+ * compare the parsed result against `now` itself, so varying `now`
+ * against the same fuzzer-found words reaches both the "already passed,
+ * roll forward" and "still in the future, don't" branches without the
+ * fuzzer needing to encode a matching date. __attime_parse() takes `now`
+ * as a plain argument and never calls time() itself, so no clock-freezing
+ * seam is needed.
  *
- * WHAT IS CHECKED. attime.h's own documented contract, the same "the
- * file's own contract, not a looser guess" range assertion
- * fuzz_od.c's, fuzz_modeparse.c's and fuzz_crontime.c's own headers
- * give theirs:
+ * Checked, per attime.h's documented contract:
  *
  *   - Return is -1 (malformed/empty timespec) or in [1, n] (words
- *     consumed) -- "always >= 1, never > n" is attime.h's own wording,
- *     checked verbatim.  n == 0 must fail: __attime_parse()'s own
- *     `if (n <= 0) return -1;` is the first line of the function.
+ *     consumed), never > n. n == 0 must fail: `if (n <= 0) return -1;`
+ *     is the function's first line.
  *   - On success, *out must actually have been written: poisoned to a
  *     sentinel before the call, checked to have changed afterwards.
- *   - On failure, *out must be UNCHANGED -- attime.h's own wording,
- *     "leaves *out untouched" -- checked by confirming the sentinel
- *     survives a -1 return.
+ *   - On failure, *out must be UNCHANGED ("leaves *out untouched"),
+ *     checked by confirming the sentinel survives a -1 return.
  *
- * NO ORACLE. Like fuzz_modeparse.c's and fuzz_crontime.c's own headers
- * reason for their targets: this implementation's documented scope,
- * DEVIATIONS section included (no timezone_name, first-three-letters
- * name matching, the ISO extension and its own bare-date default-to-
- * midnight convention), is itself the specification under test, not a
- * narrower guess a host `at` would disagree with by design.
+ * No oracle: this implementation's documented scope, DEVIATIONS section
+ * included, is itself the specification under test, not a narrower
+ * guess a host `at` would disagree with by design.
  *
- * NO SPAWN RISK, NO STDOUT/STDERR OUTPUT: attime.c (read in full)
- * calls no exec/system/popen and writes nothing to any stream -- like
- * crontime.c, a malformed timespec is reported purely through the -1
- * return, so no redirection is needed here at all.
+ * No spawn risk, no stdout/stderr output: attime.c (read in full) calls
+ * no exec/system/popen and writes nothing to any stream -- a malformed
+ * timespec is reported purely through the -1 return.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -92,9 +66,7 @@ extern void oracle_mismatch_i(const char *, const char *, long long, long long);
 
 /* Four fixed instants, ~47/133/289 days apart from an arbitrary,
  * deliberately non-round start (the same 2021-03-04T05:06:07Z instant
- * fuzz_getdate.c uses, for no reason beyond it already being a known
- * "not accidentally special" value) -- see OPTION BYTE above for why
- * these are fixed rather than fuzzer-derived. */
+ * fuzz_getdate.c uses). */
 #define BASE_NOW ((time_t)1614834367LL)
 static const time_t nowtab[4] = {
 	BASE_NOW,
