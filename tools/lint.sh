@@ -1558,7 +1558,16 @@ stage_lockset() {
 	hdr "lockset (guarded-by) proof obligations"
 	any=0
 	require_tool clang-18 || return $missing
-	lockset_flags="-DNTLIBC_LOCKSET_ANALYSIS -Wthread-safety -Wthread-safety-analysis -Wthread-safety-precise -Wno-unused-function"
+	# -c alongside -fsyntax-only changes nothing about what gets analyzed
+	# or emitted -- -fsyntax-only stops before code generation regardless,
+	# so no .o ever appears -- but it does tell a Nix stdenv cc-wrapper
+	# clang-18 that this is not a link step. Without it, the wrapper still
+	# appends its own -Wl,-dynamic-linker=/-L linker flags (it only skips
+	# them for -c/-S/-E/-M/-MM), which clang then reports right back as
+	# "argument unused during compilation" -- warning noise from the
+	# wrapper, unrelated to thread safety, that would otherwise trip the
+	# safe.c fixture's "must compile silent" check below on Nix alone.
+	lockset_flags="-DNTLIBC_LOCKSET_ANALYSIS -Wthread-safety -Wthread-safety-analysis -Wthread-safety-precise -Wno-unused-function -c"
 	fixture_log=$builddir/lockset-fixtures.log
 	: > "$fixture_log"
 	# Two fixtures, two expectations: the correctly guarded one must stay
