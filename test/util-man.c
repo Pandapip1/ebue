@@ -545,6 +545,35 @@ static const char EQNTEST_1[] =
 	".EN\n"
 	"Text after the equations must still render normally.\n";
 
+/* ==== fixture page 1f: exercises Tier 7 fill-and-adjust (.ad/.na) --
+ * see src/util/man.c's own "ADJUSTMENT" header comment. Two paragraphs,
+ * each nine words of the SAME 11-column length (differing only in a
+ * B/N prefix so find_line() below can tell them apart), one under
+ * `.ad b` (real justification) and the other under `.na` (ragged
+ * right, this file's own long-standing default) -- since both share
+ * the same word length/count/indent/terminal width, they wrap at the
+ * identical word boundary, so any rendered-length difference between
+ * them can only come from adjustment padding, not a different break.
+ * Hand-verified arithmetic at this file's documented 80-column
+ * default width (no $COLUMNS in this test's own environment) and
+ * MAN_BASE_INDENT of 7: 73 columns available, 6 words of 11 columns
+ * plus 5 mandatory single spaces = 71, a 7th word would need 83 -- so
+ * the break falls after the 6th word, leaving 2 columns of slack for
+ * `.ad b` to distribute across the resulting 5 gaps, and 3 words (35
+ * columns, nowhere near 73) on the final, never-stretched line. */
+static const char ADJUSTTEST_1[] =
+	".TH ADJUSTTEST 1 \"2026\" \"ntlibc test\" \"ntlibc Test Suite\"\n"
+	".SH NAME\n"
+	"adjusttest \\- exercise fill-and-adjust rendering\n"
+	".SH ADJUSTMENT\n"
+	".ad b\n"
+	"AdjustBXXX1 AdjustBXXX2 AdjustBXXX3 AdjustBXXX4 AdjustBXXX5 AdjustBXXX6 "
+	"AdjustBXXX7 AdjustBXXX8 AdjustBXXX9\n"
+	".PP\n"
+	".na\n"
+	"AdjustNXXX1 AdjustNXXX2 AdjustNXXX3 AdjustNXXX4 AdjustNXXX5 AdjustNXXX6 "
+	"AdjustNXXX7 AdjustNXXX8 AdjustNXXX9\n";
+
 /* ==== fixture page 2: a real, unmodified 210-line prefix of GNU grep's
  * own grep.1 (gzip -dc'd by hand from a real Linux system's
  * /nix/store copy of gnugrep-3.12) -- see this file's own header. */
@@ -1262,6 +1291,15 @@ static int line_has_substr(const char *line_start, const char *needle)
 	return 0;
 }
 
+/* Length of the line starting at `line_start`, up to (not including)
+ * its own '\n' -- used to prove real fill-and-adjust justification
+ * pads a line out to an exact column count, not merely "somewhere". */
+static size_t line_len(const char *line_start)
+{
+	const char *nl = strchr(line_start, '\n');
+	return nl ? (size_t)(nl - line_start) : strlen(line_start);
+}
+
 /* Counts lines in `buf` whose first non-space character is `ch` --
  * every man_tbl_emit_border() line (top/bottom border, `_`/`=` rule
  * row, and each allbox inter-row separator) starts with '+', so this
@@ -1398,6 +1436,46 @@ static void test_eqn(void)
 	CHECK(!plain_contains("delim"));
 
 	CHECK(plain_contains("Text after the equations must still render normally."));
+}
+
+static void test_adjustment(void)
+{
+	const char *b1, *b2, *n1, *n2;
+	char *argv[3];
+	argv[0] = (char *)"man"; argv[1] = (char *)"adjusttest"; argv[2] = 0;
+	CHECK(run(man_path, argv) == 0);
+	slurp_both();
+
+	b1 = find_line(plainbuf, "AdjustBXXX1");
+	b2 = find_line(plainbuf, "AdjustBXXX7");
+	n1 = find_line(plainbuf, "AdjustNXXX1");
+	n2 = find_line(plainbuf, "AdjustNXXX7");
+	CHECK(b1 != 0 && b2 != 0 && n1 != 0 && n2 != 0);
+	if (b1 && b2 && n1 && n2) {
+		/* `.ad b`'s own first (non-last) output line is real
+		 * justification: padded flush to this file's default
+		 * 80-column terminal width -- indent(7) + cols(73), an exact
+		 * right margin, not merely "some extra space appeared". */
+		CHECK(line_len(b1) == 80);
+		/* `.na`'s own first line -- the SAME six words, at the SAME
+		 * indent and column budget -- stays ragged (this file's
+		 * long-standing pre-Tier-7 default): 2 columns short of the
+		 * full width, exactly the slack `.ad b` above distributed as
+		 * real inter-word padding instead. */
+		CHECK(line_len(n1) == 78);
+		CHECK(line_len(b1) - line_len(n1) == 2);
+		/* A justified line's slack shows up as an inter-word gap
+		 * wider than one space -- proof it was actually distributed
+		 * as padding, not just that the line happens to be 80
+		 * columns some other way. */
+		CHECK(line_has_substr(b1, "  "));
+		/* Real troff never stretches a fill span's own LAST line to
+		 * the right margin, even under `.ad b` -- both variants'
+		 * final line (3 words, nowhere near the 73-column budget)
+		 * must come out byte-for-byte the same length. */
+		CHECK(line_len(b2) == line_len(n2));
+		CHECK(line_len(b2) < 80);
+	}
 }
 
 static void test_section_operand_restricts_search(void)
@@ -1613,6 +1691,11 @@ int main(int argc, char **argv)
 		write_file(eqnpath, EQNTEST_1);
 	}
 	{
+		char adjpath[400];
+		snprintf(adjpath, sizeof adjpath, "%s/adjusttest.1", man1dir);
+		write_file(adjpath, ADJUSTTEST_1);
+	}
+	{
 		char greppath[400];
 		snprintf(greppath, sizeof greppath, "%s/grep.1", man1dir);
 		write_grep1_excerpt(greppath);
@@ -1645,6 +1728,7 @@ int main(int argc, char **argv)
 	test_conditionals();
 	test_tables();
 	test_eqn();
+	test_adjustment();
 	test_section_operand_restricts_search();
 	test_no_such_page();
 	test_apropos_dash_k();
