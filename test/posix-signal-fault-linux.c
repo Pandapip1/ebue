@@ -115,16 +115,28 @@ static int child_segv_handler(void)
 	return 91;   /* handler_segv() should already have _exit()'d */
 }
 
-/* .word 0xffffffff: AArch64 has no single canonical "undefined
- * instruction" mnemonic the way x86 has ud2, but 0xffffffff is not a
- * valid encoding of any real AArch64 instruction (every real encoding
- * reserves bit patterns this one does not match), confirmed empirically
- * on this host to raise a real SIGILL with si_code ILL_ILLOPC -- not
- * merely assumed from the ISA reference. */
+/* AArch64 has no single canonical "undefined instruction" mnemonic the
+ * way x86 has ud2, so .word 0xffffffff is used instead: not a valid
+ * encoding of any real AArch64 instruction (every real encoding reserves
+ * bit patterns this one does not match), confirmed empirically on this
+ * host to raise a real SIGILL with si_code ILL_ILLOPC -- not merely
+ * assumed from the ISA reference. GNU as's .word is architecture-width
+ * (4 bytes on AArch64, but only 2 on x86_64), so the same directive is
+ * not portable between the two arches this file's asan CI leg targets;
+ * x86_64 uses its own canonical ud2 instead. */
+#if defined(__aarch64__)
 static void trap_illegal_instruction(void)
 {
 	__asm__ volatile(".word 0xffffffff");
 }
+#elif defined(__x86_64__)
+static void trap_illegal_instruction(void)
+{
+	__asm__ volatile("ud2");
+}
+#else
+#error "trap_illegal_instruction: unsupported architecture"
+#endif
 
 static void handler_ill(int sig, siginfo_t *si, void *uc)
 {
