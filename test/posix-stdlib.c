@@ -390,6 +390,32 @@ static void test_env(void)
 		CHECK(found);
 		unsetenv("NTLIBC_ENVIRON_CHECK");
 	}
+
+	/* clearenv(3) (XSI, not in the base standard, restored per
+	 * src/env/setenv.c's own comment: musl's libc-test functional/
+	 * env.c calls it directly): "shall clear the environment of all
+	 * name-value pairs". Save and restore PATH around the call so this
+	 * test does not leave the rest of the run (or the process spawned
+	 * by test_system() below) without one. */
+	{
+		char *saved_path = getenv("PATH");
+		char pathbuf[4096];
+		int had_path = saved_path != 0;
+
+		if (had_path) {
+			strncpy(pathbuf, saved_path, sizeof pathbuf - 1);
+			pathbuf[sizeof pathbuf - 1] = 0;
+		}
+		CHECK(setenv("NTLIBC_CLEARENV_VAR", "x", 1) == 0);
+		CHECK(getenv("NTLIBC_CLEARENV_VAR") != 0);
+
+		CHECK(clearenv() == 0);
+		CHECK(getenv("NTLIBC_CLEARENV_VAR") == 0);
+		CHECK(getenv("PATH") == 0);
+		CHECK(environ != 0 && environ[0] == 0);
+
+		if (had_path) CHECK(setenv("PATH", pathbuf, 1) == 0);
+	}
 }
 
 /* ---- mkostemp/mkstemps: forms not already covered by test/stdlib.c
@@ -437,6 +463,30 @@ static void test_mkostemp(void)
 			unlink(t);
 		}
 	}
+
+	/* mkostemps() itself, not just through mkstemps()/mkostemp(): both
+	 * a nonzero suffix length AND access-mode-forcing flags together,
+	 * the combination neither test/stdlib.c's mkstemps(t, 4) call (no
+	 * flags) nor the mkostemp(t, O_RDONLY) call above (no suffix)
+	 * exercises. */
+	{
+		char t[] = "mkostest-XXXXXX.txt";
+		int fd = mkostemps(t, 4, O_RDONLY);
+		CHECK(fd >= 0);
+		if (fd >= 0) {
+			CHECK(strstr(t, ".txt") != 0);
+			CHECK(write(fd, "hi", 2) == 2); /* O_RDONLY was forced off */
+			close(fd);
+			unlink(t);
+		}
+	}
+	/* mkstemp.html EINVAL, through mkostemps() directly: fewer than
+	 * six X's immediately before the suffix. */
+	{
+		char t[] = "short-XXXXX.txt";
+		errno = 0;
+		CHECK(mkostemps(t, 4, 0) == -1 && errno == EINVAL);
+	}
 }
 
 /* ---- mkstemp.html DESCRIPTION: "The file shall be readable and
@@ -465,6 +515,51 @@ static void test_mkostemp(void)
  * behaviour that only a real NT box (not Wine) could confirm -- so it
  * is left as a real, well-understood gap rather than attempted
  * half-way. */
+/* mktemp.html DESCRIPTION: "shall replace the contents of the string
+ * pointed to by template ... with a string that constitutes a valid
+ * pathname and that does not name an existing file", the same fill()
+ * this file's mkostemp()/mkstemp() calls above use, but through
+ * mktemp() itself: it fills the X's and confirms the name is unique,
+ * without creating the file.  RETURN VALUE: "shall return the
+ * template argument" (never a null pointer, unlike mkstemp()'s error
+ * return -- mktemp() reports failure by returning an unusable path). */
+static void test_mktemp(void)
+{
+	char t[] = "mktemptest-XXXXXX";
+	char *r;
+	struct stat st;
+
+	r = mktemp(t);
+	CHECK(r == t);
+	CHECK(strcmp(t, "mktemptest-XXXXXX") != 0);
+	/* "does not name an existing file" */
+	errno = 0;
+	CHECK(stat(t, &st) == -1 && errno == ENOENT);
+
+	/* Two successive calls against independent templates must not
+	 * collide -- fill() reseeds its xorshift state from process-
+	 * specific entropy, not from a fixed sequence, so this is not
+	 * merely restating "not the literal XXXXXX" above. */
+	{
+		char t2[] = "mktemptest-XXXXXX";
+		char *r2 = mktemp(t2);
+		CHECK(r2 == t2);
+		CHECK(strcmp(t, t2) != 0);
+	}
+
+	/* mktemp.html EINVAL is not in this call's own ERRORS list (unlike
+	 * mkstemp()'s), but src/stdlib/mktemp.c's mktemp() still refuses a
+	 * malformed template cleanly: "an empty string shall be placed in
+	 * template" per the LEGACY-era description this implementation
+	 * follows, rather than writing past the string's actual X's. */
+	{
+		char bad[] = "bad-template";
+		r = mktemp(bad);
+		CHECK(r == bad);
+		CHECK(bad[0] == '\0');
+	}
+}
+
 static void test_mkstemp_permission_bits(void)
 {
 #if NTLIBC_TEST(BUG, posix_stdlib_mkstemp_owner_only_permissions) /* BUG (compiles and links; formerly UNIMPL):: mkstemp.html DESCRIPTION -- the file is created with
@@ -965,6 +1060,7 @@ int main(int argc, char **argv)
 	test_random_state();
 	test_env();
 	test_mkostemp();
+	test_mktemp();
 	test_mkstemp_permission_bits();
 	test_realpath_buf();
 	test_system();
