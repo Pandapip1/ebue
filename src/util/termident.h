@@ -28,34 +28,34 @@
  *  - Linux: a real tty (a pty slave, most commonly) is a real
  *    character-device node with a real path, and this library's own
  *    chmod()/fchmodat() are real syscalls against it
- *    (src/stat/linux/plat_stat.c) -- but isatty() cannot be used to
- *    find it: src/internal/linux/plat_fd_init.c's classify_fd() maps
- *    *every* S_IFCHR descriptor, ptys included, to __FD_CHAR rather
- *    than __FD_CONSOLE (there is no Linux-specific tty recognition in
- *    that classifier at all yet -- a pre-existing gap in this tree's
- *    native-Linux terminal support, confirmed by reading
- *    src/internal/linux/plat_fd_init.c and src/termios/termios.c in
- *    full; out of scope to fix here, since repairing it touches
- *    isatty()/termios(3)/ioctl(2)'s shared classifier used everywhere
- *    in this tree, not just these two utilities, and this sandbox
- *    cannot link or execute a single Linux ntlibc program to validate
- *    such a change -- missing -lntdll on the standard bin/ link line
- *    by the Makefile's own deliberate design, plus missing outline-
- *    atomics/getauxval/__stack_chk_guard providers even working
- *    around that, none of it related to write/mesg). Composing with
- *    isatty() alone would therefore make mesg/write permanently inert
- *    on Linux, silently -- worse than the gap itself.  So this file
- *    finds a real Linux tty a different, still entirely real way:
- *    fstat() + S_ISCHR(), then resolve the actual device node path via
+ *    (src/stat/linux/plat_stat.c). isatty() (src/unistd/linux/
+ *    plat_isatty.c) is real here too -- a live tcgetattr() probe, not
+ *    the static __FD_CONSOLE classification NT uses (classify_fd()
+ *    still never assigns __FD_CONSOLE to anything on Linux; the live
+ *    probe is how isatty() answers correctly without it) -- but it is
+ *    deliberately not this file's primary test, because it answers a
+ *    different, WIDER question than "is this a nameable device I can
+ *    chmod() or write(1p) a message into": a Unix98 pty MASTER fd
+ *    (/dev/ptmx) passes the identical live ioctl(TCGETS) probe a real
+ *    slave does (confirmed live: opening one with posix_openpt() and
+ *    calling isatty() on the master fd itself returns 1, same as the
+ *    slave), yet /proc/self/fd resolves it to the literal shared
+ *    "/dev/ptmx" multiplexer node, not a per-session device this file
+ *    could meaningfully chmod() or deliver a write(1p) message into.
+ *    So this file finds a real Linux tty its own, narrower way: fstat()
+ *    + S_ISCHR(), then resolve the actual device node path via
  *    readlink("/proc/self/fd/<fd>") -- procfs is the Linux kernel's
  *    own, not something ntlibc provides (src/internal/vfs.c's own
  *    banner: Linux "has real native devices and a real native root, so
  *    it needs no overlay" -- every path here is native, not synthetic)
- *    -- using only fstat() and readlink(), both already real,
- *    independently-tested primitives (src/stat/linux/plat_stat.c,
- *    src/unistd/link.c). No raw syscalls of this file's own, no new
- *    parallel classification machinery -- just a working route to the
- *    same answer isatty() cannot give on this platform yet.
+ *    -- and only accepts the result if the resolved path is actually
+ *    shaped like a real tty (src/util/termident.c's own
+ *    path_looks_like_tty()), which is exactly what filters the ptmx
+ *    master case above out. isatty() is still consulted, as a fallback
+ *    for a Linux fd this path-based route could not resolve (no procfs
+ *    mounted) and unconditionally on NT (no filesystem path a console
+ *    fd could resolve to at all) -- see src/util/termident.c's own
+ *    describe_fd() for exactly where each check applies.
  */
 #ifndef _NTLIBC_UTIL_TERMIDENT_H
 #define _NTLIBC_UTIL_TERMIDENT_H
