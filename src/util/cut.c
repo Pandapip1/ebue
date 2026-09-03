@@ -62,7 +62,8 @@
 
 struct range { long start, end; };
 
-static int parse_list(const char *spec, struct range **out, size_t *out_n)
+static int parse_list(const char *spec, struct range **out withtok(heap_allocated),
+                      size_t *out_n)
 {
 	struct range *arr = NULL;
 	size_t n = 0, cap = 0;

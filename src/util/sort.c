@@ -140,7 +140,8 @@ static struct field *fields_grow(
  * fields_grow() first if not; on failure `*out` is freed and cleared so
  * every caller can propagate a single false return without repeating
  * fields_grow()'s own free-on-failure contract at each call site. */
-static int field_reserve(struct field **out, size_t *cap, size_t n)
+static int field_reserve(struct field **out withtok(heap_allocated), size_t *cap,
+                         size_t n)
 {
 	struct field *g;
 
@@ -468,7 +469,8 @@ static int parse_keydef(const char *spec, struct sort_key *k)
 
 /* ==== input reading ======================================================= */
 
-static int read_all_lines(FILE *f, struct line **out, size_t *nout, size_t *cap)
+static int read_all_lines(FILE *f, struct line **out withtok(heap_allocated),
+                          size_t *nout, size_t *cap)
 {
 	char *buf = 0;
 	size_t bufcap = 0;

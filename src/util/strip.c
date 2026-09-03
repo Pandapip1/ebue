@@ -500,7 +500,9 @@ static int strip_pe(const unsigned char *buf, size_t size,
 
 /* ==== driver =============================================================== */
 
-static int read_whole_file(const char *path, unsigned char **out, size_t *outsize)
+static int read_whole_file(const char *path,
+                           unsigned char **out withtok(heap_allocated),
+                           size_t *outsize)
 {
 	FILE *f;
 	long sz;

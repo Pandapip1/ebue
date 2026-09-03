@@ -58,9 +58,11 @@ char *__progname_full;
 /* p is nonnull per NT's own UNICODE_STRING invariant (Buffer is
  * non-NULL whenever Length > 0), not derivable from the `i < n` guards
  * alone. */
-static int split_cmdline(const WCHAR *p, size_t n, char ***argvp)
+static int split_cmdline(const WCHAR *p, size_t n,
+                         char ***argvp withtok(internal_heap_allocated))
     __attribute__((nonnull(1, 3)));
-static int split_cmdline(const WCHAR *p, size_t n, char ***argvp)
+static int split_cmdline(const WCHAR *p, size_t n,
+                         char ***argvp withtok(internal_heap_allocated))
 {
 	WCHAR *buf;
 	char **argv;

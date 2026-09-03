@@ -92,6 +92,29 @@ void leaked_sentinel_result(int fail)
 	(void)sentinel_producer(fail);
 } /* allocation-lifetime-expect: sentinel-result */
 
+/* Superficially the same out-parameter idiom as safe.c's
+ * out_param_transfer, but the transfer only happens on one branch: this
+ * must still be caught on the path that returns without ever reaching
+ * `*out = buf`. */
+void out_param_transfer_conditional_leak(void **out withtok(heap_allocated),
+                                         int ok)
+{
+	void *buf = malloc(8);
+	if (ok) {
+		*out = buf;
+		return;
+	}
+} /* allocation-lifetime-expect: out-param transfer skipped on this path */
+
+/* Same dereference shape again, but `out` carries no withtok contract at
+ * all, so it is not an owning slot -- the fix must not have broadened
+ * the match to accept every `*param = allocation` regardless of
+ * annotation. */
+void out_param_transfer_unannotated(void **out)
+{
+	*out = malloc(8);
+} /* allocation-lifetime-expect: unannotated out-parameter is not a proven destination */
+
 void *make_inherited(void)
 {
 	return malloc(8);

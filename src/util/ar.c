@@ -357,7 +357,9 @@ struct rewrite_member { struct ar_member m; long data_off; };
  * a fresh archive to a temp file and renames it over the original --
  * the only way to change an archive member's size in place without a
  * hole-punching filesystem this build does not assume. */
-static int read_all_headers(const char *path, struct rewrite_member **out, int *nout)
+static int read_all_headers(const char *path,
+                            struct rewrite_member **out withtok(heap_allocated),
+                            int *nout)
 {
 	FILE *ar;
 	char magic[AR_MAGIC_LEN];
