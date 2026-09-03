@@ -1,91 +1,54 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * regcomp()/regexec()/regerror()/regfree() -- src/regex/regex.c, 732
- * lines of hand-written parser, bytecode emitter and backtracking VM,
- * with no OS dependency.
+ * Fuzzes regcomp()/regexec()/regerror()/regfree() (src/regex/regex.c).
  *
- * WHAT IS FUZZED, AND WHAT DELIBERATELY IS NOT
+ * regcomp is fuzzed without restriction (any bytes, BRE and ERE, any
+ * cflags); regfree/regerror run on every outcome including failed ones
+ * (regfree() after a failed regcomp() is a documented safe extension
+ * here -- test/posix-glob.c). regexec runs only on patterns that pass
+ * safe_to_exec() below, which is deliberately not a faithful model of
+ * regcomp()'s grammar.
  *
- * regcomp is fuzzed without restriction: any byte string, in BRE and
- * ERE mode, with any cflags.  It is the half that walks a caller's
- * pattern with a pointer, and every one of its documented error codes
- * (REG_EBRACK, REG_EPAREN, REG_EBRACE, REG_BADBR, REG_ERANGE,
- * REG_ESUBREG, REG_BADRPT) is a place where a scanner decided it had
- * run out of pattern.  regfree and regerror are driven on every
- * outcome, including the failed ones -- test/posix-glob.c documents
- * that regfree() after a failed regcomp() is safe here as an extension,
- * so it must stay safe.
+ * The filter originally existed to dodge a real process kill: run()
+ * recursed once per I_SPLIT with no depth bound, so a repeat whose body
+ * can match empty (e.g. "(a*)*b") compiled to a progress-free
+ * SPLIT/JMP loop that exhausted the C stack while MAX_STEPS -- which
+ * counts steps, not depth -- never tripped. That's now fixed in the
+ * library itself (run() is iterative over a bounded heap stack and
+ * returns REG_ESPACE; see regex.c's "BOUNDED MATCHING" note and
+ * test_regex_nullable_repeat_does_not_crash()). The filter stays anyway
+ * since a nullable repeat still burns the whole step budget at every
+ * start offset -- about a second per input, costing most of the
+ * harness's throughput for an already-asserted class.
  *
- * regexec is fuzzed only for patterns that pass safe_to_exec() below.
- * What that filter is for has changed, and it is worth being exact
- * about, because the filter itself is not a faithful model of
- * regcomp() and never was.
+ * The filter has twice let known-bad inputs through by mis-modeling the
+ * grammar it filters, worth recording because both were invisible until
+ * found: it once treated a leading '!' in a bracket as a negation
+ * marker (fnmatch's rule, not POSIX's -- only '^' negates a bracket),
+ * so "[!]" read as unterminated and every repeat after it was analyzed
+ * against the wrong parse; and it once treated bare '+'/'?' as literal
+ * characters, missing that apply_repeat() accepts them as GNU BRE
+ * leniency, so "^+" reached the fenced unbounded recursion in three
+ * bytes. Both are fixed, but the lesson stands: a filter that mis-models
+ * its target language admits and excludes the wrong inputs alike.
  *
- * It was written to keep the harness off a *process kill*: run()
- * recursed once per I_SPLIT with no depth bound, and a repeat whose
- * body can match the empty string compiles to a progress-free
- * SPLIT/JMP loop, so "(a*)*b" against thirty 'a's exhausted the C
- * stack while the MAX_STEPS guard -- which counts steps, not depth --
- * never tripped.  An unfiltered harness found that in under a second
- * and then reported nothing else ever after, because libFuzzer stops
- * at the first crash and the corpus keeps the reproducer.
+ * No differential oracle: comparing against glibc's regexec produced
+ * 1357 mismatches, almost all GNU BRE extensions this implementation
+ * doesn't have, burying the one real disagreement -- a noisy oracle is
+ * worse than none. Checked instead are properties POSIX states
+ * unconditionally regardless of what the pattern means: regcomp/regexec
+ * return only documented codes; a match's rm_so/rm_eo are in
+ * [0, strlen(string)] with rm_so <= rm_eo (checked here rather than left
+ * to ASan, since a bad offset would be handed back to the caller, not
+ * dereferenced); an unfilled slot is (-1,-1); regerror never writes past
+ * errbuf_size and NUL-terminates when it's nonzero.
  *
- * That defect is fixed: run() is iterative over a bounded heap stack
- * and reports REG_ESPACE instead of dying (see src/regex/regex.c's
- * "BOUNDED MATCHING" header note, and the now-live
- * test_regex_nullable_repeat_does_not_crash() in test/posix-glob.c).
- * The filter stays anyway, for a smaller reason: a nullable repeat now
- * burns the whole two-million-step budget at every start offset before
- * answering, which is on the order of a second per input and would
- * cost the harness most of its throughput for a class of input whose
- * answer is already known and already asserted in test/.
- *
- * The filter accepts a repeat operator only when the item it applies
- * to is an ordinary atom (a literal, '.', an escaped character, or a
- * bracket expression), never a group, an anchor, an alternation branch
- * start, or another repeat.
- *
- * It used to mis-model brackets, and that is worth recording because
- * the mistake was invisible in exactly the way harness bugs are: it
- * treated a leading '!' as a negation marker, which is fnmatch's rule
- * (XBD 2.13.1), not a POSIX bracket's (XBD 9.3.5, where only '^'
- * negates).  So "[!]" read to it as an *unterminated* bracket, it
- * concluded regcomp would reject the pattern and there was nothing to
- * filter, and every repeat operator after that point was analysed
- * against a parse regcomp does not share.  Both reproducers of record
- * for the stack overflow -- this harness's own, and the one CI filed
- * as issue #1 -- are "[!]" followed by a repeat of a repeat, and both
- * walked straight through the filter.  Fixed; a filter that mis-models
- * the language it is filtering excludes and admits the wrong inputs in
- * both directions, which is a coverage gap wearing the shape of
- * coverage.
- *
- * NO DIFFERENTIAL ORACLE.  One was measured: comparing against glibc's
- * regexec produced 1357 mismatches, overwhelmingly GNU BRE extensions
- * ('\|', '\+', '\?') that this implementation deliberately does not
- * have, burying the single real disagreement.  A noisy oracle is worse
- * than none.  What is checked positively are the properties POSIX
- * states unconditionally and that hold whatever the pattern means:
- *
- *   - regcomp returns 0 or one of the REG_* codes in <regex.h>;
- *   - regexec returns 0 or REG_NOMATCH (or REG_ESPACE);
- *   - on a match, 0 <= rm_so <= rm_eo <= strlen(string) for every
- *     filled slot, and an unfilled slot is (-1, -1).  A negative or
- *     out-of-range offset is how a caller gets talked into an
- *     out-of-bounds read of its own subject, which is why this is
- *     checked rather than left to ASan: the bad index would be handed
- *     out, not dereferenced here;
- *   - regerror never writes past errbuf_size and always NUL-terminates
- *     when errbuf_size > 0, and returns the same size it would need.
- *
- * SIZE CAPS.  Pattern 48 bytes, subject 24.  regexec's outer loop tries
- * every start offset and gives each a fresh MAX_STEPS budget, so cost
- * is O(len * steps); an unbounded subject turns every input into a
- * libFuzzer timeout that says nothing.  run()'s recursion depth is also
- * bounded by roughly (subject length * number of repeats), so a small
- * subject keeps a *legitimate* deep match from being mistaken for the
- * fenced unbounded one.
+ * Pattern is capped at 48 bytes, subject at 24: regexec tries every
+ * start offset with a fresh step budget each (cost is O(len*steps)), so
+ * an unbounded subject makes every input an uninformative timeout; the
+ * same cap also keeps a legitimately deep match from looking like the
+ * now-fenced unbounded recursion.
  */
 #include <regex.h>
 #include <string.h>
@@ -97,17 +60,10 @@ extern void oracle_mismatch_i(const char *, const char *, long long, long long);
 #define CAP_STR 24
 
 /* True if no repeat operator in `p` applies to something that might
- * match the empty string.  See the file banner: this exists solely to
- * keep the harness off the process-kill class test_regex_nullable_
- * repeat_does_not_crash() in test/posix-glob.c now covers.
- *
- * Every uncertainty is resolved as "not safe", and that rule was earned:
- * the first version answered "safe" for a pattern whose bracket
- * expression or backslash escape ran off the end of the string, on the
- * reasoning that regcomp would reject such a pattern anyway.  It does
- * not always -- the ERE "[!].\331**\\..." compiled cleanly and then
- * killed the process -- and a filter that models the parser's grammar
- * approximately must never lean on the parser agreeing with it.
+ * match the empty string. Every uncertainty resolves to "not safe" --
+ * an early version assumed regcomp would reject a truncated bracket or
+ * escape, but "[!].\331**\\..." compiled cleanly and killed the process,
+ * so this never leans on regcomp agreeing with it.
  *
  * `prev` is 1 when the last thing scanned was an ordinary atom -- the
  * only kind of item that provably cannot match empty -- and 0
@@ -144,18 +100,8 @@ static int safe_to_exec(const char *p, int ere)
 
 		if (c == '[') {                         /* skip a whole bracket expression */
 			const char *q = p + 1;
-			/* Only '^' negates a POSIX bracket (XBD 9.3.5); '!'
-			 * is fnmatch's spelling (XBD 2.13.1) and is an
-			 * ordinary member here.  Treating it as a negation
-			 * marker made this scanner read "[!]" as an
-			 * unterminated bracket -- so it answered "regcomp
-			 * will reject this, nothing to filter" for a pattern
-			 * regcomp in fact accepts as a bracket matching '!',
-			 * and every repeat operator after it was analysed
-			 * against the wrong parse.  That is how the
-			 * stack-overflow reproducer of record got past this
-			 * filter.  A leading ']' *is* an ordinary member, in
-			 * both notations, which is the line below. */
+			/* Only '^' negates a POSIX bracket; '!' (fnmatch's
+			 * negation spelling) is an ordinary member here. */
 			if (*q == '^') q++;
 			if (*q == ']') q++;
 			while (*q && *q != ']') {
@@ -174,16 +120,8 @@ static int safe_to_exec(const char *p, int ere)
 			continue;
 		}
 
-		/* '*', '+' and '?' are repeat operators in BOTH modes.  Bare
-		 * '+'/'?' are ordinary characters in strict POSIX BRE, but
-		 * src/regex/regex.c's apply_repeat() deliberately accepts them
-		 * as "GNU BRE" leniency (its comment says so, and
-		 * test/posix-glob.c's test_regex_subexpression_capture relies
-		 * on it).  Treating them as literals here is exactly the
-		 * mistake this filter cannot afford: the BRE pattern "^+"
-		 * applies a repeat to a zero-width I_BOL and reaches the
-		 * fenced unbounded recursion in three bytes of input.  Found
-		 * by this harness on its first thirty-second run. */
+		/* '*'/'+'/'?' are repeat operators in both modes: apply_repeat()
+		 * accepts bare '+'/'?' as GNU BRE leniency even in strict BRE. */
 		if (c == '*' || c == '+' || c == '?') { if (!prev) return 0; prev = 0; p++; continue; }
 
 		if (ere) {
@@ -272,8 +210,6 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 	check_regerror(r ? r : REG_NOMATCH, &re, pat);
 
 	if (r != 0) {
-		/* Documented extension (test/posix-glob.c): regfree() after a
-		 * failed regcomp() must not crash or double-free. */
 		regfree(&re);
 		regfree(&re);
 		return 0;

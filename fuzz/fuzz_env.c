@@ -1,103 +1,52 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * getenv/setenv/putenv/unsetenv and the `environ` array they maintain --
- * src/env/getenv.c and src/env/setenv.c.  Small, but it is a
- * hand-managed NULL-terminated pointer array that four functions
- * reallocate, shift down, free elements of, and deliberately do NOT free
- * elements of, with a side table recording which strings belong to the
- * caller.  Every one of those is an ownership rule enforced by code
- * rather than by a type, and the sequence of calls decides whether they
- * hold -- which is why this is a fuzz target and not a unit test.
+ * Fuzzes getenv/setenv/putenv/unsetenv and the `environ` array
+ * (src/env/getenv.c, setenv.c) -- a hand-managed NULL-terminated pointer
+ * array whose ownership rules (what gets freed, what must not be) are
+ * enforced by code, not types, and only a sequence of calls can violate.
+ * The input is read as a program: a series of (operation, NAME or
+ * NAME=VALUE) records run against one persistent environment, so a
+ * single input can build the interesting cases directly -- a name that
+ * appears twice, setenv over a putenv'd string, putenv with no '=',
+ * a name containing '='.
  *
- * The input is read as a program: a series of records, each an
- * operation (set / set-no-overwrite / put / unset / get) and a NAME or
- * NAME=VALUE string.  A single input therefore performs a whole
- * sequence against one environment, which is what exposes the
- * interesting cases: unsetenv of a name that appears twice (its loop
- * runs until __env_find stops finding it), setenv over a putenv string
- * (which must not be freed), putenv of a string with no '=' (which is
- * specified to behave as unsetenv), and a name containing '=' (EINVAL).
+ * putenv() takes ownership of the caller's pointer, so putenv strings
+ * come from a static ring arena rather than the stack (a stack buffer
+ * would be a harness use-after-free, not a library one) -- retiring a
+ * slot's old name via unsetenv() before reuse, since overwriting it in
+ * place would corrupt a live environ entry behind the library's back.
+ * putenv calls are capped (PUTCAP): src/env/setenv.c's putenv_strings
+ * side table grows unconditionally on every call and is never pruned,
+ * even by unsetenv(), so is_putenv()'s linear scan would make every
+ * later setenv/unsetenv O(N) and eventually exhaust memory -- reachable
+ * memory, so invisible to LeakSanitizer.
  *
- * PUTENV STRINGS COME FROM A STATIC ARENA, and putenv calls are capped
- * process-wide.  Both are forced by the implementation, and the second
- * is a finding in its own right:
+ * environ itself is pruned back to ENVLOW entries once an input starts
+ * above ENVHIGH (env_prune(), via unsetenv() so ownership stays
+ * consistent). Without it, one persistent environment across tens of
+ * thousands of inputs a run eventually walks check_environ()'s MAXENV
+ * backstop into a false "lost terminator" report -- a harness artifact
+ * from unbounded growth, not a real bug -- and made every input's
+ * check_environ()/count_named() walk slower than the last. With the
+ * prune, an array that actually reaches MAXENV has genuinely lost its
+ * terminator.
  *
- *   - putenv() takes ownership of the caller's pointer and the
- *     environment keeps it, so a putenv'd string must outlive every
- *     later call.  A stack or heap buffer would be a use-after-free in
- *     the harness, not in the library.
- *   - src/env/setenv.c appends to `putenv_strings` on EVERY putenv()
- *     call, unconditionally -- it does not check whether the pointer is
- *     already tracked -- and nothing ever removes an entry, not even
- *     unsetenv().  So N putenv() calls cost 8N bytes that are never
- *     released, and is_putenv()'s linear scan makes every subsequent
- *     setenv/unsetenv O(N).  A fuzzer runs tens of thousands of inputs a
- *     second, so uncapped this harness would spend its entire budget in
- *     that scan and then exhaust memory.  The growth is reachable
- *     memory, so LeakSanitizer does not report it; it is recorded here
- *     because this is where it was found.
+ * count_named()'s comparison is deliberately case-insensitive to match
+ * src/env/getenv.c's name_eq(): this is a Windows libc, and a
+ * case-sensitive count here would disagree with the library about what
+ * "the same name" means (an earlier "N" would make a later "n" lookup
+ * succeed while the count said zero) -- caught as a harness false
+ * positive before landing here.
  *
- * THE ENVIRONMENT IS PRUNED BETWEEN INPUTS, for the same reason putenv
- * is capped -- and the finding that forced it is worth recording, since
- * it was reported as a library bug and is not one.
- *
- * Nothing here ever bounded how large `environ` got.  One environment
- * for the life of the process is deliberate: that is what makes an
- * earlier input's leftovers visible to a later one.  But an input runs
- * as many as 128 records, most of which name something new, and no
- * input is obliged to unset what it set -- so the entry count only ever
- * climbs, and check_environ()'s MAXENV backstop is not a property of
- * the library at all.  It is a number this harness was always going to
- * walk past given enough inputs.  It did, at input #32125 of a 120 s
- * run:
- *
- *     MISMATCH environ has no terminator within MAXENV
- *       ntlibc: 4097
- *       glibc : 4096
- *
- * The terminator was exactly where it belonged; there were simply 4096
- * entries in front of it, put there by the 32124 inputs before this
- * one.  Which is why the artefact libFuzzer wrote for it replays clean
- * under `tools/fuzz.sh --repro` -- and why it is worse than a wasted
- * report: the nightly saves its corpus, so a crash artefact that
- * reproduces nothing is replayed at start-up every night until someone
- * deletes it by hand.
- *
- * The same unbounded growth is why a run got slower the longer it went.
- * check_environ() and count_named() each walk the whole array and each
- * run per record, so an input costs time quadratic in an environment
- * that never shrinks.  Measured across that run, exec/s at inputs
- * #7193 / #12695 / #19639 / #28463 was 7193 / 3173 / 1510 / 694 -- the
- * last stretch searching at a tenth the rate of the first, for the same
- * wall clock.
- *
- * env_prune() therefore trims the environment back to ENVLOW entries
- * whenever an input starts with more than ENVHIGH of them.  It keeps
- * the cross-input carry-over the harness wants -- ENVLOW entries of it
- * -- and every branch of the switch below stays reachable; what it
- * gives up is only the unbounded tail, which tested nothing but this
- * file's own arithmetic.  MAXENV stays where it is, doing the job it
- * was named for: with the prune in place an input cannot start above
- * ENVHIGH or add more than 128, so an array that reaches MAXENV has
- * genuinely lost its terminator, and is walked no further than that.
- *
- * WHAT IS ASSERTED.
- *
- *   - environ is always NULL-terminated, every entry before the
- *     terminator is a readable string containing '=', and the number of
- *     entries is bounded -- read in full, so ASan sees a lost
- *     terminator as an overflow rather than a silent walk;
- *   - after setenv(name, value, 1), getenv(name) returns exactly value;
- *   - after setenv(name, value, 0) on an existing name, getenv is
- *     unchanged ("shall not be changed", setenv.html);
- *   - after unsetenv(name), getenv(name) is NULL and NO entry for that
- *     name remains -- the "appears twice" case is the reason unsetenv's
- *     loop exists, and a loop that stops early leaves one behind;
- *   - a name that is empty or contains '=' is EINVAL for both setenv
- *     and unsetenv, and the environment is left alone;
- *   - putenv of a string with no '=' removes the name, per putenv.html's
- *     cross-reference to unsetenv.
+ * Asserted: environ stays NULL-terminated with every entry containing
+ * '=' and the count bounded (read in full, so ASan sees a lost
+ * terminator as an overflow); setenv(...,1) always takes effect and
+ * setenv(...,0) never overwrites an existing value; unsetenv() leaves
+ * no entry for that name even if it appeared twice; an empty or
+ * '='-containing name is EINVAL for setenv/unsetenv; putenv of a string
+ * with no '=' removes the name, per putenv.html's cross-reference to
+ * unsetenv.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -110,10 +59,10 @@ extern void oracle_mismatch_s(const char *, const char *, const char *, const ch
 
 #define REC      64
 #define MAXENV   4096
-#define ENVHIGH  512            /* see env_prune() and the banner */
+#define ENVHIGH  512
 #define ENVLOW   256
 #define PUTARENA 128
-#define PUTCAP   1024           /* see the banner */
+#define PUTCAP   1024
 
 static char putarena[PUTARENA][REC + 1];
 static int putslot;
@@ -141,20 +90,7 @@ static void check_environ(const char *ctx)
 	}
 }
 
-/* How many entries name `name`?  unsetenv must leave zero.
- *
- * THE COMPARISON IS CASE-INSENSITIVE, and that is not a shortcut: this
- * is a Windows libc, and src/env/getenv.c's name_eq() folds case on
- * purpose -- a program asking for "PATH" has to find the "Path" that
- * Windows actually puts in the environment block.  __env_find(), and
- * therefore getenv(), setenv() and unsetenv(), all inherit that.  A
- * case-sensitive count here disagrees with the library about what
- * "the same name" means, and since the fuzzer keeps one environment
- * across every input in the process, an earlier input that set "N"
- * makes a later getenv("n") succeed while the count says zero.  The
- * first version of this harness did exactly that and reported
- * "getenv returned a value for a name not in environ" on the input
- * "@nn=" -- a harness defect, not a library one. */
+/* Case-insensitive to match src/env/getenv.c's name_eq() -- see header. */
 static int count_named(const char *name)
 {
 	size_t l = strlen(name);
@@ -177,22 +113,11 @@ static int env_count(void)
 	return n;
 }
 
-/* Trim the environment back to ENVLOW entries once it passes ENVHIGH.
- * See the banner for what went wrong without this.
- *
- * Pruning through unsetenv() rather than by rewriting environ directly
- * is the point: it retires an entry down the same ownership path
- * everything else here uses, so a putenv'd string is removed the way
- * src/env/setenv.c expects and is_putenv() still keeps it from being
- * free()d.  The cost is that the loop leans on one of the functions
- * under test, so it is bounded twice -- it gives up if unsetenv()
- * fails, and it gives up if a call does not actually shrink the array.
- * Neither is silently swallowed: whatever made unsetenv() stop removing
- * names is what the assertions in case 3 below exist to report, and
- * they run on the very next record.
- *
- * Called with the environment possibly empty (environ itself NULL), so
- * the environ[0] dereference below is reached only via n > ENVLOW. */
+/* Prunes via unsetenv() rather than rewriting environ directly, so a
+ * putenv'd string is retired down the same ownership path setenv.c
+ * expects. Bails if unsetenv() fails or stops shrinking the array,
+ * rather than looping forever; either is a real failure the next
+ * record's assertions will report, not silently swallowed. */
 static void env_prune(void)
 {
 	int n = env_count();
@@ -287,17 +212,8 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 			if (putcalls >= PUTCAP) break;
 			s = putarena[putslot];
 			putslot = (putslot + 1) % PUTARENA;
-			/* The arena is a ring, and putenv() stores the caller's
-			 * pointer rather than a copy, so a slot that is about to
-			 * be reused may still BE an environ entry.  Overwriting
-			 * it in place would rewrite that entry's text behind the
-			 * library's back -- and the first version of this harness
-			 * did exactly that, then reported "an environ entry has
-			 * no '='" for the entry it had itself just corrupted.
-			 * A harness defect, not a library one.  Retiring the name
-			 * first is enough: unsetenv() removes the entry that
-			 * points here, and is_putenv() keeps setenv.c from
-			 * free()ing a pointer it does not own. */
+			/* A reused slot may still be a live environ entry; retire
+			 * its name via unsetenv() before overwriting the text. */
 			if (s[0]) {
 				char stale[REC + 1];
 				size_t sl = strcspn(s, "=");

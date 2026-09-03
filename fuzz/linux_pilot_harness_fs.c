@@ -2,84 +2,30 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Test-harness scaffolding for the Linux filesystem-subsystem pilot --
- * NOT part of ntlibc, exactly like fuzz/linux_pilot_harness.c (the
- * mman/unistd fd-ops pilot's own harness) and fuzz/ntstubs.c are "not
- * part of ntlibc" for their respective native builds. A separate file
- * from linux_pilot_harness.c, not a reuse of it, because it backs a
- * separate binary (linux_pilot_test_fs) with its own link line -- see
- * tools/linux-build-fs.sh.
+ * NOT part of ntlibc, same as fuzz/linux_pilot_harness.c. Its own file
+ * (not shared with linux_pilot_harness.c) because it backs a separate
+ * binary, linux_pilot_test_fs -- see tools/linux-build-fs.sh.
  *
- * The fd table (__fds[]/__fd_limit/__fd_alloc/__fd_install/
- * __fd_install_at/__fd_get) is reimplemented here for the identical
- * reason linux_pilot_harness.c's own banner gives for its copy: linking
- * the real src/internal/fd.c would still require satisfying NT-only
- * syscalls this pilot has no Linux backend for at all (fd.c is core
- * NT/RTL bookkeeping, never migrated behind a plat_*.h interface, and
- * explicitly out of scope for either pilot).
+ * The fd table is reimplemented here because linking the real
+ * src/internal/fd.c would still require NT-only syscalls this pilot has
+ * no Linux backend for. The rest of this file is stand-ins for symbols
+ * that src/fcntl/fcntl.c, fadvise.c, src/stat/chmod.c, and stat.c
+ * reference from branches this test never actually takes at runtime but
+ * that the linker still needs resolved.
  *
- * Beyond the fd table, this file supplies six more stand-ins the real
- * front-door files this pilot links (src/fcntl/fcntl.c, fadvise.c;
- * src/stat/chmod.c, stat.c) reference from within functions this test
- * DOES call, even though the reachable code path here never actually
- * takes the branch that uses them (the same "the compiler cannot
- * statically prove the branch dead, so the linker still needs a real
- * symbol" situation linux_pilot_harness.c's own banner describes for
- * fd.c's __handle_type()):
- *
- *   - syscall(): every plat_*.c backend in this pilot (both the new
- *     filesystem ones and the original mman/unistd pilot's) is written
- *     against `extern long syscall(long number, ...);` and interprets
- *     its result via the RAW Linux kernel ABI convention -- a
- *     successful call's own return value, or -errno (unsigned,
- *     [-4095,-1]) on failure -- exactly as plat_mem.c's own
- *     is_sys_error()/`errno = (int)-ret` banner describes, and exactly
- *     what a real production ntlibc would get from its OWN raw syscall
- *     trampoline once one exists (the banner's own words: "both are
- *     declared/defined locally below" -- implying a real one, not a
- *     borrowed one). This pilot, like the original one, currently
- *     borrows glibc's OWN exported `syscall()` symbol as a stand-in
- *     for that trampoline rather than writing inline assembly -- and
- *     that substitution is NOT behaviourally transparent: glibc's
- *     syscall() is documented (man 2 syscall) to translate the raw
- *     kernel convention into the ordinary C library one itself --
- *     returning -1 and setting the global `errno` on failure, not the
- *     raw -errno value the wrapped syscall actually returned. Confirmed
- *     directly against this host (a tiny C program calling
- *     `syscall(SYS_openat, ..., "/nonexistent")` prints `raw return =
- *     -1, errno = 2`, not `raw return = -2`).
- *
- *     Every plat_*.c file's `errno = (int)-ret` on the error path is
- *     therefore silently wrong when built against glibc's syscall():
- *     glibc has ALREADY set the correct errno and returned bare -1, and
- *     `(int)-(-1)` is always 1 (EPERM) -- clobbering whatever the real
- *     error was with a constant, wrong one, on every single failure,
- *     regardless of which syscall or which real error occurred. This
- *     is invisible to a test that only checks a success path (which is
- *     everything the original mman/unistd pilot's own fuzz/
- *     linux_pilot_test.c checks -- every CHECK() there is a success
- *     condition), and it stayed invisible in early runs of this
- *     filesystem pilot too, for the same reason -- until a fork()-based
- *     cross-process fcntl()/flock() conflict test (this file's
- *     fuzz/linux_pilot_test_fs.c) needed a SPECIFIC errno (EAGAIN) on a
- *     deliberately-triggered failure to prove the lock was real, and
- *     every conflict came back reported as EPERM instead. strace -f
- *     confirmed the kernel itself was already returning the correct
- *     `-1 EAGAIN` at the syscall boundary in both cases -- the bug is
- *     entirely in this substitution layer, not in the plat_*.c
- *     implementations' logic, which is correct for the raw-ABI
- *     trampoline they are actually written against.
- *
- *     Fixed HERE, in the harness, not in any plat_*.c file: this
- *     defines a REAL `syscall()` (aarch64 raw `svc #0`, arguments in
- *     x0-x5, number in x8, unmodified raw return in x0) that gives
- *     every already-correct plat_*.c file the exact ABI it was written
- *     for, and statically shadows glibc's translating symbol of the
- *     same name the same way this file's own fcntl()/flock() calls
- *     already resolve to THIS link's ntlibc definitions rather than
- *     glibc's (a directly-linked object's symbol takes priority over a
- *     shared library's same-named export). This is aarch64-only, like
- *     every syscall number in this pilot; a future architecture needs
- *     its own asm here, not just its own SYS_* numbers.
+ * syscall() is a REAL raw syscall trampoline (aarch64 `svc #0`), not a
+ * stub, and its presence here fixed a real bug: every plat_*.c backend
+ * is written against the raw kernel ABI (`errno = (int)-ret` on a
+ * negative return), but this pilot previously borrowed glibc's exported
+ * syscall(), which itself translates that convention -- returning bare
+ * -1 with the real errno already set. `(int)-(-1)` is always EPERM, so
+ * every failure was silently misreported as EPERM regardless of the
+ * real error. Invisible on success-only checks; caught only when a
+ * fork()-based fcntl()/flock() conflict test needed a specific EAGAIN
+ * and got EPERM instead (confirmed via strace that the kernel itself
+ * returned EAGAIN correctly). Defining a real syscall() here, which a
+ * directly-linked object's symbol shadows over glibc's same-named
+ * export, gives every plat_*.c file the raw ABI it expects.
  */
 #include <stdarg.h>
 
@@ -112,82 +58,22 @@ long syscall(long number, ...)
 	return x0;
 }
 
-/* The remaining stand-ins, same reasoning as above ("the compiler
- * cannot statically prove the branch dead, so the linker still needs a
- * real symbol"):
- *
- *   - getpid(): src/unistd/getpid.c's real body is
- *     `(pid_t)(ULONG_PTR)__teb()->ClientId.UniqueProcess` -- NT TEB
- *     access, meaningless outside an NT process and not something this
- *     filesystem-subsystem pilot has any business reimplementing (that
- *     is src/unistd's own territory, not migrated here). fcntl.c's
- *     record_lock() calls getpid() unconditionally at the top of every
- *     F_GETLK/F_SETLK/F_SETLKW request, so a real body is needed to
- *     link fcntl() at all. This one IS answered for real, via a raw
- *     Linux getpid(2) syscall -- not a stub -- because record_lock()'s
- *     own per-fd lock-ownership bookkeeping (src/fcntl/fcntl.c's
- *     record_locks[]) depends on the *real* owning pid to behave
- *     correctly across the fork() this test performs for its lock-
- *     conflict check below, and a fake constant would silently break
- *     that check instead of just being cosmetically wrong.
- *
- *   - __mq_fd_replaced(): src/thread/mqueue.c's POSIX-message-queue
- *     fd-remap bookkeeping, called from fcntl(F_SETFD)'s handle-remake
- *     path. This pilot exercises no mqueue descriptors, so there is
- *     nothing for it to remap -- same shape of no-op as
- *     linux_pilot_harness.c's own __mq_fd_closed().
- *
- *   - __fsize_allow(): src/misc/resource.c's RLIMIT_FSIZE gate, called
- *     unconditionally by posix_fallocate() (src/fcntl/fadvise.c).
- *     Reporting "no limit" here means the other four RLIMIT_FSIZE
- *     entry points (__fsize_limited/_clamp/_room_at/_exceeded, already
- *     stubbed the same way below) stay unreachable at runtime, exactly
- *     as linux_pilot_harness.c's own comment on those four says.
- *
- *   - __vfs_stat(): src/stat/stat.c's fstat() calls it whenever
- *     `f->vfs` is set on the descriptor (the fixed POSIX namespace
- *     layered over NT paths -- /dev, /proc-shaped synthetic entries --
- *     src/internal/libc.h's own banner on struct __fd). This pilot's
- *     fd-table entries never set `vfs`, so the call is always skipped
- *     at runtime, but fstat()'s own compiled body still references the
- *     symbol.
- *
- *   - __fd_pos_save()/__fd_pos_restore(), __vfs_resolve_at(), __ntpath():
- *     pulled in by src/unistd/{read,write}.c's pread()/pwrite() and by
- *     src/stat/statvfs.c's/stat.c's path-taking entry points
- *     (statvfs()/fstatat()/stat()/lstat()), none of which this test
- *     calls -- but GNU ld resolves every undefined reference in an
- *     object file handed to it directly (as opposed to one pulled from
- *     a .a archive by need) regardless of --gc-sections, which only
- *     trims the resulting unreferenced sections from the final image
- *     rather than exempting them from symbol resolution. Same shape of
- *     stub as linux_pilot_harness.c's own __fd_pos_save()/
- *     __fd_pos_restore() (there, for the identical reason: an NT-only
- *     quirk workaround, meaningless on Linux, that was never brought
- *     into the platform-abstraction interface at all).
- *
- *   - __handle_path(), __ntpath_at(), __ntpath_free(), free(): all four
- *     are pulled in by src/stat/chmod.c's fchmod(), which -- on an
- *     EACCES from __plat_chmod() -- falls back to reopening the file by
- *     name via fchmodat(), which resolves that name through NT-only
- *     __ntpath_at() (src/internal/path.c, explicitly out of scope for
- *     this whole migration; see src/internal/plat_fcntl.h's and
- *     plat_stat.h's own banners). This pilot's fchmod() call never hits
- *     EACCES (it chmods a file this same process just created), so the
- *     fallback is dead at runtime, but fchmod()'s compiled body still
- *     references __handle_path() directly, and the fchmodat() it would
- *     call transitively references __ntpath_at()/__ntpath_free() (and,
- *     via the retrieved path buffer, free()). __handle_path() returns
- *     NULL here (matching its own real contract's "no reopenable name"
- *     answer for an unlinked/edge-case file, which is also just true:
- *     this stub tracks no NT handle-to-path mapping at all), so
- *     fchmod()'s own `if (!path) { errno = e; return -1; }` guard is
- *     what actually executes if this path is ever hit -- __ntpath_at()/
- *     __ntpath_free()/free() are therefore never actually called, only
- *     linked; their bodies exist purely to satisfy the symbol table. As
- *     with __plat_create_file()'s stub (src/fcntl/linux/plat_fcntl.c),
- *     this is a real, out-of-scope gap being named, not a shortcut this
- *     pilot is quietly relying on for something that matters.
+/* Remaining stand-ins: getpid() is answered for real (raw getpid(2), not
+ * a stub) because record_lock()'s per-fd lock-ownership bookkeeping
+ * needs the true owning pid across this test's fork()-based lock-
+ * conflict check -- a fake constant would silently break that check.
+ * Everything else below is a dead-branch symbol GNU ld still needs
+ * resolved (an object linked directly, not pulled from a .a archive by
+ * need, has every reference resolved regardless of --gc-sections):
+ * __mq_fd_replaced() (no mqueue fds exist here to remap), __fsize_allow()
+ * and friends (report "no limit", so RLIMIT_FSIZE paths stay
+ * unreachable), __vfs_stat() (this pilot's fd table never sets `vfs`),
+ * __fd_pos_save/_restore, __vfs_resolve_at, __ntpath (NT-only path
+ * handling this pilot's calls never reach), and __handle_path() /
+ * __ntpath_at() / __ntpath_free() / free() (fchmod()'s EACCES fallback
+ * path, never hit since this test chmods a file it just created --
+ * __handle_path() returning NULL here matches its real "no reopenable
+ * name" contract, so the other three are linked but never called).
  */
 #include <string.h>
 #include <unistd.h>
@@ -206,12 +92,8 @@ int __fd_alloc(int lowest)
 	return -1;
 }
 
-/* Real fd.c's own version (src/internal/fd.c) frees getdents()'s
- * lazily-allocated continuation buffer here; this pilot never links
- * src/dirent/getdents.c, so f->dbuf can never be anything but NULL --
- * a no-op stand-in, only present to satisfy src/unistd/close.c's own
- * call to it, same shape as this file's other reimplemented fd-table
- * primitives. */
+/* No-op: this pilot never links getdents.c, so f->dbuf is always NULL;
+ * present only to satisfy close.c's call to it. */
 void __fd_release_dynamic(struct __fd *f) { (void)f; }
 
 int __fd_install_at(int fd, HANDLE h, unsigned flags, int type)
@@ -249,11 +131,6 @@ void __mq_fd_replaced(int fd, __plat_handle_t h)
 	(void)fd; (void)h;
 }
 
-/* src/misc/resource.c's RLIMIT_FSIZE machinery -- see this file's own
- * banner. Reporting "no limit" leaves __fsize_clamp/_room_at/_exceeded
- * unreachable at runtime for this pilot, but their symbols are still
- * needed if anything else pulls write.c in transitively; not linked
- * here, so only the four below (plus __fsize_allow) are provided. */
 int __fsize_limited(void) { return 0; }
 long long __fsize_clamp(__plat_handle_t h, int append, size_t count)
 {
@@ -320,10 +197,6 @@ void free(void *p)
 	(void)p;
 }
 
-/* getpid(): a REAL raw Linux syscall (via this file's own syscall()
- * trampoline above), not a stub -- see this file's own banner for why
- * record_lock()'s fork-based lock-conflict test needs the true owning
- * pid, not a fake constant. */
 #define SYS_getpid 172
 pid_t getpid(void)
 {
