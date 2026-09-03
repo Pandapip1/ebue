@@ -159,7 +159,7 @@ static void notify(const struct sigevent *event)
 			free(notice);
 			return;
 		}
-		__plat_close(thread);
+		__plat_thread_close(thread);
 	}
 }
 
@@ -337,7 +337,7 @@ static int start_worker(void)
 		return -1;
 	}
 	worker_started = 1;
-	__plat_close(thread);
+	__plat_thread_close(thread);
 	if (!worker_atexit_registered) {
 		/* atexit()'s own table is a separate, already process-wide-safe
 		 * structure, so calling it while holding this file's lock isn't

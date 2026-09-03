@@ -76,6 +76,7 @@
 #include "libc.h"
 #include "plat_fd.h"
 #include "plat_process.h"
+#include "plat_thread.h"
 
 /* Set/clear OBJ_INHERIT on one open descriptor's handle in place:
  * NtDuplicateObject with the attribute asked for, then close the old
@@ -226,7 +227,7 @@ static pid_t fork_impl(int run_handlers)
 	if (__is_wow64()) __wow64_fixup_clone(r.process, r.thread);
 #endif
 	__plat_thread_resume(r.thread);
-	__plat_close(r.thread);
+	__plat_thread_close(r.thread);
 	if (run_handlers) __pthread_atfork_parent();
 	return pid;
 }
