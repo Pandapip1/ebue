@@ -413,9 +413,19 @@ static int start_worker(void)
 		 * nhandlers) is unguarded by __ntlibc_sig_lock_token -- a
 		 * separate, already-process-wide-safe table -- so calling it
 		 * while still holding this file's own lock is not a
-		 * lock-ordering hazard, merely a call to another module. */
-		atexit(aio_worker_atexit);
-		worker_atexit_registered = 1;
+		 * lock-ordering hazard, merely a call to another module.
+		 *
+		 * Its ATEXIT_CAP_ table can be exhausted by unrelated atexit()
+		 * callers before this ever runs -- the worker thread above is
+		 * already spawned and fully usable either way, so a failed
+		 * registration here is not a reason to fail start_worker():
+		 * there is no clean way to unwind an already-running thread
+		 * over it. It only means a normal exit() will not wait for
+		 * the worker to drain outstanding requests before the process
+		 * ends. worker_atexit_registered is left clear on failure so
+		 * that stays true rather than silently claiming otherwise. */
+		if (atexit(aio_worker_atexit) == 0)
+			worker_atexit_registered = 1;
 	}
 	return 0;
 }
