@@ -19,27 +19,17 @@
 #include "afd.h"
 #include "ownership_stubs.h"
 
-/* The "\Device\Tcp"/"\Device\Udp" transport names this project's two
- * socket kinds (AF_INET/SOCK_STREAM, AF_INET/SOCK_DGRAM) name in their
- * open packet, and the shared length in *bytes* -- both names are 11
- * characters, so one length serves either (see afd.h's
- * __afd_open_ea_size_for() comment).  AFD_OPEN_PACKET.
- * TransportDeviceNameLength is a byte count, not a character count
- * (phnt ntafd.h annotates it _Field_size_bytes_opt_; ReactOS passes
- * UNICODE_STRING.Length, which is also bytes).  Getting this wrong by a
- * factor of two is the classic UTF-16 length bug, so it is computed
- * once, here. */
+/* TransportDeviceNameLength is a byte count, not a character count
+ * (UTF-16); both transport names are 11 chars so one length serves
+ * either. */
 static const WCHAR afd_transport_tcp[] = AFD_TRANSPORT_TCP;
 static const WCHAR afd_transport_udp[] = AFD_TRANSPORT_UDP;
 #define AFD_TRANSPORT_WCHARS ((sizeof(afd_transport_tcp) / sizeof(WCHAR)) - 1) /* excludes the NUL */
 #define AFD_TRANSPORT_BYTES (AFD_TRANSPORT_WCHARS * sizeof(WCHAR))
 
-/* Which name/length pair a given socktype selects.  A build-time
- * assertion, not a runtime one: if a third transport ever needed a
- * differently-sized name, AFD_TRANSPORT_BYTES above (computed from the
- * TCP name alone) would silently understate or overstate the UDP name's
- * real length -- this keeps that failure mode from being possible
- * rather than catching it after the fact. */
+/* Build-time assertion: AFD_TRANSPORT_BYTES is computed from the TCP
+ * name alone, so a differently-sized UDP name would silently mis-size
+ * requests without this. */
 typedef char __afd_transport_lengths_match[
 	(sizeof(afd_transport_udp) == sizeof(afd_transport_tcp)) ? 1 : -1];
 
@@ -48,12 +38,10 @@ static const WCHAR *afd_transport_for(int socktype)
 	return socktype == SOCK_DGRAM ? afd_transport_udp : afd_transport_tcp;
 }
 
-/* The value is the open packet: the shape's header (NOT
- * sizeof(AFD_OPEN_PACKET), which is 28, nor sizeof(AFD_CREATE_PACKET),
- * which is 16 -- both count a TransportName[1] placeholder and pad),
- * the name, and the name's NUL.  The NUL is not counted by the packet's
- * own name-length field but is kept in the buffer, matching ReactOS's
- * WSPSocket, which copies TransportName.Length + sizeof(WCHAR). */
+/* Header size + name + NUL, not sizeof(AFD_OPEN_PACKET)/AFD_CREATE_PACKET
+ * (those pad and count a placeholder TransportName[1]). The NUL is kept
+ * in the buffer though not counted by the name-length field, matching
+ * ReactOS's WSPSocket. */
 #define AFD_OPEN_PACKET_BYTES(hdr) ((hdr) + AFD_TRANSPORT_BYTES + sizeof(WCHAR))
 
 /* See afd.h.  The header byte count for a shape, and the only place
@@ -65,39 +53,19 @@ static unsigned long afd_shape_header(int shape)
 	     : (unsigned long)AFD_OPEN_PACKET_HEADER_SIZE;
 }
 
-/* See afd.h.
- *
- * Version-gated, not probed, and afd.h's socket-creation banner is
- * where the argument for that lives: handing either driver the other
- * one's layout *succeeds*, so there is no failure for a probe to learn
- * from.  src/internal/ntversion.c states the three conditions a
- * divergence has to meet before it may be settled this way.
- *
- * The threshold is NT 6.0, matching ReactOS's own apitest
- * (modules/rostests/apitests/afd/AfdHelpers.c, which branches on
- * `LOBYTE(LOWORD(GetVersion())) >= 6`).  A platform that cannot supply
- * a version at all is treated as modern -- see ntversion.c -- so the
- * shape CI verifies is also the shape any unrecognised platform gets. */
+/* Version-gated rather than probed: handing either driver the other's
+ * layout succeeds, so there's no failure to probe for. Threshold is NT
+ * 6.0, matching ReactOS's apitest; an unversioned platform is treated
+ * as modern. */
 int __afd_open_shape(void)
 {
 	return __nt_version_at_least(6, 0) ? AFD_SHAPE_NT6 : AFD_SHAPE_NT4;
 }
 
-/* See afd.h.  Exact fit, deliberately: this is
- *
- *     FIELD_OFFSET(FILE_FULL_EA_INFORMATION, EaName)
- *       + EaNameLength + 1 (the NUL) + EaValueLength
- *
- * which is exactly the `ComputedLength` NT's IoCheckEaBufferValidity()
- * computes.  ReactOS's WSPSocket instead writes
- * `SizeOfPacket + sizeof(FILE_FULL_EA_INFORMATION) + AFD_PACKET_COMMAND_LENGTH`,
- * which is 3 bytes larger (sizeof() counts the EaName[1] placeholder
- * and pads to 4) and leaves the declared total 4-misaligned.  The
- * validator tolerates trailing slack on a final entry, but there is no
- * reason to declare bytes the entry does not describe -- and an exact,
- * 4-aligned total is an invariant test/posix-socket-ea.c can assert
- * without having to special-case padding.  (ReactOS's *apitest* sizes
- * it exactly the way this does, with FIELD_OFFSET throughout.) */
+/* Exact fit matching NT's IoCheckEaBufferValidity() ComputedLength
+ * (FIELD_OFFSET(EaName) + EaNameLength + 1 + EaValueLength) -- not
+ * ReactOS's WSPSocket formula, which pads 3 bytes larger and leaves the
+ * total 4-misaligned. */
 unsigned long __afd_open_ea_size_for(int shape)
 {
 	return (unsigned long)(AFD_EA_HEADER_SIZE + AFD_EA_NAME_LEN + 1
@@ -109,13 +77,8 @@ unsigned long __afd_open_ea_size(void)
 	return __afd_open_ea_size_for(__afd_open_shape());
 }
 
-/* See afd.h.
- *
- * The two shapes are written out separately and in full rather than
- * shared through a run of offsets.  They differ by three fields in the
- * middle, which is precisely the kind of difference that disappears
- * when it is expressed as arithmetic; each block below can be read
- * against its reference declaration one field at a time. */
+/* The two shapes are written out separately in full, not shared via
+ * offset arithmetic, since they differ by three fields in the middle. */
 void __afd_build_open_ea_for(int shape, int socktype, void *buf)
 {
 	FILE_FULL_EA_INFORMATION *ea = (FILE_FULL_EA_INFORMATION *)buf;
@@ -126,23 +89,19 @@ void __afd_build_open_ea_for(int shape, int socktype, void *buf)
 	__ownership_writable_span(buf, __afd_open_ea_size_for(shape));
 	memset(buf, 0, __afd_open_ea_size_for(shape));
 
-	/* Single, and therefore final, entry: NextEntryOffset is 0.  A
-	 * non-zero value would have to equal ALIGN_UP(ComputedLength, 4)
-	 * *and* be followed by another entry. */
+	/* Single, final entry: NextEntryOffset is 0 (a non-zero value
+	 * would require another entry to follow). */
 	ea->NextEntryOffset = 0;
 	ea->Flags = 0;
-	/* EaNameLength excludes the terminator; the terminator must still
-	 * be present, because the validator checks EaName[EaNameLength]
-	 * == '\0'.  Hence AFD_EA_NAME_LEN here but +1 in the copy. */
+	/* Excludes the NUL, but the validator checks
+	 * EaName[EaNameLength] == '\0', so the copy below is +1. */
 	ea->EaNameLength = AFD_EA_NAME_LEN;
 	__ownership_writable_span(ea->EaName, AFD_EA_NAME_LEN + 1);
 	memcpy(ea->EaName, AFD_EA_NAME, AFD_EA_NAME_LEN + 1);
 	ea->EaValueLength = (unsigned short)AFD_OPEN_PACKET_BYTES(hdr);
 
-	/* The value starts immediately after the name's NUL.  With a
-	 * 15-byte name that lands at offset 8 + 15 + 1 == 24, so the
-	 * packet's own uint32_t fields stay naturally aligned -- true of
-	 * both shapes, since only the header length differs. */
+	/* Starts right after the name's NUL; with a 15-byte name that's
+	 * offset 24, keeping the packet's uint32_t fields aligned. */
 	value = (void *)(ea->EaName + AFD_EA_NAME_LEN + 1);
 
 	if (shape == AFD_SHAPE_NT4) {
@@ -161,14 +120,10 @@ void __afd_build_open_ea_for(int shape, int socktype, void *buf)
 		AFD_OPEN_PACKET *pkt = (AFD_OPEN_PACKET *)value;
 		pkt->EndpointFlags = 0; /* not CONNECTIONLESS/RAW/MESSAGE_ORIENTED */
 		pkt->GroupID = 0;
-		/* The three fields ReactOS's 12-byte AFD_CREATE_PACKET does
-		 * not have, and whose absence is what made real Windows read
-		 * the device name as a length -- see afd.h's socket-creation
-		 * banner.  socktype selects both the SocketType/Protocol pair
-		 * and (via afd_transport_for() above) the matching device
-		 * name -- the three must agree, or afd.sys opens an endpoint
-		 * whose driver-side transport does not match what its own
-		 * fields claim. */
+		/* Fields ReactOS's AFD_CREATE_PACKET lacks. socktype must
+		 * agree with the transport device name (via
+		 * afd_transport_for()) or afd.sys opens a mismatched
+		 * endpoint. */
 		pkt->AddressFamily = AF_INET;
 		pkt->SocketType = socktype;
 		pkt->Protocol = socktype == SOCK_DGRAM ? IPPROTO_UDP : IPPROTO_TCP;
@@ -184,37 +139,18 @@ void __afd_build_open_ea(void *buf)
 	__afd_build_open_ea_for(__afd_open_shape(), SOCK_STREAM, buf);
 }
 
-/* __afd_open() and __afd_ioctl() -- declared in src/internal/afd.h,
- * called by every file under src/socket/ -- have moved to
- * src/socket/nt/plat_socket.c: their bodies are entirely NtCreateFile/
- * NtDeviceIoControlFile/NtWaitForSingleObject marshaling, no different
- * in kind from src/mman/nt/plat_mem.c or src/unistd/nt/plat_fd.c, and
- * this file (afdsupport.c) is the pure byte-marshaling half of the AFD
- * support code -- the EA/request/reply builders below, none of which
- * issue a syscall of their own. See src/internal/plat_socket.h's banner
- * for why __afd_open()/__afd_ioctl() keep their existing afd.h-declared,
- * NT-shaped signatures rather than gaining POSIX-shaped __plat_ twins:
- * six other files under src/socket/ call them directly and are out of
- * scope for this conversion. */
+/* __afd_open()/__afd_ioctl() (declared in afd.h) live in
+ * src/socket/nt/plat_socket.c; this file is the pure byte-marshaling
+ * half -- EA/request/reply builders that issue no syscalls of their
+ * own. */
 
-/* sockaddr_in -> TRANSPORT_ADDRESS.  bind.html/connect.html both take
- * (address, address_len); AF_INET/SOCK_STREAM is this project's only
- * supported pair, so anything else is EAFNOSUPPORT.
+/* sockaddr_in -> TRANSPORT_ADDRESS. AF_INET is this project's only
+ * supported family (else EAFNOSUPPORT); TCP and UDP share this same
+ * marshaling since the TDI wire address is identical either way.
  *
- * AF_INET/SOCK_STREAM is this project's only supported *pair* wearing
- * that literal spelling; AF_INET/SOCK_DGRAM is supported too and uses
- * this exact same address marshaling unchanged -- the TDI wire address
- * for a UDP endpoint is the same TDI_ADDRESS_IP shape as a TCP one, only
- * the transport device differs (see afd.h's socket-creation banner), so
- * there is nothing socktype-specific for this function to do.
- *
- * The 14 address bytes are written through src/internal/afd.h's
- * TDI_IP_OFF_* offsets rather than through a TDI_ADDRESS_IP struct.
- * tdi.h packs that struct to 1 (it sits between pshpack1.h and
- * poppack.h), so in_addr is at +2, not at the +4 an ordinary C struct
- * would put it; see the TDI banner in afd.h.  ReactOS's WSPBind
- * (dll/win32/msafd/misc/dllmain.c) writes the same 14 bytes as a plain
- * RtlCopyMemory of sockaddr.sa_data, which is the identical image. */
+ * Written through afd.h's TDI_IP_OFF_* offsets rather than a
+ * TDI_ADDRESS_IP struct: tdi.h packs that struct to 1, so in_addr sits
+ * at +2, not the +4 a plain C struct would give it. */
 int __afd_addr_from_sockaddr(const struct sockaddr *restrict addr, socklen_t len, TRANSPORT_ADDRESS *restrict out)
 {
 	const struct sockaddr_in *sin;
@@ -254,30 +190,21 @@ int __afd_build_bind_request(void *buf, unsigned long share_type,
 	return 0;
 }
 
-/* See afd.h.  46 on x86_64, 34 on i386 -- and in neither case
- * sizeof(AFD_CONNECT_INFO), which rounds the tail up for
- * TAAddressCount's alignment and would declare bytes the request does
- * not describe.  IOCTL_AFD_CONNECT is METHOD_NEITHER, so this is the
- * only bound afd.sys has on its read of the address. */
+/* 46 on x86_64, 34 on i386 -- not sizeof(AFD_CONNECT_INFO), which pads
+ * the tail. IOCTL_AFD_CONNECT is METHOD_NEITHER, so this size is the
+ * only bound afd.sys has on the address it reads. */
 unsigned long __afd_connect_request_size(void)
 {
 	return (unsigned long)AFD_CONNECT_REQ_SIZE;
 }
 
-/* See afd.h.  Written through the AFD_CONNECT_REQ_OFF_* byte offsets
- * rather than through AFD_CONNECT_INFO's members, for the reason the
- * header's connect banner gives: the position of RemoteAddress is the
- * one thing this project's two reference sources disagree about, it
- * differs only on x86_64, and expressing it as arithmetic on
- * sizeof(HANDLE) keeps the disagreement visible instead of hiding it
- * inside a compiler's padding rules.
+/* Written through byte offsets, not AFD_CONNECT_INFO members: the two
+ * reference sources disagree on RemoteAddress's position (x86_64 only),
+ * and offset arithmetic keeps that visible instead of hiding it in
+ * padding.
  *
- * SanActive, RootEndpoint and ConnectEndpoint are all zero for an
- * ordinary connect(): no Winsock SAN provider, and no multipoint
- * root/leaf endpoints (those are what WSAJoinLeaf fills in -- phnt
- * ntafd.h shares this structure between AFD_CONNECT and
- * AFD_JOIN_LEAF).  ReactOS's WSPConnect (dll/win32/msafd/misc/
- * dllmain.c) likewise sets UseSAN/Root/Unknown to 0/0/0. */
+ * SanActive/RootEndpoint/ConnectEndpoint are zero for an ordinary
+ * connect() -- no SAN provider, no WSAJoinLeaf multipoint endpoints. */
 int __afd_build_connect_request(void *buf, const struct sockaddr *addr, socklen_t len)
 {
 	unsigned char *p = (unsigned char *)buf;
@@ -309,14 +236,9 @@ int __afd_build_connect_request(void *buf, const struct sockaddr *addr, socklen_
 
 /* ---- IOCTL_AFD_SELECT request/reply, by offset -----------------------
  *
- * See src/internal/afd.h's poll section: ReactOS's ULONG_PTR Exclusive
- * puts Handles at +24 on x86_64, where the AFD driver's own source,
- * phnt, wepoll and libuv all put it at +16.  Everything here goes
- * through the named offsets so that no compiler's idea of ULONG_PTR
- * can move the array again.
- *
- * The header fields are at fixed offsets on both ABIs; only the
- * per-handle element size is pointer-sized. */
+ * ReactOS's ULONG_PTR Exclusive puts Handles at +24 on x86_64, where
+ * phnt/wepoll/libuv all put it at +16; everything here uses named
+ * offsets so no compiler's ULONG_PTR layout can move the array again. */
 
 /* See afd.h. */
 unsigned long __afd_poll_request_size(unsigned long nhandles)
@@ -324,9 +246,8 @@ unsigned long __afd_poll_request_size(unsigned long nhandles)
 	return (unsigned long)AFD_POLL_REQ_SIZE(nhandles);
 }
 
-/* See afd.h.  Timeout is a plain LONGLONG here (src/internal/nt.h has
- * no .QuadPart union), memcpy'd rather than stored through a cast so
- * the buffer needs no more than pointer alignment. */
+/* Timeout is a plain LONGLONG (no .QuadPart union here), memcpy'd
+ * rather than cast-stored so the buffer needs only pointer alignment. */
 void __afd_build_poll_request(void *buf, long long timeout, unsigned long nhandles) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned char *p = (unsigned char *)buf;
@@ -339,20 +260,10 @@ void __afd_build_poll_request(void *buf, long long timeout, unsigned long nhandl
 	memcpy(p + AFD_POLL_REQ_OFF_TIMEOUT, &timeout, sizeof(timeout));
 	__ownership_writable_span(p + AFD_POLL_REQ_OFF_HANDLE_COUNT, sizeof(count));
 	memcpy(p + AFD_POLL_REQ_OFF_HANDLE_COUNT, &count, sizeof(count));
-	/* Four bytes, and always zero.  Microsoft's afd.h and phnt call
-	 * it BOOLEAN Unique, wepoll and libuv call it ULONG Exclusive;
-	 * they disagree about the type but not about the four bytes
-	 * before an 8-aligned Handles, and zero is zero either way --
-	 * see afd.h's poll banner.
-	 *
-	 * It must *stay* zero, and not merely because this project has
-	 * no use for it: AfdPoll() reads it as Unique, and a non-zero
-	 * Unique makes the request supersede any existing unique poll on
-	 * the same first file object, cancelling that other IRP with
-	 * STATUS_CANCELLED (the driver's poll.c walks AfdPollListHead
-	 * and cancels the match).  A __fd_probe()-shaped poll setting it
-	 * would silently break another thread's concurrent
-	 * select()/poll() on the same socket. */
+	/* Four bytes, always zero. Must stay zero: AfdPoll() reads it as
+	 * Unique, and non-zero cancels any other unique poll IRP on the
+	 * same file object (STATUS_CANCELLED) -- silently breaking a
+	 * concurrent select()/poll() on the same socket. */
 	__ownership_writable_span(p + AFD_POLL_REQ_OFF_EXCLUSIVE, sizeof(exclusive));
 	memcpy(p + AFD_POLL_REQ_OFF_EXCLUSIVE, &exclusive, sizeof(exclusive));
 }
@@ -371,8 +282,8 @@ void __afd_poll_set_handle(void *buf, unsigned long i, HANDLE h, uint32_t events
 	memcpy(e + AFD_POLL_H_OFF_STATUS, &zero, sizeof(zero));
 }
 
-/* See afd.h.  IOCTL_AFD_SELECT is METHOD_BUFFERED, so afd.sys writes
- * the events it actually observed back into these same slots. */
+/* IOCTL_AFD_SELECT is METHOD_BUFFERED: afd.sys writes observed events
+ * back into these same slots. */
 uint32_t __afd_poll_get_events(const void *buf, unsigned long i)
 {
 	const unsigned char *e = (const unsigned char *)buf + AFD_POLL_REQ_OFF_HANDLES + (size_t)i * AFD_POLL_H_SIZE;
@@ -395,30 +306,17 @@ uint32_t __afd_poll_get_handle_count(const void *buf)
 	return count;
 }
 
-/* See afd.h.  Matching on the handle rather than indexing by request
- * position is not defensive padding: AfdPoll() *compacts* its output.
- * poll.c walks the requested endpoints and does
- *
- *     if ( found ) {
- *         pollInfo->NumberOfHandles++;
- *         pollHandleInfo++;
- *     }
- *
- * -- the output pointer advances only for an endpoint that fired, so
- * the entries that did fire are packed to the front of the array and
- * output slot i has nothing to do with request slot i.  With today's
- * single-handle probe the two coincide; written as an indexed read it
- * would silently become wrong the first time src/select/poll.c batches
- * several sockets into one ioctl. */
+/* Matches by handle, not request-slot index: AfdPoll() compacts its
+ * output, advancing the output pointer only for endpoints that fired,
+ * so output slot i is unrelated to request slot i once more than one
+ * handle is polled. */
 uint32_t __afd_poll_events_for(const void *buf, unsigned long nrequested, HANDLE h)
 {
 	uint32_t count = __afd_poll_get_handle_count(buf);
 	unsigned long i;
 
-	/* The reply cannot name more handles than were asked about; a
-	 * count that says otherwise is not a reply this code understands,
-	 * and reading past the buffer on its say-so would be worse than
-	 * reporting nothing. */
+	/* Reply can't name more handles than requested; clamp rather than
+	 * trust it and read past the buffer. */
 	if ((unsigned long long)count > (unsigned long long)nrequested)
 		count = (uint32_t)nrequested;
 
@@ -436,8 +334,8 @@ uint32_t __afd_poll_events_for(const void *buf, unsigned long nrequested, HANDLE
 			return events;
 		}
 	}
-	/* Not named in the reply: no event fired on it.  That is a real
-	 * answer -- "nothing is ready" -- not a failure to obtain one. */
+	/* Not named in the reply means no event fired -- a real answer,
+	 * not a failure to obtain one. */
 	return 0;
 }
 
@@ -474,36 +372,17 @@ void __afd_addr_to_sockaddr(const TA_ADDRESS *ta, struct sockaddr *addr, socklen
 	*len = sizeof(sin);
 }
 
-/* See afd.h.  Two fields are checked, and each one is load-bearing.
+/* Two fields checked, both load-bearing. TAAddressCount says whether an
+ * address is present at all -- this buffer is out-only, so an unwritten
+ * Address[0] is uninitialised stack, not a request readback. AddressLength
+ * stands in for a length check on IoStatus.Information: the driver
+ * zeroes it on a short copy-back, so rejecting zero rejects a truncated
+ * reply with no second source of truth needed. AddressType is skipped --
+ * AF_INET is the only family this library ever produces.
  *
- * TAAddressCount is the only field in the reply that says how many
- * addresses are present.  accept.c read Address[0] without consulting
- * it, which is the same defect __afd_poll_events_for() exists to fix --
- * except that this buffer is out-only, so an unwritten Address[0] is
- * not the caller's own request read back but uninitialised stack.
- *
- * AddressLength stands in for a length check on IoStatus.Information.
- * The driver writes it as part of the TDI address it moves in, so over
- * a buffer zeroed before the ioctl a copy-back that stopped short of
- * the address leaves it zero, and rejecting zero rejects that reply --
- * with no arithmetic against Information, and no second source of truth
- * about how big the reply "should" be.  AfdWaitForListen() always
- * declares the whole address written or fails the IRP outright
- * (STATUS_BUFFER_TOO_SMALL), so a well-formed reply always passes; so
- * do the two name queries, which either move the whole TDI address in
- * or fail with STATUS_BUFFER_TOO_SMALL (AfdGetPeerName()) or the
- * transport's own query error (AfdGetSockName()).
- *
- * AddressType is deliberately not checked: it is the field that overlays
- * sa_family, and socket() admits AF_INET alone, so a connection accepted
- * on one of this library's listeners -- or an address AFD reports for
- * one of its endpoints -- has no other family to be.  It carries no
- * information AddressLength has not already given.
- *
- * The two field offsets are spelled +0 and +4 rather than through the
- * AFD_*_RSP_OFF_* names, because those differ per reply and this is the
- * one part that does not: a TRANSPORT_ADDRESS is TAAddressCount then
- * TA_ADDRESS, wherever the enclosing reply happens to put it. */
+ * Offsets are +0/+4 literally, not via AFD_*_RSP_OFF_* names, since
+ * those differ per reply while a TRANSPORT_ADDRESS's own layout does
+ * not. */
 int __afd_transport_addr_out(const void *tap, struct sockaddr *addr, socklen_t *len)
 {
 	const unsigned char *p = (const unsigned char *)tap;
@@ -521,10 +400,9 @@ int __afd_transport_addr_out(const void *tap, struct sockaddr *addr, socklen_t *
 
 	if (!addr || !len) return 0;
 
-	/* Copied out by byte count rather than read through a
-	 * TA_ADDRESS * aimed into the buffer: the caller's buffer need
-	 * not be aligned for one, and this file's own tests hand it a
-	 * plain unsigned char image. */
+	/* Copied by byte count rather than through a TA_ADDRESS * aimed
+	 * at the buffer: the caller's buffer need not be aligned, and
+	 * tests hand it a plain unsigned char image. */
 	memset(&ta, 0, sizeof(ta));
 	__ownership_readable_span(p + 4, (size_t)(2 + 2 + TDI_ADDRESS_LENGTH_IP));
 	memcpy(&ta, p + 4, (size_t)(2 + 2 + TDI_ADDRESS_LENGTH_IP));
@@ -540,15 +418,11 @@ int __afd_accept_reply_addr(const void *reply, struct sockaddr *addr, socklen_t 
 	                                addr, len);
 }
 
-/* See afd.h.  These four exist so that the one thing that distinguishes
- * the two name replies -- 26 bytes with a ULONG ActivityCount in front
- * versus 22 bytes with nothing -- is reachable from a test with no
- * \Device\Afd, the same way __afd_build_bind_request() makes the bind
- * request's layout reachable.  Written as separate functions rather
- * than as an offset argument to one, because the offset is not a
- * parameter of anything: each ioctl has exactly one right answer, and a
- * caller that could pass the other one is the bug these are here to
- * make visible. */
+/* Separate functions, not one taking an offset argument: each ioctl has
+ * exactly one right answer, and a caller able to pass the other one is
+ * the bug this shape exists to prevent. These make the two name
+ * replies' differing sizes (26 bytes w/ ActivityCount vs 22 without)
+ * reachable from tests with no \Device\Afd. */
 unsigned long __afd_sockname_reply_size(void)
 {
 	return (unsigned long)AFD_SOCKNAME_RSP_SIZE;

@@ -84,11 +84,8 @@ static int rwlock_ready(pthread_rwlock_t *lock)
 	return 0;
 }
 
-/* x86 branch stays the literal asm tcc needs; see
- * src/thread/pthread_cancel.c's own copy of this function for why
- * (duplicated in three files, not shared, but the reasoning is
- * identical) and for the aarch64/tcc (PLATFORM=nt ARCH=aarch64) branch
- * below's own story -- src/thread/nt/aarch64/atomic32.S's banner. */
+/* x86 branch stays literal asm because tcc needs it (see
+ * pthread_cancel.c's copy of this function, duplicated rather than shared). */
 static int compare_exchange(volatile int *address, int old_value, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	int new_value)
 {
@@ -134,14 +131,6 @@ static int shared_acquire(struct rwlock_data *data,
 	}
 }
 
-/* waiter required (`waiter->lock`/`waiter->linked` dereferenced
- * unconditionally at entry). This function's own flagged findings
- * here (`data->head`/`data->tail`/`data->waiting_writers`) are NOT
- * fixable on this signature: data is loaded from waiter->lock, a
- * struct FIELD's own value, a genuinely different symbolic fact from
- * waiter itself that `nonnull` cannot describe -- verified sound by
- * hand (every waiter is only ever linked onto the rwlock_data that
- * initialized it), left as an honest residual rather than force-fit. */
 static void unlink_waiter(struct rw_waiter *waiter) __attribute__((nonnull(1)));
 static void unlink_waiter(struct rw_waiter *waiter)
 {
@@ -155,11 +144,8 @@ static void unlink_waiter(struct rw_waiter *waiter)
 	waiter->linked = 0;
 }
 
-/* True, with the acquisition already recorded, if the lock was
- * immediately free for `write`'s mode.  Both call sites below run this
- * with data's lock held and, on a true result, always take the identical
- * next step ("mark self as the new owner"); folding that step in here
- * keeps the two from being able to drift out of step. */
+/* Records the acquisition too, on success, so both call sites can't drift
+ * out of step on the "mark self as new owner" step. */
 static int rwlock_try_immediate(struct rwlock_data *data, pthread_t self, int write)
 {
 	int available = write ? (!data->writer && !data->readers)
@@ -193,8 +179,6 @@ static void wake_waiters(struct rwlock_data *data)
 	}
 }
 
-/* argument required: aliased into waiter and dereferenced
- * unconditionally (`waiter->linked`) right after the lock. */
 static void wait_cleanup(void *argument) __attribute__((nonnull(1)));
 static void wait_cleanup(void *argument)
 {

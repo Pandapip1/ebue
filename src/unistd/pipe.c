@@ -2,13 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * An anonymous pipe is a named pipe with a name nobody else will guess,
- * which is exactly how kernel32's CreatePipe makes one.  The read end is
- * the server side, created with NtCreateNamedPipeFile; the write end is
- * an ordinary NtOpenFile of the same name.  Both are synchronous and
- * byte-stream, so read and write on them behave as they do on a file.
- * See src/unistd/nt/plat_unistd.c for how __plat_pipe() below builds one
- * (and for __pipe_handles(), the lower-level HANDLE-returning form
- * src/select/select.c's own one-shot pipe still calls directly).
+ * same as kernel32's CreatePipe: the read end is the server side
+ * (NtCreateNamedPipeFile), the write end an ordinary NtOpenFile of the
+ * same name. Both are synchronous byte-stream, so read/write behave as
+ * on a file. See src/unistd/nt/plat_unistd.c's __plat_pipe().
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc

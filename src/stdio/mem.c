@@ -52,12 +52,8 @@ FILE *fmemopen(void *__restrict buf, size_t size, const char *__restrict mode)
 		while (l < size && b[l]) l++;
 		f->mem_len = l;
 		f->mem_pos = l;
-		/* fmemopen.html: for append modes the initial position is the
-		 * first null byte, "and ... the current position shall be reset
-		 * to the size of the buffer" before each write -- so a write
-		 * lands at the end of the CONTENTS whatever the caller has
-		 * seeked to since.  Recorded here because the write path is
-		 * shared with open_memstream(), which has no append mode. */
+		/* Initial position is the first NUL; buf.c's shared write path
+		 * resets to mem_len before every write while this is set. */
 		f->mem_append = 1;
 	}
 	f->bufmode = _IOFBF;
@@ -95,40 +91,14 @@ FILE *open_memstream(char **bufp, size_t *sizep)
 	return f;
 }
 
-/* open_wmemstream(): https://pubs.opengroup.org/onlinepubs/9699919799/functions/open_wmemstream.html
- * DESCRIPTION, RETURN VALUE, ERRORS.  open_memstream()'s wide twin: a
- * dynamically grown buffer behind a FILE, except that the buffer holds
- * wchar_t and *sizep counts WIDE CHARACTERS.
- *
- * Three differences from the byte version, all of them consequences of
- * that one sentence:
- *
- *  - the stream is wide-oriented from the moment it exists.  Not a
- *    convenience: fwide.html leaves a byte function applied to a
- *    wide-oriented stream undefined, and here it would be concretely
- *    destructive, because a stray fputc() would put an odd number of
- *    bytes into a buffer whose contents are wchar_t and misalign
- *    everything after it.  Setting the orientation up front is what
- *    makes fwide() report the truth about that.
- *
- *  - the `wmem` flag tells src/stdio/buf.c's __file_write() to keep a
- *    null WIDE character past the end rather than a null byte, and to
- *    divide the byte length down before storing it through sizep.
- *
- *  - src/stdio/wide.c's fputwc() path writes the wchar_t's own bytes
- *    for this stream instead of converting through wcrtomb().  A memory
- *    stream that holds wide characters must not hold their multibyte
- *    encoding; that is the whole difference between this and
- *    open_memstream().
- *
- * mem_len/mem_pos/mem_size stay BYTE counts, so all the growth
- * arithmetic is shared with open_memstream() unchanged; only the
- * terminator width and the reported size are divided.
- *
- * The caller owns the buffer and frees it, exactly as for
- * open_memstream(); fclose() does not (f->mem_owned is for
- * fmemopen(NULL, ...) and is deliberately not set here).
- */
+/* open_memstream()'s wide twin: buffer holds wchar_t, *sizep counts wide
+ * characters, and the stream is wide-oriented from creation (a stray
+ * byte write would misalign the wchar_t contents). mem_len/mem_pos/
+ * mem_size stay byte counts so the growth arithmetic is shared with
+ * open_memstream(); only the terminator width and reported size divide.
+ * fputwc() (src/stdio/wide.c) writes the wchar_t's own bytes here instead
+ * of converting through wcrtomb(). Caller owns and frees the buffer;
+ * fclose() does not (mem_owned is for fmemopen(NULL, ...) only). */
 FILE *open_wmemstream(wchar_t **bufp, size_t *sizep)
 {
 	FILE *f;

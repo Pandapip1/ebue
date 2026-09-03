@@ -1,30 +1,14 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * getentropy(): fill a caller-given buffer with cryptographically
- * strong random bytes. Not POSIX (a BSD/glibc/Linux extension,
- * originally from OpenBSD), but no different in kind from the rest of
- * <unistd.h>'s _GNU_SOURCE/_BSD_SOURCE-guarded surface.
+ * getentropy(): fill a caller-given buffer with cryptographically strong
+ * random bytes (BSD/glibc extension, not POSIX). NT has no entropy
+ * source in ntdll; the real implementation needs bcrypt.dll's
+ * BCryptGenRandom, so it's only real under NTLIBC_USE_KERNEL32 (ENOSYS
+ * otherwise) -- see src/unistd/nt/plat_unistd.c's __plat_getentropy().
+ * Linux's is real unconditionally, via getrandom(2).
  *
- * Previously left undefined-ok on the theory that using bcrypt.dll's
- * BCryptGenRandom -- the only real entropy source reachable at all,
- * ntdll having none -- meant taking on a "routine dependency" this
- * library otherwise avoids. That framing missed that the project
- * already has a sanctioned answer to exactly this situation:
- * NTLIBC_USE_KERNEL32 (see configure --help, and src/unistd/ids.c's
- * advapi32 use / src/signal/signal.c's SetConsoleCtrlHandler use for
- * two existing examples of the same "load a higher-level DLL only in
- * the build that explicitly asked for it" shape). This just routes
- * getentropy() through that same, already-existing door instead of
- * refusing to build it at all -- see src/unistd/nt/plat_unistd.c's
- * __plat_getentropy() for the NT side (real under NTLIBC_USE_KERNEL32,
- * ENOSYS without it) and src/unistd/linux/plat_unistd.c's for the Linux
- * side (real unconditionally, via getrandom(2) -- no higher-level
- * dependency question even arises there).
- *
- * getentropy(3) (not a POSIX page; OpenBSD/glibc): "the maximum
- * permitted value for the length argument is 256... If the buflen
- * argument is greater than 256, error EIO." */
+ * getentropy(3): buflen > 256 is EIO. */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
  * public-header contract; transitive ABI declarations are intentional,

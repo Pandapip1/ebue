@@ -1,21 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The POSIX-facing allocator front door: argument validation and the
- * overflow checks (calloc()/reallocarray()) stay here, portable across
- * every platform; the four primitives with no portable equivalent --
- * allocate, resize, query a live allocation's usable size, free --
- * live behind src/internal/plat_malloc.h (see that header and each
- * platform's own plat_malloc.c for why: NT delegates to ntdll's own
- * process heap, already a serious allocator with size classes,
- * coalescing and guard-page support; a platform with nothing
- * equivalent to delegate to, like Linux, needs a real one written out
- * -- see src/malloc/linux/plat_malloc.c's own banner).
- *
- * posix_memalign()/aligned_alloc()/memalign()/valloc() below were
- * already expressed purely in terms of malloc()/free() rather than any
- * raw heap call, so they needed no change at all from the split that
- * produced this file's own shape.
+ * The POSIX-facing allocator front door: argument validation and
+ * overflow checks stay here, portable across every platform; allocate,
+ * resize, query usable size, and free live behind
+ * src/internal/plat_malloc.h (NT delegates to ntdll's process heap,
+ * Linux implements a real one — see src/malloc/linux/plat_malloc.c).
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -59,12 +49,9 @@ void *realloc(void *p consume_if_nonnull_return(heap_allocated), size_t n)
 	return q;
 }
 
-/* __malloc()/__free() -- the separate allocator crt/crt1.c uses before
- * main() runs -- used to be two thin wrappers right here.  They moved to
- * their own translation unit, src/malloc/crt_alloc.c: see that file's
- * banner for the mechanical link-time reason (a duplicate-symbol error
- * against any program, like musl's flockfile-list.c regression test,
- * that interposes its own malloc()/calloc()/free()/realloc()). */
+/* __malloc()/__free(), used by crt/crt1.c before main() runs, live in
+ * their own translation unit (src/malloc/crt_alloc.c) — see its banner
+ * for the link-time reason. */
 
 size_t malloc_usable_size(void *p)
 {

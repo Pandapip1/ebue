@@ -1,17 +1,12 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * <netdb.h> pieces with no OS dependency at all -- shared between every
- * platform rather than duplicated per-backend. gai_strerror() is a
- * pure code->string table (https://pubs.opengroup.org/onlinepubs/
- * 9699919799/functions/gai_strerror.html); freeaddrinfo() only ever
- * walks and frees a list this library's own getaddrinfo() built out of
- * malloc()'d nodes (see freeaddrinfo.html's own "along with any
- * additional storage associated with those structures"), so the exact
- * same walk is correct whether that list came from src/netdb/linux/
- * addrinfo.c's real resolver or src/netdb/nt/plat_netdb.c's stub --
- * a stub that never actually allocates a result still returns a
- * pointer this same free walk can safely no-op on.
+ * <netdb.h> pieces with no OS dependency at all, shared between every
+ * platform. gai_strerror() is a pure code->string table. freeaddrinfo()
+ * only ever walks a list this library's own getaddrinfo() built out of
+ * malloc()'d nodes, so the same walk is correct whether it came from
+ * the real Linux resolver or NT's stub (which never allocates, so the
+ * walk safely no-ops).
  */
 #include <netdb.h>
 #include <stdlib.h>

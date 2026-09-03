@@ -1,15 +1,9 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * swab(): copy nbytes bytes, exchanging adjacent pairs.  Pure byte
- * shuffling, nothing NT-specific about it, which is presumably why it
- * ended up declared here with no definition to go with it.
- *
- * https://pubs.opengroup.org/onlinepubs/9699919799/functions/swab.html:
- * negative nbytes does nothing; odd nbytes copies and swaps nbytes-1
- * bytes and leaves the disposition of the last byte unspecified (this
- * copies it through unswapped, the least surprising of the allowed
- * choices).
+ * swab.html: negative nbytes does nothing; odd nbytes copies and swaps
+ * nbytes-1 bytes and leaves the last byte's disposition unspecified
+ * (copied through unswapped here, the least surprising choice).
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc

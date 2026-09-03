@@ -1,73 +1,16 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * statvfs/fstatvfs --
- * https://pubs.opengroup.org/onlinepubs/9699919799/functions/fstatvfs.html
+ * statvfs/fstatvfs: everything comes from NtQueryVolumeInformationFile,
+ * which works on any open handle on the volume, so both entry points
+ * share one filler and differ only in how they get a handle.
  *
- * Everything here comes from NtQueryVolumeInformationFile, which is
- * pure NTDLL and works on any open handle on the volume -- so both
- * entry points share one filler and differ only in how they get a
- * handle, exactly as stat()/fstat() do in stat.c next door.
- *
- * Field by field, with the NT class each value is derived from.  The
- * spec's own escape clause covers the two that have no source at all:
- * "It is unspecified whether all members of the statvfs structure have
- * meaningful values on all file systems" (DESCRIPTION).
- *
- *   f_bsize, f_frsize
- *      SectorsPerAllocationUnit * BytesPerSector -- the cluster size.
- *      NT's allocation unit *is* the fundamental block: every size NT
- *      reports for the volume is counted in them, so f_frsize and
- *      f_bsize are the same number here.  They are allowed to differ
- *      (f_bsize is a preferred I/O size, f_frsize the unit f_blocks is
- *      counted in) but on NT there is nothing to make them differ.
- *
- *   f_blocks, f_bfree, f_bavail
- *      FileFsFullSizeInformation's TotalAllocationUnits,
- *      ActualAvailableAllocationUnits and
- *      CallerAvailableAllocationUnits.  That class exists precisely to
- *      separate "free on the volume" from "free to this caller after
- *      quota", which is POSIX's f_bfree/f_bavail split exactly.  When
- *      the volume does not support it, FileFsSizeInformation is the
- *      fallback and reports only the caller-available figure -- so
- *      f_bfree is then set equal to f_bavail rather than invented.
- *
- *   f_files, f_ffree, f_favail
- *      **Always 0.  NT has no file-serial-number pool to report.**  A
- *      POSIX file system allocates inodes out of a fixed table and can
- *      say how many are left; NTFS grows its MFT on demand and none of
- *      the FileFs* classes exposes a record count, free or total.  Any
- *      nonzero number here would be fabricated, and (unlike a zero,
- *      which the DESCRIPTION clause above covers) would be believed by
- *      a caller doing capacity arithmetic.  Zero is the honest answer,
- *      not a placeholder to be filled in later.
- *
- *   f_fsid
- *      FileFsVolumeInformation's VolumeSerialNumber -- the same value
- *      stat.c uses for st_dev, so the two agree about what "the same
- *      file system" means, which is the only property POSIX gives
- *      f_fsid.
- *
- *   f_namemax
- *      FileFsAttributeInformation's MaximumComponentNameLength (255 on
- *      NTFS), in characters.
- *
- *   f_flag
- *      ST_RDONLY comes from either FILE_READ_ONLY_VOLUME in
- *      FileSystemAttributes (a read-only mount) or FILE_READ_ONLY_DEVICE
- *      in FileFsDeviceInformation's Characteristics (read-only media --
- *      a CD-ROM is read-only without the file system saying so).  Both
- *      are checked because they are genuinely different conditions.
- *
- *      ST_NOSUID is set unconditionally, and that is a real mapping
- *      rather than a default: basedefs/sys_statvfs.h.html defines it as
- *      "does not support the semantics of the ST_ISUID and ST_ISGID
- *      file mode bits", and no NT file system does.  ntlibc never
- *      produces those bits from stat() (see stat.c's mode_from_attrs,
- *      which synthesises 0755/0644/0444 and the execute bits and
- *      nothing else) and its exec() family never honours them.  So the
- *      bit is *true here*, on every volume, and omitting it would be
- *      the inaccurate choice.
+ * f_bsize == f_frsize always, since NT's allocation unit is the only
+ * block size it reports. f_files/f_ffree/f_favail are always 0: NTFS's
+ * MFT grows on demand and exposes no inode-pool count, so a nonzero
+ * value would be fabricated. f_fsid is the same VolumeSerialNumber
+ * stat.c uses for st_dev. ST_NOSUID is set unconditionally since no NT
+ * file system honors setuid/setgid bits and ntlibc never produces them.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc

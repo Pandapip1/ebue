@@ -4,88 +4,29 @@
  * <sys/mman.h>, Pass 2: anonymous mappings and file-backed mappings of
  * regular files, plus page locking.
  *
- * See include/sys/mman.h's banner for the edition question that shapes
- * this file (Issue 7 has no anonymous mapping; MAP_ANONYMOUS is a gated
- * extension here) and for the full file-backed argument.  The short
- * form, because it is the one load-bearing decision this file still
- * makes about it: munmap.html's ERRORS are exactly three -- addr not
- * page-aligned, range outside the address space, len of zero -- so
- * THERE IS NO ERRNO FOR A PARTIAL munmap, and the platform's unmap-view
- * primitive only ever drops a section view WHOLE (see
- * src/internal/plat_mem.h).  That bounds one thing -- MAP_FIXED cannot
- * replace part of a file-backed mapping, only its entire current extent
- * (see mmap()'s MAP_FIXED branch) -- and no longer the mapping itself:
- * ordinary munmap() of a file-backed mapping this library created is
- * always whole-extent in every case measured against it, so the
- * reservation-table bookkeeping below (`live`, page-granular for the
- * anonymous path) simply is not exercised partially on the file-backed
- * side either.
+ * munmap.html's only errors are misalignment, out-of-range, and len==0 --
+ * there is no errno for a partial munmap, and the platform's unmap-view
+ * primitive only ever drops a section view whole (see plat_mem.h). So
+ * MAP_FIXED can only replace a file-backed mapping's entire extent, and
+ * every munmap() of one this library creates is whole-extent.
  *
+ * Each mmap() takes its own reservation (plat_mem.h's reserve/commit
+ * split), so a partial munmap() can decommit just the subrange while
+ * keeping the rest of the reservation -- releasing a reservation always
+ * takes the whole thing. A decommitted range therefore stays reserved,
+ * not free, until the mapping's last live page goes: an NT-specific,
+ * unobservable-but-real address-space leak bounded by the number of live
+ * mappings.
  *
- * One reservation per mapping, and why
- * ------------------------------------
+ * MAP_FIXED is honoured at page granularity inside our own reservations,
+ * [ENOMEM] outside them; discarding old contents (mmap.html) needs an
+ * explicit decommit-then-commit, since only a freshly committed page
+ * comes back zero-filled.
  *
- * The platform's reserve/commit split (see plat_mem.h) is what makes a
- * conforming partial munmap() possible.  Each mmap() takes its OWN
- * reservation via __plat_mem_reserve().  A partial munmap() then
- * decommits just the subrange -- page-granular, which is what POSIX
- * needs -- and keeps the reservation, so the surviving pages of the
- * same mapping are untouched and still at their own addresses.  Only
- * when the last live page of a mapping goes does the reservation itself
- * get released.  Releasing a reservation cannot free part of it (it
- * takes the whole thing, base address and size zero), which is exactly
- * why one reservation per mapping rather than one big arena: a shared
- * arena could never release anything until every mapping in it died.
- *
- * THE DIVERGENCE THIS BUYS, WRITTEN DOWN BECAUSE IT IS UNOBSERVABLE.
- * After a partial munmap() the decommitted pages stay RESERVED, not
- * free.  So the address space is not returned to the system, and a later
- * mmap(NULL, ...) will not reuse those addresses.  No conforming program
- * can detect this -- POSIX gives no way to ask "is this address
- * available", and mmap(NULL, ...) promises only *some* address -- but an
- * unobservable divergence is exactly the kind that becomes observable
- * later, when someone adds an address-space accounting call or a program
- * unmaps and remaps in a loop.  It is a leak of reservation, bounded by
- * the number of live mappings, not of committed memory.
- *
- * This is an NT reservation-granularity property (64 KiB allocation
- * granularity, page-granular commit/decommit within it); a backend
- * whose native mmap/munmap are page-granular end to end would not need
- * this reservation-table strategy at all.  It stays in this file rather
- * than behind __plat_mem_* because it is this library's OWN chosen
- * strategy for satisfying POSIX's partial-munmap requirement -- shared
- * verbatim by whichever backend is compiled in, not something each
- * backend reimplements or could opt out of.
- *
- *
- * MAP_FIXED
- * ---------
- *
- * Honoured at page granularity inside our own reservations; [ENOMEM]
- * outside them.  mmap.html: "If MAP_FIXED is set ... any previous
- * mappings in [addr, addr+len) are discarded", and "If a mapping to be
- * replaced was private, ... the modifications shall be discarded".  Both
- * halves are implemented, the second one deliberately: the range is
- * decommitted and then committed again (__plat_mem_commit_fixed), which
- * is what actually discards the old contents (a freshly committed page
- * comes back zero-filled).  A bare commit over already-committed pages
- * succeeds and leaves the old bytes in place, so it would have satisfied
- * "the address is honoured" while quietly failing "the modifications
- * shall be discarded" -- a test checking only the returned address
- * cannot tell those two apart.
- *
- *
- * msync
- * -----
- *
- * Shared file views are flushed through __plat_mem_flush_view().  NT and
- * Wine do not reliably mark the file timestamps when a section's dirty
- * pages are flushed, so writable shared mappings retain an independent
- * file handle and that call explicitly marks LastWriteTime and
- * ChangeTime.  The independent handle matters because POSIX permits the
- * caller to close fildes after mmap().  Anonymous mappings and private
- * file views have no object to update, so success for those remains a
- * real no-op.
+ * msync: NT/Wine don't reliably update file timestamps when a section's
+ * dirty pages flush, so writable shared mappings keep an independent
+ * file handle and __plat_mem_flush_view() marks LastWriteTime/ChangeTime
+ * explicitly.
  *
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/mmap.html
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/munmap.html
@@ -111,13 +52,11 @@
 
 #define MMAP_PAGE 4096u
 
-/* One live mapping. `live` is a one-bit-per-page bitmap, allocated only
- * after the first partial change; NULL means every page is live. `locked`
- * uses two bits per page (0 unlocked, 1 locked, 2 newly locked by the
- * current mlockall transaction) and is likewise allocated only when a
- * lock must be recorded. Lazy allocation matters for vmfill-style huge
- * reservations: bookkeeping should not consume memory in proportion to
- * a mapping which has never been split or locked. */
+/* One live mapping. `live` is a one-bit-per-page bitmap (NULL means every
+ * page is live); `locked` is two bits per page (0 unlocked, 1 locked, 2
+ * newly locked by the current mlockall transaction). Both are allocated
+ * lazily, on first partial change, so a huge never-split reservation
+ * costs no bookkeeping memory. */
 struct mapping {
 	char *base;
 	size_t npages;
@@ -128,20 +67,15 @@ struct mapping {
 	int filebacked;         /* section view, not a private anonymous
 	                          * reservation -- see plat_mem.h */
 	__plat_handle_t writeback; /* independent writable MAP_SHARED file handle */
-	/* The fildes/off mmap() itself was called with, kept only for
-	 * posix_mem_offset() to hand back (posix_mem_offset.html: "the
-	 * descriptor used (via mmap()) to establish the mapping").
-	 * Meaningless when !filebacked -- posix_mem_offset() never reads
-	 * these for an anonymous mapping, it answers EACCES first (see
-	 * this file's posix_mem_offset()). */
+	/* fildes/off mmap() was called with, kept for posix_mem_offset() to
+	 * hand back. Meaningless when !filebacked -- that path answers
+	 * EACCES before reading these. */
 	int mm_fd;
 	off_t mm_off;
 };
 
-/* POSIX permits an implementation-defined mapping limit and EMFILE at
- * that limit, but an arbitrary 256-entry ceiling made otherwise valid
- * address-space exhaustion probes stop early. The registry now grows as
- * needed; allocation failure is its only limit. */
+/* Grows as needed; allocation failure is the only limit (a fixed ceiling
+ * once made valid address-space exhaustion probes stop early). */
 static struct mapping *maps;
 static size_t maps_len;
 static size_t maps_cap;
@@ -166,23 +100,13 @@ static int lock_future;
 static size_t pground(size_t n) { return (n + MMAP_PAGE - 1) & ~(size_t)(MMAP_PAGE - 1); }
 static int pgaligned(const void *p) { return ((uintptr_t)p & (MMAP_PAGE - 1)) == 0; }
 
-/* The mapping owning [p, p+len), or NULL.  A range that straddles two
- * mappings belongs to neither: POSIX lets one munmap() span several
- * mappings, but MAP_FIXED replacement is defined against the mapping it
- * lands in, so the two callers want different things and only this one
- * wants containment. */
-/* Address-range containment and intersection against this allocator's
- * own bookkept mapping bases (below, and in munmap()/msync()/
- * lock_range()/mmap()'s MAP_FIXED-replacement branch) is a flat-
- * address-space question about two independently obtained pointers --
- * a caller's argument and one of `maps[]`'s own bases, populated by an
- * earlier, unrelated mmap() call -- not a same-object relationship.
- * ISO C only defines <, <=, >, >=, and - between pointers into the same
- * array object (6.5.6p9, 6.5.8p5); comparing or subtracting across
- * `maps[]`'s entries needs uintptr_t for the same reason src/string/
- * memmove.c's copy-direction test does.  Centralised here rather than
- * cast at each of the five call sites so the reasoning is written down
- * once. */
+/* The mapping owning [p, p+len), or NULL. A range straddling two mappings
+ * belongs to neither: MAP_FIXED replacement needs containment, unlike
+ * munmap() which may legitimately span several mappings. */
+/* These compare pointers from unrelated objects (a caller's argument vs.
+ * one of `maps[]`'s bases), which ISO C only defines via uintptr_t
+ * (6.5.6p9, 6.5.8p5) -- same reasoning as memmove.c's copy-direction
+ * test. */
 static int addr_lt(const void *a, const void *b) { return (uintptr_t)a < (uintptr_t)b; }
 static int addr_le(const void *a, const void *b) { return (uintptr_t)a <= (uintptr_t)b; }
 static int addr_gt(const void *a, const void *b) { return (uintptr_t)a > (uintptr_t)b; }
@@ -264,12 +188,10 @@ static void set_page_lock_state(struct mapping *m, size_t page, unsigned state) 
 	}
 }
 
-/* Wine reports a whole page beyond a mapped file's end as an access
- * violation on an uncommitted address, rather than NT's more descriptive
- * EXCEPTION_IN_PAGE_ERROR.  The signal bridge asks this after such a fault
- * so it can preserve POSIX's SIGBUS distinction.  A page decommitted by
- * munmap() is deliberately excluded: it is no longer part of the mapping
- * and remains SIGSEGV/SEGV_MAPERR. */
+/* Wine reports a page beyond a mapped file's end as an access violation
+ * on an uncommitted address rather than NT's EXCEPTION_IN_PAGE_ERROR; the
+ * signal bridge asks this to recover POSIX's SIGBUS distinction. A page
+ * decommitted by munmap() is excluded -- it stays SIGSEGV/SEGV_MAPERR. */
 int __mman_fault_is_object_error(const void *p)
 {
 	size_t i;
@@ -382,20 +304,10 @@ static void init_page_state(struct mapping *m, size_t npages)
 	m->locked = NULL;
 }
 
-/* Release the whole reservation once no page of it is live.  For an
- * anonymous mapping that is __plat_mem_release(), same as always.  For a
- * file-backed mapping it is __plat_mem_unmap_view() instead: a section
- * view is not memory a reservation-release call owns.  The section
- * handle itself was already closed at map time (the view holds its own
- * reference -- see mmap()); writable shared views also close the
- * independent writeback handle retained for msync().
- *
- * m required: the loop condition (`m->npages`) and every field write
- * below it are unconditional. Every real call site passes either `m`
- * where it was already dereferenced (mmap()'s MAP_FIXED arm, guarded by
- * its own earlier `if (!m) { errno = ENOMEM; return MAP_FAILED; }`) or
- * `&maps[k]`/`&maps[i]`, the address of a registry entry -- never NULL
- * either way. */
+/* Release the whole reservation once no page is live: __plat_mem_release()
+ * for an anonymous mapping, __plat_mem_unmap_view() for a file-backed one
+ * (a section view isn't memory a reservation-release call owns). Writable
+ * shared views also close the independent writeback handle msync() uses. */
 static void drop_if_dead(struct mapping *m)
 	__attribute__((nonnull(1))) parameter_element_of(0, maps);
 static void drop_if_dead(struct mapping *m)
@@ -426,69 +338,45 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) // NO
 		return MAP_FAILED;
 	}
 
-	/* "[EINVAL] The value of flags is invalid (neither MAP_PRIVATE nor
-	 * MAP_SHARED is set)."  Exactly one, not merely at least one --
-	 * both together is not a described state. */
+	/* Exactly one of MAP_SHARED/MAP_PRIVATE, not merely at least one --
+	 * both together is not a described state (mmap.html [EINVAL]). */
 	if ((flags & (MAP_SHARED | MAP_PRIVATE)) != MAP_SHARED &&
 	    (flags & (MAP_SHARED | MAP_PRIVATE)) != MAP_PRIVATE) {
 		errno = EINVAL;
 		return MAP_FAILED;
 	}
 
-	/* __MAP_ANONYMOUS, not MAP_ANONYMOUS: the user-visible spelling is
-	 * gated behind _BSD_SOURCE/_GNU_SOURCE, and this file is compiled
-	 * with different feature-test macros in different builds.  Reading
-	 * the gated name here made the library's behaviour depend on its own
-	 * compile flags -- see include/sys/mman.h. */
+	/* __MAP_ANONYMOUS, not the gated MAP_ANONYMOUS spelling: this file is
+	 * built with different feature-test macros in different builds, and
+	 * reading the gated name would make behaviour depend on that. */
 	anon = (flags & __MAP_ANONYMOUS) != 0;
 
 	if (anon) {
-		/* "[EINVAL] ... off is not a multiple of the page size".
-		 * For an anonymous mapping there is no object to offset
-		 * into, so the only meaningful offset is zero; anything
-		 * else is a caller error rather than something to silently
-		 * ignore. */
+		/* No object to offset into for an anonymous mapping, so only
+		 * zero is meaningful; anything else is a caller error. */
 		if (off != 0) { errno = EINVAL; return MAP_FAILED; }
 	} else {
-		/* Issue 7 has no anonymous mapping, so a caller who did not
-		 * ask for the extension is making a file-backed request and
-		 * gets one of the file-backed answers.  These are kept apart
-		 * deliberately -- a caller cannot tell a correct refusal
-		 * from a wrong one if they all came back the same way:
-		 *
-		 *   no valid descriptor -> [EBADF], mmap.html's shall-fail
-		 *     "The fildes argument is not a valid open file
-		 *     descriptor".  This is the fd = -1 case, i.e. the call
-		 *     that *looks* anonymous but is not.
-		 *
-		 *   valid descriptor, wrong type -> [ENODEV], "The fildes
-		 *     argument refers to a file whose type is not supported
-		 *     by mmap()".  Pass 2 widens support from "no file type"
-		 *     to "regular files" -- see include/sys/mman.h -- so
-		 *     everything else (a pipe, a socket, a directory, ...)
-		 *     is still declined here, at the same literal reading.
-		 *
-		 *   valid regular-file descriptor -> validated below and,
-		 *     absent an error, actually mapped. */
+		/* A caller not asking for the anonymous extension is making a
+		 * file-backed request: [EBADF] for no valid descriptor
+		 * (fd = -1, looks anonymous but isn't), [ENODEV] for a valid
+		 * descriptor of an unsupported type (anything but a regular
+		 * file), kept distinct so a caller can tell which refusal it
+		 * got. */
 		f = __fd_get(fd);
 		if (!f) { errno = EBADF; return MAP_FAILED; }
 		if (f->type != __FD_FILE) { errno = ENODEV; return MAP_FAILED; }
 
-		/* "[EINVAL] ... off is not a multiple of the page size ...,
-		 * or is considered invalid by the implementation." off is
-		 * signed; a negative offset is exactly that. */
+		/* off is signed; a negative offset is "invalid by the
+		 * implementation" (mmap.html [EINVAL]). */
 		if (off < 0 || (off & (off_t)(MMAP_PAGE - 1)) != 0) {
 			errno = EINVAL;
 			return MAP_FAILED;
 		}
 
-		/* mmap.html: "[EACCES] The fildes argument is not open for
-		 * read, regardless of the protection specified, or fildes is
-		 * not open for write and PROT_WRITE was specified for a
-		 * MAP_SHARED type mapping."  A MAP_PRIVATE writer needs no
-		 * write access to the file at all -- its writes never reach
-		 * the object (see prot_to_view in the backend) -- so the
-		 * second half is MAP_SHARED-only, deliberately. */
+		/* mmap.html [EACCES]: fildes must be open for read always, and
+		 * for write too if PROT_WRITE+MAP_SHARED. A MAP_PRIVATE writer
+		 * needs no file write access -- its writes never reach the
+		 * object -- so the second check is MAP_SHARED-only. */
 		if ((f->flags & O_ACCMODE) == O_WRONLY) {
 			errno = EACCES;
 			return MAP_FAILED;
@@ -504,48 +392,26 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) // NO
 
 	if (flags & MAP_FIXED) {
 		size_t first, i;
-		/* "[EINVAL] MAP_FIXED was specified, and ... addr is not a
-		 * multiple of the page size." */
 		if (!pgaligned(addr)) { errno = EINVAL; return MAP_FAILED; }
-		/* Page-granular commit works only inside a reservation we
-		 * already own; there is no way to plant a mapping at an
-		 * arbitrary address otherwise, and inventing one would mean
-		 * reserving at allocation granularity and lying about the
-		 * base. "[ENOMEM] MAP_FIXED was specified, and the range
-		 * [addr,addr+len) exceeds that allowed for the address space
-		 * of a process." */
+		/* Page-granular commit only works inside a reservation we
+		 * already own; there's no way to plant a mapping at an
+		 * arbitrary address otherwise (mmap.html [ENOMEM]). */
 		m = find_containing(addr, len);
 		if (!m) { errno = ENOMEM; return MAP_FAILED; }
 
 		if (m->filebacked) {
-			/* A section view is placed and removed as a whole --
-			 * there is no primitive for decommitting or
-			 * re-mapping part of one, the same "no error for a
-			 * partial operation" problem the anonymous path
-			 * solves with page-granular reserve/commit (see this
-			 * file's banner).  MAP_FIXED can therefore only be
-			 * honoured here when [addr,addr+len) is the file-
-			 * backed mapping's ENTIRE current extent: the old
-			 * view is unmapped whole and a new one takes its
-			 * place.  A MAP_FIXED that only overlaps PART of a
-			 * file-backed mapping is refused with [ENOMEM] --
-			 * no case reaching this library exercises that, and
-			 * an honest refusal beats silently misbehaving. */
-			/* Also refused here, alongside the partial-replace
-			 * case above: an ANONYMOUS MAP_FIXED landing exactly
-			 * on a file-backed mapping's extent.  POSIX allows a
-			 * MAP_FIXED to replace any previous mapping regardless
-			 * of its kind, but the replacement path below is
-			 * __plat_mem_map_file(), which needs a real file
-			 * descriptor (`f`) -- present only when THIS call is
-			 * itself file-backed (`!anon`, set above). Without
-			 * this check `f` is NULL here whenever the current
-			 * call is anonymous, which is exactly the null
-			 * dereference on f->h that `clang --analyze`
-			 * [core.NullDereference] catches. No case reaching
-			 * this library replaces a file-backed mapping with an
-			 * anonymous one; an honest [ENOMEM] beats silently
-			 * misbehaving here too. */
+			/* A section view is placed/removed only as a whole, so
+			 * MAP_FIXED is honoured here only when [addr,addr+len)
+			 * is the mapping's entire current extent; a partial
+			 * overlap is refused with [ENOMEM] rather than
+			 * misbehaving.
+			 *
+			 * Also refused: an anonymous MAP_FIXED landing on a
+			 * file-backed extent. POSIX allows replacing any prior
+			 * mapping, but the replacement path needs a real file
+			 * descriptor (`f`), which is NULL when this call is
+			 * anonymous -- without this check that's a null deref
+			 * on f->h. */
 			if ((char *)addr != m->base || npages != m->npages || anon) {
 				errno = ENOMEM;
 				return MAP_FAILED;
@@ -555,18 +421,14 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) // NO
 				if (__plat_dup(f->h, 0, &writeback) < 0)
 					return MAP_FAILED;
 			}
-			/* Unlike the anonymous MAP_FIXED path's decommit,
-			 * this has no separate "discard" step: a section
-			 * view occupies its address range for as long as it
-			 * exists, so the platform will not place the new view
-			 * until the old one is gone from under it (measured:
-			 * [STATUS_CONFLICTING_ADDRESSES] otherwise). The old
-			 * mapping's contents are therefore lost even if the
-			 * replacement below fails -- the same trade the
-			 * anonymous path already makes (see its own comment,
-			 * above) for the same reason: mmap.html's MAP_FIXED
-			 * clause requires the old mapping discarded, not
-			 * preserved on failure. */
+			/* No separate discard step here: a section view
+			 * occupies its range for as long as it exists, so the
+			 * old one must be unmapped before the platform will
+			 * place the new one (measured:
+			 * STATUS_CONFLICTING_ADDRESSES otherwise). Old contents
+			 * are lost even if the replacement below fails --
+			 * mmap.html's MAP_FIXED requires discard, not
+			 * preserve-on-failure. */
 			__plat_mem_unmap_view(m->base, m->npages * MMAP_PAGE);
 			if (m->writeback) __plat_close(m->writeback);
 			base = addr;
@@ -694,14 +556,8 @@ int munmap(void *addr, size_t len)
 	size_t k;
 	char *a = addr;
 
-	/* munmap.html ERRORS, all three of them:
-	 *   "[EINVAL] Addresses in the range [addr,addr+len) are outside
-	 *     the valid range for the address space of a process."
-	 *   "[EINVAL] The len argument is 0."
-	 *   "[EINVAL] The addr argument is not a multiple of the page size
-	 *     as returned by sysconf()."
-	 * That is the whole list -- which is the reason this implementation
-	 * is shaped the way it is; see the banner. */
+	/* munmap.html's only errors: out-of-range, len==0, misaligned addr --
+	 * see the banner for why that shapes this implementation. */
 	if (len == 0) { errno = EINVAL; return -1; }
 	if (!pgaligned(addr)) { errno = EINVAL; return -1; }
 
@@ -720,16 +576,11 @@ int munmap(void *addr, size_t len)
 		}
 	}
 
-	/* "The munmap() function shall remove any mappings for those entire
-	 * pages containing any part of the address space of the process
-	 * starting at addr and continuing for len bytes ... If there are no
-	 * mappings in the specified address range, then munmap() has no
-	 * effect."  So an unmapped-but-valid range is a SUCCESS, not an
-	 * error, and a range spanning several mappings unmaps all of them.
-	 * Both fall out of walking the table rather than requiring one
-	 * mapping to contain the range. */
-	/* Allocate any bitmap needed for a partial change before changing
-	 * platform mappings, so bookkeeping allocation failure is atomic. */
+	/* An unmapped-but-valid range is a SUCCESS per munmap.html, not an
+	 * error, and a range spanning several mappings unmaps all of them --
+	 * both fall out of walking the table rather than requiring one
+	 * mapping to contain the range. Bitmaps are allocated in a first pass
+	 * so bookkeeping allocation failure is atomic. */
 	for (k = 0; k < maps_len; k++) {
 		struct mapping *m = &maps[k];
 		char *lo, *hi;
@@ -754,9 +605,8 @@ int munmap(void *addr, size_t len)
 		{
 			size_t first = addr_diff(lo, m->base) / MMAP_PAGE;
 			size_t n = addr_diff(hi, lo) / MMAP_PAGE;
-			/* Page-granular decommit: keeps the reservation,
-			 * leaves the rest of the mapping exactly where it
-			 * was. */
+			/* Page-granular decommit keeps the reservation and the
+			 * rest of the mapping in place. */
 			__plat_mem_decommit(lo, addr_diff(hi, lo));
 			if (first == 0 && n == m->npages) {
 				m->live_pages = 0;
@@ -775,8 +625,7 @@ int munmap(void *addr, size_t len)
 
 int mprotect(void *addr, size_t len, int prot)
 {
-	/* mprotect.html ERRORS: "[EINVAL] The addr argument is not a
-	 * multiple of the page size as returned by sysconf()." */
+	/* mprotect.html [EINVAL] */
 	if (!pgaligned(addr)) { errno = EINVAL; return -1; }
 	if (len == 0) return 0;
 
@@ -788,16 +637,10 @@ int msync(void *addr, size_t len, int flags) // NOLINT(bugprone-easily-swappable
 	size_t k;
 	char *a = addr;
 	char *end;
-	/* The arguments are validated even when the range contains no shared
-	 * file view, because a caller who passes a
-	 * misaligned address has made an error whether or not there is
-	 * anything to flush, and msync.html does give an error for it:
-	 * "[EINVAL] The value of addr is not a multiple of the page size as
-	 * returned by sysconf()", and "[EINVAL] The value of flags is
-	 * invalid". */
+	/* Validated even with no shared file view in range: msync.html gives
+	 * [EINVAL] for these regardless of whether there's anything to flush. */
 	if (!pgaligned(addr)) { errno = EINVAL; return -1; }
 	if ((flags & ~(MS_ASYNC | MS_SYNC | MS_INVALIDATE)) != 0) { errno = EINVAL; return -1; }
-	/* "[EINVAL] The value of flags includes both MS_ASYNC and MS_SYNC." */
 	if ((flags & MS_ASYNC) && (flags & MS_SYNC)) { errno = EINVAL; return -1; }
 	end = a + pground(len);
 	if (flags & MS_INVALIDATE) {
@@ -832,19 +675,13 @@ int msync(void *addr, size_t len, int flags) // NOLINT(bugprone-easily-swappable
 	return 0;
 }
 
-/* mlock.html: "shall cause those whole pages containing any part of the
- * address space ... to be memory-resident until unlocked".
- *
- * __plat_mem_lock() is a real, genuine lock on every backend this
- * interface is defined against (NT and Wine alike -- see
- * src/internal/nt.h's note on NtLockVirtualMemory), rather than a
- * wrapper that reports success without doing anything.  It is bounded
- * by a resource limit on both -- a working-set quota on NT,
- * RLIMIT_MEMLOCK on the host under Wine -- and that limit is an
- * ENVIRONMENT property, not a platform one: the same binary succeeds on
- * a machine with a generous limit and fails on one without.  That is why
- * test/posix-mman.c keys its skip on the limit it measures rather than
- * on which system it believes it is running. */
+/* __plat_mem_lock() is a real lock on every backend (NT and Wine, see
+ * nt.h's note on NtLockVirtualMemory), not a reports-success no-op. It's
+ * bounded by a resource limit (working-set quota on NT, RLIMIT_MEMLOCK
+ * under Wine) that is an environment property, not a platform one -- the
+ * same binary can succeed or fail depending on the machine's limit, which
+ * is why test/posix-mman.c skips based on the measured limit rather than
+ * the system it believes it's on. */
 static int lock_range(const void *addr, size_t len, int lock) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	char *base;
@@ -915,10 +752,9 @@ int mlockall(int flags)
 				if (mlock(m->base + first * MMAP_PAGE, n * MMAP_PAGE) < 0) {
 					int saved = errno;
 					size_t j;
-					/* A failed mlockall() must not leave the
-					 * successfully visited prefix locked. State 2
-					 * distinguishes locks acquired by this call from
-					 * locks that predated it. */
+					/* Unlock only what this call locked: state 2
+					 * marks locks acquired here, distinct from ones
+					 * that predated it. */
 					for (j = 0; j < maps_len; j++) {
 						struct mapping *r = &maps[j];
 						size_t a, z;
@@ -978,21 +814,11 @@ int munlockall(void)
 	return 0;
 }
 
-/* posix_madvise(): https://pubs.opengroup.org/onlinepubs/9699919799/
- * functions/posix_madvise.html.  DESCRIPTION: "shall advise the
- * implementation on the expected behavior...with respect to the data in
- * the memory starting at address addr, and continuing for len bytes,"
- * and "shall have no effect on the semantics of access to memory in the
- * specified range, although it may affect the performance of access."
- * This implementation has no page-replacement heuristic for any advice
- * value to steer, so every valid one is genuinely a no-op -- see
- * <sys/mman.h>'s banner for why that is not the same thing as a stub.
- * ERRORS: "[EINVAL] The value of advice is invalid" and "[ENOMEM]
- * Addresses in the range starting at addr and continuing for len bytes
- * are partly or completely outside the range allowed for the address
- * space of the calling process" -- the latter checked against the same
- * mapping registry mmap()/munmap()/mlock() already maintain, via the
- * same find_containing() munmap()'s MAP_FIXED path uses. */
+/* posix_madvise(): this implementation has no page-replacement heuristic
+ * for any advice value to steer, so every valid one is genuinely a no-op
+ * -- see <sys/mman.h>'s banner for why that is not the same as a stub.
+ * [ENOMEM] is checked via the same mapping registry mmap()/munmap()/
+ * mlock() already maintain. */
 int posix_madvise(void *addr, size_t len, int advice)
 {
 	if (advice != POSIX_MADV_NORMAL && advice != POSIX_MADV_SEQUENTIAL &&
@@ -1006,18 +832,11 @@ int posix_madvise(void *addr, size_t len, int advice)
 	return 0;
 }
 
-/* posix_typed_mem_open(): https://pubs.opengroup.org/onlinepubs/
- * 9699919799/functions/posix_typed_mem_open.html.  "shall establish a
- * connection between the typed memory object specified by...name and a
- * file descriptor."  Which typed memory pools exist is entirely
- * implementation-defined (RATIONALE), and this implementation ships
- * none -- there is no NT concept this could honestly wire to (a "typed
- * memory object" names a distinct, bounded pool of physical memory with
- * its own characteristics, e.g. a DMA-capable region; ntlibc has one
- * general-purpose virtual address space and no such pools to name) --
- * so ERRORS' "[ENOENT] The named typed memory object does not exist" is
- * this system's real, permanent answer for every name, not a stand-in
- * for one that will exist later.  See <sys/mman.h>'s banner. */
+/* posix_typed_mem_open(): which typed memory pools exist is entirely
+ * implementation-defined, and this implementation ships none -- NT has no
+ * concept of a distinct, bounded physical-memory pool (e.g. DMA-capable)
+ * to wire to, only one general-purpose address space. [ENOENT] is
+ * therefore this system's permanent answer for every name. */
 int posix_typed_mem_open(const char *name, int oflag, int tflag)
 {
 	(void)name;
@@ -1034,13 +853,8 @@ int posix_typed_mem_open(const char *name, int oflag, int tflag)
 	return -1;
 }
 
-/* posix_typed_mem_get_info(): https://pubs.opengroup.org/onlinepubs/
- * 9699919799/functions/posix_typed_mem_get_info.html.  Since
- * posix_typed_mem_open() above never succeeds, no fildes value this
- * process could hold was ever established as a typed memory descriptor
- * -- ERRORS' "[EBADF] The fildes argument is not a valid open file
- * descriptor" (for typed-memory purposes; no other kind honestly
- * reaches this function) is therefore this implementation's only real
+/* Since posix_typed_mem_open() above never succeeds, no fildes value here
+ * was ever a valid typed memory descriptor, so [EBADF] is the only real
  * outcome for any input. */
 int posix_typed_mem_get_info(int fildes, struct posix_typed_mem_info *info)
 {
@@ -1050,19 +864,9 @@ int posix_typed_mem_get_info(int fildes, struct posix_typed_mem_info *info)
 	return -1;
 }
 
-/* posix_mem_offset(): https://pubs.opengroup.org/onlinepubs/9699919799/
- * functions/posix_mem_offset.html.  "shall return in the variable
- * pointed to by off a value that identifies the offset...of the memory
- * block currently mapped at addr[, and] in the variable pointed to by
- * fildes, the descriptor used (via mmap()) to establish the mapping."
- * Answered from the same mapping registry mmap() already keeps (struct
- * mapping's mm_fd/mm_off, set at every file-backed mmap() call site).
- * ERRORS: "[EACCES] The region...was not established via a memory
- * object" -- an anonymous mapping, mm_fd/mm_off meaningless for it, see
- * struct mapping's own comment -- and "[ENOMEM] The addresses in the
- * range...are outside the range allowed for the address space," which
- * find_containing() returning NULL covers whether addr is unmapped
- * entirely or the range crosses into a different mapping. */
+/* posix_mem_offset(): answered from struct mapping's mm_fd/mm_off, set at
+ * every file-backed mmap() call site. [EACCES] for an anonymous mapping,
+ * where those fields are meaningless. */
 int posix_mem_offset(const void *__restrict addr, size_t len,
                       off_t *__restrict off, size_t *__restrict contig_len,
                       int *__restrict fildes)

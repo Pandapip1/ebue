@@ -2,24 +2,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * bind(): https://pubs.opengroup.org/onlinepubs/9699919799/functions/
- * bind.html.  "assign a local socket address to a socket" (DESCRIPTION);
- * EINVAL "the socket is already bound" (ERRORS) -- checked here via the
- * __SOCK_ST_BOUND bit (src/internal/plat_socket.h) rather than trusting
- * either backend's own error for a rebind, since neither's behaviour on
- * an already-bound endpoint was verified against a real reference (AFD's
- * against real Windows; Linux's own EINVAL-on-rebind was not relied on
- * either, for the same reason: consistency between backends matters more
- * than which one technically already gets this right).
+ * bind.html.  EINVAL on rebind is checked here via the __SOCK_ST_BOUND
+ * bit rather than trusted from either backend, since neither's rebind
+ * behavior was verified against a real reference -- consistency between
+ * backends matters more than which one already happens to get it right.
  *
- * ReactOS's WSPBind (dll/win32/msafd/misc/dllmain.c) picks
- * AFD_SHARE_EXCLUSIVE/REUSE/WILDCARD/UNIQUE from ExclusiveAddressUse/
- * wildcard-endpoint-info/ReuseAddresses; this project only implements
- * the one option in <sys/socket.h>'s setsockopt() scope, SO_REUSEADDR
- * (src/socket/sockopt.c sets __SOCK_ST_REUSEADDR), so the choice handed
- * to __plat_socket_bind() is just a plain reuse-if-requested boolean --
- * which AFD_SHARE_* value (or, on Linux, which setsockopt(2) call) that
- * becomes is each backend's own affair (src/socket/{nt,linux}/
- * plat_socket.c).
+ * Only SO_REUSEADDR is implemented (of the AFD_SHARE_EXCLUSIVE/REUSE/
+ * WILDCARD/UNIQUE choices ReactOS's WSPBind picks from), so
+ * __plat_socket_bind() just takes a plain reuse-if-requested boolean;
+ * mapping that to a real AFD_SHARE_* value or setsockopt(2) call is each
+ * backend's own affair.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc

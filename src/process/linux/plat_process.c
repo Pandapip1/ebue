@@ -47,10 +47,15 @@
 #include "libc.h"
 #include "plat_process.h"
 
-/* aarch64 Linux syscall numbers, confirmed against this build host's own
- * <sys/syscall.h>. aarch64 has no fork(2) syscall; __plat_process_fork()
- * below uses clone(SIGCHLD, 0, 0, 0, 0), confirmed to return 0 in the
- * child / the child's pid in the parent exactly like fork(). */
+/* Linux syscall numbers -- aarch64 confirmed against this host's own
+ * <sys/syscall.h>; x86_64/i386 confirmed against a real x86_64-linux-gnu
+ * glibc's own asm/unistd_64.h/unistd_32.h, genuinely different tables
+ * from aarch64's. None of the three define a fork(2) number: aarch64 has
+ * no such syscall at all, and though x86_64/i386 do, clone(2) takes the
+ * identical (flags, stack, ptid, ctid, tls) shape on all three arches,
+ * so __plat_process_fork()/__plat_process_spawn() share one
+ * clone(SIGCHLD, 0, 0, 0, 0) call across all of them instead. */
+#if defined(__aarch64__)
 #define SYS_clone      220
 #define SYS_execve     221
 #define SYS_wait4      260
@@ -65,6 +70,41 @@
 #define SYS_read       63
 #define SYS_write      64
 #define SYS_nanosleep  101
+#elif defined(__x86_64__)
+#define SYS_clone      56
+#define SYS_execve     59
+#define SYS_wait4      61
+#define SYS_exit_group 231
+#define SYS_kill       62
+#define SYS_openat     257
+#define SYS_close      3
+#define SYS_fstat      5
+#define SYS_pipe2      293
+#define SYS_dup3       292
+#define SYS_fcntl      72   /* same x86_64 number src/fcntl/linux/
+                             * plat_fcntl.c already uses. */
+#define SYS_read       0
+#define SYS_write      1
+#define SYS_nanosleep  35
+#elif defined(__i386__)
+#define SYS_clone      120
+#define SYS_execve     11
+#define SYS_wait4      114
+#define SYS_exit_group 252
+#define SYS_kill       37
+#define SYS_openat     295
+#define SYS_close      6
+#define SYS_fstat      108
+#define SYS_pipe2      331
+#define SYS_dup3       330
+#define SYS_fcntl      55   /* same i386 number src/fcntl/linux/
+                             * plat_fcntl.c already uses. */
+#define SYS_read       3
+#define SYS_write      4
+#define SYS_nanosleep  162
+#else
+#error "plat_process.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 #define AT_FDCWD_LX     (-100)
 #define O_CLOEXEC_LX    0x80000  /* octal 02000000 -- confirmed against the host */
@@ -81,19 +121,16 @@
 #define S_IXGRP_LX 0010
 #define S_IXOTH_LX 0001
 
-/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in the
- * call path. NOT `extern long syscall(long, ...)`: that symbol resolves to
- * the HOST's real glibc at link time, and glibc's syscall() sets glibc's
- * OWN errno on failure rather than handing back the raw kernel -errno this
- * file's `errno = (int)-ret` translation requires. aarch64 calling
- * convention: x8 = syscall number, x0..x5 = up to 6 arguments, result (or
- * -errno in [-4095,-1]) in x0. __plat_process_fork() below also relies on
- * this returning zero exactly once from the *child* side of clone(2), the
- * same way a bare `svc #0` must -- a glibc syscall(SYS_clone, ...) call
- * would additionally be unsafe here for the child/parent stack-frame
- * reason src/thread/linux/plat_thread.c's banner documents, though
- * SIGCHLD-only clone (no CLONE_VM) happens to share the parent's stack so
- * that hazard doesn't apply to this file's simpler use. */
+/* A minimal 6-argument raw syscall, one calling convention per arch
+ * below. NOT `extern long syscall(long, ...)`: that resolves to the
+ * HOST's real glibc at link time, and glibc's syscall() sets glibc's OWN
+ * errno on failure rather than handing back the raw kernel -errno this
+ * file's `errno = (int)-ret` translation requires. __plat_process_fork()
+ * below also relies on this returning zero exactly once from the
+ * *child* side of clone(2) -- safe on every arch here because
+ * SIGCHLD-only clone (no CLONE_VM) shares the parent's stack, unlike
+ * src/thread/linux/plat_thread.c's CLONE_VM case. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
@@ -109,6 +146,49 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 		: "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+/* Saves/restores %ebx and %ebp around int $0x80 (both double as syscall
+ * argument registers here); the asm never touches %esp beyond this
+ * matched push/pop pair, so both the parent and child return through an
+ * intact C stack frame. */
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#endif
 
 static int is_sys_error(long ret)
 {
@@ -127,9 +207,18 @@ static int unbox_fd(__plat_handle_t h) { return (int)((long)h - 1); }
 /* ---- can start directly? ---------------------------------------------- */
 
 /* A minimal, byte-exact mirror of the leading fields of Linux's real
- * aarch64 struct stat (st_mode at byte offset 16, whole struct 128 bytes),
- * padded to the kernel's real size so fstat(2) never writes past this
- * buffer. Only st_mode is ever read. */
+ * kernel struct stat, padded to the kernel's real total size so
+ * fstat(2) never writes past this buffer. Only st_mode is ever read.
+ *
+ * Field order genuinely differs per arch, not just widths: aarch64
+ * orders st_mode (4-byte uint) before st_nlink, at offset 16
+ * (dev(8)+ino(8)); x86_64 orders st_nlink (8-byte ulong) before st_mode
+ * instead, so st_mode sits at offset 24; i386's classic pre-LFS layout
+ * uses 4-byte st_dev/st_ino and 2-byte st_mode/st_nlink (mode-then-
+ * nlink), landing st_mode at offset 8. Whole-struct sizes: 128
+ * (aarch64), 144 (x86_64), 64 (i386 -- the old non-LFS fstat(2); moot
+ * here since only st_mode is read). */
+#if defined(__aarch64__)
 struct raw_stat_prefix {
 	unsigned long st_dev;
 	unsigned long st_ino;
@@ -137,6 +226,32 @@ struct raw_stat_prefix {
 	unsigned int  st_nlink;
 	unsigned char reserved[128 - 24];
 };
+#define RAW_STAT_SIZE 128
+#elif defined(__x86_64__)
+struct raw_stat_prefix {
+	unsigned long st_dev;
+	unsigned long st_ino;
+	unsigned long st_nlink;
+	unsigned int  st_mode;
+	unsigned char reserved[144 - 28];
+};
+#define RAW_STAT_SIZE 144
+#elif defined(__i386__)
+struct raw_stat_prefix {
+	unsigned long  st_dev;
+	unsigned long  st_ino;
+	unsigned short st_mode;
+	unsigned short st_nlink;
+	unsigned char  reserved[64 - 12];
+};
+#define RAW_STAT_SIZE 64
+#else
+#error "plat_process.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
+/* Catches unexpected compiler padding at compile time instead of
+ * risking a silent fstat(2) buffer overflow. */
+_Static_assert(sizeof(struct raw_stat_prefix) == RAW_STAT_SIZE,
+               "raw_stat_prefix size mismatch for this architecture");
 
 /* Unlike NT, Linux has a real execute permission bit and its kernel
  * already runs a "#!" script directly through binfmt_script, so there is

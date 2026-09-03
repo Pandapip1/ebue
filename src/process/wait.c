@@ -4,40 +4,31 @@
  * Waiting for children.
  *
  * A pid is a process id; the handle needed to wait on it is kept in the
- * child table __spawn/fork filled in.  The exit code becomes a POSIX
+ * child table __spawn/fork filled in. The exit code becomes a POSIX
  * wait status: an ordinary exit is (code << 8), so all 256 exit codes
- * survive intact.  A death by signal comes from one of exactly two
+ * survive intact. A death by signal comes from one of exactly two
  * places, neither of which a plain exit() can imitate:
+ * __ENCODE_SIGNAL_EXIT(sig) (libc.h), the out-of-range status this
+ * library's kill()/abort()/raise() end a process with, or an NT
+ * exception code the kernel itself terminated the process with
+ * (0xC0000xxx/0x8000xxxx NTSTATUS).
  *
- *   - __ENCODE_SIGNAL_EXIT(sig) (see libc.h), the out-of-range status this
- *     library's kill()/abort()/raise() end a process with;
- *   - an NT exception code the kernel itself terminated the process
- *     with, which is an 0xC0000xxx/0x8000xxxx NTSTATUS.
+ * wait3()/wait4() add a struct rusage for the reaped child, filled from
+ * NtQueryInformationProcess(ProcessTimes) before its handle closes -- the
+ * only piece of struct rusage NT actually has an answer for
+ * (src/misc/resource.c). Every reap also folds into a running total for
+ * getrusage(RUSAGE_CHILDREN), whether or not the caller asked for it.
  *
- * wait3()/wait4() are the same reaping logic as waitpid(), with an extra
- * output: a struct rusage for the one child just reaped, filled from
- * NtQueryInformationProcess(ProcessTimes) on its handle before it is
- * closed -- the only piece of struct rusage NT actually has an answer
- * for (see src/misc/resource.c for the same source feeding getrusage()).
- * Every reap, whether or not the caller asked for it, is also folded
- * into a running total so getrusage(RUSAGE_CHILDREN) has something to
- * report even when the caller only ever called wait()/waitpid().
- *
- * That per-child ProcessTimes query only ever sees the reaped child's
- * OWN CPU time, never CPU time the child had already collected from ITS
- * OWN children before it exited -- and times.html's tms_cutime/
- * tms_cstime clause (RATIONALE: "The inclusion of times of child
- * processes is recursive, so that a parent process may collect the
- * total times of all of its descendants") requires exactly that.
- * fill_child_rusage() below gets it from a job object instead when one
- * is available (struct __child.job, libc.h): __plat_process_spawn()/
- * __plat_process_fork() place every new child in a job of its own
- * before its first instruction runs, and ordinary job-membership
- * inheritance -- not anything arranged per generation -- carries that
- * same membership down to whatever the child spawns too, so the job's
- * own accounting already covers the whole subtree by the time this
- * process reaps the child at its own root.  See
- * __plat_process_times()'s comment (plat_process.h) for the rest. */
+ * That per-child query only ever sees the reaped child's OWN CPU time,
+ * never time it already collected from ITS OWN children -- but
+ * times.html's tms_cutime/tms_cstime clause requires the recursive
+ * total. fill_child_rusage() below gets that from a job object instead
+ * when one is available (struct __child.job): every new child is placed
+ * in a job of its own at creation, and ordinary job-membership
+ * inheritance carries that down to whatever the child spawns too, so the
+ * job's own accounting already covers the whole subtree by the time this
+ * process reaps the child at its root. See __plat_process_times()'s
+ * comment (plat_process.h) for the rest. */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
  * public-header contract; transitive ABI declarations are intentional,
@@ -125,17 +116,12 @@ void __rusage_children(struct rusage *ru)
 }
 
 /* These two are ordinary process-lifetime globals, and
- * RtlCloneUserProcess copies the address space that holds them -- so a
+ * RtlCloneUserProcess copies the address space holding them -- so a
  * fork()ed child would otherwise start life reporting the *parent's*
- * reaped-children times as its own, through both
- * getrusage(RUSAGE_CHILDREN) and times()'s tms_cutime/tms_cstime.
- * fork.html: "The child process values of tms_utime, tms_stime,
- * tms_cutime, and tms_cstime shall be set to 0."  The first two come
- * from the child's own NT process object, which really is fresh (its
- * KERNEL_USER_TIMES has its own CreateTime and zeroed Kernel/User
- * time); these two have no kernel source at all -- KERNEL_USER_TIMES
- * has no child-time fields -- so nothing but this resets them.
- * src/process/fork.c calls it on the STATUS_PROCESS_CLONED arm. */
+ * reaped-children times as its own. fork.html requires tms_cutime/
+ * tms_cstime be reset to 0 in the child; KERNEL_USER_TIMES has no
+ * child-time fields at all, so nothing but this call resets them
+ * (fork.c, on the STATUS_PROCESS_CLONED arm). */
 void __rusage_children_reset(void)
 {
 	children_ktime100ns = 0;
@@ -143,27 +129,19 @@ void __rusage_children_reset(void)
 }
 
 /* Fill *ru with the resource usage of one child, from its still-open
- * process handle -- the ru argument to wait3()/wait4() is documented as
- * "resource usage of the terminated child", not the RUSAGE_CHILDREN
- * running total.  A query failure (the handle really ought to still be
- * valid here, since nothing has closed it yet) just leaves *ru zeroed
- * rather than failing the whole wait: the pid was already reaped
- * successfully, and losing the accounting detail is not worth losing
- * that.
+ * process handle -- wait3()/wait4()'s ru is "resource usage of the
+ * terminated child", not the RUSAGE_CHILDREN running total. A query
+ * failure just leaves *ru zeroed rather than failing the whole wait: the
+ * pid was already reaped successfully, and losing the accounting detail
+ * isn't worth losing that.
  *
- * `job` is c->job -- the job this child was placed in at creation time,
- * or __PLAT_HANDLE_NULL -- and is what makes the total below the
- * RECURSIVE figure times.html's tms_cutime/tms_cstime clause (and its
- * RATIONALE: "the times of a child are only added to those of its
- * parent when its parent successfully waits on the child") asks for,
- * rather than just this one child's own CPU time: see
- * __plat_process_times()'s own comment (src/internal/plat_process.h)
+ * `job` (c->job, or __PLAT_HANDLE_NULL) is what makes the total the
+ * RECURSIVE figure times.html's tms_cutime/tms_cstime clause asks for,
+ * rather than just this child's own CPU time: see __plat_process_times()
  * for how the job accounts for grandchildren this child already reaped
- * before it exited, which this process has no other way to learn --
- * that figure lives only in the child's own now-closing address space,
- * in ITS OWN children_ktime100ns/children_utime100ns below, and NT
- * offers no ReadProcessMemory-shaped primitive this library uses
- * anywhere else. */
+ * before exiting -- a figure this process has no other way to learn,
+ * since it lives only in the child's own now-closing address space and
+ * NT offers no ReadProcessMemory-shaped primitive this library uses. */
 static void fill_child_rusage(__plat_handle_t h, __plat_handle_t job, struct rusage *ru)
 {
 	unsigned long long ktime = 0, utime = 0;
@@ -179,22 +157,17 @@ static void fill_child_rusage(__plat_handle_t h, __plat_handle_t job, struct rus
 
 /* The pending stop-or-continue report for a child, if any.
  *
- * wait.html, WUNTRACED: "The status of any child processes specified by
- * pid that are stopped, and whose status has not yet been reported since
- * they stopped, shall also be reported to the requesting process."
- * WCONTINUED says the same for a child "that has continued from a job
- * control stop".  waitid.html's WSTOPPED and WCONTINUED are the same two
- * clauses; WSTOPPED and WUNTRACED are even the same bit
- * (<sys/wait.h>), so one lookup serves both interfaces and they cannot
- * come to disagree about a child.
+ * wait.html's WUNTRACED and waitid.html's WSTOPPED are the same clause
+ * and even the same bit (<sys/wait.h>), likewise WCONTINUED, so one
+ * lookup serves both interfaces and they cannot disagree about a child.
  *
- * A stop sent by this parent is recorded immediately by kill().  A child
- * that stopped itself cannot write this private table, so it publishes an
- * auto-reset named event before suspending; discover_self_stops() consumes
- * that event and records the same status here.
+ * A stop sent by this parent is recorded immediately by kill(). A child
+ * that stopped itself cannot write this private table, so it publishes
+ * an auto-reset named event before suspending; discover_self_stops()
+ * consumes that event and records the same status here.
  *
- * `want` is a pid, or 0 for any child.  `which` is WSTOPPED (== WUNTRACED)
- * and/or WCONTINUED.  Consuming is the caller's job -- it clears
+ * `want` is a pid, or 0 for any child. `which` is WSTOPPED (== WUNTRACED)
+ * and/or WCONTINUED. Consuming is the caller's job -- it clears
  * c->jobstat, which is what "has not yet been reported" turns on, unless
  * WNOWAIT asked for the report to stay available. */
 static struct __child *job_report(pid_t want, int which) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
@@ -233,22 +206,18 @@ static void discover_self_stops(pid_t want)
 
 /* One reaping engine for wait/waitpid/wait3/wait4/waitid.
  *
- * `nowait` is waitid()'s WNOWAIT: "Keep the process whose status is
- * returned in infop in a waitable state" (waitid.html DESCRIPTION).
- * It is expressible here because reaping is two separable steps -- the
+ * `nowait` is waitid()'s WNOWAIT ("keep the process ... in a waitable
+ * state"). It's expressible because reaping is two separable steps: the
  * status is recorded in the table entry (c->done/c->status), and
- * __child_remove() is what closes the handle and frees the slot.  A
- * WNOWAIT call does the first and skips the second, so the child is
- * genuinely still waitable afterwards rather than merely reported as
- * such.
+ * __child_remove() is what closes the handle and frees the slot -- a
+ * WNOWAIT call does only the first, so the child stays genuinely
+ * waitable, not merely reported as such.
  *
  * That leaves a table entry with pid != 0 && done == 1, a state no
- * caller could reach before waitid existed (every other path calls
- * __child_remove immediately after setting done, and __child_add
- * clears it).  The any-child scan below therefore has to look for
- * already-known statuses first; without that it would skip such an
- * entry and report ECHILD for a child whose status POSIX requires it
- * to hand back again. */
+ * caller could reach before waitid existed. The any-child scan below
+ * must therefore look for already-known statuses first, or it would
+ * skip such an entry and report ECHILD for a child whose status POSIX
+ * requires handing back again. */
 /* The __PLAT_WAIT_* mode a wait on a child's handle should use for this
  * call's options: NOHANG polls once and returns; WUNTRACED cannot block
  * indefinitely because a self-stop marker is not a handle any wait can
@@ -356,20 +325,14 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 	if (pid < 0) pid = -pid;   /* process groups are single processes here */
 	c = __child_find(pid);
 	if (!c) {
-		/* Not in the table means not waitable, full stop.  Reopening the
-		 * pid with NtOpenProcess (to cover a child lost to an allocation
-		 * failure in __child_add) is not a safe fallback: on real Windows
+		/* Not in the table means not waitable, full stop. Reopening the
+		 * pid with NtOpenProcess is not a safe fallback: on real Windows
 		 * the kernel process object outlives its last handle, so an
-		 * already-reaped, no-longer-existing child can still be opened
-		 * and would hand back its pid and exit status a second time,
-		 * where POSIX requires ECHILD (a reaped child has ceased to exist
-		 * and is no longer a child of this process -- wait.html
-		 * DESCRIPTION/ERRORS).
-		 *
-		 * A child that never made it into the table is therefore
-		 * unwaitable, which is the honest outcome: __child_add failing is
-		 * already a hard error at spawn time, and waitpid(-1)/wait() could
-		 * never see such a child either, since they only scan the table. */
+		 * already-reaped, no-longer-existing child could still be opened
+		 * and hand back its pid and exit status a second time, where
+		 * POSIX requires ECHILD. A child that never made it into the
+		 * table is therefore unwaitable, the honest outcome -- waitpid(-1)/
+		 * wait() could never see it either, since they only scan the table. */
 		errno = ECHILD;
 		return -1;
 	}
@@ -404,20 +367,13 @@ reap:
 	pid = c->pid;
 	if (ru) fill_child_rusage(c->h, c->job, ru);
 	else { struct rusage tmp; fill_child_rusage(c->h, c->job, &tmp); }
-	/* fill_child_rusage() has already folded this child's times into the
-	 * RUSAGE_CHILDREN running total, so a WNOWAIT call must not leave the
-	 * entry in a state where a later real reap folds them in a second
-	 * time.  It does not: c->done is set above, and every path that sees
-	 * done == 1 returns the recorded status without touching the handle
-	 * again. */
-	/* Both reads a backend's cached reap info could ever need to survive
-	 * for are done as of the line above (exit code just above that, and
-	 * fill_child_rusage()'s __plat_process_times() unconditionally, this
-	 * comment's own point) -- c->done/c->status now hold the answer for
-	 * any WNOWAIT repeat, so the backend's own copy, if it kept one, is
-	 * safe to release regardless of `nowait`. See
-	 * __plat_process_reap_release()'s own comment (plat_process.h) for
-	 * why a backend needs this at all. */
+	/* fill_child_rusage() already folded this child's times into
+	 * RUSAGE_CHILDREN, so a WNOWAIT call must not let a later real reap
+	 * fold them in a second time. It doesn't: c->done is set above, and
+	 * every path that sees done == 1 returns the recorded status without
+	 * touching the handle again -- so any backend cached reap info is
+	 * safe to release regardless of `nowait` (see
+	 * __plat_process_reap_release(), plat_process.h). */
 	__plat_process_reap_release(c->h);
 	if (!nowait) __child_remove(c);
 	return pid;
@@ -439,45 +395,26 @@ pid_t wait(int *status)
  * The reaping itself is do_waitpid() above, unchanged: waitid() differs
  * from waitpid() only in how the caller names the child (idtype/id
  * rather than a signed pid) and in how the result is reported (a
- * siginfo_t rather than a packed int).  Both are translations, so
- * neither the child-table walk nor the exit-status decoding is
- * duplicated here.
+ * siginfo_t rather than a packed int).
  *
- * idtype:
- *   P_ALL   "wait for any children and id is ignored" -- do_waitpid's
- *           pid == -1.
- *   P_PID   "wait for the child with a process ID equal to (pid_t)id".
- *   P_PGID  "wait for any child with a process group ID equal to
- *           (pid_t)id".  Every process is its own process group of one
- *           on this platform (src/unistd/ids.c, and kill()'s own
- *           writeup in src/signal/signal.c makes the same argument),
- *           so a process group id *is* a process id here and this is
- *           the P_PID case with the same number -- not an
- *           approximation of it.
- *   P_PIDFD is a Linux extension, not in POSIX, and there are no pidfds
- *           here; it is rejected with EINVAL along with any other
- *           value.
+ * idtype: P_ALL is do_waitpid's pid == -1; P_PID is a plain pid; P_PGID
+ * is the same as P_PID here, since every process is its own process
+ * group of one (src/unistd/ids.c), so a process group id *is* a process
+ * id, not an approximation of one. P_PIDFD is a Linux extension with no
+ * pidfds here, rejected with EINVAL like any other value.
  *
- * options: "Applications shall specify at least one of the flags
- * WEXITED, WSTOPPED, or WCONTINUED" (DESCRIPTION), so a call naming
- * none of them is [EINVAL].
+ * options: a call naming none of WEXITED/WSTOPPED/WCONTINUED is EINVAL.
  *
- * WSTOPPED and WCONTINUED are real, and share every part of their
- * implementation with waitpid()'s WUNTRACED/WCONTINUED -- see
- * job_report() above.  Parent-sent stops are recorded directly; a
- * self-stopping child publishes the named marker discovered above.
- *
- * What that same lack does cost: a child suspended by anything *else*
- * -- a debugger, another program calling NtSuspendProcess on it -- is
- * unreportable, because nothing notifies this process and no state
- * exists to poll.  That half stays impossible, and it is also not what
- * the clause asks for ("any child that has stopped upon receipt of a
- * signal").
+ * WSTOPPED and WCONTINUED are real, sharing their whole implementation
+ * with waitpid()'s WUNTRACED/WCONTINUED (job_report() above): a
+ * parent-sent stop is recorded directly, and a self-stopping child
+ * publishes the marker discovered above. A child suspended by anything
+ * *else* (a debugger, etc.) stays unreportable, since nothing notifies
+ * this process -- which is also not what the clause asks for.
  *
  * WNOWAIT is real, not accepted-and-ignored: it maps onto do_waitpid's
- * `nowait`, which records the status in the child table without
- * releasing the entry, so the child remains waitable and a following
- * wait/waitpid/waitid returns the same status again.
+ * `nowait`, which records the status without releasing the entry, so a
+ * following wait/waitpid/waitid returns the same status again.
  */
 int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
@@ -505,22 +442,18 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options) // NOLINT(bu
 	if (idtype != P_ALL && want <= 0) { errno = ECHILD; return -1; }
 
 	if (options & WEXITED) {
-		/* WSTOPPED is WUNTRACED and WCONTINUED is WCONTINUED (the
-		 * same bits, <sys/wait.h>), so the flags pass straight
-		 * through and do_waitpid() applies its own job_report() ahead
-		 * of the exit wait.  WEXITED itself has no waitpid() spelling
-		 * -- it is what waitpid() always does -- and must be masked
-		 * off, since do_waitpid() rejects any bit it does not know. */
+		/* WSTOPPED/WCONTINUED share bits with WUNTRACED/WCONTINUED
+		 * (<sys/wait.h>), so they pass straight through to
+		 * do_waitpid()'s own job_report(). WEXITED has no waitpid()
+		 * spelling -- it's what waitpid() always does -- so it must be
+		 * masked off, since do_waitpid() rejects any bit it doesn't know. */
 		pid = do_waitpid(want, &status, options & (WNOHANG | WSTOPPED | WCONTINUED),
 		                 0, options & WNOWAIT ? 1 : 0);
 		if (pid < 0) return -1;
-		/* "If WNOHANG was specified and status is not available, 0
-		 * shall be returned" (RETURN VALUE).  DESCRIPTION also
-		 * requires infop to be distinguishable in that case;
-		 * POSIX.1-2017 leaves it implementation-defined whether infop
-		 * is written, and zeroing it (si_signo == 0, si_pid == 0) is
-		 * what makes "nothing happened" detectable by a caller that
-		 * only has the 0 return to go on. */
+		/* WNOHANG with no status available returns 0; POSIX.1-2017
+		 * leaves infop implementation-defined in that case, and zeroing
+		 * it (si_signo == 0) is what makes "nothing happened" detectable
+		 * by a caller with only the 0 return to go on. */
 		if (pid == 0) {
 			if (infop) {
 				memset(infop, 0, sizeof *infop);
@@ -528,10 +461,9 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options) // NOLINT(bu
 			return 0;
 		}
 	} else {
-		/* No WEXITED: the caller wants a stop or continue report and
-		 * explicitly not an exit, so do_waitpid() must not be entered
-		 * at all -- it would wait on the process handle and reap a
-		 * child whose death this call did not ask to hear about.
+		/* No WEXITED: the caller wants a stop/continue report only, so
+		 * do_waitpid() must not run at all -- it would wait on the
+		 * process handle and reap a child this call didn't ask about.
 		 * Read the report directly instead. */
 		struct __child *c = job_report(want < 0 ? 0 : want, options & (WSTOPPED | WCONTINUED));
 
@@ -540,14 +472,12 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options) // NOLINT(bu
 			pid = c->pid;
 			if (!(options & WNOWAIT)) c->jobstat = 0;
 		} else {
-			/* Nothing pending, and nothing can make one pending
-			 * later: the only thing that stops or continues a child
-			 * here is this process calling kill(), and a blocked
-			 * waitid() is not calling kill().  So the wait POSIX
-			 * describes would be an unconditional hang.  With WNOHANG
-			 * this is plainly "no status available", a 0 return;
-			 * without it, ECHILD is both terminating and true --
-			 * there is no child that can ever satisfy this request. */
+			/* Nothing pending, and nothing can make one pending later:
+			 * only this process's own kill() stops or continues a
+			 * child, and a blocked waitid() isn't calling kill(). So
+			 * the wait POSIX describes would hang forever -- WNOHANG
+			 * makes that "no status available" (0); without it, ECHILD
+			 * is simply true. */
 			if (infop) {
 				memset(infop, 0, sizeof *infop);
 			}

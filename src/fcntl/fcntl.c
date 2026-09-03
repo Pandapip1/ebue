@@ -23,11 +23,10 @@ struct record_lock_state {
 	unsigned char held;
 };
 
-/* NtUnlockFile on a range which was never locked wedges some Wine
- * versions instead of returning STATUS_RANGE_NOT_LOCKED.  Remember the
- * single range placed through each descriptor so an ordinary redundant
- * F_UNLCK remains the harmless success POSIX requires.  The owner check is
- * essential after fork(): the memory is copied, but record locks are not. */
+/* NtUnlockFile on a never-locked range wedges some Wine versions instead
+ * of returning STATUS_RANGE_NOT_LOCKED, so the placed range is tracked
+ * here to make a redundant F_UNLCK a harmless no-op. The owner check
+ * matters after fork(): record locks are not copied, only the memory is. */
 static struct record_lock_state record_locks[FD_MAX];
 
 static int record_lock_range(struct __fd *f, const struct flock *l,
@@ -171,26 +170,12 @@ int fcntl(int fd, int cmd, ...)
 		__plat_handle_t h, old = f->h;
 		unsigned want = arg & FD_CLOEXEC ? O_CLOEXEC : 0;
 		if ((f->flags & O_CLOEXEC) == want) return 0;
-		/* Inheritability is a property of the handle; remake it --
-		 * __plat_dup_to(), not plain __plat_dup(), because `fd` is
-		 * both the source's own real descriptor number AND the
-		 * target slot this remake must land back in: on a backend
-		 * where a duplicate's real number is externally significant
-		 * (Linux; see plat_fd.h's own comment), an arbitrary-numbered
-		 * remake here would silently detach this exact fd number from
-		 * this process's own real descriptor table -- invisible to
-		 * every caller in THIS process, but breaking the moment a
-		 * child inherits it afterward (test/posix-fcntl-lock-
-		 * crossproc.c's fcntl(F_SETFD, FD_CLOEXEC) immediately
-		 * followed by fcntl(F_SETFD, 0), right before spawning, is
-		 * exactly this). Source and target being the same slot here
-		 * collapses to a plain in-place flag toggle on that backend
-		 * (no new descriptor at all -- __plat_dup_to()'s own oldfd==
-		 * newfd case), which is why `old` is passed as
-		 * __PLAT_HANDLE_NULL rather than the prior handle: unlike
-		 * posix_spawn.c's own use of this function, closing the prior
-		 * handle is this call site's own job below, done only when
-		 * the result actually turns out to be a distinct object. */
+		/* __plat_dup_to(), not plain __plat_dup(): on Linux a duplicate's
+		 * real fd number is externally significant, so remaking with an
+		 * arbitrary number would silently detach this fd from the real
+		 * descriptor table and break the moment a child inherits it.
+		 * `old` is __PLAT_HANDLE_NULL, not the prior handle, because
+		 * closing it (below) is this call site's job, not dup_to()'s. */
 		if (__plat_dup_to(f->h, fd, __PLAT_HANDLE_NULL, !want, &h) < 0) return -1;
 		if (h != old) __plat_close(old);
 		f->h = h;

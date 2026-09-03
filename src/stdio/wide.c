@@ -1,30 +1,15 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The wide-character stdio family: fgetwc/getwc/getwchar,
- * fputwc/putwc/putwchar, fgetws, fputws, ungetwc and fwide, per
- * fgetwc.html, fputwc.html, fgetws.html, fputws.html, ungetwc.html and
- * fwide.html.
+ * The wide-character stdio family: a thin layer over rw.c's byte
+ * primitives and the UTF-8 <-> UTF-16 converter in src/stdlib/mbrtowc.c.
  *
- * Everything here is a thin layer over the byte primitives in rw.c and
- * the UTF-8 <-> UTF-16 converter in src/stdlib/mbrtowc.c: a stream
- * still holds bytes, and a wide character is what those bytes decode
- * to.  Only two pieces of per-stream state are new (see stdio_impl.h):
- * the fwide() orientation, and a single wide pushback slot.
- *
- * THE 16-BIT wchar_t SHOWS UP IN EXACTLY ONE PLACE, and it is worth
- * naming because it is invisible in the code.  A supplementary
- * character is one 4-byte UTF-8 sequence but TWO wchar_t, so
- * mbrtowc() hands back the high surrogate having consumed all four
- * bytes and keeps the low one in the conversion state, to be returned
- * on the next call with no bytes consumed (its (size_t)-3 return).
- * fgetwc() therefore asks the state for a pending unit BEFORE it reads
- * anything, which is why every call starts with a zero-length
- * mbrtowc().  Symmetrically wcrtomb() answers 0 for a lone high
- * surrogate -- nothing written yet -- which fputwc() must report as
- * success returning wc, not as an error.  Neither case is a POSIX
- * clause; both are forced by the wchar_t width and are the only reason
- * this file is not a dozen one-liners.
+ * A supplementary character is one 4-byte UTF-8 sequence but two
+ * wchar_t: mbrtowc() returns the high surrogate having consumed all four
+ * bytes and holds the low one in conversion state for a zero-length
+ * follow-up call ((size_t)-3), which is why fgetwc() checks state before
+ * reading. Symmetrically, wcrtomb() returns 0 for a lone high surrogate,
+ * which fputwc() must treat as success, not error.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc

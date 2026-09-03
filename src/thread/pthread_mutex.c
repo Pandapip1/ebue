@@ -109,10 +109,9 @@ static int create_semaphore(__plat_handle_t *output)
 
 static int owned_by(const struct mutex_data *data, struct __pthread *thread)
 {
-	/* fork() preserves virtual addresses, so the child's initial pthread
-	 * control block can have the same pointer value as its parent's.  A
-	 * process-shared recursive mutex must not mistake that address match for
-	 * ownership by the same thread. */
+	/* fork() preserves addresses, so the child's pthread control block can
+	 * match the parent's pointer value; a process-shared recursive mutex
+	 * must not mistake that for same-thread ownership. */
 	return data->owner == thread && data->owner_pid == getpid();
 }
 
@@ -182,17 +181,8 @@ int pthread_mutex_init(pthread_mutex_t *__restrict mutex construct(pthread_mutex
 	return 0;
 }
 
-/* mutex is deliberately NOT required here (d24fe86): mutex_ready(mutex)
- * above already has a real `if (!mutex) return EINVAL;` check of its
- * own, called unconditionally before `data`/`data->owner` is ever
- * touched -- marking mutex nonnull would tell the compiler that check
- * is dead code, which is false. `data->owner` below is a genuinely
- * separate fact (mutex_data() is a reinterpret cast of the SAME already-
- * validated pointer, not a new allocation) that `nonnull` has no way to
- * describe on this signature regardless -- verified sound by hand, left
- * as an honest residual rather than force-fit. pthread_mutex_
- * setprioceiling() below shares the identical shape via
- * pthread_mutex_lock(), which bottoms out in the same mutex_ready(). */
+/* mutex is deliberately not marked nonnull: mutex_ready() already NULL-checks
+ * it, and marking it here would make that check look like dead code. */
 
 int pthread_mutex_destroy(pthread_mutex_t *mutex destroy(pthread_mutex) static_handle(pthread_mutex) consume(pthread_mutex_unlocked))
 {

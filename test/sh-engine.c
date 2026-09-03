@@ -114,10 +114,10 @@ static void test_simple_command_words(void)
 	if (!l) return;
 	c = only_command(l);
 	CHECK(c && c->kind == SH_CMD_SIMPLE);
-	CHECK(c && c->assigns == 0);
+	CHECK(c && c->u.simple.assigns == 0);
 	CHECK(c && c->redirs == 0);
 	if (c) {
-		w = c->words;
+		w = c->u.simple.words;
 		CHECK(w && strcmp(w->text, "echo") == 0); w = w ? w->next : 0;
 		CHECK(w && strcmp(w->text, "hello") == 0); w = w ? w->next : 0;
 		CHECK(w && strcmp(w->text, "world") == 0); w = w ? w->next : 0;
@@ -138,19 +138,19 @@ static void test_assignment_prefix(void)
 	struct sh_command *c;
 	if (!l) return;
 	c = only_command(l);
-	CHECK(c && c->assigns && strcmp(c->assigns->text, "FOO=bar") == 0);
-	CHECK(c && c->assigns && c->assigns->next && strcmp(c->assigns->next->text, "BAZ=1") == 0);
-	CHECK(c && c->assigns && c->assigns->next && c->assigns->next->next == 0);
-	CHECK(c && c->words && strcmp(c->words->text, "echo") == 0);
-	CHECK(c && c->words && c->words->next && strcmp(c->words->next->text, "$FOO") == 0);
+	CHECK(c && c->u.simple.assigns && strcmp(c->u.simple.assigns->text, "FOO=bar") == 0);
+	CHECK(c && c->u.simple.assigns && c->u.simple.assigns->next && strcmp(c->u.simple.assigns->next->text, "BAZ=1") == 0);
+	CHECK(c && c->u.simple.assigns && c->u.simple.assigns->next && c->u.simple.assigns->next->next == 0);
+	CHECK(c && c->u.simple.words && strcmp(c->u.simple.words->text, "echo") == 0);
+	CHECK(c && c->u.simple.words && c->u.simple.words->next && strcmp(c->u.simple.words->next->text, "$FOO") == 0);
 	__sh_list_free(l);
 
 	l = must_parse("echo FOO=bar");
 	if (!l) return;
 	c = only_command(l);
-	CHECK(c && c->assigns == 0);
-	CHECK(c && c->words && strcmp(c->words->text, "echo") == 0);
-	CHECK(c && c->words && c->words->next && strcmp(c->words->next->text, "FOO=bar") == 0);
+	CHECK(c && c->u.simple.assigns == 0);
+	CHECK(c && c->u.simple.words && strcmp(c->u.simple.words->text, "echo") == 0);
+	CHECK(c && c->u.simple.words && c->u.simple.words->next && strcmp(c->u.simple.words->next->text, "FOO=bar") == 0);
 	__sh_list_free(l);
 }
 
@@ -162,8 +162,8 @@ static void test_assignment_only_command(void)
 	struct sh_command *c;
 	if (!l) return;
 	c = only_command(l);
-	CHECK(c && c->assigns && strcmp(c->assigns->text, "FOO=bar") == 0);
-	CHECK(c && c->words == 0);
+	CHECK(c && c->u.simple.assigns && strcmp(c->u.simple.assigns->text, "FOO=bar") == 0);
+	CHECK(c && c->u.simple.words == 0);
 	__sh_list_free(l);
 }
 
@@ -178,9 +178,9 @@ static void test_quoting_suppresses_operators(void)
 	struct sh_command *c;
 	if (!l) return;
 	c = only_command(l);
-	CHECK(c && c->words && c->words->next && strcmp(c->words->next->text, "\"a;b\"") == 0);
-	CHECK(c && c->words && c->words->next && c->words->next->next &&
-	      strcmp(c->words->next->next->text, "'c|d'") == 0);
+	CHECK(c && c->u.simple.words && c->u.simple.words->next && strcmp(c->u.simple.words->next->text, "\"a;b\"") == 0);
+	CHECK(c && c->u.simple.words && c->u.simple.words->next && c->u.simple.words->next->next &&
+	      strcmp(c->u.simple.words->next->next->text, "'c|d'") == 0);
 	__sh_list_free(l);
 }
 
@@ -202,7 +202,7 @@ static void test_dollar_paren_and_brace_word_boundary(void)
 	c = only_command(l);
 	CHECK(c != 0);
 	if (!c) { __sh_list_free(l); return; }
-	w = c->words;
+	w = c->u.simple.words;
 	CHECK(w && strcmp(w->text, "echo") == 0); w = w ? w->next : 0;
 	CHECK(w && strcmp(w->text, "$(a | b; c)") == 0); w = w ? w->next : 0;
 	CHECK(w && strcmp(w->text, "${FOO}") == 0); w = w ? w->next : 0;
@@ -217,8 +217,8 @@ static void test_backtick_word_boundary(void)
 	struct sh_command *c;
 	if (!l) return;
 	c = only_command(l);
-	CHECK(c && c->words && c->words->next && strcmp(c->words->next->text, "`a | b; c`suffix") == 0);
-	CHECK(c && c->words && c->words->next && c->words->next->next == 0);
+	CHECK(c && c->u.simple.words && c->u.simple.words->next && strcmp(c->u.simple.words->next->text, "`a | b; c`suffix") == 0);
+	CHECK(c && c->u.simple.words && c->u.simple.words->next && c->u.simple.words->next->next == 0);
 	__sh_list_free(l);
 }
 
@@ -231,16 +231,16 @@ static void test_comment(void)
 	if (!l) return;
 	CHECK(l->items && l->items->next && l->items->next->next == 0);
 	c = &l->items->andor->pipeline.commands[0];
-	CHECK(c->words && c->words->next && strcmp(c->words->next->text, "hi") == 0);
-	CHECK(c->words && c->words->next && c->words->next->next == 0);
+	CHECK(c->u.simple.words && c->u.simple.words->next && strcmp(c->u.simple.words->next->text, "hi") == 0);
+	CHECK(c->u.simple.words && c->u.simple.words->next && c->u.simple.words->next->next == 0);
 	c = &l->items->next->andor->pipeline.commands[0];
-	CHECK(c->words && strcmp(c->words->text, "echo") == 0);
+	CHECK(c->u.simple.words && strcmp(c->u.simple.words->text, "echo") == 0);
 	__sh_list_free(l);
 
 	l = must_parse("echo abc#def");
 	if (!l) return;
 	c = only_command(l);
-	CHECK(c && c->words && c->words->next && strcmp(c->words->next->text, "abc#def") == 0);
+	CHECK(c && c->u.simple.words && c->u.simple.words->next && strcmp(c->u.simple.words->next->text, "abc#def") == 0);
 	__sh_list_free(l);
 }
 
@@ -269,9 +269,9 @@ static void test_pipeline(void)
 	pl = &l->items->andor->pipeline;
 	CHECK(pl->ncommands == 3);
 	CHECK(pl->bang == 0);
-	CHECK(strcmp(pl->commands[0].words->text, "a") == 0);
-	CHECK(strcmp(pl->commands[1].words->text, "b") == 0);
-	CHECK(strcmp(pl->commands[2].words->text, "c") == 0);
+	CHECK(strcmp(pl->commands[0].u.simple.words->text, "a") == 0);
+	CHECK(strcmp(pl->commands[1].u.simple.words->text, "b") == 0);
+	CHECK(strcmp(pl->commands[2].u.simple.words->text, "c") == 0);
 	__sh_list_free(l);
 }
 
@@ -283,7 +283,7 @@ static void test_pipeline_bang(void)
 	pl = &l->items->andor->pipeline;
 	CHECK(pl->bang == 1);
 	CHECK(pl->ncommands == 1);
-	CHECK(strcmp(pl->commands[0].words->text, "false") == 0);
+	CHECK(strcmp(pl->commands[0].u.simple.words->text, "false") == 0);
 	__sh_list_free(l);
 }
 
@@ -296,11 +296,11 @@ static void test_andor(void)
 	struct sh_andor *a;
 	if (!l) return;
 	a = l->items->andor;
-	CHECK(a && a->op == SH_AO_NONE && strcmp(a->pipeline.commands[0].words->text, "a") == 0);
+	CHECK(a && a->op == SH_AO_NONE && strcmp(a->pipeline.commands[0].u.simple.words->text, "a") == 0);
 	a = a ? a->next : 0;
-	CHECK(a && a->op == SH_AO_AND && strcmp(a->pipeline.commands[0].words->text, "b") == 0);
+	CHECK(a && a->op == SH_AO_AND && strcmp(a->pipeline.commands[0].u.simple.words->text, "b") == 0);
 	a = a ? a->next : 0;
-	CHECK(a && a->op == SH_AO_OR && strcmp(a->pipeline.commands[0].words->text, "c") == 0);
+	CHECK(a && a->op == SH_AO_OR && strcmp(a->pipeline.commands[0].u.simple.words->text, "c") == 0);
 	CHECK(a && a->next == 0);
 	__sh_list_free(l);
 }
@@ -315,11 +315,11 @@ static void test_list_separators(void)
 	struct sh_list_item *it;
 	if (!l) return;
 	it = l->items;
-	CHECK(it && it->sep == SH_SEP_SEQ && strcmp(it->andor->pipeline.commands[0].words->text, "a") == 0);
+	CHECK(it && it->sep == SH_SEP_SEQ && strcmp(it->andor->pipeline.commands[0].u.simple.words->text, "a") == 0);
 	it = it ? it->next : 0;
-	CHECK(it && it->sep == SH_SEP_AMP && strcmp(it->andor->pipeline.commands[0].words->text, "b") == 0);
+	CHECK(it && it->sep == SH_SEP_AMP && strcmp(it->andor->pipeline.commands[0].u.simple.words->text, "b") == 0);
 	it = it ? it->next : 0;
-	CHECK(it && it->sep == SH_SEP_END && strcmp(it->andor->pipeline.commands[0].words->text, "c") == 0);
+	CHECK(it && it->sep == SH_SEP_END && strcmp(it->andor->pipeline.commands[0].u.simple.words->text, "c") == 0);
 	CHECK(it && it->next == 0);
 	__sh_list_free(l);
 }
@@ -333,9 +333,9 @@ static void test_subshell(void)
 	if (!l) return;
 	c = only_command(l);
 	CHECK(c && c->kind == SH_CMD_SUBSHELL);
-	CHECK(c && c->body && c->body->items && c->body->items->next && c->body->items->next->next == 0);
-	CHECK(c && c->body && strcmp(c->body->items->andor->pipeline.commands[0].words->text, "a") == 0);
-	CHECK(c && c->body && strcmp(c->body->items->next->andor->pipeline.commands[0].words->text, "b") == 0);
+	CHECK(c && c->u.group.body && c->u.group.body->items && c->u.group.body->items->next && c->u.group.body->items->next->next == 0);
+	CHECK(c && c->u.group.body && strcmp(c->u.group.body->items->andor->pipeline.commands[0].u.simple.words->text, "a") == 0);
+	CHECK(c && c->u.group.body && strcmp(c->u.group.body->items->next->andor->pipeline.commands[0].u.simple.words->text, "b") == 0);
 	__sh_list_free(l);
 }
 
@@ -346,7 +346,7 @@ static void test_brace_group(void)
 	if (!l) return;
 	c = only_command(l);
 	CHECK(c && c->kind == SH_CMD_BRACE);
-	CHECK(c && c->body && c->body->items && c->body->items->next && c->body->items->next->next == 0);
+	CHECK(c && c->u.group.body && c->u.group.body->items && c->u.group.body->items->next && c->u.group.body->items->next->next == 0);
 	__sh_list_free(l);
 }
 
@@ -380,7 +380,7 @@ static void test_redirections(void)
 	CHECK(r && r->op == SH_R_DGREAT && r->fd == -1 && strcmp(r->word, "app") == 0); r = r ? r->next : 0;
 	CHECK(r == 0);
 	/* the io_number/redirect target words never became command args */
-	CHECK(c->words && c->words->next == 0 && strcmp(c->words->text, "cmd") == 0);
+	CHECK(c->u.simple.words && c->u.simple.words->next == 0 && strcmp(c->u.simple.words->text, "cmd") == 0);
 	__sh_list_free(l);
 }
 
@@ -553,7 +553,7 @@ static void test_group_redir_leak(void)
 	if (!l) return;
 	c = only_command(l);
 	CHECK(c && c->kind == SH_CMD_SUBSHELL);
-	CHECK(c && c->body != 0);
+	CHECK(c && c->u.group.body != 0);
 	r = c ? c->redirs : 0;
 	CHECK(r && r->op == SH_R_GREAT && r->fd == 2 && strcmp(r->word, "a") == 0); r = r ? r->next : 0;
 	CHECK(r && r->op == SH_R_GREAT && r->fd == 3 && strcmp(r->word, "b") == 0); r = r ? r->next : 0;
@@ -743,8 +743,8 @@ static void test_roundtrip(void)
  * drain_heredocs() then read `h->redir->word` out of freed memory.
  * `f()(<<E)&` is the ten-byte reduction; the programs below are the
  * same shapes written out with a real terminator line so that they
- * parse.  The fix keeps the body in sh_command.func_body whenever
- * anything is pending.
+ * parse.  The fix keeps the body in sh_command.u.funcdef.func_body
+ * whenever anything is pending.
  *
  * WHAT THE ASSERTIONS ARE FOR, since a use-after-free need not be
  * visible in a `make check` build with no sanitizer: `make asan`
@@ -796,7 +796,7 @@ static void test_funcdef_heredoc_before_list_operator(void)
  * from.  So by the time parse_funcdef() used to ask "is anything still
  * pending?", the queue this bug's sibling above depends on had already
  * answered "no" -- even though the body plainly had a here-document.
- * cmd->func_body was then freed, along with the only place the drained
+ * cmd->u.funcdef.func_body was then freed, along with the only place the drained
  * body and terminator lived, and print_command()'s FUNCDEF case had
  * nothing left to reprint but the bare "<<DELIM" operator text inside
  * func_text.
@@ -3909,9 +3909,9 @@ static void test_compound_as_pipeline_stage(const char *self)
 	/* The CONTENT, not just the status.  An `if` stage whose body never
 	 * ran still exits 0 (an empty compound-list succeeds), so a status-only
 	 * assertion here passes even when the stage executed nothing at all --
-	 * which is exactly what happens if this path reads cmd->body directly
-	 * instead of dispatching on the kind: SH_CMD_IF keeps its branches in
-	 * ->arms and its ->body is NULL. */
+	 * which is exactly what happens if this path reads u.group.body
+	 * directly instead of dispatching on the kind: SH_CMD_IF keeps its
+	 * branches in u.ifcmd.arms, a different union member entirely. */
 	/* redirection-dependent: see file_redir_supported() */
 	if (file_redir_supported(self)) {
 		unlink("shtst_cps_out.txt");
@@ -3921,8 +3921,9 @@ static void test_compound_as_pipeline_stage(const char *self)
 		check_file_is("shtst_cps_out.txt", "hi\n");
 
 		/* Same for a `for` stage, which fails differently and so needs its own
-		 * assertion: ->body IS the do-group there, so a bypassing path runs the
-		 * body once with the loop variable never set, rather than not at all. */
+		 * assertion: u.forloop.body IS the do-group there, so a bypassing path
+		 * runs the body once with the loop variable never set, rather than not
+		 * at all. */
 		unlink("shtst_cps_out.txt");
 		snprintf(src, sizeof src,
 			"for f in a b; do '%s' --produce \"$f\"; done | '%s' --cat > shtst_cps_out.txt", self, self);
@@ -4041,8 +4042,8 @@ static void test_funcdef_parse(void)
 		c = only_command(l);
 		if (c) {
 			CHECK(c->kind == SH_CMD_FUNCDEF);
-			CHECK(c->name && strcmp(c->name, "f") == 0);
-			CHECK(c->func_text && strcmp(c->func_text, "{ :; }") == 0);
+			CHECK(c->u.funcdef.name && strcmp(c->u.funcdef.name, "f") == 0);
+			CHECK(c->u.funcdef.func_text && strcmp(c->u.funcdef.func_text, "{ :; }") == 0);
 		}
 		__sh_list_free(l);
 	}
@@ -4054,7 +4055,7 @@ static void test_funcdef_parse(void)
 		c = only_command(l);
 		if (c) {
 			CHECK(c->kind == SH_CMD_FUNCDEF);
-			CHECK(c->func_text && strcmp(c->func_text, "( : )") == 0);
+			CHECK(c->u.funcdef.func_text && strcmp(c->u.funcdef.func_text, "( : )") == 0);
 		}
 		__sh_list_free(l);
 	}
@@ -4067,7 +4068,7 @@ static void test_funcdef_parse(void)
 		if (l->items) {
 			struct sh_command *first = &l->items->andor->pipeline.commands[0];
 			CHECK(first->kind == SH_CMD_FUNCDEF);
-			CHECK(first->func_text && strcmp(first->func_text, "{ :; }") == 0);
+			CHECK(first->u.funcdef.func_text && strcmp(first->u.funcdef.func_text, "{ :; }") == 0);
 			CHECK(l->items->next != 0);
 		}
 		__sh_list_free(l);

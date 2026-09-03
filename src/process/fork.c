@@ -3,115 +3,66 @@
  *
  * fork().
  *
- * Unlike execve, fork has no image to start from: it has to give the
- * child a copy of *this* process's own memory -- heap, globals, stack --
- * and have it resume inside fork() itself, not at the entry point crt1.c
- * runs for every other process.  Windows has exactly one primitive for
- * that, ntdll's RtlCloneUserProcess, and no combination of the others
- * gets there:
+ * Unlike execve, fork has no image to start from: it must give the child
+ * a copy of *this* process's memory and resume inside fork() itself, not
+ * at the entry point crt1.c uses for every other process. NT's only
+ * primitive for that is ntdll's RtlCloneUserProcess:
  *
- *   - NtCreateProcessEx and NtCreateProcess (the lower-level calls
- *     RtlCloneUserProcess itself is built on) create a process object
- *     that shares the calling process's address space but has no thread.
- *     The obvious next step, NtCreateThreadEx into it, does not work: the
- *     kernel considers a thread-less process "awaiting deletion" and
- *     unconditionally answers STATUS_PROCESS_IS_TERMINATING to any
- *     attempt to give it one.  There is no supported way to hand such a
- *     process its first thread other than what RtlCloneUserProcess itself
- *     does internally.
+ *   - NtCreateProcessEx/NtCreateProcess make a thread-less process object
+ *     sharing the caller's address space, but a subsequent
+ *     NtCreateThreadEx into it fails with STATUS_PROCESS_IS_TERMINATING --
+ *     there is no supported way to give such a process its first thread
+ *     other than what RtlCloneUserProcess does internally.
  *
- *   - NtCreateUserProcess does not clone anything: it is RtlCreateUserProcess's
- *     underlying call, and like it, it maps a *new* image into a *new*
- *     address space.  That is exec's primitive, not fork's; __spawn
- *     already uses the Rtl wrapper around it.
+ *   - NtCreateUserProcess maps a *new* image into a *new* address space --
+ *     that is exec's primitive (__spawn already uses its Rtl wrapper),
+ *     not fork's.
  *
- *   - RtlCloneUserProcess itself is documented as unreliable and is where
- *     the trouble it took to characterise the above two lives: measured
- *     on real Windows (M2libc's x86/windows/process.c has the notes),
- *     under WOW64 -- a 32-bit process running on a 64-bit kernel -- the
- *     cloned thread resumes past the 32-on-64 CPU-simulation bring-up
- *     that normally programs the FS segment base, so fs:0x18 (the TEB
- *     access every access to __teb() depends on) faults; separately, the
- *     clone can inherit an ntdll-internal SRW lock in a state only the
- *     WOW64 return path releases, deadlocking the child on its way out
- *     of the call.  Both are specific to that 32-on-64 transition: they
- *     live in the code path a thread only takes while switching between
- *     32-bit and 64-bit execution modes on the way back from the clone.
- *     A native x86_64 ntlibc process never runs that way -- there is no
- *     32-on-64 handoff to miss -- but an i386 ntlibc process can be
- *     running under WOW64, so fork() below checks __is_wow64() and, on
- *     that path only, calls __wow64_fixup_clone() (arch/i386/src/
+ *   - RtlCloneUserProcess itself is documented as unreliable under WOW64
+ *     (measured on real Windows, M2libc's x86/windows/process.c): the
+ *     cloned thread can resume past the 32-on-64 bring-up that programs
+ *     the FS segment base, faulting on fs:0x18 (TEB access), or inherit
+ *     an ntdll SRW lock only the WOW64 return path releases, deadlocking
+ *     the child. Both are specific to the 32-on-64 transition, so only an
+ *     i386 build running under WOW64 needs the fixup: fork() checks
+ *     __is_wow64() and calls __wow64_fixup_clone() (arch/i386/src/
  *     wow64_fixup.c) on the clone's still-suspended handles before ever
- *     resuming it: the same heaven's-gate context surgery and stuck-lock
- *     patch M2libc's notes describe, done here in ntlibc's own types.
+ *     resuming it.
  *
- * What RtlCloneUserProcess actually does is duplicate the calling
- * process's entire address space, at the same virtual addresses, into a
- * new process, and clone the calling thread's own register state into a
- * new thread in it -- so the new thread's copy of this very call resumes
- * with the same stack, the same locals, the same everything, and returns
- * STATUS_PROCESS_CLONED instead of STATUS_SUCCESS to tell it apart from
- * the original.  That is fork()'s 0-vs-child-pid split, for free: no
- * setjmp-style register capture, no manual memory copy, no address
- * matching to arrange, because the primitive already does all of that as
- * the definition of "clone".  It is also exactly why __fds (fd.c) and the
- * heap (malloc.c) both say in their own comments that they survive fork
- * automatically: they are just memory, and all of this process's memory
- * makes the trip.
+ * RtlCloneUserProcess duplicates the whole address space at the same
+ * virtual addresses and clones the calling thread's register state into a
+ * new thread, so the clone's copy of this very call resumes with the same
+ * stack and locals, returning STATUS_PROCESS_CLONED instead of
+ * STATUS_SUCCESS -- fork()'s 0-vs-child-pid split, for free. It is also
+ * why __fds (fd.c) and the heap (malloc.c) survive fork automatically:
+ * they are just memory, and all of this process's memory makes the trip.
  *
- * The one thing that does not make the trip on its own is *handle*
- * inheritance: NT copies into the clone only the handles marked
- * OBJ_INHERIT, the same rule __spawn relies on for redirected fds across
- * exec (see spawn.c).  So every open descriptor's handle is marked
- * inheritable here before cloning, and the close-on-exec ones are put
- * back afterwards, in both processes.
+ * What does NOT make the trip on its own is *handle* inheritance: NT
+ * copies only OBJ_INHERIT handles into the clone. So every descriptor's
+ * handle -- close-on-exec ones included -- is marked inheritable here
+ * before cloning and restored after, in both processes. Marking *every*
+ * descriptor matters: POSIX fork() hands the child every fd the parent
+ * had, only dropping close-on-exec ones on an actual exec. Leaving
+ * cloexec handles unmarked left the clone's fd table naming handles that
+ * were never copied -- free handle numbers NT would hand straight back
+ * out to the next thing that asked, such as an exec'ing child's own
+ * RtlCreateUserProcess process handle. __fd_close_all_cloexec() (exec.c)
+ * would then close that "descriptor", and the following waitpid failed
+ * with STATUS_INVALID_HANDLE: execve() reporting EBADF for a program
+ * that actually ran to completion (GNU make: "Bad file descriptor", exit
+ * 127, for a compile whose object file was sitting right there).
+ * Deterministic, not a race -- the same build loses the same files every
+ * time.
  *
- * Marking *every* descriptor, close-on-exec ones included, is the whole
- * point, and it is not what this used to do.  A close-on-exec descriptor
- * is deliberately given a handle without OBJ_INHERIT (open.c, pipe.c,
- * dup.c, fcntl.c) so that exec does not carry it into the new program --
- * but fork is not exec.  POSIX fork() hands the child every descriptor
- * the parent had, close-on-exec included; they are only closed if and
- * when the child actually execs.  Leaving them unmarked here left the
- * clone with an fd table -- ordinary memory, so copied whole -- naming
- * handles that were never copied with it, and a handle number NT is not
- * using is a handle number NT will hand straight back out.  The first
- * thing an exec'ing child does is RtlCreateUserProcess, whose new
- * process handle lands on exactly such a free number whenever it is the
- * lowest one; __fd_close_all_cloexec (exec.c) then closes it "as a
- * descriptor" and the waitpid immediately after fails with
- * STATUS_INVALID_HANDLE.  What the caller sees is execve() returning
- * EBADF for a program that in fact started and ran to completion -- GNU
- * make reporting "Bad file descriptor" and exit 127 for a compile whose
- * object file is sitting right there.  A number recycled for something
- * other than the child process gives EFAULT (STATUS_ACCESS_VIOLATION)
- * or an object that never signals, i.e. a waitpid that never returns,
- * which is the same bug wearing a different hat.  It is not a race: the
- * clone's handle table is deterministic, so the same build loses the
- * same files every time.
- *
- * The price is two NtDuplicateObject calls per open descriptor per fork
- * rather than one per non-close-on-exec descriptor, and the close-on-exec
- * handles are inheritable only for the length of the clone call itself --
- * no exec can happen in between, so nothing leaks into a spawned program.
- *
- * The same goes for the process handles in __children: RtlCreateUserProcess
- * in __spawn and RtlCloneUserProcess here both hand them back
- * non-inheritable, so without help the clone's copy of the table would be
- * full of handle *values* that mean nothing (or, once NT reuses the slot,
- * something else entirely) in the child, and a waitpid on a sibling
- * would fail -- or worse, wait on the wrong object.  They are marked
- * inheritable around the clone, and un-marked again in both processes
- * afterwards, rather than kept inheritable from __child_add on: __spawn
- * passes InheritHandles=TRUE to RtlCreateUserProcess, which copies
- * *every* inheritable handle, not just the fd table it describes in
- * RuntimeData, so a permanently-inheritable child handle would leak into
- * every exec'd program as a stray process handle it can neither see nor
- * close.  The price is two NtDuplicateObject calls per tracked child per
- * fork, which is cheap next to the clone itself.  And, as on every
- * fork(), only the calling thread is cloned; a multi-threaded caller's
- * other threads simply do not exist in the child, which is the same
- * contract POSIX fork() has always had.
+ * The close-on-exec handles are inheritable only for the length of the
+ * clone call itself, so nothing leaks into a spawned program. The same
+ * mark-around-the-clone treatment applies to __children's process
+ * handles, for the same leak reason: __spawn's InheritHandles=TRUE
+ * copies *every* inheritable handle, not just the fd table, so a
+ * permanently-inheritable child handle would leak into every exec'd
+ * program. As on every fork(), only the calling thread is cloned; a
+ * multi-threaded caller's other threads simply do not exist in the
+ * child, the same contract POSIX fork() has always had.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -126,13 +77,12 @@
 #include "plat_fd.h"
 #include "plat_process.h"
 
-/* Set (inherit != 0) or clear the OBJ_INHERIT attribute on one open
- * descriptor's handle, in place: NtDuplicateObject with the attribute
- * asked for, then close the old handle and keep the new one under the
- * same fd number.  DUPLICATE_SAME_ATTRIBUTES is deliberately not used --
- * it would copy the source handle's attributes over the ones being
- * asked for, which is exactly backwards when the point is to change
- * one -- for the same reason mark_children_inheritable does not use it. */
+/* Set/clear OBJ_INHERIT on one open descriptor's handle in place:
+ * NtDuplicateObject with the attribute asked for, then close the old
+ * handle and keep the new one under the same fd number.
+ * DUPLICATE_SAME_ATTRIBUTES is deliberately not used -- it would copy the
+ * source's attributes instead of changing them, backwards from the point
+ * here (same reason mark_children_inheritable avoids it). */
 static void set_fd_inherit(int i, int inherit)
 {
 	__plat_handle_t dup;
@@ -198,35 +148,28 @@ static pid_t fork_impl(int run_handlers)
 	rc = __plat_process_fork(&r);
 
 	if (rc == __PLAT_FORK_CHILD) {
-		/* The child: this call is returning for the second time, in a
-		 * thread the kernel built by copying the one that called it, in
-		 * a process that is a copy of this one.  Almost nothing needs
-		 * setting up -- __peb, __teb(), the fd table, the heap are all
-		 * just memory, and all of it is already here.  What does need
-		 * setting up is exactly the state POSIX says the child must
-		 * *not* inherit, since the address-space copy is indifferent
-		 * to that distinction.  The sibling handles in
-		 * __children made the trip; stop them travelling any further,
-		 * and put the close-on-exec descriptors back to non-inheritable
-		 * now that they have arrived. */
+		/* The child: this call is returning a second time, in a thread
+		 * the kernel built by copying the one that called it. Almost
+		 * nothing needs setting up -- it's all just memory, already
+		 * here -- except the state POSIX says the child must *not*
+		 * inherit, since the address-space copy doesn't know that
+		 * distinction: stop the sibling handles in __children from
+		 * travelling any further, and put close-on-exec descriptors
+		 * back to non-inheritable now that they've arrived. */
 		__pthread_reset_after_fork();
 		mark_children_inheritable(0);
 		unmark_cloexec_fds();
 		/* ...except the reaped-children time accounting, which is
-		 * memory and therefore did make the trip, and must not have.
-		 * fork.html: the child's tms_cutime/tms_cstime "shall be set
-		 * to 0" -- it has waited for no children of its own.  Nothing
-		 * in the kernel holds this figure (see wait.c), so this call
-		 * is the only thing that can. */
+		 * memory and did make the trip, but shouldn't have: fork.html
+		 * says the child's tms_cutime/tms_cstime "shall be set to 0",
+		 * and nothing in the kernel holds this figure (see wait.c), so
+		 * this call is the only thing that can reset it. */
 		__rusage_children_reset();
-		/* Same shape, same reason: fork.html also says "The time left
-		 * until an alarm clock signal shall be reset to zero, and the
-		 * alarm, if any, shall be canceled", and the deadline
-		 * src/unistd/sleep.c records for a pending alarm() is a static
-		 * that the address-space copy brought along.  The timer object
-		 * behind it did not make the trip -- its handle is deliberately
-		 * not OBJ_INHERIT -- so this only has to forget the deadline,
-		 * not cancel anything. */
+		/* Same shape, same reason: fork.html also zeroes any pending
+		 * alarm(). The deadline (sleep.c) is a static the address-space
+		 * copy brought along; the timer handle behind it is not
+		 * OBJ_INHERIT and so didn't, hence only the deadline needs
+		 * forgetting, not cancelling. */
 		__alarm_reset_after_fork();
 		/* Memory locks and MCL_FUTURE are not inherited across fork().
 		 * RtlCloneUserProcess copied mman.c's bookkeeping bytes, so make
@@ -236,30 +179,21 @@ static pid_t fork_impl(int run_handlers)
 		 * sibling thread and therefore did not survive RtlCloneUserProcess;
 		 * forget its copied queue and stale event handle in the child. */
 		__aio_reset_after_fork();
-		/* And once more: the sibling entries that travelled with the
-		 * clone carry the parent's job-control bookkeeping, and this
-		 * process stopped none of them.  Left alone, the clone would
-		 * report through waitpid(WUNTRACED) a stop it did not cause,
-		 * and would resume a sibling out from under the parent on its
-		 * own exit (src/process/children.c). */
+		/* The sibling entries that travelled with the clone carry the
+		 * parent's job-control bookkeeping, which this process didn't
+		 * cause. Left alone, the clone would report a stop it didn't
+		 * cause through waitpid(WUNTRACED), or resume a sibling out
+		 * from under the parent on its own exit. */
 		__child_forget_stops();
-		/* Same family, one more member: src/signal/sigdelivery.c's
-		 * per-process listener pipe, delivery thread and mutex event.
-		 * RtlCloneUserProcess clones only the calling thread (this
-		 * file's banner), so the delivery thread that clone thinks it
-		 * has does not exist here at all, and the pipe/mutex handle
-		 * values it carried over name nothing live in this process --
-		 * possibly something NT has since recycled onto that slot,
-		 * exactly the hazard this file's banner describes for
-		 * descriptor and child-process handles. Unconditional, like the
-		 * three calls above it: it does not check whether this process
-		 * already has a listener (it never can, immediately after a
-		 * clone) and does not NtClose()/wait on the stale handles,
-		 * only forgets them and builds fresh ones under this process's
-		 * own, correctly-cloned pid. Left undone, the child would be
-		 * permanently deaf to cross-process signals for its entire
-		 * life: not merely delayed, since nothing would ever retry
-		 * this. */
+		/* Same reason, one more member: sigdelivery.c's per-process
+		 * listener pipe, delivery thread and mutex event. Only the
+		 * calling thread is cloned, so the delivery thread the clone
+		 * thinks it has doesn't exist here, and its pipe/mutex handle
+		 * values name nothing live (or something NT has since recycled
+		 * onto that slot) -- forget them and build fresh ones under
+		 * this process's own pid. Left undone, the child would be
+		 * permanently deaf to cross-process signals: nothing would
+		 * ever retry this. */
 		__sig_delivery_reinit_after_fork();
 		if (run_handlers) __pthread_atfork_child();
 		return 0;
@@ -285,11 +219,9 @@ static pid_t fork_impl(int run_handlers)
 		if (r.job) __plat_close(r.job);
 	}
 	/* Still suspended: repair the WOW64-specific clone damage, if any,
-	 * before the child ever runs a single instruction of it.
-	 * __is_wow64()/__wow64_fixup_clone() are only ever defined for the
-	 * x86/x86_64 arches that WOW64 exists for at all (src/internal/
-	 * {i386,x86_64}/wow64.c) -- guarded here so aarch64 (which has
-	 * neither) never references either symbol. */
+	 * before the child runs a single instruction. Guarded to x86/x86_64
+	 * (src/internal/{i386,x86_64}/wow64.c) so aarch64, which has neither
+	 * symbol, never references them. */
 #if defined(__i386__) || defined(__x86_64__)
 	if (__is_wow64()) __wow64_fixup_clone(r.process, r.thread);
 #endif
@@ -304,22 +236,16 @@ pid_t fork(void)
 	return fork_impl(1);
 }
 
-/* _Fork(): kept deliberately, and no test references it -- so it will
- * keep surfacing on tools/lint-unreferenced.sh's list.  It is not an
- * unspecified extension.  POSIX.1-2024 specifies it
- * (`https://pubs.opengroup.org/onlinepubs/9799919799/functions/_Fork.html`,
- * CHANGE HISTORY: "Austin Group Defects 62, 1361, and 1383 are applied,
- * adding the _Fork() function and removing the requirement for fork() to
- * be async-signal-safe"), so this is an interface the project has early,
- * not one it invented; deleting it means re-adding it when the project
- * moves editions.  Same reasoning as posix_close().
+/* _Fork(): kept deliberately despite no test referencing it (so it will
+ * keep surfacing on tools/lint-unreferenced.sh's list) -- POSIX.1-2024
+ * specifies it (Austin Group Defects 62/1361/1383), so this is an
+ * interface the project has early, not one it invented. Same reasoning
+ * as posix_close().
  *
- * What POSIX asks of it beyond fork() is that it be async-signal-safe
- * and not run pthread_atfork() handlers.  Neither distinguishes it here:
- * there is no libpthread (see flockfile in src/stdio/file.c), so there
- * are no atfork handlers to skip, and fork() registers no handlers of
- * its own.  So it forwards, and will need revisiting only if this
- * library ever grows real threads. */
+ * POSIX asks it be async-signal-safe and skip pthread_atfork() handlers;
+ * neither distinguishes it here, since there is no libpthread and fork()
+ * registers no handlers of its own -- revisit only if real threads
+ * arrive. */
 pid_t _Fork(void)
 {
 	return fork_impl(0);

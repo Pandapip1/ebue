@@ -120,10 +120,14 @@ FILES="
 	src/misc/resource.c
 	src/misc/linux/plat_misc.c
 	src/process/children.c
+	src/process/linux/plat_process.c
 	src/thread/pthread.c
 	src/thread/pthread_cancel.c
 	src/thread/pthread_tsd.c
+	src/thread/linux/plat_thread.c
 	src/misc/sched.c
+	src/signal/linux/plat_signal.c
+	arch/$arch/src/sigreturn_trampoline.S
 "
 # This list was stale since before crt/linux/crt1.c grew its own
 # `__fd_init(); __signal_init(); __fenv_init();` sequence (unconditional
@@ -142,36 +146,45 @@ FILES="
 # linux-build-crt-cross.sh's own thread block) and, through
 # pthread_cancel.c's own deferral loop, sched_yield() (src/misc/sched.c).
 #
-# What is still NOT closeable, for the exact same reason tools/
-# linux-build-crt-cross.sh's own comment already gives in full:
+# src/signal/linux/plat_signal.c, src/process/linux/plat_process.c and
+# src/thread/linux/plat_thread.c (added to FILES above, alongside
+# arch/$arch/src/sigreturn_trampoline.S) USED TO be exactly this gap:
 # __signal_init() (crt1.c's own unconditional call) and exit()'s own
-# __plat_sig_default_terminate() call both bottom out in src/signal/
-# linux/plat_signal.c; children.c's __child_resume_stopped() bottoms out
-# in src/process/linux/plat_process.c; and pthread_cancel.c's own
-# locking (__plat_fast_lock/_unlock(), used by its cancellation-state
-# machinery) bottoms out in src/thread/linux/plat_thread.c. All three
-# files hardcode aarch64's `svc #0` raw-syscall calling convention with
-# no x86_64/i386 branch -- confirmed the same way, empirically, not
-# assumed. src/signal/signal.c itself (kill(), __sig_current_mask_copy())
-# is deliberately NOT added either: it would only trade the current
-# "kill undefined" link error for the identical plat_signal.c-rooted
-# ones already listed, while colliding with fuzz/
-# linux_pilot_dlfcn_cross_yield.c's own pre-existing __raise_internal()
-# stub (a real, reproduced `duplicate symbol: __raise_internal` --
-# checked, not guessed).
+# __plat_sig_default_terminate() call both bottom out in plat_signal.c;
+# children.c's __child_resume_stopped() bottoms out in plat_process.c;
+# and pthread_cancel.c's own locking (__plat_fast_lock/_unlock(), used by
+# its cancellation-state machinery) bottoms out in plat_thread.c. All
+# three used to hardcode aarch64's `svc #0` raw-syscall calling
+# convention with no x86_64/i386 branch at all; that is now closed for
+# real (see tools/linux-build-crt-cross.sh's own updated comment for the
+# fuller account of what closing it took -- real per-arch syscall
+# numbers, real per-arch raw_syscall() bodies, and two real per-arch
+# struct-layout fixes, not just number swaps). fuzz/linux_pilot_dlfcn_
+# cross_yield.c's own former __plat_thread_alertable_yield() stand-in was
+# removed for the identical reason (a real, reproduced `duplicate
+# symbol` once the real plat_thread.c version was linked alongside it);
+# its __mq_fd_closed()/__raise_internal() stand-ins were NOT, for the
+# reason given next.
 #
-# Net result: this script's link now fails on EXACTLY the eleven
-# symbols rooted in those three unported backend files (__signal_init,
-# __plat_sig_default_terminate, __plat_sig_deliverable_to_other_process,
-# kill, __sig_current_mask_copy, __plat_process_resume,
-# __plat_fast_lock, __plat_fast_unlock, __plat_wait_one,
-# __plat_event_create, __plat_event_set) -- confirmed by a real clean
-# build, not the six-symbol tip tools/linux-build-dlfcn-cross.sh used to
-# stop at before this list was ever updated. This is real, disclosed,
-# pre-existing scope, the same as tools/linux-build-crt-cross.sh's own
-# "two scripts remaining link failures" -- porting those three backends
-# to x86_64/i386 is separate, tracked work, not a FILES= omission this
-# list can close.
+# src/signal/signal.c itself (kill(), __sig_current_mask_copy(),
+# __signal_init()) is STILL deliberately NOT added, for the identical
+# reason as before: it would collide with fuzz/linux_pilot_dlfcn_cross_
+# yield.c's own still-necessary __raise_internal() stub (a real,
+# reproduced `duplicate symbol: __raise_internal`, checked when this
+# comment was updated, not guessed) -- signal.c is genuinely portable
+# front-end code, not a platform backend, and was never one of the four
+# files this pass ported; pulling in the whole real signal-dispatch
+# subsystem just to satisfy these three symbols is separate, larger
+# scope than a platform-backend raw-syscall port, matching this file's
+# own __raise_internal() comment above almost verbatim.
+#
+# Net result: this script's link now fails on EXACTLY three symbols,
+# ALL rooted in src/signal/signal.c itself (__sig_current_mask_copy,
+# kill, __signal_init) -- confirmed by a real clean build, down from the
+# eleven-symbol, three-backend-file gap this comment used to describe.
+# This is real, disclosed, pre-existing scope, not a FILES= omission
+# this list can close without pulling in signal.c's own much larger
+# front-end.
 
 INC="-I$srcdir/src/internal -I$BUILD/obj/include -I$srcdir/include -I$srcdir/arch/$arch -I$srcdir/arch/generic"
 CFLAGS="-std=c99 -nostdinc -fno-builtin -fno-stack-protector -g -O0 -ffunction-sections -fdata-sections \

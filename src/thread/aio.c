@@ -2,13 +2,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * POSIX asynchronous I/O.  A single detached native worker services a
- * bounded FIFO.  Besides avoiding a thread-per-request resource explosion,
- * serial service is the property cancellation needs: when a socket write is
- * blocked, later requests remain genuinely queued and can be canceled.
- *
- * The signal subsystem's recursive event mutex protects the queue.  It is
- * already initialized before user code can submit AIO, is safe to enter from
- * completion handlers, and avoids introducing a second home-grown lock.
+ * bounded FIFO: besides avoiding a thread-per-request explosion, serial
+ * service keeps a blocked request's later siblings genuinely queued and
+ * cancelable.  The queue is protected by the signal subsystem's recursive
+ * event mutex, reused here because it's already initialized before AIO
+ * can be used and is safe to enter from completion handlers.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -56,10 +54,9 @@ struct aio_request {
 	struct aio_group *group;
 };
 
-/* Each aio_suspend() call owns one event and registers this stack record while
- * blocked. A request completion sets every matching waiter's event under the
- * queue lock, giving condition-variable broadcast semantics without polling
- * or letting an unrelated waiter consume the only completion wake. */
+/* Each aio_suspend() call registers one of these on the stack while blocked;
+ * a completion sets every matching waiter's event under the queue lock, so
+ * one completion can't be consumed by an unrelated waiter. */
 struct aio_waiter {
 	const struct aiocb *const *list;
 	int count;
@@ -73,9 +70,7 @@ struct thread_notice {
 	union sigval value;
 };
 
-/* "The signal subsystem's recursive event mutex protects the queue" (see
- * this file's own banner above) -- every one of these is __sig_lock()/
- * __sig_unlock()'s to guard, not a second home-grown lock's. */
+/* Guarded by __sig_lock()/__sig_unlock() (see file banner). */
 static struct aio_request requests[AIO_MAX] NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static struct aio_group groups[AIO_MAX] NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static unsigned long long next_sequence NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
@@ -84,44 +79,23 @@ static int worker_started NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static int worker_synchronous NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static struct aio_waiter *waiters NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 
-/* Worker teardown.  A detached background worker that never checked for
- * process shutdown was a real, confirmed leak: src/thread/linux/
- * plat_thread.c's own __plat_thread_spawn() clones WITHOUT CLONE_THREAD
- * (see that file's banner), so on Linux the worker is a genuinely
- * separate process (its own pid/tgid), invisible to exit_group(2) --
- * the syscall exit()/_exit() use to tear the calling process down.
- * NtTerminateProcess (NT's own __plat_terminate()) kills every thread of
- * the process at once and would have masked this, which is why it only
- * surfaced running natively on Linux. `worker_shutdown` is the flag
- * aio_worker()'s idle-wait branch checks instead of blocking forever
- * once the queue is empty; `worker_done_event` is what
- * aio_worker_atexit() (registered once, below) blocks on so process
- * exit cannot race a still-running worker off the end of the world --
- * see that function's own comment. `worker_atexit_registered` is reset
- * by __aio_reset_after_fork() same as the rest of this block: a forked
- * child's own first real submit() needs to register its own shutdown
- * hook for the fresh worker it lazily starts, independently of whatever
- * the parent already registered before the fork. */
+/* Worker teardown. On Linux, __plat_thread_spawn() clones the worker WITHOUT
+ * CLONE_THREAD, so it's a separate process (own pid/tgid) invisible to
+ * exit_group(2); NtTerminateProcess kills every thread at once, so this bug
+ * only shows up on Linux. `worker_shutdown` is what stops the idle worker
+ * from blocking forever once the queue drains; `worker_done_event` is what
+ * aio_worker_atexit() blocks on so process exit can't race a running worker.
+ * `worker_atexit_registered` is reset on fork so a forked child's first
+ * submit() re-registers its own shutdown hook for its own lazily-started
+ * worker. */
 static int worker_shutdown NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static int worker_exited NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static __plat_handle_t worker_done_event NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static int worker_atexit_registered NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 
-/* request required: dereferenced unconditionally (`request->cb`) in
- * the loop's own comparison, and every real call site passes a
- * pointer into the file-static `requests[]` table, never NULL.
- * `waiter->list[i]` below is a different, unrelated residual: `waiter`
- * is not a parameter of this function at all -- it is walked from the
- * file-static `waiters` linked list, the same "global's own invariant"
- * class as pthread_atfork.c's handlers[i] residuals -- and its `list`
- * field's own liveness traces back to aio_suspend()'s own `list`
- * parameter (POSIX-required, and never NULL-checked there, the
- * identical contract lio_listio()'s own already-marked `list` has;
- * aio_suspend()'s `list` itself is not marked because aio_suspend()'s
- * own body never dereferences it directly, only stores it into
- * `waiter.list` and forwards it to suspend_list_ready(), itself already
- * required nonnull(1)) -- verified sound by hand across that chain, not
- * expressible as a `nonnull` on this function's own signature. */
+/* request is always a pointer into the file-static requests[] table, never
+ * NULL, so nonnull isn't declared on it (not expressible for a struct
+ * field's own conditional liveness). */
 static void wake_waiters_locked(const struct aio_request *request)
     __attribute__((nonnull(1)))
     NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
@@ -139,10 +113,7 @@ static void wake_waiters_locked(const struct aio_request *request)
 	}
 }
 
-/* argument required: cast to notice and dereferenced unconditionally
- * (`notice->function`); its one real call site (__plat_thread_spawn()
- * in notify() above) always passes a freshly malloc()'d, already
- * null-checked `notice`. */
+/* argument is always a freshly malloc()'d, already null-checked notice. */
 static unsigned __PLAT_APC_CALL notice_thread(void *argument)
     __attribute__((nonnull(1)));
 static unsigned __PLAT_APC_CALL notice_thread(void *argument)
@@ -155,12 +126,8 @@ static unsigned __PLAT_APC_CALL notice_thread(void *argument)
 	return 0;
 }
 
-/* Whether `event` is actually supposed to fire a notification: SIGEV_NONE
- * never does, and a SIGEV_SIGNAL naming signal 0 is the sigevent.h-blessed
- * way to ask for silence too (sigev_signo != 0 mirrors the same "signal 0
- * is a null signal" rule kill()/raise() apply). SIGEV_THREAD always
- * fires -- valid_event() already requires its sigev_notify_function to be
- * set. */
+/* SIGEV_NONE never notifies; SIGEV_SIGNAL naming signal 0 is also silence,
+ * mirroring kill()/raise()'s "signal 0 is a null signal" rule. */
 static int event_wants_notify(const struct sigevent *event)
 {
 	return event->sigev_notify != SIGEV_NONE &&
@@ -198,25 +165,9 @@ static void notify(const struct sigevent *event)
 
 /* Complete one member while the queue lock is held.  The caller sends the
  * copied notifications only after unlocking: a handler is allowed to call
- * aio_return(), which can immediately release and reuse this request slot. */
-/* request/individual/have_individual/have_list are all required:
- * request->error, individual, *have_individual and *have_list are all
- * written unconditionally at the top of this function, before the one
- * conditional branch that may additionally touch `list`. `list` itself
- * is deliberately NOT marked -- `*list = request->group->event;` only
- * happens inside that branch (`request->group && request->group->active
- * && ...`), not on every call.
- *
- * `request->cb->aio_sigevent` (line below) is the same "global table
- * entry's own FIELD liveness, not a parameter" residual class as
- * aio_cancel()'s own comment documents for `request->cb->aio_fildes`:
- * request->cb is only ever non-NULL once submit() has set it (after
- * its own `if (!cb ...)` check), and finish_locked()/perform() are
- * only ever called on a
- * request already past that point (REQ_RUNNING, transitioning to
- * REQ_DONE) -- verified sound by hand, not force-fit to `nonnull`,
- * which has no way to describe a struct field's own conditional
- * liveness. */
+ * aio_return(), which can immediately release and reuse this request slot.
+ * `list` isn't marked nonnull since it's only written inside the group
+ * branch, not on every call. */
 static void finish_locked(struct aio_request *request, int error, ssize_t result,
 	struct sigevent *individual, int *have_individual,
 	struct sigevent *list, int *have_list)
@@ -240,12 +191,6 @@ static void finish_locked(struct aio_request *request, int error, ssize_t result
 	}
 }
 
-/* request required (dereferenced immediately, `request->cb`); error
- * required (`*error = ...;` unconditional at the very end -- this
- * function has no early-return path that skips it). `cb->aio_fildes`
- * below is the same request->cb field-liveness residual documented on
- * finish_locked() above and aio_cancel() below -- not a fact about
- * this function's own `request`/`error` parameters. */
 static ssize_t perform(struct aio_request *request, int *error)
     __attribute__((nonnull(1, 2)));
 static ssize_t perform(struct aio_request *request, int *error)
@@ -308,13 +253,9 @@ static unsigned __PLAT_APC_CALL aio_worker(void *unused)
 		shutdown = worker_shutdown;
 		__sig_unlock();
 		if (!request) {
-			/* The queue is drained: an idle worker only blocks
-			 * indefinitely when the process is NOT shutting down.
-			 * Checking this here, rather than only before the wait,
-			 * means a shutdown requested while the queue still had
-			 * work gets serviced first (finishing outstanding AIO,
-			 * not abandoning it) and this check is revisited on every
-			 * lap, not just once. */
+			/* Checked here, not just before the wait, so a shutdown
+			 * requested mid-queue still lets outstanding AIO finish
+			 * before the worker exits. */
 			if (shutdown) break;
 			__plat_wait_one(wake, 0, 0, 0);
 			continue;
@@ -328,10 +269,8 @@ static unsigned __PLAT_APC_CALL aio_worker(void *unused)
 		if (have_individual) notify(&individual);
 		if (have_list) notify(&list);
 	}
-	/* Publish exit before returning: aio_worker_atexit() blocks on
-	 * `done` specifically so process exit cannot proceed (and, on the
-	 * Linux backend, tear down the address space) while this worker is
-	 * still between here and its own actual thread/process exit. */
+	/* Publish exit before returning so aio_worker_atexit() can't let
+	 * process exit proceed while this worker is still winding down. */
 	__sig_lock();
 	worker_exited = 1;
 	done = worker_done_event;
@@ -340,19 +279,11 @@ static unsigned __PLAT_APC_CALL aio_worker(void *unused)
 	return 0;
 }
 
-/* Registered (once) via atexit() by start_worker(), below, the first time
- * a real background worker -- as opposed to the worker_synchronous
- * fallback, which has no thread/process to clean up -- actually spawns.
- * exit()'s __funcs_on_exit() runs every atexit() handler, this one
- * included, before __exit_internal()/__plat_terminate() (exit_group(2) on
- * Linux) tears the process down -- see that syscall's own comment in
- * src/exit/linux/plat_exit.c for why it does NOT reach a worker spawned
- * via __plat_thread_spawn() on this backend (a separate tgid, not a
- * thread of the caller's own group). Blocking here, synchronously,
- * until aio_worker() has actually finished (not merely been asked to)
- * is what closes that gap: __plat_wait_one() on `worker_done_event` is
- * a real wait, already proven correct by every other consumer of this
- * same primitive in this file, not a poll or a fixed grace period. */
+/* Registered once by start_worker() the first time a real background worker
+ * spawns (the worker_synchronous fallback has nothing to clean up). Blocks
+ * until aio_worker() has actually finished, closing the gap where
+ * exit_group(2) on Linux would otherwise tear the process down without
+ * reaching a worker spawned as a separate tgid. */
 static void aio_worker_atexit(void)
 {
 	__plat_handle_t done;
@@ -381,9 +312,8 @@ static int start_worker(void)
 		return 0;
 	}
 	if (result < 0) { errno = EAGAIN; return -1; }
-	/* worker_done_event backs aio_worker_atexit()'s own wait, above --
-	 * created alongside worker_wake, before the worker can possibly run,
-	 * so both handles are already valid for the whole of its lifetime. */
+	/* Created alongside worker_wake, before the worker can run, so both
+	 * handles are valid for its whole lifetime. */
 	result = __plat_event_create(&done);
 	if (result < 0) {
 		__plat_close(event);
@@ -409,13 +339,13 @@ static int start_worker(void)
 	worker_started = 1;
 	__plat_close(thread);
 	if (!worker_atexit_registered) {
-		/* atexit()'s own bookkeeping (src/exit/exit.c's handlers[]/
-		 * nhandlers) is unguarded by __ntlibc_sig_lock_token -- a
-		 * separate, already-process-wide-safe table -- so calling it
-		 * while still holding this file's own lock is not a
-		 * lock-ordering hazard, merely a call to another module. */
-		atexit(aio_worker_atexit);
-		worker_atexit_registered = 1;
+		/* atexit()'s own table is a separate, already process-wide-safe
+		 * structure, so calling it while holding this file's lock isn't
+		 * an ordering hazard. A failed registration isn't fatal (the
+		 * worker is already usable); it just means exit() won't wait
+		 * for it to drain, so worker_atexit_registered stays clear. */
+		if (atexit(aio_worker_atexit) == 0)
+			worker_atexit_registered = 1;
 	}
 	return 0;
 }
@@ -550,13 +480,8 @@ static int timeout_valid(const struct timespec *timeout)
 	                    timeout->tv_nsec < 1000000000L);
 }
 
-/* Called with the queue lock held. Invalid request identities have already
- * ceased being outstanding and therefore satisfy aio_suspend() just like a
- * request another thread completed and collected with aio_return(). */
-/* list/any both required: *any = 0 is written unconditionally at
- * entry, and list is subscripted directly (`list[i]`) whenever
- * count >= 1 -- every real call site (aio_suspend()) forwards its own
- * list argument, which is itself required by POSIX. */
+/* Called with the queue lock held. An invalid/stale request identity counts
+ * as ready, same as one already completed and collected via aio_return(). */
 static int suspend_list_ready(const struct aiocb *const list[], int count,
 	int *any) __attribute__((nonnull(1, 3)))
     NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
@@ -613,8 +538,8 @@ int aio_suspend(const struct aiocb *const list[], int count,
 		deadline = timeout_deadline(timeout, start);
 	}
 
-	/* Avoid requiring an event on the synchronous fallback path, where every
-	 * valid request is already done before aio_suspend() can observe it. */
+	/* Avoids creating an event on the synchronous fallback path, where every
+	 * valid request is already done. */
 	__sig_lock();
 	if (suspend_list_ready(list, count, &any) || !any) {
 		__sig_unlock();
@@ -683,17 +608,9 @@ int aio_suspend(const struct aiocb *const list[], int count,
 	}
 }
 
-/* cb is deliberately NOT required: aio_cancel.html DESCRIPTION -- "If
- * the aiocbp argument is NULL, then all outstanding cancelable I/O
- * operations shall be canceled" -- and `(cb && request->cb != cb)`
- * below is exactly that real, load-bearing check, not decoration.
- * (This function's own flagged finding, `request->cb->aio_fildes`, is
- * a different, unrelated fact regardless -- request is always
- * `&requests[i]`, a file-static table entry, so it is request->cb, a
- * FIELD of that global, whose own liveness is in question, not
- * anything expressible on aio_cancel()'s own parameters; same
- * "global's own invariant, not a parameter" residual class as
- * src/env/setenv.c's is_putenv() from 242ed40.) */
+/* cb is deliberately not required: POSIX says a NULL aiocbp cancels every
+ * outstanding cancelable I/O operation, which `cb && request->cb != cb`
+ * below implements. */
 int aio_cancel(int fd, struct aiocb *cb)
 {
 	struct sigevent notifications[AIO_MAX * 2];
@@ -823,19 +740,11 @@ void __aio_reset_after_fork(void)
 	worker_synchronous = 0;
 	waiters = 0;
 	next_sequence = 0;
-	/* worker_shutdown/worker_exited/worker_done_event describe a
-	 * specific worker OS thread/process that fork(2) does NOT duplicate
-	 * (POSIX fork() -- and this backend's own plain fork syscall --
-	 * carries over only the calling thread, never a __plat_thread_spawn()
-	 * sibling): the child has no worker at all yet, whatever these said
-	 * in the parent, and must reach a fresh start_worker() call to get
-	 * one. worker_atexit_registered is deliberately NOT reset here: the
-	 * atexit() handler table itself (src/exit/exit.c's handlers[]) is
-	 * ordinary process memory, so fork() already copied any registration
-	 * the parent made, and that inherited entry -- unconditionally
-	 * re-reading these same file-static globals at the child's own
-	 * eventual exit() -- stays correct for whatever worker the child
-	 * does or does not go on to start. */
+	/* fork() carries over only the calling thread, never a worker spawned
+	 * via __plat_thread_spawn(); the child has no worker until its own
+	 * start_worker() call. worker_atexit_registered is deliberately NOT
+	 * reset: fork() already copied the atexit() registration, and that
+	 * entry re-reads these same globals at the child's own exit(). */
 	worker_shutdown = 0;
 	worker_exited = 0;
 	worker_done_event = 0;

@@ -21,26 +21,15 @@ char *ttyname(int fd)
 	return buf;
 }
 
-/* tcgetpgrp()/tcsetpgrp().  The *answer* is fixed: this platform has
- * exactly one session and one process group (src/unistd/ids.c's
- * getpgrp()/getsid(), and src/termios/termios.c's banner for why a
- * console cannot have a foreground/background split), so there is never
- * a second group for tcgetpgrp() to report or for tcsetpgrp() to move
- * the terminal to.  A fixed answer is not the same thing as no argument
- * check, though, and these two used to discard `fd` entirely:
- * tcgetpgrp.html and tcsetpgrp.html both list "[EBADF] The fildes
- * argument is not a valid file descriptor" as a *shall* fail, so fildes
- * goes through __fd_get() like every other fd-taking call here.
- *
- * The gate is __fd_get() alone, deliberately, and not
- * src/termios/termios.c's get_console(): the one-process-group model
- * above is a property of the process, not of a particular descriptor,
- * so it answers for any descriptor this process actually holds --
- * test/posix-unistd.c pins that on descriptors that are demonstrably
- * not consoles (`make check` runs with stdin on /dev/null).  Adding
- * [ENOTTY] for a non-console fildes would narrow that model, which is a
- * separate decision from supplying the argument check it never had; see
- * test/POSIX-COVERAGE.md's unistd.h section, which records it as open. */
+/* tcgetpgrp()/tcsetpgrp(). This platform has exactly one session and one
+ * process group, so there's never a second group to report or move to
+ * -- but that fixed answer still requires the shall-fail EBADF for an
+ * invalid fildes, hence __fd_get(). The gate is __fd_get() alone, not
+ * get_console(): the one-process-group model is a property of the
+ * process, not a particular descriptor, so it answers for any fd this
+ * process holds, console or not (test/posix-unistd.c pins this with
+ * stdin on /dev/null). Whether a non-console fildes should get ENOTTY
+ * instead is a separate, still-open question (test/POSIX-COVERAGE.md). */
 pid_t tcgetpgrp(int fd)
 {
 	if (!__fd_get(fd)) return -1;	/* EBADF, already set */

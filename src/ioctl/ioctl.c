@@ -4,59 +4,22 @@
  * ioctl(): a deliberately small, honest set of requests, not a general
  * escape hatch. Exactly three are recognised:
  *
- *   - FIONREAD: bytes immediately readable. For __FD_PIPE, this reuses
- *     the exact NtQueryInformationFile(FilePipeLocalInformation)
- *     ReadDataAvailable field src/select/select.c's __fd_probe()
- *     already queries to answer "is this pipe readable" -- same call,
- *     same field, just returned as a count instead of a boolean; not
- *     duplicated logic, the identical NT mechanism. (That file also
- *     reads WriteQuotaAvailable from the same structure, gated on a
- *     one-shot capability probe because wine-9.0 and older hardcode it
- *     to 0 -- irrelevant here since FIONREAD only ever asks about the
- *     read side, but worth restating: nothing in this file leans on
- *     that field either.) For __FD_FILE, it is
- *     bytes remaining until EOF (FileStandardInformation's EndOfFile
- *     minus FilePositionInformation's CurrentByteOffset) -- a real,
- *     if less commonly needed, answer. Anything else (a console, a
- *     directory, a character device, a socket) has no meaningful
- *     "bytes immediately available" concept in this library today and
- *     gets EINVAL, not a fabricated 0.
- *   - TIOCGWINSZ: terminal size. Platform-split, like termios.c's own
- *     ISIG/ICANON/ECHO: on NT, from kernel32's
- *     GetConsoleScreenBufferInfo() (srWindow's extent -- the visible
- *     window, which is what a real terminal's "size" means to a
- *     program, not the scrollback buffer's dwSize), NTLIBC_USE_KERNEL32
- *     only -- no ntdll path to console screen-buffer info exists
- *     (CONTRIBUTING.md). Without it, or on any non-console fd, ENOTTY.
- *     On Linux there is no kernel32-equivalent escape hatch to gate
- *     behind at all: it is a standard, unconditional real ioctl(2)
- *     (src/ioctl/linux/plat_ioctl.c's __plat_tiocgwinsz(), via
- *     src/internal/plat_ioctl.h) against whatever fd is given, real on
- *     any genuine tty/pty and ENOTTY -- the BSD-equivalent answer for
- *     "this isn't a terminal" -- on anything else, sourced from the
- *     kernel's own ioctl_tty(2) dispatch rather than a pre-check of fd
- *     metadata here (see that file's own comment on why: Linux folds
- *     every character device, tty and non-tty alike, into one
- *     __FD_CHAR bucket, so this file has no fd-type test that could
- *     tell a real terminal from /dev/null the way __FD_CONSOLE alone
- *     already does on NT).
- *   - FIONBIO: toggles O_NONBLOCK on the descriptor, the same flag
- *     fcntl(F_SETFL) already flips (src/fcntl/fcntl.c). Documented
- *     honestly, not oversold: O_NONBLOCK today only changes what
- *     fcntl(F_GETFL) reports back -- src/unistd/read.c's pipe path
- *     already returns EAGAIN on an empty pipe unconditionally,
- *     regardless of this flag (pipes are effectively always
- *     non-blocking at the read() level in this library; select()/
- *     poll() are the intended way to wait on one). So FIONBIO is real
- *     in the sense that it stores the same bit fcntl() does, but does
- *     not newly enable or disable any blocking behaviour that did not
- *     already exist.
+ *   - FIONREAD: for __FD_PIPE, NtQueryInformationFile's ReadDataAvailable
+ *     (the same field src/select/select.c's __fd_probe() queries, as a
+ *     count instead of a boolean); for __FD_FILE, EndOfFile minus the
+ *     current position. Anything else gets EINVAL, not a fabricated 0.
+ *   - TIOCGWINSZ: on NT, kernel32's GetConsoleScreenBufferInfo() (gated
+ *     on NTLIBC_USE_KERNEL32; no ntdll path exists), ENOTTY without it
+ *     or on a non-console fd. On Linux it's a real ioctl(2)
+ *     (src/ioctl/linux/plat_ioctl.c), with no fd-type pre-check since
+ *     the kernel's own dispatch already answers ENOTTY for a non-tty.
+ *   - FIONBIO: toggles O_NONBLOCK, the same flag fcntl(F_SETFL) flips.
+ *     Pipes already return EAGAIN unconditionally on an empty read
+ *     (src/unistd/read.c), so this stores the bit but enables no new
+ *     blocking behavior.
  *
- * Every other request -- there is no registry of "known but
- * unsupported" requests to silently swallow -- fails EINVAL. An
- * ioctl() that accepts an unknown request and does nothing is a trap
- * (a caller that checks the return value is fine; a caller that does
- * not gets silently wrong behaviour), so this never does that.
+ * Every other request fails EINVAL — there is no silent no-op fallback
+ * for an unknown request.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -90,18 +53,10 @@ static int fionread_file(struct __fd *f, int *out)
 	return 0;
 }
 
-/* arg's two unconditional dereferences below (`*(int *)arg` in the
- * FIONREAD and FIONBIO cases) are a disclosed, deliberately unmarked
- * residual: arg is not a named parameter at all, only a value pulled
- * out of ioctl()'s own trailing `...` via va_arg() -- there is no
- * parameter POSITION for `nonnull` (which only ever describes a
- * function's own fixed, named parameters) to attach to. This is the
- * same shape every variadic POSIX call with a request-dependent third
- * argument has (fcntl(), open()'s mode); trusted the same way this
- * project already trusts ioctl(2)'s own real-world convention that a
- * caller issuing a pointer-taking request (FIONREAD, FIONBIO,
- * TIOCGWINSZ) supplies a real pointer for it, not something this
- * function's own body could ever validate. */
+/* arg's unconditional dereferences below trust ioctl(2)'s own convention
+ * that a caller issuing a pointer-taking request supplies a real pointer;
+ * arg comes from va_arg() so there's no fixed parameter for `nonnull`
+ * to attach to. */
 int ioctl(int fd, unsigned long req, ...) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = __fd_get(fd);
@@ -124,13 +79,6 @@ int ioctl(int fd, unsigned long req, ...) // NOLINT(bugprone-easily-swappable-pa
 	}
 	case TIOCGWINSZ: {
 #ifdef __linux__
-		/* No fd-type pre-check here -- see this file's own banner:
-		 * __plat_tiocgwinsz() issues a real ioctl(2), and the kernel's
-		 * own ioctl_tty(2) dispatch already answers ENOTTY for any fd
-		 * that is not a genuine terminal, which is the real, load-
-		 * bearing check (a __FD_CHAR pre-filter here could only ever
-		 * be a coarse approximation of that, since __FD_CHAR also
-		 * covers /dev/null and friends). */
 		return __plat_tiocgwinsz(f->h, (struct winsize *)arg);
 #else
 		if (f->type != __FD_CONSOLE) { errno = ENOTTY; return -1; }

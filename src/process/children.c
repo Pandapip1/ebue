@@ -5,33 +5,22 @@
  * pid and the process HANDLE waitpid needs to wait on it and read its
  * exit code.
  *
- * The handle is the only thing that keeps a child reapable.  A pid on
- * Windows is a name for a process *object*, and the object goes away as
- * soon as the last handle to it does; once that happens NtOpenProcess by
- * CLIENT_ID cannot find the pid again (and the number may even be reused
- * for something else).  So a table that can fill up is not a table that
- * merely loses track of extra children -- dropping the handle destroys
- * the only way to ever learn how the child exited.  The table therefore
- * grows on demand instead of overflowing.
+ * The handle is the only thing keeping a child reapable -- a pid names a
+ * process *object* that vanishes (and can be reused) once its last handle
+ * closes -- so the table grows on demand rather than ever dropping one.
+ * It starts as a static array (no malloc for the common case, or for any
+ * fork/spawn before the allocator exists); only the 257th concurrently-
+ * unreaped child grows it, from the process heap, which survives
+ * RtlCloneUserProcess along with everything else fork() copies (see
+ * fork.c's header comment).
  *
- * It starts as a static array, so the common case -- and, importantly,
- * any fork/spawn done before or without the allocator -- never calls
- * malloc at all; only the 257th concurrently-unreaped child does.  Growth
- * allocates from the process heap (src/malloc/malloc.c: RtlAllocateHeap
- * on __peb->ProcessHeap), which is ordinary address space, so the grown
- * table makes the trip through RtlCloneUserProcess with everything else
- * fork() copies -- see fork.c's header comment.  The pointer __children
- * itself is just a global variable, and globals are memory too, so the
- * clone sees the same pointer aimed at its own copy of the same bytes.
+ * If growth fails, __child_add returns -1 and the caller closes the
+ * handle, losing the child rather than losing the fork.
  *
- * If growth fails there is nothing better to do than what the fixed table
- * used to do: __child_add returns -1 and the caller closes the handle,
- * losing the child rather than losing the fork.
- *
- * Note that __child_find returns a pointer *into* the table, which a
- * later growth may move.  Every caller uses it and is done with it before
- * any further __child_add, so this is safe as written; anything that
- * wants to hold one across a fork/spawn must remember the pid instead.
+ * __child_find returns a pointer *into* the table, which a later growth
+ * may move; every caller is done with it before the next __child_add, so
+ * this is safe, but anything holding one across a fork/spawn must
+ * remember the pid instead.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -72,10 +61,9 @@ int __child_add(int pid, __plat_handle_t h, __plat_handle_t job)
 {
 	int i;
 	/* SA_NOCLDWAIT: this child must never be something wait()/waitpid()
-	 * can find (src/signal/signal.c's __sigchld_nocldwait()).  Reporting
-	 * failure here, same as a table that could not grow, makes both
-	 * callers (fork.c, spawn.c) take the degrade path they already have:
-	 * close the handle and let the child run untracked. */
+	 * can find (signal.c's __sigchld_nocldwait()). Failing here, like a
+	 * table that can't grow, makes both callers (fork.c, spawn.c) take
+	 * the same degrade: close the handle, let the child run untracked. */
 	if (__sigchld_nocldwait()) return -1;
 	for (;;) {
 		for (i = 0; i < __child_cap; i++)
@@ -137,55 +125,32 @@ static void clear_stops(int resume)
 	}
 }
 
-/* exit.html CONSEQUENCES OF PROCESS TERMINATION: "if the exit of the
- * process causes a process group to become orphaned, and if any member
- * of the newly-orphaned process group is stopped, then a SIGHUP signal
- * followed by a SIGCONT signal shall be sent to each process".  Every
- * process is its own process group of one here (src/unistd/ids.c), so a
- * child this process stopped is orphaned the instant this process ends,
- * and the clause applies to all of them.
+/* exit.html: "if the exit of the process causes a process group to
+ * become orphaned, and if any member ... is stopped, then a SIGHUP
+ * signal followed by a SIGCONT signal shall be sent to each process."
+ * Every process is its own group of one here (src/unistd/ids.c), so a
+ * child this process stopped is always orphaned the instant it exits.
  *
- * The SIGCONT half is unconditional.  The clause's purpose is that no
- * stopped process is left with nobody able to continue it -- and here
- * that outcome is not merely untidy but terminal: the suspend count
- * lives in the kernel, the only handle to the child dies with this
- * process, and NtOpenProcess by pid is the last thing an unrelated
- * program would think to do, so a child left suspended is suspended for
- * good.  Resuming clears that completely.
+ * SIGCONT is unconditional: the suspend count lives in the kernel, the
+ * only handle to the child dies with this process, and nothing else
+ * could ever open it by pid again -- so a child left suspended here
+ * would stay suspended forever. Resuming clears that completely.
  *
- * The SIGHUP half (clear_stops(), above) is sent for real only where the
- * platform can actually deliver it as a real signal, applying the
- * child's OWN disposition, rather than destroy the child outright --
- * __plat_sig_deliverable_to_other_process() (src/internal/plat_signal.h)
- * is that per-platform capability check, done once per stopped child,
- * before the SIGCONT for that same child.  On Linux, kill(child, SIGHUP)
- * IS the real thing: signal.c's kill() reaches its own cross-process arm
- * (src/signal/linux/sigdelivery.c's __sig_try_deliver_remote()), which
- * turns that into a genuine pidfd_send_signal(2) of SIGHUP, applying
- * whatever real kernel-level disposition the child itself last synced --
- * an ignored disposition is a genuine no-op, SIG_DFL runs the real
- * default action (Term), and, as of that file's own Tier-2 widening
- * (signal()/sigaction()'s __plat_sig_install_real_handler() calls,
- * src/signal/signal.c), a real process-level function-pointer handler
- * the child installed with sigaction()/signal() genuinely runs too,
- * exactly the clause's own "signal ... sent" -- the child's own
- * disposition decides what that means, same as for any other signal.
- * On NT there is no kernel-signal path at all: this library cannot
- * deliver a real signal to another process there (see kill()'s own
- * comment), so kill(child, SIGHUP) is NtTerminateProcess -- it would
- * unconditionally destroy a child whose real disposition might well have
- * survived it, which is a strictly worse answer than the one the clause
- * is trying to buy, so NT skips it and sends only the SIGCONT half.
+ * SIGHUP is sent for real only where the platform can actually deliver
+ * it, applying the child's own disposition, rather than destroy the
+ * child outright (__plat_sig_deliverable_to_other_process()). On Linux
+ * that is a genuine pidfd_send_signal(2) honoring whatever real
+ * disposition the child last synced (ignore, default Term, or a real
+ * installed handler). NT has no cross-process signal delivery at all --
+ * kill(child, SIGHUP) there is NtTerminateProcess, strictly worse than
+ * what the clause intends -- so NT sends only the SIGCONT half.
  *
- * The coverage is wider than exit() because everything funnels through
- * __exit_internal(): _exit() and _Exit(), abort(), the default "terminate"
- * action __raise_internal() takes for an uncaught signal, and -- since
- * exception_handler() turns a mapped NT exception into exactly that --
- * a parent that dies of a SIGSEGV too.  What does not reach it is a
- * process ended without this library running at all: an exception code
- * exception_handler() passes on, or someone else's NtTerminateProcess.
- * That leaves the same residue any POSIX system leaves for SIGKILL, and
- * it is the reason a stop is worth keeping short. */
+ * Coverage follows __exit_internal(): exit()/_exit()/_Exit(), abort(),
+ * the default-terminate action for an uncaught signal, and a parent that
+ * dies of a SIGSEGV (exception_handler() funnels into the same path). A
+ * process ended without this library running at all (raw
+ * NtTerminateProcess, an unmapped exception) leaves the same residue any
+ * POSIX system leaves for SIGKILL. */
 void __child_resume_stopped(void) { clear_stops(1); }
 
 void __child_forget_stops(void) { clear_stops(0); }

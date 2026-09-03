@@ -140,79 +140,96 @@ struct sh_ifarm {
 struct sh_command {
 	enum sh_cmd_kind kind;
 
-	/* SH_CMD_SIMPLE */
-	struct sh_word *assigns;    /* leading NAME=value prefix words */
-	/* SH_CMD_SIMPLE: command name + arguments.
-	 * SH_CMD_FOR: the `in` word list, raw and unexpanded -- 2.9.4 says
-	 * "the list of words following in shall be expanded to generate a
-	 * list of items", i.e. at execution time, exactly like a simple
-	 * command's arguments, so they are the same kind of thing and get
-	 * the same field. */
-	struct sh_word *words;
+	union {
+		struct {
+			struct sh_word *assigns;  /* leading NAME=value prefix words */
+			struct sh_word *words;    /* command name + arguments */
+		} simple;
 
-	/* SH_CMD_SUBSHELL / SH_CMD_BRACE: the group's body.
-	 * SH_CMD_LOOP / SH_CMD_FOR: the `do ... done` compound-list. */
-	struct sh_list *body;
+		/* SUBSHELL and BRACE are one case in every switch that touches
+		 * this struct -- '(' and '{' differ only in how they print and
+		 * which closing token ends them -- so they share this shape too. */
+		struct {
+			struct sh_list *body;
+		} group;
 
-	/* SH_CMD_IF */
-	struct sh_ifarm *arms;      /* the if arm, then each elif arm */
-	struct sh_list *else_body;  /* the `else` part, or NULL */
+		struct {
+			struct sh_ifarm *arms;      /* the if arm, then each elif arm */
+			struct sh_list *else_body;  /* the `else` part, or NULL */
+		} ifcmd;
 
-	/* SH_CMD_LOOP */
-	struct sh_list *cond;       /* compound-list-1 */
-	int until;                  /* 0: `while`, 1: `until` */
+		struct {
+			struct sh_list *cond;   /* compound-list-1 */
+			struct sh_list *body;   /* the `do ... done` compound-list-2 */
+			int until;              /* 0: `while`, 1: `until` */
+		} loop;
 
-	/* SH_CMD_FOR: the NAME between `for` and `in`.
-	 * SH_CMD_FUNCDEF: the fname being defined. */
-	char *name;
-	/* SH_CMD_FUNCDEF: the function body, kept as its *raw source text*
-	 * -- the compound-command (and any trailing io-redirect) exactly as
-	 * written, from src/sh/parse.c's captured extent.
-	 *
-	 * Source rather than an AST node, which is the one design decision
-	 * in this construct worth arguing.  2.9.5 says the body is executed
-	 * "whenever the function name is specified as the name of a simple
-	 * command", which can be long after the sh_list it was defined in
-	 * has been freed: `__sh_cmdsub()` parses, executes and frees a
-	 * complete AST per substitution, and test/sh-engine.c runs one
-	 * program per `run()` call.  A function table holding borrowed
-	 * pointers into those trees would be reading freed memory on the
-	 * next call.  The alternatives are a deep-copy walk of the whole
-	 * AST -- ~100 lines that must be kept in sync with every field
-	 * added here, exactly the hazard new_command()'s comment in
-	 * parse.c warns about -- or keeping the text, which is what the
-	 * shell was handed in the first place and cannot fall out of sync
-	 * with anything.  Re-parsing per call is the cost; a call already
-	 * costs an expansion of every word in the body. */
-	char *func_text;
+		struct {
+			char *name;              /* the NAME between `for` and `in` */
+			/* the `in` word list, raw and unexpanded -- 2.9.4 says "the
+			 * list of words following in shall be expanded to generate a
+			 * list of items", i.e. at execution time, exactly like a
+			 * simple command's arguments. */
+			struct sh_word *words;
+			int have_in;             /* 0: `for name` with no `in` word list,
+			                          * which 2.9.4 defines as `in "$@"` -- see
+			                          * exec.c and sh/main.c on why that is
+			                          * refused rather than approximated */
+			struct sh_list *body;    /* the `do ... done` compound-list */
+		} forloop;
 
-	/* SH_CMD_FUNCDEF: the body's AST, kept ONLY when the body contained a
-	 * here-document -- see parse_funcdef() in src/sh/parse.c, which is
-	 * the only place this is ever set, via its own hd_seen/pending_head
-	 * bookkeeping, not by re-walking the tree. Two independent things
-	 * need it kept alive for that case: the `struct sh_redir` a `struct
-	 * pending_hd` still points at must not be freed out from under a
-	 * drain_heredocs() still to come, AND -- separately -- when the
-	 * drain has *already* happened by the time parse_funcdef() looks,
-	 * the canonical printer still needs to walk this to put the
-	 * already-drained here-document's body and terminator back into its
-	 * output after the definition's terminating newline, since func_text
-	 * above carries only the bare "<<DELIM" operator text, never the
-	 * body/terminator lines that follow it in the source.
-	 *
-	 * This does NOT reintroduce the hazard the comment above rules out.
-	 * That one is about the *function table* holding a borrowed pointer
-	 * into an AST that is freed before the function is called; the table
-	 * still stores text, and this field lives and dies with the sh_list
-	 * the definition was parsed into -- which is exactly the lifetime the
-	 * pending queue needs, since the queue is always drained before
-	 * __sh_parse() returns. */
-	struct sh_command *func_body;
+		struct {
+			char *name;              /* the fname being defined */
+			/* the function body, kept as its *raw source text* -- the
+			 * compound-command (and any trailing io-redirect) exactly as
+			 * written, from src/sh/parse.c's captured extent.
+			 *
+			 * Source rather than an AST node, which is the one design
+			 * decision in this construct worth arguing.  2.9.5 says the
+			 * body is executed "whenever the function name is specified
+			 * as the name of a simple command", which can be long after
+			 * the sh_list it was defined in has been freed:
+			 * `__sh_cmdsub()` parses, executes and frees a complete AST
+			 * per substitution, and test/sh-engine.c runs one program
+			 * per `run()` call.  A function table holding borrowed
+			 * pointers into those trees would be reading freed memory on
+			 * the next call.  The alternatives are a deep-copy walk of
+			 * the whole AST -- ~100 lines that must be kept in sync with
+			 * every field added here, exactly the hazard new_command()'s
+			 * comment in parse.c warns about -- or keeping the text,
+			 * which is what the shell was handed in the first place and
+			 * cannot fall out of sync with anything.  Re-parsing per
+			 * call is the cost; a call already costs an expansion of
+			 * every word in the body. */
+			char *func_text;
 
-	int have_in;                /* 0: `for name` with no `in` word list,
-	                             * which 2.9.4 defines as `in "$@"` -- see
-	                             * exec.c and sh/main.c on why that is
-	                             * refused rather than approximated */
+			/* the body's AST, kept ONLY when the body contained a
+			 * here-document -- see parse_funcdef() in src/sh/parse.c,
+			 * which is the only place this is ever set, via its own
+			 * hd_seen/pending_head bookkeeping, not by re-walking the
+			 * tree. Two independent things need it kept alive for that
+			 * case: the `struct sh_redir` a `struct pending_hd` still
+			 * points at must not be freed out from under a
+			 * drain_heredocs() still to come, AND -- separately -- when
+			 * the drain has *already* happened by the time
+			 * parse_funcdef() looks, the canonical printer still needs
+			 * to walk this to put the already-drained here-document's
+			 * body and terminator back into its output after the
+			 * definition's terminating newline, since func_text above
+			 * carries only the bare "<<DELIM" operator text, never the
+			 * body/terminator lines that follow it in the source.
+			 *
+			 * This does NOT reintroduce the hazard the comment above
+			 * rules out. That one is about the *function table* holding
+			 * a borrowed pointer into an AST that is freed before the
+			 * function is called; the table still stores text, and this
+			 * field lives and dies with the sh_list the definition was
+			 * parsed into -- which is exactly the lifetime the pending
+			 * queue needs, since the queue is always drained before
+			 * __sh_parse() returns. */
+			struct sh_command *func_body;
+		} funcdef;
+	} u;
 
 	/* every kind: redirections attached directly to this command.
 	 * 2.9.4: "each can be followed by redirections on the same line as

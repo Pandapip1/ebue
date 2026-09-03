@@ -2,31 +2,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * listen(): https://pubs.opengroup.org/onlinepubs/9699919799/functions/
- * listen.html.  "mark a connection-mode socket...as accepting
- * connections" (DESCRIPTION); a negative backlog is treated as 0, and
- * values are clamped to SOMAXCONN ("implementations may impose a limit
- * on backlog and silently reduce the specified value") -- both handled
- * here.  EDESTADDRREQ ("socket is not bound...and the protocol requires
- * that it be") applies to a not-yet-bound stream socket, so an implicit
- * bind to the wildcard address happens first, matching ReactOS's
- * WSPConnect (dllmain.c) doing the same before connect() -- listen()
- * needs the identical auto-bind for the same reason: AFD requires a
- * bound endpoint before either IOCTL_AFD_CONNECT or
- * IOCTL_AFD_START_LISTEN.
+ * listen.html.  A negative backlog is treated as 0; values are clamped
+ * to SOMAXCONN.  An unbound stream socket is implicitly wildcard-bound
+ * first, matching ReactOS's WSPConnect doing the same before connect():
+ * AFD requires a bound endpoint before IOCTL_AFD_START_LISTEN.
  *
- * SOCK_DGRAM (2026-09-01): EOPNOTSUPP.  listen.html has no ERRORS entry
- * naming this case directly, but DESCRIPTION scopes the whole function
- * to "a connection-mode socket", which a datagram socket is not by
- * construction (sys_socket.h.html DESCRIPTION), and EOPNOTSUPP is what
- * a real accept()/listen() pair report for the same mismatch elsewhere
- * on this page's own ERRORS list and what Linux's own listen(2)
- * actually returns for a SOCK_DGRAM fd -- checked here, before either
- * backend is reached, rather than let the NT backend find out from
- * IOCTL_AFD_START_LISTEN on a UDP endpoint (untested; see
- * src/internal/afd.h's AFD_TRANSPORT_UDP comment) or the Linux backend
- * find out from a real listen(2) EOPNOTSUPP -- both would likely arrive
- * at the same errno, but only the front-door check is verified and
- * platform-independent by construction. */
+ * SOCK_DGRAM: EOPNOTSUPP, checked here before either backend is reached
+ * rather than relying on IOCTL_AFD_START_LISTEN or Linux's listen(2) to
+ * report the same errno for a UDP fd -- only the front-door check is
+ * verified and platform-independent by construction. */
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <errno.h>

@@ -44,9 +44,14 @@
 #include "plat_signal.h"
 #include "linux/sync.h"
 
-/* aarch64 Linux syscall numbers (confirmed via a throwaway host program
- * printing the SYS_* macros from <sys/syscall.h>, the same oracle
- * technique src/mman/linux/plat_mem.c's banner describes). */
+/* Linux syscall numbers -- aarch64 confirmed via a throwaway host
+ * program printing the SYS_* macros from <sys/syscall.h>, the same
+ * oracle technique src/mman/linux/plat_mem.c's banner describes; x86_64/
+ * i386 confirmed against a real x86_64-linux-gnu glibc's own asm/
+ * unistd_64.h/unistd_32.h, genuinely different tables from aarch64's
+ * (e.g. SYS_read is 63 on aarch64, 0 on x86_64) rather than a fixed
+ * offset. */
+#if defined(__aarch64__)
 #define SYS_eventfd2          19
 #define SYS_ppoll             73
 #define SYS_read              63
@@ -61,14 +66,54 @@
 #define SYS_pidfd_open        434
 #define SYS_pidfd_send_signal 424
 #define SYS_mmap_ps           222
+#elif defined(__x86_64__)
+#define SYS_eventfd2          290
+#define SYS_ppoll             271
+#define SYS_read              0
+#define SYS_write             1
+#define SYS_close             3
+#define SYS_kill              62
+#define SYS_rt_sigaction      13
+#define SYS_rt_sigprocmask    14
+#define SYS_nanosleep         35
+#define SYS_msync             26
+#define SYS_getpid            39
+#define SYS_pidfd_open        434 /* shares this number with aarch64/i386:
+                                    * recent enough to be added to every
+                                    * arch's table at once. */
+#define SYS_pidfd_send_signal 424
+#define SYS_mmap_ps           9
+#elif defined(__i386__)
+#define SYS_eventfd2          328
+#define SYS_ppoll             309
+#define SYS_read                3
+#define SYS_write               4
+#define SYS_close               6
+#define SYS_kill               37
+#define SYS_rt_sigaction      174
+#define SYS_rt_sigprocmask    175
+#define SYS_nanosleep         162
+#define SYS_msync             144
+#define SYS_getpid              20
+#define SYS_pidfd_open        434
+#define SYS_pidfd_send_signal 424
+#define SYS_mmap_ps            192 /* SYS_mmap2, matching crt/linux/crt1.c's
+                                    * own i386 choice: offset is in PAGE
+                                    * units, moot here since every mmap
+                                    * call site below passes offset 0. */
+#else
+#error "plat_signal.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 #define PROT_READ_PS          0x1
 #define PROT_WRITE_PS         0x2
 
-/* Raw syscall trampoline, not glibc's syscall(2) wrapper: glibc translates
- * a kernel failure into -1 plus its OWN errno storage, distinct from
- * ntlibc's -nostdinc <errno.h>, so `errno = (int)-ret` below needs the raw
- * kernel [-4095,-1]-encodes-errno return value directly. aarch64-only. */
+/* Raw syscall trampoline, not glibc's syscall(2) wrapper: glibc
+ * translates a kernel failure into -1 plus its OWN errno storage,
+ * distinct from ntlibc's -nostdinc <errno.h>, so `errno = (int)-ret`
+ * below needs the raw kernel [-4095,-1]-encodes-errno value directly,
+ * whichever arch's raw instruction below provides it. */
 #include <stdarg.h>
+#if defined(__aarch64__)
 static long syscall(long number, ...)
 {
 	va_list ap;
@@ -93,6 +138,59 @@ static long syscall(long number, ...)
 	                 : "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long syscall(long number, ...)
+{
+	va_list ap;
+	long a1, a2, a3, a4, a5, a6, ret;
+	register long r10 __asm__("r10");
+	register long r8  __asm__("r8");
+	register long r9  __asm__("r9");
+
+	va_start(ap, number);
+	a1 = va_arg(ap, long); a2 = va_arg(ap, long); a3 = va_arg(ap, long);
+	a4 = va_arg(ap, long); a5 = va_arg(ap, long); a6 = va_arg(ap, long);
+	va_end(ap);
+
+	r10 = a4; r8 = a5; r9 = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(number), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+static long syscall(long number, ...)
+{
+	va_list ap;
+	long args[7];
+	long ret;
+
+	va_start(ap, number);
+	args[0] = number;
+	args[1] = va_arg(ap, long); args[2] = va_arg(ap, long); args[3] = va_arg(ap, long);
+	args[4] = va_arg(ap, long); args[5] = va_arg(ap, long); args[6] = va_arg(ap, long);
+	va_end(ap);
+
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#endif
 
 static int is_sys_error(long ret)
 {
@@ -326,23 +424,55 @@ int __plat_segv_code(void *addr)
 	return SEGV_ACCERR;
 }
 
-/* rt_sigaction(2)'s kernel-ABI struct, aarch64 layout: handler, flags,
- * restorer, then a sigset_t sized for exactly _NSIG (64) kernel signals --
- * NOT this file's own larger <signal.h> sigset_t, hence sigsetsize below
- * being sizeof(unsigned long), not sizeof(sigset_t). k_restorer is left
- * null and SA_RESTORER unset since the only handlers this function ever
- * installs are SIG_IGN and SIG_DFL, which never call back through
+/* rt_sigaction(2)'s kernel-ABI struct: handler, flags, restorer, then a
+ * sigset_t sized for exactly _NSIG (64) kernel signals -- NOT this
+ * file's own larger <signal.h> sigset_t, hence sigsetsize below being
+ * RT_SIGSETSIZE, not sizeof(sigset_t). k_restorer is left null and
+ * SA_RESTORER unset since the only handlers this function ever installs
+ * are SIG_IGN and SIG_DFL, which never call back through
  * rt_sigreturn(2).
  *
  * Fields are named k_* rather than sa_*: <signal.h>'s sa_handler is a
- * macro over a union, and this struct's kernel ABI layout has no union to
- * expand it into. */
+ * macro over a union, and this struct's kernel ABI layout has no union
+ * to expand it into.
+ *
+ * The kernel's own sigset_t is always exactly 8 bytes (64 signal bits)
+ * on every Linux arch, regardless of native word size. A plain
+ * `unsigned long k_mask` is 8 bytes on aarch64/x86_64 (LP64) but only 4
+ * on i386 (ILP32) -- too narrow, and it would pass sigsetsize=4 instead
+ * of the 8 the kernel strictly validates against (EINVAL otherwise) --
+ * so i386 gets a real two-word array instead. sigsetsize is a fixed
+ * RT_SIGSETSIZE (8) on every arch below, never sizeof(unsigned long), so
+ * it stays correct regardless of native word width. */
+#define RT_SIGSETSIZE 8
+#if defined(__i386__)
+struct kernel_sigaction {
+	void (*k_handler)(int);
+	unsigned long k_flags;
+	void (*k_restorer)(void);
+	unsigned long k_mask[2];
+};
+#else
 struct kernel_sigaction {
 	void (*k_handler)(int);
 	unsigned long k_flags;
 	void (*k_restorer)(void);
 	unsigned long k_mask;
 };
+#endif
+
+/* Zeroes k_mask regardless of its per-arch shape above (a single word on
+ * aarch64/x86_64, a two-word array on i386) -- one small helper instead
+ * of duplicating an #if at each of this file's three real call sites. */
+static void kernel_sigaction_zero_mask(struct kernel_sigaction *act)
+{
+#if defined(__i386__)
+	act->k_mask[0] = 0;
+	act->k_mask[1] = 0;
+#else
+	act->k_mask = 0;
+#endif
+}
 
 void __plat_sig_sync_kernel(int sig, int ignore)
 {
@@ -350,8 +480,8 @@ void __plat_sig_sync_kernel(int sig, int ignore)
 	act.k_handler = ignore ? SIG_IGN : SIG_DFL;
 	act.k_flags = 0;
 	act.k_restorer = 0;
-	act.k_mask = 0;
-	syscall(SYS_rt_sigaction, (long)sig, &act, 0L, (long)sizeof(unsigned long));
+	kernel_sigaction_zero_mask(&act);
+	syscall(SYS_rt_sigaction, (long)sig, &act, 0L, (long)RT_SIGSETSIZE);
 }
 
 void __plat_sig_default_terminate(int sig)
@@ -367,7 +497,7 @@ void __plat_sig_default_terminate(int sig)
 	 * raised it.
 	 *
 	 * The rt_sigprocmask(2) unblock right before kill(2) is load-bearing,
-	 * not optional: __plat_sig_install_fault_handlers()'s real_dispatch()
+	 * not optional: __plat_sig_install_fault_handlers()'s own real_dispatch()
 	 * below runs without SA_NODEFER, so the kernel auto-blocks `sig` for
 	 * its whole duration, and __raise_internal_info()'s default-terminate
 	 * branch can call through to this function from INSIDE that same
@@ -386,17 +516,26 @@ void __plat_sig_default_terminate(int sig)
 	 * any of the three just falls through to __exit_internal()'s own
 	 * fallback. */
 	struct kernel_sigaction act;
-	unsigned long mask;
+	/* A raw byte view of the kernel's own RT_SIGSETSIZE-byte sigset --
+	 * NOT `unsigned long mask = 1UL << (sig - 1)` (correct on aarch64/
+	 * x86_64, where a single 8-byte word IS the whole kernel sigset, but
+	 * a real bug on i386's 4-byte `unsigned long`, which both misses
+	 * signals above 32 and passes the wrong sigsetsize). Setting bit
+	 * (sig-1) by byte index instead is correct on every little-endian
+	 * arch this file targets. */
+	unsigned char mask[RT_SIGSETSIZE];
 	long pid;
+	int i;
 
 	act.k_handler = SIG_DFL;
 	act.k_flags = 0;
 	act.k_restorer = 0;
-	act.k_mask = 0;
-	syscall(SYS_rt_sigaction, (long)sig, &act, 0L, (long)sizeof(unsigned long));
+	kernel_sigaction_zero_mask(&act);
+	syscall(SYS_rt_sigaction, (long)sig, &act, 0L, (long)RT_SIGSETSIZE);
 
-	mask = 1UL << (sig - 1);
-	syscall(SYS_rt_sigprocmask, (long)SIG_UNBLOCK, (long)&mask, 0L, (long)sizeof mask);
+	for (i = 0; i < RT_SIGSETSIZE; i++) mask[i] = 0;
+	mask[(sig - 1) / 8] = (unsigned char)(1U << ((sig - 1) % 8));
+	syscall(SYS_rt_sigprocmask, (long)SIG_UNBLOCK, (long)mask, 0L, (long)RT_SIGSETSIZE);
 
 	pid = syscall(SYS_getpid);
 	syscall(SYS_kill, pid, (long)sig);
@@ -453,8 +592,8 @@ void __plat_sig_install_real_handler(int sig)
 	act.k_handler = (void (*)(int))(void *)real_dispatch; // NOLINT(bugprone-casting-through-void) -- same sigaction union-slot recovery signal.c's own SA_SIGINFO cast documents
 	act.k_flags = SA_SIGINFO | SA_RESTORER;
 	act.k_restorer = __ntlibc_sigreturn_trampoline;
-	act.k_mask = 0;
-	syscall(SYS_rt_sigaction, (long)sig, &act, 0L, (long)sizeof(unsigned long));
+	kernel_sigaction_zero_mask(&act);
+	syscall(SYS_rt_sigaction, (long)sig, &act, 0L, (long)RT_SIGSETSIZE);
 }
 
 void __plat_sig_install_fault_handlers(void)
@@ -478,8 +617,18 @@ int __plat_sig_deliverable_to_other_process(void)
  * construction (signal.c's own stop_event_name() builds them from a
  * fixed prefix plus hex digits), so narrowing byte-by-byte is exact,
  * not an approximation. */
+#if defined(__aarch64__)
 #define SYS_openat_ps    56
 #define SYS_ftruncate_ps 46
+#elif defined(__x86_64__)
+#define SYS_openat_ps    257
+#define SYS_ftruncate_ps 77
+#elif defined(__i386__)
+#define SYS_openat_ps    295
+#define SYS_ftruncate_ps 93
+#else
+#error "plat_signal.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 #define AT_FDCWD_PS      (-100)
 #define O_RDWR_PS        02
 #define O_CREAT_PS       0100

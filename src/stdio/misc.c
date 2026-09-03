@@ -4,30 +4,9 @@
  * The odds and ends of <stdio.h>: perror, remove/rename, tmpfile and its
  * name-only relatives, and popen/pclose.
  *
- * rename is NtSetInformationFile(FileRenameInformation) given the
- * destination's full NT path with no RootDirectory, which NT resolves
- * the same way opening that path would; that only works within one
- * volume, which is what POSIX rename promises anyway (EXDEV otherwise).
- *
- * popen has no /bin/sh to hand the command to, so it hands it to cmd.exe
- * /c instead -- the same choice every from-scratch Windows C runtime
- * without a POSIX subsystem makes, since cmd is what "the shell" means
- * on this OS.  Its path comes from %ComSpec%, which every Windows since
- * the days of command.com sets to cmd's full path: __spawn needs one
- * (it resolves relative to the current directory, not PATH), and
- * %ComSpec% is the one every other Windows program trusts for the same
- * reason.
- *
- * On Linux there is a real /bin/sh, but popen() below still does not
- * hard-code that path: it resolves "sh" through __find_program(name, 1)
- * -- a PATH search -- the same way src/stdlib/system.c's find_shell()
- * and src/util/atd.c/src/util/crond.c already resolve the shell they
- * spawn a command through, rather than adding a second "the shell"
- * convention beside the three this project already has.  argv = {
- * shell, "-c", cmd, NULL } then reaches sh(1p) as exactly the bytes
- * `cmd` holds: __spawn's Linux backend execve(2)s argv directly, with
- * none of cmd.exe's "/c" re-lexing above for a child to undo, so unlike
- * the NT path there is no quoting layer to get right here at all.
+ * popen hands the command to cmd.exe /c on Windows (via %ComSpec%, since
+ * there is no /bin/sh) and to a PATH-resolved "sh" on Linux, consistent
+ * with src/stdlib/system.c and the util atd/crond spawners.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -77,14 +56,8 @@ static int final_dot_component(const char *path)
 
 int renameat(int olddirfd, const char *old, int newdirfd, const char *new)
 {
-	/* rename.html ERRORS: [EINVAL] "The old argument names an ancestor
-	 * directory of the new argument, or old or new names a terminal ..,
-	 * or .." -- this one piece stays portable (pure string logic on the
-	 * final path component, no backend involvement), unlike everything
-	 * else renameat() used to do here inline (NT path resolution, the
-	 * directory-vs-non-directory type check, the actual rename), which
-	 * moved into __plat_rename() -- see plat_stdio.h's own updated
-	 * banner. */
+	/* POSIX requires EINVAL when old or new names a terminal "." or "..";
+	 * everything else is backend-specific and lives in __plat_rename(). */
 	if (final_dot_component(old) || final_dot_component(new)) {
 		errno = EINVAL;
 		return -1;
@@ -134,46 +107,15 @@ FILE *tmpfile(void)
 	return f;
 }
 
-/* tmpnam.html DESCRIPTION: "shall generate a string that is a valid
- * pathname that does not name an existing file", and "shall be able to
- * generate up to {TMP_MAX} different strings".  The one thing this
- * function must therefore not do is create the file, and creating it is
- * exactly what it used to do: it called mkstemp() on a "tmpnam_XXXXXX"
- * template and handed back the name mkstemp had just created.  The
- * documented use of the result is an O_CREAT|O_EXCL create -- the only
- * safe way to use a name this function produces -- and that got [EEXIST]
- * every single time, while every call left a zero-byte tmpnam_* file
- * behind in the caller's directory.
- *
- * mktemp() is the same generator without the create: fill the X's, stat,
- * retry while the name is taken.  It touches nothing, which is what
- * glibc's __GT_NOCREATE and musl's tmpnam do as well.
- *
- * tempnam() below would satisfy the letter of the clause by its own
- * route -- create, close, unlink -- and that is deliberately not what
- * this does.  Create-then-unlink needs write access to a directory
- * tmpnam is only supposed to be naming; it leaves the file behind if the
- * process dies in between; and its unlink() runs on a name no handle is
- * held on any more, so in a directory another user can write to it can
- * be aimed at whatever now answers to that name rather than at the file
- * that was created.  Not creating has none of those failure modes.
- *
- * What is left is the window between naming and the caller's create,
- * which is inherent to the interface (it is why the page is obsolescent
- * and why mkstemp() exists) and is not made worse or better by either
- * choice.  It is why the six random characters are load-bearing: they
- * are what stops the name from being guessed and pre-empted before the
- * caller gets to it, and O_CREAT|O_EXCL on the result -- which now
- * succeeds -- is what makes losing that race a failed open rather than a
- * clobbered file.
- *
- * The four-hex-digit call counter ahead of the random part makes
- * "{TMP_MAX} different strings" a guarantee instead of a per-pair 62^-6
- * probability: the first 65536 calls in a process cannot collide with
- * each other however the generator happens to draw.  As before, the
- * template is short and fixed so the result always fits the caller's
- * char[L_tmpnam] no matter how long $TMP is, and the name stays relative
- * to the current directory. */
+/* tmpnam() must NOT create the file (unlike an earlier version of this
+ * function, which called mkstemp() and left a zero-byte tmpnam_* file
+ * behind on every call, plus [EEXIST] on the documented O_CREAT|O_EXCL
+ * use). mktemp() is the same generator without the create; unlike
+ * create-close-unlink (what tempnam() below does), it needs no write
+ * access to the directory and leaves nothing behind on a mid-window
+ * process death. The residual naming/create race is inherent to the
+ * interface; the six random characters plus a four-hex-digit call
+ * counter make it hard to guess and guarantee TMP_MAX distinct names. */
 char *tmpnam(char *s)
 {
 	static const char hex[] = "0123456789abcdef";
@@ -184,22 +126,10 @@ char *tmpnam(char *s)
 	int e = errno, i;
 
 	for (i = 0; i < 4; i++) tmpl[10 - i] = hex[(n >> (4 * i)) & 15];
-	/* mktemp() reports failure by emptying the template, and sets errno
-	 * to 0 when it succeeds -- which tmpnam(), like any other function
-	 * here, must not do to its caller.
-	 *
-	 * The analyzer's advice on the next line -- "use mkstemp() instead"
-	 * -- is exactly the change this function was fixed to undo, so it is
-	 * suppressed at the one call site rather than tree-wide.  mkstemp()
-	 * differs from mktemp() precisely in that it *creates* the file, and
-	 * tmpnam.html requires a name that "does not name an existing file";
-	 * taking the advice reintroduces the [EEXIST]-on-every-documented-use
-	 * defect.  The residual TOCTOU window the check is really about is
-	 * inherent to tmpnam()'s interface, is why the page is obsolescent
-	 * and why mkstemp() exists as a separate function, and is narrowed
-	 * here the only way it can be: six random characters plus a
-	 * per-process counter, with the caller's O_CREAT|O_EXCL as the actual
-	 * boundary.  glibc (__GT_NOCREATE) and musl reach the same shape. */
+	/* mktemp() sets errno to 0 on success, which must not leak to the
+	 * caller. The analyzer's "use mkstemp() instead" is the defect this
+	 * function was fixed to undo (mkstemp() creates the file; tmpnam()
+	 * must not), so it's suppressed here rather than followed. */
 	if (!*mktemp(tmpl)) return 0; // NOLINT(clang-analyzer-security.insecureAPI.mktemp) -- see above: mkstemp() is the defect, not the fix
 	errno = e;
 	if (!s) s = buf;

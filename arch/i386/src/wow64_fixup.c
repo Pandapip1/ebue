@@ -4,10 +4,8 @@
  * The WOW64-only repair fork() needs after RtlCloneUserProcess, for the
  * two ways a cloned thread comes back broken under WOW64 -- a 32-bit
  * ntlibc process on a 64-bit kernel -- that fork.c's own header comment
- * describes at a high level.  Prior art for exactly this repair is
- * M2libc's x86/windows/process.c, which calls it "heaven's gate"
- * surgery; the mechanics below are the same technique, expressed in
- * ntlibc's own types and conventions rather than copied from there.
+ * describes at a high level. Prior art: M2libc's x86/windows/process.c
+ * calls this technique "heaven's gate" surgery.
  *
  * Everything here runs in the *parent*, operating on the clone's still-
  * CREATE_SUSPENDED process and thread handles, before fork.c ever calls

@@ -2,17 +2,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * POSIX message queues backed by unlinkable regular files.  Three named NT
- * semaphores accompany each generation of a queue: a binary state lock, an
- * available-message count, and an available-slot count.  Their names live in
- * the file header, so unrelated processes can reopen the queue; if every
- * process closes it while its pathname remains, mq_open() recreates the NT
- * objects from the authoritative counts in that header.
+ * semaphores per queue generation (state lock, message count, slot count)
+ * have their names stored in the file header, so mq_open() can recreate them
+ * from the header's authoritative counts if every process closes the queue
+ * while its pathname remains.
  *
  * Queue descriptors are ordinary close-on-exec file descriptors plus the
- * semaphore handles in mqds[].  That gives fork() the right behavior without
- * teaching the process launcher a private descriptor format.  close() calls
- * __mq_fd_closed() so using close(mqdes), although not the POSIX interface,
- * cannot leave a stale descriptor association or notification registration.
+ * semaphore handles in mqds[], giving fork() the right behavior for free.
+ * close() calls __mq_fd_closed() so using close(mqdes) instead of
+ * mq_close() still can't leave a stale descriptor or notification.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -38,7 +36,7 @@
 #include "plat_fd.h"
 
 #define MQ_MAGIC 0x4e544d51u
-#define MQ_VERSION 1
+#define MQ_VERSION 2
 #define MQ_MAXMSG_LIMIT 256
 #define MQ_MSGSIZE_LIMIT 65536
 #define MQ_DEFAULT_MAXMSG 10
@@ -54,11 +52,12 @@ struct mq_header {
 	unsigned receive_waiters;
 	unsigned long long sequence;
 	int notify_active;
-	int notify_kind;
+	int notify_kind; /* SIGEV_NONE or SIGEV_SIGNAL; mq_notify() rejects SIGEV_THREAD */
 	int notify_pid;
-	int notify_fd;
-	int notify_signo;
-	union sigval notify_value;
+	int notify_fd; /* registering descriptor; meaningful for every notify_kind, so it stays outside notify */
+	union {
+		struct { int signo; union sigval value; } signal;
+	} notify;
 	char lock_name[112];
 	char items_name[112];
 	char spaces_name[112];
@@ -141,15 +140,8 @@ static char *mq_path(const char *name)
 	return path;
 }
 
-/* path is required: passed to strdup() unconditionally at entry. Its
- * own flagged finding here (`*slash`) is a different, NOT-fixable-here
- * fact -- slash is strrchr()'s own return value, a local the checker
- * cannot prove nonnull without knowing this file's own mq_path() always
- * embeds a literal "/ntlibc-mq/" component before ever calling this
- * (verified by hand: both of this function's real call sites pass a
- * path built by mq_path(), whose own body memcpy()s that literal in
- * unconditionally), so strrchr() can never actually return NULL here.
- * Not a bug, and not expressible as a parameter contract. */
+/* Both call sites pass a path built by mq_path(), which always embeds a
+ * literal "/ntlibc-mq/" component, so strrchr() can never return NULL here. */
 static int ensure_dir(const char *path) __attribute__((nonnull(1)));
 static int ensure_dir(const char *path)
 {
@@ -167,8 +159,6 @@ static int ensure_dir(const char *path)
 
 /* FNV-1a is defined by multiplication modulo 2^64.  The wrap is the hash
  * operation, not an exceptional arithmetic result. */
-/* s required: dereferenced unconditionally in the loop condition
- * (`while (*s)`), even for an empty string. */
 __wraps static unsigned long long path_hash(const char *s)
     __attribute__((nonnull(1)));
 __wraps static unsigned long long path_hash(const char *s)
@@ -333,17 +323,10 @@ mqd_t mq_open(const char *name, int oflag, ...)
 		if (ftruncate(fd, (off_t)file_size) < 0 || raw_write(__fds[fd].h, &h, sizeof h, 0) < 0)
 			goto fail_created;
 	} else {
-		/* Distinguish a real I/O failure (raw_read() itself already set
-		 * errno correctly) from a header that read fine but is corrupt
-		 * or from an incompatible version: `if (!errno) errno = EIO`
-		 * used to stand in for this test, but errno is not guaranteed
-		 * to be 0 on entry -- POSIX never resets it on a prior
-		 * function's success, so a thread that happened to have some
-		 * unrelated stale errno sitting in it from an earlier, unrelated
-		 * call would report that wrong cause instead of EIO for a
-		 * corrupt-header mqueue file, exactly the CERT ERR30-C
-		 * "trusting errno without proof this call set it" pattern this
-		 * project's own lint stage exists to catch. */
+		/* io_failed distinguishes a real I/O failure (errno already set by
+		 * raw_read()) from a corrupt/incompatible header: errno isn't
+		 * guaranteed 0 on entry, so `if (!errno) errno = EIO` could report
+		 * a stale unrelated errno instead. */
 		int io_failed = raw_read(__fds[fd].h, &h, sizeof h, 0) < 0;
 		if (io_failed || h.magic != MQ_MAGIC || h.version != MQ_VERSION ||
 		    !h.maxmsg || h.maxmsg > MQ_MAXMSG_LIMIT ||
@@ -410,12 +393,10 @@ static int wait_count(struct mq_desc *d, __plat_handle_t count, int nonblock,
 {
 	struct timespec now;
 	struct mq_header h;
-	/* Cross-process delivery publishes a process-pending signal and wakes
-	 * signal-aware waits; it never runs the handler on the listener thread.
-	 * This semaphore is not part of that wake set, so the bounded waits below
-	 * must drain pending signals on this application thread.  Use the thread
-	 * counter so a handler run by an unrelated thread cannot spuriously
-	 * interrupt this descriptor operation. */
+	/* This semaphore isn't part of cross-process signal delivery's wake set,
+	 * so pending signals must be drained on this thread explicitly; the
+	 * thread counter avoids a spurious interrupt from an unrelated thread's
+	 * handler. */
 	unsigned long caught = __sig_thread_caught_count();
 	int registered = 0;
 	int status = __plat_wait_one(count, 1, 1, 0);
@@ -501,7 +482,10 @@ int mq_timedsend(mqd_t mqdes, const char *msg, size_t len, unsigned prio, // NOL
 	if (raw_write(d->file, &s, sizeof s, slot_offset(d, free_slot)) < 0) goto rollback;
 	if (!h.curmsgs && h.notify_active && !h.receive_waiters) {
 		notify = 1; notify_kind = h.notify_kind; notify_pid = h.notify_pid;
-		notify_signo = h.notify_signo; notify_value = h.notify_value;
+		if (notify_kind == SIGEV_SIGNAL) {
+			notify_signo = h.notify.signal.signo;
+			notify_value = h.notify.signal.value;
+		}
 		h.notify_active = 0;
 	}
 	h.curmsgs++;
@@ -619,8 +603,10 @@ int mq_notify(mqd_t mqdes, const struct sigevent *event)
 		h.notify_kind = event->sigev_notify;
 		h.notify_pid = (int)getpid();
 		h.notify_fd = mqdes;
-		h.notify_signo = event->sigev_signo;
-		h.notify_value = event->sigev_value;
+		if (event->sigev_notify == SIGEV_SIGNAL) {
+			h.notify.signal.signo = event->sigev_signo;
+			h.notify.signal.value = event->sigev_value;
+		}
 	}
 	if (raw_write(d->file, &h, sizeof h, 0) < 0) { give(d->lock); return -1; }
 	give(d->lock);

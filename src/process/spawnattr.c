@@ -3,30 +3,20 @@
  *
  * posix_spawnattr_t: the ten getter/setter accessors.
  *
- * These are attribute *storage* and nothing else.  Every one of them is
- * specified as "get/set the spawn-<x> attribute of the object referenced
- * by attr", with no requirement that the implementation be able to act
- * on the value -- posix_spawn() is where acting on it is specified, and
- * where this implementation reports what it cannot do (posix_spawn.c).
+ * These are attribute *storage* and nothing else. No accessor here is
+ * required to act on the value -- posix_spawn() is where acting on it is
+ * specified, and where this implementation reports what it cannot do
+ * (posix_spawn.c). That split is what lets posix_spawnattr_setschedpolicy()
+ * exist at all on a scheduler with no POSIX policies: storing and
+ * returning a value is a promise this code can keep, so it does; a
+ * setter that refused the value instead would be lying the other way,
+ * since POSIX gives it no error for "no such policy" here.
  *
- * That split is deliberate and is the honest way to have
- * posix_spawnattr_setschedpolicy() at all on a platform whose scheduler
- * has no POSIX policies: storing a value faithfully and handing the same
- * value back is a promise this code can keep, so it keeps it; *applying*
- * it is a promise it cannot keep, so posix_spawn() fails rather than
- * ignoring the flag.  A setter that refused the value instead would be
- * lying in the other direction -- POSIX gives setschedpolicy() no error
- * for "this implementation has no such policy" (its ERRORS section is
- * empty apart from the optional [EINVAL] for an invalid attr), and a
- * caller that only ever reads the value back would be broken by it.
- *
- * Each function returns an error number and does not set errno (each
- * page's RETURN VALUE: "shall return zero; otherwise, an error number
- * shall be returned").  None of them can fail here: there is no
- * allocation, and POSIX makes the [EINVAL] "the value specified by attr
- * is invalid" case a *may fail*, which this implementation does not
- * take up -- a posix_spawnattr_t that was never _init()ed is undefined
- * behaviour, not a detectable error.
+ * Each function returns an error number, not errno, and none of them can
+ * actually fail: there's no allocation, and the [EINVAL] "attr is
+ * invalid" case is a POSIX *may fail* this implementation doesn't take
+ * up -- an un-_init()ed posix_spawnattr_t is undefined behavior, not a
+ * detectable error.
  *
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_spawnattr_init.html
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_spawnattr_getflags.html

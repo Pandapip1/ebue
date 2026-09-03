@@ -2,25 +2,18 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * __vfprintf: the one formatter every printf/fprintf/sprintf/snprintf
- * variant calls into.  sprintf and snprintf are __vfprintf writing into
- * a throwaway FILE that is a fixed-size memory buffer exactly like
- * fmemopen's (see mem.c and __file_write in buf.c) but built on the
- * stack, so truncation and buffer-filling logic is not written twice.
+ * variant calls into.  sprintf/snprintf write into a throwaway
+ * fixed-size memory-buffer FILE (like fmemopen's) built on the stack.
  *
- * Floating-point conversions (%f/%e/%g and their capitals) are exact.
- * A finite double is m * 2^e for integers m < 2^53 and e, so its value
- * is a binary rational and its decimal expansion terminates: dec_exact
- * below computes every digit of it with one big-integer multiply, and
- * dec_round then rounds that expansion to the requested number of
- * places, to nearest with ties to even.  Every digit printed is
- * therefore the digit glibc and musl print.  %a/%A are exact for the
- * same reason and more directly: a double's significand is already 13
- * hex digits, so they are read straight out of the bits.
- * Positional (%n$) arguments are implemented, and an ordinary
- * unnumbered format does not pay for them: see THE ARGUMENT LIST below.
+ * Floating-point conversions (%f/%e/%g/%a and capitals) are exact: a
+ * finite double's decimal expansion terminates, so dec_exact/dec_round
+ * below compute and round every digit exactly (ties to even), and %a
+ * reads its hex significand straight out of the bits.
  *
- * No conversion sizes anything from the caller's precision, which C99
- * 7.19.6.1 leaves unbounded -- see PREC_MAX below.
+ * Positional (%n$) arguments are implemented at no cost to unnumbered
+ * formats (see THE ARGUMENT LIST below).  No conversion sizes a buffer
+ * from the caller's precision, which C99 7.19.6.1 leaves unbounded (see
+ * PREC_MAX below).
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -41,45 +34,29 @@
 
 enum { LM_NONE, LM_hh, LM_h, LM_l, LM_ll, LM_j, LM_z, LM_t, LM_L };
 
-/* A precision is an int and C99 7.19.6.1 puts no bound on it, so no
- * buffer may be sized from one.  PREC_MAX is the largest precision
- * fmt_f/fmt_e ever write out in full: the exact expansion of a double
- * runs to at most 767 significant digits and its last fractional place
- * is the 1074th (the smallest subnormal is 2^-1074), so every place
- * past PREC_MAX is a zero no matter what the value is.  emit_float
- * formats with the precision clamped to PREC_MAX and streams the
- * dropped zeros straight out, which makes the body length independent
- * of the caller's precision. */
+/* A precision is an int with no upper bound (C99 7.19.6.1), so no buffer
+ * may be sized from one.  PREC_MAX is the largest precision fmt_f/fmt_e
+ * ever write in full: a double's exact expansion has at most 767
+ * significant digits, the last at the 1074th fractional place (smallest
+ * subnormal is 2^-1074), so every place past PREC_MAX is a zero.
+ * emit_float clamps to PREC_MAX and streams the dropped zeros. */
 #define PREC_MAX 1080
-/* Worst-case body: 309 integer digits (DBL_MAX at %f), a point and
- * PREC_MAX fractional digits -- 1390 bytes, rounded up.  The other
- * shapes are smaller: %e is one digit, a point, PREC_MAX more and a
- * five-byte exponent, and %g hands fmt_f a precision of P-1-decexp,
- * which makes its body PREC_MAX+1 whatever decexp is. */
+/* Worst case: 309 integer digits (DBL_MAX at %f) + point + PREC_MAX
+ * fractional digits = 1390 bytes, rounded up; %e/%g bodies are smaller. */
 #define BODYMAX 1536
 
 /* ------------------------------------------------------------------
  * FORMAT CURSOR
  *
- * The directive scanner reads its format through gf() and steps by `st`
- * bytes, so that one scanner serves fprintf() (a byte format) and,
- * once the wide entry points exist, fwprintf() (a wide one).  Every
- * character a conversion specification can contain is ASCII.
+ * gf() reads through the cursor and steps by `st` bytes so one scanner
+ * serves both fprintf() (byte format) and fwprintf() (wide format).
  *
- * A MACRO rather than a static function, and measured rather than
- * assumed: the compiler this library ships through is tcc, which does
- * no inlining, so a fetch helper written as a function is a real call
- * per format character.  The identical change cost 17% in
- * src/stdio/scanf.c (a7c2277).
+ * A macro, not a function: tcc does no inlining, and a function-call
+ * fetch measured 17% slower (same change in src/stdio/scanf.c).
  *
- * `st` is an int, and the width of the pointer arithmetic below is
- * decided by that declared type rather than by a cast at any one site.
- *
- * The cursor is named `fp`, not `p`, deliberately: renaming it makes
- * any site that still dereferences the old pointer a COMPILE error
- * rather than a silent one-byte read of a wide format unit.  At st == 1
- * such a miss behaves perfectly and is invisible to every test, which
- * is the whole hazard of a stride refactor.
+ * Named `fp`, not `p`: a stale dereference of the old name is then a
+ * compile error instead of a silent one-byte misread of a wide unit,
+ * which at st == 1 would behave perfectly and pass every test.
  * ------------------------------------------------------------------ */
 #define gf(q, s) ((s) == 1 ? (unsigned)(unsigned char)*(q) \
 	                           : (unsigned)*(const wchar_t *)(q))
@@ -87,47 +64,24 @@ enum { LM_NONE, LM_hh, LM_h, LM_l, LM_ll, LM_j, LM_z, LM_t, LM_L };
 /* ------------------------------------------------------------------
  * THE SINK
  *
- * Everything this formatter emits goes through out() below, so that one
- * body of code can serve fprintf() -- bytes, and a return counted in
- * bytes -- and fwprintf(), whose return is "the number of wide
- * characters transmitted" (fwprintf.html RETURN VALUE).
+ * Everything emitted goes through out() below, so one body of code
+ * serves fprintf() (byte-counted return) and fwprintf() (wide-character-
+ * counted return, per fwprintf.html RETURN VALUE).
  *
- * KNOWN RESIDUAL COST, measured, so nobody re-derives it and reaches for
- * the alternative without the argument.  One formatter instead of two
- * costs about 5.9% here: 1.180s -> 1.250s over eight rounds of 500000
- * iterations of five snprintf() calls, uninstrumented, x86_64-win32-tcc
- * under Wine, the variants interleaved in one loop and minima taken.
- * That residual is the struct indirection below plus the `st == 1`
- * branch per format character; two further costs that were NOT
- * inherent have already been removed (out() re-deriving
- * `wide && f->wmem` on every call, and memsetting the whole struct
- * where only the mbstate_t needs zeroing -- together they were the
- * difference between 11.0% and 5.9%).
+ * MEASURED: one formatter costs ~5.9% versus two specialized ones
+ * (snprintf benchmark, x86_64-win32-tcc under Wine).  Two instantiations
+ * were considered and declined: %ls/%lc are written once for all four
+ * argument/sink combinations so they cannot drift, and a second parser
+ * is a defect surface no differential test catches. This library's
+ * consumers are compile- or I/O-bound, where the 5.9% is unmeasurable.
  *
- * Removing the last 5.9% would mean compiling this formatter twice from
- * a template, one instantiation per stride.  CONSIDERED AND DECLINED,
- * and the reason is correctness rather than effort: %ls and %lc are
- * written once for four argument/sink combinations precisely so they
- * cannot drift, and two instantiations reintroduce exactly that
- * surface -- a conversion added to one and not the other is a defect no
- * differential test catches, because both are generated from one source
- * and look consistent.  This library's consumers are configure, gcc,
- * tcc and sh, all compile-bound or I/O-bound, where 5.9% of the
- * formatter is not measurable.  Revisit only with a real workload that
- * shows printf dominating.
+ * `count`/`bad` live in the struct, not the parameter lists, so the
+ * signature change forces every call site to be converted -- a refactor
+ * whose misses still compile is a refactor whose misses ship.
  *
- * `count` and `bad` moved off the parameter lists and into the struct
- * deliberately, and not for tidiness: the signature change makes every
- * one of the ~40 call sites a compile error until it is converted,
- * which is the only way to be sure none was missed.  A refactor whose
- * misses still compile is a refactor whose misses ship.
- *
- * `ost` is the conversion state for encoding wide characters onto a
- * BYTE stream.  It lives here rather than in a local because a
- * supplementary character is two wchar_t on this target: wcrtomb()
- * holds the high surrogate and writes nothing until its partner
- * arrives, so the state must survive between the units of one %ls.
- * Nothing uses it yet; it arrives with the conversions that need it.
+ * `ost` holds wcrtomb() state across the units of one %ls: a
+ * supplementary character is two wchar_t on this target, and wcrtomb()
+ * buffers the high surrogate until its partner arrives.
  * ------------------------------------------------------------------ */
 struct sink {
 	FILE *f;
@@ -140,11 +94,8 @@ struct sink {
 	mbstate_t ost;
 };
 
-/* sk is required by every function in this file that takes one: each
- * dereferences it unconditionally, first statement in most cases
- * (`sk->bad`/`sk->count` below), the caller's own struct sink on the
- * stack (vfprintf_st's own `struct sink sink, *sk = &sink;`), never a
- * value that could legitimately be null. */
+/* sk is nonnull: every function here dereferences it unconditionally,
+ * always the caller's own struct sink on the stack. */
 static int count_fits(struct sink *sk, size_t n) __attribute__((nonnull(1)));
 static int count_fits(struct sink *sk, size_t n)
 {
@@ -155,17 +106,12 @@ static int count_fits(struct sink *sk, size_t n)
 	return 0;
 }
 
-/* Emit n bytes of ASCII text -- everything this file GENERATES (digits,
- * signs, padding, exponents, "0x", "(nil)", "(null)"), and nothing that
- * came from a caller's string.  That restriction is what makes a wide
- * sink almost free: an ASCII wide character encodes to the very byte it
- * already is, so on a byte-backed stream the bytes written are the same
- * and the count is the same number either way -- one unit per byte.
- * The one case that must convert is a buffer that holds wchar_t rather
- * than their encoding, which is what f->wmem marks.
- *
- * A short write is a real error unless f is a fixed memory buffer
- * (sprintf/snprintf), in which case it is just truncation. */
+/* Emit n bytes of ASCII text that this file GENERATED (digits, signs,
+ * padding, "0x", "(nil)"/"(null)"), never a caller's string.  That
+ * restriction is what makes a wide sink cheap: an ASCII byte encodes to
+ * itself, so only a buffer holding wchar_t directly (f->wmem) needs
+ * converting.  A short write is a real error unless f is a fixed memory
+ * buffer (sprintf/snprintf), where it is just truncation. */
 static void out(struct sink *sk, const char *s, size_t n) __attribute__((nonnull(1)));
 static void out(struct sink *sk, const char *s, size_t n)
 {
@@ -198,13 +144,10 @@ static void pad(struct sink *sk, char c, size_t n) // NOLINT(bugprone-easily-swa
 	size_t skipped = 0;
 
 	if (sk->bad || !count_fits(sk, n)) return;
-	/* A fixed memory sink still counts everything snprintf()/swprintf()
-	 * would have written, but bytes past its capacity are discarded.  Do
-	 * not visit that discarded tail 16 bytes at a time: besides making a
-	 * perfectly valid large width take linear time, that would make the
-	 * aggregate INT_MAX return-value check practically unreachable.  The
-	 * memory bookkeeping is in bytes; a wide memory sink consumes one
-	 * wchar_t-sized unit for each padding character. */
+	/* A fixed memory sink still counts everything that would have been
+	 * written, but the discarded tail past its capacity is never
+	 * visited 16 bytes at a time -- that would make a large width take
+	 * linear time and the INT_MAX check practically unreachable. */
 	if (sk->f->is_mem && !sk->f->mem_dynamic) {
 		size_t avail = sk->f->mem_pos < sk->f->mem_size
 		             ? sk->f->mem_size - sk->f->mem_pos : 0;
@@ -222,17 +165,13 @@ static void pad(struct sink *sk, char c, size_t n) // NOLINT(bugprone-easily-swa
 			chunks--;
 		}
 	}
-	/* count_fits() above proved this whole run representable.  out()
-	 * counted the stored prefix; account for the fixed buffer's discarded
-	 * tail without touching it. */
+	/* out() only counted the stored prefix; add back the discarded tail. */
 	if (!sk->bad) sk->count += (long)skipped;
 }
 
-/* The integer/pointer conversions below accumulate their digits
- * least-significant-first (successive `% base` remainders), so what
- * they have on hand is the reverse of what belongs on the stream.
- * n is always small: the widest case this is ever called with is a
- * 64-bit value in octal, 22 digits, well under 32. */
+/* Integer/pointer conversions accumulate digits least-significant-first,
+ * so what they hold is the reverse of what belongs on the stream.  n is
+ * always small: the widest case is a 64-bit value in octal, 22 digits. */
 static void out_reversed(struct sink *sk, const char *digits, int n) __attribute__((nonnull(1, 2)));
 static void out_reversed(struct sink *sk, const char *digits, int n)
 {
@@ -242,16 +181,12 @@ static void out_reversed(struct sink *sk, const char *digits, int n)
 	out(sk, rev, (size_t)n);
 }
 
-/* Emit n wide characters that came from a CALLER (%ls, %lc, or a %s
- * converted up into a wide sink).  Unlike out(), these can be anything,
- * so the ASCII shortcut it takes is not available here.
- *
- * On a byte-backed stream each unit is encoded with wcrtomb() through
- * sk->ost, which is why that state lives in the sink: a supplementary
- * character is TWO wchar_t on this target, and wcrtomb() answers 0 for
- * the high surrogate -- accepted, nothing written -- holding it until
- * the low one arrives.  The count still advances, because what is
- * counted is wide characters. */
+/* Emit n wide characters from a CALLER (%ls, %lc, or %s widened).
+ * Unlike out(), these can be anything, so no ASCII shortcut applies.  On
+ * a byte-backed stream each unit is encoded via wcrtomb() through
+ * sk->ost: a supplementary character is two wchar_t here, and wcrtomb()
+ * answers 0 (nothing written) for the high surrogate until its partner
+ * arrives, though the count still advances by wide characters. */
 static void out_units(struct sink *sk, const wchar_t *w, size_t n) __attribute__((nonnull(1)));
 static void out_units(struct sink *sk, const wchar_t *w, size_t n)
 {
@@ -281,34 +216,25 @@ static void out_units(struct sink *sk, const wchar_t *w, size_t n)
 /* ------------------------------------------------------------------
  * STRING AND CHARACTER ARGUMENTS
  *
- * The one place in this formatter where what is emitted did not come
- * from this file.  BOTH sides vary independently -- the argument is a
- * char * or a wchar_t *, and the sink counts bytes or wide characters
- * -- so there are four cases, two copies and two conversions:
+ * The one place a caller's own data is emitted.  Both the argument type
+ * and the sink unit vary independently, giving four cases, two copies
+ * and two conversions:
  *
  *   char *   -> bytes     copy       fprintf  "%s"
  *   wchar_t* -> bytes     wcrtomb    fprintf  "%ls"
  *   wchar_t* -> wide      copy       fwprintf "%ls"
  *   char *   -> wide      mbrtowc    fwprintf "%s"
  *
- * fprintf.html, the s conversion: with an l qualifier the wide
- * characters "shall be converted to characters (each as if by a call to
- * the wcrtomb() function)"; "if a precision is specified, no more than
- * that many bytes shall be written", and "a partial character shall not
- * be written".  fwprintf.html says the mirror image for a plain %s --
- * bytes converted "as if by repeated calls to mbrtowc()", with the
- * precision counting wide characters.  In both directions the precision
- * and the field width are measured in the SINK's unit, never the
- * argument's.
+ * A partial character is never written, and the precision/field width
+ * are always measured in the SINK's unit, never the argument's
+ * (fprintf.html/fwprintf.html, the s conversion).
  *
- * One function measures and emits, called twice: once with emit == 0 to
- * get the length the field width must pad against, and once with
- * emit == 1 to write it.  Two passes rather than a staging buffer
- * because a string argument has no bound -- the same reason nothing
- * here is ever sized from a caller's precision (see PREC_MAX).
+ * One function measures and emits, called twice: emit == 0 gets the
+ * length the field width pads against, emit == 1 writes it.  Two passes
+ * rather than a staging buffer, since a string argument has no bound
+ * (see PREC_MAX).
  * ------------------------------------------------------------------ */
-/* arg is required too: every one of the four branches below
- * dereferences it, whichever is taken (strlen(s), w[n], *w, or *s). */
+/* arg is nonnull: every branch below dereferences it. */
 static long str_arg(struct sink *sk, const void *arg, int wide_arg, int prec, int emit)
     __attribute__((nonnull(1, 2)));
 static long str_arg(struct sink *sk, const void *arg, int wide_arg, int prec, int emit) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
@@ -338,9 +264,8 @@ static long str_arg(struct sink *sk, const void *arg, int wide_arg, int prec, in
 		for (; *w; w++) {
 			size_t r = wcrtomb(buf, *w, &st);
 			if (r == (size_t)-1) break;	/* [EILSEQ]: stop here */
-			/* "a partial character shall not be written": one that
-			 * does not fit inside the precision ENTIRELY is not
-			 * written at all. */
+			/* A character that does not fit inside the precision
+			 * entirely is not written at all. */
 			if (prec >= 0 && units + (long)r > prec) break;
 			units += (long)r;
 			if (emit && r) out(sk, buf, r);
@@ -354,10 +279,9 @@ static long str_arg(struct sink *sk, const void *arg, int wide_arg, int prec, in
 			size_t r = mbrtowc(&wc, s, MB_LEN_MAX, &st);
 			size_t used;
 			if (r == (size_t)-1 || r == (size_t)-2) break;
-			/* (size_t)-3 is a low surrogate delivered from state
-			 * alone, consuming nothing: the second half of a
-			 * supplementary character, and a wide character of its
-			 * own. */
+			/* (size_t)-3: a low surrogate delivered from state alone,
+			 * consuming nothing -- the second half of a supplementary
+			 * character. */
 			used = r == (size_t)-3 ? 0 : r;
 			if (prec >= 0 && units >= prec) break;
 			units++;
@@ -383,15 +307,12 @@ static void emit_str(struct sink *sk, const void *arg, int wide_arg, int prec, /
 /* ---- exact decimal expansion of a double ---------------------------- */
 
 /* Big non-negative integers in base 10^9, least significant limb first,
- * so that reading the decimal digits back out is a matter of splitting
- * limbs rather than dividing a binary big integer down.  Only mul_small
- * is needed: nothing here ever adds, subtracts or divides.
+ * so reading decimal digits back out is splitting limbs rather than
+ * dividing a binary big integer down.  Only mul_small is needed here.
  *
- * DEC_LIMBS is chosen so nothing can overflow it.  The widest value
- * formed below is (2^53-1) * 5^1074, the numerator of the smallest
- * subnormals, which has 767 digits and so 86 limbs; the widest of the
- * other case, 2^1024, has 309 digits.  EXACT_DIG is the matching bound
- * on the digits themselves. */
+ * DEC_LIMBS bounds the widest value formed below, (2^53-1) * 5^1074 (the
+ * smallest subnormal's numerator): 767 digits, 86 limbs.  EXACT_DIG is
+ * the matching bound on the digits themselves. */
 #define DEC_LIMBS 88
 #define EXACT_DIG 768
 
@@ -416,9 +337,8 @@ static int mul_small(uint32_t *a, int n, uint32_t m) // NOLINT(bugprone-easily-s
 }
 
 /* The exact decimal expansion of a finite v >= 0: d[0..nd) are its
- * significant digits, and d[0] is the 10^decexp place, so the value is
- * 0.d * 10^(decexp+1) with every place past d[nd-1] a zero.  nd is
- * never more than EXACT_DIG, and d[0] is '0' only for v == 0. */
+ * significant digits, and d[0] is the 10^decexp place (value is
+ * 0.d * 10^(decexp+1), every place past d[nd-1] a zero). */
 struct dec {
 	int nd;
 	int decexp;
@@ -442,11 +362,10 @@ static void dec_exact(double v, struct dec *D)
 	if (!m) { D->nd = 1; D->decexp = 0; D->d[0] = '0'; return; }
 	while (m) { bn[bl++] = (uint32_t)(m % 1000000000u); m /= 1000000000u; }
 
-	/* v = m * 2^e2.  For e2 >= 0 that is the integer m << e2; for
-	 * e2 < 0 it is m * 5^-e2 with the point -e2 places from the right,
-	 * since m / 2^k == m * 5^k / 10^k.  Either way one big integer
-	 * carries every digit, so no division is needed to produce them. */
-	/* Finite double exponents bound both exact chunk counts below. */
+	/* v = m * 2^e2: for e2 >= 0, the integer m << e2; for e2 < 0,
+	 * m * 5^-e2 with the point -e2 places from the right (m / 2^k ==
+	 * m * 5^k / 10^k), so one big integer carries every digit and no
+	 * division is needed to produce them. */
 	chunks = e2 > 0 ? e2 / 29 + (e2 % 29 != 0) : 0;
 	while (chunks > 0) {
 		k = e2 > 29 ? 29 : e2;
@@ -485,16 +404,14 @@ static void dec_exact(double v, struct dec *D)
 	}
 	D->nd = (int)(p - D->d);
 	D->decexp = D->nd - 1 - nfrac;
-	/* trailing zeros are implicit anyway, and dropping them keeps the
-	 * "is the discarded tail nonzero" test in dec_round short */
+	/* trailing zeros are implicit; dropping them keeps dec_round's own
+	 * "is the discarded tail nonzero" test short */
 	while (D->nd > 1 && D->d[D->nd - 1] == '0') D->nd--;
 }
 
 /* Round D to want >= 1 significant digits, to nearest with ties to
- * even.  Asking for more digits than the expansion has is a no-op: the
- * rest are zeros already, and every reader here treats an index past nd
- * as a zero.  A carry out of the leading digit bumps decexp, leaving
- * "1" followed by zeros. */
+ * even.  Asking for more digits than the expansion has is a no-op.  A
+ * carry out of the leading digit bumps decexp, leaving "1" and zeros. */
 static void dec_round(struct dec *D, int want)
 {
 	int i, up;
@@ -521,20 +438,18 @@ static void dec_round(struct dec *D, int want)
 
 /* %f-style body (no sign): pos digits before the point, then a point
  * and prec digits after it, from D rounded to decexp+1+prec significant
- * digits.  When that count is not positive the whole value sits below
- * the last place shown, and the result is a zero there -- or a one, if
- * the value reaches half of it. */
+ * digits.  When that count is not positive, the value rounds to a zero
+ * or a one at the last place shown. */
 static int fmt_f(char *buf, struct dec *D, int prec, int alt)
 {
 	int want = D->decexp + 1 + prec, pos, i, n = 0;
 
 	if (want >= 1) dec_round(D, want);
 	else {
-		/* want == 0 puts the leading digit exactly one place below the
-		 * last one shown, so the value rounds up to a one there when
-		 * that digit is past 5, or is 5 with anything nonzero after
-		 * it; an exact half ties to the even zero.  want < 0 puts it
-		 * further down still, which always rounds to zero. */
+		/* want == 0: the leading digit is one place below the last
+		 * shown, rounding up only past 5 or on an exact tie with
+		 * something nonzero after (ties otherwise go to even zero).
+		 * want < 0 is further down still and always rounds to zero. */
 		D->d[0] = (want == 0 && (D->d[0] > '5' || (D->d[0] == '5' && D->nd > 1)))
 		          ? '1' : '0';
 		D->nd = 1;
@@ -597,15 +512,11 @@ static int strip_g(char *buf, int n, int has_exp) // NOLINT(bugprone-easily-swap
 	return n - (mant_end - i);
 }
 
-/* %a-style body: the hex significand and the binary exponent in
- * decimal, without the sign and without the "0x" -- emit_float carries
- * those in the prefix, so that a '0' flag pads between them the way
- * C99 7.19.6.1p6 asks.  *epos receives the offset of the 'p', where
- * the zeros of a precision clamped to PREC_MAX belong.
- *
- * The 52 mantissa bits of a double are exactly 13 hex digits, so every
- * digit past the 13th is a zero whatever the value; a precision below
- * 13 rounds to nearest with ties to even, like the arithmetic itself. */
+/* %a-style body: hex significand and decimal binary exponent, without
+ * the sign or "0x" -- emit_float carries those in the prefix so a '0'
+ * flag can pad between them (C99 7.19.6.1p6).  *epos receives the
+ * offset of the 'p'.  The 52 mantissa bits are exactly 13 hex digits;
+ * a precision below 13 rounds to nearest with ties to even. */
 static int fmt_a(char *buf, double v, int prec, int alt, int upper, int *epos) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const char *hex = upper ? "0123456789ABCDEF" : "0123456789abcdef";
@@ -629,8 +540,7 @@ static int fmt_a(char *buf, double v, int prec, int alt, int upper, int *epos) /
 		uint64_t rem = man & (((uint64_t)1 << shift) - 1);
 		uint64_t half = (uint64_t)1 << (shift - 1);
 		man >>= shift;
-		/* a tie goes to even, where at a precision of 0 the digit
-		 * that has to end up even is the leading one */
+		/* a tie goes to even; at precision 0 that digit is the leading one */
 		if (rem > half || (rem == half && ((prec ? man : (uint64_t)(lead - '0')) & 1))) man++;
 		if (man >> (4 * prec)) { man = 0; lead++; }   /* carried out of the digits */
 		man <<= shift;
@@ -655,8 +565,7 @@ static int fmt_a(char *buf, double v, int prec, int alt, int upper, int *epos) /
 }
 
 /* Write a body of n bytes with `zeros` further '0' spliced in at offset
- * zpos (the end of the mantissa), which is where a precision clamped to
- * PREC_MAX left off. */
+ * zpos, where a precision clamped to PREC_MAX left off. */
 static void out_body(struct sink *sk, const char *body, int n, int zpos, long zeros) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	out(sk, body, (size_t)zpos);
@@ -682,12 +591,9 @@ static void emit_float(struct sink *sk, double v, int conv, int prec, int alt, i
 	int total, special = 0;
 
 	v = fabs(v);
-	/* A NaN keeps whatever sign the flags ask for: C99 7.19.6.1p6 says a
-	 * signed conversion under '+' always begins with a sign, and p8's
-	 * "[-]nan" only makes the minus conditional.  glibc and musl both
-	 * print "+nan". */
-	/* body[] is a length-tracked buffer (n), never a NUL-terminated C
-	 * string -- out_body below always writes exactly n bytes. */
+	/* A NaN keeps whatever sign the flags ask for (C99 7.19.6.1p6/p8);
+	 * glibc and musl both print "+nan". body[] is length-tracked (n),
+	 * never NUL-terminated -- out_body always writes exactly n bytes. */
 	if (isnan(v)) { memcpy(body, upper ? "NAN" : "nan", 3); n = 3; special = 1; } // NOLINT(bugprone-not-null-terminated-result)
 	else if (isinf(v)) { memcpy(body, upper ? "INF" : "inf", 3); n = 3; special = 1; } // NOLINT(bugprone-not-null-terminated-result)
 	else if (av == 'a') {
@@ -707,14 +613,11 @@ static void emit_float(struct sink *sk, double v, int conv, int prec, int alt, i
 		int PU = P > PREC_MAX ? PREC_MAX : P;
 		dec_exact(v, &D);
 		/* the form is chosen from the rounded value's exponent (C99
-		 * 7.19.6.1p8), so round first; fmt_e/fmt_f then round to the
-		 * same width again, which is a no-op */
+		 * 7.19.6.1p8), so round first; fmt_e/fmt_f round again as a no-op */
 		dec_round(&D, PU);
 		/* without '#' the zeros a clamped precision drops are exactly
 		 * the ones strip_g would take off again, so they never go out */
 		zeros = alt ? (long)P - PU : 0;
-		/* decexp is at most 308, so the form is the same whether the
-		 * unclamped or the clamped precision picks it */
 		if (D.decexp < -4 || D.decexp >= P) {
 			n = fmt_e(body, &D, PU - 1, alt, upper, &zpos);
 			if (!alt) n = strip_g(body, n, 1);
@@ -729,9 +632,9 @@ static void emit_float(struct sink *sk, double v, int conv, int prec, int alt, i
 	if (sign) pfx[prefixlen++] = sign;
 	if (av == 'a' && !special) { pfx[prefixlen++] = '0'; pfx[prefixlen++] = upper ? 'X' : 'x'; }
 
-	/* C99 7.19.6.1p3: the count printf returns is an int, so refuse a
-	 * conversion whose zero run alone would not fit in one rather than
-	 * spend an age emitting a result that cannot be reported. */
+	/* printf's return is an int (C99 7.19.6.1p3): refuse a conversion
+	 * whose zero run alone would not fit rather than spend an age
+	 * emitting a result that cannot be reported. */
 	if (zeros > (long)(INT_MAX - n - prefixlen)) {
 		errno = EOVERFLOW;
 		sk->f->err = 1;
@@ -762,71 +665,44 @@ static void emit_float(struct sink *sk, double v, int conv, int prec, int alt, i
 /* ------------------------------------------------------------------
  * THE ARGUMENT LIST: fprintf.html's numbered conversions
  *
- * "Conversions can be applied to the nth argument after the format in
- * the argument list, rather than to the next unused argument.  In this
- * case, the conversion specifier character % ... is replaced by the
- * sequence "%n$", where n is a decimal integer in the range
- * [1,{NL_ARGMAX}] ... The format can contain either numbered argument
- * conversion specifications (that is, "%n$" and "*m$"), or unnumbered
- * argument conversion specifications (that is, % and *), but not both."
+ * "%n$"/"*m$" name a specific argument (n in [1,{NL_ARGMAX}]); a format
+ * mixing numbered and unnumbered conversions is invalid.
  *
- * A numbered format reads its arguments out of order and va_arg cannot
- * be rewound, so they have to be collected into an indexable table
- * before the first conversion runs.  Collecting them needs each
- * argument's TYPE -- va_arg is a type-directed macro, not a byte count
- * -- and an argument's type is known only from the conversion
- * specification that names it.  That is the whole reason the format is
- * scanned twice: build_argtab() below walks it for types and fills the
- * table, and the ordinary loop then sources every argument from the
- * table rather than from the va_list.
+ * A numbered format reads arguments out of order and va_arg cannot be
+ * rewound, so they must be collected into an indexable table first --
+ * which needs each argument's TYPE, known only from the conversion
+ * specification naming it.  Hence the format is scanned twice:
+ * build_argtab() below fills the table by type, and the ordinary loop
+ * then sources every argument from the table instead of the va_list.
  *
- * THE UNNUMBERED PATH DOES NOT PAY FOR THIS.  There is no pre-scan, no
- * table and no allocation: the format is classified at the first
- * conversion specification, out of the "n$" that specification's own
- * parse already looked for, and until a numbered one appears the
- * arguments come off the va_list exactly as they always did.  A format
- * that never writes "%n$" -- every format in this tree -- pays one
- * predictable branch per argument fetched.  A malloc here would be paid
- * by every printf in every program linked against this library, which
- * is why the table is NL_ARGMAX entries of frame instead.
+ * THE UNNUMBERED PATH DOES NOT PAY FOR THIS: no pre-scan, no table, no
+ * allocation.  The format is classified at the first conversion
+ * specification, and until a numbered one appears arguments come off
+ * the va_list exactly as before -- one predictable branch per argument.
+ * The table is NL_ARGMAX entries of frame rather than a malloc, since a
+ * malloc here would be paid by every printf call in every program.
  *
- * KNOWN RESIDUAL COST, measured, in the same register as the sink's
- * note above, so that nobody re-derives it: the unnumbered path is
- * about 5% slower than it was before any of this existed.  2030 ms
- * against 2140 ms of CPU TIME -- clock(), not wall, because this box is
- * shared -- over eight rounds of 500000 iterations of five snprintf()
- * calls, minima taken, x86_64-win32-tcc under Wine, the two builds
- * interleaved.
- *
- * Two candidate causes were measured and are NOT it.  The table: an
- * otherwise identical build with the array shrunk to one entry came out
- * at the same 2140 ms, so the frame is free.  The added calls: folding
- * arg_type() into parse_spec() came out at the same 2140 ms too, so it
- * is not call overhead either.  What is left is the specification being
- * parsed into a struct that the conversion reads back, and that is
- * exactly what buys both passes ONE parser.  Two parsers would recover
- * the 5% and cost a grammar obliged to agree with itself in two places
- * -- the trade this file has already refused once, on the same grounds,
- * at the sink.
+ * MEASURED: the unnumbered path is ~5% slower than before this existed
+ * (CPU time, x86_64-win32-tcc under Wine).  Not the table (shrinking it
+ * to one entry didn't help) and not call overhead (folding arg_type()
+ * into parse_spec() didn't help either) -- it's the specification being
+ * parsed into a struct the conversion reads back, which is what buys
+ * both passes ONE parser instead of two that must agree with each
+ * other, the same trade declined once already at the sink above.
  * ------------------------------------------------------------------ */
 
-/* The type an argument is fetched with.  These are the types va_arg
- * itself is handed: the default argument promotions have already been
- * applied at the call site, so there is no A_CHAR or A_SHORT -- %hhd's
- * argument arrives as an int and is narrowed after it is fetched. */
+/* The type an argument is fetched with -- what va_arg itself is handed
+ * after default argument promotions, so there is no A_CHAR or A_SHORT:
+ * %hhd's argument arrives as an int and is narrowed after fetching. */
 enum { A_NONE, A_INT, A_UINT, A_LONG, A_ULONG, A_LLONG, A_ULLONG,
        A_SIZE, A_SSIZE, A_PTRDIFF, A_WINT, A_DOUBLE, A_PTR };
 
-/* One fetched argument, normalised: every integer widens into i or u on
- * the way out of va_arg, so the conversions below read one member per
- * signedness instead of one per length modifier.  That is what keeps
- * the C type a specification names in one place -- pop_arg() below, and
- * the two cases TAKE spells out for speed, each under the same constant.
- * The alternative -- every conversion doing its own va_arg AND a
- * separate table saying what type it would have used -- is two mappings
- * that must agree, with nothing to notice when they stop agreeing: a
- * %zu that popped a long into a slot typed as a size_t would misread
- * every later argument of a numbered format. */
+/* One fetched argument, normalised: every integer widens into i or u out
+ * of va_arg, so conversions read one member per signedness rather than
+ * per length modifier.  This keeps the C type a specification names in
+ * one place (pop_arg() below, and TAKE's fast-path duplicates, each
+ * under the same constant) instead of two mappings -- fetch and type
+ * table -- that could silently disagree. */
 union varg {
 	long long i;
 	unsigned long long u;
@@ -834,14 +710,9 @@ union varg {
 	void *p;
 };
 
-/* a is written unconditionally on every path through the switch below,
- * including the default (A_NONE) case (`a->i = 0`); ap is dereferenced
- * by every case except that same A_NONE default, but at every real
- * call site in this file ap is the address of a local va_list (`&aq`)
- * or a parameter that is itself always one (build_argtab's own ap,
- * below), never a value that could legitimately be null -- the same
- * "no legitimate NULL value" reasoning as dirent's __dirstream_next()
- * out parameter (src/dirent/dirent_internal.h). */
+/* a is written unconditionally on every path (including the A_NONE
+ * default). ap is nonnull: every real call site passes the address of a
+ * local va_list. */
 static void pop_arg(union varg *a, int type, va_list *ap)
     __attribute__((nonnull(1, 3)));
 static void pop_arg(union varg *a, int type, va_list *ap)
@@ -853,18 +724,14 @@ static void pop_arg(union varg *a, int type, va_list *ap)
 	case A_ULONG:   a->u = va_arg(*ap, unsigned long); break;
 	case A_LLONG:   a->i = va_arg(*ap, long long); break;
 	case A_ULLONG:  a->u = va_arg(*ap, unsigned long long); break; // NOLINT(bugprone-branch-clone) -- va_arg must name the exact unsigned long long source type; the following size_t case only canonicalizes identically on LLP64
-	/* LLP64: long is 32 bits here while size_t and ptrdiff_t are 64, so
-	 * `long` is simply the wrong type to pull these with -- "%zd" of a
-	 * value above 4G printed its low half.  fprintf.html: z "applies to
-	 * a size_t or the corresponding signed integer type argument", t
-	 * likewise for ptrdiff_t.  Pull each as the type the page names.
-	 * src/stdio/scanf.c implements the same grammar and has always done
-	 * this correctly; printf.c was the only offender. */
+	/* LLP64: long is 32 bits while size_t/ptrdiff_t are 64, so `long` is
+	 * the wrong type to pull these with ("%zd" above 4G printed its low
+	 * half).  Pull each as the type fprintf.html names for z/t. */
 	case A_SIZE:    a->u = va_arg(*ap, size_t); break;
 	case A_SSIZE:   a->i = va_arg(*ap, ssize_t); break; // NOLINT(bugprone-branch-clone) -- va_arg must name the exact ssize_t source type; the following ptrdiff_t case only canonicalizes identically on this ABI
-	/* ptrdiff_t is a signed type whatever the conversion's signedness
-	 * is -- the length-modifier table gives t no unsigned counterpart --
-	 * so %tu/%to/%tx fetch it as one and reinterpret afterwards. */
+	/* ptrdiff_t is signed whatever the conversion's signedness is -- t
+	 * has no unsigned counterpart -- so %tu/%to/%tx fetch it as one and
+	 * reinterpret afterwards. */
 	case A_PTRDIFF: a->i = va_arg(*ap, ptrdiff_t); break;
 	case A_WINT:    a->i = va_arg(*ap, wint_t); break;
 	case A_DOUBLE:  a->d = va_arg(*ap, double); break;
@@ -873,10 +740,9 @@ static void pop_arg(union varg *a, int type, va_list *ap)
 	}
 }
 
-/* The type a conversion fetches, from the pair that decides it.  A_NONE
- * for one that fetches nothing: an unknown conversion (which this
- * formatter emits literally, consuming no argument) or a format that
- * ended before its conversion character. */
+/* The type a conversion fetches.  A_NONE for one that fetches nothing:
+ * an unknown conversion (emitted literally) or a format that ended
+ * before its conversion character. */
 static int arg_type(int lm, int conv) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	switch (conv) {
@@ -902,10 +768,9 @@ static int arg_type(int lm, int conv) // NOLINT(bugprone-easily-swappable-parame
 		}
 	case 'c': return lm == LM_l ? A_WINT : A_INT;
 	case 's': case 'p': case 'n': return A_PTR;
-	/* L is accepted and ignored, as it always was here: long double is
-	 * a double on both of this library's targets (checked: tcc gives
-	 * win32 i386 and x86_64 an 8-byte long double), so %Lf fetches the
-	 * same argument %f does. */
+	/* L is accepted and ignored: long double is a double on both of
+	 * this library's targets (tcc gives an 8-byte long double), so %Lf
+	 * fetches the same argument %f does. */
 	case 'f': case 'F': case 'e': case 'E': case 'g': case 'G':
 	case 'a': case 'A': return A_DOUBLE;
 	default: return A_NONE;
@@ -927,20 +792,11 @@ struct spec {
 	int width_overflow;
 };
 
-/* "%n$" and "*n$": a digit run terminated by '$'.  It cannot be told
- * from a width until the '$' is seen ("%1$s" against "%12s"), so the
- * only way to read it is to look ahead and rewind -- hence the original
- * cursor coming back when there is no '$'.  n has no leading zero,
- * being "a decimal integer in the range [1,{NL_ARGMAX}]", so a leading
- * '0' is the zero flag and never an index, and "%0$d" is a width of 0
- * rather than a slot nothing can fill.
- *
- * The accumulator stops once it is past NL_ARGMAX: the value is only
- * ever compared against that bound, and accumulating an arbitrarily
- * long digit run unclamped is signed overflow. */
-/* fp is dereferenced unconditionally via gf(fp, st) (the very next
- * statement after *n = 0); n is written unconditionally, first
- * statement. */
+/* "%n$"/"*n$": a digit run terminated by '$', not distinguishable from a
+ * width until the '$' is seen ("%1$s" vs "%12s"), so read ahead and
+ * rewind on a miss.  A leading '0' is never an index (n is in
+ * [1,{NL_ARGMAX}]), so "%0$d" is a width of 0.  The accumulator stops
+ * past NL_ARGMAX to avoid signed overflow on an unclamped digit run. */
 static const char *scan_argno(const char *fp, int st, int *n) __attribute__((nonnull(1, 3)));
 static const char *scan_argno(const char *fp, int st, int *n)
 {
@@ -961,21 +817,15 @@ static const char *scan_argno(const char *fp, int st, int *n)
 	return q + st;
 }
 
-/* Parse one conversion specification, from the character after its '%'
- * to its conversion character, where the cursor is left -- or on the
- * terminating null of a format that ends mid-specification, which the
- * caller sees as sp->conv == 0.
+/* Parse one conversion specification, cursor left on the conversion
+ * character (or the terminating null of a format that ends
+ * mid-specification, seen by the caller as sp->conv == 0).
  *
- * ONE parser, called by both passes.  A second scanner written for the
- * type-collecting pass would be a copy of this grammar obliged to agree
- * with it exactly, and a disagreement between the two is neither a
- * compile error nor a visible one: it is the wrong argument silently
- * fetched for a conversion.  The cost is one call per DIRECTIVE, which
- * is not the cost gf() above was made a macro to avoid -- that one was
- * a call per format CHARACTER. */
-/* sp is written unconditionally, first statement (`sp->flags = 0;`);
- * fp is dereferenced unconditionally too, right after those
- * initializations (`gf(fp, st)`). */
+ * ONE parser, called by both passes: a second scanner for the
+ * type-collecting pass would be a copy of this grammar that could
+ * silently disagree, fetching the wrong argument for a conversion.  The
+ * cost is one call per directive, not per format character (gf() above
+ * already avoids that). */
 static const char *parse_spec(const char *fp, int st, struct spec *sp) __attribute__((nonnull(1, 3)));
 static const char *parse_spec(const char *fp, int st, struct spec *sp)
 {
@@ -1004,33 +854,17 @@ static const char *parse_spec(const char *fp, int st, struct spec *sp)
 		else if (gf(fp, st) == ' ') sp->flags |= 2;
 		else if (gf(fp, st) == '0') sp->flags |= 8;
 		else if (gf(fp, st) == '#') sp->flags |= 16;
-		/* fprintf.html's flag table: "'  [CX] (The <apostrophe>.)  The
-		 * integer portion of the result of a decimal conversion ( %i,
-		 * %d, %u, %f, %F, %g, or %G ) shall be formatted with thousands'
-		 * grouping characters. ... The non-monetary grouping character
-		 * is used."
-		 *
-		 * A [CX] flag, i.e. base POSIX rather than XSI, so it must be
-		 * ACCEPTED whatever the locale.  Accepted and then ignored is
-		 * not a stub here, it is the complete implementation: the
-		 * grouping to apply is LC_NUMERIC's `grouping`, which is "" in
-		 * the POSIX locale (src/misc/locale.c), and the POSIX locale is
-		 * the only one this library has -- setlocale() accepts nothing
-		 * else.  An empty grouping specification means no separators, so
-		 * the flagged conversion must produce byte-for-byte what the
-		 * unflagged one produces, which is what ignoring it does.  The
-		 * bit is recorded rather than dropped so that a future locale
-		 * with real grouping has somewhere to hook on.
-		 *
-		 * Leaving it out of this loop was NOT a cosmetic defect.  The
-		 * apostrophe ended the flag scan, fell through the conversion
-		 * switch's default arm, and that arm emits the bytes literally
-		 * WITHOUT consuming an argument -- so every conversion after a
-		 * %' in the same format read the previous one's argument.
-		 * printf("%'d %s\n", total, name) handed `total` to %s to
-		 * dereference as a char *.  And in the POSIX locale the correct
-		 * output for %'d is identical to %d, so the one visible symptom
-		 * was the least alarming one. */
+		/* The [CX] apostrophe flag (thousands' grouping, %i/%d/%u/%f/
+		 * %F/%g/%G) must be ACCEPTED regardless of locale.  Accepted
+		 * and ignored is the complete implementation: LC_NUMERIC's
+		 * grouping is "" in the only locale this library has, so
+		 * ignoring it produces byte-for-byte the unflagged output.  The
+		 * bit is recorded for a future locale with real grouping to
+		 * hook on.  Omitting it from this loop entirely (rather than
+		 * just not implementing grouping) was a real bug: the
+		 * apostrophe then fell through to the literal-echo default arm,
+		 * which consumes no argument, so every conversion after a %' in
+		 * the same format silently read the previous one's argument. */
 		else if (gf(fp, st) == '\'') sp->flags |= 32;
 		else break;
 	}
@@ -1080,22 +914,11 @@ static const char *parse_spec(const char *fp, int st, struct spec *sp)
 
 /* Collect the arguments a numbered format names into tab[1..NL_ARGMAX],
  * in index order, and return the highest index used -- or -1 for a
- * format this cannot serve, which the caller reports as [EINVAL].
- *
- * Everything POSIX leaves undefined here becomes that -1 rather than a
- * guess, because the alternative to a diagnosed refusal is not a
- * slightly wrong answer: it is arguments read at the wrong offsets for
- * the rest of the format, i.e. an int dereferenced as a char *.  Two
- * things are refused -- mixing the two forms ("but not both") and an
- * index outside [1,{NL_ARGMAX}] -- and a gap in the numbering is not
- * one of them; see the end of this function for why. */
-/* fmt is dereferenced unconditionally via gf(fp, st) in the main loop
- * condition; tab and ap are only actually touched once max > 0 (a
- * format with at least one argument-consuming specification), but at
- * this file's one real call site both are the address of a real local
- * (`argv`, a fixed-size array that always decays to a non-null
- * address; `&aq`) -- never a value a caller could legitimately pass as
- * null, the same reasoning as pop_arg's own ap above. */
+ * format this cannot serve, reported as [EINVAL].  A diagnosed refusal
+ * beats a guess: the alternative is arguments read at the wrong
+ * offset, i.e. an int dereferenced as a char *.  Refused: mixing
+ * numbered and unnumbered forms, and an index outside
+ * [1,{NL_ARGMAX}].  Not refused: a gap in the numbering (see below). */
 static int build_argtab(const char *fmt, int st, union varg *tab, va_list *ap)
     __attribute__((nonnull(1, 3, 4)));
 static int build_argtab(const char *fmt, int st, union varg *tab, va_list *ap)
@@ -1114,9 +937,8 @@ static int build_argtab(const char *fmt, int st, union varg *tab, va_list *ap)
 		if (sp.conv) fp += st;
 		if (sp.width_overflow) return -2;
 
-		/* The unnumbered forms, in a format that has already shown a
-		 * numbered one: a '*' naming no argument, or a conversion that
-		 * fetches one and names none. */
+		/* An unnumbered form in a format that already showed a
+		 * numbered one: a '*' or conversion naming no argument. */
 		if (sp.wpos == 0 || sp.ppos == 0) return -1;
 		if (sp.type != A_NONE && !sp.argpos) return -1;
 
@@ -1134,26 +956,20 @@ static int build_argtab(const char *fmt, int st, union varg *tab, va_list *ap)
 		}
 		if (sp.type != A_NONE) {
 			if (sp.argpos > NL_ARGMAX) return -1;
-			/* Naming one argument twice is the point of the feature and
-			 * is fine; naming it with two different types is undefined,
-			 * and the last specification wins because it is the one
-			 * still in hand. */
+			/* Naming an argument twice is fine (the point of the
+			 * feature); two different types is undefined, and the
+			 * last specification wins. */
 			types[sp.argpos] = (unsigned char)sp.type;
 			if (sp.argpos > max) max = sp.argpos;
 		}
 	}
 
 	/* A GAP: an index below the highest one used that no specification
-	 * names, as in "%9$d" where the first eight arguments are passed and
-	 * never mentioned.  POSIX does not say what that means.  What it
-	 * must not do is read a slot nothing wrote or walk the va_list by a
-	 * width nobody stated, so the unnamed argument is skipped as an int:
-	 * that is what the default argument promotions produce for
-	 * everything narrower, so it is the likeliest guess, and on the
-	 * LLP64 arch every argument slot is one register wide anyway, which
-	 * makes the guess unobservable there.  Filling the slot rather than
-	 * leaving it alone is the half that matters: after this loop every
-	 * entry in [1,max] has been written before anything can read one. */
+	 * names, as in "%9$d" with the first eight args unmentioned.  POSIX
+	 * leaves this undefined; it must not read an unwritten slot, so the
+	 * unnamed argument is fetched as an int (the default-promotion
+	 * result for anything narrower, and unobservable on LLP64 where
+	 * every slot is one register wide). */
 	for (i = 1; i < max + 1; i++)
 		if (types[i] == A_NONE) types[i] = A_INT;
 
@@ -1163,20 +979,14 @@ static int build_argtab(const char *fmt, int st, union varg *tab, va_list *ap)
 
 /* The argument a specification names: out of the table for a numbered
  * format, off the va_list for an unnumbered one.  A macro because the
- * `else` arm must expand va_arg in this function's own frame, and
- * because tcc does not inline -- the branch is one predictable test,
- * a call would not be.
+ * `else` arm must expand va_arg in this function's own frame.
  *
- * A_INT and A_PTR are spelled out here rather than left to pop_arg, and
- * the reason is measurement rather than taste: between them they are
- * "%d", "%c", every "*" width and precision, "%s", "%p" and "%n", which
- * is nearly every conversion any of this library's consumers writes.
- * Under tcc, whose every static function is a real call, routing those
- * through pop_arg cost 2-3% of the formatter, and the two extra
- * comparisons here cost nothing measurable.  The duplication is safe in
- * the way duplication rarely is: each arm is guarded by the very
- * constant that selects the same arm of pop_arg's switch, so the two
- * cannot disagree about a type without disagreeing about `ty`. */
+ * A_INT and A_PTR are spelled out here rather than left to pop_arg:
+ * together they cover nearly every conversion this library's consumers
+ * write, and under tcc (no inlining) routing them through pop_arg
+ * measured 2-3% slower.  Each arm here is guarded by the same constant
+ * that selects the matching arm of pop_arg's switch, so the two cannot
+ * disagree about a type without disagreeing about `ty`. */
 #define TAKE(dst, pos, ty) do { \
 	if (argtab) (dst) = argtab[pos]; \
 	else if ((ty) == A_INT) (dst).i = va_arg(aq, int); \
@@ -1184,33 +994,26 @@ static int build_argtab(const char *fmt, int st, union varg *tab, va_list *ap)
 	else pop_arg(&(dst), (ty), &aq); \
 } while (0)
 
-/* f is dereferenced unconditionally (`sink.widemem = sink.wide &&
- * f->wmem;`); fmt is dereferenced unconditionally by the main loop's
- * own gf(fp, st). ap is a va_list BY VALUE, not a pointer this
+/* f and fmt are nonnull; ap is a va_list BY VALUE, not a pointer this
  * attribute can describe. */
 static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st) __attribute__((nonnull(1, 2)));
 static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 {
 	struct sink sink, *sk = &sink;
 	const char *fp = fmt;
-	/* Internal callers use bytes or wchar_t units.  Keep that contract local
-	 * to the pointer-difference division as well as at the call sites. */
 	if (st != 1 && st != (int)sizeof(wchar_t)) {
 		errno = EINVAL;
 		return -1;
 	}
-	/* Only a numbered format ever touches these.  Eighty-odd bytes of
-	 * frame is what buys the common path its freedom from a malloc. */
+	/* Only a numbered format ever touches these; the frame cost buys the
+	 * common path freedom from a malloc. */
 	union varg argv[NL_ARGMAX + 1];
 	union varg *argtab = 0;
-	/* A local COPY of the argument list, because everything below fetches
-	 * through its ADDRESS.  va_list is an array type on some ABIs -- not
-	 * on either of this library's targets, which is why tcc accepts &ap
-	 * without a murmur and tools/lint.sh's host gcc pass does not -- and
-	 * a parameter of array type is a pointer, so &ap would be a pointer
-	 * to the wrong thing there.  Copying costs the caller nothing:
-	 * vfprintf.html leaves "the value of ap after the return"
-	 * unspecified. */
+	/* A local COPY of ap, since everything below fetches through its
+	 * ADDRESS: va_list is an array type on some ABIs (not this
+	 * library's targets), where &ap would point to the wrong thing.
+	 * Copying costs nothing -- vfprintf.html leaves ap's value after
+	 * return unspecified. */
 	va_list aq;
 	va_copy(aq, ap);
 
@@ -1223,12 +1026,9 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 
 	while (gf(fp, st) && !sk->bad) {
 		if (gf(fp, st) != '%') {
-			/* A run of ordinary characters.  These come from the
-			 * CALLER's format, so in a wide format they are wide
-			 * characters and may be anything -- out()'s ASCII
-			 * shortcut does not apply, and neither does its length,
-			 * which would be the run's byte size rather than its
-			 * character count. */
+			/* A run of ordinary characters, from the CALLER's format:
+			 * in a wide format these may be anything, so out()'s ASCII
+			 * shortcut and byte-based length don't apply. */
 			const char *start = fp;
 			while (gf(fp, st) && gf(fp, st) != '%') fp += st;
 			if (st == 1) out(sk, start, (size_t)(fp - start));
@@ -1253,24 +1053,17 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 			}
 
 			/* The first specification that names an argument settles
-			 * the whole format: from here every argument comes out of
-			 * the table, and build_argtab() has already refused the
-			 * format if any other specification in it is unnumbered.
-			 * Until such a specification appears nothing is scanned
-			 * twice and nothing is stored, so an unnumbered format runs
-			 * exactly as it did before numbered ones existed. */
+			 * the whole format: every argument comes out of the table
+			 * from here on, and build_argtab() has already refused the
+			 * format if any other specification is unnumbered. */
 			if (!argtab && (sp.argpos || sp.wpos > 0 || sp.ppos > 0)) {
 				int argresult = build_argtab(fmt, st, argv, &aq);
 				if (argresult < 0) {
-					/* fprintf.html ERRORS: "[EINVAL] There are
-					 * insufficient arguments" -- the nearest named
-					 * failure, and the honest one to report for a
-					 * format whose arguments cannot be located.  The
-					 * stream's error indicator is deliberately NOT set
-					 * the way the [EOVERFLOW] and [EILSEQ] paths above
-					 * set it: nothing went wrong with the stream, and
-					 * ferror() answers for the file rather than for the
-					 * caller's format string. */
+					/* fprintf.html's nearest named failure is [EINVAL]
+					 * "insufficient arguments". Unlike [EOVERFLOW]/
+					 * [EILSEQ] above, the stream's error indicator is
+					 * NOT set: nothing went wrong with the stream, only
+					 * with the caller's format string. */
 					errno = argresult == -2 ? EOVERFLOW : EINVAL;
 					if (argresult == -2) sk->f->err = 1;
 					sk->bad = 1;
@@ -1280,18 +1073,16 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 			}
 
 			flags = sp.flags;
-			/* Width, then precision, then the conversion's own argument
-			 * -- the order the unnumbered form consumes them in, which
-			 * is the only order it CAN consume them in. */
+			/* Width, then precision, then the conversion's own
+			 * argument -- the only order the unnumbered form can
+			 * consume them in. */
 			width = sp.width;
 			if (sp.wpos >= 0) {
 				TAKE(a, sp.wpos, A_INT);
 				width = (int)a.i;
-				/* "A negative field width is taken as a '-' flag
-				 * followed by a positive field width."  INT_MIN's
-				 * mathematical magnitude is INT_MAX+1: it cannot be
-				 * returned by these int-returning interfaces, and a
-				 * plain `-width` would itself be signed-overflow UB. */
+				/* A negative width is a '-' flag plus a positive
+				 * width; INT_MIN has no representable positive
+				 * magnitude, and `-width` would itself be UB. */
 				if (width == INT_MIN) {
 					errno = EOVERFLOW;
 					sk->f->err = 1;
@@ -1304,19 +1095,12 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 			if (sp.ppos >= 0) {
 				TAKE(a, sp.ppos, A_INT);
 				prec = (int)a.i;
-				/* "A negative precision is taken as if the precision
-				 * were omitted." */
+				/* a negative precision is taken as omitted */
 				if (prec < 0) prec = -1;
 			}
-			/* Zeroed unconditionally, then overwritten by the fetch
-			 * that a conversion taking an argument performs.  Nothing
-			 * below reads `a` for a conversion that takes none -- an
-			 * unknown one, which is echoed literally -- so this is not
-			 * a correctness fix; it makes the reads in the switch
-			 * UNCONDITIONALLY defined instead of defined by a
-			 * correlation between sp.type and sp.conv that no local
-			 * reader can check.  clang-analyzer could not check it
-			 * either and reported all fourteen of them. */
+			/* Zeroed unconditionally so every read of `a` below is
+			 * defined outright, not by an sp.type/sp.conv correlation
+			 * no local reader (or clang-analyzer) can check. */
 			a.i = 0;
 			if (sp.type != A_NONE) TAKE(a, sp.argpos, sp.type);
 
@@ -1332,32 +1116,26 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 
 				if (issigned) {
 					long long sv;
-					/* The fetch above took this at the width its
-					 * length modifier names and sign-extended it (see
-					 * pop_arg), so the only work left is the two
-					 * modifiers naming a type NARROWER than the int
-					 * their argument was promoted to. */
+					/* Already fetched at its length modifier's width
+					 * and sign-extended (see pop_arg); only hh/h, which
+					 * name a type narrower than the promoted int, need
+					 * narrowing here. */
 					switch (sp.lm) {
 					case LM_hh: sv = (signed char)a.i; break; // NOLINT(bugprone-signed-char-misuse,cert-str34-c) -- deliberate sign extension of a %hhd argument, not a table index
 					case LM_h: sv = (short)a.i; break;
 					default: sv = a.i; break;
 					}
 					neg = sv < 0;
-					/* Negate after widening, not before: -sv is
-					 * undefined for LLONG_MIN, whose magnitude is not
-					 * representable as a long long.  Converting first
-					 * and negating the unsigned value is well defined
-					 * (C99 6.3.1.3p2: it wraps modulo 2**64, which is
-					 * exactly the magnitude wanted). */
+					/* Negate after widening: -sv is undefined for
+					 * LLONG_MIN, while negating the unsigned value
+					 * wraps modulo 2**64 (C99 6.3.1.3p2), which is
+					 * exactly the magnitude wanted. */
 					uv = neg ? __neg_mag((unsigned long long)sv) : (unsigned long long)sv;
 				} else {
 					switch (sp.lm) {
 					case LM_hh: uv = (unsigned char)a.u; break;
 					case LM_h: uv = (unsigned short)a.u; break;
-					/* t was fetched as the signed ptrdiff_t it names
-					 * (see pop_arg); this reinterprets it, exactly as
-					 * "(unsigned long long)va_arg(ap, ptrdiff_t)" did. */
-					/* widthmod-ok: pop_arg() fetched ptrdiff_t; this is its unsigned interpretation. */
+					/* widthmod-ok: pop_arg() fetched ptrdiff_t; this reinterprets it unsigned. */
 					case LM_t: uv = (unsigned long long)a.i; break;
 					default: uv = a.u; break;
 					}
@@ -1366,8 +1144,8 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 				if (uv == 0 && prec == 0) { /* "" for 0 with explicit precision 0 */ }
 				else {
 					unsigned long long t = uv;
-					/* base is 8, 10, or 16, so a nonzero value reaches
-					 * zero well before this one-pass-per-value-bit guard. */
+					/* base 8/10/16 reaches zero well before this
+					 * one-pass-per-bit guard does. */
 					unsigned bits_left = (unsigned)(sizeof t * CHAR_BIT);
 					do {
 						digbuf[dn++] = "0123456789abcdef"[t % (unsigned)base];
@@ -1376,11 +1154,9 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 						bits_left--;
 					} while (t && bits_left > 0);
 				}
-				/* A precision is a minimum digit count with no upper
-				 * bound (C99 7.19.6.1p5), so the leading zeros it
-				 * calls for are padded out to the stream rather than
-				 * stored: digbuf holds only the digits a value can
-				 * actually have. */
+				/* A precision is an unbounded minimum digit count
+				 * (C99 7.19.6.1p5), so leading zeros it calls for are
+				 * padded to the stream rather than stored. */
 				zpad = prec > dn ? prec - dn : 0;
 
 				if (neg) prefix[pn++] = '-';
@@ -1415,17 +1191,11 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 				break;
 			}
 			case 'c': {
-				/* fprintf.html: with an l qualifier "the wint_t
-				 * argument shall be converted as if by an ls
-				 * conversion specification with no precision and an
-				 * argument that points to a two-element array of type
-				 * wchar_t, the first element containing the wint_t
-				 * argument ... and the second a null wide character".
-				 * Written literally, so %lc and %ls cannot disagree.
-				 *
-				 * fwprintf.html, plain %c: "the int argument shall be
-				 * converted to a wide character as if by calling
-				 * btowc()". */
+				/* With an l qualifier, %lc is converted as if by %ls
+				 * on a two-element {wc, 0} array (fprintf.html) --
+				 * written literally so %lc and %ls cannot disagree.
+				 * Plain %c in a wide format goes through btowc()
+				 * (fwprintf.html). */
 				if (sp.lm == LM_l) {
 					wchar_t wc[2];
 					wc[0] = (wchar_t)a.i;
@@ -1435,13 +1205,10 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 					wchar_t wc[2];
 					wint_t b = btowc((int)a.i);
 					/* btowc() answers WEOF for any byte that is not a
-					 * complete character on its own, which under this
-					 * library's UTF-8 is every byte from 0x80 up.  There
-					 * is no wide character to emit, so the conversion
-					 * fails rather than inventing one: fwprintf.html's
-					 * ERRORS refer to fputwc(), whose [EILSEQ] is
-					 * exactly "the wide-character code ... does not
-					 * correspond to a valid character". */
+					 * complete character alone (0x80+ under this
+					 * library's UTF-8); the conversion fails rather
+					 * than inventing one (fwprintf.html's [EILSEQ],
+					 * via fputwc()). */
 					if (b == WEOF) {
 						errno = EILSEQ;
 						sk->f->err = 1;
@@ -1462,10 +1229,8 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 			case 's': {
 				const void *arg = a.p;
 				int wide_arg = sp.lm == LM_l;
-				/* A null pointer is undefined, but printing "(null)"
-				 * rather than dereferencing it is what this library
-				 * already did and what glibc does; the wide form gets
-				 * the same courtesy, in its own width. */
+				/* A null argument is undefined; printing "(null)"
+				 * instead of dereferencing it matches glibc. */
 				if (!arg) {
 					static const wchar_t wnull[7] = { '(', 'n', 'u', 'l', 'l', ')', 0 };
 					arg = wide_arg ? (const void *)wnull : (const void *)"(null)";
@@ -1503,11 +1268,6 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 				case LM_h: *(short *)ptr = (short)sk->count; break;
 				case LM_l: *(long *)ptr = (long)sk->count; break;
 				case LM_ll: case LM_j: *(long long *)ptr = (long long)sk->count; break;
-				/* The worst of the three: this stored through
-				 * *(long *), writing FOUR bytes into the caller's
-				 * EIGHT-byte size_t and leaving the upper four whatever
-				 * they happened to be -- silent corruption of an object
-				 * the caller owns, not merely a wrong number printed. */
 				case LM_z: *(size_t *)ptr = (size_t)sk->count; break;
 				case LM_t: *(ptrdiff_t *)ptr = (ptrdiff_t)sk->count; break;
 				default: *(int *)ptr = (int)sk->count; break;
@@ -1520,11 +1280,9 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 				break;
 			}
 			default:
-				/* an unknown conversion: emit it literally, the way
-				 * glibc does -- the conversion character and its '%',
-				 * without any "n$" that came between them, since what
-				 * is being echoed is a specification that named no
-				 * conversion at all */
+				/* an unknown conversion: emit '%' and the conversion
+				 * character literally (as glibc does), without any
+				 * "n$" that came between them */
 				if (sp.conv) {
 					out(sk, "%", 1);
 					if (st == 1) out(sk, fp, 1);
@@ -1545,19 +1303,11 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 }
 
 /* sprintf/snprintf/vsprintf/vsnprintf share this: a throwaway FILE that
- * is a fixed (or, for plain sprintf, unbounded) memory buffer exactly
- * as __file_write already knows how to fill. */
-/* fmt is required (forwarded into __vfprintf() unconditionally, which
- * itself requires it). s is deliberately NOT required: vasprintf()
- * below calls this with s == 0, cap == 0 to measure a format's length
- * without writing anything, mirroring vsnprintf(s, 0, ...)'s own
- * POSIX-documented "s may be a null pointer when n (here, cap) is
- * zero" convention (fprintf.html/snprintf) -- unlike the mem-family/
- * str-n family's own "still valid even at n == 0" ISO convention, this
- * family's own description explicitly carves out the opposite
- * exception, which is exactly the "unless explicitly stated otherwise"
- * escape ISO C 7.21.1p2 itself anticipates. Marking s here would be a
- * false claim about a real, load-bearing caller. */
+ * is a fixed (or, for plain sprintf, unbounded) memory buffer. */
+/* s is deliberately not marked nonnull: vasprintf() below calls this
+ * with s == 0, cap == 0 to measure a format's length without writing,
+ * per snprintf's own "s may be null when n is zero" convention
+ * (fprintf.html). */
 static int vxprintf_mem(char *s, size_t cap, const char *fmt, va_list ap) __attribute__((nonnull(3)));
 static int vxprintf_mem(char *s, size_t cap, const char *fmt, va_list ap)
 {
@@ -1572,11 +1322,9 @@ static int vxprintf_mem(char *s, size_t cap, const char *fmt, va_list ap)
 	mf.mem_buf = (unsigned char *)s;
 	mf.mem_size = cap;
 	r = __vfprintf(&mf, fmt, ap);
-	/* __fwrite gives even an unbuffered memory FILE a one-byte staging
-	 * buffer through __ensure_buf, and this FILE is a local that never
-	 * sees fclose, so releasing it is ours to do -- otherwise every
-	 * sprintf/snprintf that writes anything leaks that byte.  Same
-	 * ownership rule as vsscanf_impl in scanf.c. */
+	/* __fwrite staged a byte via __ensure_buf; this local FILE never
+	 * sees fclose, so freeing it is ours to do (same rule as
+	 * vsscanf_impl in scanf.c). */
 	free(mf.buf);
 	if (cap) {
 		size_t pos = mf.mem_len;
@@ -1590,30 +1338,15 @@ int vsprintf(char *__restrict s, const char *__restrict fmt, __isoc_va_list ap)
 {
 	return vxprintf_mem(s, (size_t)-1, fmt, ap);
 }
-/* fprintf.html ERRORS: "The snprintf() function shall fail if:
- * [EOVERFLOW] The value of n is greater than {INT_MAX}." -- a shall-fail,
- * so the call is refused up front: nothing is formatted, s is not
- * touched, and the return is negative with errno set (RETURN VALUE: "If
- * an output error was encountered, these functions shall return a
- * negative value and set errno").  The clause exists because the return
- * type is int and the value promised is the number of bytes that WOULD
- * have been written had n been sufficiently large: past {INT_MAX} that
- * number need not be representable, so there is no right answer to
- * return and POSIX makes the call fail instead of inventing one.
- *
- * It belongs here rather than in vxprintf_mem() because n is the thing
- * being checked, and only this pair of interfaces has one.  vsprintf()
- * passes (size_t)-1 as a "no bound" sentinel and vasprintf() passes a
- * length it computed itself; neither takes an n from the caller, so
- * neither may be refused for the size of its cap.  vfprintf.html makes
- * vsnprintf() "equivalent to ... snprintf()" and sends its ERRORS back
- * to fprintf(), which is why both entry points come through here.
- *
- * The wide sibling swprintf() has an [EOVERFLOW] too (see
- * vswprintf_impl below), but it is a different clause -- n or more wide
- * characters requested -- and needs no ceiling of its own: swprintf()
- * returns a count of what it actually wrote, never a would-have-been
- * length, so an n past {INT_MAX} has nothing unrepresentable to report. */
+/* fprintf.html: snprintf() shall fail with [EOVERFLOW] if n > {INT_MAX},
+ * refused up front (s untouched) since the return type is int but the
+ * value promised is the would-have-been length, which need not be
+ * representable past {INT_MAX}.  Checked here (not in vxprintf_mem())
+ * since only these two entry points take an n from the caller;
+ * vsprintf()'s (size_t)-1 sentinel and vasprintf()'s computed length
+ * are not caller-supplied.  swprintf() has a different [EOVERFLOW] (see
+ * vswprintf_impl below): it returns what it actually wrote, never a
+ * would-have-been length, so it needs no such ceiling. */
 int vsnprintf(char *__restrict s, size_t n, const char *__restrict fmt, __isoc_va_list ap)
 {
 	if (n > (size_t)INT_MAX) { errno = EOVERFLOW; return -1; }
@@ -1663,8 +1396,8 @@ int fprintf(FILE *__restrict f, const char *__restrict fmt, ...)
 
 int vdprintf(int fd, const char *__restrict fmt, __isoc_va_list ap)
 {
-	/* No FILE exists for fd; wrap it in one just for the call, the way
-	 * fdopen would, but without touching the descriptor table. */
+	/* No FILE exists for fd; wrap it in one for the call without
+	 * touching the descriptor table. */
 	FILE f; // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- implementation-owned transient descriptor-stream adapter is constructed from scratch, not copied
 	int r;
 	memset(&f, 0, sizeof f);
@@ -1674,15 +1407,9 @@ int vdprintf(int fd, const char *__restrict fmt, __isoc_va_list ap)
 	f.bufmode = _IONBF;
 	r = __vfprintf(&f, fmt, ap);
 	if (fflush(&f) < 0) r = -1;
-	/* __ensure_buf() allocated f.buf on the first write (one byte, for
-	 * _IONBF) and nothing else will ever free it: this FILE is a stack
-	 * object that never reaches fclose(), and fflush() only drains the
-	 * buffer, it does not release it.  Without this, every dprintf()/
-	 * vdprintf() call leaks -- caught by ASan under tools/asan-build.sh
-	 * once test/posix-stdio.c started calling them at all.  Guarded on
-	 * user_buf the same way __fclose_locked() and setvbuf() are, even
-	 * though nothing can have handed this FILE a user buffer, so the
-	 * ownership rule stays stated in one form everywhere. */
+	/* fflush() only drains the buffer __ensure_buf() allocated; it never
+	 * releases it, and this stack FILE never reaches fclose(), so
+	 * freeing it here is ours to do (ASan-caught leak otherwise). */
 	if (f.buf && !f.user_buf) free(f.buf);
 	return r;
 }
@@ -1717,11 +1444,8 @@ int asprintf(char **s, const char *fmt, ...)
 }
 
 /* ------------------------------------------------------------------
- * THE WIDE FAMILY: fwprintf.html
- *
- * "Equivalent to fprintf() ... except that the argument format is a
- * wide-character string" and the result is wide characters.  Same
- * formatter, stride sizeof(wchar_t), sink counting wide characters.
+ * THE WIDE FAMILY: fwprintf.html.  Same formatter, stride
+ * sizeof(wchar_t), sink counting wide characters instead of bytes.
  * ------------------------------------------------------------------ */
 int __vfwprintf(FILE *f, const wchar_t *fmt, va_list ap)
 {
@@ -1729,29 +1453,15 @@ int __vfwprintf(FILE *f, const wchar_t *fmt, va_list ap)
 	return vfprintf_st(f, (const char *)fmt, ap, (int)sizeof(wchar_t));
 }
 
-/* swprintf() is NOT snprintf() with a different unit, and the
- * difference is the whole reason this does not reuse vxprintf_mem():
- *
- *   snprintf  "shall return the number of bytes that would have been
- *              written had n been sufficiently large"  -- truncation is
- *              reported by a return >= n, and the caller re-sizes.
- *   swprintf  "If n or more wide characters were requested to be
- *              written, swprintf() shall return a negative value, and
- *              set errno"  -- there is no would-have-been length.
- *
- * So the buffer is given to the formatter as a wchar_t-holding memory
- * FILE (wmem, exactly like open_wmemstream()'s), the logical count is
- * compared against n afterwards, and overflow becomes -1/[EOVERFLOW]
- * rather than a length.  One wide character is reserved for the
- * terminating null, which is why the test is `>= n` and not `> n`. */
-/* Unlike vxprintf_mem's own s above, swprintf() has no "just measure"
- * calling convention to make s optional: `if (!n) { errno = EOVERFLOW;
- * return -1; }` treats n == 0 as a real error, not a documented
- * "s may be null" case (swprintf.html has no would-have-been-length to
- * report, so there is no snprintf(s, 0, ...)-style idiom for it -- see
- * this function's own comment above). s is written unconditionally
- * (`s[mf.mem_len / sizeof(wchar_t)] = 0;`) on every path that is not
- * that n == 0 error; fmt is forwarded into vfprintf_st() the same way. */
+/* swprintf() is NOT snprintf() with a different unit: unlike snprintf,
+ * which reports truncation via a would-have-been length (return >= n),
+ * swprintf() has no such length -- it returns -1/[EOVERFLOW] once n or
+ * more wide characters were requested.  So this does not reuse
+ * vxprintf_mem(): the buffer is a wmem memory FILE, and the logical
+ * count is compared against n afterwards.  One wide character is
+ * reserved for the terminating null, hence the `>= n` test. */
+/* s has no "just measure" null convention here: n == 0 is a real error
+ * (there is no would-have-been length for it to report). */
 static int vswprintf_impl(wchar_t *s, size_t n, const wchar_t *fmt, va_list ap)
     __attribute__((nonnull(1, 3)));
 static int vswprintf_impl(wchar_t *s, size_t n, const wchar_t *fmt, va_list ap)
@@ -1769,16 +1479,12 @@ static int vswprintf_impl(wchar_t *s, size_t n, const wchar_t *fmt, va_list ap)
 	mf.writable = 1;
 	mf.bufmode = _IONBF;
 	mf.mem_buf = (unsigned char *)s;
-	/* One unit short of the caller's array: the terminating null lives
-	 * in the unit this hides, so an overrun is detected as a short
-	 * write rather than by writing it. */
+	/* One unit short of the caller's array: the hidden unit is where the
+	 * terminating null goes, so an overrun is a detectable short write. */
 	mf.mem_size = (n - 1) * sizeof(wchar_t);
 	r = vfprintf_st(&mf, (const char *)fmt, ap, (int)sizeof(wchar_t));
-	/* The terminating null is unconditional when n is nonzero, including
-	 * the truncation/error path.  mem_len is the prefix actually stored. */
 	s[mf.mem_len / sizeof(wchar_t)] = 0;
-	/* Same buffer ownership as vxprintf_mem(): a local FILE never sees
-	 * fclose, so the staging buffer __ensure_buf() gave it is ours. */
+	/* Same buffer ownership as vxprintf_mem(). */
 	free(mf.buf);
 	if (r < 0) return r;
 	if ((size_t)r >= n) { errno = EOVERFLOW; return -1; }

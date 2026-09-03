@@ -53,11 +53,30 @@
 #include "plat_thread.h"
 #include "linux/sync.h"
 
-/* aarch64 Linux syscall numbers, confirmed against this host's own
- * <sys/syscall.h>. */
+/* Linux syscall numbers -- aarch64 confirmed against this host's own
+ * <sys/syscall.h>; x86_64 confirmed against a real x86_64-linux-gnu
+ * glibc's own asm/unistd_64.h, a genuinely different table, not
+ * aarch64's numbers plus a fixed offset (see src/signal/linux/
+ * plat_signal.c's own updated banner for the same warning). */
+#if defined(__aarch64__)
 #define SYS_mmap   222
 #define SYS_munmap 215
 #define SYS_futex  98
+#elif defined(__x86_64__)
+#define SYS_mmap   9
+#define SYS_munmap 11
+#define SYS_futex  202
+#elif defined(__i386__)
+/* SYS_mmap2, not the old single-struct-arg SYS_mmap (90) -- takes six
+ * plain-register arguments like every other syscall this file calls,
+ * at the cost of the offset argument being in PAGE units (moot here,
+ * every mmap call site below passes offset 0). */
+#define SYS_mmap   192
+#define SYS_munmap 91
+#define SYS_futex  240
+#else
+#error "plat_thread.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 #define FUTEX_WAIT         0
 #define FUTEX_WAKE         1
@@ -80,10 +99,11 @@
 #define DEFAULT_STACK_BYTES ((size_t)1 << 20) /* 1 MiB, matches pthread.c's
                                                 * own DEFAULT_STACK_SIZE */
 
-/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc
- * wrapper (see this file's banner for why). aarch64 calling convention:
+/* A minimal 6-argument raw syscall, one calling convention per arch
+ * below (see this file's banner for why no host libc wrapper). aarch64:
  * x8 = syscall number, x0..x5 = up to 6 arguments, result (or -errno in
  * [-4095,-1]) in x0. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
@@ -99,9 +119,54 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 		: "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#endif
 
 /* clone_aarch64.S's hand-written trampoline -- see this file's banner for
- * why a raw syscall cannot do clone()'s job by itself. */
+ * why a raw syscall cannot do clone()'s job by itself.
+ *
+ * i386/x86_64 have no sibling trampoline file yet -- a real, disclosed
+ * gap: neither is reachable from this project's curated build FILES
+ * lists (so --gc-sections drops the dead reference), but a real port
+ * needs its own clone(2) trampoline for the same double-return-into-
+ * CLONE_VM-child reason clone_aarch64.S's own banner gives. */
 extern long __ntlibc_linux_clone(__plat_thread_entry_t fn, void *stack_top, // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
                                  long flags, void *arg);
 
@@ -332,7 +397,15 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
  * and is stable for the thread's whole lifetime. See this file's banner
  * for why __plat_wait_one() cannot wait on a thread handle -- this
  * identifies the thread but cannot yet be used to block on its exit. */
+#if defined(__aarch64__)
 #define SYS_gettid 178
+#elif defined(__x86_64__)
+#define SYS_gettid 186
+#elif defined(__i386__)
+#define SYS_gettid 224
+#else
+#error "plat_thread.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 __plat_handle_t __plat_thread_duplicate_self(void)
 {
 	long tid = raw_syscall(SYS_gettid, 0L, 0L, 0L, 0L, 0L, 0L);
@@ -359,7 +432,15 @@ __plat_handle_t __plat_thread_duplicate_self(void)
  * like RtlAcquirePebLock() would on NT. */
 static int fast_lock_word;
 
+#if defined(__aarch64__)
 #define SYS_sched_yield 124
+#elif defined(__x86_64__)
+#define SYS_sched_yield 24
+#elif defined(__i386__)
+#define SYS_sched_yield 158
+#else
+#error "plat_thread.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 void __plat_fast_lock(void) NTLIBC_NO_THREAD_SAFETY_ANALYSIS;
 void __plat_fast_lock(void)
@@ -402,8 +483,18 @@ void __plat_fast_unlock(void)
  * is therefore treated as a boxed fd and read via a zero-timeout
  * ppoll(POLLIN) peek, matching the EVENT-kind branch below (also peek-only;
  * aio_suspend()'s __sig_drain_pending() call actually consumes it). */
+#if defined(__aarch64__)
 #define SYS_nanosleep_wa 101
 #define SYS_ppoll_wa     73
+#elif defined(__x86_64__)
+#define SYS_nanosleep_wa 35
+#define SYS_ppoll_wa     271
+#elif defined(__i386__)
+#define SYS_nanosleep_wa 162
+#define SYS_ppoll_wa     309
+#else
+#error "plat_thread.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 /* See this function's own banner just above: a `struct ntlibc_linux_sync *`
  * this file's own alloc_sync() produced is always mmap(2)-page-aligned;
@@ -480,9 +571,21 @@ int __plat_wait_any(__plat_handle_t *handles, unsigned count, int alertable, // 
  * gets the same property: open/create a small backing file sized to one
  * struct ntlibc_linux_sync and MAP_SHARED it, so every process that opens
  * the same path sees the same futex word. */
+#if defined(__aarch64__)
 #define SYS_openat    56
 #define SYS_ftruncate 46
 #define SYS_close     57
+#elif defined(__x86_64__)
+#define SYS_openat    257
+#define SYS_ftruncate 77
+#define SYS_close     3
+#elif defined(__i386__)
+#define SYS_openat    295
+#define SYS_ftruncate 93
+#define SYS_close     6
+#else
+#error "plat_thread.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 #define AT_FDCWD_LX   (-100)
 #define O_RDWR_LX     02
 #define O_CREAT_LX    0100
@@ -656,11 +759,27 @@ void __plat_named_mutant_release(__plat_handle_t lock)
  * __plat_thread_resume() belongs to src/process/linux/plat_process.c
  * (a no-op: nothing this backend spawns is ever created suspended).
  */
+#if defined(__aarch64__)
 #define SYS_kill_lx    129
 #define SYS_getpid_lx  172
 #define SYS_exit_lx    93
 #define SYS_write_lx   64
 #define SYS_clock_gettime_lx 113
+#elif defined(__x86_64__)
+#define SYS_kill_lx    62
+#define SYS_getpid_lx  39
+#define SYS_exit_lx    60
+#define SYS_write_lx   1
+#define SYS_clock_gettime_lx 228
+#elif defined(__i386__)
+#define SYS_kill_lx    37
+#define SYS_getpid_lx  20
+#define SYS_exit_lx    1
+#define SYS_write_lx   4
+#define SYS_clock_gettime_lx 265
+#else
+#error "plat_thread.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 #define LINUX_SIGSTOP  19
 
 /* Plain kill(2), not tgkill(2): this backend's spawn() does not pass
@@ -756,8 +875,23 @@ long long __plat_query_system_time(void)
 
 /* mqueue.c's positioned queue-file transfer via pread64(2)/pwrite64(2):
  * explicit offset, no side effect on the file position. */
+#if defined(__aarch64__)
 #define SYS_pread64_lx  67
 #define SYS_pwrite64_lx 68
+#elif defined(__x86_64__)
+#define SYS_pread64_lx  17
+#define SYS_pwrite64_lx 18
+#elif defined(__i386__)
+/* i386's pread64/pwrite64 take the 64-bit offset as TWO 32-bit halves (a
+ * low/high register pair), a genuinely different argument shape, not
+ * just a different number -- __plat_thread_file_io() below would need
+ * to split `off` for i386 specifically, which it does not do. A real,
+ * disclosed gap, not attempted here. */
+#define SYS_pread64_lx  180
+#define SYS_pwrite64_lx 181
+#else
+#error "plat_thread.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 ssize_t __plat_thread_file_io(__plat_handle_t h, void *buf, size_t count, // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; buffer extent and file offset have distinct roles
                               off_t off, int write_op)

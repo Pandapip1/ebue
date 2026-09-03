@@ -39,8 +39,7 @@ extern int memcmp(const void *, const void *, size_t);
 static int failures;
 
 #define CHECK(cond, msg) do { \
-	if (cond) printf("ok   - %s\n", msg); \
-	else { printf("FAIL - %s (errno=%d)\n", msg, errno); failures++; } \
+	if (!(cond)) { printf("FAIL - %s (errno=%d)\n", msg, errno); failures++; } \
 } while (0)
 
 /* A fixed high port, retried on EADDRINUSE: this pilot's link set has no

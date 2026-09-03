@@ -2,39 +2,21 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * accept(): https://pubs.opengroup.org/onlinepubs/9699919799/functions/
- * accept.html.  "extracts the first connection on the queue...creates a
- * new socket...returns a new file descriptor" (DESCRIPTION); "If
- * address is not a null pointer...address_len...will be modified...If
- * the actual length of the address is greater than...the stored
- * address shall be truncated" -- both handled here, via a local
- * full-sized `peer`/`peerlen` buffer __plat_socket_accept() (src/
- * internal/plat_socket.h) fills that can never itself be truncated (an
- * AF_INET address always fits in a struct sockaddr_in), followed by this
- * front door's own truncate-into-the-caller's-buffer copy below -- the
- * same two-step shape the pre-portable version had, just with the
- * backend call replacing an inline two-step AFD sequence.  address/
- * address_len are left untouched when address is NULL, matching the
- * DESCRIPTION's "the peer address is not returned" (no clause requires
- * *address_len be touched in that case either).
+ * accept.html.  Truncates into the caller's buffer per DESCRIPTION;
+ * address/address_len are left untouched when address is NULL.
+ * __plat_socket_accept() fills a full-sized local `peer` buffer that can
+ * never itself truncate (AF_INET always fits sockaddr_in), then this
+ * front door truncate-copies into the caller's buffer.
  *
- * The NT backend's real sequence is two AFD steps (ReactOS's WSPAccept,
- * dll/win32/msafd/misc/dllmain.c: IOCTL_AFD_WAIT_FOR_LISTEN blocks until
- * a connection is pending and returns its SequenceNumber plus the peer's
- * TDI address; a *new* AFD endpoint is then opened exactly like socket()
- * does, and IOCTL_AFD_ACCEPT binds the pending connection onto it) --
- * collapsed into the one portable call below; see src/socket/nt/
- * plat_socket.c's __plat_socket_accept() for where that two-step dance,
- * and the ECONNABORTED-on-a-reply-with-no-address handling that goes
- * with it, now lives.  This project skips the conditional-accept path
- * (lpfnCondition et al in ReactOS's version): out of POSIX's accept()
- * scope entirely, it is a WSAAccept()-only Winsock extension.
+ * NT's real accept is two AFD steps (IOCTL_AFD_WAIT_FOR_LISTEN, then
+ * IOCTL_AFD_ACCEPT on a freshly opened endpoint), collapsed into the one
+ * portable call below -- see src/socket/nt/plat_socket.c. Conditional
+ * accept (WSAAccept()'s lpfnCondition) is out of POSIX's accept() scope
+ * and not implemented.
  *
- * SOCK_DGRAM (2026-09-01): needs no explicit check here.  A datagram
- * socket's __SOCK_ST_LISTENING bit can never be set -- listen.c refuses
- * it with EOPNOTSUPP before that bit is ever touched -- so the
- * `!(f->pad & __SOCK_ST_LISTENING)` check just below already reports
- * EINVAL for one, the same as any other stream socket nobody called
- * listen() on yet.
+ * A datagram socket's __SOCK_ST_LISTENING bit can never be set
+ * (listen.c refuses SOCK_DGRAM with EOPNOTSUPP), so the check below
+ * already reports EINVAL for one -- no separate SOCK_DGRAM gate needed.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -65,21 +47,15 @@ int accept(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict len)
 
 	newfd = __fd_install(newh, 0, __FD_SOCKET);
 	if (newfd < 0) { __plat_close(newh); return -1; }
-	/* __fd_get(newfd) is not expressible via nonnull on any parameter of
-	 * this function -- newfd is not a pointer, and __fd_get()'s return
-	 * value is a local, not a parameter this signature could describe.
-	 * It is never NULL in practice: newfd just came back from a
-	 * successful __fd_install() moments above, with nothing in between
-	 * that could remove it. */
+	/* __fd_get(newfd) can't be NULL here: newfd just came back from a
+	 * successful __fd_install() with nothing in between that could
+	 * remove it. */
 	__fd_get(newfd)->pad = __SOCK_ST_BOUND | __SOCK_ST_CONNECTED;
 	memcpy(__fd_get(newfd)->peer, &peer, sizeof peer);
 	__fd_get(newfd)->peer_len = sizeof peer;
 
-	/* Converted only here, on the success path, so that a failure
-	 * between the check above and this point still leaves the caller's
-	 * address buffer untouched -- the behaviour every earlier revision
-	 * of this function had.  The reply was validated before any of that
-	 * happened, so this call cannot fail. */
+	/* Done only on the success path, so a failure above leaves the
+	 * caller's address buffer untouched. */
 	if (addr) {
 		socklen_t n = *len < (socklen_t)sizeof peer ? *len : (socklen_t)sizeof peer;
 		memcpy(addr, &peer, n);

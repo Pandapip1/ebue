@@ -2,15 +2,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * opendir/fdopendir: ask open() for an O_DIRECTORY descriptor and wrap it
- * in a DIR.  Going through open() is significant for the fixed POSIX
- * namespace: its directories have event handles only as lifetime and
- * inheritance carriers, and readdir() enumerates them without asking NT.
- *
- * The handle goes through the fd table like any other, which is what
- * makes dirfd() trivial and fdopendir() nearly free: fdopendir() does not
- * duplicate its argument, it just starts using the fd that is already
- * there, exactly as glibc's does, so the caller must not touch that fd
- * itself afterward and closedir() closes it.
+ * in a DIR. For the fixed POSIX namespace (/, /dev), the handle exists
+ * only as a lifetime/inheritance carrier; readdir() enumerates those
+ * entries without asking NT. fdopendir() does not duplicate its argument
+ * fd, it just starts using it, exactly as glibc's does — the caller must
+ * not touch that fd afterward, and closedir() closes it.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc

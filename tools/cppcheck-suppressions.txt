@@ -71,6 +71,11 @@ intToPointerCast:src/stdlib/system.c
 # duration of the copy (XCU tee(1p): "Ignore the SIGINT signal"), same
 # integer-literal-to-pointer cast as above.
 intToPointerCast:src/util/tee.c
+# __plat_sig_sync_kernel() (the Linux rt_sigaction backend) assigns
+# SIG_IGN/SIG_DFL to the raw kernel_sigaction's k_handler, same
+# integer-literal-to-pointer cast as above -- this is signal()'s own
+# storage, one layer lower.
+intToPointerCast:src/signal/linux/plat_signal.c
 
 # CLIENT_ID.UniqueProcess/UniqueThread are declared HANDLE by NT but hold
 # small integer ids, which is what a pid_t is; the cast back is the
@@ -93,6 +98,13 @@ signConversion:src/string/memmove.c
 # left-shift rule to `>>` as well and misreports it; verified against
 # cppcheck 2.21.1 with a two-line test case.
 shiftTooManyBitsSigned:arch/*/src/int64.c
+# arith.c's ev_rel_bit()/wordexp arithmetic `>>` arm ('R' case) already
+# validates `0 <= rhs < LONG_BIT` before shifting a signed long by rhs,
+# so rhs at LONG_BIT-1 (63 on this LP64 aarch64 target, where LONG_BIT
+# is 64) is an in-range width-1 shift, not out-of-range; a negative left
+# operand there is implementation-defined (C99 6.5.7p5), not undefined.
+# Same misapplication of the left-shift overflow rule to `>>` as above.
+shiftTooManyBitsSigned:src/wordexp/arith.c
 
 # cppcheck's bundled posix.cfg models fetestexcept()/feclearexcept()/
 # feraiseexcept() after glibc's <fenv.h>: a 6-bit FE_ALL_EXCEPT (glibc's
@@ -110,3 +122,53 @@ shiftTooManyBitsSigned:arch/*/src/int64.c
 # in this tree that passes a single-bit argument outside FE_ALL_EXCEPT.
 invalidFunctionArg:src/math/fenv.c
 invalidFunctionArg:src/math/nearbyint.c
+
+# fpclassify(x)/signbit(x) (include/math.h) select the f/""/l variant with
+# `sizeof(x) == sizeof(float) ? ... : ...` -- the standard pre-_Generic
+# type-dispatch idiom this C99 (-std=c99, tcc-compatible, no _Generic)
+# tree relies on throughout <math.h>. sizeof of a non-VLA expression never
+# evaluates that expression (C99 6.5.3.4p2), so x is not actually called
+# here whatever it is syntactically. cproj() and cacosh() are the only two
+# call sites in the tree where x itself is a function call (creal(z)/
+# cimag(z)) rather than a plain variable, which is what makes cppcheck's
+# textual "function call inside sizeof()" check fire.
+sizeofFunctionCall:src/complex/complex_parts.c
+sizeofFunctionCall:src/complex/cinverse.c
+
+# mmap()'s MAP_FIXED file-backed-remap arm frees m->live/m->locked, then
+# calls init_page_state(m, npages), which sets both fields back to NULL
+# through the same pointer -- and only then, on a later failure path
+# (mlock() below it), frees them again. The second free() is therefore
+# free(NULL), a no-op, never the same live pointer twice. cppcheck's
+# doubleFree does not track a struct field being reset to NULL inside a
+# called function, so it treats the pointer as still live-and-freed
+# across that call; reproduced in isolation with an 11-line repro (two
+# free()s, an intervening function that clears both fields, and a third
+# free() on a conditional path) against cppcheck 2.21.1.
+doubleFree:src/mman/mman.c
+
+# ev_shift()'s `>>` arm already validates `0 <= r < 32` (the `if (r < 0 ||
+# r >= 32) { ev_fail(e); v = 0; }` immediately above) before shifting a
+# signed int32_t by r, so r=31 is the width-1 boundary of an in-range
+# shift, not an out-of-range one -- and even a negative left operand at
+# that count is implementation-defined by C99 6.5.7p5, not undefined.
+# Same misapplication of the left-shift overflow rule to `>>` already
+# recorded for arch/*/src/int64.c's `(int)hi >> 31` above, verified
+# against cppcheck 2.21.1 there with a two-line test case.
+shiftTooManyBitsSigned:src/util/m4.c
+
+# mailx(1) -i ignores SIGINT for the duration of the session (XCU
+# mailx(1p): "the SIGINT signal ... shall be ignored"), same
+# integer-literal-to-pointer cast as the three call sites already
+# suppressed above.
+intToPointerCast:src/util/mailx.c
+
+# sort's final write path closes an -o FILE* it fopen()'d, or fflushes
+# stdout when writing there instead, in one ternary:
+# `outfile ? fclose(outf) != 0 : fflush(outf) != 0`. cppcheck's
+# useClosedFile/deallocuse treats the untaken fclose() arm as having run
+# before evaluating the fflush() arm, so it reports outf as already
+# closed even when outfile is NULL and fclose() never executes.
+# Reproduced in an 11-line isolated repro (the same ternary, an FILE*
+# initialised from stdout rather than fopen()) against cppcheck 2.21.1.
+useClosedFile:src/util/sort.c

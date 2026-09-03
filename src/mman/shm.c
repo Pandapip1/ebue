@@ -2,22 +2,22 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * POSIX shared-memory objects, represented by ordinary backing files in a
- * private directory under the process temporary directory.  This is not a
- * shortcut around the VM implementation: src/mman/mman.c maps a regular file
- * through NtCreateSection/NtMapViewOfSection, so the returned descriptor has
- * exactly the object shape mmap(), ftruncate(), fstat(), close() and fork()
- * already understand.  unlink() asks NT for POSIX deletion semantics first.
- * Wine rejects that disposition while a section view exists, so shm_unlink()
- * falls back to renaming the backing file out of the public namespace.  The
- * mapped file object remains alive while the original name becomes reusable
- * immediately, which is the observable POSIX contract.
+ * private directory under the process temporary directory. Not a shortcut
+ * around the VM implementation: src/mman/mman.c maps these through the same
+ * NtCreateSection/NtMapViewOfSection path as any regular file, so the
+ * descriptor has the object shape mmap()/ftruncate()/fstat()/close()/fork()
+ * already understand.
  *
- * The namespace directory is shared by processes that inherit the same
- * TMPDIR/TMP/TEMP setting.  POSIX leaves names without an initial slash and
- * names containing additional slashes implementation-defined; ntlibc accepts
- * the former for compatibility with the Open POSIX Test Suite and rejects the
- * latter.  Restricting the component to the portable filename character set
- * also avoids giving DOS device names and separators a second interpretation.
+ * unlink() asks NT for POSIX deletion semantics first; Wine rejects that
+ * disposition while a section view exists, so shm_unlink() falls back to
+ * renaming the backing file out of the namespace -- the mapped object stays
+ * alive while the original name becomes reusable immediately.
+ *
+ * Names without an initial slash and names with extra slashes are POSIX
+ * implementation-defined; ntlibc accepts the former (Open POSIX Test Suite
+ * compatibility) and rejects the latter. Component chars are restricted to
+ * the portable filename set, which also avoids DOS device names/separators
+ * getting a second interpretation.
  */
 #define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- strnlen(): bounded name and path validation
 #include <sys/mman.h>
@@ -92,23 +92,11 @@ static char *shm_path(const char *name)
 	return path;
 }
 
-/* path required: forwarded to strdup(path) unconditionally, which
- * itself calls strlen(path) before anything else; both real call sites
- * (shm_open(), shm_mode_write()) already null-check their own
- * shm_path()/shm_mode_path() result before calling this, so path is
- * never NULL here.
- *
- * The `*slash` this function's own body dereferences a few lines down
- * is NOT expressible via this attribute: `slash` is strrchr(dir, '/')'s
- * result, a local derived value, not path itself. It is never NULL in
- * practice -- both real callers only ever pass a path shm_path()/
- * shm_mode_path() built by concatenating "/ntlibc-shm(-mode)/" onto a
- * directory, so a '/' always exists -- but that is an invariant of this
- * function's only two callers, not a fact about the `path` parameter
- * nonnull can state. Left as a disclosed residual rather than force-fit
- * to an unrelated mechanism, the same class of case 9be895e's/d24fe86's
- * own commits already established for a checker finding on a value
- * derived from, rather than equal to, a parameter. */
+/* path is never NULL here: both callers null-check their shm_path()/
+ * shm_mode_path() result first. `slash` (strrchr(dir, '/')) is never NULL
+ * either, since both callers only ever pass a path built by concatenating
+ * "/ntlibc-shm(-mode)/" onto a directory -- but that's an invariant of the
+ * callers, not something the nonnull attribute on `path` can state. */
 static int ensure_namespace(const char *path) __attribute__((nonnull(1)));
 static int ensure_namespace(const char *path)
 {
@@ -129,14 +117,10 @@ static int ensure_namespace(const char *path)
 	return 0;
 }
 
-/* The mode namespace mirrors the data namespace one directory beside it:
- *
- *   .../ntlibc-shm/name       data mapped through NtCreateSection
- *   .../ntlibc-shm-mode/name  four-byte persistent POSIX mode
- *
- * Real NT stores the same value in $LXMOD on the data file.  Stock Wine
- * accepts that EA in NtCreateFile but drops it, so the sidecar is the
- * compatibility record that makes the mode survive close and reopen. */
+/* Sidecar file beside the data file, storing a four-byte POSIX mode. Real
+ * NT would store this in the data file's $LXMOD EA, but stock Wine accepts
+ * that EA in NtCreateFile and then drops it, so the sidecar is what makes
+ * the mode survive close and reopen under Wine. */
 withtok(heap_allocated)
 static char *shm_mode_path(const char *path)
 {
@@ -189,15 +173,8 @@ static int shm_mode_write(const char *path, mode_t mode)
 	return result;
 }
 
-/* mode required: `*mode = ...` is written whenever the read succeeds,
- * with no NULL check of mode itself anywhere in this function; its one
- * real call site (shm_open()) always passes `&stored`, the address of
- * its own local, never NULL. path is not marked: shm_mode_path(path)
- * is the only use, and that function already tolerates whatever path
- * shm_mode_read()'s own two possible callers could pass (there is only
- * one, shm_open(), which already checked its own shm_path() result
- * nonnull before reaching here, but path itself is never dereferenced
- * DIRECTLY in this function's own body, only forwarded). */
+/* mode is never NULL: the one call site (shm_open()) always passes
+ * &stored, the address of its own local. */
 static int shm_mode_read(const char *path, mode_t *mode) __attribute__((nonnull(2)));
 static int shm_mode_read(const char *path, mode_t *mode)
 {
@@ -250,10 +227,9 @@ int shm_open(const char *name, int oflag, mode_t mode)
 	if (!path) return -1;
 	if (ensure_namespace(path) < 0) { free(path); return -1; }
 
-	/* O_CREAT without O_EXCL has to distinguish a newly-created object
-	 * from an existing one because POSIX applies mode only to the former.
-	 * Try the atomic create first, then open the winner if it already
-	 * exists. */
+	/* O_CREAT without O_EXCL must still distinguish new from existing --
+	 * POSIX applies mode only to the former -- so try an atomic create
+	 * first and fall back to opening the existing object. */
 	if ((oflag & O_CREAT) && !(oflag & O_EXCL)) {
 		fd = open(path, oflag | O_EXCL | O_CLOEXEC, mode);
 		if (fd >= 0) created = 1;
@@ -293,16 +269,15 @@ int shm_open(const char *name, int oflag, mode_t mode)
 static unsigned tombstone_serial;
 
 /* Windows before POSIX disposition support, and Wine even when it accepts
- * the information class, cannot delete a file that backs a live section.
- * Renaming it is enough to implement shm_unlink()'s namespace operation:
- * existing mappings keep referring to the same file object, while a later
- * shm_open() of the original name sees no object.  The second unlink usually
- * removes the tombstone immediately; if the runtime still refuses it, the
- * private name is harmless and a later process incarnation can replace it.
+ * the information class, cannot delete a file backing a live section.
+ * Renaming satisfies shm_unlink()'s namespace contract instead: existing
+ * mappings keep the same file object, and a later shm_open() of the
+ * original name sees nothing. The tombstone's own unlink usually succeeds
+ * immediately after; if not, the orphaned private name is harmless.
  *
- * PID, TID and a per-process serial make collisions non-routine.  A collision
- * with a still-mapped tombstone merely makes rename() fail, in which case the
- * next serial is tried instead of replacing a live object's last name. */
+ * PID+TID+serial make collisions non-routine; a collision with a
+ * still-mapped tombstone just fails rename(), so the next serial is tried
+ * rather than replacing a live object's last name. */
 static int rename_mapped_away(const char *path)
 {
 	static const char stem[] = ".ntlibc-shm-deleted-";
@@ -327,9 +302,9 @@ static int rename_mapped_away(const char *path)
 			return -1;
 		}
 		if (rename(path, dead) == 0) {
-			/* A live section may keep this private unlink from succeeding.
-			 * The namespace operation already succeeded, so do not turn a
-			 * cleanup limitation back into a shm_unlink() failure. */
+			/* A live section may block this cleanup unlink; the
+			 * namespace operation already succeeded, so that isn't
+			 * a shm_unlink() failure. */
 			(void)unlink(dead);
 			free(dead);
 			errno = saved;
