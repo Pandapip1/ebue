@@ -263,7 +263,8 @@ static unsigned char *read_whole_file(int fd, size_t *out_size)
 	unsigned char *buf;
 	size_t got = 0;
 
-	if (fstat(fd, &st) < 0 || st.st_size < 0) return NULL;
+	if (fstat(fd, &st) < 0) return NULL;
+	if (st.st_size < 0) { errno = EOVERFLOW; return NULL; }
 	*out_size = (size_t)st.st_size;
 
 	buf = malloc(*out_size ? *out_size : 1);
