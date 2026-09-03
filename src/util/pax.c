@@ -850,7 +850,10 @@ static int materialize(const struct pax_member *m, const char *destpath,
 				}
 			}
 		}
-		close(fd);
+		if (close(fd) < 0) {
+			__util_diagf("pax: %s: %s\n", destpath, strerror(errno));
+			return -1;
+		}
 		{
 			struct utimbuf ub;
 			ub.actime = ub.modtime = (time_t)m->mtime;
@@ -1035,7 +1038,7 @@ static int do_write(const char *archive, enum pax_format fmt, char **files, int 
 	if (rc < 0) ctx.failed = 1;
 	if (pax_write_trailer(out, fmt) < 0) ctx.failed = 1;
 	if (archive) { if (fclose(out) != 0) ctx.failed = 1; }
-	else fflush(out);
+	else if (fflush(out) != 0) ctx.failed = 1;
 
 	if (stdin_list) {
 		int i;

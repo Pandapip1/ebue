@@ -250,16 +250,21 @@ static void wfile_write_line(struct wfile_table *t, const char *name, const char
 	if (wf) { fwrite(data, 1, len, wf); fputc('\n', wf); }
 }
 
-static void wfile_table_close(struct wfile_table *t)
+static int wfile_table_close(struct wfile_table *t)
 {
 	size_t i;
+	int had_error = 0;
 	for (i = 0; i < t->n; i++) {
-		if (t->entries[i].f != stdout && t->entries[i].f != stderr)
-			fclose(t->entries[i].f);
+		if (t->entries[i].f != stdout && t->entries[i].f != stderr &&
+		    fclose(t->entries[i].f) != 0) {
+			__util_diagf("sed: %s: %s\n", t->entries[i].name, strerror(errno));
+			had_error = 1;
+		}
 		free(t->entries[i].name);
 	}
 	free(t->entries);
 	t->entries = 0; t->n = 0; t->cap = 0;
+	return had_error;
 }
 
 /* ==== append queue: a\ text and r file, drained per XCU's own timing
@@ -1571,7 +1576,7 @@ int __util_sed_main(int argc, char **argv)
 	free_input(&in);
 	buf_free(&st.pattern);
 	buf_free(&st.hold);
-	wfile_table_close(&st.wtab);
+	if (wfile_table_close(&st.wtab) && status == 0) status = 1;
 	free(st.aq.entries);
 
 	return status;

@@ -458,7 +458,10 @@ summary:
 		in_full, in_partial, out_full, out_partial);
 
 	if (ifd > 0) close(ifd);
-	if (ofd > 1) close(ofd);
+	if (ofd > 1 && close(ofd) < 0) {
+		__util_diagf("dd: closing '%s': %s\n", o.of_path ? o.of_path : "stdout", strerror(errno));
+		had_error = 1;
+	}
 
 	if (dd_interrupted) status = 130; /* 128+SIGINT, this project's own signal-exit-status convention (see test/util-fsops.c and friends) */
 	else if (had_error) status = 1;
