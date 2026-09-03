@@ -26,7 +26,7 @@
  * past the buffer.  The TRANSPORT_NAME_LENGTH check below is the direct
  * regression assertion for that.
  *
- * test/*.c is built with -Iarch/$(ARCH) -Iarch/generic -Iobj/include
+ * The test/ sources are built with -Iarch/$(ARCH) -Iarch/generic -Iobj/include
  * -Iinclude only (see Makefile) -- src/internal/ is NOT on the include
  * path -- so the two prototypes and every expected constant are
  * declared locally, the same way test/posix-errno.c and test/misc.c do.

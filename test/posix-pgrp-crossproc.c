@@ -4,7 +4,7 @@
  * Stock-Wine coverage for killpg/1-2's mechanism without fork(). */
 /* sigset_t and the sigaction()/killpg()/setpgrp() family are
  * feature-test gated in include/signal.h and include/unistd.h; same
- * define most other test/*.c already carry for the same reason (see
+ * define most other tests in test/ already carry for the same reason (see
  * test/posix-glob.c's comment on this exact define). */
 #define _GNU_SOURCE
 #include <signal.h>

@@ -369,7 +369,7 @@ static void test_float_ldbl(void)
  * directly supports [a type of] width N, no padding bits, and (for the
  * signed type) a two's complement representation" -- so where they
  * exist (int8/16/32/64_t and unsigned) they must be exactly that wide
- * with no padding, and *_MIN/*_MAX must be exactly +-2^(N-1)/2^N-1. ---- */
+ * with no padding, and *_MIN and *_MAX must be exactly +-2^(N-1)/2^N-1. ---- */
 static void test_stdint_exact_width(void)
 {
 	CHECK(sizeof(int8_t) == 1 && sizeof(uint8_t) == 1);
@@ -378,7 +378,7 @@ static void test_stdint_exact_width(void)
 	CHECK(sizeof(int64_t) == 8 && sizeof(uint64_t) == 8);
 
 	/* No padding + two's complement, tested the same way as
-	 * test_limits_consistency: *_MAX/*_MIN must match the exact bit
+	 * test_limits_consistency: *_MAX and *_MIN must match the exact bit
 	 * width, not just be "close". */
 	CHECK((uintmax_t)INT8_MAX == 0x7f && INT8_MIN == -128 && (uintmax_t)UINT8_MAX == 0xff);
 	CHECK((uintmax_t)INT16_MAX == 0x7fff && INT16_MIN == -32768 && (uintmax_t)UINT16_MAX == 0xffff);

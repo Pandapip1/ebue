@@ -45,7 +45,7 @@
  * same 26-byte sock-name image, handed to the peer-name reader, must
  * NOT yield the address it carries.
  *
- * test/*.c is built with -Iarch/$(ARCH) -Iarch/generic -Iobj/include
+ * The test/ sources are built with -Iarch/$(ARCH) -Iarch/generic -Iobj/include
  * -Iinclude only (see Makefile) -- src/internal/ is NOT on the include
  * path -- so the prototypes and every expected constant are declared
  * locally, the same way test/posix-socket-bind.c does.  That is

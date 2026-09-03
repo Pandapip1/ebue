@@ -398,7 +398,7 @@ static char *join_path(const char *dir, const char *name)
 
 /* Reads one directory's own entries (never recursing here -- list_dir()
  * below drives -R's recursion itself, directory by directory). Returns
- * 0 with *outp/*np set on success, -1 (diagnostic already written) on
+ * 0 with *outp and *np set on success, -1 (diagnostic already written) on
  * failure to even open the directory. */
 static int read_directory(const struct ls_opts *o, const char *dir, struct entry **outp, size_t *np)
 {

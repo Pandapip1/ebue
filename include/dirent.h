@@ -64,7 +64,7 @@ void           rewinddir(DIR *) __attribute__((nonnull(1)));
 int            dirfd(DIR *) __attribute__((nonnull(1)));
 
 /* alphasort/versionsort's nonnull covers a/b themselves; it can't express
- * that *a/*b (one level further in) are also non-NULL, but qsort_r never
+ * that *a and *b (one level further in) are also non-NULL, but qsort_r never
  * invokes a comparator outside the array scandir() builds, so that holds
  * by construction. filter/compar are optional and left unmarked. */
 int alphasort(const struct dirent **, const struct dirent **)

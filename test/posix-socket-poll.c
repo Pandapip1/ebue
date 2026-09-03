@@ -79,7 +79,7 @@
  * control reproduces that byte image and proves these assertions
  * reject it.
  *
- * test/*.c is built with -Iarch/$(ARCH) -Iarch/generic -Iobj/include
+ * The test/ sources are built with -Iarch/$(ARCH) -Iarch/generic -Iobj/include
  * -Iinclude only (see Makefile) -- src/internal/ is NOT on the include
  * path -- so the prototypes and every expected constant are declared
  * locally, exactly as the siblings do.  A layout test that included

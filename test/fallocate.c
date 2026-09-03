@@ -22,7 +22,7 @@
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_fallocate.html
  */
 /* mkdtemp() is feature-test gated in include/stdlib.h; same define most
- * other test/*.c already carry for the same reason (see
+ * other tests in test/ already carry for the same reason (see
  * test/posix-glob.c's comment on this exact define). */
 #define _GNU_SOURCE
 #include <stdio.h>

@@ -15,8 +15,9 @@
  * in which all four were absent, and is kept verbatim -- a record of what
  * was checked is worth more than one edited to agree with today. All four
  * headers are now implemented (include/{langinfo,nl_types,monetary,
- * iconv}.h and the matching src/misc/*.c), so the six cases covering them
- * are un-fenced and run, plus one new case, test_catgets_reads_a_catalogue(),
+ * iconv}.h and the matching sources in src/misc/), so the six cases
+ * covering them are un-fenced and run, plus one new case,
+ * test_catgets_reads_a_catalogue(),
  * since the original could only watch catopen() fail on a machine with no
  * catalogues installed. Sentences below saying "the four" or "does not
  * exist" describe the 2026-08-25 tree; a *fenced* case's own claim of
@@ -405,7 +406,7 @@
  * run the day each is implemented.
  */
 /* newlocale()/LC_ALL_MASK are feature-test gated in include/locale.h;
- * same define most other test/*.c already carry for the same reason
+ * same define most other tests in test/ already carry for the same reason
  * (see test/posix-glob.c's comment on this exact define). */
 #define _GNU_SOURCE
 #include <locale.h>

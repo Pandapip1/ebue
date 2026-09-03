@@ -7,7 +7,7 @@ size_t strcspn(const char *, const char *);
 size_t strspn(const char *, const char *);
 /* Deliberately `unsigned short`, NOT whatever clang's own builtin
  * wchar_t happens to be on the host running this fixture -- this is
- * ntlibc's own real `wchar_t` typedef (arch/*\/bits/alltypes.h.in's
+ * ntlibc's own real `wchar_t` typedef (each arch/'s bits/alltypes.h.in's
  * `TYPEDEF unsigned short wchar_t`, kept 2 bytes on every arch this
  * tree builds for), and the whole point of wide_scan_return_value_
  * extent_is_trusted below is to prove trackScanExtent() uses THIS

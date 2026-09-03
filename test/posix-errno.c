@@ -6,7 +6,7 @@
  * functions (src/internal/libc.h: "map, do not set"), so they are tested
  * directly here rather than indirectly through a syscall wrapper.
  *
- * test/*.c is built with -Iarch/$(ARCH) -Iarch/generic -Iobj/include
+ * The test/ sources are built with -Iarch/$(ARCH) -Iarch/generic -Iobj/include
  * -Iinclude only (see Makefile) -- src/internal/ is NOT on the include
  * path, so the NTSTATUS values below are copied by hand from
  * src/internal/nt.h and the three prototypes are declared locally, the

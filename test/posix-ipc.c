@@ -10,7 +10,7 @@
  *
  * A name-level cross-index of the 1188 interfaces named by the NAME
  * sections of the 882 POSIX function reference pages against every
- * identifier appearing in test/*.c found the whole XSI IPC group
+ * identifier appearing in the test/ tree found the whole XSI IPC group
  * absent -- not merely untested, but unmentioned.  Twelve interfaces
  * with no test at all:
  *

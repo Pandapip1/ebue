@@ -26,8 +26,8 @@
  *
  * WHY THIS FILE LIVES ONE DIRECTORY DOWN
  *
- * It has no main() and is not a test.  The Makefile's TEST_SRCS is
- * `wildcard test/*.c` and its pattern rule links every match into its own
+ * It has no main() and is not a test.  The Makefile's TEST_SRCS globs
+ * every test/ source and its pattern rule links every match into its own
  * PE; tools/asan-build.sh and tools/lint.sh's lint-unreferenced stage
  * make the same assumption.  Same reason test/rpath-plugin-src/ exists,
  * and the Makefile says so at obj/test/rpath-plugin.dll: a non-test .c

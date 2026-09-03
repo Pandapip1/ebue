@@ -3,7 +3,7 @@
  *
  * <netdb.h>'s Windows NT backend. The real implementation (a /etc/hosts
  * parser, an /etc/nsswitch.conf-driven dispatcher, and a UDP DNS stub
- * resolver) exists only for native Linux -- see src/netdb/linux/*.c. NT
+ * resolver) exists only for native Linux -- see src/netdb/linux/. NT
  * still needs a definition for each declared function, or `make
  * linkcheck` flags a public declaration with no reachable definition.
  *

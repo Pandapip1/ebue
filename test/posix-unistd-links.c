@@ -6,7 +6,7 @@
  * clauses test/posix-unistd.c's test_linkat() left open.  All three
  * are in test/POSIX-GAP-ACCOUNTING.md's "Implemented, not
  * clause-audited (357)" unistd.h row, and symlinkat() is the one name
- * in that row with no assertion of its own anywhere in test/*.c
+ * in that row with no assertion of its own anywhere in the test/ tree
  * (test/posix-glob.c merely calls it while building a fixture).
  *
  * Pages:

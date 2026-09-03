@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Clause-by-clause POSIX.1-2017 audit of the POSIX-specified functions
- * that tools/lint-unreferenced.sh found no test/*.c even calls.  When
+ * that tools/lint-unreferenced.sh found no test/ source even calls.  When
  * that check was introduced the list was 56 names long; eight of
  * them are POSIX interfaces with a specification page to hold them to:
  *
@@ -25,7 +25,7 @@
  * ERRORS list names an error this implementation never produces, the
  * assertion is still written out in full and fenced, using the three
  * conventions the rest of this tree uses (greppable by the tag right
- * after "#if 0 /* "):
+ * after "#if 0 / * "):
  *
  *   BUG:    a confirmed, real spec violation (should pass once fixed)
  *   N/A:    genuinely impossible on this platform, with the mechanism
@@ -42,7 +42,7 @@
  */
 /* strdup()/mkstemp()/renameat()/fileno() are feature-test gated in
  * include/string.h, include/stdlib.h, include/stdio.h and
- * include/unistd.h; same define most other test/*.c already carry for
+ * include/unistd.h; same define most other tests in test/ already carry for
  * the same reason (see test/posix-glob.c's comment on this exact
  * define). */
 #define _GNU_SOURCE

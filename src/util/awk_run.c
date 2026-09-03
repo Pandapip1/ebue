@@ -501,7 +501,7 @@ static void fields_reserve(struct awk_interp *ip, int n)
 
 /* Splits `s` (length len) per `fs`'s XCU-defined field-splitting rules
  * (used for both $0's own splitting and split()'s built-in), appending
- * results as owned strings into *outv/*outn (grown with xrealloc).
+ * results as owned strings into *outv and *outn (grown with xrealloc).
  * extra_nl_sep additionally treats '\n' as a separator even when fs is
  * not the default whitespace form -- RS=="" paragraph mode's own rule
  * ("the <newline> character shall always be a field separator, no

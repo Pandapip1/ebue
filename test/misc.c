@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 /* setenv() is feature-test gated in include/stdlib.h; same define most
- * other test/*.c already carry for the same reason (see
+ * other tests in test/ already carry for the same reason (see
  * test/posix-glob.c's comment on this exact define). */
 #define _GNU_SOURCE
 #include <stdio.h>

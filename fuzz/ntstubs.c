@@ -3,7 +3,7 @@
  *
  * ntstubs.c -- the ntdll side of the world, for native (Linux) builds.
  *
- * Lets the *real* src/*.c be compiled and linked by a native clang with
+ * Lets the real src/ sources be compiled and linked by a native clang with
  * ASan/UBSan/libFuzzer. Nothing here is part of ntlibc: it stands in for
  * ntdll.dll, the one thing a native build can't have. Everything ntlibc
  * itself computes runs unmodified.
@@ -4240,7 +4240,7 @@ NTSTATUS NTAPI NtFsControlFile(HANDLE h, HANDLE ev, PIO_APC_ROUTINE apc, PVOID a
  * getsockname) goes through NtDeviceIoControlFile below, against the real
  * host AF_INET/SOCK_STREAM socket __afd_open() already created. Requests
  * and replies are read/written through afd.h's own AFD_*_OFF_* byte
- * offsets, the same ones src/socket/*.c's request builders use, so this
+ * offsets, the same ones src/socket/'s request builders use, so this
  * parses exactly what the library sends rather than a second guessed
  * layout.
  *

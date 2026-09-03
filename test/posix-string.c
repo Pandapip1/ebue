@@ -8,7 +8,7 @@
  */
 /* stpncpy()/memccpy()/strtok_r()/strcoll_l() and LC_GLOBAL_LOCALE are
  * feature-test gated in include/string.h/include/strings.h and
- * include/locale.h; same define most other test/*.c already carry for
+ * include/locale.h; same define most other tests in test/ already carry for
  * the same reason (see test/posix-glob.c's comment on this exact
  * define). */
 #define _GNU_SOURCE
@@ -120,7 +120,7 @@ static void test_strcasecmp_ordering(void)
  * through both LC_GLOBAL_LOCALE and a freshly created "C" locale must
  * agree with strcoll() and with the sign of strcmp().  Asserted here
  * because strcoll_l() exists in src/string/strcoll.c and links, but was
- * named by no assertion anywhere in test/*.c (see
+ * named by no assertion anywhere in the test/ tree (see
  * test/POSIX-GAP-ACCOUNTING.md).  Runs on real Windows in CI too;
  * nothing here touches the OS. */
 static void test_strcoll_l(void)

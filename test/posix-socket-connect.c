@@ -55,7 +55,7 @@
  * cannot be a ULONG on Win64; while ReactOS's own `Root` and literal
  * `Unknown` record that its authors did not know what the fields were).
  *
- * test/*.c is built with -Iarch/$(ARCH) -Iarch/generic -Iobj/include
+ * The test/ sources are built with -Iarch/$(ARCH) -Iarch/generic -Iobj/include
  * -Iinclude only (see Makefile) -- src/internal/ is NOT on the include
  * path -- so the prototypes and every expected constant are declared
  * locally, exactly as its two siblings do.  That is deliberate rather

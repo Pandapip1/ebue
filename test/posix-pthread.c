@@ -14,7 +14,7 @@
  *
  * A name-level cross-index of the 1190 distinct interfaces named in the
  * NAME sections of that package's 882 function pages against every
- * identifier appearing anywhere in test/*.c finds 364 POSIX interfaces
+ * identifier appearing anywhere in the test/ tree finds 364 POSIX interfaces
  * with no mention at all.  <pthread.h> is far and away the largest
  * single block of them: 99 of the 364.  (The index is name-level, so it
  * over-reports -- prose-only coverage reads as absent -- which is the

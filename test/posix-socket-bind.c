@@ -33,7 +33,7 @@
  * is not a local address, hence EADDRNOTAVAIL.  ADDR_LENGTH and the
  * in_addr placement below are the direct assertions for that.
  *
- * test/*.c is built with -Iarch/$(ARCH) -Iarch/generic -Iobj/include
+ * The test/ sources are built with -Iarch/$(ARCH) -Iarch/generic -Iobj/include
  * -Iinclude only (see Makefile) -- src/internal/ is NOT on the include
  * path -- so the two prototypes and every expected constant are
  * declared locally, the same way test/posix-socket-ea.c does.  That is

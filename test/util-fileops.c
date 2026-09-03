@@ -4,7 +4,7 @@
  * Black-box tests for ntlibc's `rm`, `cp` and `mv` (XCU rm(1p), cp(1p),
  * mv(1p)) -- the second, higher-risk tier of POSIX standard utilities
  * after test/util-trivial.c's true/false/test.  Same shape as that file
- * (see its header): each standalone obj/bin/*.exe is spawned as a real
+ * (see its header): each standalone obj/bin/NAME.exe is spawned as a real
  * process, and the shell built-in is exercised through `obj/sh/sh.exe
  * -c` too, confirming both callers of __util_*_main() (src/internal/
  * util.h) agree.

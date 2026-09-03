@@ -100,7 +100,7 @@ static int fails;
 } while (0)
 
 /* src/internal/afd.h's TA_ADDRESS.  Redeclared rather than included --
- * afd.h is a src/internal/ header and test/*.c are built against the
+ * afd.h is a src/internal/ header and the test/ sources are built against the
  * public include path only -- and redeclared as a struct rather than
  * passed as void *, so the two translation units really do agree on the
  * parameter type (C99 6.2.7: separately declared structs with the same

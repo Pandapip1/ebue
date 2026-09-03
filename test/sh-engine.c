@@ -49,7 +49,7 @@
  */
 /* fmemopen()/mkstemp()/strdup()/setenv()/unsetenv() are feature-test
  * gated in include/stdio.h and include/stdlib.h; same define most
- * other test/*.c already carry for the same reason (see
+ * other tests in test/ already carry for the same reason (see
  * test/posix-glob.c's comment on this exact define). */
 #define _GNU_SOURCE
 #include "test-policy.h"
@@ -738,8 +738,8 @@ static void test_roundtrip(void)
  *
  * WHAT THE ASSERTIONS ARE FOR, since a use-after-free need not be
  * visible in a `make check` build with no sanitizer: `make asan`
- * (tools/asan-build.sh) compiles src/sh/*.c natively and runs this very
- * file under ASan, which is what turns the first case into a hard
+ * (tools/asan-build.sh) compiles the src/sh/ sources natively and runs
+ * this very file under ASan, which is what turns the first case into a hard
  * failure.  Under plain `make check` these two assertions still
  * discriminate, against the OTHER way this could have been "fixed":
  * each program must parse, and must parse to exactly ONE list item.
@@ -3764,7 +3764,7 @@ static void test_compound_redirection(const char *self)
 
 	/* Every assertion in here is about a redirection reaching a spawned
 	 * child, which the native ASan stub cannot model -- tools/asan-build.sh
-	 * compiles src/*.c against fuzz/ntstubs.c, whose RtlCreateUserProcess
+	 * compiles all of src/ against fuzz/ntstubs.c, whose RtlCreateUserProcess
 	 * execve()s a real host binary instead of copying NT process
 	 * parameters.  file_redir_supported() is the probe the stage-3
 	 * redirection tests already use for exactly this, and it prints a note

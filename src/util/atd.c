@@ -53,8 +53,8 @@
  * shortening the poll interval for a test is not a spec deviation the
  * way shortening cron's real per-minute granularity would be):
  *
- *   1. List $HOME/.ntlibc/atjobs/*.job (src/util/spool.h). For each
- *      whose "#run_at" header (src/util/atbatch.h's job file format)
+ *   1. List the *.job files under $HOME/.ntlibc/atjobs/ (src/util/spool.h).
+ *      For each whose "#run_at" header (src/util/atbatch.h's job file format)
  *      is <= now:
  *        a. If its queue is "b" (batch(1p)'s own queue), consult
  *           getloadavg(); a Linux host that is genuinely busy (1-
