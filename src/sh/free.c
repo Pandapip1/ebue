@@ -50,41 +50,64 @@ static void free_ifarms(struct sh_ifarm *a)
 	}
 }
 
-/* Unconditional in every field, not switched on c->kind: parse.c's
- * new_command() zeroes all of them for every kind, so a field this
- * command does not use is a NULL that each of these already ignores.
- * Switching on the kind instead would mean a node abandoned halfway
- * through parsing -- kind already set, fields belonging to a different
- * kind still populated by an earlier goto -- leaked whatever the switch
- * decided not to look at. */
+/* Switched on c->kind rather than freeing every field unconditionally:
+ * the union means only the active variant's pointers are meaningful,
+ * and reading a different variant's pointer out of the same bytes is
+ * not "freeing an unused NULL" the way it was when every kind had its
+ * own separate field.  This still handles a node abandoned mid-parse
+ * safely -- new_command() zeroes the whole union up front, and every
+ * place parse.c later changes c->kind in place (SUBSHELL/BRACE/FUNCDEF)
+ * does so before writing any field of the new variant, so whichever
+ * variant c->kind names at the point of a free is the one that has
+ * actually been initialised, whether or not parsing went on to finish
+ * populating it. */
 /* c is required, unlike every free_*() sibling above and below it: this
  * frees a command's *contents*, not a linked-list node, so there is no
  * "NULL means empty list" reading available here the way there is for
  * __sh_free_words()/__sh_free_redirs()/free_ifarms()/__sh_list_free().
- * `__sh_free_words(c->assigns);` dereferences c unconditionally on
- * entry, and every real call site -- this file's own recursive
- * func_body call (guarded by `if (c->func_body)` first), and
- * free_pipeline_contents() below (always `&pl->commands[i]`, an array
- * element's address) -- always passes a real struct. */
+ * `switch (c->kind)` dereferences c unconditionally on entry, and every
+ * real call site -- this file's own recursive func_body call (guarded
+ * by `if (c->u.funcdef.func_body)` first), and free_pipeline_contents()
+ * below (always `&pl->commands[i]`, an array element's address) --
+ * always passes a real struct. */
 // NOLINTNEXTLINE(misc-no-recursion) -- the destructor mirrors the owned shell-AST hierarchy
 void __sh_free_command_contents(struct sh_command *c)
 {
-	__sh_free_words(c->assigns);
-	__sh_free_words(c->words);
 	__sh_free_redirs(c->redirs);
-	__sh_list_free(c->body);
-	free_ifarms(c->arms);
-	__sh_list_free(c->else_body);
-	__sh_list_free(c->cond);
-	__free(c->name);
-	__free(c->func_text);
-	/* Recursive rather than a __sh_list_free() like the fields above:
-	 * sh.h's func_body is a bare sh_command, not a list, and parse.c's
-	 * free_command() -- which would be the natural call -- is static
-	 * there.  This is the same two lines it is. */
-	if (c->func_body) {
-		__sh_free_command_contents(c->func_body);
-		__free(c->func_body);
+	switch (c->kind) {
+	case SH_CMD_SIMPLE:
+		__sh_free_words(c->u.simple.assigns);
+		__sh_free_words(c->u.simple.words);
+		break;
+	case SH_CMD_SUBSHELL:
+	case SH_CMD_BRACE:
+		__sh_list_free(c->u.group.body);
+		break;
+	case SH_CMD_IF:
+		free_ifarms(c->u.ifcmd.arms);
+		__sh_list_free(c->u.ifcmd.else_body);
+		break;
+	case SH_CMD_LOOP:
+		__sh_list_free(c->u.loop.cond);
+		__sh_list_free(c->u.loop.body);
+		break;
+	case SH_CMD_FOR:
+		__free(c->u.forloop.name);
+		__sh_free_words(c->u.forloop.words);
+		__sh_list_free(c->u.forloop.body);
+		break;
+	case SH_CMD_FUNCDEF:
+		__free(c->u.funcdef.name);
+		__free(c->u.funcdef.func_text);
+		/* Recursive rather than a __sh_list_free() like the fields
+		 * above: sh.h's func_body is a bare sh_command, not a list, and
+		 * parse.c's free_command() -- which would be the natural call --
+		 * is static there.  This is the same two lines it is. */
+		if (c->u.funcdef.func_body) {
+			__sh_free_command_contents(c->u.funcdef.func_body);
+			__free(c->u.funcdef.func_body);
+		}
+		break;
 	}
 }
 
