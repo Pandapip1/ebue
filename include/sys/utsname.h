@@ -6,13 +6,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * <sys/utsname.h>: uname() fills every field from something this
- * backend genuinely knows -- on NT, RtlGetVersion() for sysname/release/
- * version, a registry lookup (falling back to gethostname()) for
- * nodename, and a compile-time arch check for machine; on Linux, a
- * single real uname(2) syscall answers all of them directly. See
- * src/misc/uname.c's header comment and src/misc/{nt,linux}/plat_misc.c's
- * own __plat_uname() for exactly what each field reports and why. */
+ * <sys/utsname.h>: on NT, uname() fills sysname/release/version from
+ * RtlGetVersion(), nodename from a registry lookup (falling back to
+ * gethostname()), and machine from a compile-time arch check; on Linux,
+ * a single uname(2) syscall answers all of them directly.
+ */
 #ifndef _SYS_UTSNAME_H
 #define _SYS_UTSNAME_H
 #ifdef __cplusplus

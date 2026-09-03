@@ -28,15 +28,9 @@ typedef enum {
 pid_t wait (int *);
 pid_t waitpid (pid_t, int *, int );
 
-/* waitid.html.  <signal.h> for siginfo_t, which basedefs/sys_wait.h.html
- * requires this header to define "as described in <signal.h>".
- *
- * Guarded by the same feature-test set <signal.h> guards siginfo_t
- * itself with -- under -std=c99 with no feature-test macro set (which
- * defines __STRICT_ANSI__, so features.h defaults nothing on), that
- * type does not exist and this declaration must not either.  This is
- * what tools/hdr-hygiene.sh compiles for, and it is also what a strict
- * ISO C program gets: waitid() is not an ISO C interface. */
+/* Guarded by the same feature-test set <signal.h> guards siginfo_t with:
+ * under strict ISO C that type does not exist, and waitid() is not an
+ * ISO C interface either. */
 #if defined(_POSIX_SOURCE) || defined(_POSIX_C_SOURCE) \
  || defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) \
  || defined(_BSD_SOURCE)

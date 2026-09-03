@@ -15,11 +15,7 @@ extern "C" {
 #include <features.h>
 #include <sys/select.h>
 
-/* tv is required: src/time/gettimeofday.c's gettimeofday() writes
- * tv->tv_sec/tv_usec unconditionally on its own success path, with no
- * NULL check. tz is accepted-and-ignored (`(void)tz;`, matching glibc's
- * own "obsolete" treatment) and every real caller in this tree already
- * passes NULL for it, so it is left unmarked. */
+/* tz is accepted-and-ignored, matching glibc's own "obsolete" treatment. */
 int gettimeofday (struct timeval *__restrict, void *__restrict) __attribute__((nonnull(1)));
 
 #define ITIMER_REAL    0
@@ -31,30 +27,14 @@ struct itimerval {
 	struct timeval it_value;
 };
 
-int getitimer (int, struct itimerval *);  /* undefined-ok: ITIMER_REAL's
-	one-shot half could be armed on the same NT timer alarm() now uses
-	(src/unistd/sleep.c), but an interval timer is defined by its repeat,
-	and repeating is what this platform cannot deliver: SIGALRM arrives
-	through an APC that only runs while the thread is in an alertable
-	wait, so expiries a computing thread missed coalesce instead of
-	queueing (see ualarm() in unistd.h). ITIMER_VIRTUAL/ITIMER_PROF fire
-	on CPU time consumed rather than wall-clock time, an even harder
-	signal to generate without a scheduler tick this library sees. A
-	timer *thread* is what would close both, and it does not change this:
-	it would deliver from a callback thread into __raise_internal()'s
-	unlocked handlers/blocked/pending state, the same data race
-	src/signal/signal.c's ctrl_handler() already flags as tolerable only
-	because Ctrl-C is rare -- a real interval timer firing repeatedly is
-	not -- and src/unistd/sleep.c's banner records the second reason it
-	was rejected, which is what fork() would then be cloning --
-	the marker stays because it is still true of, and only checked
-	against, the NT build. Linux has both a real signal-delivery model
-	and this library's own already-working, genuinely repeating software
-	timer machinery (src/time/timer.c's per-process timer manager
-	thread, previously only reachable through timer_create()), and does
-	define this one -- built on exactly that machinery rather than a raw
-	setitimer(2) syscall, in src/time/linux/plat_itimer.c, whose own
-	banner explains why. */
+int getitimer (int, struct itimerval *);  /* undefined-ok: an interval timer
+	is defined by its repeat, and SIGALRM on NT arrives through an APC that
+	only runs while the thread is in an alertable wait, so expiries a
+	computing thread missed coalesce instead of queueing.
+	ITIMER_VIRTUAL/ITIMER_PROF need CPU-time signals this platform has no
+	scheduler tick to generate either. Linux has both a real signal-delivery
+	model and this library's own repeating software timer machinery, and
+	defines this one (src/time/linux/plat_itimer.c). */
 int setitimer (int, const struct itimerval *__restrict, struct itimerval *__restrict);  /* undefined-ok: see getitimer */
 int utimes (const char *, const struct timeval [2]);
 
@@ -64,24 +44,14 @@ struct timezone {
 	int tz_dsttime;
 };
 int futimesat(int, const char *, const struct timeval [2]);
-/* tv is required the same way gettimeofday()'s own tv is: settimeofday()
- * dereferences tv->tv_usec unconditionally as its first real check, with
- * no NULL guard. tz is accepted-and-ignored the same way (`(void)tz;`)
- * and left unmarked for the same reason. */
+/* tz is accepted-and-ignored, same as gettimeofday()'s. */
 int settimeofday(const struct timeval *, const struct timezone *) __attribute__((nonnull(1)));
 int adjtime (const struct timeval *, struct timeval *);  /* undefined-ok:
-	adjtime() means a *gradual* slew towards the target, applied a little
-	at a time so nothing observes the clock jumping or running backwards.
-	The only ntdll (or kernel32) primitive this library has for setting
-	the clock at all is NtSetSystemTime (src/time/stime.c), a single hard
-	jump; there is no W32Time-style slew API reachable from a plain
-	process at either layer, so there is nothing to build the gradual
-	half of adjtime() on -- the marker stays because it is still true of,
-	and only checked against, the NT build. Linux has a real, genuinely
-	gradual NTP-style slewing API, adjtimex(2) (mode ADJ_OFFSET_
-	SINGLESHOT is BSD adjtime()'s own semantics verbatim -- a one-shot,
-	non-PLL slew, not a hard jump), and does define this one, in
-	src/time/linux/plat_adjtime.c. */
+	adjtime() means a gradual slew, applied a little at a time; the only
+	clock-setting primitive available on NT (NtSetSystemTime) is a single
+	hard jump, with no W32Time-style slew API reachable from a plain
+	process. Linux has a real NTP-style slewing API (adjtimex(2)) and
+	defines this one, in src/time/linux/plat_adjtime.c. */
 #define timerisset(t) ((t)->tv_sec || (t)->tv_usec)
 #define timerclear(t) ((t)->tv_sec = (t)->tv_usec = 0)
 #define timercmp(s,t,op) ((s)->tv_sec == (t)->tv_sec ? \
