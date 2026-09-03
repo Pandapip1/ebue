@@ -86,6 +86,9 @@ FILES="
 	src/process/children.c
 	src/process/linux/plat_process.c
 	src/signal/linux/plat_signal.c
+	src/thread/linux/plat_thread.c
+	src/thread/linux/clone_aarch64.S
+	src/internal/linux/tls_setup.c
 	src/unistd/close.c
 	src/unistd/read.c
 	src/unistd/write.c
@@ -94,6 +97,19 @@ FILES="
 	fuzz/linux_pilot_harness_process.c
 	fuzz/linux_pilot_test_process.c
 "
+# src/thread/linux/plat_thread.c (plus its own clone_aarch64.S trampoline
+# and src/internal/linux/tls_setup.c dependency, the same trio
+# tools/linux-build-thread.sh already links) was missing until commit
+# 735db9c8 ("pthread_create(): give Linux a real create_suspended
+# primitive") moved __plat_thread_resume() out of
+# src/process/linux/plat_process.c (which this FILES list already had)
+# into plat_thread.c, for the ODR reason that commit's own message
+# gives (it needs plat_thread.c's new suspend/resume gate table). This
+# pilot's own fork.c calls __plat_thread_resume() directly, unstubbed
+# by fuzz/linux_pilot_harness_process.c (that harness only stubs the
+# atfork hooks, per its own banner) -- so the link broke the moment the
+# real definition moved out from under this list. Verified with a full
+# clean rebuild+run.
 # src/signal/linux/plat_signal.c was missing until commit d47e081f
 # ("Send real SIGHUP to orphaned stopped children on Linux") made
 # src/process/children.c's clear_stops() call the real
