@@ -20,16 +20,16 @@
  * alternate SYNOPSIS forms on separate lines), .ds/.nr/.rn (string/
  * number registers -- see "REGISTERS" below), .de/.de1/.am/.am1/.ig/
  * .rm/.als (user-defined macros -- see "MACROS" below), .if/.ie/.el
- * (conditionals -- see "CONDITIONALS" below), and a common subset of
- * escape sequences. This file IS that engine, not a wrapper around a
- * real one.
+ * (conditionals -- see "CONDITIONALS" below), .TS/.TE (tbl tables --
+ * see "TABLES" below), and a common subset of escape sequences. This
+ * file IS that engine, not a wrapper around a real one.
  *
  * ---- WHAT IS DELIBERATELY NOT IMPLEMENTED, AND WHY --------------------
  *
- *  - .TS/.TE (tbl) and .EQ/.EN (eqn): each is its own real sub-
- *    language comparable in size to this whole file. Skipped like any
- *    unknown macro (see "UNKNOWN-MACRO DEGRADATION" below): that one
- *    table or equation is lost, the rest of the page still renders.
+ *  - .EQ/.EN (eqn): its own real sub-language comparable in size to
+ *    this whole file. Skipped like any unknown macro (see
+ *    "UNKNOWN-MACRO DEGRADATION" below): that one equation is lost,
+ *    the rest of the page still renders.
  *  - \k (mark register) and \s (point-size change): recognised and
  *    consumed only -- no horizontal-motion tracking or point-size
  *    concept exists here for them to act on.
@@ -242,6 +242,148 @@
  * real page this file has been tested against, and a documented
  * simplification of troff's fully general "anywhere in the input"
  * rule.
+ *
+ * ============================================================
+ * TABLES: .TS/.TE (tbl)
+ * ============================================================
+ *
+ * A real subset parser/renderer for tbl's own mini-language (see
+ * man_render_table() and its helpers), not a stub that drops the
+ * table. `.TS [H]` begins collecting every following raw source line
+ * verbatim, up to a line matching `.TE`, the exact same "verbatim
+ * raw-line collection, terminator recognised at the very top of
+ * man_process_line() before normal dispatch" shape .de's own
+ * c->def_active collection uses (c->tbl_active/tbl_body here). The `H`
+ * argument (real troff: repeat the heading rows across page breaks) is
+ * ignored -- this file has no real pagination for it to act on, the
+ * same reasoning \n(mo/\n(dy's neighbours give elsewhere. Once `.TE`
+ * closes the block, the collected lines are parsed and rendered as one
+ * unit into c->doc at the current c->rs_indent, exactly where a `.nf`
+ * block's raw lines would land.
+ *
+ * The collected block has three parts, in order:
+ *
+ *  1. AN OPTIONAL OPTIONS LINE: present only when the very first
+ *     collected (non-blank) line ends in `;`. Recognised keywords:
+ *     `box`/`frame` and `allframe` (draw a bordered table -- see
+ *     "box-drawing" below), `allbox` (bordered AND ruled between every
+ *     row/column), `doublebox`/`allframe` (real troff draws a double-
+ *     line outer border; this file degrades that to the same single-
+ *     line ASCII box `box` draws -- a real, documented simplification,
+ *     the same spirit as the `\fP` depth-1 font-stack one), `tab(x)`
+ *     (use `x` instead of a literal tab as the cell-data field
+ *     separator), and `center`/`centre` (center the whole table
+ *     between the current indent and the terminal width). `expand`
+ *     (stretch columns to fill the full line width),
+ *     `linesize(N)`/`delim(xx)`/`nospaces`/`nowarn`/`nokeep`/
+ *     `nocenter`: recognised and consumed so their syntax doesn't leak
+ *     into the table, but not applied -- this file always sizes
+ *     columns from real cell content and never changes delimiter/
+ *     spacing behaviour for them.
+ *
+ *  2. ONE OR MORE FORMAT-SPECIFICATION LINES: each physical line lists
+ *     that line's own column descriptors (whitespace- or comma-
+ *     separated), ending when a line's last token is a lone `.`
+ *     (attached to the previous token or standing alone, both real
+ *     troff forms). If there are more DATA rows than format lines, the
+ *     LAST format line's descriptors are reused for every remaining
+ *     row -- real troff's own rule, and the reason a table's steady-
+ *     state column alignment/width is always taken from that last
+ *     format line (man_render_table()'s `disp[]`), not the first (a
+ *     real page's FIRST format line is very often instead a `c s s`-
+ *     style spanning title row -- see point 3 below). Each column
+ *     descriptor is one alignment letter -- `l`/`L` left, `c`/`C`
+ *     center, `r`/`R` right, `n`/`N` numeric (aligned on the decimal
+ *     point, see below), `s`/`S` "this column's data is spanned from
+ *     the previous column, consume no field here", `^` "this column's
+ *     data is spanned from the row above, consume no field here", and
+ *     `a`/`A`/`e`/`E` (real troff: alphabetic top-alignment / equal-
+ *     width column grouping -- this file has no multi-line-cell or
+ *     column-grouping concept for either to act on, so both degrade to
+ *     plain left alignment, per this tier's own plan note that the
+ *     rarer variants may be ignored if genuinely uncommon) -- followed
+ *     by any number of modifier letters: `b`/`B` bold and `i`/`I`/
+ *     `u`/`U` italic (this file has no underline marker, `u` degrades
+ *     to italic) set that column's font for EVERY cell in it (if a
+ *     descriptor sets both, bold wins, matching the single-active-
+ *     marker model \fB/\fI already use elsewhere in this file); a `(`
+ *     up to its matching `)` (covers `w(N)` explicit width, `f(name)`
+ *     font-name selectors, and similar) and any other single modifier
+ *     letter or digit (point-size numbers, the `e`-as-modifier equal-
+ *     width flag, `t`/`p`/`v`/`z` vertical-fill/point-size/font
+ *     letters) are recognised and consumed, never applied -- see point
+ *     1 above, this file always computes real widths from content.
+ *
+ *  3. DATA ROWS: every remaining line up to the block's own `.TE`. A
+ *     line that is exactly `_` (optionally surrounded by whitespace)
+ *     is a single-rule row; exactly `=` is a double-rule row -- both
+ *     span the whole table width instead of holding cells, and do NOT
+ *     consume a format-line slot (rule rows aren't data). Any other
+ *     line is a normal data row: split on the option line's separator
+ *     (a literal tab by default) into fields, assigned in order to
+ *     that row's own format line's columns that are NOT `s`/`^`
+ *     (which instead render blank -- see "box-drawing" below for why
+ *     that, not a real merge, is this tier's one honest layout
+ *     degradation). Fewer fields than slots leaves the remaining cells
+ *     blank; extra fields are dropped -- both match this file's
+ *     established "forgiving, no crash, honest no-op" precedent for
+ *     request arguments elsewhere (e.g. \$1..\$9 beyond argc). A
+ *     single field that is exactly `_`/`=` (after trimming) renders as
+ *     a rule filling just that cell's own column width, the common
+ *     real-world way to underline one column's header without ruling
+ *     the whole row. Every other field is register-interpolated and
+ *     escape-decoded through the same decode_text() every other piece
+ *     of text in this file goes through, so `\*(xx`/`\n(xx`/named
+ *     glyphs all work inside table cells.
+ *
+ * ---- COLUMN WIDTH AND ALIGNMENT ------------------------------------------
+ *
+ * Each column's width is the widest cell content actually measured in
+ * it (man_vislen(), the same UTF-8/marker-aware column counter word-
+ * wrapping uses) -- rule/span cells don't contribute, so an all-
+ * spanned column can be zero-width. A NUMERIC column instead tracks,
+ * per cell, the visible width to the LEFT of its first `.` and the
+ * visible width FROM that `.` onward (man_tbl_decimal_split()); the
+ * column's width is the sum of each side's own maximum, and every
+ * cell is padded so every row's decimal point lines up in the same
+ * output column -- real decimal-point alignment, not a right-justify
+ * approximation. A cell with no `.` is treated as all-integer-part,
+ * which naturally right-justifies it against cells that do have a
+ * fraction. One simplification: a column's alignment/width-computation
+ * KIND is taken once from the table's steady-state (last) format
+ * line's descriptor at that column position (see point 2 above) and
+ * applied to every row at that position, even though real troff
+ * technically lets a table's non-last format lines declare a
+ * DIFFERENT alignment letter for the same column index (vanishingly
+ * rare in real pages -- this tier's own research pass found none;
+ * per-row SPAN/rule behaviour above is still read from each row's own
+ * format line regardless of this simplification, since that's what
+ * actually determines which field goes where).
+ *
+ * ---- BOX-DRAWING --------------------------------------------------------
+ *
+ * `box`/`frame`: a plain ASCII border (`+`/`-`/`|`) around the whole
+ * table, drawn once at the top and bottom. `allbox`: the same border
+ * PLUS a ruled line between every data row (not duplicated next to a
+ * `_`/`=` rule row, which already draws one). No box option at all:
+ * columns are simply separated by MAN_TBL_COL_GAP spaces, no border
+ * characters -- matching plain (non-boxed) real tbl output. `center`
+ * adds left padding, computed once from the table's own total rendered
+ * width against the terminal width, ahead of every line -- an honest
+ * approximation of real troff's page-relative centering, since this
+ * file has no page-width concept distinct from the terminal.
+ *
+ * The one real, deliberate layout degradation named above: `s`
+ * (horizontal span) and `^` (vertical span) columns render as BLANK
+ * space filling their own column's width, rather than real troff's
+ * visual merge (the owning cell's content stretching across the
+ * combined width of every column it spans, or repeating the cell
+ * above for `^`). The DATA is never lost or misassigned by this --
+ * every field still reads into the correct owning column, see point 3
+ * above -- only the visual presentation of a spanned cell is
+ * simplified, the same "the data must render correctly and
+ * completely, box/line drawing may degrade" spirit this tier's own
+ * plan names for double-line boxes.
  *
  * ============================================================
  * GZIP-COMPRESSED (.gz) PAGES
@@ -1350,6 +1492,8 @@ struct man_ctx {
 	struct man_macro cond_body; /* raw lines collected for that block (struct man_macro reused as a plain growable line list -- .name is never set) */
 	int last_ie_result;        /* most recent .ie's outcome, for a following .el -- see "CONDITIONALS" */
 	int have_last_ie;          /* 0 until the first .ie runs, and after each .el consumes it */
+	int tbl_active;             /* collecting a .TS/.TE table body right now -- see "TABLES" */
+	struct man_macro tbl_body;  /* raw lines collected for that table (struct man_macro reused as a plain growable line list, same as cond_body above) */
 };
 
 static int man_ctx_init(struct man_ctx *c, int width)
@@ -1370,6 +1514,7 @@ static void man_ctx_free(struct man_ctx *c)
 	man_mactab_free(&c->macros);
 	free(c->def_end);
 	man_macro_free_lines(&c->cond_body);
+	man_macro_free_lines(&c->tbl_body);
 }
 
 /* Blank-line-before-a-new-block bookkeeping: exactly one blank line
@@ -1833,6 +1978,518 @@ static int man_begin_macro_def(struct man_ctx *c, const char *directive, struct 
 	return 1;
 }
 
+/* ==== TABLES: .TS/.TE (tbl) -- see this file's own header comment
+ * ("TABLES") for the full design writeup; everything below is the
+ * mechanical implementation of that design. ==== */
+
+#define MAN_TBL_COL_GAP 3   /* inter-column spacing for a non-boxed table */
+#define MAN_TBL_MAX_COLS 64 /* bound against a pathological/malformed format line, same discipline as MAN_MAX_RS_DEPTH */
+
+enum man_tbl_align { MAN_TBL_LEFT, MAN_TBL_CENTER, MAN_TBL_RIGHT, MAN_TBL_NUMERIC, MAN_TBL_SPAN, MAN_TBL_VSPAN };
+
+struct man_tbl_colspec { enum man_tbl_align align; int bold, ital; };
+
+struct man_tbl_fmtrow { struct man_tbl_colspec *v; size_t n, cap; };
+
+struct man_tbl_fmt { struct man_tbl_fmtrow *v; size_t n, cap; };
+
+/* kind: 0 = real text (cell.text is the decoded/styled content), 1 =
+ * horizontal span (`s`: no field consumed, blank filler), 2 = vertical
+ * span (`^`: no field consumed, blank filler), 3 = single-rule field
+ * (`_`: fill this cell's own column width with `-`), 4 = double-rule
+ * field (`=`: fill with `=`). */
+struct man_tbl_cell { int kind; char *text; };
+
+/* full_rule: 0 = an ordinary row of `cells`, 1 = a whole-table `_`
+ * single-rule row, 2 = a whole-table `=` double-rule row (neither of
+ * which has any cells, and neither of which consumes a format-line
+ * slot -- see this file's header comment). */
+struct man_tbl_row { int full_rule; struct man_tbl_cell *cells; size_t ncells; };
+
+struct man_tbl_rows { struct man_tbl_row *v; size_t n, cap; };
+
+static void man_tbl_fmtrow_free(struct man_tbl_fmtrow *r) { free(r->v); r->v = 0; r->n = r->cap = 0; }
+
+static int man_tbl_fmtrow_push(struct man_tbl_fmtrow *r, struct man_tbl_colspec cs)
+{
+	if (r->n + 1 > r->cap) {
+		size_t newcap;
+		struct man_tbl_colspec *g;
+		if (!__util_array_capacity(r->cap, r->n, 1, 8, sizeof *r->v, &newcap)) return 0;
+		g = __util_reallocarray(r->v, newcap, sizeof *r->v);
+		if (!g) return 0;
+		r->v = g; r->cap = newcap;
+	}
+	r->v[r->n++] = cs;
+	return 1;
+}
+
+static void man_tbl_fmt_free(struct man_tbl_fmt *f)
+{
+	size_t i;
+	for (i = 0; i < f->n; i++) man_tbl_fmtrow_free(&f->v[i]);
+	free(f->v); f->v = 0; f->n = f->cap = 0;
+}
+
+static struct man_tbl_fmtrow *man_tbl_fmt_new_row(struct man_tbl_fmt *f)
+{
+	if (f->n + 1 > f->cap) {
+		size_t newcap;
+		struct man_tbl_fmtrow *g;
+		if (!__util_array_capacity(f->cap, f->n, 1, 4, sizeof *f->v, &newcap)) return 0;
+		g = __util_reallocarray(f->v, newcap, sizeof *f->v);
+		if (!g) return 0;
+		f->v = g; f->cap = newcap;
+	}
+	memset(&f->v[f->n], 0, sizeof f->v[f->n]);
+	return &f->v[f->n++];
+}
+
+static void man_tbl_row_free(struct man_tbl_row *row)
+{
+	size_t i;
+	for (i = 0; i < row->ncells; i++) free(row->cells[i].text);
+	free(row->cells);
+	row->cells = 0; row->ncells = 0;
+}
+
+static void man_tbl_rows_free(struct man_tbl_rows *rs)
+{
+	size_t i;
+	for (i = 0; i < rs->n; i++) man_tbl_row_free(&rs->v[i]);
+	free(rs->v); rs->v = 0; rs->n = rs->cap = 0;
+}
+
+static struct man_tbl_row *man_tbl_rows_new(struct man_tbl_rows *rs)
+{
+	if (rs->n + 1 > rs->cap) {
+		size_t newcap;
+		struct man_tbl_row *g;
+		if (!__util_array_capacity(rs->cap, rs->n, 1, 8, sizeof *rs->v, &newcap)) return 0;
+		g = __util_reallocarray(rs->v, newcap, sizeof *rs->v);
+		if (!g) return 0;
+		rs->v = g; rs->cap = newcap;
+	}
+	memset(&rs->v[rs->n], 0, sizeof rs->v[rs->n]);
+	return &rs->v[rs->n++];
+}
+
+/* Splits a tbl option/format-spec line on whitespace and commas (real
+ * tbl accepts either between column descriptors) into raw tokens.
+ * Deliberately not man_tokenize(): that splitter is shaped for troff
+ * REQUEST ARGUMENTS (`"quoted strings"`, `\`-escaped spaces), neither
+ * of which tbl's own option/format mini-language uses. Reuses struct
+ * man_argv purely as a generic growable char* array, the same way
+ * struct man_macro is reused as a plain line list for cond_body/
+ * tbl_body above. */
+static int man_tbl_split(const char *s, struct man_argv *out)
+{
+	size_t i = 0, n = strlen(s);
+	memset(out, 0, sizeof *out);
+	while (i < n) {
+		size_t start;
+		while (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == ',')) i++;
+		if (i >= n) break;
+		start = i;
+		while (i < n && s[i] != ' ' && s[i] != '\t' && s[i] != ',') i++;
+		if (!man_argv_push(out, s + start, i - start)) { man_argv_free(out); return 0; }
+	}
+	return 1;
+}
+
+/* Trims leading/trailing spaces/tabs (and a trailing '\r', for a page
+ * with CRLF line endings) from `s`, returning the trimmed span as a
+ * start offset + length rather than a copy -- every caller already
+ * holds `s` alive for at least as long as it needs the span. */
+static void man_tbl_trim_span(const char *s, size_t *start, size_t *len)
+{
+	size_t n = strlen(s), a = 0, b = n;
+	while (a < b && (s[a] == ' ' || s[a] == '\t')) a++;
+	while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t' || s[b - 1] == '\r')) b--;
+	*start = a; *len = b - a;
+}
+
+/* One column descriptor token (`l`, `cb`, `n`, `s`, `^`, `lw(10)`, ...)
+ * -- see this file's own header comment ("TABLES", point 2) for
+ * exactly which modifier letters are recognised-and-applied (b/i) vs
+ * recognised-and-consumed-only (everything else, including `(...)`
+ * groups like `w(N)`). */
+static void man_tbl_parse_colspec(const char *tok, struct man_tbl_colspec *out)
+{
+	size_t i, n = strlen(tok);
+	memset(out, 0, sizeof *out);
+	if (n == 0) { out->align = MAN_TBL_LEFT; return; }
+	switch (tok[0]) {
+	case 'c': case 'C': out->align = MAN_TBL_CENTER; break;
+	case 'r': case 'R': out->align = MAN_TBL_RIGHT; break;
+	case 'n': case 'N': out->align = MAN_TBL_NUMERIC; break;
+	case 's': case 'S': out->align = MAN_TBL_SPAN; break;
+	case '^': out->align = MAN_TBL_VSPAN; break;
+	default: out->align = MAN_TBL_LEFT; break; /* l/L, and a/A/e/E degraded to left -- see header comment */
+	}
+	for (i = 1; i < n; i++) {
+		char m = tok[i];
+		if (m == 'b' || m == 'B') out->bold = 1;
+		else if (m == 'i' || m == 'I' || m == 'u' || m == 'U') out->ital = 1;
+		else if (m == '(') { i++; while (i < n && tok[i] != ')') i++; }
+		/* else: a width/point-size digit or another modifier letter
+		 * (f/t/p/v/z/e) -- recognised, not applied, see header comment. */
+	}
+}
+
+/* Splits `s` into the visible-column width to the LEFT of its first
+ * `.` and the visible-column width FROM that `.` onward (the `.`
+ * itself counted on the right side) -- man_vislen()'s own UTF-8/
+ * marker-skipping logic, just tallied into two buckets instead of one.
+ * A cell with no `.` is all left-side, matching plain-integer numeric
+ * alignment. See this file's header comment ("TABLES", "COLUMN WIDTH
+ * AND ALIGNMENT"). */
+static void man_tbl_decimal_split(const char *s, size_t *leftvis, size_t *rightvis)
+{
+	size_t i, n = strlen(s), dot = n;
+	*leftvis = 0; *rightvis = 0;
+	for (i = 0; i < n; i++) if (s[i] == '.') { dot = i; break; }
+	for (i = 0; i < n; i++) {
+		unsigned char ch = (unsigned char)s[i];
+		if (ch == (unsigned char)MAN_M_BOLD || ch == (unsigned char)MAN_M_ITAL ||
+		    ch == (unsigned char)MAN_M_ROMAN) continue;
+		if ((ch & 0xC0) == 0x80) continue;
+		if (i < dot) (*leftvis)++; else (*rightvis)++;
+	}
+}
+
+/* Emits one full-width box border/rule line -- `+---+----+` when
+ * `boxed`, or a bare run of `ch` spanning the same total content width
+ * otherwise. Shared by the table's own top/bottom/allbox borders and
+ * by a `_`/`=` whole-table rule row (see this file's header comment,
+ * "TABLES"): a rule row IS exactly a border line, just with `ch`
+ * chosen by which rule character the page used. */
+static int man_tbl_emit_border(struct man_buf *doc, int indent, const int *width, size_t ncols, char ch, int boxed)
+{
+	size_t j;
+	if (!mbuf_appendn(doc, indent, ' ')) return 0;
+	if (!boxed) {
+		int total = 0;
+		for (j = 0; j < ncols; j++) total += width[j] + (j ? MAN_TBL_COL_GAP : 0);
+		if (!mbuf_appendn(doc, total, ch)) return 0;
+		return mbuf_appendc(doc, '\n');
+	}
+	if (!mbuf_appendc(doc, '+')) return 0;
+	for (j = 0; j < ncols; j++) {
+		if (!mbuf_appendn(doc, width[j] + 2, ch)) return 0;
+		if (!mbuf_appendc(doc, '+')) return 0;
+	}
+	return mbuf_appendc(doc, '\n');
+}
+
+/* Pads and appends one cell's rendering into `doc`, per its own kind
+ * and (for real text) the column's alignment -- see this file's header
+ * comment ("TABLES", "COLUMN WIDTH AND ALIGNMENT") for the numeric
+ * decimal-point math `numleft` feeds. */
+static int man_tbl_emit_cell(struct man_buf *doc, const struct man_tbl_cell *cell,
+    enum man_tbl_align align, int width, int numleft)
+{
+	const char *text;
+	size_t vv;
+	int pad;
+
+	if (cell->kind == 1 || cell->kind == 2) return mbuf_appendn(doc, width, ' ');
+	if (cell->kind == 3) return mbuf_appendn(doc, width, '-');
+	if (cell->kind == 4) return mbuf_appendn(doc, width, '=');
+
+	text = cell->text ? cell->text : "";
+	vv = man_vislen(text, strlen(text));
+	pad = width - (int)vv;
+	if (pad < 0) pad = 0;
+
+	if (align == MAN_TBL_RIGHT) {
+		if (!mbuf_appendn(doc, pad, ' ')) return 0;
+		return mbuf_append(doc, text, strlen(text));
+	}
+	if (align == MAN_TBL_CENTER) {
+		int lp = pad / 2, rp = pad - lp;
+		if (!mbuf_appendn(doc, lp, ' ')) return 0;
+		if (!mbuf_append(doc, text, strlen(text))) return 0;
+		return mbuf_appendn(doc, rp, ' ');
+	}
+	if (align == MAN_TBL_NUMERIC) {
+		size_t lv, rv;
+		int lp, rp;
+		man_tbl_decimal_split(text, &lv, &rv);
+		lp = numleft - (int)lv;
+		if (lp < 0) lp = 0;
+		if (!mbuf_appendn(doc, lp, ' ')) return 0;
+		if (!mbuf_append(doc, text, strlen(text))) return 0;
+		rp = width - lp - (int)vv;
+		if (rp < 0) rp = 0;
+		return mbuf_appendn(doc, rp, ' ');
+	}
+	/* LEFT (and the SPAN/VSPAN/rule kinds handled above never reach here). */
+	if (!mbuf_append(doc, text, strlen(text))) return 0;
+	return mbuf_appendn(doc, pad, ' ');
+}
+
+/* Parses and renders one already-collected `.TS`...`.TE` block (`body`
+ * -- struct man_macro reused as a plain raw-line list, c->tbl_body's
+ * own shape) into c->doc. See this file's own header comment
+ * ("TABLES") for the full three-part grammar this walks: an optional
+ * `;`-terminated options line, one or more format-spec lines ending in
+ * a lone `.`, then data rows up to the block's own end. A malformed
+ * table with no recognisable format-spec line is an honest no-op --
+ * the same "silently skipped, rest of the page still renders"
+ * precedent "UNKNOWN-MACRO DEGRADATION" documents elsewhere in this
+ * file -- rather than a hard failure. */
+static int man_render_table(struct man_ctx *c, struct man_macro *body)
+{
+	size_t li = 0, i;
+	int have_box = 0, have_allbox = 0, have_center = 0;
+	char tabch = '\t';
+	struct man_tbl_fmt fmt;
+	struct man_tbl_rows rows;
+	struct man_tbl_colspec *disp = 0;
+	size_t ncols = 0;
+	int *width = 0, *numleft = 0, *numright = 0;
+	int ok = 1;
+
+	memset(&fmt, 0, sizeof fmt);
+	memset(&rows, 0, sizeof rows);
+
+	while (li < body->n) {
+		size_t start, len;
+		man_tbl_trim_span(body->lines[li], &start, &len);
+		if (len > 0) break;
+		li++;
+	}
+
+	if (li < body->n) {
+		size_t start, len;
+		man_tbl_trim_span(body->lines[li], &start, &len);
+		if (len > 0 && body->lines[li][start + len - 1] == ';') {
+			struct man_argv opts;
+			char optline[512];
+			size_t copylen = len - 1;
+			size_t k;
+			if (copylen >= sizeof optline) copylen = sizeof optline - 1;
+			for (k = 0; k < copylen; k++) optline[k] = body->lines[li][start + k];
+			optline[copylen] = 0;
+			if (!man_tbl_split(optline, &opts)) return 0;
+			for (i = 0; i < opts.n; i++) {
+				const char *kw = opts.v[i];
+				if (!strncasecmp(kw, "tab(", 4) && strlen(kw) >= 6) tabch = kw[4];
+				else if (!strcasecmp(kw, "box") || !strcasecmp(kw, "frame")) have_box = 1;
+				else if (!strcasecmp(kw, "allbox")) { have_box = 1; have_allbox = 1; }
+				else if (!strcasecmp(kw, "doublebox") || !strcasecmp(kw, "allframe")) have_box = 1;
+				else if (!strcasecmp(kw, "center") || !strcasecmp(kw, "centre")) have_center = 1;
+				/* expand/linesize(N)/delim(xx)/nospaces/nowarn/nokeep/nocenter: see header comment */
+			}
+			man_argv_free(&opts);
+			li++;
+		}
+	}
+
+	while (li < body->n) {
+		size_t start, len, llen;
+		struct man_argv toks;
+		struct man_tbl_fmtrow *row;
+		int done_here = 0;
+		char tmp[512];
+		size_t clen;
+
+		man_tbl_trim_span(body->lines[li], &start, &len);
+		if (len == 0) { li++; continue; }
+
+		llen = len;
+		if (body->lines[li][start + llen - 1] == '.') {
+			done_here = 1;
+			llen--;
+			while (llen > 0 && (body->lines[li][start + llen - 1] == ' ' ||
+			    body->lines[li][start + llen - 1] == '\t')) llen--;
+		}
+
+		clen = llen;
+		if (clen >= sizeof tmp) clen = sizeof tmp - 1;
+		{
+			size_t k;
+			for (k = 0; k < clen; k++) tmp[k] = body->lines[li][start + k];
+		}
+		tmp[clen] = 0;
+		if (!man_tbl_split(tmp, &toks)) { man_tbl_fmt_free(&fmt); return 0; }
+
+		row = man_tbl_fmt_new_row(&fmt);
+		if (!row) { man_argv_free(&toks); man_tbl_fmt_free(&fmt); return 0; }
+		for (i = 0; i < toks.n && i < MAN_TBL_MAX_COLS; i++) {
+			struct man_tbl_colspec cs;
+			man_tbl_parse_colspec(toks.v[i], &cs);
+			if (!man_tbl_fmtrow_push(row, cs)) { man_argv_free(&toks); man_tbl_fmt_free(&fmt); return 0; }
+		}
+		if (row->n > ncols) ncols = row->n;
+		man_argv_free(&toks);
+		li++;
+		if (done_here) break;
+	}
+
+	if (fmt.n == 0 || ncols == 0) { man_tbl_fmt_free(&fmt); return 1; }
+	if (ncols > MAN_TBL_MAX_COLS) ncols = MAN_TBL_MAX_COLS;
+
+	disp = calloc(ncols, sizeof *disp);
+	if (!disp) { man_tbl_fmt_free(&fmt); return 0; }
+	{
+		struct man_tbl_fmtrow *last = &fmt.v[fmt.n - 1];
+		for (i = 0; i < ncols; i++) {
+			if (i < last->n) disp[i] = last->v[i];
+			else { disp[i].align = MAN_TBL_LEFT; disp[i].bold = 0; disp[i].ital = 0; }
+		}
+	}
+
+	{
+		size_t data_idx = 0;
+		for (; li < body->n && ok; li++) {
+			size_t start, len;
+			man_tbl_trim_span(body->lines[li], &start, &len);
+			if (len == 1 && body->lines[li][start] == '_') {
+				struct man_tbl_row *rw = man_tbl_rows_new(&rows);
+				if (!rw) { ok = 0; break; }
+				rw->full_rule = 1;
+				continue;
+			}
+			if (len == 1 && body->lines[li][start] == '=') {
+				struct man_tbl_row *rw = man_tbl_rows_new(&rows);
+				if (!rw) { ok = 0; break; }
+				rw->full_rule = 2;
+				continue;
+			}
+			if (len == 0) continue;
+
+			{
+				struct man_tbl_fmtrow *frow = &fmt.v[data_idx < fmt.n ? data_idx : fmt.n - 1];
+				struct man_tbl_row *rw = man_tbl_rows_new(&rows);
+				const char *raw = body->lines[li];
+				size_t rn = strlen(raw), p = 0;
+
+				if (!rw) { ok = 0; break; }
+				rw->cells = calloc(ncols, sizeof *rw->cells);
+				if (!rw->cells) { ok = 0; break; }
+				rw->ncells = ncols;
+
+				for (i = 0; i < ncols && ok; i++) {
+					struct man_tbl_colspec cs = (i < frow->n) ? frow->v[i] : disp[i];
+
+					if (cs.align == MAN_TBL_SPAN || cs.align == MAN_TBL_VSPAN) {
+						rw->cells[i].kind = (cs.align == MAN_TBL_SPAN) ? 1 : 2;
+						continue;
+					}
+					if (p > rn) {
+						rw->cells[i].text = strdup("");
+						if (!rw->cells[i].text) ok = 0;
+						continue;
+					}
+					{
+						size_t fs = p, fe, tstart, tlen;
+						while (p < rn && raw[p] != tabch) p++;
+						fe = p;
+						p = (p < rn) ? p + 1 : rn + 1;
+						tstart = fs; tlen = fe - fs;
+						while (tlen > 0 && (raw[tstart] == ' ' || raw[tstart] == '\t')) { tstart++; tlen--; }
+						while (tlen > 0 && (raw[tstart + tlen - 1] == ' ' || raw[tstart + tlen - 1] == '\t')) tlen--;
+						if (tlen == 1 && raw[tstart] == '_') rw->cells[i].kind = 3;
+						else if (tlen == 1 && raw[tstart] == '=') rw->cells[i].kind = 4;
+						else {
+							struct man_buf cell;
+							int font = cs.bold ? MAN_M_BOLD : (cs.ital ? MAN_M_ITAL : 0);
+							memset(&cell, 0, sizeof cell);
+							if (font && !mbuf_appendc(&cell, (char)font)) ok = 0;
+							if (ok && !decode_text(&c->regs, &cell, raw + tstart, tlen, 0)) ok = 0;
+							if (ok && font && !mbuf_appendc(&cell, MAN_M_ROMAN)) ok = 0;
+							if (ok) {
+								rw->cells[i].text = strdup(cell.data ? cell.data : "");
+								if (!rw->cells[i].text) ok = 0;
+							}
+							mbuf_free(&cell);
+						}
+					}
+				}
+				data_idx++;
+			}
+		}
+	}
+
+	if (ok) {
+		width = calloc(ncols, sizeof *width);
+		numleft = calloc(ncols, sizeof *numleft);
+		numright = calloc(ncols, sizeof *numright);
+		if (!width || !numleft || !numright) ok = 0;
+	}
+	if (ok) {
+		size_t j, ri;
+		for (j = 0; j < ncols; j++) {
+			for (ri = 0; ri < rows.n; ri++) {
+				struct man_tbl_row *rw = &rows.v[ri];
+				struct man_tbl_cell *cell;
+				if (rw->full_rule || j >= rw->ncells) continue;
+				cell = &rw->cells[j];
+				if (cell->kind != 0) continue;
+				if (disp[j].align == MAN_TBL_NUMERIC) {
+					size_t lv, rv;
+					man_tbl_decimal_split(cell->text ? cell->text : "", &lv, &rv);
+					if ((int)lv > numleft[j]) numleft[j] = (int)lv;
+					if ((int)rv > numright[j]) numright[j] = (int)rv;
+				} else {
+					size_t vv = man_vislen(cell->text ? cell->text : "", strlen(cell->text ? cell->text : ""));
+					if ((int)vv > width[j]) width[j] = (int)vv;
+				}
+			}
+			if (disp[j].align == MAN_TBL_NUMERIC) width[j] = numleft[j] + numright[j];
+		}
+	}
+
+	if (ok) ok = man_flush_paragraph(c);
+	if (ok) { c->extra_indent = 0; c->pending_tag = 0; }
+	if (ok) {
+		int indent = c->rs_indent + c->extra_indent;
+		int total = 0;
+		size_t j, ri;
+
+		for (j = 0; j < ncols; j++) total += width[j] + (j ? MAN_TBL_COL_GAP : 0);
+		if (have_box) { total = 1; for (j = 0; j < ncols; j++) total += width[j] + 3; }
+		if (have_center) {
+			int room = c->width - indent - total;
+			if (room > 0) indent += room / 2;
+		}
+
+		ok = man_block_start(c);
+		if (ok && have_box) ok = man_tbl_emit_border(&c->doc, indent, width, ncols, '-', 1);
+		for (ri = 0; ri < rows.n && ok; ri++) {
+			struct man_tbl_row *rw = &rows.v[ri];
+			if (rw->full_rule) {
+				ok = man_tbl_emit_border(&c->doc, indent, width, ncols, rw->full_rule == 2 ? '=' : '-', have_box);
+				continue;
+			}
+			ok = mbuf_appendn(&c->doc, indent, ' ');
+			if (ok && have_box) ok = mbuf_appendstr(&c->doc, "| ");
+			for (j = 0; j < ncols && ok; j++) {
+				ok = man_tbl_emit_cell(&c->doc, &rw->cells[j], disp[j].align, width[j], numleft[j]);
+				if (ok) {
+					if (j + 1 < ncols) ok = have_box ? mbuf_appendstr(&c->doc, " | ") : mbuf_appendn(&c->doc, MAN_TBL_COL_GAP, ' ');
+					else if (have_box) ok = mbuf_appendstr(&c->doc, " |");
+				}
+			}
+			if (ok) ok = mbuf_appendc(&c->doc, '\n');
+			if (ok && have_allbox && ri + 1 < rows.n && !rows.v[ri + 1].full_rule)
+				ok = man_tbl_emit_border(&c->doc, indent, width, ncols, '-', 1);
+		}
+		if (ok && have_box) ok = man_tbl_emit_border(&c->doc, indent, width, ncols, '-', 1);
+		if (ok) c->had_output = 1;
+	}
+
+	free(disp);
+	free(width);
+	free(numleft);
+	free(numright);
+	man_tbl_fmt_free(&fmt);
+	man_tbl_rows_free(&rows);
+	return ok;
+}
+
 /* Forward declaration: a macro body line is fed back through the same
  * line-processing function top-level source lines go through -- see
  * this file's own header comment ("MACROS") -- so man_invoke_macro()
@@ -1936,6 +2593,34 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 		return 1;
 	}
 
+	if (c->tbl_active) {
+		/* Same shape as c->def_active's own custom-end-marker check
+		 * above -- `.TE` (unlike `.de`'s `..`) is always the literal
+		 * terminator, never page-customisable, so there is no
+		 * equivalent of c->def_end here. */
+		const char *p = line;
+		int terminated;
+		while (*p == ' ' || *p == '\t') p++;
+		terminated = 0;
+		if (p[0] == '.') {
+			char ename[16] = { 0 };
+			const char *erest;
+			man_split_request(p, ename, sizeof ename, &erest);
+			terminated = !strcmp(ename, "TE");
+		}
+		if (terminated) {
+			struct man_macro tbody = c->tbl_body;
+			int ok;
+			memset(&c->tbl_body, 0, sizeof c->tbl_body);
+			c->tbl_active = 0;
+			ok = man_render_table(c, &tbody);
+			man_macro_free_lines(&tbody);
+			return ok;
+		}
+		if (!man_macro_add_line(&c->tbl_body, line)) return 0;
+		return 1;
+	}
+
 	if (line[0] != '.') {
 		/* Plain text line. */
 		if (!c->fill) {
@@ -2026,6 +2711,18 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 				free(action);
 			}
 			return ok;
+		}
+
+		if (!strcmp(name, "TS")) {
+			/* Begins collecting a `.TS`...`.TE` table body verbatim --
+			 * see this file's own header comment ("TABLES") and the
+			 * c->tbl_active check above. Real troff's only argument
+			 * here is `H` (repeat the heading rows across page
+			 * breaks); ignored, same as \n(mo's neighbours -- no real
+			 * pagination exists here for it to act on. */
+			c->tbl_active = 1;
+			man_macro_free_lines(&c->tbl_body);
+			return 1;
 		}
 
 		if (!man_tokenize(rest, &a)) return 0;
@@ -2234,7 +2931,7 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 			struct man_macro *m = man_mac_find(&c->macros, name);
 			/* Checked only here, after every built-in request name
 			 * above -- a page can never shadow a built-in by defining
-			 * a same-named macro. Anything still unmatched (.TS, .EQ,
+			 * a same-named macro. Anything still unmatched (.EQ,
 			 * .ad, .na, .hy, .sp, .ce, .in, .ll, ...): unimplemented,
 			 * silently skipped -- see this file's own
 			 * "UNKNOWN-MACRO DEGRADATION" header comment. */
