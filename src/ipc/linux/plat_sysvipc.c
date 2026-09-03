@@ -54,10 +54,22 @@
 #include <stdarg.h>
 #include <errno.h>
 
-/* aarch64 Linux syscall numbers (arch/arm64/include/uapi/asm/unistd.h,
- * via the generic modern ABI's asm-generic/unistd.h) -- confirmed
- * against this host's own kernel headers, the same discipline
- * plat_mem.c's own banner describes. */
+/* Linux syscall numbers -- aarch64 confirmed against this host's own
+ * kernel headers (arch/arm64/include/uapi/asm/unistd.h, via the
+ * generic modern ABI's asm-generic/unistd.h), the same discipline
+ * plat_mem.c's own banner describes; x86_64/i386 confirmed against
+ * this host's own /nix/store linux-headers asm/unistd_64.h /
+ * asm/unistd_32.h.
+ *
+ * i386 has no direct SYS_semop at all (the direct-syscall generation
+ * that gave i386 real shmget/msgget/semget/etc. entries -- 393-402 --
+ * skipped semop specifically; only the Y2038-safe SYS_semtimedop_time64
+ * exists). This file uses that instead of the legacy SYS_ipc(2)
+ * multiplexer i386 also still has: semtimedop(2) with a NULL timeout
+ * "behaves exactly like semop()" per its own man page, and struct
+ * sembuf's own layout (already arch-independent, per this file's
+ * banner) needs no adjustment either way. */
+#if defined(__aarch64__)
 #define SYS_msgget     186
 #define SYS_msgctl     187
 #define SYS_msgrcv     188
@@ -69,12 +81,42 @@
 #define SYS_shmctl     195
 #define SYS_shmat      196
 #define SYS_shmdt      197
+#elif defined(__x86_64__)
+#define SYS_shmget     29
+#define SYS_shmat      30
+#define SYS_shmctl     31
+#define SYS_semget     64
+#define SYS_semop      65
+#define SYS_semctl     66
+#define SYS_shmdt      67
+#define SYS_msgget     68
+#define SYS_msgsnd     69
+#define SYS_msgrcv     70
+#define SYS_msgctl     71
+#elif defined(__i386__)
+#define SYS_semget           393
+#define SYS_semctl           394
+#define SYS_shmget           395
+#define SYS_shmctl           396
+#define SYS_shmat            397
+#define SYS_shmdt            398
+#define SYS_msgget           399
+#define SYS_msgsnd           400
+#define SYS_msgrcv           401
+#define SYS_msgctl           402
+#define SYS_semtimedop_time64 420
+#else
+#error "plat_sysvipc.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
-/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
- * the call path at all. See plat_mem.c's own comment on why this is a
- * static local rather than `extern long syscall(long, ...)`: aarch64's
- * syscall calling convention is x8 = syscall number, x0..x5 = up to 6
- * arguments, result (or -errno in [-4095,-1]) in x0. */
+/* A minimal 6-argument raw syscall: no host libc in the call path at
+ * all. See plat_mem.c's own comment on why this is a static local
+ * rather than `extern long syscall(long, ...)`. Three per-arch
+ * bodies, same "own syscall table per file" discipline this tree
+ * already uses (see src/dirent/linux/plat_dirent.c's own
+ * raw_syscall()): aarch64's `svc #0`, x86_64's `syscall`, i386's
+ * register-starved `int $0x80`. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
@@ -90,6 +132,47 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 		: "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#else
+#error "plat_sysvipc.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 static int is_sys_error(long ret)
 {
@@ -97,23 +180,87 @@ static int is_sys_error(long ret)
 }
 
 /* asm-generic/ipcbuf.h's struct ipc64_perm. __kernel_mode_t is 4 bytes
- * on every architecture this header would need to know about (it is
- * `unsigned int` in asm-generic/posix_types.h), so the kernel struct's
- * own `__pad1[4 - sizeof(__kernel_mode_t)]` is a zero-length array --
- * omitted here entirely rather than spelled out as an invalid C array,
- * with the same total size and member offsets (natural alignment, no
- * packing, matching how the kernel header itself is compiled). */
+ * (`unsigned int`, asm-generic/posix_types.h) on aarch64/x86_64, so
+ * the kernel struct's own `__pad1[4 - sizeof(__kernel_mode_t)]` is a
+ * zero-length array there -- omitted entirely below rather than
+ * spelled out as an invalid C array, with the same total size and
+ * member offsets (natural alignment, no packing, matching how the
+ * kernel header itself is compiled).
+ *
+ * i386 is genuinely different, confirmed against this host's own
+ * /nix/store linux-headers asm/posix_types_32.h: __kernel_mode_t is
+ * overridden there to `unsigned short` (2 bytes, a real legacy-ABI
+ * survivor, not 4), which makes __pad1 a REAL 2-byte array, not a
+ * zero-length one -- omitting it on i386 the way the 64-bit branch
+ * does would silently shift every field from `seq` onward by 2 bytes
+ * out of alignment with the real kernel struct. __pad1 is spelled out
+ * explicitly below for i386 rather than relying on the compiler's own
+ * natural alignment happening to insert the same gap (unsigned short
+ * mode followed directly by unsigned short seq would NOT need any
+ * padding on its own -- the 2 bytes are only there because the real
+ * kernel struct reserves them explicitly). */
+#if defined(__i386__)
+struct k_ipc64_perm {
+	int key;
+	unsigned uid, gid, cuid, cgid;
+	unsigned short mode;
+	unsigned short __pad1; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
+	unsigned short seq;
+	unsigned short __pad2; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
+	unsigned long __unused1;
+	unsigned long __unused2;
+};
+#define LX_IPC64_PERM_SIZE 36
+#else
 struct k_ipc64_perm {
 	int key;
 	unsigned uid, gid, cuid, cgid;
 	unsigned mode;
 	unsigned short seq;
-	unsigned short __pad2;
+	unsigned short __pad2; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	unsigned long __unused1;
 	unsigned long __unused2;
 };
+#define LX_IPC64_PERM_SIZE 48
+#endif
+/* Hand-computed from the real field list and natural alignment above
+ * (48 = 6 leading 4-byte fields + 2-byte seq + 2-byte pad2 + 4 bytes
+ * of compiler-inserted alignment padding before the two 8-byte
+ * `unsigned long` fields + 16 for those two fields; 36 = 5 leading
+ * 4-byte fields + 2-byte mode + 2-byte pad1 + 2-byte seq + 2-byte
+ * pad2 + 8 for the two 4-byte-on-i386 `unsigned long` fields, no
+ * extra alignment padding needed since everything is already
+ * 4-aligned) -- sanity-checked below rather than trusted by
+ * inspection alone, same discipline as src/dirent/linux/
+ * plat_dirent.c's own __lx_dirent64 assert. */
+_Static_assert(sizeof(struct k_ipc64_perm) == LX_IPC64_PERM_SIZE,
+               "k_ipc64_perm layout mismatch for this architecture");
 
-/* asm-generic/shmbuf.h's struct shmid64_ds, __BITS_PER_LONG == 64 half. */
+/* asm-generic/shmbuf.h's struct shmid64_ds. On the two 64-bit arches
+ * here (__BITS_PER_LONG==64 in the real kernel header), the three
+ * timestamps are each a single 8-byte `long`. i386 (__BITS_PER_LONG==
+ * 32) genuinely has a DIFFERENT SHAPE, not just narrower fields: each
+ * timestamp is a low/high `unsigned long` PAIR (Y2038 future-proofing
+ * bolted onto an otherwise-32-bit ABI) -- see combine_time32() below
+ * for the real kernel-documented reconstruction formula (asm-generic/
+ * sembuf.h's own comment, which gives the identical formula for
+ * semid64_ds's otime/ctime and applies equally to shmid64_ds/
+ * msqid64_ds's own low/high pairs). */
+#if defined(__i386__)
+struct k_shmid64_ds {
+	struct k_ipc64_perm shm_perm;
+	unsigned long shm_segsz;
+	unsigned long shm_atime, shm_atime_high;
+	unsigned long shm_dtime, shm_dtime_high;
+	unsigned long shm_ctime, shm_ctime_high;
+	int shm_cpid;
+	int shm_lpid;
+	unsigned long shm_nattch;
+	unsigned long __unused4;
+	unsigned long __unused5;
+};
+#define LX_SHMID64_DS_SIZE 84
+#else
 struct k_shmid64_ds {
 	struct k_ipc64_perm shm_perm;
 	unsigned long shm_segsz;
@@ -126,8 +273,30 @@ struct k_shmid64_ds {
 	unsigned long __unused4;
 	unsigned long __unused5;
 };
+#define LX_SHMID64_DS_SIZE 112
+#endif
+_Static_assert(sizeof(struct k_shmid64_ds) == LX_SHMID64_DS_SIZE,
+               "k_shmid64_ds layout mismatch for this architecture");
 
-/* asm-generic/msgbuf.h's struct msqid64_ds, __BITS_PER_LONG == 64 half. */
+/* asm-generic/msgbuf.h's struct msqid64_ds -- see k_shmid64_ds's own
+ * comment above for why i386's low/high timestamp pairs are a real
+ * shape difference, not just narrower fields. */
+#if defined(__i386__)
+struct k_msqid64_ds {
+	struct k_ipc64_perm msg_perm;
+	unsigned long msg_stime, msg_stime_high;
+	unsigned long msg_rtime, msg_rtime_high;
+	unsigned long msg_ctime, msg_ctime_high;
+	unsigned long msg_cbytes;
+	unsigned long msg_qnum;
+	unsigned long msg_qbytes;
+	int msg_lspid;
+	int msg_lrpid;
+	unsigned long __unused4;
+	unsigned long __unused5;
+};
+#define LX_MSQID64_DS_SIZE 88
+#else
 struct k_msqid64_ds {
 	struct k_ipc64_perm msg_perm;
 	long msg_stime;
@@ -141,8 +310,25 @@ struct k_msqid64_ds {
 	unsigned long __unused4;
 	unsigned long __unused5;
 };
+#define LX_MSQID64_DS_SIZE 120
+#endif
+_Static_assert(sizeof(struct k_msqid64_ds) == LX_MSQID64_DS_SIZE,
+               "k_msqid64_ds layout mismatch for this architecture");
 
-/* asm-generic/sembuf.h's struct semid64_ds, __BITS_PER_LONG == 64 half. */
+/* asm-generic/sembuf.h's struct semid64_ds -- see k_shmid64_ds's own
+ * comment above for why i386's low/high timestamp pairs are a real
+ * shape difference, not just narrower fields. */
+#if defined(__i386__)
+struct k_semid64_ds {
+	struct k_ipc64_perm sem_perm;
+	unsigned long sem_otime, sem_otime_high;
+	unsigned long sem_ctime, sem_ctime_high;
+	unsigned long sem_nsems;
+	unsigned long __unused3;
+	unsigned long __unused4;
+};
+#define LX_SEMID64_DS_SIZE 64
+#else
 struct k_semid64_ds {
 	struct k_ipc64_perm sem_perm;
 	long sem_otime;
@@ -151,6 +337,23 @@ struct k_semid64_ds {
 	unsigned long __unused3;
 	unsigned long __unused4;
 };
+#define LX_SEMID64_DS_SIZE 88
+#endif
+_Static_assert(sizeof(struct k_semid64_ds) == LX_SEMID64_DS_SIZE,
+               "k_semid64_ds layout mismatch for this architecture");
+
+#if defined(__i386__)
+/* The real kernel-documented low/high timestamp reconstruction (asm-
+ * generic/sembuf.h's own comment, quoted in this file's banner above):
+ * `user.sem_otime = kernel.sem_otime + ((long long)kernel.sem_otime_high
+ * << 32)`. Written with an explicit unsigned-long-long cast on `lo`
+ * rather than relying on usual arithmetic conversion to avoid any
+ * doubt about sign-extension, since `lo` is itself unsigned. */
+static time_t combine_time32(unsigned long lo, unsigned long hi)
+{
+	return (time_t)((unsigned long long)lo + ((unsigned long long)hi << 32));
+}
+#endif
 
 static void perm_to_user(struct ipc_perm *u, const struct k_ipc64_perm *k)
 {
@@ -216,9 +419,15 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf)
 		buf->shm_lpid = (pid_t)k.shm_lpid;
 		buf->shm_cpid = (pid_t)k.shm_cpid;
 		buf->shm_nattch = (shmatt_t)k.shm_nattch;
+#if defined(__i386__)
+		buf->shm_atime = combine_time32(k.shm_atime, k.shm_atime_high);
+		buf->shm_dtime = combine_time32(k.shm_dtime, k.shm_dtime_high);
+		buf->shm_ctime = combine_time32(k.shm_ctime, k.shm_ctime_high);
+#else
 		buf->shm_atime = (time_t)k.shm_atime;
 		buf->shm_dtime = (time_t)k.shm_dtime;
 		buf->shm_ctime = (time_t)k.shm_ctime;
+#endif
 		return 0;
 	}
 	/* IPC_RMID and every ipcs(1)-only cmd (SHM_LOCK, SHM_UNLOCK, ...)
@@ -276,9 +485,15 @@ int msgctl(int msqid, int cmd, struct msqid_ds *buf)
 		buf->msg_qbytes = (msglen_t)k.msg_qbytes;
 		buf->msg_lspid = (pid_t)k.msg_lspid;
 		buf->msg_lrpid = (pid_t)k.msg_lrpid;
+#if defined(__i386__)
+		buf->msg_stime = combine_time32(k.msg_stime, k.msg_stime_high);
+		buf->msg_rtime = combine_time32(k.msg_rtime, k.msg_rtime_high);
+		buf->msg_ctime = combine_time32(k.msg_ctime, k.msg_ctime_high);
+#else
 		buf->msg_stime = (time_t)k.msg_stime;
 		buf->msg_rtime = (time_t)k.msg_rtime;
 		buf->msg_ctime = (time_t)k.msg_ctime;
+#endif
 		return 0;
 	}
 	ret = raw_syscall(SYS_msgctl, (long)msqid, (long)cmd, (long)buf, 0, 0, 0);
@@ -297,7 +512,16 @@ int semget(key_t key, int nsems, int semflg)
 
 int semop(int semid, struct sembuf *sops, size_t nsops)
 {
-	long ret = raw_syscall(SYS_semop, (long)semid, (long)sops, (long)nsops, 0, 0, 0);
+	long ret;
+#if defined(__i386__)
+	/* See this file's own syscall-number banner: i386 has no direct
+	 * SYS_semop, so this goes through SYS_semtimedop_time64 with a
+	 * NULL timeout instead -- documented by semtimedop(2) itself to
+	 * "behave exactly like semop()" in that case, not an approximation. */
+	ret = raw_syscall(SYS_semtimedop_time64, (long)semid, (long)sops, (long)nsops, 0L, 0, 0);
+#else
+	ret = raw_syscall(SYS_semop, (long)semid, (long)sops, (long)nsops, 0, 0, 0);
+#endif
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
@@ -334,8 +558,13 @@ int semctl(int semid, int semnum, int cmd, ...)
 		if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 		perm_to_user(&buf->sem_perm, &k.sem_perm);
 		buf->sem_nsems = (unsigned short)k.sem_nsems;
+#if defined(__i386__)
+		buf->sem_otime = combine_time32(k.sem_otime, k.sem_otime_high);
+		buf->sem_ctime = combine_time32(k.sem_ctime, k.sem_ctime_high);
+#else
 		buf->sem_otime = (time_t)k.sem_otime;
 		buf->sem_ctime = (time_t)k.sem_ctime;
+#endif
 		return 0;
 	}
 	case GETALL:
