@@ -36,10 +36,17 @@
 //     pointer-parameter writes: computePurity() memoizes one verdict per
 //     callee, matching how `pure` really works, but a callee that writes
 //     through its own pointer parameter is never pure even where the
-//     actual argument is always a local. fnmatch.c's fnm_match() calling
-//     bracket_match(&probe, c) is this shape -- verified sound by hand,
-//     left as a known false-claim finding rather than adding full
-//     per-call-site parameter-write tracking.
+//     actual argument is always a local. fnmatch.c's bracket_match() used
+//     to have exactly this shape -- fnm_match() called it as
+//     bracket_match(&probe, c), writing through a `const char **pp`
+//     out-parameter whose one and only actual argument was always a
+//     fnm_match()-local -- and was the live false-claim finding this
+//     limitation produced. It has since been refactored to return a
+//     `struct bracket_result` by value instead, which sidesteps the gap
+//     structurally rather than this checker growing full per-call-site
+//     parameter-write tracking; no current tree code hits this
+//     limitation, but nothing prevents a future callee from reintroducing
+//     the shape.
 //
 // Cross-TU calls are trusted only if already declared
 // __attribute__((pure))/((const)) visible in this TU, or if the callee is
