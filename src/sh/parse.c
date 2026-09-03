@@ -770,27 +770,21 @@ static const char *const misplaced_reswords[] = {
 	"then", "else", "elif", "fi", "do", "done", "in", 0
 };
 
-/* Every sh_command allocation goes through here.  The struct has grown
- * six fields that only some kinds use, and a kind that forgets to
- * initialise one reads uninitialised memory in free.c's walk long
- * before anything notices in the executor -- so there is exactly one
- * place that decides what an unset field is. */
+/* Every sh_command allocation goes through here.  A kind that forgets
+ * to initialise one of its variant's fields reads uninitialised memory
+ * in free.c's per-kind walk long before anything notices in the
+ * executor -- so there is exactly one place that decides what an unset
+ * field is.  Zeroing the whole union rather than field-by-field is what
+ * keeps this correct across parse.c's own in-place kind mutations
+ * (SUBSHELL/BRACE/FUNCDEF): whichever variant a later `c->kind = ...`
+ * switches to, its fields already read as zero without this function
+ * having to know about the switch. */
 static struct sh_command *new_command(struct parser *p, enum sh_cmd_kind kind)
 {
 	struct sh_command *c = __malloc(sizeof *c);
 	if (!c) { perr(p, "out of memory"); return 0; }
 	c->kind = kind;
-	c->assigns = 0;
-	c->words = 0;
-	c->body = 0;
-	c->arms = 0;
-	c->else_body = 0;
-	c->cond = 0;
-	c->until = 0;
-	c->name = 0;
-	c->func_text = 0;
-	c->func_body = 0;
-	c->have_in = 0;
+	memset(&c->u, 0, sizeof c->u);
 	c->redirs = 0;
 	return c;
 }
@@ -847,7 +841,7 @@ static struct sh_command *parse_if(struct parser *p)
 		arm->cond = 0;
 		arm->body = 0;
 		arm->next = 0;
-		if (tail) tail->next = arm; else cmd->arms = arm;
+		if (tail) tail->next = arm; else cmd->u.ifcmd.arms = arm;
 		tail = arm;
 
 		arm->cond = parse_list(p, ST_THEN);
@@ -861,7 +855,7 @@ static struct sh_command *parse_if(struct parser *p)
 	}
 	if (is_resword(p, "else")) {
 		advance(p);
-		cmd->else_body = parse_list(p, ST_FI);
+		cmd->u.ifcmd.else_body = parse_list(p, ST_FI);
 		if (p->had_error) goto fail;
 	}
 	if (expect_resword(p, "fi")) goto fail;
@@ -879,11 +873,11 @@ static struct sh_command *parse_loop(struct parser *p, int until)
 {
 	struct sh_command *cmd = new_command(p, SH_CMD_LOOP);
 	if (!cmd) return 0;
-	cmd->until = until;
+	cmd->u.loop.until = until;
 	advance(p); /* `while` / `until` */
-	cmd->cond = parse_list(p, ST_DO);
+	cmd->u.loop.cond = parse_list(p, ST_DO);
 	if (p->had_error) { free_command(cmd); return 0; }
-	cmd->body = parse_do_group(p);
+	cmd->u.loop.body = parse_do_group(p);
 	if (p->had_error) { free_command(cmd); return 0; }
 	return cmd;
 }
@@ -911,21 +905,21 @@ static struct sh_command *parse_for(struct parser *p)
 		perr(p, "expected a variable name after `for'");
 		goto fail;
 	}
-	cmd->name = xstrdup(p->cur.text);
-	if (!cmd->name) { perr(p, "out of memory"); goto fail; }
+	cmd->u.forloop.name = xstrdup(p->cur.text);
+	if (!cmd->u.forloop.name) { perr(p, "out of memory"); goto fail; }
 	advance(p);
 	skip_newlines(p); /* `linebreak` */
 
 	if (is_resword(p, "in")) {
 		advance(p);
-		cmd->have_in = 1;
+		cmd->u.forloop.have_in = 1;
 		while (p->cur.type == T_WORD) {
 			struct sh_word *w = __malloc(sizeof *w);
 			if (!w) { perr(p, "out of memory"); goto fail; }
 			w->text = xstrdup(p->cur.text);
 			w->next = 0;
 			if (!w->text) { __free(w); perr(p, "out of memory"); goto fail; }
-			if (wtail) wtail->next = w; else cmd->words = w;
+			if (wtail) wtail->next = w; else cmd->u.forloop.words = w;
 			wtail = w;
 			advance(p);
 		}
@@ -936,7 +930,7 @@ static struct sh_command *parse_for(struct parser *p)
 	 * lets a ';' end. */
 	if (p->cur.type == T_SEMI) advance(p);
 
-	cmd->body = parse_do_group(p);
+	cmd->u.forloop.body = parse_do_group(p);
 	if (p->had_error) goto fail;
 	return cmd;
 fail:
@@ -987,6 +981,14 @@ static struct sh_command *parse_funcdef(struct parser *p, struct sh_command *cmd
 	struct sh_command *body;
 	const char *start, *end;
 	unsigned long hd0;
+
+	/* Flipped here, before any u.funcdef field is written below, rather
+	 * than once the definition is fully parsed: cmd arrives as
+	 * SH_CMD_SIMPLE with an all-zero union (new_command()), and every
+	 * `goto fail` between here and the end reaches free_command() -- so
+	 * kind must already name the variant whose fields (possibly still
+	 * zero, possibly partially filled) that free will read. */
+	cmd->kind = SH_CMD_FUNCDEF;
 
 	advance(p);   /* '(' */
 	if (p->cur.type != T_RPAREN) {
@@ -1065,8 +1067,8 @@ static struct sh_command *parse_funcdef(struct parser *p, struct sh_command *cmd
 	 * still-live borrowed pointer (case 1). Unchanged -- the common
 	 * case, every function definition in every script that uses no
 	 * here-document -- and this frees as before: the body lives in
-	 * cmd->func_body until the enclosing sh_list is freed. */
-	if (p->lx.hd_seen != hd0) cmd->func_body = body;
+	 * cmd->u.funcdef.func_body until the enclosing sh_list is freed. */
+	if (p->lx.hd_seen != hd0) cmd->u.funcdef.func_body = body;
 	else                      free_command(body);
 	end = p->cur.start;        /* the token after the body -- T_EOF has
 	                            * one too, pointing at the NUL, so there
@@ -1074,10 +1076,9 @@ static struct sh_command *parse_funcdef(struct parser *p, struct sh_command *cmd
 	if (end < start) end = start;
 	while (end > start && isspace((unsigned char)end[-1])) end--;
 
-	cmd->kind = SH_CMD_FUNCDEF;
-	cmd->name = fname;
-	cmd->func_text = xstrndup(start, (size_t)(end - start));
-	if (!cmd->func_text) { cmd->name = 0; perr(p, "out of memory"); goto fail; }
+	cmd->u.funcdef.name = fname;
+	cmd->u.funcdef.func_text = xstrndup(start, (size_t)(end - start));
+	if (!cmd->u.funcdef.func_text) { cmd->u.funcdef.name = 0; perr(p, "out of memory"); goto fail; }
 	return cmd;
 fail:
 	__free(fname);
@@ -1120,15 +1121,21 @@ not_compound:
 
 	if (p->cur.type == T_LPAREN) {
 		advance(p);
+		/* Flipped before u.group.body is written below, same reasoning as
+		 * parse_funcdef()'s own kind flip: cmd's union is still all-zero
+		 * from new_command(SH_CMD_SIMPLE), so this is safe the moment it
+		 * happens, and every failure path below reaches free_command()
+		 * with kind already naming the variant those zeroed-or-filled
+		 * bytes belong to. */
 		cmd->kind = SH_CMD_SUBSHELL;
-		cmd->body = parse_list(p, ST_RPAREN);
+		cmd->u.group.body = parse_list(p, ST_RPAREN);
 		if (p->had_error) { free_command(cmd); return 0; }
 		if (p->cur.type != T_RPAREN) { perr(p, "expected ')'"); free_command(cmd); return 0; }
 		advance(p);
 	} else if (p->cur.type == T_LBRACE) {
 		advance(p);
 		cmd->kind = SH_CMD_BRACE;
-		cmd->body = parse_list(p, ST_RBRACE);
+		cmd->u.group.body = parse_list(p, ST_RBRACE);
 		if (p->had_error) { free_command(cmd); return 0; }
 		if (p->cur.type != T_RBRACE) { perr(p, "expected '}'"); free_command(cmd); return 0; }
 		advance(p);
@@ -1158,7 +1165,7 @@ not_compound:
 			if (!w) { __free(fname); perr(p, "out of memory"); goto simple_fail; }
 			w->text = fname;
 			w->next = 0;
-			cmd->words = w;
+			cmd->u.simple.words = w;
 			wtail = w;
 			seen_word = 1;
 		}
@@ -1178,7 +1185,7 @@ not_compound:
 					if (!w) { perr(p, "out of memory"); goto simple_fail; }
 					w->text = xstrdup(p->cur.text);
 					w->next = 0;
-					if (atail) atail->next = w; else cmd->assigns = w;
+					if (atail) atail->next = w; else cmd->u.simple.assigns = w;
 					atail = w;
 					advance(p);
 					continue;
@@ -1188,14 +1195,14 @@ not_compound:
 				if (!w) { perr(p, "out of memory"); goto simple_fail; }
 				w->text = xstrdup(p->cur.text);
 				w->next = 0;
-				if (wtail) wtail->next = w; else cmd->words = w;
+				if (wtail) wtail->next = w; else cmd->u.simple.words = w;
 				wtail = w;
 				advance(p);
 				continue;
 			}
 			break;
 		}
-		if (!seen_word && !cmd->assigns && !cmd->redirs) {
+		if (!seen_word && !cmd->u.simple.assigns && !cmd->redirs) {
 			perr(p, "expected a command");
 			goto simple_fail;
 		}
@@ -1214,8 +1221,9 @@ trailing_redirs:
 	 * this point `cmd` owns a redirection list this very loop has been
 	 * building, and it is reached from two directions -- fallthrough
 	 * from the '(' / '{' branches above, where the group's body hangs
-	 * off cmd->body, and the `goto trailing_redirs` the if/while/until/
-	 * for parsers take, where it hangs off cmd->arms/cmd->cond instead.
+	 * off cmd->u.group.body, and the `goto trailing_redirs` the
+	 * if/while/until/for parsers take, where it hangs off
+	 * cmd->u.ifcmd.arms/cmd->u.loop.cond instead.
 	 * Anything narrower than "free the whole command" would therefore
 	 * have to enumerate a set of fields that new_command() keeps
 	 * growing, and would leak whichever one it had not heard of --
