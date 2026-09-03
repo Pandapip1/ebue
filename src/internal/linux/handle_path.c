@@ -29,7 +29,11 @@
 
 /* Same 6-argument raw syscall trampoline every Linux backend defines
  * for itself. File-scoped by convention, not shared, the same as every
- * other Linux backend in this tree. */
+ * other Linux backend in this tree. Three per-arch bodies, same "own
+ * syscall table per file" discipline this tree already uses (see
+ * src/dirent/linux/plat_dirent.c's own raw_syscall()): aarch64's
+ * `svc #0`, x86_64's `syscall`, i386's register-starved `int $0x80`. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x0 __asm__("x0") = a1;
@@ -45,8 +49,60 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 	                 : "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#else
+#error "handle_path.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
+/* Linux syscall number -- aarch64 confirmed against this host's own
+ * <sys/syscall.h>; x86_64/i386 confirmed against this host's own
+ * /nix/store linux-headers asm/unistd_64.h / asm/unistd_32.h. */
+#if defined(__aarch64__)
 #define SYS_readlinkat 78
+#elif defined(__x86_64__)
+#define SYS_readlinkat 267
+#elif defined(__i386__)
+#define SYS_readlinkat 305
+#else
+#error "handle_path.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 static int is_sys_error(long ret)
 {
