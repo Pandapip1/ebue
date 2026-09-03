@@ -151,6 +151,7 @@ static int child_main(int argc, char **argv)
 		wr(1, sigismember(&got, SIGINT) ? "blocked" : "unblocked");
 		return 0;
 	}
+	if (!strcmp(cmd, "noop")) return 0;
 	wr(2, "child: unknown command\n");
 	return 1;
 }
@@ -1279,21 +1280,37 @@ static void test_setpgroup_other_group(void)
 	pid, which this test's own assertion below reuses to observe the
 	real NT priority class rather than the self_nice cache
 	getpriority(PRIO_PROCESS, 0) would report for a target that is not
-	self. */
+	self.
+
+	A later real Wine-hosted `make check` run reported this fence
+	STALE (PASS produced TIMEOUT), diagnosed from source as a bug in
+	this TEST, not in posix_spawn(): the child below used to be spawned
+	with argv = {self, NULL}, giving it argc == 1 -- missing
+	child_main()'s `argc > 1` dispatch and falling into main()'s
+	top-level flow instead, which tools/test-policy.py's isolated-probe
+	transform makes call this very function again before its own final
+	verdict, regardless of argc.  Each such child spawned another just
+	like it: unbounded recursive self-spawning, each level paying real
+	Wine process-creation cost, is what timed out.  Fixed by giving the
+	child a "noop" argv[1] so it dispatches into child_main() and exits
+	at once, like every other child in this file. */
 static void test_setschedparam_applied(void)
 {
 	posix_spawnattr_t at;
 	struct sched_param par;
 	pid_t pid;
 	int status;
-	char *argv[2];
+	char *argv[3];
 
 	par.sched_priority = 5;
 	CHECK(posix_spawnattr_init(&at) == 0);
 	CHECK(posix_spawnattr_setschedparam(&at, &par) == 0);
 	CHECK(posix_spawnattr_setschedpolicy(&at, 0) == 0);
 	CHECK(posix_spawnattr_setflags(&at, POSIX_SPAWN_SETSCHEDULER) == 0);
-	argv[0] = (char *)self; argv[1] = 0;
+	/* "noop", not a bare argv[0]: see this fence's own VERIFICATION
+	 * addendum above for why a child with no distinguishing argv[1]
+	 * recurses instead of exiting. */
+	argv[0] = (char *)self; argv[1] = (char *)"noop"; argv[2] = 0;
 	CHECK(posix_spawn(&pid, self, 0, &at, argv, environ) == 0);
 	/* getpriority() for a pid that is not self queries the child's
 	 * real NT priority class directly (src/misc/resource.c); read
