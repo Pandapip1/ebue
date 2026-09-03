@@ -78,23 +78,45 @@ FILES="
 	src/math/fenv.c
 	src/signal/signal.c
 	src/signal/linux/sigdelivery.c
+	src/signal/linux/plat_signal.c
 	src/process/children.c
+	src/process/linux/plat_process.c
 	src/stdio/file.c
 	src/stdio/buf.c
 	src/thread/pthread.c
 	src/thread/pthread_cancel.c
 	src/thread/pthread_tsd.c
+	src/thread/linux/plat_thread.c
 	src/misc/resource.c
 	src/unistd/getpid.c
 	src/unistd/ids.c
 	src/unistd/write.c
 	src/unistd/lseek.c
+	src/unistd/linux/plat_unistd.c
 	src/socket/sendrecv.c
 	src/string/memcpy.c
 	src/string/memset.c
 	src/string/strlen.c
 	src/string/strcmp.c
 	src/string/strncmp.c
+"
+# arch/$arch/src/sigreturn_trampoline.S: the real SA_RESTORER trampoline
+# src/signal/linux/plat_signal.c's own __plat_sig_install_real_handler()
+# unconditionally references (by name, k_restorer = __ntlibc_sigreturn_
+# trampoline) for every arch it supports -- see that file's own comment
+# on that function and each arch's own arch/$arch/src/sigreturn_
+# trampoline.S banner. __signal_init() (crt1.c, unconditional) reaches
+# __plat_sig_install_fault_handlers() -> __plat_sig_install_real_handler()
+# on every arch, so this is a REAL, not merely potential, link
+# requirement -- confirmed by first trying without it and getting a real
+# "undefined symbol: __ntlibc_sigreturn_trampoline" from this exact
+# script. Named directly here (basename-based object naming below still
+# works: the loop's `basename "$f" .c` leaves a ".S" input's own
+# extension alone, producing "sigreturn_trampoline.S.o" -- a valid,
+# unique object filename, just not as tidy as tools/linux-build-thread.sh's
+# own sed-based stem-stripping).
+FILES="$FILES
+	arch/$arch/src/sigreturn_trampoline.S
 "
 # src/misc/linux/plat_misc.c is NOT in the common list above: unlike the
 # other Linux backend files, it DOES try to be multi-arch (its own
@@ -136,29 +158,31 @@ fi
 # with this exact CC/CFLAGS combination before adding it here, not
 # assumed from the aarch64 list.
 #
-# What this list still CANNOT close, on this arch pair, is a clean link:
-# __signal_init()'s Linux path (src/signal/signal.c, via __sig_delivery_
-# init() unconditionally and __plat_sig_install_fault_handlers() on the
-# aarch64 arm this build never takes) and exit()'s own default-terminate
-# path (src/exit/exit.c's __plat_sig_default_terminate() call) both
-# bottom out in src/signal/linux/plat_signal.c; children.c's own
-# __child_resume_stopped() bottoms out in src/process/linux/
-# plat_process.c; getpid()/getuid()/getpgrp() (signal.c's own kill()/
-# make_siginfo() call these) bottom out in src/unistd/linux/
-# plat_unistd.c; and sigdelivery.c's lock/semaphore machinery bottoms out
-# in src/thread/linux/plat_thread.c. Every one of those four backend
-# files hardcodes aarch64's `svc #0` raw-syscall calling convention with
-# NO `#if defined(__x86_64__)`/`#if defined(__i386__)` branch at all --
-# unlike src/fcntl/linux/plat_fcntl.c, src/unistd/linux/plat_fd.c,
+# src/signal/linux/plat_signal.c, src/thread/linux/plat_thread.c,
+# src/process/linux/plat_process.c and src/unistd/linux/plat_unistd.c
+# (added to FILES above, alongside arch/$arch/src/sigreturn_trampoline.S
+# -- see that entry's own comment) USED TO be exactly this gap: every one
+# of the four hardcoded aarch64's `svc #0` raw-syscall calling convention
+# with NO `#if defined(__x86_64__)`/`#if defined(__i386__)` branch at
+# all, unlike src/fcntl/linux/plat_fcntl.c, src/unistd/linux/plat_fd.c,
 # src/internal/linux/plat_fd_init.c and src/exit/linux/plat_exit.c above,
-# which already handle all three arches -- confirmed empirically:
-# `clang --target=x86_64-linux-gnu -c src/signal/linux/plat_signal.c`
-# (and the same for the other three files, and for --target=i386-linux-
-# gnu) fails outright with "unknown register name 'x8' in asm", so none
-# of the four can even be ADDED to this FILES list, let alone close the
-# link.
+# which already handled all three arches. That is now closed for real,
+# for both x86_64 and i386: real per-arch syscall numbers (confirmed
+# against a real x86_64-linux-gnu glibc's own asm/unistd_64.h/
+# unistd_32.h, not guessed or offset from aarch64's), real per-arch
+# raw_syscall() bodies (x86_64's `syscall` convention, i386's register-
+# starved array trick -- both already-established patterns this tree's
+# own crt1.c/plat_fcntl.c set), and two real per-arch struct-layout fixes
+# discovered along the way, not just syscall-number swaps: plat_process.c's
+# raw_stat_prefix (the kernel's real struct stat has a genuinely
+# different FIELD ORDER on x86_64 -- st_nlink before st_mode, not after --
+# and a genuinely different, narrower field set on i386), and plat_signal.c's
+# struct kernel_sigaction (the kernel's rt_sigaction(2) sigset is always
+# exactly 8 bytes on every arch, which a plain `unsigned long k_mask`
+# only happens to be on the two LP64 arches -- i386 needs a real two-word
+# array plus a fixed RT_SIGSETSIZE, not sizeof(unsigned long)).
 #
-# One more, for i386 only, of a different KIND than the five files
+# One more, for i386 only, of a different KIND than the files
 # above: src/signal/signal.c's own sig_dispatch() calls
 # __sig_call_on_altstack() for SA_ONSTACK delivery on `#if defined(_WIN32)
 # || defined(__linux__)`, same as aarch64 -- but unlike aarch64's own
@@ -175,25 +199,33 @@ fi
 # Linux caller's arguments got read out of the wrong registers. Left out
 # for that reason, not because it fails to build.
 #
-# This is real, disclosed, pre-existing scope, not a curated-list
-# omission: .github/workflows/ci.yml's own Linux-build-matrix comment
-# already says "Linux is complete on aarch64; x86_64 and i386 currently
-# have curated CRT build/run coverage", and commit 66367136's own title
-# ("Install real cross-process signal delivery on Linux/aarch64 (Tier
-# 2)") names the one arch it landed for. Porting these backends' raw
-# syscalls (and, for i386/x86_64, a real SysV __sig_call_on_altstack) to
-# the two arches that need them (right syscall numbers, right kernel-ABI
-# struct layouts, right calling conventions, per arch) is real,
-# substantial, correctness-sensitive work -- out of scope for this
-# script's FILES list, and not attempted here. Every other gap crt1.c's
-# own growing call graph has introduced IS closed above, so the
-# undefined symbols this script still ends on (__plat_getpid,
-# __plat_detect_uid, __plat_wait_one, __plat_fast_lock,
-# __plat_process_resume, __plat_sig_default_terminate, __plat_event_set,
-# __plat_sigevent_set, __plat_stop_event_create, __sig_call_on_altstack,
-# and their like -- run this script to see the current, complete list
-# for a given arch) are exactly, only, and entirely a symptom of those
-# still-unported backends, not of anything still missing from this list.
+# Real SysV __sig_call_on_altstack is still real, disclosed, pre-existing
+# scope, not a curated-list omission: .github/workflows/ci.yml's own
+# Linux-build-matrix comment still says "Linux is complete on aarch64;
+# x86_64 and i386 currently have curated CRT build/run coverage", and
+# commit 66367136's own title ("Install real cross-process signal
+# delivery on Linux/aarch64 (Tier 2)") names the one arch it landed for.
+# Confirmed by a real clean build, both arches: with the four raw-syscall
+# backend files above now genuinely ported (see the FILES list itself
+# and each new #elif branch's own comments), this script's link ends on
+# EXACTLY ONE remaining undefined symbol for x86_64 -- __sig_call_on_
+# altstack, precisely the gap this comment already named -- and, for
+# i386, that same symbol plus three more that are ALSO real, disclosed,
+# pre-existing gaps unrelated to this task's own four files: __divdi3/
+# __moddi3 (i386 has no native 64-bit divide instruction; src/thread/
+# linux/plat_thread.c's own __plat_wait_one() -- pre-existing arithmetic,
+# not touched by this pass -- does a real `long long / long long`
+# converting relative_ticks to a struct timespec, which a -nostdlib
+# freestanding build has no libgcc/compiler-rt to supply the routine
+# for; a real fix needs a genuine, carefully-derived 64-bit software
+# division implementation, out of scope for a raw-syscall/struct-layout
+# port and not attempted here), __plat_write_start_offset and
+# __plat_sock_send (src/misc/linux/plat_misc.c and src/socket/linux/
+# plat_socket.c -- the two files this script's OWN pre-existing comment,
+# a few paragraphs up, already names as x86_64-only, unrelated to the
+# four backend files this pass ported). Porting a real SysV __sig_call_
+# on_altstack, writing real __divdi3/__moddi3, and porting plat_misc.c/
+# plat_socket.c to i386 are each separate, disclosed follow-up work.
 
 INC="-I$srcdir/src/internal -I$BUILD/obj/include -I$srcdir/include -I$srcdir/arch/$arch -I$srcdir/arch/generic"
 CFLAGS="-std=c99 -nostdinc -fno-builtin -fno-stack-protector -g -O0 -ffunction-sections -fdata-sections \

@@ -1,44 +1,28 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * A real, correct __plat_thread_alertable_yield() (src/internal/
- * plat_thread.h's declared interface -- a plain sched_yield(2)),
- * standing in for the full src/thread/linux/plat_thread.c on the
- * x86_64/i386 cross pilots (tools/linux-build-dlfcn-cross.sh) -- NOT
- * because this one function is hard to port, but because the REST of
- * that file (futex-based mutexes, clone(2) thread creation, semaphores,
- * ...) is a much larger, genuinely separate porting job this pass's own
- * scope (crt/linux/$(ARCH)/start.S + src/dlfcn/linux/plat_dlfcn.c's
- * relocation handling) never asked for, and pulling in that whole file
- * just to satisfy the one symbol src/internal/plat_malloc_generic.h's
- * ntlibc_malloc_lock() references (only on its CAS-retry path -- never
- * actually reached by this pilot's own single-threaded, uncontended
- * test) would silently expand this pass's footprint well past what it
- * verifies. Kept in fuzz/ rather than src/thread/linux/, deliberately:
- * this is test-harness scaffolding standing in for an unported file,
- * not a (partial, therefore misleading) arch port of that file itself.
- *
- * Real code, not a stub: a genuine sched_yield(2) syscall, the exact
- * same job src/thread/linux/plat_thread.c's own aarch64 version does,
- * just this pass's own two new arches' syscall numbers (confirmed
- * against arch/x86/entry/syscalls/syscall_{64,32}.tbl, the same oracle
- * every other syscall number in this pass's own commits came from).
+ * __plat_thread_alertable_yield() USED TO be defined here too, standing
+ * in for the full src/thread/linux/plat_thread.c on the x86_64/i386
+ * cross pilots the same way __mq_fd_closed()/__raise_internal() below
+ * still do for their own still-unported subsystems -- NOT because that
+ * one function was hard to port, but because the REST of that file
+ * (futex-based mutexes, clone(2) thread creation, semaphores, ...) used
+ * to be a much larger, genuinely separate porting job. That whole file
+ * is now really ported for x86_64/i386 (src/thread/linux/plat_thread.c
+ * itself, including a real __plat_thread_alertable_yield()) and is in
+ * tools/linux-build-dlfcn-cross.sh's own FILES list -- so the stand-in
+ * that used to live here was removed, not left duplicating the real
+ * definition (a real, reproduced `duplicate symbol:
+ * __plat_thread_alertable_yield` otherwise, the identical class of
+ * collision this file's own __raise_internal() comment below already
+ * warns signal.c itself would cause if it were ever added alongside
+ * this file). __mq_fd_closed() and __raise_internal() below are NOT
+ * removed: mqueue.c's/signal.c's own much larger subsystems (not just
+ * their plat_*.c backends) are still genuinely out of this pass's scope,
+ * unlike plat_thread.c which this pass's own FILES list now links for
+ * real in full.
  */
 #include "plat_thread.h"
-
-#if defined(__x86_64__)
-void __plat_thread_alertable_yield(void)
-{
-	__asm__ volatile("syscall" : : "a"(24) : "rcx", "r11", "memory");
-}
-#elif defined(__i386__)
-void __plat_thread_alertable_yield(void)
-{
-	__asm__ volatile("int $0x80" : : "a"(158) : "memory");
-}
-#else
-#error "linux_pilot_dlfcn_cross_yield.c: unsupported architecture"
-#endif
 
 /* __mq_fd_closed() (src/thread/mqueue.c's own declared interface,
  * called unconditionally from the public close() front door,
