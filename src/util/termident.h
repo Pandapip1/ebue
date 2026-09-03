@@ -29,33 +29,16 @@
  *    character-device node with a real path, and this library's own
  *    chmod()/fchmodat() are real syscalls against it
  *    (src/stat/linux/plat_stat.c). isatty() (src/unistd/linux/
- *    plat_isatty.c) is real here too -- a live tcgetattr() probe, not
- *    the static __FD_CONSOLE classification NT uses (classify_fd()
- *    still never assigns __FD_CONSOLE to anything on Linux; the live
- *    probe is how isatty() answers correctly without it) -- but it is
- *    deliberately not this file's primary test, because it answers a
- *    different, WIDER question than "is this a nameable device I can
- *    chmod() or write(1p) a message into": a Unix98 pty MASTER fd
- *    (/dev/ptmx) passes the identical live ioctl(TCGETS) probe a real
- *    slave does (confirmed live: opening one with posix_openpt() and
- *    calling isatty() on the master fd itself returns 1, same as the
- *    slave), yet /proc/self/fd resolves it to the literal shared
- *    "/dev/ptmx" multiplexer node, not a per-session device this file
- *    could meaningfully chmod() or deliver a write(1p) message into.
- *    So this file finds a real Linux tty its own, narrower way: fstat()
- *    + S_ISCHR(), then resolve the actual device node path via
- *    readlink("/proc/self/fd/<fd>") -- procfs is the Linux kernel's
- *    own, not something ntlibc provides (src/internal/vfs.c's own
- *    banner: Linux "has real native devices and a real native root, so
- *    it needs no overlay" -- every path here is native, not synthetic)
- *    -- and only accepts the result if the resolved path is actually
- *    shaped like a real tty (src/util/termident.c's own
- *    path_looks_like_tty()), which is exactly what filters the ptmx
- *    master case above out. isatty() is still consulted, as a fallback
- *    for a Linux fd this path-based route could not resolve (no procfs
- *    mounted) and unconditionally on NT (no filesystem path a console
- *    fd could resolve to at all) -- see src/util/termident.c's own
- *    describe_fd() for exactly where each check applies.
+ *    plat_isatty.c) is real here too now, but answers a wider question
+ *    than this file needs: it also succeeds on a Unix98 pty MASTER fd
+ *    (/dev/ptmx), which is not a nameable per-session device this file
+ *    could chmod() or write(1p) a message into. So this file finds a
+ *    real Linux tty its own way instead: fstat() + S_ISCHR(), then
+ *    resolve the actual device node path via
+ *    readlink("/proc/self/fd/<fd>") and check it is shaped like a real
+ *    tty (src/util/termident.c's own path_looks_like_tty(), which is
+ *    what filters the ptmx master case out). isatty() is only a
+ *    fallback, for a path this route could not resolve.
  */
 #ifndef _NTLIBC_UTIL_TERMIDENT_H
 #define _NTLIBC_UTIL_TERMIDENT_H
