@@ -12,7 +12,6 @@
 #include "pthread_impl.h"
 #include "ownership_stubs.h"
 #include "plat_thread.h"
-#include "plat_fd.h"
 
 #define SPIN_UNLOCKED 1
 #define SPIN_LOCKED 2
@@ -239,7 +238,7 @@ int pthread_barrier_wait(pthread_barrier_t *barrier handle(pthread_barrier))
 			data->generation++;
 			wake_barrier_waiters_locked(data, generation);
 			__plat_fast_unlock();
-			if (waiter.event) __plat_close(waiter.event);
+			if (waiter.event) __plat_sync_close(waiter.event);
 			return PTHREAD_BARRIER_SERIAL_THREAD;
 		}
 		if (waiter.event) {
@@ -256,7 +255,7 @@ int pthread_barrier_wait(pthread_barrier_t *barrier handle(pthread_barrier))
 			__plat_fast_lock();
 			unlink_barrier_waiter_locked(&waiter);
 			__plat_fast_unlock();
-			__plat_close(waiter.event);
+			__plat_sync_close(waiter.event);
 		} else {
 			/* pthread_barrier_wait() has no resource-error return. Retain
 			 * generation polling only for degraded event-allocation failure. */

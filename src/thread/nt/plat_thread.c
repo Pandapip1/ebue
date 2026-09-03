@@ -195,6 +195,19 @@ void __plat_named_mutant_release(__plat_handle_t lock)
 	NtClose(lock);
 }
 
+/* See plat_thread.h's own __plat_sync_close() banner for why this call
+ * exists separately from plat_fd.h's __plat_close() at all: on NT a
+ * semaphore/event/named-semaphore handle IS a real NtClose()-able HANDLE
+ * like any other, so this backend's implementation is exactly that generic
+ * close, unlike Linux's (a real munmap(2) there -- see that backend's own
+ * comment). Never called on a named-mutant handle: __plat_named_mutant_
+ * release() above already closes those as part of releasing them, and no
+ * real call site in this tree calls this on one. */
+int __plat_sync_close(__plat_handle_t h)
+{
+	return __plat_close(h);
+}
+
 /* ---- thread lifecycle ---------------------------------------------------- */
 
 #define THREAD_CREATE_FLAGS_CREATE_SUSPENDED 1u

@@ -14,7 +14,6 @@
 #include "pthread_impl.h"
 #include "ownership_stubs.h"
 #include "plat_thread.h"
-#include "plat_fd.h"
 
 #define MUTEX_MAGIC ((ULONG_PTR)0x4d555458u)
 #define MUTEX_DEAD  ((ULONG_PTR)0x4d555444u)
@@ -148,7 +147,7 @@ static int mutex_ready(pthread_mutex_t *mutex)
 	}
 	error = data->magic == MUTEX_MAGIC ? 0 : EINVAL;
 	__plat_fast_unlock();
-	if (semaphore) __plat_close(semaphore);
+	if (semaphore) __plat_sync_close(semaphore);
 	return error;
 }
 
@@ -200,7 +199,7 @@ int pthread_mutex_destroy(pthread_mutex_t *mutex destroy(pthread_mutex) static_h
 	data->semaphore = 0;
 	data->magic = MUTEX_DEAD;
 	__plat_fast_unlock();
-	if (semaphore) __plat_close(semaphore);
+	if (semaphore) __plat_sync_close(semaphore);
 	__ownership_pthread_mutex_destroyed(mutex);
 	return 0;
 }

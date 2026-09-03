@@ -167,6 +167,43 @@ static void test_errno_thread_isolation(void)
 #endif
 }
 
+/* A REAL, CONFIRMED bug distinct from test_errno_thread_isolation() above:
+ * pthread_mutex_destroy() and sem_destroy() (plus several other release
+ * paths across pthread_cond.c/pthread_rwlock.c/pthread_sync.c/
+ * pthread_tsd.c/mqueue.c) used to release their internal semaphore/event
+ * handle via plat_fd.h's generic __plat_close() instead of the sync-domain
+ * __plat_sync_close() (see plat_thread.h's own __plat_sync_close() banner).
+ * On the Linux backend that handle is a raw mmap(2)'d pointer, not a boxed
+ * fd+1, so that close(2) truncated it to a bogus "fd" and clobbered the
+ * caller's own errno with EBADF on every one of these teardown paths --
+ * confirmed the same way test_errno_thread_isolation() confirms
+ * pthread_join()'s: errno must still read back exactly what was set
+ * beforehand, immediately after a successful teardown call that has no
+ * business touching errno at all.
+ *
+ * Deliberately does not exercise pthread_cond_wait()/pthread_cond_timedwait()
+ * here even though cond_wait()'s per-wait semaphore hits the very same
+ * release path: a real, separate, pre-existing bug (cond_wait() calls
+ * pthread_mutex_unlock() while still holding __plat_fast_lock(), which
+ * pthread_mutex_unlock() also acquires -- a self-deadlock on this
+ * non-recursive process-wide spinlock) hangs both forever on this backend,
+ * confirmed independently of this fix and disclosed, not addressed, here. */
+static void test_errno_sync_close_isolation(void)
+{
+	pthread_mutex_t mutex;
+	sem_t sem;
+
+	errno = EACCES;
+	CHECK(pthread_mutex_init(&mutex, 0) == 0);
+	CHECK(pthread_mutex_destroy(&mutex) == 0);
+	CHECK(errno == EACCES);
+
+	errno = EACCES;
+	CHECK(sem_init(&sem, 0, 0) == 0);
+	CHECK(sem_destroy(&sem) == 0);
+	CHECK(errno == EACCES);
+}
+
 int main(void)
 {
 	test_atfork();
@@ -175,5 +212,6 @@ int main(void)
 	test_condition_validation();
 	test_rwlock_timed_acquisition();
 	test_errno_thread_isolation();
+	test_errno_sync_close_isolation();
 	return fails != 0;
 }

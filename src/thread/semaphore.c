@@ -27,7 +27,6 @@
 #include "ownership_stubs.h"
 #include "pthread_impl.h"
 #include "plat_thread.h"
-#include "plat_fd.h"
 
 #define SEM_MAGIC 0x53454d31u
 #define NAMED_MAX 64
@@ -206,7 +205,7 @@ int sem_init(sem_t *sem construct(semaphore), int pshared, unsigned value) // NO
 int sem_destroy(sem_t *sem destroy(semaphore))
 {
 	if (!valid(sem) || sem->__named) { errno = EINVAL; return -1; }
-	__plat_close(sem->__handle);
+	__plat_sync_close(sem->__handle);
 	memset(sem, 0, sizeof *sem);
 	__plat_fast_lock();
 	unnamed_count--;
@@ -325,7 +324,7 @@ retry_record:
 	__plat_fast_lock();
 	entry = free_slot();
 	if (!entry) {
-		__plat_fast_unlock(); __plat_close(h);
+		__plat_fast_unlock(); __plat_sync_close(h);
 		if (created) (void)unlink(path);
 		saved = EMFILE; goto fail_locked;
 	}
@@ -352,7 +351,7 @@ int sem_close(sem_t *sem)
 	if (!entry || !entry->refs) { __plat_fast_unlock(); errno = EINVAL; return -1; }
 	entry->refs--;
 	if (!entry->linked && !entry->refs) {
-		__plat_close(entry->sem.__handle);
+		__plat_sync_close(entry->sem.__handle);
 		free(entry->path);
 		memset(entry, 0, sizeof *entry);
 	}
@@ -376,7 +375,7 @@ int sem_unlink(const char *name)
 		if (entry) {
 			entry->linked = 0;
 			if (!entry->refs) {
-				__plat_close(entry->sem.__handle);
+				__plat_sync_close(entry->sem.__handle);
 				free(entry->path);
 				__ownership_writable_span(entry, sizeof *entry);
 				memset(entry, 0, sizeof *entry);

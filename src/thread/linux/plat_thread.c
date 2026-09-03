@@ -940,6 +940,45 @@ void __plat_named_mutant_release(__plat_handle_t lock)
 	__plat_semaphore_post(lock);
 }
 
+/* A REAL, CONFIRMED bug, the same class __plat_thread_close()'s own banner
+ * documents for the boxed-pid domain but for a second, separate domain:
+ * pthread_cond.c/pthread_mutex.c/pthread_rwlock.c/pthread_sync.c/
+ * pthread_tsd.c/semaphore.c/mqueue.c used to release every semaphore/
+ * event/named-semaphore handle this file hands out via plat_fd.h's generic
+ * __plat_close(), which issues close(2) on `(int)((long)h - 1)`. That is
+ * exactly right for an fd+1 handle, but every handle this file returns is
+ * a raw `struct ntlibc_linux_sync *` -- an mmap(2)'d pointer (see this
+ * file's own banner and src/internal/linux/sync.h), a completely
+ * different representation that merely gets silently truncated to a
+ * plausible-looking 32-bit "fd" by the same cast. Typically that close(2)
+ * just fails EBADF (the truncated pointer essentially never names a real
+ * open descriptor) and clobbers the caller's own errno right after an
+ * otherwise-successful mutex/cond/rwlock/once/semaphore/mqueue teardown --
+ * indistinguishable from unrelated errno corruption elsewhere -- and, on
+ * top of that, close(2) never releases the mmap()'d page either way, so
+ * every wrongly-__plat_close()'d handle also leaked a full page. Confirmed
+ * unbounded under sustained load: pthread_cond.c's cond_wait() and
+ * pthread_rwlock.c's rwlock_acquire() each allocate a fresh semaphore per
+ * wait, not once per object lifetime, so a condvar-wait/signal loop or a
+ * contended rwlock loop leaked a page per iteration.
+ *
+ * See plat_thread.h's own __plat_sync_close() banner for the full fix.
+ * This backend's implementation is a real munmap(2): the exact inverse of
+ * alloc_sync()/map_named_sem() above, which both hand back an
+ * mmap(2)'d region sized to exactly one struct ntlibc_linux_sync (always
+ * within a single page). munmap(2) unmaps every page overlapping
+ * [h, h + length), so the exact length passed does not need to match the
+ * original mmap(2) call's rounded-up page size -- only to name at least
+ * one byte inside the same single page, which sizeof(struct
+ * ntlibc_linux_sync) always does. */
+int __plat_sync_close(__plat_handle_t h)
+{
+	long ret = raw_syscall(SYS_munmap, (long)h,
+	                       (long)sizeof(struct ntlibc_linux_sync), 0, 0, 0, 0);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
 /* A REAL, CONFIRMED bug, distinct from the TLS/CLONE_SETTLS one this file's
  * __plat_thread_spawn() banner documents: pthread.c used to release every
  * thread handle (join, detach, the error-unwind in pthread_create()) via
