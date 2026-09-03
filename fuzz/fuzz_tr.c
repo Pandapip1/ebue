@@ -5,92 +5,61 @@
  * (expand_spec(): literal chars, \-escapes, \ddd octal, c-c ranges,
  * [:class:], [=c=], and the string2-only [x*n] repeat), a
  * character-class/range parser in the same shape fuzz_fnmatch.c already
- * fuzzes for fnmatch()'s bracket scanner -- read that file's header
- * first for the general approach this one reuses (a bracket/range
- * grammar walked byte-by-byte with no bound of its own beyond the
- * input's length).
+ * fuzzes for fnmatch()'s bracket scanner: a bracket/range grammar walked
+ * byte-by-byte with no bound of its own beyond the input's length.
  *
- * WHAT IS FUZZED.  string1 and string2 -- src/util/tr.c's own grammar,
- * expand_spec(), the whole reason this harness exists -- plus, more
- * thinly, the translate/delete/squeeze loop that runs after both
- * operands parse, driven by a short fixed-cap slice of input text.  All
- * three (string1, string2, and the input text) come from disjoint
- * slices of the same fuzz buffer, split the way fuzz_grep.c splits
- * pattern from content: a header byte picks the option combination, two
- * more pick where each split falls, and the resulting three segments
- * are capped independently (CAP_S1/CAP_S2/CAP_TEXT below) so one huge
- * segment cannot starve the other two of coverage.
+ * string1 and string2 -- expand_spec(), the whole reason this harness
+ * exists -- plus, more thinly, the translate/delete/squeeze loop that
+ * runs after both operands parse, driven by a short fixed-cap slice of
+ * input text. All three come from disjoint slices of the same fuzz
+ * buffer, split the way fuzz_grep.c splits pattern from content: a
+ * header byte picks the option combination, two more pick where each
+ * split falls, and the three segments are capped independently
+ * (CAP_S1/CAP_S2/CAP_TEXT below) so one huge segment cannot starve the
+ * other two of coverage.
  *
- * WHY REAL argv OPERANDS FOR string1/string2, BUT NOT FOR THE TEXT.
  * string1/string2 are real argv elements (char*), so each is rejected
- * outright on an embedded NUL -- same reasoning fuzz_fnmatch.c and
- * fuzz_sed.c give: such an input does not describe one C string, and
- * accepting it would let the fuzzer spend its budget re-discovering the
- * same truncation under different names.  The TEXT tr(1p) translates is
- * not an argv element -- src/util/tr.c reads it a byte at a time from
- * stdin via getchar() -- so it is written verbatim to a file instead,
- * embedded NULs and all: unlike string1/string2, an embedded NUL in
- * translated text is perfectly ordinary input tr(1p) is specified to
- * handle byte-for-byte.
+ * outright on an embedded NUL -- such an input doesn't describe one C
+ * string. The TEXT tr(1p) translates is not an argv element -- tr.c
+ * reads it a byte at a time from stdin via getchar() -- so it's written
+ * verbatim to a file instead, embedded NULs and all: unlike
+ * string1/string2, an embedded NUL in translated text is ordinary input
+ * tr(1p) is specified to handle byte-for-byte.
  *
- * WHY A TEMP FILE FOR STDIN, NOT fmemopen().  include/stdio.h declares
- * `stdin` as `extern FILE *const stdin` (checked directly before writing
- * this), so it cannot be reassigned to point at a memory buffer the way
- * a hosted libc's harness might -- the same restriction fuzz_grep.c's
- * own header documents for `stdin` in general.  freopen(), unlike a
- * plain assignment, reuses the existing FILE* object rather than
- * replacing it, so it is the seam this harness (and fuzz_sed.c, for
- * stdout/stderr) uses instead: the fuzzed text is written to a fixed
- * path under /tmp -- present from start-up in fuzz/ntstubs.c's
- * simulated volume, per fuzz_glob.c's own header -- and stdin is
- * freopen()ed onto it before every call.  stdout and stderr are
- * freopen()ed too, onto their own fixed paths, for the reason
- * fuzz_sed.c's header gives: __util_tr_main() writes every translated
- * byte to the real stdout and every diagnostic to the real stderr, and
- * this harness calls it millions of times with no fork.
+ * `stdin` is `FILE *const` here, so it can't be reassigned to a memory
+ * buffer; freopen() reuses the existing FILE* object instead, onto a
+ * fixed path under /tmp. stdout and stderr are freopen()ed too, onto
+ * their own fixed paths: __util_tr_main() writes every translated byte
+ * to real stdout and every diagnostic to real stderr, millions of times
+ * with no fork.
  *
- * OPTION COMBINATIONS.  tr(1p)'s SYNOPSIS is exactly four forms (quoted
- * in full in src/util/tr.c's own header comment); this harness's header
- * byte picks one of the four *and* whether string2 is supplied, biased
+ * tr(1p)'s SYNOPSIS is exactly four forms; this harness's header byte
+ * picks one of the four *and* whether string2 is supplied, biased
  * toward combinations __util_tr_main()'s own argument-combination check
  * actually accepts (string2 required with plain translate and with -ds,
  * forbidden with plain -d, optional with plain -s) so most inputs reach
- * expand_spec() rather than bouncing off the option check before the
- * parser under test is ever entered -- the same reasoning fuzz_grep.c's
- * header gives for guarding its own zero-operand hazard.  -c and -C
- * (complement) are exercised too: expand_spec()'s own header comment
- * says they are accepted as exact synonyms in this build, and this
- * harness has no reason to prefer one over the other.
+ * expand_spec() rather than bouncing off the option check first. -c and
+ * -C (complement) are exercised too: expand_spec() accepts them as
+ * exact synonyms in this build.
  *
- * NO RUNAWAY-COMPUTATION CONCERN, unlike fuzz_sed.c's b/t branch graph.
- * src/util/tr.c has no backward branch, no recursion, and no loop whose
- * bound depends on anything but the length of string1, string2 or the
- * input text -- every one of which this harness already caps -- so
- * there is nothing here that needs a sed_may_loop_forever()-style
- * pre-scan.
+ * No runaway-computation concern, unlike fuzz_sed.c's b/t branch graph:
+ * tr.c has no backward branch, no recursion, and no loop whose bound
+ * depends on anything but the length of string1, string2 or the input
+ * text -- every one of which this harness already caps.
  *
- * NO ORACLE, same reasoning fuzz_printf.c's and fuzz_sed.c's headers
- * give: a byte-for-byte comparison against GNU tr would mostly be a
- * stream of disagreements about extensions src/util/tr.c's own header
- * comment already documents as deliberately narrowed (no real
- * multi-byte/collation-aware -c/-C, no equivalence classes beyond a
- * single character), not defects.  What is checked instead is
- * src/internal/util.h's own contract -- a real process exit status,
- * never a raw errno or boolean -- narrowed, like fuzz_grep.c's oracle,
- * to the values src/util/tr.c's own code was read in full and confirmed
- * to actually return: 0 (success), 1 (the one out-of-memory path, in
- * the -c/-C complement branch), or 2 (every argument/grammar error --
- * bad option, wrong operand count for the chosen form, a malformed
- * string1/string2, an empty string2).  A fourth value would be a real
- * regression.
+ * No oracle: a byte-for-byte comparison against GNU tr would mostly be
+ * disagreements about extensions tr.c's own header documents as
+ * deliberately narrowed (no real multi-byte/collation-aware -c/-C, no
+ * equivalence classes beyond a single character), not defects. Checked
+ * instead: tr.c's code was read in full and confirmed to only ever
+ * return 0 (success), 1 (the one out-of-memory path, in the -c/-C
+ * complement branch), or 2 (every argument/grammar error) -- a fourth
+ * value would be a real regression.
  *
- * THE exit()-VS-return DISCIPLINE.  Checked for free by construction,
- * same as fuzz_grep.c's header explains: src/util/tr.c was read in full
- * while writing this harness and calls neither exit() nor _exit()
- * anywhere -- required, since src/sh/builtin.c registers this alongside
- * every other __util_<name>_main() as an in-process shell builtin with
- * no fork to contain a stray exit() (src/internal/util.h's own header
- * comment).
+ * exit()-vs-return discipline checked for free by construction: tr.c was
+ * read in full and calls neither exit() nor _exit() anywhere -- required,
+ * since src/sh/builtin.c registers this as an in-process shell builtin
+ * with no fork to contain a stray exit().
  */
 #include <stdio.h>
 #include <stdlib.h>
