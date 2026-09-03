@@ -39,6 +39,7 @@
 #include "libc.h"
 #include "plat_signal.h"
 #include "plat_fd.h"
+#include "plat_misc.h"
 #ifdef NTLIBC_USE_KERNEL32
 #include "kernel32.h"
 #endif
@@ -775,6 +776,28 @@ int kill(pid_t pid, int sig)
 		 * above into an EPERM for targets that today accept a plain
 		 * signal. */
 		if (__plat_kill_open((int)pid, sig_stops(sig) || sig == SIGCONT, &h) < 0) return -1;
+#ifdef _WIN32
+		/* wait.c's waitpid() (see its own comment on this exact NT quirk)
+		 * won't reopen an untracked pid at all, because on real Windows the
+		 * kernel process object outlives its last handle: an already-
+		 * reaped, no-longer-existing child can still be opened above and
+		 * hand back a live-looking handle for a pid NT has quietly recycled
+		 * or is about to. kill() can't refuse the open outright the way
+		 * waitpid() does -- an untracked pid legitimately names a real,
+		 * unrelated process most of the time -- so instead confirm the
+		 * object __plat_kill_open() just handed back is still the live
+		 * process it claims to be before this pid is allowed to touch any
+		 * of the SIGSTOP/SIGCONT/stop-signal/remote-delivery/termination
+		 * paths below. __plat_process_alive() sets errno to ESRCH itself on
+		 * the not-alive path. Linux needs no equivalent: its
+		 * __plat_kill_open() hands back a pidfd, immune to this race by
+		 * construction (see that function's own comment) -- and calling
+		 * __plat_process_alive() on Linux would misinterpret the bare pid
+		 * __plat_kill_open() built as a boxed pidfd, the same handle-
+		 * domain mismatch plat_signal.h's wake_event banner already
+		 * documents as a real, previously-crashing bug. */
+		if (!__plat_process_alive(h)) { __plat_close(h); return -1; }
+#endif
 	}
 	if (!sig) { if (!c) __plat_close(h); return 0; }
 	if (sig == SIGSTOP) {
