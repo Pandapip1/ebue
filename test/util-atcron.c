@@ -195,10 +195,9 @@ static int out_contains(const char *needle)
 
 /* Bounded poll for a marker file a scheduled job is expected to
  * create -- real synchronization on the daemon's own observable
- * effect, never a fixed sleep racing it (this file's own header, and
- * this project's task brief, both call this out explicitly). Polls
- * every 100ms up to max_ms; returns 1 if the file appeared, 0 on
- * timeout. */
+ * effect, never a fixed sleep racing it (this file's own header calls
+ * this out explicitly). Polls every 100ms up to max_ms; returns 1 if
+ * the file appeared, 0 on timeout. */
 static int wait_for_file(const char *path, long max_ms)
 {
 	long waited = 0;

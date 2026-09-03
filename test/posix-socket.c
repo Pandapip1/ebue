@@ -3,7 +3,7 @@
  *
  * <sys/socket.h>/<netinet/in.h>/<arpa/inet.h>, AF_INET/SOCK_STREAM only
  * (test/networking-audit.md, this project's own design audit for
- * sockets, and the task that produced src/socket/). Each assertion
+ * sockets). Each assertion
  * cites the clause of https://pubs.opengroup.org/onlinepubs/
  * 9699919799/functions/<name>.html or .../basedefs/<header>.html it
  * checks, same convention as test/posix-sysmisc.c.
