@@ -31,13 +31,8 @@ extern "C" {
 #define FP_SUBNORMAL 3
 #define FP_NORMAL    4
 
-/* __fpclassify{,f,l}/__signbit{,f,l} (src/math/fpclassify.c) are pure
- * bit-pattern classification: each reinterprets its argument's bytes
- * through a union and masks/compares the sign/exponent/mantissa
- * fields -- no FPU comparison instruction is ever executed (unlike,
- * say, fmax/fmin's `x < y`), so there is no hardware FP exception this
- * could ever raise, on top of already having no errno, no globals, no
- * writes.  Deterministic in the argument's bit pattern alone. */
+/* Pure bit-pattern classification via union reinterpretation, not an FPU
+ * comparison, so no hardware FP exception is possible. */
 int __fpclassify(double) __attribute__((__pure__));
 int __fpclassifyf(float) __attribute__((__pure__));
 int __fpclassifyl(long double) __attribute__((__pure__));
@@ -69,18 +64,14 @@ int __signbitl(long double) __attribute__((__pure__));
 
 #define MATH_ERRNO  1
 #define MATH_ERREXCEPT 2
-/* MATH_ERREXCEPT: errno is never touched by any src/math/ function, but
- * <fenv.h>'s FE_DIVBYZERO/FE_INVALID/FE_OVERFLOW/FE_UNDERFLOW/
- * FE_INEXACT and feclearexcept()/fetestexcept() are real, observing
- * genuine x87/SSE hardware exception flags -- see include/fenv.h. */
+/* errno is never touched by any src/math/ function; <fenv.h>'s exception
+ * flags are the real, hardware-backed error signal -- see that header. */
 #define math_errhandling 2
 
 #define FP_ILOGBNAN (-1-0x7fffffff)
 #define FP_ILOGB0 FP_ILOGBNAN
 
-/* fabs{,f,l} (src/math/fabs.c) mask off the sign bit through a union,
- * the same pure bit-pattern manipulation as __fpclassify above -- no
- * comparison, no FPU exception possible, no errno, no globals. */
+/* Sign-bit masking via union, same as __fpclassify above. */
 double      fabs(double) __attribute__((__pure__));
 float       fabsf(float) __attribute__((__pure__));
 long double fabsl(long double) __attribute__((__pure__));
@@ -102,11 +93,6 @@ long double sqrtl(long double);
 double      fmod(double, double);
 float       fmodf(float, float);
 long double fmodl(long double, long double);
-/* e is a required output parameter, not an optional one: ISO C's frexp
- * family has no "discard the exponent" calling convention (unlike, say,
- * fesetenv's FE_DFL_ENV sentinel), and src/math/frexp.c's three bodies
- * write through it on every path with no NULL check, matching musl and
- * glibc, neither of which check it either. */
 #ifdef NTLIBC_ARITHMETIC_ANALYSIS
 #define __arith_output_excludes_min(argument) \
 	__attribute__((annotate("ntlibc_arith_output_excludes_min:" #argument)))
@@ -123,10 +109,6 @@ long double ldexpl(long double, int);
 double      scalbn(double, int);
 float       scalbnf(float, int);
 long double scalbnl(long double, int);
-/* ip is a required output parameter, the same "no discard convention"
- * reasoning as frexp's own e above: src/math/modf.c's three bodies
- * write through it on every path (including both the NaN and infinite
- * special cases), with no NULL check anywhere. */
 double      modf(double, double *) __attribute__((nonnull(2)));
 float       modff(float, float *) __attribute__((nonnull(2)));
 long double modfl(long double, long double *) __attribute__((nonnull(2)));
@@ -262,10 +244,7 @@ long double fmaxl(long double, long double);
 double      fmin(double, double);
 float       fminf(float, float);
 long double fminl(long double, long double);
-/* copysign{,f,l} (src/math/copysign.c) combine x's magnitude bits with
- * y's sign bit through a union, the same pure bit-pattern manipulation
- * as fabs above -- no comparison, no FPU exception possible, no errno,
- * no globals. */
+/* Magnitude/sign-bit combination via union, same as fabs above. */
 double      copysign(double, double) __attribute__((__pure__));
 float       copysignf(float, float) __attribute__((__pure__));
 long double copysignl(long double, long double) __attribute__((__pure__));

@@ -8,24 +8,11 @@
  *
  * <monetary.h>: monetary formatting.  See src/misc/strfmon.c.
  *
- * monetary.h.html DESCRIPTION, verbatim: "The <monetary.h> header
- * shall define the locale_t type as described in <locale.h>.", "The
- * <monetary.h> header shall define the size_t type as described in
- * <stddef.h>.", "The <monetary.h> header shall define the ssize_t type
- * as described in <sys/types.h>." -- and the two prototypes below.
- *
- * What a caller gets here, stated once so it is not a surprise: the
- * mechanics of the conversion specification are implemented in full --
- * the =f fill character, the '^', '+', '(', '!' and '-' flags, field
- * width, left precision #n, right precision .p, "%%", and the [E2BIG]
- * truncation rule.  The *locale data* those mechanics format with is
- * the POSIX locale's, and the POSIX locale's entire LC_MONETARY block
- * is the "not available" value: no currency symbol, no grouping, no
- * sign strings, {CHAR_MAX} for every numeric field.  So %i and %n here
- * differ from each other, and from "%.2f", by very little.  That is a
- * property of the only locale this library has, not of this
- * implementation, and src/misc/strfmon.c names every place it has to
- * choose a fallback because the locale said "not available".
+ * The conversion-specification mechanics are implemented in full, but the
+ * locale data they format with is the POSIX locale's, whose entire
+ * LC_MONETARY block is "not available" (no currency symbol, no grouping,
+ * no sign strings). So %i and %n differ from each other, and from "%.2f",
+ * by very little -- a property of the only locale this library has.
  */
 #ifndef _MONETARY_H
 #define _MONETARY_H
@@ -42,11 +29,8 @@ extern "C" {
 
 #include <bits/alltypes.h>
 
-/* fmt required -- forwarded, unguarded, into the static vstrfmon() in
- * src/misc/strfmon.c, itself required at its own now-explicit
- * contract (dereferenced unconditionally by the format-scan loop). s
- * is deliberately NOT marked; see the vstrfmon() comment for the one
- * real (if incidental) path where a NULL s does not crash. */
+/* s is deliberately not marked nonnull; see vstrfmon() in strfmon.c for
+ * the one path where a NULL s does not crash. */
 ssize_t strfmon(char *__restrict, size_t, const char *__restrict, ...)
     __attribute__((nonnull(3)));
 ssize_t strfmon_l(char *__restrict, size_t, locale_t,
