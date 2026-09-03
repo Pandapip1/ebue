@@ -26,20 +26,10 @@ extern "C" {
 
 #include <bits/alltypes.h>
 
-/* fcntl.h.html DESCRIPTION: "The <fcntl.h> header shall define the
- * values used for l_whence, SEEK_SET, SEEK_CUR, and SEEK_END as
- * described in <stdio.h>."
- *
- * Unconditional -- the sentence carries no option-group margin marker.
- * It exists so a translation unit doing record locking, which needs
- * this header for struct flock and F_SETLK, can fill in l_whence
- * without also including <stdio.h>; on glibc and musl such a unit
- * compiles, and here it did not.
- *
- * Same values as <stdio.h> and <unistd.h>, and deliberately spelled the
- * same way rather than guarded: C99 6.10.3p2 makes an identical
- * redefinition benign, which is what lets all three headers be included
- * together, and is how <unistd.h> and <stdio.h> already coexist. */
+/* POSIX requires these here unconditionally so record-locking code can fill
+ * in l_whence without also including <stdio.h>. Deliberately spelled the
+ * same as <stdio.h>/<unistd.h>'s own definitions rather than guarded: C99
+ * 6.10.3p2 makes an identical macro redefinition benign. */
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
@@ -49,45 +39,18 @@ extern "C" {
 #define O_RDWR    02
 #define O_ACCMODE 03
 
-/* fcntl.h.html DESCRIPTION: "The <fcntl.h> header shall define the
- * following symbolic constants for use as the file access modes for
- * open(), openat(), and fcntl(). The values shall be unique, except
- * that O_EXEC and O_SEARCH may have equal values."
- *
- * 03 is the only bit pattern O_ACCMODE can still hold that is not
- * already an access mode, and spending it on both -- which is the whole
- * point of the standard's exception -- is what keeps O_ACCMODE itself
- * at 03.  The alternative is musl's: spell both as O_PATH and widen the
- * mask to (03|O_PATH).  Rejected here because it is not additive.  It
- * would reclassify every existing open(..., O_PATH) in a program as an
- * execute-only open, and change the value fcntl(F_GETFL) reports for
- * the descriptors those calls made, purely as a side effect of two new
- * names appearing.  03, by contrast, was already the unreachable arm of
- * the access-mode switch in src/fcntl/open.c, so nothing that compiles
- * today means anything different tomorrow.
- *
- * open() refuses both, with [EINVAL] -- the same answer 03 got before
- * it had names, and read the comment on that switch for why refusing is
- * the honest answer rather than a stub.  These are the header constants
- * only; giving O_SEARCH a traverse-only directory handle and O_EXEC an
- * execute-only one is separate work this does not claim. */
+/* POSIX permits O_EXEC and O_SEARCH to share a value. Both get 03, the one
+ * bit pattern O_ACCMODE had left over (already open()'s unreachable switch
+ * arm), rather than musl's O_PATH approach, which would reclassify existing
+ * open(..., O_PATH) callers as execute-only. open() refuses both with
+ * EINVAL; only the constants are implemented. */
 #define O_EXEC   03
 #define O_SEARCH 03
 
-/* "O_TTY_INIT Set the termios structure terminal parameters to a state
- * that provides conforming behavior... The O_TTY_INIT flag can have the
- * value zero and in this case it need not be bitwise-distinct from the
- * other flags."
- *
- * Zero, and by the clause's own escape hatch rather than as a stub.
- * The only terminal on this platform is the NT console, and the state
- * that gives conforming behavior there is the mode a console comes up
- * in -- processed input, line input, echo, which src/termios/termios.c
- * maps to ISIG|ICANON|ECHO -- so a freshly opened console already
- * satisfies the flag and there is nothing for open() to set.  What is
- * NOT claimed: a console whose mode an earlier process altered is not
- * put back, because nothing in NT distinguishes "as it came up" from
- * "as someone left it". */
+/* Zero, per POSIX's escape hatch allowing O_TTY_INIT to be zero: a freshly
+ * opened NT console already comes up in the conforming state (ISIG|ICANON|
+ * ECHO), so open() has nothing to set. A console an earlier process left
+ * altered is not restored. */
 #define O_TTY_INIT 0
 
 #define O_CREAT        0100

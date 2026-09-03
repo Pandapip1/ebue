@@ -43,30 +43,11 @@
 #define _Noreturn
 #endif
 
-/* __wraps -- "the wraparound in this function is on purpose".
- *
- * Unsigned overflow is not undefined behaviour; it is modular arithmetic
- * (C99 6.2.5p9), which is why -fsanitize=undefined does not check it and
- * -fsanitize=integer does.  Marking the functions that wrap deliberately
- * is what makes an accidental wrap visible, so the annotation is the
- * point of the check, not an escape from it.
- *
- * Only clang has the attribute *and* the check, so only clang gets it.
- * tcc parses __attribute__ and silently ignores contents it does not
- * know, and its __has_attribute() answers 0 for no_sanitize, so either
- * guard alone would do; gcc knows no_sanitize but not these sanitizer
- * names, and warns under -Wattributes (which tools/lint.sh turns on), so
- * the __clang__ test is the one that earns its keep.
- *
- * Internal to the library: programs including <ctype.h> never see it.
- *
- * __has_attribute gets a fallback definition rather than a bare
- * `defined(__has_attribute)` guard: a compiler old enough to lack the
- * builtin cannot be asked whether it has it either, so the fallback
- * just answers 0.  This also keeps cppcheck's --force preprocessor
- * (which explores every #ifdef configuration, including one with
- * __clang__ defined) from hitting __has_attribute(...) as a directive
- * it cannot evaluate at all. */
+/* __wraps marks a function's wraparound as deliberate (unsigned overflow is
+ * modular arithmetic, not UB, so -fsanitize=integer still flags it unless
+ * excluded). Only clang has both the attribute and that sanitizer check;
+ * gcc warns under -Wattributes on unknown sanitizer names, so the
+ * __clang__ guard matters. Internal to the library only. */
 #ifdef _NTLIBC_INTERNAL
 #ifndef __has_attribute
 #define __has_attribute(x) 0
