@@ -37,12 +37,8 @@ typedef struct {
 #define FD_ISSET(d, s) !!((s)->fds_bits[(d)/(8*sizeof(long))] & (1UL<<((d)%(8*sizeof(long)))))
 
 /* select()/pselect(): implemented in src/select/select.c, which has the
- * full design writeup (the wait-vs-poll split across this library's
- * three open descriptor shapes, the latency/CPU trade-off of the 20ms
- * pipe-poll interval, exact timeout semantics, and what pselect()'s
- * sigmask can honestly promise when signal delivery here is always
- * synchronous -- see src/signal/signal.c). poll() (<poll.h>) shares
- * that file's readiness-probe and wait primitives. */
+ * full design writeup. poll() (<poll.h>) shares that file's readiness-
+ * probe and wait primitives. */
 int select (int, fd_set *__restrict, fd_set *__restrict, fd_set *__restrict, struct timeval *__restrict);
 int pselect (int, fd_set *__restrict, fd_set *__restrict, fd_set *__restrict, const struct timespec *__restrict, const sigset_t *__restrict);
 

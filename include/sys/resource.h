@@ -25,12 +25,8 @@ struct rlimit {
 	rlim_t rlim_max;
 };
 
-/* No trailing reserved padding: this reports what NT can actually tell
- * us (src/misc/resource.c) and nothing more.  A `long __reserved[16]`
- * tail lived here for a while; nothing ever read it, and it made the
- * struct far larger than any caller had reason to expect.  See the
- * symbol-preemption note in tools/asan-build.sh for why an oversized
- * struct here is actively dangerous in the native test build. */
+/* No trailing reserved padding: this reports what NT can actually tell us
+ * (src/misc/resource.c) and nothing more. */
 struct rusage {
 	struct timeval ru_utime;
 	struct timeval ru_stime;
@@ -41,98 +37,46 @@ struct rusage {
 
 int getrlimit (int, struct rlimit *);
 
-/* setrlimit(): src/misc/resource.c defines it for the resources NT has a
- * real enforcement primitive for -- RLIMIT_NPROC, RLIMIT_CPU, RLIMIT_AS,
- * RLIMIT_DATA, via a job object this process creates and assigns itself to
- * (NtCreateJobObject/NtAssignProcessToJobObject/NtSetInformationJobObject,
- * src/internal/nt.h) -- and tracks the soft/hard pair itself for every
- * other RLIMIT_* (including the ones below that NT genuinely cannot
- * enforce past process start) so getrlimit() always reports back exactly
- * what the last successful setrlimit() call recorded. RLIMIT_NOFILE,
- * RLIMIT_STACK, RLIMIT_FSIZE, RLIMIT_CORE, RLIMIT_RSS, RLIMIT_MEMLOCK
- * still have no NT mechanism that can shrink what they actually cap after
- * this process has started (FD_MAX is a compile-time array bound, not a
- * runtime ceiling; NT fixes stack reservation at NtCreateThreadEx() time;
- * there is no per-process max-file-size, core-dump-size, RSS, or
- * mlock-budget primitive at all) -- setrlimit() accordingly only accepts
- * a request for one of these that does not ask for stricter enforcement
- * than the fixed value it already reports (asking to raise, or to repeat,
- * the existing ceiling is a harmless no-op; asking to lower it would be
- * exactly the misrepresentation this comment used to warn about, so that
- * is rejected with EINVAL instead of silently accepted).
+/* setrlimit() on NT: RLIMIT_NPROC/CPU/AS/DATA have a real enforcement
+ * primitive (a job object this process assigns itself to); every other
+ * RLIMIT_* is tracked soft/hard in process state so getrlimit() reads back
+ * exactly what was last set. RLIMIT_NOFILE/STACK/FSIZE/CORE/RSS/MEMLOCK
+ * have no NT mechanism to shrink what they cap after process start, so
+ * setrlimit() rejects a stricter request for these with EINVAL rather
+ * than silently misrepresenting the ceiling.
  *
- * THAT PARAGRAPH IS NT-ONLY, and stays because it is still true of, and
- * only checked against, the NT build. Linux's real setrlimit(2)/
- * prlimit64(2) genuinely enforces all four of RLIMIT_STACK/CORE/RSS/
- * MEMLOCK (RLIMIT_RSS is the one worth flagging honestly even there --
- * the kernel has accepted and stored a value for it without ever acting
- * on it since 2.4.30/2.6.9, per its own man page -- but the syscall
- * itself is real, and genuinely enforced for the other three), so
- * src/misc/resource.c's setrlimit() accepts a real lowering for these
- * four on Linux and reflects it onto the kernel via prlimit64(2)
- * (src/misc/linux/plat_misc.c's __plat_rlimit_apply_extra()), the same
- * way it already does for RLIMIT_NPROC/CPU/AS/DATA above. */
+ * On Linux, setrlimit()/prlimit64(2) genuinely enforces STACK/CORE/RSS/
+ * MEMLOCK too (RLIMIT_RSS is accepted and stored by the kernel but never
+ * acted on, per its own man page), so a real lowering is accepted and
+ * reflected onto the kernel for those four as well. */
 int setrlimit (int, const struct rlimit *);
 int getrusage (int, struct rusage *);
 
-/* getpriority()/setpriority(): POSIX.1-2017 base functions (moved from XSI
- * to BASE in Issue 5, getpriority.html "Standards Status"). NZERO is the
- * default nice value; the valid *returned* nice range is
+/* NZERO is the default nice value; the valid *returned* nice range is
  * [-NZERO, NZERO-1].
  *
- * Mapping onto NT: this process's own nice value is tracked directly (the
- * authoritative source getpriority() reads back for PRIO_PROCESS on
- * itself), and mirrored onto NtSetInformationProcess(ProcessPriorityClass)
- * as best-effort real NT-visible effect. NtSetInformationProcess's other
- * plausible route, the finer-grained ProcessBasePriority class, turns out
- * not to be implemented by every NT workalike this library's test suite
- * runs against (confirmed: STATUS_NOT_IMPLEMENTED from the Wine build
- * this project's own CI uses, even though a newer Wine tree does
- * implement it -- src/misc/resource.c has the detail); ProcessPriorityClass
- * is the coarser but far more portable mechanism (it is what kernel32's
- * SetPriorityClass() has always been built on), so that is what is used:
- *     nice == 0         -> PROCESS_PRIOCLASS_NORMAL
- *     0  < nice < 10     -> PROCESS_PRIOCLASS_BELOW_NORMAL
- *     10 <= nice <= 19   -> PROCESS_PRIOCLASS_IDLE
- * (each successive class is less favorable to the process, matching the
- * POSIX direction of higher nice meaning friendlier to other processes).
- * Since an unprivileged caller may never set a negative nice value at all
- * (see EACCES below), the classes above NORMAL are never reached from
- * this process's own setpriority() calls, and are listed here only for
- * completeness (src/internal/nt.h). This maps 20 nice values onto 3
- * classes -- badly lossy -- but every setpriority() this process issues
- * against itself is remembered verbatim in a small piece of process-local
- * state, so getpriority() on one's own process always reads back exactly
- * what was last set, regardless of how coarse the NT-visible side effect
- * is. A *foreign* process's nice value (queried, never cached) is derived
- * from PROCESS_BASIC_INFORMATION.BasePriority via
- * nice = clamp(8 - bp, -20, 19), best-effort in two ways: ntlibc has no
- * cache for a priority it did not itself set, and that BasePriority field
- * is not reliably populated for a 32-bit process running under WOW64 on
- * at least the Wine build this project tests against (its own test
- * suite, dlls/ntdll/tests/info.c, marks exactly that field `todo_wine`
- * under is_wow64 after a priority change) -- both honestly approximate,
- * not exact, for a process this one did not set the priority of itself.
+ * This process's own nice value is tracked directly in process-local state
+ * (the authoritative source getpriority() reads back on itself), and
+ * mirrored best-effort onto NtSetInformationProcess(ProcessPriorityClass)
+ * -- the coarser but more portable class, since the finer-grained
+ * ProcessBasePriority is not implemented by every NT workalike this
+ * project tests against. This maps 20 nice values onto 3 classes, badly
+ * lossy on the NT-visible side, but getpriority() on one's own process
+ * still reads back exactly what was last set. A *foreign* process's nice
+ * value is instead derived from PROCESS_BASIC_INFORMATION.BasePriority,
+ * best-effort and approximate (that field is not reliably populated for a
+ * 32-bit process under WOW64 on at least the Wine build this project
+ * tests against).
  *
- * PRIO_PGRP/PRIO_USER: ntlibc models a process group this process is
- * always the only nameable member of (src/unistd/ids.c keeps the id as
- * per-process bookkeeping; no call there reports another process's
- * group) and exactly one current user (geteuid() maps the process token),
- * so who==0,
- * who==getpgrp(), or who==geteuid() all honestly denote "this process,
- * the sole member of its own group and the sole process running as this
- * uid" and behave exactly like PRIO_PROCESS on self. Any other who value
- * cannot name a group or user this library tracks, so it is ESRCH -- no
- * group/user directory exists to search.
+ * PRIO_PGRP/PRIO_USER: ntlibc models a process group and user this process
+ * is always the sole member of, so who==0, who==getpgrp(), or
+ * who==geteuid() all behave exactly like PRIO_PROCESS on self; any other
+ * who is ESRCH.
  *
- * nice() (declared by <unistd.h>) moves the same value and is implemented
- * in src/misc/resource.c in terms of these two, so a caller cannot get a
- * different answer depending on which page it asks through. It counts
- * from the other origin -- nice()'s scale is [0, 2*NZERO-1] with the
- * default at NZERO, this one's is that less NZERO -- and its [EPERM] is
- * stated on the sign of incr where setpriority()'s [EACCES] is stated on
- * the resulting value; src/misc/resource.c has both differences in
- * full. */
+ * nice() (<unistd.h>) is implemented in terms of these two but counts
+ * from a different origin -- its scale is [0, 2*NZERO-1] rather than
+ * this one's [-NZERO, NZERO-1] -- see src/misc/resource.c for the
+ * EPERM/EACCES difference too. */
 #define NZERO 20
 #define PRIO_PROCESS 0
 #define PRIO_PGRP 1
