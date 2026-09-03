@@ -733,14 +733,19 @@ static int ensure_parent_dirs(const char *path)
 }
 
 /* Drains `m`'s data out of `reader` without writing it anywhere, for a
- * regular-file member materialize() has decided not to extract (a -k/-u
- * skip, or a parent-directory failure) -- keeps the archive stream
- * positioned at the next member's header instead of leaving it stuck
- * mid-data.  `reader` is NULL in copy mode (there is no archive to
+ * member materialize() has decided not to extract (a -k/-u skip, or a
+ * parent-directory failure) -- keeps the archive stream positioned at
+ * the next member's header instead of leaving it stuck mid-data. Only
+ * PAX_REG and PAX_HARDLINK members carry data blocks of their own
+ * (matching reader_skip_data()'s own PAX_REG || PAX_HARDLINK check
+ * above -- a foreign/malformed archive is not required to zero a
+ * hardlink member's size field the way this build's own writer
+ * always does). `reader` is NULL in copy mode (there is no archive to
  * drain from), so this is a harmless no-op there. */
 static void materialize_skip_data(struct pax_reader *reader, const struct pax_member *m)
 {
-	if (reader && m->type == PAX_REG) pax_reader_copy_data(reader, m, -1);
+	if (reader && (m->type == PAX_REG || m->type == PAX_HARDLINK))
+		pax_reader_copy_data(reader, m, -1);
 }
 
 /* Creates one filesystem entry for `m` at `destpath`, reading `size`

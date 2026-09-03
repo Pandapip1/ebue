@@ -88,6 +88,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include "util.h"
 
 struct field { size_t start, end; };
@@ -231,16 +232,31 @@ static size_t key_end_off(const char *line, size_t len, const struct field *fiel
 
 /* ==== character-level comparison ========================================= */
 
+/* An absurdly long numeric sort key (30+ digits under `sort -n`) must
+ * not be allowed to wrap around long long's range: a wrapped value can
+ * come out negative or otherwise smaller than a normal-sized key it
+ * should sort *after*, flipping the comparison order.  POSIX sort still
+ * has to process the rest of the file even when one field is malformed
+ * or extreme, so this saturates to LLONG_MAX/LLONG_MIN -- "at least
+ * this large" -- rather than erroring the line out; the overflow check
+ * happens before each multiply/add so `v` never actually wraps. */
 static long long parse_numeric(const char *s, size_t len)
 {
 	size_t i = 0;
 	int neg = 0;
 	long long v = 0;
+	int overflowed = 0;
 
 	while (i < len && isblank((unsigned char)s[i])) i++;
 	if (i < len && s[i] == '-') { neg = 1; i++; }
-	for (; i < len && s[i] >= '0' && s[i] <= '9'; i++) v = v * 10 + (s[i] - '0');
-	return neg ? -v : v;
+	for (; i < len && s[i] >= '0' && s[i] <= '9'; i++) {
+		int digit = s[i] - '0';
+		if (v > (LLONG_MAX - digit) / 10) { overflowed = 1; break; }
+		v = v * 10 + digit;
+	}
+	if (overflowed) v = LLONG_MAX;
+	if (!neg) return v;
+	return overflowed ? LLONG_MIN : -v;
 }
 
 static int char_passes(unsigned char c, int d, int i) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles

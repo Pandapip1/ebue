@@ -209,6 +209,18 @@ static void test_sort_dash_n(void)
 	check_out(sort_path, argv, "2\n4\n10\n33\n");
 }
 
+/* A numeric key long enough to overflow long long must saturate to
+ * "largest possible value" rather than silently wrapping around --
+ * a naive `v = v * 10 + digit` accumulator wraps this particular
+ * 20-digit value to a large *negative* long long, which would sort it
+ * before -3 instead of after 100. */
+static void test_sort_dash_n_overflow_saturates(void)
+{
+	char *argv[] = { (char *)"sort", (char *)"-n", (char *)"scratch/s2b", 0 };
+	make_file("scratch/s2b", "100\n5\n91311472887713638272\n42\n7\n-3\n");
+	check_out(sort_path, argv, "-3\n5\n7\n42\n100\n91311472887713638272\n");
+}
+
 static void test_sort_dash_u(void)
 {
 	char *argv[] = { (char *)"sort", (char *)"-u", (char *)"scratch/s3", 0 };
@@ -463,6 +475,7 @@ static void test_builtins_match_standalone(void)
 static void rmtree_scratch(void)
 {
 	unlink("scratch/s1"); unlink("scratch/s1sorted"); unlink("scratch/s2");
+	unlink("scratch/s2b");
 	unlink("scratch/s3"); unlink("scratch/s4"); unlink("scratch/s5");
 	unlink("scratch/s6");
 	unlink("scratch/u1"); unlink("scratch/u2"); unlink("scratch/u3");
@@ -513,6 +526,7 @@ int main(int argc, char **argv)
 	test_sort_basic();
 	test_sort_dash_r();
 	test_sort_dash_n();
+	test_sort_dash_n_overflow_saturates();
 	test_sort_dash_u();
 	test_sort_multikey_numeric_tiebreak();
 	test_sort_dash_t_and_tiebreak();

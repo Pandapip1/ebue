@@ -21,6 +21,28 @@ static void set_shortname(struct term_ident *out, const char *s)
 	    base);
 }
 
+/* S_ISCHR() alone does not mean "terminal" -- /dev/null, /dev/zero,
+ * and every other non-tty character device are S_ISCHR too.  A
+ * resolved device path is only really a terminal if it is one of the
+ * shapes the Linux kernel actually hands out for ttys: a pty slave
+ * (/dev/pts/N), a virtual console or serial line (/dev/ttyN,
+ * /dev/ttyS0, ...), or the /dev/tty and /dev/console aliases
+ * themselves. */
+static int path_looks_like_tty(const char *path)
+{
+	static const char *const tty_prefixes[] = {
+		"/dev/pts/",
+		"/dev/tty",
+		"/dev/console",
+	};
+	size_t i;
+	for (i = 0; i < sizeof tty_prefixes / sizeof tty_prefixes[0]; i++) {
+		size_t len = strlen(tty_prefixes[i]);
+		if (strncmp(path, tty_prefixes[i], len) == 0) return 1;
+	}
+	return 0;
+}
+
 /* Describes fd, if it is a terminal at all.  Returns 1 (out filled) or
  * 0 (out left untouched -- caller tries the next candidate fd). */
 static int describe_fd(int fd, struct term_ident *out)
@@ -36,9 +58,15 @@ static int describe_fd(int fd, struct term_ident *out)
 		n = readlink(procpath, out->path, sizeof out->path - 1);
 		if (n > 0) {
 			out->path[n] = 0;
-			out->opaque = 0;
-			set_shortname(out, out->path);
-			return 1;
+			if (path_looks_like_tty(out->path)) {
+				out->opaque = 0;
+				set_shortname(out, out->path);
+				return 1;
+			}
+			/* A real, resolved char-device path that is not
+			 * tty-shaped (/dev/null, /dev/zero, ...): not a
+			 * terminal.  Fall through to isatty() below, same
+			 * as any other non-terminal fd. */
 		}
 		/* readlink() failing here (no /proc -- NT, or a Linux
 		 * process started with procfs unmounted) is not itself
