@@ -2268,8 +2268,9 @@ static int man_render_table(struct man_ctx *c, struct man_macro *body)
 			struct man_argv opts;
 			char optline[512];
 			size_t copylen = len - 1;
+			size_t k;
 			if (copylen >= sizeof optline) copylen = sizeof optline - 1;
-			memcpy(optline, body->lines[li] + start, copylen);
+			for (k = 0; k < copylen; k++) optline[k] = body->lines[li][start + k];
 			optline[copylen] = 0;
 			if (!man_tbl_split(optline, &opts)) return 0;
 			for (i = 0; i < opts.n; i++) {
@@ -2307,7 +2308,10 @@ static int man_render_table(struct man_ctx *c, struct man_macro *body)
 
 		clen = llen;
 		if (clen >= sizeof tmp) clen = sizeof tmp - 1;
-		memcpy(tmp, body->lines[li] + start, clen);
+		{
+			size_t k;
+			for (k = 0; k < clen; k++) tmp[k] = body->lines[li][start + k];
+		}
 		tmp[clen] = 0;
 		if (!man_tbl_split(tmp, &toks)) { man_tbl_fmt_free(&fmt); return 0; }
 
