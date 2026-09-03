@@ -42,7 +42,7 @@
  * /run/current-system/sw/share/terminfo), but that's an artifact of
  * this machine, not something a shipped binary could rely on: Windows
  * NT has no terminal database at all, and this project's native-Linux
- * target is a from-scratch bootstrap environment (boot/kaem/*.kaem)
+ * target is a from-scratch bootstrap environment (see boot/kaem/)
  * that cannot assume ncurses-data/terminfo is installed either. So the
  * table is fixed: five terminal types (xterm, xterm-256color, vt100,
  * ansi, dumb) with capability strings hand-copied from `infocmp`

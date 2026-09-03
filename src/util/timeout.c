@@ -22,7 +22,7 @@
  * OPTIONS implemented (this tree's usual "-xVALUE or -x VALUE, never
  * -x -- VALUE" attachment convention -- see e.g. src/util/uniq.c's
  * -f/-s -- no bundled short options, no getopt(3), no long options;
- * consistent with every other src/util/*.c in this tree):
+ * consistent with every other *.c file in src/util/):
  *
  *  -s signal   Send this signal instead of the default SIGTERM.
  *              Accepts a name (with or without a leading "SIG",
@@ -44,7 +44,7 @@
  * "sending signal N to command" diagnostic), and every GNU long-option
  * spelling (--signal=, --kill-after=, ...) -- none of the short
  * options above have a long-option twin here for the same reason no
- * other src/util/*.c in this tree does.
+ * other *.c file in src/util/ does.
  *
  * DURATION grammar: GNU's own -- "a floating point number with an
  * optional suffix: 's' for seconds (the default), 'm' for minutes,

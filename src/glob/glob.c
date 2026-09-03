@@ -223,9 +223,10 @@ static int join(char *out withtok(writable_span(outcap)), size_t outcap,
  * that one top-level glob() call will perform before giving up as
  * though it had run out of memory. Recursion depth here is already
  * bounded by the pattern's own component count (the NOLINT below), but
- * depth is not the axis that matters: a pattern of the shape
- * "* /../* /../* /../..." (a wildcard immediately undone by a literal
- * "..", repeated) revisits the SAME directory at the SAME depth every
+ * depth is not the axis that matters: a pattern shaped like repeated
+ * wildcard/../wildcard/../wildcard/../.. components (a wildcard
+ * immediately undone by a literal "..", repeated) revisits the SAME
+ * directory at the SAME depth every
  * time, and each visit re-multiplies by however many entries that
  * directory has, so the number of do_glob() CALLS is exponential in the
  * number of repeats even though the directory tree involved is tiny and
@@ -509,9 +510,8 @@ nospace:
  * GLOB_STEP_LIMIT is a defensive CAP: it stops a pathological pattern
  * from running forever, but it does so by giving up (GLOB_NOSPACE) on
  * exactly the patterns a real caller is most likely to write by hand --
- * "* /../* /../* /../foo" (without the spaces the pattern needs to stop
- * that from also ending THIS comment) is not an exotic adversarial
- * input, it looks
+ * repeated wildcard/../wildcard/../wildcard/../foo components is not
+ * an exotic adversarial input, it looks
  * like the kind of thing a generated or templated path ends up as. The
  * cap alone still does all the wasted enumeration work up to the
  * ceiling before giving up.

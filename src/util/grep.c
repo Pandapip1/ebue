@@ -38,7 +38,7 @@
  * even though XCU's Utility Syntax Guideline 5 permits it and grep's
  * own SYNOPSIS groups `-insvx` suggestively -- every other utility in
  * this tree already made the same choice (checked before writing this
- * file: no src/util/*.c parses bundled short options), and grep does
+ * file: no *.c file in src/util/ parses bundled short options), and grep does
  * not break that consistency.
  *
  * -E/-F and -c/-l/-q are each read as genuinely mutually exclusive,

@@ -124,7 +124,7 @@ static char *dupn(const char *s, size_t n)
 	return r;
 }
 
-/* Grows *buf/*cap by at least one byte for *n to write into; returns 0
+/* Grows *buf and *cap by at least one byte for *n to write into; returns 0
  * on allocation failure (buffer left usable, just not grown). */
 static int growbuf(char **buf, size_t *cap, size_t n)
 {

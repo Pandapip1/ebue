@@ -2677,7 +2677,7 @@ static int man_read_page(const char *path, char **out, size_t *outlen)
  * source) or, once decode_text() has expanded its escapes, "<name> -
  * <description>" -- so the first " - " (space, hyphen, space) in the
  * decoded text is the separator between the redundant name repeat and
- * the actual description. Points *out/*out_len at the description; on
+ * the actual description. Points *out and *out_len at the description; on
  * a malformed or nonstandard NAME line with no such separator, leaves
  * them pointing at the whole decoded line unchanged -- printing the
  * raw line is still more useful than reporting no description at all. */
