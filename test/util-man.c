@@ -575,7 +575,7 @@ static const char ADJUSTTEST_1[] =
 	"AdjustNXXX7 AdjustNXXX8 AdjustNXXX9\n";
 
 /* ==== fixture page 1g: exercises Tier 7 hyphenation (.hy/.nh) -- see
- * src/util/man.c's own "HYPHENATION" header comment. Four paragraphs, all
+ * src/util/man.c's own "HYPHENATION" header comment. Five paragraphs, all
  * at this file's documented 80-column default width (no $COLUMNS in this
  * test's own environment) and MAN_BASE_INDENT of 7 (73 columns
  * available), the same arithmetic ADJUSTTEST_1 above hand-verifies:
@@ -598,7 +598,17 @@ static const char ADJUSTTEST_1[] =
  *    shape, the word is deferred whole, exactly like P2.
  *  - P4 (.hy on, "understanding" placed where it comfortably fits):
  *    proves hyphenation is only ever attempted when a word doesn't fit
- *    -- the word must render intact, unsplit, on one line. */
+ *    -- the word must render intact, unsplit, on one line.
+ *  - P5 (.hy on, same filler shape as P1, but the word being split is
+ *    exactly MAN_HYPH_MAX_WORD - 2 == 54 ASCII letters -- the longest
+ *    word man_hyph_word_ok() ever accepts, where man_hyph_find_points()'s
+ *    own dotted-word length (wlen + 2) reaches MAN_HYPH_MAX_WORD exactly.
+ *    A real, execution-based regression case for a fixed off-by-one that
+ *    wrote one int past the end of that function's own `vals[]` stack
+ *    array at precisely this boundary -- not merely reasoned about.
+ *    "under" + "standing" x6 + "s" (5 + 48 + 1 == 54) still carries this
+ *    file's own recognised ".under3" prefix, so the same "under-" split
+ *    point P1 exercises is still the expected, correct result here. */
 static const char HYPHTEST_1[] =
 	".TH HYPHTEST 1 \"2026\" \"ntlibc test\" \"ntlibc Test Suite\"\n"
 	".SH NAME\n"
@@ -617,7 +627,11 @@ static const char HYPHTEST_1[] =
 	"understanding\n"
 	".PP\n"
 	".hy\n"
-	"A short line with the word understanding placed early enough to fit.\n";
+	"A short line with the word understanding placed early enough to fit.\n"
+	".PP\n"
+	".hy\n"
+	"P5FillerAA P5FillerBB P5FillerCC P5FillerDD P5FillerEE P5FillerFF "
+	"understandingstandingstandingstandingstandingstandings afterward\n";
 
 /* ==== fixture page 2: a real, unmodified 210-line prefix of GNU grep's
  * own grep.1 (gzip -dc'd by hand from a real Linux system's
@@ -1525,7 +1539,7 @@ static void test_adjustment(void)
 
 static void test_hyphenation(void)
 {
-	const char *p1, *p1n, *p2, *p2n, *p3, *p3n, *p4;
+	const char *p1, *p1n, *p2, *p2n, *p3, *p3n, *p4, *p5, *p5n;
 	char *argv[3];
 	argv[0] = (char *)"man"; argv[1] = (char *)"hyphtest"; argv[2] = 0;
 	CHECK(run(man_path, argv) == 0);
@@ -1576,6 +1590,22 @@ static void test_hyphenation(void)
 		 * place a word that doesn't fit". */
 		CHECK(line_has_substr(p4, "understanding"));
 		CHECK(!line_has_substr(p4, "under-"));
+	}
+
+	p5 = find_line(plainbuf, "P5FillerFF");
+	CHECK(p5 != 0);
+	if (p5) {
+		p5n = p5 + line_len(p5) + 1;
+		/* Regression case for a fixed stack-buffer overflow: the word
+		 * being split here is exactly 54 ASCII letters -- the longest
+		 * man_hyph_word_ok() ever accepts -- which makes man_hyph_
+		 * find_points()'s own dotted-word length (wlen + 2) land on
+		 * exactly MAN_HYPH_MAX_WORD, one past the end of that
+		 * function's un-fixed `vals[]`. The correct result is still
+		 * the same "under-" split point P1 above exercises. */
+		CHECK(line_has_substr(p5, "under-"));
+		CHECK(!line_has_substr(p5, "understandingstanding"));
+		CHECK(line_has_substr(p5n, "standingstanding"));
 	}
 }
 

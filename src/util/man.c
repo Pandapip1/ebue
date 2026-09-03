@@ -1948,7 +1948,14 @@ static int man_hyph_word_ok(const char *word, size_t wlen)
 static int man_hyph_find_points(const char *word, size_t wlen, int *points, int max_points)
 {
 	char dotted[MAN_HYPH_MAX_WORD];
-	int vals[MAN_HYPH_MAX_WORD];
+	int vals[MAN_HYPH_MAX_WORD + 1]; /* one gap-weight slot per dotted-word
+	                                    * BYTE POSITION, 0..dlen inclusive
+	                                    * (dlen == wlen+2 can reach
+	                                    * MAN_HYPH_MAX_WORD exactly at the
+	                                    * longest word man_hyph_word_ok()
+	                                    * allows) -- one wider than
+	                                    * `dotted` itself, which only ever
+	                                    * needs indices 0..dlen-1. */
 	size_t dlen, i, p;
 	int n = 0;
 
