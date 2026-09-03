@@ -247,12 +247,14 @@ static void poll_once(const char *dir)
 			 * than lose track of it. Re-claiming means renaming it
 			 * back so the next tick's own is-it-due scan finds it
 			 * again. */
-			rename(running, path);
+			if (rename(running, path) < 0)
+				fprintf(stderr, "atd: cannot re-queue %s: %s\n", id, strerror(errno));
 			continue;
 		}
 		pid = spawn_job(dir, id, running);
 		if (pid < 0) {
-			unlink(running);
+			if (unlink(running) < 0)
+				fprintf(stderr, "atd: cannot clean up %s: %s\n", id, strerror(errno));
 			continue;
 		}
 		g_running[g_nrunning].pid = pid;
