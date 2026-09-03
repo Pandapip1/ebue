@@ -93,11 +93,6 @@ struct stat {
 #define UTIME_OMIT 0x3ffffffe
 
 int stat(const char *__restrict, struct stat *__restrict);
-/* st is required: src/stat/stat.c's fstat() writes through it
- * unconditionally on the shm-mode-fixup path (`st->st_mode = ...`),
- * reached whenever the underlying __plat_fstat()/__vfs_stat() call
- * that already used st itself succeeded, with no NULL check of its
- * own anywhere in this function. */
 int fstat(int, struct stat *) __attribute__((nonnull(2)));
 int lstat(const char *__restrict, struct stat *__restrict);
 int fstatat(int, const char *__restrict, struct stat *__restrict, int);
