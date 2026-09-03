@@ -2,37 +2,23 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * The four AddressSanitizer entry points fuzz/ntstubs.c calls, supplied
- * for the build that has no AddressSanitizer in it.
+ * for the build that has no AddressSanitizer in it (NTLIBC_SAN_MODE=ubsan,
+ * where those four names are simply undefined otherwise).
  *
- * ntstubs.c answers RtlAllocateHeap/RtlFreeHeap/RtlReAllocateHeap/
- * RtlSizeHeap with __interceptor_malloc and friends, and it does so on
- * purpose: routing ntlibc's heap through ASan's allocator is what makes
- * every ntlibc allocation visible to ASan and to LeakSanitizer with a
- * full ntlibc stack behind it (see the LeakSanitizer paragraph in
- * tools/asan-build.sh).  In NTLIBC_SAN_MODE=ubsan there is no such
- * allocator, and those four names are simply undefined.
+ * A name-resolution shim, not a replacement allocator: each function
+ * forwards to the host libc's, so ntstubs.c gets glibc's malloc rather
+ * than ASan's -- no redzones, no quarantine, no LeakSanitizer. Nothing
+ * here can put those back.
  *
- * WHAT THIS FILE IS AND IS NOT.  It is a name-resolution shim, not a
- * replacement allocator: each function forwards to the host libc's, so
- * the behaviour ntstubs.c gets is glibc's malloc rather than ASan's.
- * That is the whole of the difference, and it is exactly the capability
- * that mode loses -- no redzones, so no heap-buffer-overflow detection;
- * no quarantine, so no use-after-free or double-free detection; no
- * LeakSanitizer.  Nothing here can put those back, and nothing here
- * should pretend to.
- *
- * WHY dlsym RATHER THAN CALLING malloc().  For the same reason
- * fuzz/host_oracle.c does it: `malloc` in this link is *ntlibc's* --
- * src/malloc/malloc.o is in the link and the static linker binds to the
- * definition it can already see.  Calling it here would route
- * RtlAllocateHeap back into the allocator that is implemented in terms
- * of RtlAllocateHeap.  Going through an explicit libc.so.6 handle
- * reaches glibc's, and cannot see ntlibc's hidden-visibility ones at
- * all.
+ * dlsym, not a direct call to malloc(): `malloc` in this link is
+ * *ntlibc's* (src/malloc/malloc.o is in the link and the static linker
+ * binds to the definition it can already see), so calling it here would
+ * route RtlAllocateHeap back into the allocator implemented in terms of
+ * RtlAllocateHeap. An explicit libc.so.6 handle reaches glibc's instead.
  *
  * Compiled against the HOST headers, like host_oracle.c and unlike
  * everything else in this directory -- it has to agree with glibc about
- * size_t and about malloc_usable_size, not with ntlibc.
+ * size_t and malloc_usable_size, not with ntlibc.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -78,19 +64,11 @@ void *__interceptor_realloc(void *p, size_t n)
 	return f(p, n);
 }
 
-/* RtlSizeHeap's answer.  malloc_usable_size() is glibc's nearest
- * equivalent to __sanitizer_get_allocated_size() and differs in one way
- * that matters to a reader of this code: it returns the size of the
- * BUCKET, which is >= the requested size, where the sanitizer returns
- * exactly what was asked for.  Anything in ntlibc that trusted
- * RtlSizeHeap as an exact figure would therefore be handed a larger
- * number here than under ASan.  Its one caller today is ntlibc's own
- * malloc_usable_size() (src/malloc/malloc.c), whose documented answer
- * IS the usable bucket size rather than the requested one -- so for that
- * caller this is not merely safe, it is the more faithful of the two.
- * Recorded anyway, because "right for today's only caller" is not the
- * same claim as "equivalent", and the next caller may want the other
- * one. */
+/* RtlSizeHeap's answer. malloc_usable_size() returns the size of the
+ * BUCKET (>= the requested size), where __sanitizer_get_allocated_size()
+ * under ASan returns exactly what was asked for -- a real difference,
+ * though harmless for its one caller today, ntlibc's own
+ * malloc_usable_size(), whose documented answer IS the bucket size. */
 size_t __sanitizer_get_allocated_size(const void *p)
 {
 	static size_t (*f)(void *);
@@ -98,24 +76,13 @@ size_t __sanitizer_get_allocated_size(const void *p)
 	return f((void *)p);
 }
 
-/* ------------------------------------------- LeakSanitizer's two switches
- *
- * __lsan_disable()/__lsan_enable() bracket a region whose allocations
- * LeakSanitizer should not report.  fuzz/fuzz_shparse.c uses them around
- * a deliberately-leaked parse, and libFuzzer's own ExternalFunctions
+/* __lsan_disable()/__lsan_enable() bracket a region whose allocations
+ * LeakSanitizer should not report. fuzz_shparse.c uses them around a
+ * deliberately-leaked parse, and libFuzzer's own ExternalFunctions
  * constructor references them too, so without definitions the link fails
- * outright in this mode -- which is how this gap was found, by building
- * every harness rather than the ones this work touched.
- *
- * No-ops, and exactly right as no-ops: the request is "suspend leak
- * detection here", and in a build with no LeakSanitizer there is no leak
- * detection to suspend.  This is NOT the shim quietly satisfying a check
- * that should have failed -- the check is absent for the whole run, not
- * only inside the bracket, and that absence is stated everywhere this
- * mode is described.  A harness whose point is a leak assertion is
- * vacuous here, and fuzz_shparse's is: its leak fence asserts nothing in
- * this mode.  The mode-wide statement covers it; a per-call warning
- * would fire millions of times and be read by nobody.
+ * outright in this mode. No-ops are exactly right: with no
+ * LeakSanitizer, there is no leak detection to suspend, so
+ * fuzz_shparse's leak fence is simply vacuous here.
  */
 void __lsan_disable(void) { }
 void __lsan_enable(void) { }
