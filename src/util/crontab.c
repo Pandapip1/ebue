@@ -238,9 +238,13 @@ static int do_edit(void)
 	if (cur) {
 		int c;
 		while ((c = fgetc(cur)) != EOF) fputc(c, tf);
-		fclose(cur);
+		(void)fclose(cur);
 	}
-	fclose(tf);
+	if (fclose(tf) != 0) {
+		__util_diagf("crontab: %s: %s\n", tmpl, strerror(errno));
+		unlink(tmpl);
+		return 1;
+	}
 
 	editor = getenv("VISUAL");
 	if (!editor || !*editor) editor = getenv("EDITOR");
