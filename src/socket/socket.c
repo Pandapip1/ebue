@@ -2,34 +2,20 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * socket(): https://pubs.opengroup.org/onlinepubs/9699919799/functions/
- * socket.html.  "create an unbound socket in a communications domain,
- * and return a file descriptor" (DESCRIPTION) -- this project's
- * declared scope (see <sys/socket.h>'s banner) is AF_INET/SOCK_STREAM,
- * AF_INET/SOCK_DGRAM, and an anonymous AF_UNIX/SOCK_DGRAM; everything
- * else is EAFNOSUPPORT/EPROTOTYPE/EPROTONOSUPPORT (mandatory ERRORS).
+ * socket.html.  Scope is AF_INET/SOCK_STREAM, AF_INET/SOCK_DGRAM, and an
+ * anonymous AF_UNIX/SOCK_DGRAM; everything else is EAFNOSUPPORT/
+ * EPROTOTYPE/EPROTONOSUPPORT.
  *
- * AF_UNIX/SOCK_DGRAM (2026-09-01): this project has no <sys/un.h> (no
- * pathname-bearing AF_UNIX address exists to bind() one to), so what
- * socket(AF_UNIX, SOCK_DGRAM, 0) hands back is, underneath, the exact
- * same AF_INET/SOCK_DGRAM (UDP) endpoint socket(AF_INET, SOCK_DGRAM, 0)
- * would -- unbound, unconnected, usable with this project's own
- * AF_INET sockaddr_in if the caller bind()s/connect()s it explicitly,
- * and it is what src/socket/socketpair.c's own AF_UNIX/SOCK_DGRAM path
- * builds a connected pair out of.  This is the same standing precedent
- * socketpair.c's AF_UNIX/SOCK_STREAM path already established for
- * accept()ed/connect()ed peers reporting AF_INET addresses rather than
- * AF_UNIX ones -- not a new kind of shortcut.
+ * AF_UNIX/SOCK_DGRAM: this project has no <sys/un.h>, so
+ * socket(AF_UNIX, SOCK_DGRAM, 0) hands back the same underlying
+ * AF_INET/SOCK_DGRAM endpoint socket(AF_INET, SOCK_DGRAM, 0) would --
+ * what socketpair.c's AF_UNIX/SOCK_DGRAM path builds its connected pair
+ * out of, the same precedent its AF_UNIX/SOCK_STREAM path already set
+ * for peers reporting AF_INET addresses.
  *
- * SOCK_CLOEXEC/SOCK_NONBLOCK (same page, DESCRIPTION's "type"
- * paragraph): both bits live in `type` alongside the socket type
- * itself, so both are masked off before the SOCK_STREAM/SOCK_DGRAM
- * comparison and folded into the new fd's flags word instead -- the
- * same close-on-exec and nonblocking-mode plumbing open() already uses
- * (src/fcntl/open.c, src/internal/fd.c's exec-time sweep for
- * O_CLOEXEC), just reached from socket() instead of open().  See
- * <sys/socket.h>'s own comments on the macros for why each reuses its
- * O_ bit value, and SOCK_NONBLOCK's in particular for what storing the
- * bit does and does not change about socket I/O.
+ * SOCK_CLOEXEC/SOCK_NONBLOCK bits live in `type`; both are masked off
+ * before the SOCK_STREAM/SOCK_DGRAM comparison and folded into the new
+ * fd's flags word instead, the same plumbing open() uses.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -54,13 +40,10 @@ int socket(int domain, int type, int protocol) // NOLINT(bugprone-easily-swappab
 
 	if (domain != AF_INET && domain != AF_UNIX) { errno = EAFNOSUPPORT; return -1; }
 	if (t != SOCK_STREAM && t != SOCK_DGRAM) { errno = EPROTOTYPE; return -1; }
-	/* AF_UNIX/SOCK_STREAM: not one of the two pairs this project
-	 * creates (see this file's banner) -- AF_UNIX/SOCK_STREAM only
-	 * exists internally, inside socketpair.c's own loopback-TCP
-	 * construction, never reached through this front door.  EPROTONOSUPPORT,
-	 * not EAFNOSUPPORT: the family is real, this exact family/type
-	 * combination is what is missing (ERRORS: "The protocol is not
-	 * supported by the address family"). */
+	/* AF_UNIX/SOCK_STREAM exists only internally (socketpair.c's
+	 * loopback-TCP construction), never reached through this front
+	 * door. EPROTONOSUPPORT not EAFNOSUPPORT: the family is real, just
+	 * this family/type combination isn't supported. */
 	if (domain == AF_UNIX && t != SOCK_DGRAM) { errno = EPROTONOSUPPORT; return -1; }
 	if (t == SOCK_STREAM && protocol != 0 && protocol != IPPROTO_TCP) { errno = EPROTONOSUPPORT; return -1; }
 	if (t == SOCK_DGRAM && domain == AF_INET && protocol != 0 && protocol != IPPROTO_UDP) { errno = EPROTONOSUPPORT; return -1; }
@@ -70,10 +53,8 @@ int socket(int domain, int type, int protocol) // NOLINT(bugprone-easily-swappab
 
 	fd = __fd_install(h, (cloexec ? O_CLOEXEC : 0) | (nonblock ? O_NONBLOCK : 0), __FD_SOCKET);
 	if (fd < 0) { __plat_close(h); return -1; }
-	/* Same residual as src/socket/accept.c's own __fd_get(newfd)->pad:
-	 * not expressible via nonnull (fd is not a pointer, and __fd_get()'s
-	 * return is a local, not a parameter), never NULL in practice since
-	 * fd just came back from a successful __fd_install(). */
+	/* __fd_get(fd) can't be NULL here: fd just came back from a
+	 * successful __fd_install(). */
 	__fd_get(fd)->pad = (t == SOCK_DGRAM) ? __SOCK_ST_DGRAM : 0;
 	return fd;
 }

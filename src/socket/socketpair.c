@@ -3,30 +3,21 @@
  *
  * socketpair(): a connected, bidirectional AF_UNIX pair.
  *
- * Two constructions exist, tried in order:
+ * Two constructions, tried in order:
  *
- *   1. __plat_socketpair() (src/internal/plat_socket.h): a real, native
- *      socketpair(2) where the platform's kernel has one.  Linux does
- *      -- see src/socket/linux/plat_socket.c -- and genuinely connects
- *      the two ends with the kernel's own mutual send/receive flow
- *      control, which matters for SOCK_DGRAM (see socketpair_dgram()'s
- *      comment below for why the fallback construction cannot
- *      reproduce it).
- *   2. Falls back to a private loopback AF_INET pair -- a TCP
- *      listener+accept for SOCK_STREAM, a bind()+connect() UDP pair
- *      for SOCK_DGRAM -- when __plat_socketpair() reports ENOSYS (NT:
- *      AFD has no native socketpair primitive at all).  ntlibc does
- *      not expose pathname-bearing AF_UNIX endpoints, but socketpair
- *      has no pathname or externally visible address, so this has
- *      exactly the observable semantics socketpair() promises while
- *      reusing the AF_INET transport the rest of this directory
- *      already implements.
+ *   1. __plat_socketpair(): a real socketpair(2) where the platform has
+ *      one (Linux) -- genuinely connects the two ends with the kernel's
+ *      own flow control, which matters for SOCK_DGRAM (see
+ *      socketpair_dgram()'s comment).
+ *   2. Falls back to a private loopback AF_INET pair (TCP listener+accept
+ *      for SOCK_STREAM, bind()+connect() UDP for SOCK_DGRAM) when
+ *      __plat_socketpair() reports ENOSYS (NT: AFD has no native
+ *      primitive). socketpair() has no pathname or externally visible
+ *      address, so this has the same observable semantics while reusing
+ *      the AF_INET transport this directory already implements.
  *
- * SOCK_CLOEXEC/SOCK_NONBLOCK (sys_socket.h.html's DESCRIPTION carries
- * the same "type argument may set SOCK_CLOEXEC"/SOCK_NONBLOCK text
- * socket() cites): both ends of the pair get whichever bits the caller
- * asked for, on every path.  See <sys/socket.h>'s own comment on
- * SOCK_NONBLOCK for what storing the bit does and does not change.
+ * Both ends of the pair get whichever of SOCK_CLOEXEC/SOCK_NONBLOCK the
+ * caller asked for, on every path.
  */
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -39,23 +30,15 @@
 #include "plat_socket.h"
 #include "plat_fd.h"
 
-/* Installs a __plat_socketpair()'d handle as a connected __FD_SOCKET,
- * mirroring socket()'s own __fd_install() + pad bookkeeping
- * (src/socket/socket.c) and connect()'s __SOCK_ST_CONNECTED/peer
- * caching (src/socket/connect.c) -- this handle is *already* connected
- * (that is the entire point of a native socketpair(2)), so there is no
- * separate connect() call to run those through.
+/* Installs an already-connected __plat_socketpair() handle, mirroring
+ * socket()'s __fd_install()/pad bookkeeping and connect()'s
+ * __SOCK_ST_CONNECTED/peer caching without a separate connect() call.
  *
- * f->peer: an unnamed AF_UNIX socket's peer has no meaningful address
- * to cache (a real AF_UNIX socketpair(2) pair is anonymous on both
- * ends -- Linux's own getpeername(2) on one reports sa_family=AF_UNIX
- * with an empty path), and this project's getpeername() is pure
- * struct __fd field access with no live kernel query behind it
- * (src/socket/getname.c's banner), so an all-zero AF_UNIX-family
- * sockaddr is cached rather than left at whatever __fd_install() left
- * the slot in -- honest (matches what a real unnamed peer looks like)
- * rather than a fabricated AF_INET address the way the loopback
- * fallback's peer already is. */
+ * f->peer is cached as an all-zero AF_UNIX sockaddr rather than left
+ * uninitialized: a real AF_UNIX socketpair(2) pair is anonymous on both
+ * ends, and this project's getpeername() is pure field access with no
+ * live kernel query, so this is honest about matching an unnamed peer
+ * (unlike the loopback fallback's fabricated AF_INET peer). */
 static int install_pair_handle(__plat_handle_t h, int dgram, int cloexec, int nonblock)
 {
 	struct __fd *f;
@@ -72,17 +55,11 @@ static int install_pair_handle(__plat_handle_t h, int dgram, int cloexec, int no
 	return fd;
 }
 
-/* SOCK_STREAM: pair[0] gets SOCK_CLOEXEC/SOCK_NONBLOCK for free -- it
- * comes from this file's own socket() call below, which already honors
- * both bits.  pair[1] does not: it comes from accept(), and this
- * project has no accept4() to pass either bit through, so both are
- * applied with separate fcntl() calls once the fd exists (F_SETFD for
- * SOCK_CLOEXEC, F_SETFL for SOCK_NONBLOCK).  A window exists between
- * that accept() and those fcntl() calls in which a concurrent exec() in
- * another thread would leak the fd, or a concurrent I/O call would
- * block when the caller asked for non-blocking -- the same window
- * accept4() exists to close everywhere it is missing; nothing narrower
- * is available without it. */
+/* pair[0] gets SOCK_CLOEXEC/SOCK_NONBLOCK from socket() directly.
+ * pair[1] comes from accept() (no accept4() here), so both are applied
+ * via separate fcntl() calls after the fd exists -- leaving the same
+ * exec()/blocking-I/O race window accept4() exists to close, with no
+ * narrower fix available without it. */
 static int socketpair_stream(int cloexec, int nonblock, int pair[2])
 {
 	struct sockaddr_in address;
@@ -122,22 +99,15 @@ fail:
 	return -1;
 }
 
-/* SOCK_DGRAM (2026-09-01): no listener/accept dance -- a datagram
- * socket has no connection to accept (listen.c/accept.c both refuse
- * SOCK_DGRAM outright, see their own comments).  Instead, two ordinary
- * AF_INET/SOCK_DGRAM (UDP) sockets are each bound to an ephemeral
- * loopback port, then connect()'d to *each other's* assigned address --
- * connect() on a datagram socket sets its default destination
- * (connect.html DESCRIPTION) rather than performing a handshake, so
- * this needs no cooperation between the two ends beyond each one
- * knowing the other's address, exactly the same way two independent
- * UDP peers on real loopback addresses would rendezvous.
+/* No listener/accept dance: a datagram socket has no connection to
+ * accept. Instead two UDP sockets are each bound to an ephemeral
+ * loopback port and connect()'d to *each other's* address -- connect()
+ * on SOCK_DGRAM just sets the default destination, so no handshake is
+ * needed.
  *
- * Both ends come from this file's own socket() calls, unlike the
- * SOCK_STREAM path's pair[1] (from accept()) -- so SOCK_CLOEXEC/
- * SOCK_NONBLOCK apply to both directly through socket()'s own flags,
- * and the fcntl() window socketpair_stream() has to accept does not
- * exist here at all. */
+ * Both ends come from socket() directly here, unlike the SOCK_STREAM
+ * path's pair[1] (from accept()), so SOCK_CLOEXEC/SOCK_NONBLOCK apply
+ * cleanly with no fcntl() race window. */
 static int socketpair_dgram(int cloexec, int nonblock, int pair[2])
 {
 	struct sockaddr_in addr_a, addr_b;
