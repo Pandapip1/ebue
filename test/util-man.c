@@ -294,6 +294,51 @@ static const char FROBNICATE_1[] =
 	".SH SEE ALSO\n"
 	".BR true (1)\n";
 
+/* ==== fixture page 1b: exercises Tier 2 user-defined macros (.de/.de1/
+ * .am/.am1/.ig, invocation, $0/$1-$9/$* argument substitution, .rm/.rn/
+ * .als) plus the two formatter fidelity fixes (.RB per-word alternation,
+ * \c join suppression). Each result sits on its own line via .br, same
+ * "never split across a word-wrap boundary" reasoning FROBNICATE_1's own
+ * REGISTERS section already documents. */
+static const char MACROTEST_1[] =
+	".TH MACROTEST 1 \"2026\" \"ntlibc test\" \"ntlibc Test Suite\"\n"
+	".SH NAME\n"
+	"macrotest \\- exercise user-defined macros\n"
+	".SH MACROS\n"
+	".de greet\n"
+	"Hello, \\$1! Args: \\$*\n"
+	"..\n"
+	".greet World extra\n"
+	".br\n"
+	".de1 greet2\n"
+	".B \\$0 says hi to \\$1\n"
+	"..\n"
+	".greet2 Bob\n"
+	".br\n"
+	".am greet\n"
+	"More appended text for \\$1.\n"
+	"..\n"
+	".greet Carol\n"
+	".br\n"
+	".ig\n"
+	"This should never appear in rendered output.\n"
+	"..\n"
+	".rm greet2\n"
+	".greet2 ShouldBeSkipped\n"
+	".als aliasgreet greet\n"
+	".rn greet renamedgreet\n"
+	".renamedgreet Dave\n"
+	".br\n"
+	".aliasgreet Eve\n"
+	".SH FIDELITY\n"
+	".RB \"wordone wordtwo\" \"wordthree\"\n"
+	".br\n"
+	".B contfoo\\c\n"
+	".I contbar\n"
+	".br\n"
+	".B nofoo\n"
+	".I nobar\n";
+
 /* ==== fixture page 2: a real, unmodified 210-line prefix of GNU grep's
  * own grep.1 (gzip -dc'd by hand from a real Linux system's
  * /nix/store copy of gnugrep-3.12) -- see this file's own header. */
@@ -621,6 +666,79 @@ static void test_registers(void)
 	CHECK(plain_contains("Groff detection register: 1"));
 }
 
+/* Real .de/.de1/.am/.am1/.ig, macro invocation, $0/$1-$9/$* argument
+ * substitution, .rm/.rn/.als, and the two formatter fidelity fixes
+ * (.RB per-word alternation, \c join suppression) -- see MACROTEST_1's
+ * own header comment. */
+static void test_macros(void)
+{
+	char *argv[3];
+	argv[0] = (char *)"man"; argv[1] = (char *)"macrotest"; argv[2] = 0;
+	CHECK(run(man_path, argv) == 0);
+	slurp_both();
+
+	/* .de greet + .greet World extra: $1 and $* both substitute the
+	 * invoking line's own raw arguments. */
+	CHECK(plain_contains("Hello, World! Args: World extra"));
+
+	/* .de1 greet2 + .greet2 Bob: $0 is the name the macro was invoked
+	 * as, $1 the first argument; .de1 behaves exactly like .de here
+	 * (see src/util/man.c's own header comment, "MACROS"). Bold, so
+	 * checked de-overstruck. */
+	CHECK(plain_contains("greet2 says hi to Bob"));
+
+	/* .am greet appends a second body line onto the existing one
+	 * without discarding it: .greet Carol must show BOTH the original
+	 * template (with Carol substituted) and the newly appended one. */
+	CHECK(plain_contains("Hello, Carol! Args: Carol"));
+	CHECK(plain_contains("More appended text for Carol."));
+
+	/* .ig discards its body for real: never stored, never invokable,
+	 * and its literal text never leaks into output either. */
+	CHECK(!out_contains("This should never appear"));
+
+	/* .rm greet2, then invoking it again: unknown macro, silently
+	 * skipped like any other unrecognised request -- its argument
+	 * text must not appear anywhere (the line is never processed as
+	 * an invocation, since there is nothing left to invoke). */
+	CHECK(!out_contains("ShouldBeSkipped"));
+
+	/* .als aliasgreet greet takes an INDEPENDENT COPY of greet's
+	 * current (already-.am-appended) body; .rn greet renamedgreet
+	 * then renames the original away entirely. Both the renamed
+	 * macro and the alias must still work afterward, and both must
+	 * still carry the appended second line -- proving the alias
+	 * really copied, rather than merely referencing, OLD's body. */
+	CHECK(plain_contains("Hello, Dave! Args: Dave"));
+	CHECK(plain_contains("More appended text for Dave."));
+	CHECK(plain_contains("Hello, Eve! Args: Eve"));
+	CHECK(plain_contains("More appended text for Eve."));
+
+	/* Fidelity fix 1: .RB "wordone wordtwo" "wordthree" alternates
+	 * roman/bold PER WORD across the whole call, not per argv[]
+	 * token -- wordtwo (the second word, still inside the first
+	 * quoted argument) is bold, and wordthree (a whole separate
+	 * argument) continues the same cycle back to roman with NO
+	 * separator at that argument boundary, while the real space
+	 * between wordone/wordtwo (from inside one quoted argument) is
+	 * still preserved. The de-overstruck plain text alone proves
+	 * both halves: the space survives, the arg-boundary concatenation
+	 * doesn't gain one. */
+	CHECK(plain_contains("wordone wordtwowordthree"));
+	/* And the raw bytes prove wordtwo specifically carries bold
+	 * overstrike (its own d->t letter boundary), the same style this
+	 * file's own existing "bold" assertion already relies on. */
+	CHECK(out_contains("d\bdt\bt"));
+
+	/* Fidelity fix 2: \c at the end of one macro call's decoded text
+	 * suppresses the join-space before the NEXT accumulated content --
+	 * .B contfoo\c immediately followed by .I contbar must render as
+	 * one unbroken "contfoocontbar", while the same shape without \c
+	 * (.B nofoo / .I nobar) keeps its normal single join-space. */
+	CHECK(plain_contains("contfoocontbar"));
+	CHECK(plain_contains("nofoo nobar"));
+}
+
 static void test_section_operand_restricts_search(void)
 {
 	char *argv[4];
@@ -690,6 +808,17 @@ static void test_real_grep1_excerpt(void)
 	CHECK(!out_contains(".ie "));
 	CHECK(!out_contains("\\\\$"));
 	CHECK(!out_contains("mailto:"));
+
+	/* Tier 2 proof against this same real, unmodified fixture: its own
+	 * opening boilerplate defines `.de dT` (body: `.ds Dt \\$2`) then
+	 * immediately invokes it as `.dT Time-stamp: "2025-03-21"` -- a
+	 * real .de + macro invocation + $2 argument substitution + .ds
+	 * chain that only runs end-to-end now that user macros are real.
+	 * `.TH GREP 1 \*(Dt ...` then interpolates the date this set,
+	 * landing it in the rendered footer. Before Tier 2, \*(Dt was an
+	 * always-undefined string register (empty), so this date never
+	 * appeared at all. */
+	CHECK(out_contains("2025-03-21"));
 }
 
 static void test_builtin_agrees_with_standalone(void)
@@ -745,6 +874,11 @@ int main(int argc, char **argv)
 		write_file(frobpath, FROBNICATE_1);
 	}
 	{
+		char macropath[400];
+		snprintf(macropath, sizeof macropath, "%s/macrotest.1", man1dir);
+		write_file(macropath, MACROTEST_1);
+	}
+	{
 		char greppath[400];
 		snprintf(greppath, sizeof greppath, "%s/grep.1", man1dir);
 		write_grep1_excerpt(greppath);
@@ -773,6 +907,7 @@ int main(int argc, char **argv)
 
 	test_finds_and_formats_frobnicate();
 	test_registers();
+	test_macros();
 	test_section_operand_restricts_search();
 	test_no_such_page();
 	test_apropos_dash_k();
