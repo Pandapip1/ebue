@@ -139,6 +139,19 @@ class FallibleResultChecker : public Checker<check::PreStmt<CallExpr>> {
       if (const auto *Operator = dyn_cast<BinaryOperator>(Parent))
         return Operator->getOpcode() == BO_Comma &&
                Operator->getLHS() == Current.get<Stmt>();
+      const Stmt *Slot = Current.get<Stmt>();
+      if (const auto *If = dyn_cast<IfStmt>(Parent))
+        return If->getThen() == Slot || If->getElse() == Slot;
+      if (const auto *While = dyn_cast<WhileStmt>(Parent))
+        return While->getBody() == Slot;
+      if (const auto *Do = dyn_cast<DoStmt>(Parent))
+        return Do->getBody() == Slot;
+      if (const auto *For = dyn_cast<ForStmt>(Parent))
+        /* Only the body and increment slots discard their value the way a
+         * bare statement does.  The condition slot's value is tested to
+         * control the loop, so a fallible call sitting there is used, not
+         * discarded -- deliberately not matched here. */
+        return For->getBody() == Slot || For->getInc() == Slot;
       return isa<CompoundStmt>(Parent);
     }
   }

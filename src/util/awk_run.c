@@ -775,7 +775,10 @@ static void flush_all_streams(struct awk_interp *ip)
 	awk_hiter_init(&it, &ip->streams);
 	while ((n = awk_hiter_next(&it))) {
 		struct awk_stream *st = n->val;
-		if (!st->is_input) fflush(st->f);
+		if (!st->is_input && fflush(st->f) != 0) {
+			__util_diagf("awk: write error\n");
+			ip->exit_status = 2;
+		}
 	}
 }
 
