@@ -6,26 +6,12 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-/* <sched.h> -- see
- * https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/sched.h.html
- *
- * The process-scheduling interfaces are declared here, but ntlibc does
- * not claim the _POSIX_PRIORITY_SCHEDULING option: NT has priorities and
- * a round-robin quantum, but no process-visible POSIX FIFO/RR policy
- * distinction and no hard realtime guarantee.  src/misc/sched.c keeps
- * the observable policy/priority state and validates process IDs while
- * leaving that stronger option macro absent.
- *
- * struct sched_param is POSIX base and unconditional even though every
- * policy and function that uses it is optional: "The <sched.h> header
- * shall define the sched_param structure ... shall include at least
- * the following member: int sched_priority" carries no margin marker
- * on the page, unlike the sentences either side of it ([PS] on pid_t,
- * [SS|TSP] on time_t and on the sporadic-server members of the same
- * struct).
- *
- * sched_yield() itself is POSIX base, mandatory for conformance, and
- * is *not* part of that option group. */
+/* <sched.h>: the process-scheduling interfaces are declared here, but
+ * ntlibc does not claim the _POSIX_PRIORITY_SCHEDULING option -- NT has
+ * priorities and a round-robin quantum, but no process-visible POSIX
+ * FIFO/RR policy distinction and no hard realtime guarantee.
+ * src/misc/sched.c keeps the observable policy/priority state and
+ * validates process IDs while leaving that stronger option macro absent. */
 
 #ifndef _SCHED_H
 #define _SCHED_H
