@@ -130,6 +130,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <unistd.h>
+#include <limits.h>
 #include "util.h"
 
 /* ==== line storage ========================================================
@@ -418,7 +419,19 @@ static const char *parse_uint(const char *s, long *out)
 {
 	long v = 0;
 	if (!isdigit((unsigned char)*s)) return 0;
-	while (isdigit((unsigned char)*s)) { v = v * 10 + (*s - '0'); s++; }
+	while (isdigit((unsigned char)*s)) {
+		int digit = *s - '0';
+		/* A hunk header's line number/count comes straight from
+		 * whatever patch file this process was handed -- unbounded
+		 * digits here would carry v past LONG_MAX and overflow the
+		 * multiply below, which is undefined behaviour rather than
+		 * merely a bogus header. Treated the same as any other
+		 * malformed header: reject it, same as the leading
+		 * not-a-digit check above. */
+		if (v > (LONG_MAX - digit) / 10) return 0;
+		v = v * 10 + digit;
+		s++;
+	}
 	*out = v;
 	return s;
 }

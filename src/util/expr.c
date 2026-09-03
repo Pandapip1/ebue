@@ -82,6 +82,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <regex.h>
 #include "util.h"
 
@@ -229,11 +230,43 @@ static char *do_arith(struct expr_ctx *c, char *a consume(heap_allocated), const
 	}
 	x = strtol(a, NULL, 10);
 	y = strtol(b, NULL, 10);
-	if (!strcmp(op, "+")) r = x + y;
-	else if (!strcmp(op, "-")) r = x - y;
-	else if (!strcmp(op, "*")) r = x * y;
-	else {
+	/* x and y are each whatever a caller's argv put there, up to and
+	 * including LONG_MIN/LONG_MAX -- "expr 9223372036854775807 + 1" on a
+	 * 64-bit long reaches this line with exactly that x and y=1. Every
+	 * operator below can overflow a real `long` on real input, and a
+	 * plain +, -, or * on `long` operands is undefined behaviour right
+	 * at overflow, not merely POSIX-unspecified; each arm below checks
+	 * before computing rather than after, since the overflowing
+	 * expression itself must never be evaluated. */
+	if (!strcmp(op, "+")) {
+		if ((y > 0 && x > LONG_MAX - y) || (y < 0 && x < LONG_MIN - y)) {
+			xerr(c, "overflow"); result = dupstr(c, ""); goto done;
+		}
+		r = x + y;
+	} else if (!strcmp(op, "-")) {
+		if ((y < 0 && x > LONG_MAX + y) || (y > 0 && x < LONG_MIN + y)) {
+			xerr(c, "overflow"); result = dupstr(c, ""); goto done;
+		}
+		r = x - y;
+	} else if (!strcmp(op, "*")) {
+		if (x > 0) {
+			if (y > 0 ? x > LONG_MAX / y : y < LONG_MIN / x) {
+				xerr(c, "overflow"); result = dupstr(c, ""); goto done;
+			}
+		} else if (x < 0) {
+			if (y > 0 ? x < LONG_MIN / y : y < LONG_MAX / x) {
+				xerr(c, "overflow"); result = dupstr(c, ""); goto done;
+			}
+		}
+		r = x * y;
+	} else {
 		if (y == 0) { xerr(c, "division by zero"); result = dupstr(c, ""); goto done; }
+		/* LONG_MIN / -1 (and the equivalent %) is the one division
+		 * that overflows: its mathematical result, -LONG_MIN, is one
+		 * past LONG_MAX. */
+		if (x == LONG_MIN && y == -1) {
+			xerr(c, "overflow"); result = dupstr(c, ""); goto done;
+		}
 		r = !strcmp(op, "/") ? x / y : x % y;
 	}
 	result = numstr(c, r);
