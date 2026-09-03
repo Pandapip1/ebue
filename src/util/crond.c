@@ -299,7 +299,7 @@ static void run_entry(const char *crontabs_dir, const struct cron_entry *e, time
 	sf = fdopen(fd, "w");
 	if (sf) {
 		fputs(stdin_body, sf);
-		fclose(sf);
+		if (fclose(sf) != 0) { unlink(stdin_path); free(cmd); free(stdin_body); return; }
 	} else {
 		close(fd);
 	}
