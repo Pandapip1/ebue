@@ -57,8 +57,7 @@ char *__find_program(const char *name, int use_path)
 static int failures;
 
 #define CHECK(cond, msg) do { \
-	if (cond) printf("ok   - %s\n", msg); \
-	else { printf("FAIL - %s (errno=%d)\n", msg, errno); failures++; } \
+	if (!(cond)) { printf("FAIL - %s (errno=%d)\n", msg, errno); failures++; } \
 } while (0)
 
 static void cleanup(void)

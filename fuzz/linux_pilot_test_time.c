@@ -31,8 +31,7 @@ extern int printf(const char *, ...);
 static int failures;
 
 #define CHECK(cond, msg) do { \
-	if (cond) printf("ok   - %s\n", msg); \
-	else { printf("FAIL - %s (errno=%d)\n", msg, errno); failures++; } \
+	if (!(cond)) { printf("FAIL - %s (errno=%d)\n", msg, errno); failures++; } \
 } while (0)
 
 /* Absolute difference between two (sec,nsec) timespec-shaped instants,

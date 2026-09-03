@@ -76,22 +76,16 @@
  * array, and NT ships %SystemRoot%\system32\drivers\etc\services in
  * exactly the /etc/services format.
  *
- * ==================== how these failed originally =====================
+ * ==================== interfaces intentionally left unfenced ===========
  *
- * Every one of the 22 started out UNIMPL: include/ had no netdb.h, so
- * every fence died on its own #include, and that ABSENCE is what an
- * UNIMPL fence (rather than BUG) asserts. All 22 are unwrapped now, per
- * this file's opening paragraph.
- *
- * Not fenced here, with reasons -- see the report accompanying this
- * file: h_errno and the gethostbyname()/gethostbyaddr() pair.  Checked,
- * not assumed: the 2017a <netdb.h> page's "The following shall be
- * declared as functions" block lists 21 names and none of the three is
- * among them, and manpages-posix-dev ships no gethostbyname page at
- * all.  POSIX removed them in this edition, so their absence here is
- * conformant and a fence would assert the wrong thing.  Also not
- * fenced: <net/if.h>'s
- * if_nametoindex family (a separate header, and a separate unit).
+ * Not fenced here, with reasons: h_errno and the gethostbyname()/
+ * gethostbyaddr() pair.  Checked, not assumed: the 2017a <netdb.h>
+ * page's "The following shall be declared as functions" block lists 21
+ * names and none of the three is among them, and manpages-posix-dev
+ * ships no gethostbyname page at all.  POSIX removed them in this
+ * edition, so their absence here is conformant and a fence would assert
+ * the wrong thing.  Also not fenced: <net/if.h>'s if_nametoindex family
+ * (a separate header, and a separate unit).
  */
 
 /* setenv()/unsetenv() (used by this file's own new hermetic-fixture

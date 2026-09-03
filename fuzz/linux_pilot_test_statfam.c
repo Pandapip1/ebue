@@ -50,8 +50,7 @@ extern void *memset(void *, int, size_t);
 static int failures;
 
 #define CHECK(cond, msg) do { \
-	if (cond) printf("ok   - %s\n", msg); \
-	else { printf("FAIL - %s (errno=%d)\n", msg, errno); failures++; } \
+	if (!(cond)) { printf("FAIL - %s (errno=%d)\n", msg, errno); failures++; } \
 } while (0)
 
 /* Installs a REAL raw fd (opened via a raw syscall, not through any
