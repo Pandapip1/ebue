@@ -494,6 +494,57 @@ static const char TBLTEST_1[] =
 	".TE\n"
 	"Text after the third, allbox/custom-separator table.\n";
 
+/* ==== fixture page 1e: exercises Tier 6 eqn (.EQ/.EN) -- see src/
+ * util/man.c's own "EQN" header comment for the exact grammar and its
+ * linear-approximation rendering choices. Hand-written for the same
+ * reason TBLTEST_1 above is (a small real-world .EQ-using page wasn't
+ * easy to source at fixture size), but the quadratic-formula equation
+ * is eqn's own textbook-canonical example (see e.g. the original "Typ-
+ * esetting Mathematics" eqn tutorial): `x = { -b +- sqrt{b sup 2 -
+ * 4ac} } over {2a}`, chosen specifically because it's the standard
+ * proof that `over` binds to the bracketed numerator group ALONE and
+ * not to the whole "x =" prefix before it -- exactly the tight-vs-loose
+ * precedence this file's own man_eqn_parse_over() header comment
+ * documents getting right. Also exercises: a `delim` directive line
+ * (must produce no visible output of its own), Greek-letter lookup
+ * (lowercase `alpha`, uppercase `GAMMA`) alongside `sub`, a left-
+ * associative chained `over`, `sqrt` on a bare primary, `sub`/`sup`
+ * combining onto one primary, and a `"quoted"` literal staying literal
+ * text beside the same bare word looked up as a Greek letter. */
+static const char EQNTEST_1[] =
+	".TH EQNTEST 1 \"2026\" \"ntlibc test\" \"ntlibc Test Suite\"\n"
+	".SH NAME\n"
+	"eqntest \\- exercise eqn equation rendering\n"
+	".SH EQUATIONS\n"
+	".EQ\n"
+	"delim $$\n"
+	".EN\n"
+	"The quadratic formula:\n"
+	".EQ\n"
+	"x = { -b +- sqrt{ b sup 2 - 4 ac } } over {2 a}\n"
+	".EN\n"
+	"Greek letters and a subscript:\n"
+	".EQ\n"
+	"alpha sub i + GAMMA\n"
+	".EN\n"
+	"A left-associative chained fraction:\n"
+	".EQ\n"
+	"a over b over c\n"
+	".EN\n"
+	"A square root:\n"
+	".EQ\n"
+	"sqrt x\n"
+	".EN\n"
+	"Sub and sup combine onto one primary regardless of order:\n"
+	".EQ\n"
+	"x sup 2 sub i\n"
+	".EN\n"
+	"A quoted literal stays literal beside the same bare name looked up:\n"
+	".EQ\n"
+	"\"pi\" + pi\n"
+	".EN\n"
+	"Text after the equations must still render normally.\n";
+
 /* ==== fixture page 2: a real, unmodified 210-line prefix of GNU grep's
  * own grep.1 (gzip -dc'd by hand from a real Linux system's
  * /nix/store copy of gnugrep-3.12) -- see this file's own header. */
@@ -1307,6 +1358,48 @@ static void test_tables(void)
 	CHECK(count_lines_starting_with(plainbuf, '+') == 3 + 0 + 4);
 }
 
+static void test_eqn(void)
+{
+	char *argv[3];
+	argv[0] = (char *)"man"; argv[1] = (char *)"eqntest"; argv[2] = 0;
+	CHECK(run(man_path, argv) == 0);
+	slurp_both();
+
+	/* The canonical quadratic-formula example, proof that `over` binds
+	 * to the bracketed numerator group alone -- "x =" must stay OUTSIDE
+	 * the fraction, not get pulled inside it -- see src/util/man.c's own
+	 * man_eqn_parse_over() header comment. */
+	CHECK(plain_contains("x = (-b +- sqrt(b^2 - 4 ac))/(2 a)"));
+
+	/* Greek-letter lookup (lowercase `alpha`, uppercase `GAMMA`,
+	 * rendered as real UTF-8 codepoints -- see man_eqn_greek[]) beside
+	 * a real subscript. */
+	CHECK(plain_contains("\xCE\xB1_i + \xCE\x93"));
+
+	/* Left-associative chained `over`: `a over b over c` -> "(a/b)/c",
+	 * not "a/(b/c)". */
+	CHECK(plain_contains("(a/b)/c"));
+
+	/* `sqrt` on a bare primary. */
+	CHECK(plain_contains("sqrt(x)"));
+
+	/* `sub`/`sup` combine onto the SAME primary regardless of which one
+	 * appears first in the source. */
+	CHECK(plain_contains("x_i^2"));
+
+	/* A `"quoted"` literal is exempt from Greek-letter lookup (stays
+	 * the literal word "pi"), while the same BARE word beside it is
+	 * looked up as the letter. */
+	CHECK(plain_contains("pi + \xCF\x80"));
+
+	/* `delim $$` is a recognised-and-consumed mode-setting directive --
+	 * see "EQN" in src/util/man.c's own header comment -- and must
+	 * produce no visible output of its own anywhere on the page. */
+	CHECK(!plain_contains("delim"));
+
+	CHECK(plain_contains("Text after the equations must still render normally."));
+}
+
 static void test_section_operand_restricts_search(void)
 {
 	char *argv[4];
@@ -1515,6 +1608,11 @@ int main(int argc, char **argv)
 		write_file(tblpath, TBLTEST_1);
 	}
 	{
+		char eqnpath[400];
+		snprintf(eqnpath, sizeof eqnpath, "%s/eqntest.1", man1dir);
+		write_file(eqnpath, EQNTEST_1);
+	}
+	{
 		char greppath[400];
 		snprintf(greppath, sizeof greppath, "%s/grep.1", man1dir);
 		write_grep1_excerpt(greppath);
@@ -1546,6 +1644,7 @@ int main(int argc, char **argv)
 	test_macros();
 	test_conditionals();
 	test_tables();
+	test_eqn();
 	test_section_operand_restricts_search();
 	test_no_such_page();
 	test_apropos_dash_k();

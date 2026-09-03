@@ -21,15 +21,13 @@
  * number registers -- see "REGISTERS" below), .de/.de1/.am/.am1/.ig/
  * .rm/.als (user-defined macros -- see "MACROS" below), .if/.ie/.el
  * (conditionals -- see "CONDITIONALS" below), .TS/.TE (tbl tables --
- * see "TABLES" below), and a common subset of escape sequences. This
- * file IS that engine, not a wrapper around a real one.
+ * see "TABLES" below), .EQ/.EN (eqn equations, a documented linear-
+ * approximation subset -- see "EQN" below), and a common subset of
+ * escape sequences. This file IS that engine, not a wrapper around a
+ * real one.
  *
  * ---- WHAT IS DELIBERATELY NOT IMPLEMENTED, AND WHY --------------------
  *
- *  - .EQ/.EN (eqn): its own real sub-language comparable in size to
- *    this whole file. Skipped like any unknown macro (see
- *    "UNKNOWN-MACRO DEGRADATION" below): that one equation is lost,
- *    the rest of the page still renders.
  *  - \k (mark register) and \s (point-size change): recognised and
  *    consumed only -- no horizontal-motion tracking or point-size
  *    concept exists here for them to act on.
@@ -386,6 +384,162 @@
  * plan names for double-line boxes.
  *
  * ============================================================
+ * EQN: .EQ/.EN
+ * ============================================================
+ *
+ * A real subset parser/renderer for eqn's own in-line mathematical
+ * notation (see man_render_eqn() and its helpers), not a stub that
+ * drops the equation. `.EQ [label]` begins collecting every following
+ * raw source line verbatim, up to a line matching `.EN`, the same
+ * "verbatim raw-line collection, terminator recognised at the very top
+ * of man_process_line() before normal dispatch" shape `.TS`'s own
+ * c->tbl_active collection uses (c->eqn_active/eqn_body here). Real
+ * troff's optional arguments here -- a cross-reference label, and/or a
+ * one-letter display-position override (`L`/`I`/`C`/`R`) -- are both
+ * ignored: this file always centers a displayed equation (see below),
+ * the same "recognised argument, no real per-page effect" precedent
+ * `.TS [H]`'s own `H` argument sets.
+ *
+ * There is no real 2-D typeset math in a terminal regardless of how
+ * much of eqn's grammar gets implemented -- stacked fractions, a
+ * radical sign actually drawn over its argument, a superscript
+ * genuinely raised half a line, are not things plain terminal text can
+ * represent. Real groff itself falls back to a readable LINEAR ASCII
+ * approximation for its own `-Tascii`/`-Tutf8` output devices (`a over
+ * b` becomes text meaning "a divided by b", not a drawn fraction bar);
+ * this file matches that existing real-world precedent rather than
+ * inventing a new one. Each collected `.EQ`/`.EN` line is register-
+ * interpolated and escape-decoded (decode_text(), the same pass every
+ * other piece of text in this file goes through -- `\*(xx`/`\n(xx`/
+ * named glyphs all work inside an equation too) and then parsed and
+ * rendered as ONE COMPLETE, INDEPENDENT equation of its own. Unlike
+ * real eqn, an expression cannot span multiple physical source lines
+ * here -- a page that deliberately hard-wraps one long equation's
+ * source across several lines (this tier's own research pass found
+ * none doing so) would see it rendered as several smaller, unrelated-
+ * looking pieces instead of one, a documented, honest degradation, not
+ * a silently wrong answer.
+ *
+ * The implemented grammar (man_eqn_parse_expr() and the functions
+ * below it, in precedence order, tightest first):
+ *
+ *  - A PRIMARY is a bare word (rendered literally, unless it's one of
+ *    the Greek-letter names below), a `"quoted string"` (rendered
+ *    literally, and -- matching real eqn -- exempt from being read as
+ *    a keyword or a Greek-letter name, since quoting is exactly how a
+ *    real page would spell out the literal word "sub" or "pi"), a
+ *    `{ expr }` group (pure grouping -- see below), or `sqrt PRIMARY`
+ *    (its own argument, itself a primary, so `sqrt` binds to exactly
+ *    the next atom or group and no further).
+ *  - `sub`/`sup` are POSTFIX operators on the immediately preceding
+ *    primary: `x sub i sup 2` and `x sup 2 sub i` both mean the same
+ *    thing (subscript i, superscript 2) -- either order is accepted,
+ *    each keyword recognised at most once per primary. A second `sub`
+ *    or `sup` on the same primary without an intervening `{ }` group
+ *    falls outside this tier's documented scope (a real page needing
+ *    that nests explicitly instead, `x sub {i sub j}`, which the
+ *    grouping rule below already handles); it is read back as a
+ *    literal word by the next primary, the same "malformed input
+ *    degrades to something reasonable, never crashes" precedent
+ *    "UNKNOWN-MACRO DEGRADATION" documents elsewhere in this file.
+ *  - `over` binds just as TIGHTLY as `sub`/`sup`: to the single
+ *    (possibly already sub/sup-combined) unit immediately to its left
+ *    and right, never to an entire concatenated run -- this is what
+ *    makes eqn's own canonical quadratic-formula example, `x = { -b +-
+ *    sqrt{b sup 2 - 4ac} } over {2a}`, render correctly as `x = (-b +-
+ *    sqrt(b^2 - 4ac))/(2a)`: `over`'s left operand is exactly the `{
+ *    -b +- sqrt{...} }` group (one unit), never pulling the preceding
+ *    `x =` into the fraction. Chained `over`s are left-associative (`a
+ *    over b over c` -> `(a/b)/c`), each intermediate division
+ *    parenthesized when it becomes the next numerator -- exactly the
+ *    disambiguation a human writing plain-text math by hand would add.
+ *  - Units (a primary, with or without sub/sup/over already applied)
+ *    written next to each other with no keyword between them
+ *    CONCATENATE (eqn's own loosest-binding juxtaposition rule),
+ *    rejoined here with a single space for readability.
+ *  - `{ expr }` is TRANSPARENT grouping only: its own parsed value
+ *    (text and all) is used exactly as if the braces were never there
+ *    -- they exist purely to scope what an outer sub/sup/over/sqrt
+ *    applies to (`{a + b} over c` -> `(a + b)/c`), never to add visible
+ *    output of their own, matching real eqn.
+ *
+ * A parsed value only gets wrapped in an extra delimiter when embedded
+ * as a sub/sup/over/sqrt operand IF it represents more than one
+ * concatenated unit or is itself an `over` division (man_eqn_wrap(),
+ * keyed off each value's own `compound` flag) -- so `x sub i` reads
+ * "x_i", not the noisier "x_{i}", while `x sub {i+1}` correctly reads
+ * "x_{i+1}". Sub/sup use `{ }` as that delimiter (the common
+ * plain-text-math convention for a multi-character subscript); `over`
+ * and `sqrt` use `( )` (`sqrt{a + b}` -> "sqrt(a + b)"; `a over {b +
+ * c}` -> "a/(b + c)"). A subscripted/superscripted primary is itself
+ * treated as atomic (never re-wrapped) once built: `x sub i over y`
+ * reads "x_i/y", since a subscripted quantity already reads as one
+ * visual unit without an extra delimiter.
+ *
+ * Greek-letter names (man_eqn_greek[]): the full 24-letter lowercase
+ * alphabet (`alpha` .. `omega`), plus the 11 uppercase names whose
+ * glyph actually differs from a plain Latin letter (`GAMMA`, `DELTA`,
+ * `THETA`, `LAMBDA`, `XI`, `PI`, `SIGMA`, `UPSILON`, `PHI`, `PSI`,
+ * `OMEGA` -- real eqn has no separate uppercase name for e.g. ALPHA or
+ * BETA, since their Greek capitals are visually identical to Latin A
+ * and B, so neither does this table), rendered as their real UTF-8
+ * Greek codepoints. This deliberately does NOT match groff -Tascii's
+ * own fallback (which, confined to 7-bit ASCII, spells the name out as
+ * plain text, e.g. literal "pi") -- it instead matches THIS file's own
+ * pre-existing precedent of emitting real UTF-8 for named glyphs it
+ * can represent exactly (see man_specials[] above, e.g. \(co -> the
+ * real copyright sign, not the string "(C)"), which reads better on
+ * any UTF-8 terminal without losing honesty about what's a real glyph
+ * versus an approximation.
+ *
+ * A line whose first word is `delim` or `define` -- real eqn's own
+ * mode-setting directives (respectively: switch on/off a pair of
+ * characters that trigger inline math mode inside ordinary paragraph
+ * text elsewhere on the page, outside any `.EQ`/`.EN` pair; and define
+ * a reusable text macro for later equations to reference) -- is
+ * recognised and consumed rather than parsed as math, so its keyword
+ * and argument don't render as meaningless literal text. NEITHER
+ * directive's actual effect is implemented: in particular, the `delim`
+ * inline-math-in-running-text feature (`.EQ` / `delim $$` / `.EN`
+ * followed later by `$x sup 2$` inside a plain paragraph line) is out
+ * of this tier's scope entirely -- only real `.EQ`...`.EN` BLOCK
+ * equations are recognised; an inline delimited expression is left as
+ * plain literal text, the same "not hooked in, not silently mangled"
+ * choice \k/\s make elsewhere in this file.
+ *
+ * NOT implemented, and left as literal text if encountered: matrices
+ * and piles (`matrix`, `pile`, `lpile`, `rpile`, `cpile`, column
+ * layout); summation/integral/product bounds (`from`/`to`, e.g. `sum
+ * from i=0 to n`); sized delimiters (`left`/`right`, e.g. `left (
+ * x over y right )` growing the parens to fit); font/size changes
+ * (`roman`, `italic`, `bold`, `fat`, `size`); accent marks (`dot`,
+ * `dotdot`, `hat`, `tilde`, `vec`, `dyad`, `bar`, `under`); explicit
+ * spacing tokens (bare `~`/`^` as full-/half-space, distinct from `^`
+ * as this file's OWN superscript-rendering character in its output);
+ * and `mark`/`lineup` multi-equation column alignment. Every one of
+ * these is a real, named eqn construct outside the plan's own
+ * documented subset (sub/sup, over, sqrt, Greek letters, `{ }`
+ * grouping) -- a page using one sees that construct's own keyword and
+ * operands rendered as literal words side by side, not a crash and not
+ * silently dropped text.
+ *
+ * Recursion (nested `{ }` groups) is bounded by MAN_EQN_MAX_DEPTH, the
+ * same "documented finite bound, loud degrade not silent hang"
+ * discipline MAN_MAX_RS_DEPTH/MAN_MAX_MACRO_DEPTH already give `.RS`
+ * nesting and macro invocation.
+ *
+ * Each rendered equation line is emitted as its own display, indented
+ * from c->rs_indent and then centered within the remaining line width
+ * (room split evenly left/right, man_vislen()'s own UTF-8-aware column
+ * counter, so a Greek letter's multi-byte UTF-8 encoding still counts
+ * as one column) -- a deliberate, fixed choice (see the `.EQ` argument
+ * paragraph above), not real per-page position-argument handling. A
+ * malformed/empty equation (nothing left after trimming and stripping
+ * directive lines) renders nothing, the same honest no-op precedent
+ * "UNKNOWN-MACRO DEGRADATION" documents elsewhere in this file, rather
+ * than an empty display line.
+ *
+ * ============================================================
  * GZIP-COMPRESSED (.gz) PAGES
  * ============================================================
  *
@@ -553,6 +707,13 @@
  * MAN_MAX_RS_DEPTH turns that into a loud diagnostic instead of an
  * unbounded stack. */
 #define MAN_MAX_MACRO_DEPTH 64
+
+/* A pathological/malformed `.EQ`...`.EN` expression with an unbounded
+ * run of nested `{` groups would otherwise recurse the eqn expression
+ * parser without limit; bounded the same "documented finite bound,
+ * loud degrade not silent hang" way as MAN_MAX_RS_DEPTH -- see
+ * man_eqn_parse_primary(). */
+#define MAN_EQN_MAX_DEPTH 64
 
 #define MAN_BASE_INDENT 7  /* classic troff `an.tmac` .nr IN default */
 #define MAN_SS_COL      3
@@ -1494,6 +1655,8 @@ struct man_ctx {
 	int have_last_ie;          /* 0 until the first .ie runs, and after each .el consumes it */
 	int tbl_active;             /* collecting a .TS/.TE table body right now -- see "TABLES" */
 	struct man_macro tbl_body;  /* raw lines collected for that table (struct man_macro reused as a plain growable line list, same as cond_body above) */
+	int eqn_active;             /* collecting a .EQ/.EN equation body right now -- see "EQN" */
+	struct man_macro eqn_body;  /* raw lines collected for that equation (struct man_macro reused as a plain growable line list, same as tbl_body above) */
 };
 
 static int man_ctx_init(struct man_ctx *c, int width)
@@ -1515,6 +1678,7 @@ static void man_ctx_free(struct man_ctx *c)
 	free(c->def_end);
 	man_macro_free_lines(&c->cond_body);
 	man_macro_free_lines(&c->tbl_body);
+	man_macro_free_lines(&c->eqn_body);
 }
 
 /* Blank-line-before-a-new-block bookkeeping: exactly one blank line
@@ -2490,6 +2654,476 @@ static int man_render_table(struct man_ctx *c, struct man_macro *body)
 	return ok;
 }
 
+/* ==== EQN: .EQ/.EN -- see this file's own header comment ("EQN") for
+ * the full design writeup; everything below is the mechanical
+ * implementation of that design. ==== */
+
+/* `\(*a`-style Greek-LETTER-NAME lookup for eqn's own bare (unquoted)
+ * word tokens -- see this file's header comment ("EQN") for exactly
+ * which names are covered: the full 24-letter lowercase alphabet, plus
+ * the 11 uppercase names whose glyph actually differs from a plain
+ * Latin letter (real troff/eqn has no separate uppercase name for
+ * ALPHA/BETA/EPSILON/... since they'd be visually identical to A/B/E/
+ * ..., so neither does this table). */
+static const struct { const char *name; const char *rep; } man_eqn_greek[] = {
+	{ "alpha", "\xCE\xB1" }, { "beta", "\xCE\xB2" }, { "gamma", "\xCE\xB3" },
+	{ "delta", "\xCE\xB4" }, { "epsilon", "\xCE\xB5" }, { "zeta", "\xCE\xB6" },
+	{ "eta", "\xCE\xB7" }, { "theta", "\xCE\xB8" }, { "iota", "\xCE\xB9" },
+	{ "kappa", "\xCE\xBA" }, { "lambda", "\xCE\xBB" }, { "mu", "\xCE\xBC" },
+	{ "nu", "\xCE\xBD" }, { "xi", "\xCE\xBE" }, { "omicron", "\xCE\xBF" },
+	{ "pi", "\xCF\x80" }, { "rho", "\xCF\x81" }, { "sigma", "\xCF\x83" },
+	{ "tau", "\xCF\x84" }, { "upsilon", "\xCF\x85" }, { "phi", "\xCF\x86" },
+	{ "chi", "\xCF\x87" }, { "psi", "\xCF\x88" }, { "omega", "\xCF\x89" },
+	{ "GAMMA", "\xCE\x93" }, { "DELTA", "\xCE\x94" }, { "THETA", "\xCE\x98" },
+	{ "LAMBDA", "\xCE\x9B" }, { "XI", "\xCE\x9E" }, { "PI", "\xCE\xA0" },
+	{ "SIGMA", "\xCE\xA3" }, { "UPSILON", "\xCE\xA5" }, { "PHI", "\xCE\xA6" },
+	{ "PSI", "\xCE\xA8" }, { "OMEGA", "\xCE\xA9" },
+};
+
+static const char *man_eqn_lookup_greek(const char *name)
+{
+	size_t i;
+	for (i = 0; i < sizeof man_eqn_greek / sizeof *man_eqn_greek; i++)
+		if (!strcmp(man_eqn_greek[i].name, name)) return man_eqn_greek[i].rep;
+	return 0;
+}
+
+/* One eqn source token: `{`/`}` are always their own token regardless
+ * of surrounding whitespace (real eqn's own rule); a `"..."` span is
+ * one literal token with `quoted` set, exempting it from keyword
+ * (`sub`/`sup`/`over`/`sqrt`) and Greek-letter-name recognition --
+ * matching real eqn, where only a BARE word is ever looked up as a
+ * keyword or a named letter. */
+struct man_eqn_tok { char *text; int quoted; };
+struct man_eqn_toks { struct man_eqn_tok *v; size_t n, cap; };
+
+static void man_eqn_toks_free(struct man_eqn_toks *t)
+{
+	size_t i;
+	for (i = 0; i < t->n; i++) free(t->v[i].text);
+	free(t->v);
+	t->v = 0; t->n = t->cap = 0;
+}
+
+static int man_eqn_toks_push(struct man_eqn_toks *t, const char *s, size_t n, int quoted)
+{
+	char *dup;
+	if (t->n + 1 > t->cap) {
+		size_t newcap;
+		struct man_eqn_tok *g;
+		if (!__util_array_capacity(t->cap, t->n, 1, 16, sizeof *t->v, &newcap)) return 0;
+		g = __util_reallocarray(t->v, newcap, sizeof *t->v);
+		if (!g) return 0;
+		t->v = g; t->cap = newcap;
+	}
+	dup = malloc(n + 1);
+	if (!dup) return 0;
+	memcpy(dup, s, n);
+	dup[n] = 0;
+	t->v[t->n].text = dup;
+	t->v[t->n].quoted = quoted;
+	t->n++;
+	return 1;
+}
+
+static int man_eqn_tokenize(const char *s, struct man_eqn_toks *out)
+{
+	size_t i = 0, n = strlen(s);
+	memset(out, 0, sizeof *out);
+	while (i < n) {
+		while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+		if (i >= n) break;
+		if (s[i] == '{' || s[i] == '}') {
+			if (!man_eqn_toks_push(out, s + i, 1, 0)) { man_eqn_toks_free(out); return 0; }
+			i++;
+			continue;
+		}
+		if (s[i] == '"') {
+			size_t start = ++i;
+			while (i < n && s[i] != '"') i++;
+			if (!man_eqn_toks_push(out, s + start, i - start, 1)) { man_eqn_toks_free(out); return 0; }
+			if (i < n) i++;
+			continue;
+		}
+		{
+			size_t start = i;
+			while (i < n && s[i] != ' ' && s[i] != '\t' && s[i] != '{' && s[i] != '}' && s[i] != '"') i++;
+			if (!man_eqn_toks_push(out, s + start, i - start, 0)) { man_eqn_toks_free(out); return 0; }
+		}
+	}
+	return 1;
+}
+
+/* One parsed eqn value: `text` is its rendered linear-approximation
+ * string; `compound` marks whether it represents MORE than one
+ * juxtaposed primary (a concatenation, or an `over` division result)
+ * -- see man_eqn_wrap() and this file's header comment ("EQN") for why
+ * that distinction is what decides whether embedding this value as a
+ * sub/sup/over operand needs an extra disambiguating delimiter around
+ * it, instead of always adding one (`x sub i` should read "x_i", not
+ * the noisier "x_{i}"). */
+struct man_eqn_val { char *text; int compound; };
+
+static void man_eqn_val_free(struct man_eqn_val *v) { free(v->text); v->text = 0; }
+
+static int man_eqn_val_set(struct man_eqn_val *v, const char *text, int compound)
+{
+	v->text = strdup(text);
+	v->compound = compound;
+	return v->text != 0;
+}
+
+/* Wraps `v` in `open`/`close` only if v->compound -- an atomic value
+ * (a single word, a single Greek letter, an already-self-delimited
+ * `sqrt(...)`) is returned unwrapped. */
+static int man_eqn_wrap(const struct man_eqn_val *v, char open, char close, char **out)
+{
+	size_t n;
+	char *s;
+	if (!v->compound) { *out = strdup(v->text ? v->text : ""); return *out != 0; }
+	n = strlen(v->text);
+	s = malloc(n + 3);
+	if (!s) return 0;
+	s[0] = open;
+	memcpy(s + 1, v->text, n);
+	s[1 + n] = close;
+	s[2 + n] = 0;
+	*out = s;
+	return 1;
+}
+
+struct man_eqn_parser { struct man_eqn_toks *toks; size_t pos; int depth; };
+
+static const struct man_eqn_tok *man_eqn_peek(struct man_eqn_parser *p)
+{
+	return p->pos < p->toks->n ? &p->toks->v[p->pos] : 0;
+}
+
+static const struct man_eqn_tok *man_eqn_advance(struct man_eqn_parser *p)
+{
+	return p->pos < p->toks->n ? &p->toks->v[p->pos++] : 0;
+}
+
+static int man_eqn_is_kw(const struct man_eqn_tok *t, const char *kw)
+{
+	return t && !t->quoted && !strcmp(t->text, kw);
+}
+
+static int man_eqn_parse_expr(struct man_eqn_parser *p, struct man_eqn_val *out);
+
+/* primary := WORD | QUOTED-STRING | '{' expr '}' | 'sqrt' primary
+ *
+ * A `{...}` group is transparent grouping only -- its own parsed value
+ * (text AND compound flag) is returned as-is, exactly as if the braces
+ * were never there; braces exist purely to scope what an outer sub/
+ * sup/over/sqrt applies to, never to add visible output of their own
+ * (matching real eqn). A `sqrt` with no following primary, or a bare
+ * `sub`/`sup`/`over` keyword with no valid preceding operand (caught
+ * by the callers below, not here), falls back to being treated as
+ * ordinary literal text -- the same forgiving "malformed input degrades
+ * honestly, never crashes" precedent this file gives elsewhere (see
+ * e.g. "UNKNOWN-MACRO DEGRADATION" in this file's own header comment). */
+static int man_eqn_parse_primary(struct man_eqn_parser *p, struct man_eqn_val *out)
+{
+	const struct man_eqn_tok *t = man_eqn_peek(p);
+
+	if (!t) return man_eqn_val_set(out, "", 0);
+
+	if (man_eqn_is_kw(t, "{")) {
+		struct man_eqn_val inner;
+		int ok;
+		man_eqn_advance(p);
+		if (p->depth >= MAN_EQN_MAX_DEPTH) {
+			/* Bounded recursion: stop descending into this group (skip
+			 * to its matching close, best-effort) rather than growing
+			 * the parse stack without limit -- see MAN_EQN_MAX_DEPTH. */
+			while ((t = man_eqn_peek(p)) != 0 && !man_eqn_is_kw(t, "}")) man_eqn_advance(p);
+			if (t) man_eqn_advance(p);
+			return man_eqn_val_set(out, "", 0);
+		}
+		p->depth++;
+		ok = man_eqn_parse_expr(p, &inner);
+		p->depth--;
+		if (!ok) return 0;
+		t = man_eqn_peek(p);
+		if (man_eqn_is_kw(t, "}")) man_eqn_advance(p);
+		*out = inner;
+		return 1;
+	}
+
+	if (man_eqn_is_kw(t, "}")) return man_eqn_val_set(out, "", 0); /* stray close: empty, don't consume */
+
+	if (man_eqn_is_kw(t, "sqrt")) {
+		struct man_eqn_val operand;
+		struct man_buf b;
+		man_eqn_advance(p);
+		if (!man_eqn_parse_primary(p, &operand)) return 0;
+		memset(&b, 0, sizeof b);
+		if (!mbuf_appendstr(&b, "sqrt(") || !mbuf_appendstr(&b, operand.text ? operand.text : "") ||
+		    !mbuf_appendc(&b, ')')) { mbuf_free(&b); man_eqn_val_free(&operand); return 0; }
+		man_eqn_val_free(&operand);
+		out->text = b.data ? b.data : strdup("");
+		out->compound = 0;
+		return out->text != 0;
+	}
+
+	{
+		const char *rep = t->quoted ? 0 : man_eqn_lookup_greek(t->text);
+		int ok = man_eqn_val_set(out, rep ? rep : t->text, 0);
+		man_eqn_advance(p);
+		return ok;
+	}
+}
+
+/* postfix := primary ('sub' primary)? ('sup' primary)?
+ *          | primary ('sup' primary)? ('sub' primary)?
+ *
+ * Real eqn allows either order (`x sub i sup 2` and `x sup 2 sub i`
+ * both place `i` as the subscript and `2` as the superscript); this
+ * loop accepts either, bounded to (at most) one of each -- a repeated
+ * second `sub` or `sup` on the same primary is not this file's
+ * documented scope (real pages needing that nest with braces instead,
+ * `x sub {i sub j}`, which the grouping above already handles), so it
+ * falls through and is read as a literal word by the next primary()
+ * call instead, the same "malformed input degrades to something
+ * reasonable" precedent as above. The combined result is treated as
+ * ATOMIC (compound = 0): `x sub i over y` should read "x_i/y", not the
+ * noisier "{x_i}/y" -- a subscripted/superscripted quantity already
+ * reads as one visual unit without an extra delimiter. */
+static int man_eqn_parse_postfix(struct man_eqn_parser *p, struct man_eqn_val *out)
+{
+	struct man_eqn_val base, subv, supv;
+	int have_sub = 0, have_sup = 0, tries;
+
+	if (!man_eqn_parse_primary(p, &base)) return 0;
+
+	for (tries = 0; tries < 2; tries++) {
+		const struct man_eqn_tok *t = man_eqn_peek(p);
+		if (!have_sub && man_eqn_is_kw(t, "sub")) {
+			man_eqn_advance(p);
+			if (!man_eqn_parse_primary(p, &subv)) { man_eqn_val_free(&base); return 0; }
+			have_sub = 1;
+		} else if (!have_sup && man_eqn_is_kw(t, "sup")) {
+			man_eqn_advance(p);
+			if (!man_eqn_parse_primary(p, &supv)) {
+				man_eqn_val_free(&base);
+				if (have_sub) man_eqn_val_free(&subv);
+				return 0;
+			}
+			have_sup = 1;
+		} else break;
+	}
+
+	if (!have_sub && !have_sup) { *out = base; return 1; }
+
+	{
+		struct man_buf b;
+		int ok;
+		char *piece;
+		memset(&b, 0, sizeof b);
+		ok = mbuf_appendstr(&b, base.text ? base.text : "");
+		if (ok && have_sub) {
+			ok = man_eqn_wrap(&subv, '{', '}', &piece);
+			if (ok) { ok = mbuf_appendc(&b, '_') && mbuf_appendstr(&b, piece); free(piece); }
+		}
+		if (ok && have_sup) {
+			ok = man_eqn_wrap(&supv, '{', '}', &piece);
+			if (ok) { ok = mbuf_appendc(&b, '^') && mbuf_appendstr(&b, piece); free(piece); }
+		}
+		man_eqn_val_free(&base);
+		if (have_sub) man_eqn_val_free(&subv);
+		if (have_sup) man_eqn_val_free(&supv);
+		if (!ok) { mbuf_free(&b); return 0; }
+		out->text = b.data ? b.data : strdup("");
+		out->compound = 0;
+		return out->text != 0;
+	}
+}
+
+/* term := postfix ('over' postfix)* -- `over`, like `sub`/`sup`, binds
+ * TIGHTLY: to the single immediately-adjacent postfix unit on each
+ * side, not to an entire concatenated run. This matters for correctly
+ * reading eqn's own canonical quadratic-formula example, `x = { -b +-
+ * sqrt{b sup 2 - 4ac} } over {2a}`: `over` must take ONLY the `{ -b +-
+ * sqrt{...} }` group as its numerator (a single postfix unit, a `{ }`
+ * group) and `{2a}` as its denominator, leaving `x =` outside the
+ * fraction entirely -- a looser-binding `over` that grabbed everything
+ * concatenated since the start of the expression (as an earlier
+ * version of this parser incorrectly did) would wrongly pull `x =`
+ * inside the numerator. Left-associative, so `a over b over c` reads
+ * as `(a/b)/c` -- each intermediate division is itself compound, so
+ * man_eqn_wrap() parenthesizes it when it becomes the next numerator,
+ * exactly the disambiguation a human writing plain-text math by hand
+ * would add. */
+static int man_eqn_parse_over(struct man_eqn_parser *p, struct man_eqn_val *out)
+{
+	struct man_eqn_val val;
+	if (!man_eqn_parse_postfix(p, &val)) return 0;
+
+	for (;;) {
+		const struct man_eqn_tok *t = man_eqn_peek(p);
+		struct man_eqn_val rhs;
+		struct man_buf b;
+		char *lp = 0, *rp = 0;
+		int ok;
+
+		if (!man_eqn_is_kw(t, "over")) break;
+		man_eqn_advance(p);
+		if (!man_eqn_parse_postfix(p, &rhs)) { man_eqn_val_free(&val); return 0; }
+
+		ok = man_eqn_wrap(&val, '(', ')', &lp);
+		if (ok) ok = man_eqn_wrap(&rhs, '(', ')', &rp);
+		memset(&b, 0, sizeof b);
+		if (ok) ok = mbuf_appendstr(&b, lp) && mbuf_appendc(&b, '/') && mbuf_appendstr(&b, rp);
+		free(lp);
+		free(rp);
+		man_eqn_val_free(&val);
+		man_eqn_val_free(&rhs);
+		if (!ok) { mbuf_free(&b); return 0; }
+
+		val.text = b.data ? b.data : strdup("");
+		val.compound = 1;
+		if (!val.text) return 0;
+	}
+
+	*out = val;
+	return 1;
+}
+
+/* expr := term* (stops at `}` or end of input) -- eqn's own
+ * juxtaposition rule: terms written next to each other with no
+ * operator between them are simply concatenated, rejoined here with a
+ * single space so the linear rendering stays readable ("a + b", not
+ * "a+b"). `compound` is set whenever more than one term was read
+ * (definitely needs a delimiter if this whole run becomes an over/sub/
+ * sup operand later); when EXACTLY one term was read, that term's OWN
+ * compound flag is carried through unchanged rather than forced to
+ * false -- a lone term can already be compound itself (a `{a+b}` group
+ * standing alone as this whole expr, or an `over` division result, for
+ * instance), and losing that flag here would drop the delimiter
+ * man_eqn_wrap() needs to add around it later (`x sub {2 a}` must still
+ * render "x_{2 a}", not the ambiguous "x_2 a"). */
+static int man_eqn_parse_expr(struct man_eqn_parser *p, struct man_eqn_val *out)
+{
+	struct man_buf b;
+	size_t count = 0;
+	int ok = 1, last_compound = 0;
+	memset(&b, 0, sizeof b);
+	for (;;) {
+		const struct man_eqn_tok *t = man_eqn_peek(p);
+		struct man_eqn_val piece;
+		if (!t || man_eqn_is_kw(t, "}")) break;
+		if (!man_eqn_parse_over(p, &piece)) { ok = 0; break; }
+		if (count && !mbuf_appendc(&b, ' ')) { man_eqn_val_free(&piece); ok = 0; break; }
+		if (!mbuf_appendstr(&b, piece.text ? piece.text : "")) { man_eqn_val_free(&piece); ok = 0; break; }
+		last_compound = piece.compound;
+		man_eqn_val_free(&piece);
+		count++;
+	}
+	if (!ok) { mbuf_free(&b); return 0; }
+	out->text = b.data ? b.data : strdup("");
+	out->compound = count > 1 ? 1 : (count == 1 && last_compound);
+	return out->text != 0;
+}
+
+/* Renders one already-decoded, already-trimmed eqn source line to its
+ * linear-approximation text (malloc'd, caller frees). See this file's
+ * own header comment ("EQN") for the grammar this implements and every
+ * construct it does NOT. */
+static int man_eqn_render_line(const char *s, char **out)
+{
+	struct man_eqn_toks toks;
+	struct man_eqn_parser parser;
+	struct man_eqn_val result;
+	int ok;
+
+	if (!man_eqn_tokenize(s, &toks)) return 0;
+	memset(&parser, 0, sizeof parser);
+	parser.toks = &toks;
+	ok = man_eqn_parse_expr(&parser, &result);
+	man_eqn_toks_free(&toks);
+	if (!ok) return 0;
+	*out = result.text;
+	return 1;
+}
+
+/* Parses and renders one already-collected `.EQ`...`.EN` block (`body`
+ * -- struct man_macro reused as a plain raw-line list, c->eqn_body's
+ * own shape, same convention man_render_table() above documents for
+ * c->tbl_body) into c->doc. Unlike a `.TS` table, there is no shared
+ * multi-line grammar to assemble first: each collected raw line is
+ * register-interpolated/escape-decoded (decode_text(), the same pass
+ * every other piece of text in this file goes through, so `\*(xx`/
+ * `\n(xx`/named glyphs all work inside an equation too) and then parsed
+ * as ONE COMPLETE, INDEPENDENT equation of its own -- see this file's
+ * header comment ("EQN") for why a single equation deliberately cannot
+ * span multiple physical source lines here, a real, honest
+ * simplification of eqn's fully general free-form line-wrapping. A
+ * line whose first word is `delim` or `define` (real eqn's own mode-
+ * setting directives, covered under "EQN" in the header comment as
+ * NOT implemented) is recognised and consumed rather than parsed as
+ * math -- otherwise its keyword and argument would render as
+ * meaningless literal text, worse than a clean skip. */
+static int man_render_eqn(struct man_ctx *c, struct man_macro *body)
+{
+	size_t li;
+	int ok = 1, started = 0;
+
+	for (li = 0; li < body->n && ok; li++) {
+		size_t start, len;
+		char *rendered;
+
+		man_tbl_trim_span(body->lines[li], &start, &len); /* generic trim helper, not table-specific despite the name */
+		if (len == 0) continue;
+
+		{
+			char *decoded_src;
+			struct man_buf decoded;
+			int is_directive;
+
+			decoded_src = malloc(len + 1);
+			if (!decoded_src) { ok = 0; break; }
+			memcpy(decoded_src, body->lines[li] + start, len);
+			decoded_src[len] = 0;
+
+			is_directive =
+			    (!strncmp(decoded_src, "delim", 5) && (decoded_src[5] == 0 || decoded_src[5] == ' ' || decoded_src[5] == '\t')) ||
+			    (!strncmp(decoded_src, "define", 6) && (decoded_src[6] == 0 || decoded_src[6] == ' ' || decoded_src[6] == '\t'));
+			if (is_directive) { free(decoded_src); continue; }
+
+			memset(&decoded, 0, sizeof decoded);
+			if (!decode_text(&c->regs, &decoded, decoded_src, len, 0)) { mbuf_free(&decoded); free(decoded_src); ok = 0; break; }
+			free(decoded_src);
+			ok = man_eqn_render_line(decoded.data ? decoded.data : "", &rendered);
+			mbuf_free(&decoded);
+			if (!ok) break;
+		}
+
+		if (rendered[0] == 0) { free(rendered); continue; }
+
+		if (!started) {
+			ok = man_flush_paragraph(c);
+			if (ok) { c->extra_indent = 0; c->pending_tag = 0; }
+			if (ok) ok = man_block_start(c);
+			if (!ok) { free(rendered); break; }
+			started = 1;
+		}
+
+		{
+			size_t vis = man_vislen(rendered, strlen(rendered));
+			int indent = c->rs_indent + c->extra_indent;
+			int room = c->width - indent - (int)vis;
+			if (room > 0) indent += room / 2;
+			ok = mbuf_appendn(&c->doc, indent, ' ');
+			if (ok) ok = mbuf_appendstr(&c->doc, rendered);
+			if (ok) ok = mbuf_appendc(&c->doc, '\n');
+		}
+		free(rendered);
+	}
+	if (ok && started) c->had_output = 1;
+	return ok;
+}
+
 /* Forward declaration: a macro body line is fed back through the same
  * line-processing function top-level source lines go through -- see
  * this file's own header comment ("MACROS") -- so man_invoke_macro()
@@ -2621,6 +3255,33 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 		return 1;
 	}
 
+	if (c->eqn_active) {
+		/* Same shape as c->tbl_active's own collection above -- `.EN`
+		 * is likewise always the literal terminator, never page-
+		 * customisable. */
+		const char *p = line;
+		int terminated;
+		while (*p == ' ' || *p == '\t') p++;
+		terminated = 0;
+		if (p[0] == '.') {
+			char ename[16] = { 0 };
+			const char *erest;
+			man_split_request(p, ename, sizeof ename, &erest);
+			terminated = !strcmp(ename, "EN");
+		}
+		if (terminated) {
+			struct man_macro ebody = c->eqn_body;
+			int ok;
+			memset(&c->eqn_body, 0, sizeof c->eqn_body);
+			c->eqn_active = 0;
+			ok = man_render_eqn(c, &ebody);
+			man_macro_free_lines(&ebody);
+			return ok;
+		}
+		if (!man_macro_add_line(&c->eqn_body, line)) return 0;
+		return 1;
+	}
+
 	if (line[0] != '.') {
 		/* Plain text line. */
 		if (!c->fill) {
@@ -2722,6 +3383,20 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 			 * pagination exists here for it to act on. */
 			c->tbl_active = 1;
 			man_macro_free_lines(&c->tbl_body);
+			return 1;
+		}
+
+		if (!strcmp(name, "EQ")) {
+			/* Begins collecting a `.EQ`...`.EN` equation body verbatim --
+			 * see this file's own header comment ("EQN") and the
+			 * c->eqn_active check above. Real troff's own optional
+			 * arguments here are a cross-reference label and/or a one-
+			 * letter display-position override (L/I/C/R); both ignored
+			 * (this file always centers, see "EQN"), same "recognised
+			 * argument, no real per-page effect" precedent `.TS`'s own
+			 * `H` argument sets above. */
+			c->eqn_active = 1;
+			man_macro_free_lines(&c->eqn_body);
 			return 1;
 		}
 
