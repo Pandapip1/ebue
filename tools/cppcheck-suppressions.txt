@@ -172,3 +172,22 @@ intToPointerCast:src/util/mailx.c
 # Reproduced in an 11-line isolated repro (the same ternary, an FILE*
 # initialised from stdout rather than fopen()) against cppcheck 2.21.1.
 useClosedFile:src/util/sort.c
+
+# wake_waiters()'s writer-wake loop: the guard immediately above it
+# (`if (data->readers || !data->waiting_writers) return;`) only lets
+# execution reach the loop when waiting_writers > 0. waiting_writers is
+# incremented exactly once, when a write-waiter is linked into the queue,
+# and decremented only by unlink_waiter() when a write-waiter is
+# unlinked -- the counter and the list contents are kept in lockstep, so
+# waiting_writers > 0 guarantees at least one `waiter->write` node is
+# still reachable from data->head. The loop therefore always sets `best`
+# to a non-NULL value before `data->writer = best->owner`,
+# `unlink_waiter(best)`, and `__plat_semaphore_post(best->semaphore)`
+# dereference it below. cppcheck's flow-insensitive analysis cannot
+# correlate the counter with the list contents, so it assumes the loop
+# can run zero iterations and leave best == 0. Reproduced against
+# cppcheck 2.21.1 via `tools/lint.sh cppcheck`: 4 nullPointer findings,
+# all rooted at the `best = 0` initialisation -- at best->owner,
+# unlink_waiter(best), best->semaphore, and the waiter->lock/waiter->linked
+# dereferences inside unlink_waiter() itself once called with best.
+nullPointer:src/thread/pthread_rwlock.c
