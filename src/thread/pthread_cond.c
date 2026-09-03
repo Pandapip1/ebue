@@ -190,12 +190,28 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	if (waiter->next) waiter->next->previous = waiter;
 	data->waiters = waiter;
 	waiter->linked = 1;
+	__plat_fast_unlock();
+	/* pthread_mutex_unlock() below acquires __plat_fast_lock() itself, so
+	 * it cannot be called while this thread still holds it -- that is a
+	 * guaranteed self-deadlock against a non-recursive lock. Releasing the
+	 * fast lock first does not reopen the lost-wakeup race the atomic
+	 * "release mutex and wait" requirement guards against: the waiter is
+	 * already linked into data->waiters, under the fast lock, before the
+	 * mutex is actually released. Any other thread must acquire the fast
+	 * lock to touch data->waiters (cond_signal()/cond_broadcast()) or to
+	 * take mutex ownership (mutex_acquire()), and mutex ownership cannot
+	 * change hands until pthread_mutex_unlock() below clears data->owner
+	 * under its own fast-lock acquisition -- which, in this same thread's
+	 * program order, only happens after the waiter is already published.
+	 * So no thread can become the new mutex owner and signal the
+	 * condition without already seeing this waiter linked. */
 	error = pthread_mutex_unlock(mutex);
 	if (error) {
+		__plat_fast_lock();
 		unlink_waiter(data, waiter);
+		__plat_fast_unlock();
 		cleanup.mutex_held = 1;
 	} else cleanup.mutex = mutex;
-	__plat_fast_unlock();
 	while (!error) {
 		int status;
 		if (absolute) {
