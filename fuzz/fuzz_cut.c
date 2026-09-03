@@ -4,83 +4,56 @@
  * __util_cut_main() -- src/util/cut.c's own range-list parser
  * (parse_list(), static to that file): "a comma or <blank>-separated
  * list of numbers and/or number ranges" -- "N", "N-", "N-M", "-M" --
- * shared verbatim across all three of cut's modes (-b/-c/-f, per that
- * file's own header comment), plus is_selected()'s membership scan and
- * the byte/character/field slicing built on top of it.
+ * shared across all three of cut's modes (-b/-c/-f), plus
+ * is_selected()'s membership scan and the byte/character/field slicing
+ * built on top of it.
  *
- * NOT src/util/tablist.c, DESPITE THIS FILE'S OWN TASK DESCRIPTION
- * NAMING BOTH: read both files in full before writing this harness, per
- * that instruction, specifically to check whether cut.c actually calls
- * into tablist.c's shared grammar the way expand.c and unexpand.c do
- * (src/util/tablist.c's own header comment: "why it lives here rather
- * than duplicated in src/util/expand.c and src/util/unexpand.c"). It
- * does not: `grep -n tablist src/util/cut.c` finds nothing, and
- * cut.c defines its own static parse_list()/struct range/is_selected()
- * from scratch, textually similar to tablist.c's own parse loop (both
- * walk a comma/blank-separated numeric list with strtol()) but a
- * genuinely separate implementation with a different grammar --
- * tablist.c's is "a single number OR a strictly-ascending list, no
- * ranges, no trailing/leading open end" (interval vs. explicit stops,
- * per __util_tablist_parse()'s own header comment), while cut.c's adds
- * "N-", "N-M" and "-M" range forms tablist.c's grammar has no equivalent
- * of at all. Reported here rather than silently fuzzing the wrong
- * function: tablist.c's __util_tablist_parse() is reachable only through
- * expand(1p)'s and unexpand(1p)'s own -t option (src/util/expand.c,
- * src/util/unexpand.c), and this project has no fuzz_expand.c/
- * fuzz_unexpand.c harness yet -- tablist.c stays without fuzz coverage
- * after this batch, which is outside the three targets this task named.
+ * Not src/util/tablist.c: `grep -n tablist src/util/cut.c` finds
+ * nothing -- cut.c defines its own static parse_list()/struct
+ * range/is_selected() from scratch, textually similar to tablist.c's
+ * parse loop but a genuinely separate grammar (tablist.c has no
+ * equivalent of cut's "N-", "N-M", "-M" range forms). tablist.c itself
+ * is reachable only through expand(1p)'s/unexpand(1p)'s -t option, and
+ * has no fuzz harness of its own yet.
  *
- * WHAT IS FUZZED, AND HOW.  Same tokenized-argv shape as fuzz_expr.c's
- * and fuzz_find.c's harnesses (read fuzz_expr.c's own header comment for
- * the general reasoning: cut's whole interface is argv plus a file
- * operand, so there is no separate stream-level lexer here the way
- * xargs' read_tokens() has). The fuzz buffer is NOT tokenized into
- * multiple operands, though -- unlike find's whole predicate expression,
- * cut's list is syntactically ONE operand (the value of -b/-c/-f), so
- * the whole (embedded-NUL-rejected) buffer becomes that one operand
- * verbatim, capped at LIST_CAP bytes.
+ * Same tokenized-argv shape as fuzz_expr.c's and fuzz_find.c's
+ * harnesses: cut's whole interface is argv plus a file operand, so
+ * there's no separate stream-level lexer here the way xargs'
+ * read_tokens() has. The fuzz buffer is not tokenized into multiple
+ * operands, though -- cut's list is syntactically ONE operand (the value
+ * of -b/-c/-f), so the whole (embedded-NUL-rejected) buffer becomes
+ * that one operand verbatim, capped at LIST_CAP bytes.
  *
- * OPTION BYTE.  Byte 0 selects: bits 0-1 the mode (-b/-c/-f, wrapping via
- * %3 so all three are reachable and none is systematically favored by a
- * power-of-two mask); bit 2 whether -s is added (field mode only;
- * cut.c's own header comment notes -s/-d are refused outright with any
- * other mode, so this harness lets that refusal path run too rather than
- * only ever building a mode-consistent argv); bit 3 whether an explicit
- * -d is added, with the delimiter byte itself taken from byte 1 of the
- * input (so a NUL, non-ASCII, or multi-byte-lead delimiter byte is real,
- * reachable input, not filtered out); bit 4 whether -n is added ("not
- * implemented", per cut.c's own header comment -- always refused with
- * exit 2, but that refusal path itself has to actually run under the
- * fuzzer's input mix to matter as coverage, not merely exist in the
- * source).
+ * Byte 0 selects: bits 0-1 the mode (-b/-c/-f, wrapping via %3 so none
+ * is systematically favored by a power-of-two mask); bit 2 whether -s
+ * is added (field mode only; -s/-d are refused outright with any other
+ * mode, so this harness lets that refusal path run too); bit 3 whether
+ * an explicit -d is added, with the delimiter byte taken from byte 1 of
+ * the input (so a NUL, non-ASCII, or multi-byte-lead delimiter is real,
+ * reachable input); bit 4 whether -n is added ("not implemented" --
+ * always refused with exit 2, but that refusal path still needs to
+ * actually run to count as coverage).
  *
- * THE FIXTURE.  A small, fixed content file cut(1p) reads -- multiple
+ * The fixture is a small, fixed content file cut(1p) reads -- multiple
  * short lines mixing tab- and colon-delimited fields, one line with NO
  * delimiter at all (exercises -s's suppress-vs-passthrough branch), one
  * empty line, and one line containing a real multi-byte UTF-8 character
  * (exercises -c's mbrtowc()-driven character counting against -b's raw
  * byte counting, since this build's mbrtowc() really does decode UTF-8
- * unconditionally -- cut.c's own header comment on why -b and -c are
- * NOT the same thing here). Fixed rather than fuzzed, for the identical
- * reason fuzz_sed.c's and fuzz_ed.c's own header comments give for their
- * own data/text fixtures: the grammar under test is the list's, and
- * there is no separate-value oracle to gain by also fuzzing the data
- * cut(1p) slices.
+ * unconditionally). Fixed rather than fuzzed: the grammar under test is
+ * the list's, and there's no separate-value oracle to gain by also
+ * fuzzing the data cut(1p) slices.
  *
- * NO SPAWN RISK.  cut(1p) never invokes another program under any
- * option this file implements (checked while reading the file in full,
- * per this task's own instruction) -- so, unlike fuzz_find.c's -exec/-ok
- * and fuzz_xargs.c's own entire reason for existing, no safety exclusion
- * is needed here at all.
+ * No spawn risk: cut(1p) never invokes another program under any option
+ * this file implements (checked while reading the file in full), so,
+ * unlike fuzz_find.c's -exec/-ok, no safety exclusion is needed here.
  *
- * WHAT IS CHECKED.  cut(1p)'s own EXIT STATUS section, cited in
- * src/util/cut.c's header comment: "0 Success. >0 An error occurred." --
- * narrowed, like every other __util_*_main() harness in this directory,
- * to the two values that file's own code ever actually returns on a
- * non-fatal path (1: an unopenable file operand -- unreachable here,
- * since this harness always passes one file that fixture() has already
- * created; 2: any usage error -- bad list, conflicting -b/-c/-f, -d/-s
- * with the wrong mode, -n), plus 0 for success.
+ * Checked: cut(1p)'s own EXIT STATUS section ("0 Success. >0 An error
+ * occurred."), narrowed to the two values cut.c's own code ever
+ * actually returns on a non-fatal path (1: an unopenable file operand
+ * -- unreachable here, since this harness always passes one file that
+ * fixture() has already created; 2: any usage error), plus 0 for
+ * success.
  */
 #include <stdio.h>
 #include <stdlib.h>

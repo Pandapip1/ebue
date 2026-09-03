@@ -7,25 +7,21 @@
  *
  * Unlike that earlier harness, this one DOES need a real __fd_install():
  * src/socket/socket.c's and src/socket/accept.c's front doors both
- * install a freshly opened descriptor themselves now (socket() calls
- * __plat_socket_open() then __fd_install(); accept() calls
- * __plat_socket_accept() then __fd_install()), rather than the earlier
- * pilot's test code doing the installation by hand against a
+ * install a freshly opened descriptor themselves now, rather than the
+ * earlier pilot's test code doing the installation by hand against a
  * pre-connected socketpair(2).
  *
  * __fd_install()/__fd_install_at() are reimplemented here, minimally,
- * rather than linking the real src/internal/fd.c, for the exact same
- * reason fuzz/linux_pilot_harness.c and fuzz/linux_pilot_harness_socket.c
- * both give for their own from-scratch fd tables: the real
- * __fd_install_at() falls back to __handle_type(h) whenever its `type`
- * argument is 0 (`f->type = (unsigned char)(type ? type : __handle_type(h));`),
- * and __handle_type() unconditionally references NT-only ntdll entry
- * points that have no definition in a native Linux link -- a link-time
- * failure even though every call in this pilot always passes a nonzero
- * type (__FD_SOCKET) and so never actually reaches that branch at
- * runtime.  This file's own __fd_install_at() skips the fallback
+ * rather than linking the real src/internal/fd.c, for the same reason
+ * every other pilot harness gives for its own from-scratch fd table: the
+ * real __fd_install_at() falls back to __handle_type(h) whenever its
+ * `type` argument is 0, and __handle_type() unconditionally references
+ * NT-only ntdll entry points with no definition in a native Linux link --
+ * a link-time failure even though every call in this pilot always
+ * passes a nonzero type (__FD_SOCKET) and so never reaches that branch
+ * at runtime. This file's own __fd_install_at() skips the fallback
  * entirely and just stores `type` directly, so __handle_type is never
- * referenced at all.
+ * referenced.
  */
 #include <string.h>
 #include "libc.h"

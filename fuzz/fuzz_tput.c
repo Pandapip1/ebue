@@ -5,61 +5,38 @@
  * [args...]` argument parser: the -T/-Ttype terminal-type-selection
  * forms, the built-in five-terminal table lookup (lookup_term()), and
  * the capability-name dispatch (clear/init/reset/cols/lines/bold/smso/
- * rmso/smul/rmul/rev/sgr0/cup) each operand name resolves to -- see that
- * file's own header comment for the full POSIX-vs-extension boundary and
- * the exact EXIT STATUS mapping this harness checks below.
+ * rmso/smul/rmul/rev/sgr0/cup) each operand name resolves to.
  *
- * TURNING BYTES INTO ARGV.  Same NUL-delimited tokenized-argv shape
- * fuzz_expr.c's header comment describes: no separate lexer exists to
- * fuzz, because tput's grammar -- like expr's, test's, and find's -- is
- * entirely argv-shaped, and this harness's only job is to do the
- * word-splitting a real shell would have done. argv[0] is always the
- * fixed string "tput"; every token after it, fuzzer-controlled, becomes
- * one argv element in order -- covering the "-T type" two-token form,
- * the "-Ttype" single-token compact form (__util_tput_main()'s
- * `strncmp(argv[1], "-T", 2)` case), a bare "-T" with nothing after it
- * (usage error), any capability-name operand, and cup's row/col operand
- * pair, all without this harness needing to encode tput's grammar
- * itself.
+ * Same NUL-delimited tokenized-argv shape as fuzz_expr.c: no separate
+ * lexer exists to fuzz, because tput's grammar is entirely argv-shaped.
+ * argv[0] is always the fixed string "tput"; every token after it,
+ * fuzzer-controlled, becomes one argv element in order -- covering the
+ * "-T type" two-token form, the "-Ttype" single-token compact form, a
+ * bare "-T" with nothing after it (usage error), any capability-name
+ * operand, and cup's row/col operand pair.
  *
- * NO DICTIONARY, NO SEED CORPUS SHIPPED HERE EITHER, matching the rest
- * of this directory: tput's known vocabulary (five terminal-type names,
- * eleven capname strings) is a small fixed-string set pure random
- * mutation is slow to discover on a cold corpus, but coverage-guided
- * mutation plus tools/fuzz.sh's persistent corpus is this directory's
- * consistent answer rather than a hand-written dictionary.
- *
- * STDOUT/STDERR REDIRECTION: same freopen()-a-fixed-sink-file mechanism
- * as elsewhere in this directory -- every successful capability lookup
- * prints the real escape sequence to stdout (print_string()/
+ * Both stdout and stderr are redirected: every successful capability
+ * lookup prints the real escape sequence to stdout (print_string()/
  * print_numeric()/print_cup()), and every parse or lookup failure prints
  * one line to stderr via __util_diagf().
  *
- * This redirection also sidesteps live_dimension()'s ioctl() call at
+ * That redirection also sidesteps live_dimension()'s ioctl() call at
  * runtime: tput.c's cols/lines path tries isatty(1) before falling back
  * to term_table's static value, and freopen() above makes fd 1 a
  * regular file, so isatty(1) is false and ioctl(1, TIOCGWINSZ, ...) is
- * never reached. That matters because src/ioctl/ioctl.c's TIOCGWINSZ
- * case needs __plat_tiocgwinsz, which is missing from this native
- * build's link for the same reason fuzz_stty.c's header documents at
- * length (src/ioctl/linux/ is skipped by asan-build.sh's file-selection
- * loop even though this native build predefines __linux__) -- breaking
- * the link of every harness in fuzz/Makefile's HARNESSES list, not just
- * this one, since ioctl.o is linked unconditionally regardless of
- * whether a given harness calls ioctl(). Reported rather than worked
- * around: this file's own runtime behaviour never depends on the
- * missing symbol (isatty(1) is false first), but that does not fix the
- * link itself, which is a pre-existing defect in src/ioctl/ioctl.c
- * outside this file's scope.
+ * never reached -- which matters because src/ioctl/ioctl.c's
+ * TIOCGWINSZ case needs __plat_tiocgwinsz, missing from this native
+ * build's link (see fuzz_stty.c's header). This breaks the link of
+ * every harness in fuzz/Makefile's HARNESSES list, not just this one,
+ * since ioctl.o is linked unconditionally -- a pre-existing defect
+ * outside this file's scope, not fixed by this file's own runtime
+ * behavior never depending on the missing symbol.
  *
- * WHAT IS CHECKED. tput.c's own EXIT STATUS section, mapped onto this
- * implementation's concrete return values in that file's own header
- * comment: every `return` in the file is one of exactly 0, 1, 2, 3, 4 or
- * 5, narrower than POSIX's own bare ">4 An error occurred" for the
- * failure tail, so that exact range is what this harness checks. No
- * exit()/_exit() call anywhere in the file either; libFuzzer's own
- * atexit-based detection is the backstop, as in every other harness
- * here.
+ * Checked: tput.c's EXIT STATUS section, mapped onto concrete return
+ * values -- every `return` in the file is one of exactly 0, 1, 2, 3, 4
+ * or 5, narrower than POSIX's own bare ">4 An error occurred" for the
+ * failure tail. No exit()/_exit() call anywhere in the file either;
+ * libFuzzer's own atexit-based detection is the backstop.
  */
 #include <stdio.h>
 #include <stdlib.h>

@@ -4,37 +4,35 @@
  * Test-harness scaffolding for the Linux platform pilot -- NOT part of
  * ntlibc, exactly like fuzz/ntstubs.c is "not part of ntlibc" for the
  * native ASan build. Stands in for the handful of internal helpers the
- * pilot's front-door files (close.c, read.c, write.c) reference but
- * that this pilot deliberately does not port:
+ * pilot's front-door files (close.c, read.c, write.c) reference but that
+ * this pilot deliberately does not port:
  *
  *   __fd_pos_save/__fd_pos_restore (src/internal/fdpos.c) -- purely an
  *     NT quirk workaround (a synchronous NT handle's position moves
  *     during a positioned pread/pwrite transfer, which POSIX forbids);
  *     Linux's pread64/pwrite64 never move the descriptor's position at
  *     all, so the real fix is "this pair becomes a no-op on this
- *     backend", not something to port. Declared HANDLE (not
- *     __plat_handle_t) in libc.h because it was never brought into the
- *     platform-abstraction interface at all -- a real gap this pilot
- *     surfaces rather than silently works around; see the report.
+ *     backend". Declared HANDLE (not __plat_handle_t) in libc.h because
+ *     it was never brought into the platform-abstraction interface at
+ *     all -- a real gap this pilot surfaces rather than silently works
+ *     around.
  *
  *   __mq_fd_closed (src/thread/mqueue.c) -- releases a POSIX message
  *     queue's fd-side bookkeeping on close(); this pilot exercises no
  *     mqueue descriptors, so there is nothing for it to release.
  *
  * The fd table itself (__fds[], __fd_limit, __fd_alloc, __fd_install
- * and __fd_install_at, __fd_get) is ALSO reimplemented here, minimally,
- * rather than linking
- * the real src/internal/fd.c: that file's __handle_type() (NT device-
- * type classification via NtQueryVolumeInformationFile/
- * NtQueryInformationFile) is unconditionally called by the real
- * __fd_install_at() whenever type==0 -- a runtime branch on a function
- * argument the compiler cannot statically prove dead even though this
- * pilot always passes a nonzero type, so linking the real file would
- * still require satisfying two NT-only syscalls. This reimplementation
- * covers only what the mman/unistd-fd-ops pilot's front doors actually
- * call; it is not a Linux port of fd.c's real responsibilities (cwd
- * tracking, runtime-data serialization for spawn, handle classification
- * by device type), which stay real, open, future work -- see the report.
+ * and __fd_install_at, __fd_get) is also reimplemented here, minimally,
+ * rather than linking the real src/internal/fd.c: that file's
+ * __handle_type() (NT device-type classification) is unconditionally
+ * called by the real __fd_install_at() whenever type==0 -- a runtime
+ * branch on a function argument the compiler cannot statically prove
+ * dead even though this pilot always passes a nonzero type. This
+ * reimplementation covers only what the mman/unistd-fd-ops pilot's
+ * front doors actually call; it is not a Linux port of fd.c's real
+ * responsibilities (cwd tracking, runtime-data serialization for spawn,
+ * handle classification by device type), which stay real, open, future
+ * work.
  */
 #include <string.h>
 #include "libc.h"

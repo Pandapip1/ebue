@@ -1,29 +1,26 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * src/time/strptime.c: a format-driven parser that just gained %C, %U
- * and %W, and whose conversion table (read_num, match_name, the %z and
- * composite-expansion cases) is exactly where a freshly extended switch
- * hides an out-of-bounds read or an infinite/quadratic recursion (%c,
- * %D/%x, %F, %r, %R, %T/%X all recurse into parse() with a substituted
- * format).
+ * src/time/strptime.c: a format-driven parser whose conversion table
+ * (read_num, match_name, the %z and composite-expansion cases) is
+ * exactly where a freshly extended switch hides an out-of-bounds read or
+ * an infinite/quadratic recursion (%c, %D/%x, %F, %r, %R, %T/%X all
+ * recurse into parse() with a substituted format).
  *
- * Both axes the parser actually has -- the format string and the input
- * being matched against it -- need to vary independently, so one fuzzer
- * input is split into two NUL-terminated buffers at the first 0x00 byte:
- * everything before it is the format, everything after is the input.  A
+ * Both axes the parser has -- the format string and the input being
+ * matched against it -- need to vary independently, so one fuzzer input
+ * is split into two NUL-terminated buffers at the first 0x00 byte:
+ * everything before it is the format, everything after is the input. A
  * raw byte stream with no separator gives an empty input and the whole
- * thing as format, which still exercises the parser (mismatch against ""
- * comes back NULL almost immediately) without wasting a byte on a
- * dedicated length prefix.
+ * thing as format, which still exercises the parser without wasting a
+ * byte on a dedicated length prefix.
  *
- * There is no host oracle: glibc's strptime accepts locale-dependent
- * names and a superset of conversions (E/O modifiers, %s, week-number
- * fields that DO feed back into tm on some platforms) that ntlibc's
- * deliberately does not implement, so a differential comparison would be
- * mostly noise.  This is a crash/UB/OOB check under ASan+UBSan, plus a
- * couple of invariants strptime's own contract guarantees regardless of
- * locale.
+ * No host oracle: glibc's strptime accepts locale-dependent names and a
+ * superset of conversions (E/O modifiers, %s, week-number fields that DO
+ * feed back into tm on some platforms) that ntlibc's deliberately does
+ * not implement, so a differential comparison would be mostly noise.
+ * This is a crash/UB/OOB check under ASan+UBSan, plus a couple of
+ * invariants strptime's own contract guarantees regardless of locale.
  */
 #include <time.h>
 #include <string.h>

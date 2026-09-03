@@ -3,76 +3,54 @@
  *
  * __util_od_main() -- src/util/od.c's own `-t type` parser (parse_type(),
  * static to that file: "c", or one of "xodu" followed by a decimal byte
- * count that must parse cleanly AND be exactly 1, 2, 4 or 8 -- read that
- * file's header comment's own SCOPE paragraph for exactly which real
- * od(1p) `-t` spellings this build implements (the decimal-byte-count
- * form only) and which real ones it refuses loudly instead (the C/S/I/L
- * letter-size suffix, `-t a`, `-t f`)) plus the per-type row formatting
- * parse_type()'s output selects between: print_row()'s -t c escape table
- * (char_field(), this file's own header quotes the escape set verbatim),
- * and load_unit()'s native-byte-order multi-byte decode feeding
- * odigits()/udigits()/ddigits()'s width tables and od_run()'s -v-gated
- * run-of-identical-rows "*" elision.
+ * count that must parse cleanly AND be exactly 1, 2, 4 or 8; this build
+ * implements only the decimal-byte-count form, refusing the C/S/I/L
+ * letter-size suffix, `-t a`, `-t f`) plus the per-type row formatting
+ * parse_type()'s output selects between: print_row()'s -t c escape
+ * table (char_field()), and load_unit()'s native-byte-order multi-byte
+ * decode feeding odigits()/udigits()/ddigits()'s width tables and
+ * od_run()'s -v-gated run-of-identical-rows "*" elision.
  *
- * WHAT IS FUZZED, AND HOW.  The fuzz buffer, after one leading options
- * byte, becomes the -t argument VERBATIM (capped at TYPE_CAP bytes,
- * embedded NUL rejected -- the same "one operand, not a token stream"
- * treatment fuzz_cut.c's own header comment gives its -b/-c/-f list
- * value, for the identical reason: unlike find's whole predicate
- * expression or sort's/csplit's own multi-operand grammars, od's -t takes
- * exactly one string and parse_type() is the only thing that ever
- * tokenizes it, internally, via s[0] and strtol(s+1, ...)). No prefix or
- * suffix is added by this harness: a string the fuzzer discovers on its
- * own, unmodified, is handed straight to parse_type(), so both the
- * well-formed spellings ("x1".."u8", "c") and every rejected shape
- * (letter-size suffixes, "-t a"/"-t f"'s own bare letters, garbage) are
- * reached exactly as a real argv[] would present them.
+ * The fuzz buffer, after one leading options byte, becomes the -t
+ * argument verbatim (capped at TYPE_CAP bytes, embedded NUL rejected):
+ * od's -t takes exactly one string and parse_type() is the only thing
+ * that ever tokenizes it internally, via s[0] and strtol(s+1, ...). No
+ * prefix or suffix is added: a string the fuzzer discovers on its own is
+ * handed straight to parse_type(), so both well-formed spellings
+ * ("x1".."u8", "c") and every rejected shape are reached exactly as a
+ * real argv[] would present them.
  *
- * OPTION BYTE.  Byte 0 selects: bit 0 -v (disables od_run()'s "*"
- * elision, this file's header comment's own -v paragraph -- fuzzed
- * because the fixture below is built specifically to contain an elidable
- * run, see THE FIXTURE); bits 1-2 -A's address-base letter, cycled
- * through all four od(1p) defines ('d','o','x','n') via a fixed table
- * rather than %4 on a hand-picked mask, so all four -- including 'n', "no
- * offsets shall be output", which print_offset() special-cases as a bare
- * early return -- are reached with equal weight.
+ * Byte 0 selects: bit 0 -v (disables od_run()'s "*" elision -- fuzzed
+ * because the fixture below is built specifically to contain an
+ * elidable run); bits 1-2 -A's address-base letter, cycled through all
+ * four od(1p) defines ('d','o','x','n') via a fixed table so all four
+ * -- including 'n', which print_offset() special-cases as a bare early
+ * return -- are reached with equal weight.
  *
- * THE FIXTURE.  A small, fixed binary file (not derived from the fuzz
- * input, for the identical reason fuzz_cut.c's and fuzz_sort.c's own
- * fixed-content-fixture headers give: the grammar under test is -t's, not
- * the bytes od(1p) dumps) built, not written as a string literal, because
- * it deliberately contains every byte value 0x00-0xFF in order (every
- * char_field() branch: the eight named escapes, the printable range, and
- * the three-digit-octal fallback all get at least one real byte; every
- * load_unit() unit size sees the full value range at least once as it
- * slides across the 0x00-0xFF run), followed by three full 16-byte rows
- * of the same repeated byte (an elidable run for od_run()'s "*" logic --
- * "only a full ROWBYTES row can ever be elided", per that function's own
- * comment, which is exactly why this run is placed after, not inside, the
- * 256-byte ramp: the ramp's own rows are never mutually identical) and a
- * short, sub-16-byte tail (od_run()'s own final-short-row path, and
- * print_row()'s type-loop stepping by o->size across a row whose length
- * is not a multiple of it).
+ * The fixture is a small, fixed binary file (not derived from the fuzz
+ * input: the grammar under test is -t's, not the bytes od(1p) dumps)
+ * built, not written as a string literal, because it deliberately
+ * contains every byte value 0x00-0xFF in order (every char_field()
+ * branch -- named escapes, printable range, three-digit-octal fallback
+ * -- gets at least one real byte, and every load_unit() unit size sees
+ * the full value range as it slides across the ramp), followed by three
+ * full 16-byte rows of the same repeated byte (an elidable run for
+ * od_run()'s "*" logic -- only a full ROWBYTES row can ever be elided,
+ * which is why this run is placed after, not inside, the 256-byte ramp)
+ * and a short, sub-16-byte tail (od_run()'s own final-short-row path).
  *
- * NO SPAWN RISK.  od(1p) never invokes another program under any option
- * this file implements (checked while reading src/util/od.c in full, per
- * this task's own instruction) -- so, unlike fuzz_find.c's -exec/-ok, no
- * argv-content safety exclusion is needed here.
+ * No spawn risk: od(1p) never invokes another program under any option
+ * this file implements (checked while reading od.c in full).
  *
- * STDOUT/STDERR REDIRECTION: the same freopen()-a-fixed-sink-file-once-
- * per-call mechanism fuzz_find.c's, fuzz_ar.c's and fuzz_pax.c's own
- * header comments give, for the identical reason -- od_run()'s own row
- * output and print_type's diagnostics (__util_diagf(), stderr) would
- * otherwise hit the real terminal on every one of millions of calls.
+ * stdout/stderr are redirected: od_run()'s own row output and
+ * print_type's diagnostics would otherwise hit the real terminal on
+ * every one of millions of calls.
  *
- * WHAT IS CHECKED.  src/util/od.c has no dedicated EXIT STATUS section of
- * its own, but every `return` in __util_od_main() (read in full while
- * writing this harness) is exactly 0 or 1 -- every usage/parse error is a
- * literal `return 1;`, and the success path's `return status ? 1 : 0;`
- * folds od_run()'s own `is->any_error || od_output_failed` boolean into
- * the same two values -- so the assertion below checks that real, full
- * range, the same "the file's own contract, not a looser guess" reasoning
- * fuzz_ar.c's and fuzz_pax.c's own headers give for their targets.
+ * Checked: src/util/od.c has no dedicated EXIT STATUS section of its
+ * own, but every `return` in __util_od_main() (read in full) is exactly
+ * 0 or 1 -- every usage/parse error is a literal `return 1;`, and the
+ * success path's `return status ? 1 : 0;` folds od_run()'s own
+ * `is->any_error || od_output_failed` boolean into the same two values.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -88,9 +66,9 @@ extern void oracle_mismatch_i(const char *, const char *, long long, long long);
 #define ROOT "/tmp/odfz"
 #define FIXTURE ROOT "/data"
 
-/* ==== fixture: a small, fixed binary file -- see this file's header
- * comment for why its content is NOT derived from the fuzz input, and for
- * why it is built rather than written as a string literal. ================ */
+/* fixture: a small, fixed binary file -- see this file's header comment
+ * for why its content is NOT derived from the fuzz input, and for why it
+ * is built rather than written as a string literal. */
 
 static void write_file(const char *path, const unsigned char *data, size_t len)
 {
@@ -117,7 +95,7 @@ static void fixture(void)
 	write_file(FIXTURE, buf, n);
 }
 
-/* ==== stdout/stderr redirection -- see this file's header comment. ======= */
+/* stdout/stderr redirection -- see this file's header comment. */
 
 static int redirect_streams(void)
 {

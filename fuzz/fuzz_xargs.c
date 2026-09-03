@@ -9,80 +9,59 @@
  * sysconf(_SC_LINE_MAX), -I's per-line substitution via subst(), -L's
  * whole-line grouping).
  *
- * WHAT IS FUZZED, AND HOW.  Unlike fuzz_expr.c's and fuzz_find.c's
- * argv-shaped harnesses, xargs' own quoting/escaping grammar operates on
- * a byte STREAM, not on already-split argv words -- read_tokens() (this
- * file's target) calls fgetc(stdin) directly, one byte at a time, per
- * its own comment "unlike shell quoting". This harness therefore does
- * the opposite of fuzz_expr.c: it leaves argv almost entirely FIXED (see
- * SAFETY EXCLUSION below for why) and instead redirects the real process
- * stdin onto a file holding the fuzz bytes verbatim, exactly the
- * freopen() technique fuzz_ed.c's own header comment explains at length
- * (`stdin` is `FILE *const` in this libc's <stdio.h>, so freopen() --
- * which reuses the existing FILE* object -- is the only way to point it
- * somewhere other than the real inherited stream; fopen() cannot).
+ * Unlike fuzz_expr.c's and fuzz_find.c's argv-shaped harnesses, xargs'
+ * quoting/escaping grammar operates on a byte STREAM, not already-split
+ * argv words -- read_tokens() calls fgetc(stdin) directly, one byte at a
+ * time. This harness therefore leaves argv almost entirely fixed (see
+ * the safety exclusion below) and instead redirects real process stdin
+ * onto a file holding the fuzz bytes verbatim: `stdin` is `FILE *const`
+ * here, so freopen() (which reuses the existing FILE* object) is the
+ * only way to redirect it.
  *
- * Byte 0 selects among -t/-x/-p/-I/-L/-n/-s (see OPTION BYTE below); the
- * rest, capped at STDIN_CAP, becomes the whole of stdin, unfiltered --
- * embedded NUL bytes included, unlike every argv-token harness in this
- * directory, because read_tokens()'s fgetc() loop has no notion of a
- * C-string terminator at all; a NUL byte reaching it is just another
- * byte of "bare text" per the grammar's own EXTENDED DESCRIPTION, and
- * excluding it here would be excluding real, legal input from coverage
- * for no reason.
+ * Byte 0 selects among -t/-x/-p/-I/-L/-n/-s; the rest, capped at
+ * STDIN_CAP, becomes the whole of stdin, unfiltered -- embedded NUL
+ * bytes included, unlike every argv-token harness in this directory,
+ * since read_tokens()'s fgetc() loop has no notion of a C-string
+ * terminator: a NUL byte is just another byte of "bare text".
  *
- * A SAFETY EXCLUSION, NOT A COVERAGE TRADEOFF: which program is run.
- * Read fuzz_ed.c's own header comment on `!` in full before this
- * paragraph -- __util_xargs_main() reaching run_one() -> spawn_and_wait()
- * -> __find_program()/__spawn() is find(1p)'s -exec/-ok risk restated for
- * this utility's *entire* reason for existing (there is no xargs
- * invocation that does not eventually try to run something), which makes
- * "exclude the primary that reaches it" (fuzz_find.c's own fix) not
- * available here -- some invocation always happens. What stays entirely
- * out of the fuzzer's control instead is WHICH program: PROG below is a
- * fixed, compile-time constant naming a file this harness never creates,
- * under a directory component ('/'), so src/process/find_program.c's own
- * has_dir() takes it "as-is" rather than searching $PATH for it (see that
- * file's own header comment) -- no environment property (an empty PATH,
- * an absent shell) is being trusted to keep failing forever the way
- * fuzz_ed.c's own header comment says not to trust one; the guarantee
- * here is structural instead: __spawn() -> NT process creation ->
- * ultimately execve() of a path that provably does not exist can only
- * ever fail with ENOENT, the same universally-safe "no such file" failure
- * any execve() of a nonexistent path produces on any Unix, never
- * "successfully launch a real interpreter and hand it fuzzer-chosen
- * text" the way `!`'s risk was. The fuzzer never sees PROG at all -- it
- * is not derived from, or influenced by, the fuzz buffer in any way -- so
- * there is no path by which a fuzzer input could redirect this harness at
- * a different, real executable.
+ * A safety exclusion, not a coverage tradeoff: which program is run.
+ * __util_xargs_main() reaching run_one() -> spawn_and_wait() ->
+ * __find_program()/__spawn() is find(1p)'s -exec/-ok risk restated for
+ * this utility's *entire* reason for existing -- there is no xargs
+ * invocation that doesn't eventually try to run something, so excluding
+ * the primary that reaches it (fuzz_find.c's fix) isn't available here.
+ * What stays entirely out of the fuzzer's control instead is WHICH
+ * program: PROG is a fixed, compile-time constant naming a file this
+ * harness never creates, under a directory component ('/'), so
+ * find_program.c's has_dir() takes it "as-is" instead of searching
+ * $PATH. The guarantee is structural: __spawn() of a path that provably
+ * does not exist can only ever fail with ENOENT, never "successfully
+ * launch a real interpreter and hand it fuzzer-chosen text". The fuzzer
+ * never sees PROG -- it is not derived from, or influenced by, the fuzz
+ * buffer in any way.
  *
- * -p's PROMPT CONFIRMATION cannot hang this harness even when selected:
- * prompt_confirm() also reads from `stdin` with getchar(), but only after
- * read_tokens() has already consumed the entire redirected file up to
- * EOF (read_tokens() runs first, unconditionally, before any batch or any
- * run_one() call) -- so every getchar() prompt_confirm() issues sees EOF
- * immediately and returns "not confirmed" without blocking, the same
- * fact that lets -p be included in the option byte at all rather than
+ * -p's prompt confirmation cannot hang this harness even when selected:
+ * prompt_confirm() also reads from `stdin` with getchar(), but only
+ * after read_tokens() has already consumed the entire redirected file up
+ * to EOF -- so every getchar() prompt_confirm() issues sees EOF
+ * immediately and returns "not confirmed" without blocking, which is
+ * what lets -p be included in the option byte at all rather than
  * excluded the way -exec/-ok are in fuzz_find.c.
  *
- * REDIRECTED: stdout/stderr, for the identical reason and by the
- * identical mechanism as fuzz_sed.c's and fuzz_ed.c's own header
- * comments give -- -t/-p's trace_line()/prompt_confirm() write to
- * stderr, and __util_diagf() (src/internal/util.h) always does too, on
- * every one of millions of calls.
+ * stdout/stderr are redirected: -t/-p's trace_line()/prompt_confirm()
+ * write to stderr, and __util_diagf() always does too, on every one of
+ * millions of calls.
  *
- * WHAT IS CHECKED.  xargs(1p)'s own EXIT STATUS section, cited in full in
- * src/util/xargs.c's header comment: "0 ... 1-125 ... 126 ... found but
- * could not be invoked ... 127 ... could not be found." Every code this
- * harness can actually observe stays inside [0, 127] by that contract
- * (PROG can only ever yield 126 or 127, never a genuine utility exit
- * code, since it never really runs -- see SAFETY EXCLUSION above), so a
- * value outside that range is asserted as a defect.
+ * Checked: xargs(1p)'s own EXIT STATUS section ("0 ... 1-125 ... 126 ...
+ * found but could not be invoked ... 127 ... could not be found").
+ * Every code this harness can actually observe stays inside [0, 127] by
+ * that contract (PROG can only ever yield 126 or 127, never a genuine
+ * utility exit code, since it never really runs), so a value outside
+ * that range is asserted as a defect.
  *
- * SIZE CAPS.  512 bytes of stdin content -- generous next to
- * fuzz_sed.c's 480-byte script cap for a structurally similar streaming
- * grammar, small enough that read_tokens()'s own unbounded-growth
- * buf_putc()/emit_token() realloc loop stays cheap per call.
+ * 512 bytes of stdin content -- generous next to fuzz_sed.c's 480-byte
+ * script cap for a structurally similar streaming grammar, small enough
+ * that read_tokens()'s own unbounded-growth realloc loop stays cheap.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,10 +76,8 @@ extern void oracle_mismatch_i(const char *, const char *, long long, long long);
 #define STDIN_CAP 512
 #define ROOT "/tmp/xargsfz"
 
-/* Never created anywhere in this file, deliberately -- see this file's
- * header comment on SAFETY EXCLUSION.  The directory component is what
- * makes src/process/find_program.c's has_dir() take it as-is instead of
- * consulting $PATH. */
+/* Never created anywhere in this file, deliberately -- see the safety
+ * exclusion in this file's header comment. */
 #define PROG ROOT "/__NEVER_CREATE_THIS_FILE__"
 
 static void write_file(const char *path, const char *data, size_t len)

@@ -6,50 +6,32 @@
  * hosts_resolve.c and src/misc/linux/{pwd,grp}.c (src/internal/
  * nsswitch.h has the full contract).
  *
- * WHY A BESPOKE COMPILE RULE, NOT THE ORDINARY LIBRARY.
  * src/netdb/linux/ is not part of the library ../tools/asan-build.sh
- * builds for every other harness in this directory: that script's own
- * comment above its `linux)` case says this native harness exercises
- * the NT backend through ntstubs.c, and every OTHER platform-split
- * module has an nt/ counterpart standing in for the linux/ one it
- * skips. src/netdb/linux/ has no such counterpart -- src/netdb/nt/
- * plat_netdb.c is a self-contained NT implementation that never calls
- * __nsswitch_order() at all -- so this function is simply absent from
- * that library today, not present under different behaviour.
- *
- * __nsswitch_order() itself has no NT dependency at all: fopen(),
- * fgets(), fclose(), strchr(), strncmp(), tolower(), nothing else,
- * every one of them already in the general library this harness links
- * (fopen() reaches ntstubs.c's own simulated in-memory volume the same
- * way every other native fuzz/test binary's file I/O already does). So
- * rather than widen asan-build.sh's file selection for every harness --
- * a bigger, separate decision -- ../fuzz/Makefile compiles the real
- * nsswitch.c once, on its own (see the $(OUT)/nsswitch.o rule), and
- * links the result into this harness alone, exactly the shape
- * ntstubs.o/host_oracle.o already use for something that is not part of
- * $(LIBDIR). Nothing in nsswitch.c was changed to make this possible:
+ * builds for every other harness (this native harness exercises the NT
+ * backend through ntstubs.c, and src/netdb/nt/plat_netdb.c never calls
+ * __nsswitch_order() at all), so this function is simply absent from
+ * that library today. __nsswitch_order() itself has no NT dependency at
+ * all (fopen(), fgets(), fclose(), strchr(), strncmp(), tolower(),
+ * nothing else -- fopen() reaches ntstubs.c's own simulated in-memory
+ * volume the same way every other native fuzz/test binary's file I/O
+ * does), so rather than widen asan-build.sh's file selection,
+ * fuzz/Makefile compiles the real nsswitch.c once on its own and links
+ * the result into this harness alone, the same shape ntstubs.o/
+ * host_oracle.o already use. Nothing in nsswitch.c was changed:
  * __nsswitch_order() was already non-static and already declared in
  * src/internal/nsswitch.h, unlike resolv.c's parse_response() (see
- * fuzz_resolv.c's own banner for that one).
+ * fuzz_resolv.c's own header for that one).
  *
- * THE FILE-PATH SEAM.  __nsswitch_order() does not take a buffer --
- * fopen(__NSS_NSSWITCH_PATH(), "r") is baked into it, and there is no
- * lower buffer-taking entry point underneath: the whole function is one
- * fopen()+fgets() loop. src/internal/nss_paths.h's own banner describes
- * the seam that already exists for exactly this: __NSS_NSSWITCH_PATH()
- * expands to __nss_path("NTLIBC_TEST_NSSWITCH_PATH", "/etc/nsswitch.conf"),
- * an UNDOCUMENTED env-var override this library's own test fixtures use,
- * with TZ and HOSTALIASES as precedent for "an env var is the sanctioned
- * way to redirect a libc database lookup". This harness uses that same
+ * __nsswitch_order() does not take a buffer -- fopen(__NSS_NSSWITCH_PATH(),
+ * "r") is baked into it, and there is no lower buffer-taking entry point
+ * underneath. src/internal/nss_paths.h's own banner describes the seam
+ * that already exists for exactly this: __NSS_NSSWITCH_PATH() expands to
+ * __nss_path("NTLIBC_TEST_NSSWITCH_PATH", "/etc/nsswitch.conf"), an
+ * undocumented env-var override this library's own test fixtures use,
+ * with TZ and HOSTALIASES as precedent. This harness uses that same
  * seam: it fwrite()s the fuzz input into a path inside ntstubs.c's own
- * simulated volume (the in-memory filesystem every fopen() in this build
- * already goes through -- nothing here is a real host file, and
- * NTLIBC_FUZZ_MIRROR plays no part), then setenv()s
- * NTLIBC_TEST_NSSWITCH_PATH to that path before calling
- * __nsswitch_order(). This is the "existing seam/injection point for
- * feeding synthetic file content" the task asked to prefer over
- * filesystem mocking -- nss_paths.h's override IS that seam, already
- * built for this.
+ * simulated volume, then setenv()s NTLIBC_TEST_NSSWITCH_PATH to that
+ * path before calling __nsswitch_order().
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,9 +75,8 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 	n = size < CAP ? size : CAP;
 	memcpy(content, data, n);
 
-	/* A path inside ntstubs.c's own simulated volume -- not a real host
-	 * file, and independent of NTLIBC_FUZZ_MIRROR (see this file's own
-	 * banner). "w" truncates, so each call starts the fixture fresh. */
+	/* A path inside ntstubs.c's own simulated volume, not a real host
+	 * file. "w" truncates, so each call starts the fixture fresh. */
 	f = fopen("/fuzz_nsswitch.conf", "w");
 	if (!f) return 0;
 	if (n && fwrite(content, 1, n, f) != n) { fclose(f); return 0; }

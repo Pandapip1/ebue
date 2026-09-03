@@ -2,80 +2,59 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * __util_uuencode_main() -- src/util/uuencode.c, uuencode(1p)'s encoder:
- * emit_line()'s 45-bytes-in/4-characters-per-3-bytes-out chunking over
- * src/util/uucode.h's UUENC() mapping, the "begin mode decode_pathname"
- * header (mode read via fstat() when a real source_file is given, a
- * fixed 0644 default over stdin), and the zero-length-line-then-"end"
- * terminator.
+ * emit_line()'s 45-bytes-in/4-characters-per-3-bytes-out chunking, the
+ * "begin mode decode_pathname" header (mode read via fstat() when a real
+ * source_file is given, a fixed 0644 default over stdin), and the
+ * zero-length-line-then-"end" terminator.
  *
- * LOWER PRIORITY THAN fuzz_uudecode.c, ON PURPOSE, PER THIS PROJECT'S
- * OWN TASK BRIEF: uuencode(1p) turns arbitrary bytes into printable
- * output through a fixed, small, non-branching per-3-byte transform
- * (emit_line() has exactly one shape for every input, no format
- * variant, no untrusted structure to misparse) -- encoding arbitrary
- * bytes is inherently lower-risk than uudecode.c's job of *parsing* a
- * stream shaped like a real format, which is exactly why fuzz_uudecode.c
- * is this pair's higher-value harness and this one exists mainly for
- * completeness (basic crash/hang/exit-status coverage of a real, if
- * simple, hand-written loop) rather than because a rich bug surface is
- * expected here.
+ * Lower priority than fuzz_uudecode.c, on purpose: emit_line() has
+ * exactly one shape for every input, no format variant, no untrusted
+ * structure to misparse, so encoding arbitrary bytes is inherently
+ * lower-risk than uudecode.c's job of *parsing* a stream shaped like a
+ * real format. This harness exists mainly for completeness.
  *
- * WHAT IS FUZZED, AND HOW. uuencode(1p) reads source_file (or stdin) as
- * raw bytes to encode -- there is no format for this harness's fuzz
- * buffer to look like the way fuzz_uudecode.c's does, so, mirroring
- * fuzz_patch.c's target-file treatment, every fuzzer byte after the
- * first becomes the literal content of a file this harness creates,
- * NUL-safe because it is written with write(2) (never strlen()) and read
- * back with fread() (never a NUL-terminated-string API).
+ * uuencode(1p) reads source_file (or stdin) as raw bytes to encode --
+ * there's no format for the fuzz buffer to resemble, so every fuzzer
+ * byte after the first becomes the literal content of a file this
+ * harness creates, NUL-safe because it's written with write(2) (never
+ * strlen()) and read back with fread().
  *
- * BYTE 0 selects three independent bits of real option/operand coverage:
+ * Byte 0 selects two independent bits:
  *
  *   bit 0  one-operand (stdin) vs. two-operand (source_file) form. Set,
  *          real process stdin is freopen()'d from the same fuzz-content
- *          file (so uuencode(1p)'s fread(buf, ..., in) with `in == stdin`
- *          still reads real fuzzer bytes, not the harness's own input);
- *          this is also the ONLY way to reach the "no source_file: mode
- *          defaults to 0644" branch, since fstat() only runs when
- *          src_path is non-NULL. Clear, the file is passed as the
- *          source_file operand directly, reaching the fstat()-derived-
- *          mode branch instead.
+ *          file; this is also the only way to reach the "no
+ *          source_file: mode defaults to 0644" branch, since fstat()
+ *          only runs when src_path is non-NULL. Clear, the file is
+ *          passed as the source_file operand, reaching the
+ *          fstat()-derived-mode branch instead.
  *   bit 1  whether "-m" is prepended -- always refused (Base64 is not
- *          implemented; see src/util/uuencode.c's own header comment),
- *          so this reaches that refusal path directly rather than
- *          leaving it permanently unexercised.
+ *          implemented), reaching that refusal path directly.
  *
- * decode_pathname (the operand naming what a downstream uudecode should
- * call the *recreated* file) is always a fixed literal, never derived
- * from fuzz bytes: unlike uudecode.c's header-filename field, this
- * string is never open()'d or otherwise resolved as a path by
- * uuencode.c itself (read in full: it only ever appears inside the
- * "begin mode %s\n" printf() as text) -- varying it would add no new
- * code path, only a cosmetic difference in the printed header.
+ * decode_pathname is always a fixed literal, never derived from fuzz
+ * bytes: unlike uudecode.c's header-filename field, this string is never
+ * open()'d or resolved as a path by uuencode.c (read in full: it only
+ * ever appears inside the "begin mode %s\n" printf() as text).
  *
- * SIZE CAP. ENCODE_CAP bytes of the fuzz buffer become the source
- * content -- the same "bound the absolute cost" reasoning fuzz_patch.c's
- * PATCH_CAP and fuzz_uudecode.c's INPUT_CAP give; emit_line()'s own loop
- * is bounded by how many bytes fread() actually returned, which is at
- * most this cap, so there is no separate runaway-computation concern.
+ * ENCODE_CAP bytes of the fuzz buffer become the source content;
+ * emit_line()'s loop is bounded by how many bytes fread() actually
+ * returned, which is at most this cap, so there's no separate
+ * runaway-computation concern beyond the absolute-cost bound.
  *
- * REDIRECTED: both stdout and stderr. Unlike fuzz_uudecode.c, this file
- * DOES write to stdout -- emit_line()'s putchar() calls and the
- * begin/end printf()s are the entire point of the utility -- so both
- * streams are freopen()'d once per call, matching fuzz_sed.c's/
- * fuzz_ed.c's own reasoning for redirecting real process I/O a fuzzer
- * would otherwise flood on every one of millions of calls.
+ * Both stdout and stderr are redirected. Unlike fuzz_uudecode.c, this
+ * file DOES write to stdout -- emit_line()'s putchar() calls and the
+ * begin/end printf()s are the entire point of the utility.
  *
- * WHAT IS CHECKED. src/internal/util.h's contract: a real exit status.
- * src/util/uuencode.c's every `return` (read in full) uses exactly 0 or
- * 1 -- like uudecode(1p), there is no >1 class here -- so 1 is the real
- * upper bound asserted. No exit()/_exit() call anywhere in the file
- * either; libFuzzer's own atexit-based detection is the backstop, as in
- * every other harness in this directory.
+ * Checked: src/util/uuencode.c's every `return` (read in full) uses
+ * exactly 0 or 1 -- like uudecode(1p), there is no >1 class here -- so 1
+ * is the real upper bound asserted. No exit()/_exit() call anywhere in
+ * the file either; libFuzzer's own atexit-based detection is the
+ * backstop.
  *
- * NO ORACLE, for the same reason fuzz_uudecode.c's header gives: a
- * reference uuencode(1p) exists, but this file's own -m refusal is a
- * real, deliberate scope narrowing a differential run would report as a
- * false mismatch rather than a finding.
+ * No oracle, for the same reason fuzz_uudecode.c gives: a reference
+ * uuencode(1p) exists, but this file's own -m refusal is a real,
+ * deliberate scope narrowing a differential run would report as a false
+ * mismatch rather than a finding.
  */
 #include <stdio.h>
 #include <stdlib.h>

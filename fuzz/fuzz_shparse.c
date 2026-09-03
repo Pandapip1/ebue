@@ -3,47 +3,33 @@
  *
  * __sh_parse() -- src/sh/parse.c, the shell's lexer and recursive-descent
  * parser, with src/sh/print.c's canonical reprinter and src/sh/free.c's
- * AST teardown alongside it.  Roughly 900 lines that turn a whole
- * program text into an AST, entirely in memory: quote state across four
- * kinds of quoting, balanced "$(...)" and "${...}", backquotes,
- * here-documents drained at the newline, IO numbers, pipelines, and-or
- * lists, subshells and brace groups.  src/sh/execute.c is deliberately not
- * reached from here -- executing a fuzzer's program would fork.
+ * AST teardown alongside it: quote state across four kinds of quoting,
+ * balanced "$(...)" and "${...}", backquotes, here-documents drained at
+ * the newline, IO numbers, pipelines, and-or lists, subshells and brace
+ * groups. src/sh/execute.c is deliberately not reached from here --
+ * executing a fuzzer's program would fork.
  *
- * The parser is the single largest untested-against-hostile-input
- * surface in the tree that needs no OS objects at all, and every scanner
- * in it (copy_squoted, copy_dquoted, copy_balanced, copy_backquoted,
- * scan_word, drain_heredocs, strip_delim) advances a pointer through the
- * caller's buffer looking for a terminator that a fuzzer will simply not
- * provide.
- *
- * THE ORACLE IS THE PRINTER, AND IT IS A REAL ONE.  src/sh/print.c's
+ * The oracle is the printer, and it's a real one: src/sh/print.c's
  * banner states the property test/sh-engine.c already checks by hand for
- * a fixed set of programs: parse -> print -> parse -> print must reach a
- * fixed point, i.e. the second print equals the first.  That is a strong
- * invariant for a parser, and it needs no reference implementation:
+ * a fixed set of programs -- parse -> print -> parse -> print must reach
+ * a fixed point, i.e. the second print equals the first. That needs no
+ * reference implementation: if the printer loses a field, or the parser
+ * reads its own canonical output differently from how it produced it, or
+ * either side has an off-by-one in a quote or here-document boundary,
+ * the text drifts on the second pass. This harness generalises that
+ * check to arbitrary input. The one thing it must not do is assume the
+ * reprint parses at all -- print.c's own comment says printing is
+ * best-effort under allocation failure -- so a NULL second parse is
+ * tolerated and only a *differing* second print is reported.
  *
- *   - if the printer loses a field, the reprint of the reparse differs;
- *   - if the parser reads its own canonical output differently from the
- *     way it produced it, the two prints differ;
- *   - if either side has an off-by-one in a quote or here-document
- *     boundary, the text drifts on the second pass.
+ * open_memstream() (src/stdio/mem.c) collects the output, so its own
+ * buffer growth is under test here too, incidentally: a program whose
+ * reprint is long exercises the memstream's realloc path with a length
+ * nothing else in fuzz/ drives.
  *
- * This harness generalises that hand-written check to arbitrary input,
- * which is exactly what a fuzzer is for.  The one thing it must not do
- * is assume the reprint parses at all -- print.c's own comment says
- * printing is best-effort under allocation failure -- so a NULL second
- * parse is tolerated and only a *differing* second print is reported.
- *
- * open_memstream() (src/stdio/mem.c) collects the output.  Its own
- * buffer growth is therefore under test here too, incidentally: a
- * program whose reprint is long exercises the memstream's realloc path
- * with a length nothing else in fuzz/ drives.
- *
- * sh.h is included by relative path.  It lives in src/sh/, which is not
- * on the harness include path (-I src/internal is), and adding one would
- * be a change to fuzz/Makefile's shared build rules for a single file's
- * benefit.
+ * sh.h is included by relative path: it lives in src/sh/, which is not
+ * on the harness include path, and adding one would be a change to
+ * fuzz/Makefile's shared build rules for a single file's benefit.
  */
 #include <string.h>
 #include <stdlib.h>
