@@ -550,9 +550,18 @@ static int parse_normal_hunk(struct linebuf *L, size_t *ip, struct hunk *h)
 	if (!is_normal_header(&L->v[*ip], &o1, &o2, &cmd, &n1, &n2)) return 0;
 	(*ip)++;
 	memset(h, 0, sizeof *h);
-	if (cmd == 'a') { h->old_start = o1; h->old_count = 0; h->new_start = n1; h->new_count = n2 - n1 + 1; }
-	else if (cmd == 'd') { h->old_start = o1; h->old_count = o2 - o1 + 1; h->new_start = n1; h->new_count = 0; }
-	else { h->old_start = o1; h->old_count = o2 - o1 + 1; h->new_start = n1; h->new_count = n2 - n1 + 1; }
+	/* o2/n2 are a hunk header's *second* range number, straight out of
+	 * whatever patch file this process was handed -- a "5,3c8,10" header
+	 * (end before start) is malformed, and o2-o1+1/n2-n1+1 would go
+	 * negative. That negative count later gets cast to size_t in
+	 * apply_section() (e.g. "src = (size_t)pos + (size_t)h->old_count"),
+	 * which would misinterpret it as a huge unsigned value instead of
+	 * rejecting the malformed hunk. Clamped to 0 the same way
+	 * parse_context_hunk() below already clamps its own ohi>=olo /
+	 * nhi>=nlo hunk-header ranges. */
+	if (cmd == 'a') { h->old_start = o1; h->old_count = 0; h->new_start = n1; h->new_count = n2 >= n1 ? n2 - n1 + 1 : 0; }
+	else if (cmd == 'd') { h->old_start = o1; h->old_count = o2 >= o1 ? o2 - o1 + 1 : 0; h->new_start = n1; h->new_count = 0; }
+	else { h->old_start = o1; h->old_count = o2 >= o1 ? o2 - o1 + 1 : 0; h->new_start = n1; h->new_count = n2 >= n1 ? n2 - n1 + 1 : 0; }
 
 	if (cmd == 'd' || cmd == 'c') {
 		for (k = 0; k < h->old_count; k++) {
