@@ -71,6 +71,11 @@ intToPointerCast:src/stdlib/system.c
 # duration of the copy (XCU tee(1p): "Ignore the SIGINT signal"), same
 # integer-literal-to-pointer cast as above.
 intToPointerCast:src/util/tee.c
+# __plat_sig_sync_kernel() (the Linux rt_sigaction backend) assigns
+# SIG_IGN/SIG_DFL to the raw kernel_sigaction's k_handler, same
+# integer-literal-to-pointer cast as above -- this is signal()'s own
+# storage, one layer lower.
+intToPointerCast:src/signal/linux/plat_signal.c
 
 # CLIENT_ID.UniqueProcess/UniqueThread are declared HANDLE by NT but hold
 # small integer ids, which is what a pid_t is; the cast back is the
@@ -93,6 +98,13 @@ signConversion:src/string/memmove.c
 # left-shift rule to `>>` as well and misreports it; verified against
 # cppcheck 2.21.1 with a two-line test case.
 shiftTooManyBitsSigned:arch/*/src/int64.c
+# arith.c's ev_rel_bit()/wordexp arithmetic `>>` arm ('R' case) already
+# validates `0 <= rhs < LONG_BIT` before shifting a signed long by rhs,
+# so rhs at LONG_BIT-1 (63 on this LP64 aarch64 target, where LONG_BIT
+# is 64) is an in-range width-1 shift, not out-of-range; a negative left
+# operand there is implementation-defined (C99 6.5.7p5), not undefined.
+# Same misapplication of the left-shift overflow rule to `>>` as above.
+shiftTooManyBitsSigned:src/wordexp/arith.c
 
 # cppcheck's bundled posix.cfg models fetestexcept()/feclearexcept()/
 # feraiseexcept() after glibc's <fenv.h>: a 6-bit FE_ALL_EXCEPT (glibc's
