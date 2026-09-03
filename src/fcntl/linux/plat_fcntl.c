@@ -10,15 +10,27 @@
  * `struct __ntpath *np`. Most of ntlibc's own O_* flag values already
  * match the Linux kernel ABI bit-for-bit and pass straight through.
  *
- * THREE do not, discovered by actually running open(O_DIRECTORY) against
- * a real kernel and getting EINVAL back: ntlibc's own <fcntl.h> has
- * O_DIRECTORY=0200000/O_NOFOLLOW=0400000/O_DIRECT=040000, but the real
- * Linux kernel ABI is O_DIRECTORY=040000/O_NOFOLLOW=0100000/
- * O_DIRECT=0200000 -- O_DIRECTORY and O_DIRECT are transposed, and
- * O_NOFOLLOW matches neither swap. A real, pre-existing mismatch in
- * include/fcntl.h itself, invisible until an external ABI actually tested
- * these bit positions. Fixed here (translating three bits in one backend
- * function), not in the public header, to keep the blast radius small.
+ * THREE do not, and -- unlike this banner used to claim -- the fix is
+ * NOT the same on every architecture. ntlibc's own <fcntl.h> has
+ * O_DIRECTORY=0200000/O_NOFOLLOW=0400000/O_DIRECT=040000. A real kernel
+ * ABI check (raw openat(2), ENOTDIR-on-a-regular-file vs success-on-a-
+ * real-directory for each candidate bit value, not trusted from any
+ * header) gives OPPOSITE answers per architecture:
+ *   - x86_64/i386: the kernel's real O_DIRECTORY/O_NOFOLLOW/O_DIRECT
+ *     ARE 0200000/0400000/040000 -- identical to ntlibc's own values.
+ *     No translation needed; confirmed with a qemu-user pilot (open("/",
+ *     O_DIRECTORY) succeeds untranslated, EINVALs when translated).
+ *   - aarch64: the kernel's real values are O_DIRECTORY=040000/
+ *     O_NOFOLLOW=0100000/O_DIRECT=0200000 -- genuinely different bit
+ *     positions from x86_64/i386, confirmed the same way (raw openat(2)
+ *     directly, on this host's own real kernel) and matching this
+ *     host's own real glibc <fcntl.h>. ntlibc's values DO need
+ *     translating here.
+ * A previous fix applied the aarch64 translation unconditionally on
+ * every architecture: right for aarch64 (why the native suite never
+ * caught it), silently sending the wrong bit to the x86_64/i386 kernel
+ * (why a real directory open EINVALs there). The translation now only
+ * runs for aarch64.
  *
  * Linux already has real, native `/dev/null` etc, so the VFS-overlay
  * machinery this interface's *vfsout / *vfsnativeout report is never
@@ -97,10 +109,12 @@
 #define S_IFCHR_LX  0020000
 #define S_IFIFO_LX  0010000
 
-/* ntlibc's own O_DIRECTORY/O_NOFOLLOW/O_DIRECT values do NOT match the
- * real Linux kernel ABI -- see this file's own banner for how that was
- * discovered and why it is fixed here, not in include/fcntl.h. Every
- * other O_* flag already matches and is passed straight through. */
+#if defined(__aarch64__)
+/* aarch64's real kernel O_DIRECTORY/O_NOFOLLOW/O_DIRECT values --
+ * confirmed against this host's own real <fcntl.h> and a raw openat(2)
+ * ENOTDIR/success probe, see this file's own banner. Genuinely
+ * different bit positions from ntlibc's own <fcntl.h>, and from
+ * x86_64/i386's real kernel ABI (which need no translation at all). */
 #define LX_O_DIRECTORY 040000
 #define LX_O_NOFOLLOW  0100000
 #define LX_O_DIRECT    0200000
@@ -113,6 +127,11 @@ static int to_linux_open_flags(int flags)
 	if (flags & O_DIRECT)    out |= LX_O_DIRECT;
 	return out;
 }
+#else
+/* x86_64/i386: ntlibc's own O_DIRECTORY/O_NOFOLLOW/O_DIRECT already
+ * match the real kernel ABI bit-for-bit -- no translation. */
+static int to_linux_open_flags(int flags) { return flags; }
+#endif
 
 /* fcntl(2) lock commands and lock types: confirmed against this host's
  * own <fcntl.h> -- identical across 64-bit Linux architectures. */
