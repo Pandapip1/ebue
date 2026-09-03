@@ -87,6 +87,20 @@ int compare_to_saved_after_unknown_call(int (*fn)(void)) {
 	return r;
 }
 
+void *fopen(const char *path, const char *mode);
+
+/* `if (!fopen(...))` is the idiomatic C null-check for a pointer-
+ * returning capable call; it must diagnose that call's failure exactly
+ * as `== 0`/`== NULL` already does, not just an explicit comparison. */
+int diagnosed_read_pointer_null_check(const char *path) {
+	void *f = fopen(path, "r");
+	if (!f) {
+		if (errno == 9)
+			return -1;
+	}
+	return 0;
+}
+
 int __set_errno_status(int st);
 int open(const char *path, int flags, int mode);
 

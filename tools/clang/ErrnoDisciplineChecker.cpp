@@ -102,6 +102,22 @@ class ErrnoDisciplineChecker
         "cksum_stream", "read_all", "write_all", "link_one", "mkdir_p",
         // src/stdio/buf.c's shared fd-and-buffer-position seek helper
         "__file_seek",
+        // src/dirent/opendir.c: every return path sets errno, either via
+        // open()/__fd_get() (both already above) or its own explicit
+        // ENOMEM/ENOTDIR assignment
+        "opendir", "fdopendir",
+        // src/socket/linux/plat_socket.c and src/socket/nt/plat_socket.c:
+        // every __plat_socketpair() implementation sets errno on its
+        // only failure return
+        "__plat_socketpair",
+        // src/util/spool.c: every return path sets errno, either via a
+        // capable call already above (open()/mkdir()) or its own explicit
+        // ENOENT/ENAMETOOLONG assignment
+        "__spool_dir", "__spool_crontab_path",
+        // src/dlfcn/linux/plat_dlfcn.c's open_needed(): every return path
+        // sets errno, either via open() (already above) or its own
+        // explicit ENAMETOOLONG assignment
+        "open_needed",
     };
     StringRef Name = Function->getName();
     for (StringRef Candidate : Names)
@@ -435,6 +451,22 @@ public:
     C.addTransition(State);
   }
 
+  /* Shared by both checkPreStmt overloads below: if Symbol is a capable
+   * call's tracked return value, mark that call Diagnosed. Used for
+   * `<capable-call> <cmp> <sentinel>` (BinaryOperator) and for
+   * `!<capable-call>` (UnaryOperator, UO_LNot) -- the pointer-returning
+   * idiom (`if (!fopen(...))`) that a bare comparison never sees since it
+   * has no BinaryOperator of its own. */
+  static void diagnoseIfSetter(SymbolRef Symbol, CheckerContext &C) {
+    if (!Symbol)
+      return;
+    ProgramStateRef State = C.getState();
+    const Stmt *const *Setter = State->get<ErrnoSetterOf>(Symbol);
+    if (!Setter)
+      return;
+    C.addTransition(State->set<CallSlot>(SlotDiagnosed, *Setter));
+  }
+
   /* Recognise `<capable-call> <cmp> <sentinel>` (and the transitive form
    * through a variable the call's result was copied into, which the
    * engine's own symbolic execution already resolves to the same
@@ -452,19 +484,23 @@ public:
     default:
       return;
     }
-    ProgramStateRef State = C.getState();
     SymbolRef Symbol = C.getSVal(Operation->getLHS()).getAsSymbol(true);
     if (!Symbol)
       Symbol = C.getSVal(Operation->getRHS()).getAsSymbol(true);
-    if (!Symbol)
-      return;
-    const Stmt *const *Setter = State->get<ErrnoSetterOf>(Symbol);
-    if (!Setter)
-      return;
-    C.addTransition(State->set<CallSlot>(SlotDiagnosed, *Setter));
+    diagnoseIfSetter(Symbol, C);
   }
 
   void checkPreStmt(const UnaryOperator *Operation, CheckerContext &C) const {
+    /* `if (!fopen(...))` etc.: the idiomatic C null-check for a
+     * pointer-returning capable call diagnoses that call's failure
+     * exactly as `== 0`/`== NULL` already does above -- same trust
+     * boundary, just reached through negation instead of an explicit
+     * comparison against zero. */
+    if (Operation->getOpcode() == UO_LNot) {
+      diagnoseIfSetter(C.getSVal(Operation->getSubExpr()).getAsSymbol(true),
+                       C);
+      return;
+    }
     if (!isErrnoDeref(Operation))
       return;
     ProgramStateRef State = C.getState();
