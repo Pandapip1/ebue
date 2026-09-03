@@ -18,9 +18,10 @@
  * six alternating-font pairs (.BI/.BR/.IR/.IB/.RB/.RI, one shared
  * helper), .RS/.RE, .nf/.fi, .br (real pages routinely need it to keep
  * alternate SYNOPSIS forms on separate lines), .ds/.nr/.rn (string/
- * number registers -- see "REGISTERS" below), and a common subset of
- * escape sequences. This file IS that engine, not a wrapper around a
- * real one.
+ * number registers -- see "REGISTERS" below), .de/.de1/.am/.am1/.ig/
+ * .rm/.als (user-defined macros -- see "MACROS" below), and a common
+ * subset of escape sequences. This file IS that engine, not a wrapper
+ * around a real one.
  *
  * ---- WHAT IS DELIBERATELY NOT IMPLEMENTED, AND WHY --------------------
  *
@@ -28,15 +29,6 @@
  *    language comparable in size to this whole file. Skipped like any
  *    unknown macro (see "UNKNOWN-MACRO DEGRADATION" below): that one
  *    table or equation is lost, the rest of the page still renders.
- *  - .de/.ig (user macro definitions): bodies are never executed, but
- *    their lines ARE tracked and skipped as a span (in_macro_def
- *    below) -- otherwise a macro body's raw template text (e.g. a
- *    literal `\$1`) would print as if it were real page content. This
- *    is the one piece of macro handling here, purely to avoid that
- *    corruption, not to run anything.
- *  - .am (append to a user macro): needs the macro storage .de doesn't
- *    keep (Tier 2 of this project's own troff-engine plan) -- there's
- *    nothing yet to append to.
  *  - .if/.ie/.el (conditionals): real condition evaluation is its own
  *    expression language, same reason as .TS/.EQ. Unlike .de, not
  *    tracking a conditional's `\{ ... \}` span doesn't corrupt output
@@ -59,11 +51,69 @@
  * Any `.xx` request this file doesn't implement is silently skipped:
  * one line consumed, nothing emitted, no following lines swallowed.
  * This matches real troff's own behaviour for a macro with no defined
- * body (a no-op, not an error) -- .de/.ig above are the one deliberate
- * exception, because only they can corrupt output otherwise. Passing
- * the raw request line through as text was rejected on purpose: a
- * stray ".ie \n(.g \{\" line printed into the middle of a paragraph is
- * more confusing than a silent no-op.
+ * body (a no-op, not an error) -- .de/.am/.ig above are the one
+ * deliberate exception, because only they can corrupt output
+ * otherwise. Passing the raw request line through as text was
+ * rejected on purpose: a stray ".ie \n(.g \{\" line printed into the
+ * middle of a paragraph is more confusing than a silent no-op.
+ *
+ * ============================================================
+ * MACROS: .de/.de1/.am/.am1/.ig, INVOCATION, AND $1.. ARGUMENTS
+ * ============================================================
+ *
+ * A second name -> body table (struct man_mactab below), separate from
+ * the register table above (real troff also keeps macros/strings in a
+ * different name space than number registers; see "REGISTERS" for why
+ * this file already merges strings+numbers together but keeps macros
+ * apart, since a macro body is a list of LINES, not one scalar value).
+ *
+ * `.de NAME [END]` stores every following raw source line, verbatim
+ * and unprocessed, up to a line matching END (or the literal `..` if
+ * END is omitted -- real troff's own default), replacing NAME's
+ * previous body if it had one. `.am NAME [END]` is identical except it
+ * APPENDS to NAME's existing body (creating NAME empty first if it had
+ * none yet), also matching real troff. `.de1`/`.am1` behave exactly
+ * like `.de`/`.am` here: real troff's own distinction is a
+ * compatibility-mode toggle this file has no concept of (it never
+ * emulates AT&T troff's stricter register-name/backslash rules), so
+ * there is nothing for `1` to actually change. `.ig [END]` still never
+ * stores anything -- its lines are scanned with the exact same
+ * termination logic and discarded, matching real troff's own "define
+ * nothing, just skip" semantics.
+ *
+ * A line encountered later whose request name matches a stored macro
+ * (checked only after every built-in request above it -- a page
+ * cannot shadow a built-in by defining a same-named macro) EXECUTES
+ * that macro: each stored body line, after $-argument substitution
+ * (below), is fed back through the exact same line-processing
+ * function top-level source lines go through, so a macro body can
+ * itself use any real macro/register/request, including defining or
+ * invoking further macros. Recursion (a macro invoking itself, or a
+ * cycle) is bounded by MAN_MAX_MACRO_DEPTH, the same "documented
+ * finite bound, loud failure not silent hang" discipline
+ * MAN_MAX_RS_DEPTH already gives `.RS` nesting.
+ *
+ * $-argument substitution is a textual pre-pass over each RAW stored
+ * body line (before that line is tokenized/decoded like any other
+ * source line): a literal `\$1`..`\$9` is replaced with the invoking
+ * line's corresponding argument (raw, undecoded text -- decoded
+ * normally once the substituted line is processed like any other),
+ * `\$0` with the name the macro was invoked as, and `\$*`/`\$@` with
+ * every argument space-joined (real troff's `\$@` individually
+ * double-quotes each argument for safe re-passing to another macro
+ * call; this file's own tokenizer has no matching escaped-quote
+ * support to reconstruct that form, so `\$@` is a documented
+ * simplification, identical to `\$*` here). An argument index beyond
+ * how many were actually given substitutes nothing, matching real
+ * troff.
+ *
+ * `.rm NAME` deletes a macro; `.als NEW OLD` makes NEW an independent
+ * copy of OLD's current body (a real troff alias is a copy taken at
+ * alias time, not a live link -- redefining OLD afterward does not
+ * change NEW); `.rn OLD NEW` (see "REGISTERS" for its register
+ * behaviour) also renames a macro when OLD names one instead of a
+ * register. All three are silent no-ops when OLD/NAME doesn't exist,
+ * matching real troff's own forgiving behaviour for these requests.
  *
  * ============================================================
  * REGISTERS: .ds/.nr/.rn, AND \* / \n INTERPOLATION
@@ -121,11 +171,16 @@
  * ESCAPE SEQUENCES IMPLEMENTED
  * ============================================================
  *
- * See decode_text() for the exhaustive switch. Summary: \- \_ \& \e \c
+ * See decode_text() for the exhaustive switch. Summary: \- \_ \& \e
  * \% \(space) \0 \| \^ \' \` \. \\ (literal-character/spacing
- * escapes), \" (comment to end of line, also a whole-line `.\"`
- * request), \fX \f(XX \f[...] (font change: B/I are real; everything
- * else -- R, P, numbered/named fonts -- maps to roman/reset, since
+ * escapes), \c (interrupt output right here and suppress the usual
+ * join-space/break before whatever comes next -- real troff's own
+ * meaning; tracked via man_ctx's own suppress_join flag, consulted
+ * everywhere this file would otherwise insert a join space between
+ * consecutive accumulated fragments), \" (comment to end of line, also
+ * a whole-line `.\"` request), \fX \f(XX \f[...] (font change: B/I are
+ * real; everything else -- R, P, numbered/named fonts -- maps to
+ * roman/reset, since
  * this file keeps no font *stack* and every real page tested only ever
  * nests one level deep, where \fP's "previous font" distinction never
  * arises), \(xx (a built-in table of the commonest named glyphs;
@@ -253,6 +308,12 @@
  * `.RS` run into a loud "too deeply nested" skip instead of unbounded
  * growth. */
 #define MAN_MAX_RS_DEPTH 64
+
+/* A user macro invoking itself (directly or through a cycle) would
+ * otherwise recurse without limit; bounding it the same way as
+ * MAN_MAX_RS_DEPTH turns that into a loud diagnostic instead of an
+ * unbounded stack. */
+#define MAN_MAX_MACRO_DEPTH 64
 
 #define MAN_BASE_INDENT 7  /* classic troff `an.tmac` .nr IN default */
 #define MAN_SS_COL      3
@@ -522,13 +583,117 @@ static size_t man_read_reg_name(const char *s, size_t n, size_t i, char *name, s
 	return i;
 }
 
+/* ==== macro table: .de/.de1/.am/.am1/.ig, .rm/.als ===================== *
+ * See this file's own header comment ("MACROS") for the full design
+ * rationale -- summary: a separate name -> body table (a macro body is
+ * a list of raw source lines, not one scalar value, so it doesn't fit
+ * man_regtab above), looked up only after every built-in request name
+ * so a page can never shadow a built-in by defining a same-named
+ * macro. */
+
+struct man_macro {
+	char *name;   /* malloc'd */
+	char **lines; /* malloc'd array of malloc'd raw body lines */
+	size_t n, cap;
+};
+
+struct man_mactab { struct man_macro *v; size_t n, cap; };
+
+static void man_macro_free_lines(struct man_macro *m)
+{
+	size_t i;
+	for (i = 0; i < m->n; i++) free(m->lines[i]);
+	free(m->lines);
+	m->lines = 0; m->n = m->cap = 0;
+}
+
+static void man_mactab_free(struct man_mactab *t)
+{
+	size_t i;
+	for (i = 0; i < t->n; i++) { free(t->v[i].name); man_macro_free_lines(&t->v[i]); }
+	free(t->v);
+	t->v = 0; t->n = t->cap = 0;
+}
+
+static struct man_macro *man_mac_find(struct man_mactab *t, const char *name)
+{
+	size_t i;
+	for (i = 0; i < t->n; i++)
+		if (!strcmp(t->v[i].name, name)) return &t->v[i];
+	return 0;
+}
+
+/* Finds `name`'s existing macro slot, or grows the table and creates a
+ * fresh (empty-bodied) one. Returns NULL only on allocation failure. */
+static struct man_macro *man_mac_get_or_create(struct man_mactab *t, const char *name)
+{
+	struct man_macro *m = man_mac_find(t, name);
+	char *dup;
+
+	if (m) return m;
+
+	if (t->n + 1 > t->cap) {
+		size_t newcap;
+		struct man_macro *g;
+		if (!__util_array_capacity(t->cap, t->n, 1, 8, sizeof *t->v, &newcap)) return 0;
+		g = __util_reallocarray(t->v, newcap, sizeof *t->v);
+		if (!g) return 0;
+		t->v = g; t->cap = newcap;
+	}
+	dup = strdup(name);
+	if (!dup) return 0;
+	m = &t->v[t->n++];
+	memset(m, 0, sizeof *m);
+	m->name = dup;
+	return m;
+}
+
+static int man_macro_add_line(struct man_macro *m, const char *line)
+{
+	char *dup;
+	if (m->n + 1 > m->cap) {
+		size_t newcap;
+		char **g;
+		if (!__util_array_capacity(m->cap, m->n, 1, 16, sizeof *m->lines, &newcap)) return 0;
+		g = __util_reallocarray(m->lines, newcap, sizeof *m->lines);
+		if (!g) return 0;
+		m->lines = g; m->cap = newcap;
+	}
+	dup = strdup(line);
+	if (!dup) return 0;
+	m->lines[m->n++] = dup;
+	return 1;
+}
+
+/* Removes the macro named `name`, if any (silent no-op if not found) --
+ * used by man_do_rm() and man_do_rn()'s own macro-rename overwrite,
+ * same shape as man_reg_remove() above. */
+static void man_mac_remove(struct man_mactab *t, const char *name)
+{
+	size_t i, j;
+	for (i = 0; i < t->n; i++) {
+		if (strcmp(t->v[i].name, name) != 0) continue;
+		free(t->v[i].name);
+		man_macro_free_lines(&t->v[i]);
+		for (j = i; j + 1 < t->n; j++) t->v[j] = t->v[j + 1];
+		t->n--;
+		return;
+	}
+}
+
 /* Escape/glyph decoder: appends the rendering of one chunk of raw
  * troff text (a whole text line, or one macro argument) to `out`,
  * expanding the escapes this file's own header comment documents.
  * See that comment for the exact, exhaustive list. `regs` is the
  * register table \* / \n interpolation escapes read (and, indirectly
- * through man_do_ds()/man_do_nr(), write). */
-static int decode_text(struct man_regtab *regs, struct man_buf *out, const char *s, size_t n)
+ * through man_do_ds()/man_do_nr(), write). `trailing_c`, if non-NULL,
+ * is set to 1 when this chunk ended in \c (see "ESCAPE SEQUENCES
+ * IMPLEMENTED" in this file's own header comment) and left untouched
+ * otherwise -- callers that thread join-space suppression across
+ * consecutive accumulated fragments pass a real pointer; callers that
+ * don't care (register values, headings, and the like never
+ * participate in that join logic) pass NULL. */
+static int decode_text(struct man_regtab *regs, struct man_buf *out, const char *s, size_t n, int *trailing_c)
 {
 	size_t i = 0;
 
@@ -560,8 +725,18 @@ static int decode_text(struct man_regtab *regs, struct man_buf *out, const char 
 			if (!mbuf_appendc(out, '\\')) return 0;
 			i++;
 			break;
-		case '&': case 'c': case '%': case '|': case '^':
+		case '&': case '%': case '|': case '^':
 			i++; /* zero-width / spacing / no-break hints: dropped */
+			break;
+		case 'c':
+			/* \c: interrupt processing right here -- anything after
+			 * it in this same chunk is real troff's own "not part of
+			 * this output" territory, so stop rather than keep
+			 * decoding. Reported to the caller via trailing_c so it
+			 * can suppress the join-space it would otherwise insert
+			 * before whatever gets accumulated next. */
+			if (trailing_c) *trailing_c = 1;
+			i = n;
 			break;
 		case '"':
 			i = n; /* comment to end of line */
@@ -771,8 +946,14 @@ struct man_ctx {
 	                          * flush against it, no blank -- see each
 	                          * case's own comment) */
 	int had_output;         /* has anything at all been written to doc yet */
-	int in_macro_def;       /* inside a .de/.ig ... .. span: skip everything */
 	struct man_regtab regs; /* .ds/.nr/.rn register table -- see decode_text() */
+	struct man_mactab macros; /* .de/.am/.ig/.rm/.als macro table -- see "MACROS" */
+	int def_active;          /* collecting a .de/.am/.ig body right now */
+	int def_discard;         /* def_active's body is .ig's: discard, don't store */
+	char *def_end;            /* malloc'd custom end-macro name, or NULL for the default ".." */
+	struct man_macro *def_target; /* macro def_active is writing lines into (NULL if def_discard) */
+	int macro_depth;         /* current user-macro invocation nesting, bounded by MAN_MAX_MACRO_DEPTH */
+	int suppress_join;       /* \c seen: skip the next join-space between accumulated fragments */
 };
 
 static int man_ctx_init(struct man_ctx *c, int width)
@@ -790,6 +971,8 @@ static void man_ctx_free(struct man_ctx *c)
 	mbuf_free(&c->acc);
 	free(c->pending_prefix);
 	man_regtab_free(&c->regs);
+	man_mactab_free(&c->macros);
+	free(c->def_end);
 }
 
 /* Blank-line-before-a-new-block bookkeeping: exactly one blank line
@@ -923,13 +1106,17 @@ static int man_flush_as_tag(struct man_ctx *c, int width)
 /* Appends `text` (raw, not yet escape-decoded) to the accumulator in
  * font `font` (0 = current/roman, MAN_M_BOLD, MAN_M_ITAL), inserting a
  * single space first if the accumulator is non-empty -- the .B/.I
- * (single-font, space-joined-with-args) shape. */
+ * (single-font, space-joined-with-args) shape. A trailing \c in `text`
+ * (real troff's own "no break here" escape) suppresses that join-space
+ * for whatever gets appended next instead, via c->suppress_join. */
 static int man_acc_add_font(struct man_ctx *c, const char *text, int font)
 {
-	if (c->acc.len > 0) { if (!mbuf_appendc(&c->acc, ' ')) return 0; }
+	int had_c = 0;
+	if (c->acc.len > 0 && !c->suppress_join) { if (!mbuf_appendc(&c->acc, ' ')) return 0; }
 	if (font) { if (!mbuf_appendc(&c->acc, (char)font)) return 0; }
-	if (!decode_text(&c->regs, &c->acc, text, strlen(text))) return 0;
+	if (!decode_text(&c->regs, &c->acc, text, strlen(text), &had_c)) return 0;
 	if (font) { if (!mbuf_appendc(&c->acc, MAN_M_ROMAN)) return 0; }
+	c->suppress_join = had_c;
 	return 1;
 }
 
@@ -976,7 +1163,7 @@ static void man_th(struct man_ctx *c, struct man_argv *a,
 
 	for (i = 0; i < 5; i++) mbuf_reset(slots[i]);
 	for (i = 0; i < a->n && i < 5; i++)
-		if (!decode_text(&c->regs, slots[i], a->v[i], strlen(a->v[i]))) return;
+		if (!decode_text(&c->regs, slots[i], a->v[i], strlen(a->v[i]), 0)) return;
 }
 
 static int man_center3(struct man_buf *doc, int width, const char *l, const char *ctr, const char *r)
@@ -1039,7 +1226,7 @@ static int man_do_ds(struct man_ctx *c, struct man_argv *a)
 	memset(&val, 0, sizeof val);
 	for (i = 1; i < a->n && ok; i++) {
 		if (i > 1 && !mbuf_appendc(&val, ' ')) ok = 0;
-		if (ok && !decode_text(&c->regs, &val, a->v[i], strlen(a->v[i]))) ok = 0;
+		if (ok && !decode_text(&c->regs, &val, a->v[i], strlen(a->v[i]), 0)) ok = 0;
 	}
 	if (ok) ok = man_reg_set_string(&c->regs, a->v[0], val.data ? val.data : "");
 	mbuf_free(&val);
@@ -1084,8 +1271,8 @@ static int man_do_nr(struct man_ctx *c, struct man_argv *a)
 
 	memset(&val, 0, sizeof val);
 	memset(&incrbuf, 0, sizeof incrbuf);
-	ok = decode_text(&c->regs, &val, a->v[1], strlen(a->v[1]));
-	if (ok && a->n >= 3) ok = decode_text(&c->regs, &incrbuf, a->v[2], strlen(a->v[2]));
+	ok = decode_text(&c->regs, &val, a->v[1], strlen(a->v[1]), 0);
+	if (ok && a->n >= 3) ok = decode_text(&c->regs, &incrbuf, a->v[2], strlen(a->v[2]), 0);
 	if (ok && a->n >= 3) have_incr = man_parse_plain_number(incrbuf.data, &incr);
 
 	if (ok && man_parse_plain_number(val.data, &parsed)) {
@@ -1101,42 +1288,218 @@ static int man_do_nr(struct man_ctx *c, struct man_argv *a)
 	return ok;
 }
 
-/* .rn OLD NEW: renames the register (string or number, whichever is
- * defined -- see this file's header comment for why this table
- * doesn't separate string/number name spaces the way real troff
- * technically does) named OLD to NEW. OLD not existing is a silent
- * no-op; NEW already existing is silently overwritten; both match
- * real troff's own .rn behaviour. */
+/* .rn OLD NEW: renames whichever thing OLD names -- a register (string
+ * or number, whichever is defined -- see this file's header comment
+ * for why this table doesn't separate string/number name spaces the
+ * way real troff technically does), tried first, or otherwise a macro
+ * (real troff's own `.rn` covers macros/strings, never number
+ * registers, because of that name-space split -- checking the
+ * register table first and falling back to the macro table gives the
+ * same practical result: whichever thing OLD actually names gets
+ * renamed). OLD not existing as either is a silent no-op; NEW already
+ * existing is silently overwritten; both match real troff's own .rn
+ * behaviour. */
 static int man_do_rn(struct man_ctx *c, struct man_argv *a)
 {
 	struct man_reg *old;
+	struct man_macro *oldm;
 	char *newname;
 
 	if (a->n < 2 || !strcmp(a->v[0], a->v[1])) return 1;
-	if (!man_reg_find(&c->regs, a->v[0])) return 1; /* OLD doesn't exist: nothing to rename */
 
-	/* Overwrite any existing NEW first, then re-find OLD by name --
-	 * man_reg_remove() can shift the table, invalidating any pointer
-	 * taken before it ran. */
-	man_reg_remove(&c->regs, a->v[1]);
-	old = man_reg_find(&c->regs, a->v[0]);
+	if (man_reg_find(&c->regs, a->v[0])) {
+		/* Overwrite any existing NEW first, then re-find OLD by name --
+		 * man_reg_remove() can shift the table, invalidating any
+		 * pointer taken before it ran. */
+		man_reg_remove(&c->regs, a->v[1]);
+		old = man_reg_find(&c->regs, a->v[0]);
+		newname = strdup(a->v[1]);
+		if (!newname) return 0;
+		free(old->name);
+		old->name = newname;
+		return 1;
+	}
 
-	newname = strdup(a->v[1]);
-	if (!newname) return 0;
-	free(old->name);
-	old->name = newname;
+	oldm = man_mac_find(&c->macros, a->v[0]);
+	if (oldm) {
+		man_mac_remove(&c->macros, a->v[1]);
+		oldm = man_mac_find(&c->macros, a->v[0]);
+		newname = strdup(a->v[1]);
+		if (!newname) return 0;
+		free(oldm->name);
+		oldm->name = newname;
+		return 1;
+	}
+
+	return 1; /* OLD doesn't exist as either kind: nothing to rename */
+}
+
+/* .rm NAME: deletes macro NAME; not existing is a silent no-op,
+ * matching real troff's own .rm behaviour. */
+static int man_do_rm(struct man_ctx *c, struct man_argv *a)
+{
+	if (a->n < 1) return 1;
+	man_mac_remove(&c->macros, a->v[0]);
 	return 1;
+}
+
+/* .als NEW OLD: makes NEW an independent copy of OLD's current body --
+ * a real troff alias is a copy taken at alias time, not a live link,
+ * so redefining OLD afterward does not change NEW. OLD not existing is
+ * a silent no-op, the same honest-no-op precedent this file's other
+ * register/macro-management requests already follow for a missing
+ * source name. */
+static int man_do_als(struct man_ctx *c, struct man_argv *a)
+{
+	struct man_macro *old, *new;
+	size_t i;
+
+	if (a->n < 2) return 1;
+	old = man_mac_find(&c->macros, a->v[1]);
+	if (!old) return 1;
+	new = man_mac_get_or_create(&c->macros, a->v[0]);
+	if (!new) return 0;
+	man_macro_free_lines(new);
+	for (i = 0; i < old->n; i++)
+		if (!man_macro_add_line(new, old->lines[i])) return 0;
+	return 1;
+}
+
+/* Argument-substitution escapes real troff recognises inside a macro
+ * body -- see this file's own header comment ("MACROS") for the full
+ * design rationale. Textual, over the RAW stored body line, before
+ * that line is tokenized/decoded like any other source line -- \$1
+ * substitutes with `args`' raw (undecoded) text, decoded normally once
+ * the whole substituted line is processed downstream. */
+static int man_macro_subst_args(const char *body, const char *macroname,
+    struct man_argv *args, struct man_buf *out)
+{
+	size_t n = strlen(body);
+	size_t i = 0;
+
+	while (i < n) {
+		if (body[i] == '\\' && i + 2 < n && body[i + 1] == '$') {
+			char sel = body[i + 2];
+			if (sel >= '1' && sel <= '9') {
+				size_t idx = (size_t)(sel - '1');
+				if (idx < args->n && !mbuf_appendstr(out, args->v[idx])) return 0;
+				i += 3;
+				continue;
+			}
+			if (sel == '0') {
+				if (!mbuf_appendstr(out, macroname)) return 0;
+				i += 3;
+				continue;
+			}
+			if (sel == '*' || sel == '@') {
+				size_t k;
+				for (k = 0; k < args->n; k++) {
+					if (k && !mbuf_appendc(out, ' ')) return 0;
+					if (!mbuf_appendstr(out, args->v[k])) return 0;
+				}
+				i += 3;
+				continue;
+			}
+		}
+		if (!mbuf_appendc(out, body[i])) return 0;
+		i++;
+	}
+	return 1;
+}
+
+/* .de/.de1/.am/.am1/.ig: begins collecting body lines into c->def_*
+ * state -- see this file's own header comment ("MACROS") for the
+ * default-vs-custom end-marker syntax. `.de`/`.am` replace/append to a
+ * macro named by argv[0]; `.ig` has no macro-name argument at all
+ * (argv[0], if present, is instead the custom end-marker). */
+static int man_begin_macro_def(struct man_ctx *c, const char *directive, struct man_argv *a)
+{
+	int append = !strcmp(directive, "am") || !strcmp(directive, "am1");
+	int discard = !strcmp(directive, "ig");
+
+	free(c->def_end);
+	c->def_end = 0;
+	c->def_target = 0;
+
+	if (discard) {
+		if (a->n > 0) { c->def_end = strdup(a->v[0]); if (!c->def_end) return 0; }
+	} else {
+		if (a->n < 1) return 1; /* .de/.am with no name: real troff errors; honest no-op here */
+		c->def_target = man_mac_get_or_create(&c->macros, a->v[0]);
+		if (!c->def_target) return 0;
+		if (!append) man_macro_free_lines(c->def_target);
+		if (a->n > 1) { c->def_end = strdup(a->v[1]); if (!c->def_end) return 0; }
+	}
+
+	c->def_discard = discard;
+	c->def_active = 1;
+	return 1;
+}
+
+/* Forward declaration: a macro body line is fed back through the same
+ * line-processing function top-level source lines go through -- see
+ * this file's own header comment ("MACROS") -- so man_invoke_macro()
+ * below needs to call it before its own later definition. */
+static int man_process_line(struct man_ctx *c, struct man_render *r, char *line);
+
+static int man_invoke_macro(struct man_ctx *c, struct man_render *r,
+    struct man_macro *m, const char *macroname, struct man_argv *args)
+{
+	size_t i;
+	int ok = 1;
+
+	if (c->macro_depth >= MAN_MAX_MACRO_DEPTH) {
+		__util_diagf("man: macro '%s' nested too deeply (>%d), aborting expansion\n",
+		    macroname, MAN_MAX_MACRO_DEPTH);
+		return 1; /* loud diagnostic, not a hard failure -- MAN_MAX_RS_DEPTH's own precedent */
+	}
+
+	c->macro_depth++;
+	for (i = 0; i < m->n && ok; i++) {
+		struct man_buf expanded;
+		char *lc;
+		memset(&expanded, 0, sizeof expanded);
+		ok = man_macro_subst_args(m->lines[i], macroname, args, &expanded);
+		if (ok) {
+			lc = strdup(expanded.data ? expanded.data : "");
+			if (!lc) { ok = 0; }
+			else {
+				ok = man_process_line(c, r, lc);
+				free(lc);
+			}
+		}
+		mbuf_free(&expanded);
+	}
+	c->macro_depth--;
+	return ok;
 }
 
 static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 {
 	man_strip_comment(line);
 
-	if (c->in_macro_def) {
+	if (c->def_active) {
 		const char *p = line;
+		int terminated = 0;
 		while (*p == ' ' || *p == '\t') p++;
-		if (p[0] == '.' && p[1] == '.' &&
-		    (p[2] == 0 || p[2] == ' ' || p[2] == '\t')) c->in_macro_def = 0;
+		if (p[0] == '.') {
+			if (c->def_end) {
+				char ename[16] = { 0 };
+				const char *erest;
+				man_split_request(p, ename, sizeof ename, &erest);
+				terminated = !strcmp(ename, c->def_end);
+			} else {
+				terminated = p[1] == '.' && (p[2] == 0 || p[2] == ' ' || p[2] == '\t');
+			}
+		}
+		if (terminated) {
+			c->def_active = 0;
+			free(c->def_end);
+			c->def_end = 0;
+			c->def_target = 0;
+			return 1;
+		}
+		if (!c->def_discard && c->def_target && !man_macro_add_line(c->def_target, line)) return 0;
 		return 1;
 	}
 
@@ -1146,7 +1509,7 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 			struct man_buf tmp;
 			int ok = 1;
 			memset(&tmp, 0, sizeof tmp);
-			if (!decode_text(&c->regs, &tmp, line, strlen(line))) { mbuf_free(&tmp); return 0; }
+			if (!decode_text(&c->regs, &tmp, line, strlen(line), 0)) { mbuf_free(&tmp); return 0; }
 			if (tmp.len == 0) {
 				ok = mbuf_appendc(&c->doc, '\n');
 			} else {
@@ -1185,9 +1548,13 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 
 		man_split_request(line, name, sizeof name, &rest);
 
-		if (!strcmp(name, "de") || !strcmp(name, "de1") || !strcmp(name, "ig")) {
-			c->in_macro_def = 1;
-			return 1;
+		if (!strcmp(name, "de") || !strcmp(name, "de1") ||
+		    !strcmp(name, "am") || !strcmp(name, "am1") || !strcmp(name, "ig")) {
+			struct man_argv da;
+			if (!man_tokenize(rest, &da)) return 0;
+			ok = man_begin_macro_def(c, name, &da);
+			man_argv_free(&da);
+			return ok;
 		}
 
 		if (!man_tokenize(rest, &a)) return 0;
@@ -1201,7 +1568,7 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 			if (!man_flush_paragraph(c)) { man_argv_free(&a); return 0; }
 			for (i = 0; i < a.n && ok; i++) {
 				if (i && !mbuf_appendc(&heading, ' ')) ok = 0;
-				if (ok && !decode_text(&c->regs, &heading, a.v[i], strlen(a.v[i]))) ok = 0;
+				if (ok && !decode_text(&c->regs, &heading, a.v[i], strlen(a.v[i]), 0)) ok = 0;
 			}
 			if (ok) {
 				int is_sh = !strcmp(name, "SH");
@@ -1323,7 +1690,7 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 				ok = mbuf_appendc(&tmp, (char)font);
 				for (i = 0; i < a.n && ok; i++) {
 					if (i && !mbuf_appendc(&tmp, ' ')) { ok = 0; break; }
-					ok = decode_text(&c->regs, &tmp, a.v[i], strlen(a.v[i]));
+					ok = decode_text(&c->regs, &tmp, a.v[i], strlen(a.v[i]), 0);
 				}
 				if (ok) ok = mbuf_appendc(&tmp, MAN_M_ROMAN);
 				if (ok && tmp.len > 0) {
@@ -1339,27 +1706,48 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 			}
 		} else if (!strcmp(name, "BI") || !strcmp(name, "IB") || !strcmp(name, "BR") ||
 		           !strcmp(name, "RB") || !strcmp(name, "IR") || !strcmp(name, "RI")) {
-			/* Alternating-font macros: args concatenated with NO
-			 * inserted separator, alternating font1/font2/font1/...
-			 * -- see this file's own header comment for why all six
-			 * standard combinations are handled by this one shared
-			 * shape rather than just the three the task named. */
+			/* Alternating-font macros: real troff alternates font1/
+			 * font2/font1/... per space-separated WORD across the
+			 * whole argument list, not per raw argv[] token -- a
+			 * quoted multi-word argument like .RB "word1 word2"
+			 * "word3" still alternates at the word1/word2 boundary,
+			 * continuing the same cycle into the next argument's own
+			 * words. Args supply their own spacing in real troff (no
+			 * separator is added AT AN ARGUMENT BOUNDARY); a space
+			 * WITHIN one argument is real source text and is copied
+			 * through verbatim between that argument's own words, so
+			 * `.RB [ \-x ]` still renders tight as "[-x]" (three
+			 * single-word args, nothing between them) while
+			 * "word1 word2" still keeps its own internal space. */
 			int f1 = man_font_for_letter(name[0]);
 			int f2 = man_font_for_letter(name[1]);
 			size_t i;
-			/* Joins to whatever the accumulator already holds (e.g. a
-			 * preceding .B/.I line in the same fill-mode paragraph)
-			 * with a single space, the same implicit inter-line join
-			 * every plain text line gets -- only the args WITHIN one
-			 * alternating-macro call are concatenated with no
-			 * separator, per real troff's own BI/BR/etc semantics. */
-			if (c->acc.len > 0) { if (!mbuf_appendc(&c->acc, ' ')) ok = 0; }
+			int windex = 0;
+			int had_c = 0;
+			if (c->acc.len > 0 && !c->suppress_join) { if (!mbuf_appendc(&c->acc, ' ')) ok = 0; }
 			for (i = 0; i < a.n && ok; i++) {
-				int font = (i % 2 == 0) ? f1 : f2;
-				if (!mbuf_appendc(&c->acc, (char)font)) { ok = 0; break; }
-				if (!decode_text(&c->regs, &c->acc, a.v[i], strlen(a.v[i]))) { ok = 0; break; }
-				if (!mbuf_appendc(&c->acc, MAN_M_ROMAN)) { ok = 0; break; }
+				const char *s = a.v[i];
+				size_t si = 0, sn = strlen(s);
+				while (si < sn && ok) {
+					size_t wstart;
+					while (si < sn && (s[si] == ' ' || s[si] == '\t')) {
+						if (!mbuf_appendc(&c->acc, s[si])) { ok = 0; break; }
+						si++;
+					}
+					if (!ok || si >= sn) break;
+					wstart = si;
+					while (si < sn && s[si] != ' ' && s[si] != '\t') si++;
+					{
+						int font = (windex % 2 == 0) ? f1 : f2;
+						had_c = 0;
+						if (!mbuf_appendc(&c->acc, (char)font)) { ok = 0; break; }
+						if (!decode_text(&c->regs, &c->acc, s + wstart, si - wstart, &had_c)) { ok = 0; break; }
+						if (!mbuf_appendc(&c->acc, MAN_M_ROMAN)) { ok = 0; break; }
+						windex++;
+					}
+				}
 			}
+			if (ok) c->suppress_join = had_c;
 			if (ok) ok = man_maybe_consume_tag(c);
 		} else if (!strcmp(name, "ds")) {
 			ok = man_do_ds(c, &a);
@@ -1367,11 +1755,20 @@ static int man_process_line(struct man_ctx *c, struct man_render *r, char *line)
 			ok = man_do_nr(c, &a);
 		} else if (!strcmp(name, "rn")) {
 			ok = man_do_rn(c, &a);
+		} else if (!strcmp(name, "rm")) {
+			ok = man_do_rm(c, &a);
+		} else if (!strcmp(name, "als")) {
+			ok = man_do_als(c, &a);
+		} else {
+			struct man_macro *m = man_mac_find(&c->macros, name);
+			/* Checked only here, after every built-in request name
+			 * above -- a page can never shadow a built-in by defining
+			 * a same-named macro. Anything still unmatched (.if, .ie,
+			 * .el, .TS, .EQ, .ad, .na, .hy, .sp, .ce, .in, .ll, ...):
+			 * unimplemented, silently skipped -- see this file's own
+			 * "UNKNOWN-MACRO DEGRADATION" header comment. */
+			if (m) ok = man_invoke_macro(c, r, m, name, &a);
 		}
-		/* Any other request name (.if, .ie, .el, .TS, .EQ, .ad, .na,
-		 * .hy, .sp, .ce, .in, .ll, ...): unimplemented, silently
-		 * skipped -- see this file's own "UNKNOWN-MACRO DEGRADATION"
-		 * header comment. */
 		man_argv_free(&a);
 		return ok;
 	}
@@ -1812,7 +2209,7 @@ static void man_apropos_name_description(const char *text, size_t tlen, struct m
 	if (!lineend) lineend = end;
 
 	memset(&decoded, 0, sizeof decoded);
-	if (!decode_text(&no_regs, &decoded, line, (size_t)(lineend - line))) { mbuf_free(&decoded); return; }
+	if (!decode_text(&no_regs, &decoded, line, (size_t)(lineend - line), 0)) { mbuf_free(&decoded); return; }
 
 	man_apropos_split_description(decoded.data ? decoded.data : "", decoded.len, &desc, &desclen);
 
