@@ -3,101 +3,49 @@
  *
  * Cross-process signal delivery, phase 1.
  *
- * src/signal/signal.c's file banner says it outright: kill() to another
- * process used to consult only that process's DEFAULT disposition,
- * never any sa_handler/SIG_IGN it had installed, because there was no
- * channel to tell a running process "a signal arrived, go look at your
- * own tables". This file is that channel.
+ * Every process that has run __signal_init() owns a named pipe
+ * (\Device\NamedPipe\ntlibc-sig.<pid>) and a dedicated thread blocked
+ * reading it. kill() to another ntlibc process writes a packet to that
+ * pipe instead of guessing its disposition; the target's own delivery
+ * thread queues it, and an eligible application thread drains it at a
+ * signal-aware safe point under its own sigprocmask().
  *
- * The design, in one sentence: every process that has run __signal_init()
- * owns a named pipe (\Device\NamedPipe\ntlibc-sig.<pid>) and one
- * dedicated OS thread blocked reading it; kill() to another ntlibc
- * process writes a small packet to *its* pipe instead of guessing, and
- * that process's own delivery thread queues the packet process-wide.
- * An eligible application thread drains it at a signal-aware safe point,
- * so that thread's sigprocmask() state controls delivery.
+ * Deliberately NOT implemented: thread-context hijacking (interrupting
+ * a thread mid-instruction, as a real kernel or Cygwin's exceptions.cc
+ * would). A signal that arrives while the target thread is off running
+ * ordinary code stays pending until its next safe point; only
+ * select()'s poll loop is taught to notice a fresh delivery early,
+ * since it already polls. NtCancelSynchronousIoFile, which would let a
+ * blocked read()/write() be interrupted too, is a stub in ReactOS's
+ * ntdll and unused here for that reason.
  *
- * What this deliberately does NOT do -- thread-context hijacking
- * (SuspendThread/GetThreadContext/SetThreadContext + instruction-pointer
- * rewrite, the way a real kernel or Cygwin's exceptions.cc interrupts a
- * thread mid-instruction) -- is why a signal that arrives while the
- * application thread is off running ordinary code between syscalls
- * stays pending rather than interrupting it: nothing here ever touches
- * the application thread's register state. Only src/select/select.c's
- * poll loop is taught to notice a fresh delivery early, because it
- * already polls; every other blocking call keeps the exact latency it
- * had before this file existed. That is an accepted, documented gap,
- * not an oversight -- see EXPLICITLY OUT OF SCOPE in this change's
- * commit message. NtCancelSynchronousIoFile, which would let a blocked
- * read()/write() be interrupted the same way select() now is, is a
- * `@ stdcall -stub` in ReactOS's dll/ntdll/def/ntdll.spec and is not
- * used here for that reason.
+ * Two NT pipe mechanics this leans on (verified against ReactOS's
+ * npfs.sys, the only available source for this wire behavior):
+ *   - Opening a pipe path with no listener fails synchronously
+ *     (STATUS_OBJECT_NAME_NOT_FOUND), not the Win32 CreateFile
+ *     "wait for a free instance" behavior -- so kill() to a pid with no
+ *     listener fails fast, never hangs.
+ *   - A server instance is only readable once "connected"; a fresh
+ *     instance starts "listening", and reading it directly fails with
+ *     STATUS_PIPE_LISTENING instead of blocking. FSCTL_PIPE_LISTEN is
+ *     what actually blocks for a client -- skipping it works once, for
+ *     the first sender, then silently drops every sender after.
  *
- * Two NT mechanics this file leans on hard enough to be worth stating
- * up front, both measured against ReactOS's own npfs.sys source
- * (drivers/filesystems/npfs/{create,read,statesup,fsctrl}.c) since that
- * is the only place the wire behaviour of NtCreateNamedPipeFile /
- * NtReadFile / NtFsControlFile against a named pipe is written down in
- * anything this project can grep:
+ * Whether a reused pipe instance can safely go back through
+ * FSCTL_PIPE_LISTEN after its client disconnects is untested (a
+ * plausible driver-bugcheck route in ReactOS, and real Windows behavior
+ * here isn't inspectable), so this code never reuses an instance: it
+ * always publishes a fresh listening instance before acknowledging the
+ * request it just served, serialized across processes by a per-target
+ * named NT mutant.
  *
- *   - Opening a pipe path that names no listener is a plain object-
- *     manager name-lookup failure (STATUS_OBJECT_NAME_NOT_FOUND),
- *     resolved synchronously by the parse routine -- it is NOT the
- *     Win32 CreateFile "wait for a free instance" behaviour, which is a
- *     distinct, opt-in mechanism (FSCTL_PIPE_WAIT / kernel32's
- *     WaitNamedPipe) that sig_try_deliver_remote() below never invokes.
- *     So a kill() to a pid with no listener -- no such process, a
- *     non-ntlibc process, or an ntlibc process that has not finished
- *     __signal_init() yet -- fails fast, never hangs.
- *   - A named pipe server instance is only ever readable while its
- *     NamedPipeState is "connected". A fresh instance starts
- *     "listening", and NtReadFile against a merely-listening instance
- *     fails immediately with STATUS_PIPE_LISTENING rather than
- *     blocking for a client (read.c). FSCTL_PIPE_LISTEN
- *     (src/internal/nt.h) is the operation that actually blocks until a
- *     client connects. Skipping it -- reading straight after create --
- *     works exactly once, for the very first sender, because a freshly
- *     created instance happens to already be listening; every sender
- *     after that gets STATUS_PIPE_LISTENING and is silently never
- *     delivered. This was caught by reading npfs before writing the
- *     loop below, not by testing: a test that only ever sends one
- *     signal per process pair would not have caught it either.
- *
- * The loop below sidesteps the companion question -- whether a *reused*
- * instance can be safely handed back to FSCTL_PIPE_LISTEN once its
- * client has disconnected -- rather than answering it. ReactOS's
- * NpSetDisconnectedPipeState (statesup.c) has no case for a CCB a
- * client has already closed out from under (state FILE_PIPE_CLOSING_STATE);
- * that falls to its `default: NpBugCheck(...)`, i.e. the client closing
- * its handle before the server gets around to FSCTL_PIPE_DISCONNECT --
- * which was exactly kill()'s original one-way write-then-NtClose pattern
- * -- is a plausible route to a driver bugcheck on that implementation. Whether
- * real Windows's npfs.sys shares that gap is not something this project
- * can inspect; ReactOS is not this library's actual runtime target
- * (README.md: Windows 7+; CONTRIBUTING.md is explicit that a name
- * existing in ReactOS or Wine is not evidence about Microsoft's ntdll),
- * so the honest position is "untested, avoid it" rather than "safe,
- * assumed". So sig_delivery_thread() below never reuses an instance or
- * calls FSCTL_PIPE_DISCONNECT at all; it always publishes a fresh
- * listening instance before acknowledging the request it just served,
- * serialized across processes by a per-target named NT mutant. See
- * sig_delivery_thread() and sig_try_deliver_remote_info() below for the
- * handoff mechanics.
- *
- * Locking. Before this file, signal.c's own header truthfully said "no
- * threading support to speak of" -- sigwait()'s banner already
- * documents one narrow exception (the NTLIBC_USE_KERNEL32 console-
- * control handler thread), unguarded. This file adds a second, ordinary
- * one: sig_delivery_thread() calls __raise_internal() concurrently with
- * whatever the application thread is doing, and both sides read and
- * write signal.c's shared dispositions and process-pending queue (thread
- * masks, thread-pending state and alternate stacks stay TLS, so they need
- * no lock). __sig_lock()/__sig_unlock() below are a recursive mutex --
- * why recursive, and why the application's handler callback runs with it
- * released, are explained at their own definitions further down -- that
- * signal.c acquires around every external entry point touching that
- * state and around every __raise_internal() call. __raise_internal()
- * itself never locks: it assumes its caller already holds the lock. */
+ * Locking: sig_delivery_thread() calls __raise_internal() concurrently
+ * with the application thread, both touching signal.c's shared
+ * dispositions and pending queue. __sig_lock()/__sig_unlock() below are
+ * a recursive mutex (the application's handler callback runs with it
+ * released) that signal.c acquires around every entry point and every
+ * __raise_internal() call; __raise_internal() itself assumes the caller
+ * already holds it. */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
  * public-header contract; transitive ABI declarations are intentional,
@@ -111,13 +59,9 @@
 #include "plat_signal.h"
 #include "plat_fd.h"
 
-/* Wire format: one fixed-size NT message per signal. FILE_PIPE_MESSAGE_TYPE
- * (below) is what makes "one NtWriteFile call == one NtReadFile call"
- * an NT-enforced guarantee rather than a hope about write sizes staying
- * under some byte-stream atomicity threshold -- unlike
- * src/unistd/pipe.c's anonymous pipes, which are byte-stream because
- * they only ever have the one reader this library itself created and
- * never interleave writers. */
+/* One fixed-size NT message per signal. FILE_PIPE_MESSAGE_TYPE makes
+ * "one NtWriteFile call == one NtReadFile call" an NT-enforced guarantee,
+ * unlike src/unistd/pipe.c's byte-stream anonymous pipes. */
 struct sigpacket {
 	ULONG magic;
 	ULONG signo;
@@ -131,43 +75,29 @@ struct sigpacket {
 #define SIGPACKET_NONDEFAULT_ONLY 1u
 
 static __plat_handle_t wake_event;   /* auto-reset; set on every packet arrival. 0 = not running. */
-static HANDLE lock_event;   /* auto-reset-as-mutex, initially signalled (free). 0 = no locking done.
-                              * Kept as a raw HANDLE, and __sig_lock()/__sig_unlock() below kept
-                              * calling Nt{Wait,Set}Event on it directly: those four functions are
-                              * explicitly out of scope for this migration (see this file's own
-                              * Locking banner and plat_signal.h's file banner). */
+static HANDLE lock_event;   /* auto-reset-as-mutex, initially signalled (free). 0 = no locking done. */
 static __plat_handle_t send_mutant;  /* named per target; serializes clients across processes. */
 
 /* RECURSIVE, deliberately: internal signal paths can nest before or after a
  * user handler, even though the handler callback itself temporarily drops the
- * lock. Tracking the owning thread and a re-entry depth makes the same thread
- * able to walk back in without waiting on itself, while a genuinely different
- * thread still blocks for real. lock_owner/lock_depth are touched only by whichever
- * thread currently owns the lock (or is in the middle of acquiring it,
- * where a torn read of a stale owner value only ever costs a spurious
- * real wait, never a wrong grant -- the actual exclusion is still
- * lock_event, an NT synchronization primitive). */
+ * lock. lock_owner/lock_depth let the owning thread re-enter without waiting
+ * on itself, while a genuinely different thread still blocks for real; a torn
+ * read of a stale owner only ever costs a spurious real wait, never a wrong
+ * grant, since lock_event is the actual exclusion. */
 static pid_t lock_owner;
 static int lock_depth;
 
-/* __plat_handle_t __sig_delivery_event(void), declared in libc.h, is
- * select()'s read of wake_event -- deliberately not exposed as a
- * variable so a caller outside this file can never accidentally close
- * or signal it directly. */
+/* Not exposed as a variable so a caller outside this file can never
+ * accidentally close or signal wake_event directly. */
 __plat_handle_t __sig_delivery_event(void) { return wake_event; }
 
-/* State-checking wait loops in signal.c and sleep.c use the same event as
- * select(), but wait alertably so timer APCs remain deliverable. A set that
- * lands between a caller's state check and this wait is retained by the
- * auto-reset event, closing the lost-wakeup window without a polling slice.
+/* Waits alertably so timer APCs remain deliverable. A set that lands between
+ * a caller's state check and this wait is retained by the auto-reset event,
+ * closing the lost-wakeup window without a polling slice.
  *
- * The NTSTATUS return and LARGE_INTEGER* parameter stay exactly as they
- * were: src/unistd/sleep.c, outside this migration, calls this directly
- * with a LARGE_INTEGER it builds itself, so the signature cannot change.
- * No caller of this function (here or in signal.c/sleep.c) ever inspects
- * the returned status, so folding every real outcome into one reported
- * STATUS_SUCCESS below is not a behavior change -- see plat_signal.h's
- * file banner. */
+ * Signature (NTSTATUS return, LARGE_INTEGER* parameter) is fixed: src/unistd/
+ * sleep.c calls this directly with a LARGE_INTEGER it builds itself. No
+ * caller inspects the returned status. */
 NTSTATUS __sig_wait_delivery(LARGE_INTEGER *timeout)
 {
 	__plat_signal_wait(wake_event, timeout != 0, timeout ? (long long)*timeout : 0);
@@ -179,32 +109,21 @@ void __sig_notify_delivery(void)
 	if (wake_event) __plat_event_set(wake_event);
 }
 
-/* NTLIBC_NO_THREAD_SAFETY_ANALYSIS: this and the three functions below it
- * are __ntlibc_sig_lock_token's actual implementation -- the raw NT
- * primitives (lock_event/lock_owner/lock_depth) a lockset checker cannot
- * see through are exactly what "holding the capability" means here, so
- * asking it to re-derive that from these bodies is circular.  Every
- * caller still sees the ACQUIRE()/RELEASE() contract from libc.h; only
- * self-checking these four definitions' own insides is turned off. */
+/* NTLIBC_NO_THREAD_SAFETY_ANALYSIS: this and the next three functions are
+ * __ntlibc_sig_lock_token's actual implementation over the raw NT primitives
+ * (lock_event/lock_owner/lock_depth), which a lockset checker cannot see
+ * through; every caller still sees the ACQUIRE()/RELEASE() contract from
+ * libc.h. */
 void __sig_lock(void) NTLIBC_NO_THREAD_SAFETY_ANALYSIS
 {
 	pid_t me;
 	if (!lock_event) return;
-	/* A defer region, not an unsafe one: __sig_lock()/__sig_unlock() run
-	 * on the way into and out of ordinary, POSIX-legal blocking calls
-	 * (sleep(), sigwait(), and friends), not only inside calls the
-	 * application chose to make async-cancel-unsafe on purpose.  Marking
-	 * this region unsafe (as it was before this fix, for eight minutes
-	 * of this codebase's own history -- see [[wine-clone-process-hazards]]
-	 * and 3d8ff6c, which converted the PEB lock to defer immediately
-	 * after and should have moved this one too) meant any async
-	 * cancellation landing while a thread was merely checking pending
-	 * signals hit cancel_unsafe_abort() and took the whole process down
-	 * with it: a regression this project's own OPTS legs (pthread_cancel/
-	 * 2-1, 3-1, 4-1, pthread_cleanup_push/1-2, all "expected PASS" ->
-	 * ABNORMAL) caught directly. Deferring instead lets the redirect
-	 * wait for this lock to be released and then deliver promptly, the
-	 * same as the PEB lock already does. */
+	/* Deferred, not unsafe: __sig_lock()/__sig_unlock() run around ordinary
+	 * POSIX-legal blocking calls (sleep(), sigwait(), ...), not only inside
+	 * calls the application made async-cancel-unsafe on purpose. Treating this
+	 * region as unsafe would abort the process if an async cancellation lands
+	 * while a thread is merely checking pending signals. Deferring lets the
+	 * cancellation wait for this lock to be released and then deliver promptly. */
 	__pthread_cancel_defer_enter();
 	me = gettid();
 	if (lock_depth > 0 && lock_owner == me) { lock_depth++; return; }
@@ -249,12 +168,8 @@ void __sig_relock_after_handler(int depth) NTLIBC_NO_THREAD_SAFETY_ANALYSIS
 	lock_depth = depth;
 }
 
-/* \Device\NamedPipe\ntlibc-sig.<pid, 8 hex digits> -- the same prefix-
- * plus-hex-pid shape src/unistd/pipe.c's __pipe_handles() uses for its
- * anonymous pipes, minus the serial suffix: there is exactly one
- * signal pipe per process, so the pid alone is the whole name a sender
- * needs, and it is exactly the pid __sig_try_deliver_remote()'s caller
- * (kill()) already has in hand. */
+/* \Device\NamedPipe\ntlibc-sig.<pid, 8 hex digits> -- one signal pipe per
+ * process, named by the pid kill()'s caller already has in hand. */
 static void sig_pipe_name(pid_t pid, WCHAR *name, UNICODE_STRING *us)
 {
 	static const char pfx[] = "\\Device\\NamedPipe\\ntlibc-sig.";
@@ -293,14 +208,10 @@ static void sig_send_lock_name(pid_t pid, WCHAR *name, UNICODE_STRING *us)
 	us->MaximumLength = (USHORT)(us->Length + sizeof(WCHAR));
 }
 
-/* The delivery thread: one per process, started by __sig_delivery_init()
- * and never joined or cancelled -- NT tears down every thread of a
- * process at exit, which is the only "shutdown" this loop ever needs.
- * `arg` is the first listening pipe, created synchronously by init before
- * application startup can report itself ready. Publishing that instance in
- * the creating thread closes the old interval in which a target had installed
- * a handler but kill() could still miss its not-yet-scheduled listener thread
- * and fall back to the signal's default action. */
+/* One per process, started by __sig_delivery_init() and never joined or
+ * cancelled -- NT tears down every thread at process exit. `arg` is the
+ * first listening pipe, created synchronously by init so a kill() sender
+ * can never race this thread's own not-yet-scheduled startup. */
 static ULONG NTAPI sig_delivery_thread(PVOID arg)
 {
 	pid_t pid = getpid();
@@ -313,12 +224,8 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 	for (;;) {
 		if (!pipe) pipe = __plat_signal_pipe_create(&us);
 		if (!pipe) {
-			/* Nowhere to report this to -- a background service thread
-			 * with no caller waiting on it. A transient failure (heap
-			 * pressure, a name collision with a not-yet-torn-down
-			 * previous instance) is worth a short backoff and another
-			 * try rather than giving up and leaving this process deaf
-			 * to cross-process signals for the rest of its life. */
+			/* No caller to report failure to; retry after a backoff rather than
+			 * leaving this process deaf to cross-process signals permanently. */
 			__plat_signal_backoff();
 			continue;
 		}
@@ -343,9 +250,8 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 				}
 
 				/* Publish the next listening instance before acknowledging this
-				 * request.  send_mutant keeps every other process targeting this
-				 * pid outside NtOpenFile until this reply releases its owner, so
-				 * there is no close/recreate interval for a sender to race. */
+				 * one; send_mutant keeps other senders out of NtOpenFile until
+				 * this reply releases it, so there's no close/recreate race. */
 				next = __plat_signal_pipe_create(&us);
 				if (!next) accepted = 0;
 
@@ -374,33 +280,23 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 			}
 		}
 
-		/* Even a malformed or disconnected client gets an overlapped
-		 * replacement when possible. A legitimate sender still owns the
-		 * named mutant until its read fails, so publishing first preserves
-		 * the same handoff invariant as the acknowledged path above. */
+		/* Same handoff invariant as the acknowledged path: publish a
+		 * replacement even for a malformed or disconnected client. */
 		{
 			__plat_handle_t next = __plat_signal_pipe_create(&us);
 			__plat_close(pipe);
 			pipe = next;
 		}
 	}
-	/* Unreachable: the loop above has no break/return, so this line
-	 * never runs. Present only because a NTAPI (stdcall) thread
-	 * function is declared returning ULONG, and this build's gcc pass
-	 * (tools/lint.sh) does not credit `for (;;)` with never falling
-	 * through the way tcc, the compiler this library actually ships
-	 * with, evidently does -- -Wreturn-type fired without it. */
+	/* Unreachable; present only because NTAPI thread functions return ULONG
+	 * and tools/lint.sh's gcc pass wants an explicit return after for(;;). */
 	return 0;
 }
 
-/* __signal_init() (src/signal/signal.c) calls this once at process
- * startup, after __teb()/__peb are live (crt/crt1.c) so getpid() below
- * is real. Every failure here degrades rather than aborting startup:
- * a process that cannot get a listener still runs exactly as it did
- * before this file existed -- __sig_try_deliver_remote() below simply
- * never succeeds for callers targeting it, and kill() falls back to
- * today's default-disposition-only behaviour, same as if the target
- * were not an ntlibc process at all. */
+/* __signal_init() calls this once at process startup. Every failure here
+ * degrades rather than aborting startup: __sig_try_deliver_remote() below
+ * simply never succeeds for this process, and kill() falls back to
+ * default-disposition-only behaviour, same as targeting a non-ntlibc process. */
 void __sig_delivery_init(void)
 {
 	UNICODE_STRING lock_us, pipe_us;
@@ -408,12 +304,9 @@ void __sig_delivery_init(void)
 	__plat_handle_t ev, mutant, pipe, thr;
 	pid_t pid;
 
-	/* The mutex is created independently of everything below it: every
-	 * signal.c entry point calls __sig_lock()/__sig_unlock() regardless
-	 * of whether this process ever gets a working pipe or delivery
-	 * thread (a second real thread already exists under
-	 * NTLIBC_USE_KERNEL32 -- see this file's banner -- so the mutex earns
-	 * its keep even when the rest of this function gives up below). */
+	/* The mutex is created independently of everything below: every signal.c
+	 * entry point calls __sig_lock()/__sig_unlock() regardless of whether
+	 * this process ever gets a working pipe or delivery thread. */
 	ev = __plat_sigevent_create(1);
 	if (ev) lock_event = ev;
 
@@ -426,14 +319,10 @@ void __sig_delivery_init(void)
 	if (!mutant) { __plat_close(ev); return; }
 	send_mutant = mutant;
 
-	/* Create and publish the first server instance here, not in the new
-	 * thread. NtCreateThreadEx returning says only that the thread object
-	 * exists; it does not say the thread has run. A child can therefore
-	 * install a handler and notify its parent while the listener is still
-	 * unscheduled. The parent then sees no pipe and applies the default
-	 * action despite the installed handler. Passing an already-named pipe
-	 * to the thread makes init's return the explicit publication boundary.
-	 * A client which connects before the thread reaches FSCTL_PIPE_LISTEN is
+	/* Created and published here, not in the new thread: NtCreateThreadEx
+	 * returning only means the thread object exists, not that it has run,
+	 * so a not-yet-scheduled listener could otherwise miss an early sender.
+	 * A client connecting before the thread reaches FSCTL_PIPE_LISTEN is
 	 * handled as STATUS_PIPE_CONNECTED by the loop above. */
 	sig_pipe_name(pid, pipe_name, &pipe_us);
 	pipe = __plat_signal_pipe_create(&pipe_us);
@@ -452,37 +341,19 @@ void __sig_delivery_init(void)
 		return;
 	}
 
-	/* Published only once the thread that will act on it exists and has
-	 * been handed its own pid -- wake_event is the one piece of this
-	 * subsystem select() reads from another thread's writes, so there is
-	 * no benefit to publishing it earlier and a real (if narrow) benefit
-	 * to not: a select() that observed a non-zero wake_event before
-	 * sig_delivery_thread() could ever set it would just see an event
-	 * that is never signalled yet, which is indistinguishable from
-	 * "not running" for every purpose select() has for it. */
+	/* Published only after the thread exists: select() reads wake_event from
+	 * another thread's writes, and a not-yet-set event is indistinguishable
+	 * from "not running" for its purposes, so there's no benefit to earlier. */
 	wake_event = ev;
 	__plat_close(thr);  /* the thread runs detached; nothing here ever waits on or terminates it */
 }
 
-/* fork.c's STATUS_PROCESS_CLONED arm calls this unconditionally, the
- * same way it calls __rusage_children_reset()/__alarm_reset_after_fork()/
- * __child_forget_stops() beside it -- none of those check "already
- * done" first, they just re-run, and neither does this.
- *
- * RtlCloneUserProcess clones only the calling thread (src/process/fork.c's
- * banner), so sig_delivery_thread() -- a *different* thread -- simply
- * does not exist in the child; wake_event, lock_event, and send_mutant are stale
- * copies of the parent's numeric handle values, naming nothing live in
- * this process (or, worse, naming whatever the kernel has since
- * recycled onto that same handle-table slot -- fork.c's own discussion
- * of this exact hazard for descriptor and child-process handles applies
- * unchanged here). They are never NtClose()'d or waited on: that would
- * touch whatever unrelated object now sits there. Just forget the
- * values and build fresh ones, keyed by this process's OWN pid --
- * getpid() reads it live off __teb()->ClientId.UniqueProcess
- * (src/unistd/getpid.c), which RtlCloneUserProcess did set correctly for
- * the child even though nothing else about this subsystem survived the
- * clone intact. */
+/* RtlCloneUserProcess clones only the calling thread, so sig_delivery_thread()
+ * does not exist in the child; wake_event/lock_event/send_mutant are stale
+ * handle values naming nothing live in this process (or worse, whatever the
+ * kernel has since recycled onto that slot). Never NtClose()'d or waited on
+ * for that reason -- just forget them and build fresh ones under the child's
+ * own pid. */
 void __sig_delivery_reinit_after_fork(void)
 {
 	wake_event = 0;
@@ -493,26 +364,15 @@ void __sig_delivery_reinit_after_fork(void)
 	__sig_delivery_init();
 }
 
-/* kill()'s cross-process arm (src/signal/signal.c), called before that
- * function's existing default-action-only path
- * (NtTerminateProcess). Returns nonzero if the packet was handed to the
- * target's own listener -- in which case kill() returns success and
- * skips its old path entirely, because the target's delivery thread
- * will now apply that process's REAL disposition, which is strictly
- * more correct than this process's blind guess ever was. Returns 0 for
- * any failure at all -- not just STATUS_OBJECT_NAME_NOT_FOUND -- so
- * kill() can fall straight through unchanged: a target with no
- * listener (no such process, a non-ntlibc process, or an ntlibc process
- * still inside __signal_init()) is exactly the case the existing
- * default-action path exists to handle, and this function draws no
- * distinction between "no listener" and any other reason the attempt
- * did not land.
+/* kill()'s cross-process arm, called before its default-action-only
+ * (NtTerminateProcess) fallback. Returns nonzero only if the target's own
+ * listener accepted the packet; any failure -- no such process, a
+ * non-ntlibc process, or one still inside __signal_init() -- returns 0 and
+ * lets kill() fall through unchanged.
  *
- * Every packet receives a reply after its replacement listener is ready.
- * Catchable stop signals additionally set nondefault_only: the target
- * snapshots its disposition under __sig_lock(), then replies zero when the
- * sender must use the default NtSuspendProcess action. A zero reply leaves
- * the packet undelivered and tells kill() to use that fallback. */
+ * Catchable stop signals set nondefault_only: the target snapshots its
+ * disposition under __sig_lock() and replies zero when the sender must use
+ * the default NtSuspendProcess action instead. */
 static int sig_try_deliver_remote_info(int pid, int sig, const void *data, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 				       int nondefault_only)
 {
@@ -530,10 +390,9 @@ static int sig_try_deliver_remote_info(int pid, int sig, const void *data, // NO
 	if (!__plat_wait_acquire(mutant)) { __plat_close(mutant); return 0; }
 
 	sig_pipe_name(pid, name, &us);
-	/* See this file's banner: a missing name resolves synchronously. The
-	 * named mutant plus replacement-before-reply handoff guarantees that a
+	/* The named mutant plus replacement-before-reply handoff means a
 	 * cooperating sender never observes a missing or busy instance between
-	 * two successful requests; no retry or timeout is involved. */
+	 * two successful requests; no retry or timeout needed. */
 	h = __plat_signal_pipe_open(&us);
 	if (!h) goto out;
 

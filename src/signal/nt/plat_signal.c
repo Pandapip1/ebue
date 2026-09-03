@@ -3,9 +3,7 @@
  *
  * NT implementation of src/internal/plat_signal.h -- see that header
  * for the contract each function makes and for why several of them
- * necessarily take a raw UNICODE_STRING*.  Everything here was, until
- * this file existed, inline inside src/signal/signal.c and
- * sigdelivery.c; nothing changed in substance, only location.
+ * necessarily take a raw UNICODE_STRING*.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -30,13 +28,9 @@ __plat_handle_t __plat_sigevent_create(int initially_signalled)
 	return ev;
 }
 
-/* __plat_event_set() is declared above (this file's own header comment)
- * but defined in src/thread/nt/plat_thread.c, not here: both this file
- * and the thread subsystem's own generic-event path independently
- * arrived at an identical NtSetEvent()-wrapping implementation during
- * the platform-abstraction migration, and only one definition may
- * exist per the ODR. Kept where the other generic sync primitives
- * (__plat_event_create() et al.) live; this file just uses it. */
+/* __plat_event_set() is declared in this file's header but defined in
+ * src/thread/nt/plat_thread.c alongside the other generic sync primitives,
+ * to avoid a duplicate ODR definition. */
 
 void __plat_signal_wait(__plat_handle_t wake_event, int has_timeout, long long ticks) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
@@ -77,9 +71,7 @@ int __plat_signal_pipe_listen(__plat_handle_t pipe)
 	IO_STATUS_BLOCK io;
 	NTSTATUS st = NtFsControlFile(pipe, 0, 0, 0, &io, FSCTL_PIPE_LISTEN, 0, 0, 0, 0);
 	if (st == STATUS_PENDING) { NtWaitForSingleObject(pipe, 0, 0); st = io.Status; }
-	/* A serialized sender can connect to the replacement instance after
-	 * it is created but before this thread reaches LISTEN. The instance
-	 * is already connected in that case, which is the desired state. */
+	/* A sender may already have connected before this thread reaches LISTEN. */
 	if (st == STATUS_PIPE_CONNECTED) st = STATUS_SUCCESS;
 	return NT_SUCCESS(st);
 }
@@ -202,13 +194,9 @@ int __plat_process_suspend(__plat_handle_t h)
 	return 0;
 }
 
-/* __plat_process_resume() is declared above (this file's own header
- * comment) but defined in src/process/nt/plat_process.c, not here: both
- * this file and the process subsystem's own resume-a-stopped-child path
- * (src/process/children.c) independently arrived at the identical
- * NtResumeProcess()-wrapping implementation during the platform-
- * abstraction migration, and only one definition may exist per the ODR.
- * Kept where process lifecycle otherwise lives; this file just uses it. */
+/* __plat_process_resume() is declared in this file's header but defined in
+ * src/process/nt/plat_process.c alongside the rest of process lifecycle, to
+ * avoid a duplicate ODR definition. */
 
 int __plat_kill_open(pid_t pid, int want_suspend_resume, __plat_handle_t *out) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
@@ -251,33 +239,23 @@ int __plat_segv_code(void *addr)
 	return mbi.State == MEM_COMMIT ? SEGV_ACCERR : SEGV_MAPERR;
 }
 
-/* No real kernel-level signal disposition exists to synchronize with on
- * NT -- see this header's own comment on this function: every signal
- * reaching __raise_internal() here was already synthesized by this
- * library (an NT exception turned into one by exception_handler(), or
- * a direct raise()/kill()-to-self/plat_fd.c SIGPIPE call), and every one
- * of those call sites already reads handlers[] itself before deciding
- * anything. */
+/* No real kernel signal disposition exists on NT to synchronize with: every
+ * signal reaching __raise_internal() was already synthesized by this
+ * library, and each call site already reads handlers[] itself. */
 void __plat_sig_sync_kernel(int sig, int ignore)
 {
 	(void)sig; (void)ignore;
 }
 
-/* Same reasoning as __plat_sig_sync_kernel() just above: NT has no real
- * kernel signal of its own to raise, so __exit_internal() (src/exit/exit.c)
- * always falls through to its own __ENCODE_SIGNAL_EXIT() simulation
- * unconditionally, exactly as before this function existed. */
+/* NT has no real kernel signal to raise, so __exit_internal() always falls
+ * through to its own __ENCODE_SIGNAL_EXIT() simulation. */
 void __plat_sig_default_terminate(int sig)
 {
 	(void)sig;
 }
 
-/* No catchable cross-process signal exists on NT -- kill()'s own
- * last-resort arm (src/signal/signal.c) reaches __plat_kill_terminate()
- * above, which is NtTerminateProcess unconditionally, not a real signal
- * delivery.  See this function's plat_signal.h comment: children.c's
- * clear_stops() uses this to skip SIGHUP rather than destroy a child
- * that may have caught it. */
+/* No catchable cross-process signal exists on NT; children.c's clear_stops()
+ * uses this to skip SIGHUP rather than destroy a child that may have caught it. */
 int __plat_sig_deliverable_to_other_process(void)
 {
 	return 0;
