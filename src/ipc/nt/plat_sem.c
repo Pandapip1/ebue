@@ -282,8 +282,13 @@ int semget(key_t key, int nsems, int semflg)
 		char buf[16];
 		int n = snprintf(buf, sizeof buf, "%d", id + 1);
 		lseek(ctrfd, 0, SEEK_SET);
-		if (n > 0 && (size_t)n < sizeof buf)
-			write(ctrfd, buf, (size_t)n);
+		if (n > 0 && (size_t)n < sizeof buf &&
+		    write(ctrfd, buf, (size_t)n) != n) {
+			close(ctrfd);
+			free(ctrpath);
+			__plat_named_mutant_release(lock);
+			return -1;
+		}
 		ftruncate(ctrfd, n > 0 && (size_t)n < sizeof buf ? n : 0);
 	}
 	close(ctrfd);
