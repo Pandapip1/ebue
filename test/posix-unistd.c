@@ -1519,6 +1519,147 @@ static void test_brk_sbrk_linux(void)
 	CHECK(sbrk(0) == b0);
 }
 
+/* syscall(3) (glibc/Linux, not POSIX -- unistd.h's own comment: "no
+ * stable, numbered raw-syscall ABI exposed to user mode" on NT, "Real
+ * on Linux").  getpid(2) is the simplest syscall with an independently
+ * checkable answer: raw and library results must agree.  Numbers below
+ * are this file's own copy of the same per-arch table
+ * test/posix-netdb.c's nd_raw_syscall() already carries (its own
+ * comment cites where each one was confirmed) -- getpid's number
+ * happens to be identical to close's in that table's aarch64/x86_64
+ * rows, so this is independent data, not a shared macro this file
+ * would otherwise have to import from a test it does not include. */
+#if defined(__aarch64__)
+#define NTLIBC_TEST_SYS_getpid 172
+#elif defined(__x86_64__)
+#define NTLIBC_TEST_SYS_getpid 39
+#elif defined(__i386__)
+#define NTLIBC_TEST_SYS_getpid 20
+#endif
+
+static void test_syscall_linux(void)
+{
+#ifdef NTLIBC_TEST_SYS_getpid
+	long r = syscall(NTLIBC_TEST_SYS_getpid);
+	CHECK(r == (long)getpid());
+#else
+	printf("note: no known getpid syscall number for this architecture; "
+	       "syscall() itself is still compiled and linked, just not "
+	       "exercised here\n");
+#endif
+}
+
+/* daemon(3) (BSD, not POSIX -- src/unistd/daemon.c's own header
+ * comment: "the standard BSD/glibc fork()+setsid() idiom").  Gated to
+ * real Linux only: daemon() calls fork() internally, which needs
+ * RtlCloneUserProcess on NT -- real there (test/fork-win.c and
+ * friends) but NOT under stock Wine, which is exactly what `make
+ * check`'s own harness runs, so a fork()-driven assertion would fail
+ * there for a reason that has nothing to do with daemon() itself. Real
+ * Linux has no such dependency, so this proves the whole contract --
+ * detachment (only the child branch ever returns; the parent branch
+ * _exit(0)s from inside daemon() itself), setsid()'s new session/group
+ * leadership, nochdir=0's chdir("/"), and noclose=0's /dev/null
+ * redirection of fd 0/1/2 -- in the one environment that can prove it
+ * cheaply and unconditionally. */
+static int daemon_is_devnull(int fd)
+{
+	struct stat st_fd, st_null;
+	if (fstat(fd, &st_fd) != 0) return 0;
+	if (stat("/dev/null", &st_null) != 0) return 0;
+	return st_fd.st_dev == st_null.st_dev && st_fd.st_ino == st_null.st_ino;
+}
+
+static void test_daemon_linux(void)
+{
+	char cwd[4096], resultpath[4200];
+	pid_t outer_child;
+
+	CHECK(getcwd(cwd, sizeof cwd) == cwd);
+	snprintf(resultpath, sizeof resultpath, "%s/daemon-linux-result.txt", cwd);
+	unlink(resultpath);
+
+	/* A throwaway process to be daemon()'s own caller: calling
+	 * daemon() directly from THIS process would _exit(0) it the moment
+	 * its own parent branch runs, taking the rest of this test binary
+	 * down with it. */
+	outer_child = fork();
+	CHECK(outer_child >= 0);
+	if (outer_child < 0) return;
+
+	if (outer_child == 0) {
+		int r = daemon(0, 0);
+		/* Reached only by daemon()'s child branch -- the parent
+		 * branch (this same process, before the fork it just made)
+		 * already _exit(0)'d from inside daemon() itself, so this
+		 * process is now a different, freshly forked one. */
+		if (r == 0) {
+			pid_t pid = getpid();
+			int is_leader = getpgrp() == pid && getsid(0) == pid;
+			char newcwd[4096];
+			int cwd_is_root = getcwd(newcwd, sizeof newcwd) != 0
+			                  && strcmp(newcwd, "/") == 0;
+			int si = daemon_is_devnull(0);
+			int so = daemon_is_devnull(1);
+			int se = daemon_is_devnull(2);
+			FILE *f = fopen(resultpath, "w");
+			if (f) {
+				fprintf(f, "%ld %d %d %d %d %d\n",
+				        (long)pid, is_leader, cwd_is_root, si, so, se);
+				fclose(f);
+			}
+		}
+		_exit(0);
+	}
+
+	/* outer_child is daemon()'s own caller. Its parent branch exits 0
+	 * right after daemon()'s internal fork() succeeds, so this reaps
+	 * quickly regardless of how long the real daemon -- a different,
+	 * now-orphaned process this test has no wait handle on -- takes to
+	 * finish and exit on its own. */
+	{
+		int status;
+		CHECK(waitpid(outer_child, &status, 0) == outer_child);
+		CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	}
+
+	/* Poll for the orphaned daemon to finish writing its results and
+	 * exit -- the same bounded-wait shape test/posix-grp.c's
+	 * burn_user_ticks() uses for a different cross-process fact:
+	 * generous enough not to flake under load, bounded so a real
+	 * failure (daemon() silently never reaching its child branch at
+	 * all) fails this test instead of hanging the suite. */
+	{
+		int waited = 0, i;
+		struct stat st;
+		for (i = 0; i < 500; i++) {
+			if (stat(resultpath, &st) == 0 && st.st_size > 0) { waited = 1; break; }
+			usleep(10000);
+		}
+		CHECK(waited);
+		if (!waited) return;
+	}
+
+	{
+		FILE *f = fopen(resultpath, "r");
+		long got_pid = 0;
+		int is_leader = 0, cwd_is_root = 0, si = 0, so = 0, se = 0;
+		CHECK(f != 0);
+		if (f) {
+			CHECK(fscanf(f, "%ld %d %d %d %d %d",
+			      &got_pid, &is_leader, &cwd_is_root, &si, &so, &se) == 6);
+			fclose(f);
+		}
+		/* the real daemon, a distinct process from its own
+		 * throwaway caller */
+		CHECK(got_pid > 0 && (pid_t)got_pid != outer_child);
+		CHECK(is_leader);       /* setsid(): new session/group leader */
+		CHECK(cwd_is_root);     /* nochdir=0: chdir("/") */
+		CHECK(si && so && se);  /* noclose=0: fd 0/1/2 -> /dev/null */
+	}
+	unlink(resultpath);
+}
+
 static void test_usershells_linux(void)
 {
 	char *sh;
@@ -2226,6 +2367,80 @@ static void test_unistd_posix_vdisable(void)
 #endif
 }
 
+/* posix_close(3) (POSIX.1-2024, Austin Group Defect 1039 -- close()
+ * with an explicit EINTR policy via a flags argument):
+ * src/unistd/posix_close.c's own header explains why POSIX_CLOSE_RESTART
+ * is a no-op here (this library never delivers a signal into a blocked
+ * syscall, and close() is one NtClose/close(2) call that cannot itself
+ * return EINTR), so posix_close(fd, flags) is close(fd) regardless of
+ * flags -- checked with both the restart and non-restart flag values,
+ * plus the ordinary EBADF a closed/invalid descriptor already gets from
+ * close() (close.html ERRORS). */
+static void test_posix_close(void)
+{
+	int fd;
+
+	fd = open("posix-close-a.txt", O_CREAT | O_RDWR, 0644);
+	CHECK(fd >= 0);
+	if (fd >= 0) {
+		CHECK(write(fd, "x", 1) == 1);
+		CHECK(posix_close(fd, 0) == 0);
+		errno = 0;
+		CHECK(close(fd) == -1 && errno == EBADF); /* really closed */
+		unlink("posix-close-a.txt");
+	}
+
+	fd = open("posix-close-b.txt", O_CREAT | O_RDWR, 0644);
+	CHECK(fd >= 0);
+	if (fd >= 0) {
+		CHECK(posix_close(fd, POSIX_CLOSE_RESTART) == 0);
+		errno = 0;
+		CHECK(close(fd) == -1 && errno == EBADF);
+		unlink("posix-close-b.txt");
+	}
+
+	errno = 0;
+	CHECK(posix_close(-1, 0) == -1 && errno == EBADF);
+}
+
+/* vfork.html DESCRIPTION: "shall be equivalent to fork() ... except that
+ * behavior is undefined if the process created by vfork() ... returns
+ * from the function in which vfork() was called."  src/unistd/vfork.c's
+ * implementation is a plain call to fork() (this library's fork() is
+ * already a full copy-on-write clone, so the parent-suspended memory-
+ * sharing optimisation vfork() names is only ever a performance hint,
+ * never a correctness requirement here) -- checked by the same
+ * distinct-pid, real-child, reap-and-check-status pattern used
+ * throughout this tree wherever a real child process is needed. */
+static void test_vfork_and_underscore_Fork(void)
+{
+	pid_t pid;
+	int status;
+
+	pid = vfork();
+	CHECK(pid >= 0);
+	if (pid == 0) _exit(42);
+	if (pid > 0) {
+		CHECK(waitpid(pid, &status, 0) == pid);
+		CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 42);
+	}
+
+	/* _Fork(): POSIX.1-2024 (Austin Group Defects 62/1361/1383).
+	 * src/process/fork.c's own comment: "POSIX asks it be
+	 * async-signal-safe and skip pthread_atfork() handlers; neither
+	 * distinguishes it here, since there is no libpthread and fork()
+	 * registers no handlers of its own" -- so its observable contract
+	 * from a caller's side is identical to fork()'s, checked the same
+	 * way. */
+	pid = _Fork();
+	CHECK(pid >= 0);
+	if (pid == 0) _exit(43);
+	if (pid > 0) {
+		CHECK(waitpid(pid, &status, 0) == pid);
+		CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 43);
+	}
+}
+
 /* waitpid.html DESCRIPTION: pid less than -1 selects the process group
  * whose ID is the absolute value of pid.  INT_MIN's mathematical absolute
  * value cannot be represented by pid_t, so no child can have that group;
@@ -2296,6 +2511,8 @@ int main(void)
 	test_syncfs_linux();
 	test_acct_linux();
 	test_brk_sbrk_linux();
+	test_syscall_linux();
+	test_daemon_linux();
 	test_usershells_linux();
 #endif
 	test_getlogin();
@@ -2305,6 +2522,8 @@ int main(void)
 	test_unistd_pathconf_names();
 	test_unistd_confstr_names();
 	test_unistd_posix_vdisable();
+	test_posix_close();
+	test_vfork_and_underscore_Fork();
 	test_waitpid_int_min_no_overflow();
 
 	CHECK(chdir(origcwd) == 0);

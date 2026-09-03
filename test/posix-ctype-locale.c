@@ -51,16 +51,19 @@
  * interface -- and not BUG, which would assert a present interface
  * giving a wrong answer.  --pedantic decides it, not this comment.
  *
- * ==================== not fenced here, deliberately ==================
+ * ==================== isalnum_l/iswalnum_l, added later ==============
  *
- * isalnum_l and iswalnum_l do not appear in the gap list above because
- * those two identifiers already occur in the test/ tree -- at
+ * isalnum_l and iswalnum_l did not appear in the gap list above because
+ * those two identifiers already occurred in the test/ tree -- at
  * test/posix-headers.c:173, in prose, not in an assertion.  The index
  * over-reports coverage by construction (it is a name match, not a
- * call-site audit); rather than silently correct it in one direction,
- * the honest thing is to say so: two members of this family read as
- * covered on a name match, the other thirty do not, and this file
- * fences what the index found.
+ * call-site audit), and that gap was real: tools/lint-unreferenced.sh's
+ * undefined-symbol scan (which does check call sites) found both
+ * functions genuinely unreferenced by any test.  Real assertions for
+ * both now live inline in posix_ctype_locale_isalpha_l_family() and
+ * posix_ctype_locale_iswalpha_l_family() below, next to their isalpha_l/
+ * iswalpha_l siblings, rather than in a family of their own -- there is
+ * nothing about isalnum_l()/iswalnum_l() that needs a separate fence.
  *
  * The RELATED gap that is already fenced, and must not be confused with
  * this one: test/posix-headers.c's `ctype_h_defines_locale_t` island
@@ -115,6 +118,15 @@ static void test_posix_ctype_locale_isalpha_l_family(void)
 	CHECK(isalpha_l('0', loc) == 0);
 	CHECK(isalpha_l(' ', loc) == 0);
 
+	/* isalnum.html: "test whether c is a character of class alpha or
+	 * digit in the current locale, or in the locale represented by
+	 * locale, respectively." -- alpha OR digit, nothing else. */
+	CHECK(isalnum_l('a', loc) != 0);
+	CHECK(isalnum_l('Z', loc) != 0);
+	CHECK(isalnum_l('7', loc) != 0);
+	CHECK(isalnum_l(' ', loc) == 0);
+	CHECK(isalnum_l('!', loc) == 0);
+
 	CHECK(isdigit_l('7', loc) != 0);
 	CHECK(isdigit_l('a', loc) == 0);
 
@@ -158,6 +170,7 @@ static void test_posix_ctype_locale_isalpha_l_family(void)
 	 * the locale argument meaningful rather than decorative. */
 	CHECK((isalpha_l('a', loc) != 0) == (isalpha('a') != 0));
 	CHECK((ispunct_l('!', loc) != 0) == (ispunct('!') != 0));
+	CHECK((isalnum_l('a', loc) != 0) == (isalnum('a') != 0));
 
 	freelocale(loc);
 }
@@ -233,6 +246,14 @@ static void test_posix_ctype_locale_iswalpha_l_family(void)
 	 * memberships as the byte functions, over wide-character codes. */
 	CHECK(iswalpha_l(L'a', loc) != 0);
 	CHECK(iswalpha_l(L'0', loc) == 0);
+
+	/* iswalnum.html: alpha OR digit, mirroring isalnum_l() above one
+	 * character width up. */
+	CHECK(iswalnum_l(L'a', loc) != 0);
+	CHECK(iswalnum_l(L'7', loc) != 0);
+	CHECK(iswalnum_l(L' ', loc) == 0);
+	CHECK(iswalnum_l(L'!', loc) == 0);
+
 	CHECK(iswdigit_l(L'7', loc) != 0);
 	CHECK(iswdigit_l(L'a', loc) == 0);
 	CHECK(iswxdigit_l(L'F', loc) != 0);
@@ -255,6 +276,7 @@ static void test_posix_ctype_locale_iswalpha_l_family(void)
 	 * valid character in the locale used by the function, or the value
 	 * of WEOF", and WEOF is in no class. */
 	CHECK(iswalpha_l(WEOF, loc) == 0);
+	CHECK(iswalnum_l(WEOF, loc) == 0);
 	CHECK(iswdigit_l(WEOF, loc) == 0);
 	CHECK(iswspace_l(WEOF, loc) == 0);
 

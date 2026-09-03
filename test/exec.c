@@ -260,6 +260,22 @@ static int exec_child(const char *self, const char *role)
 		errno = 0;
 		if (execv("./no-such-program-here.exe", build_argv(self, "--argv")) != -1) return 1;
 		return errno == ENOENT ? 0 : 2;
+	} else if (!strcmp(role, "--exec-vpe")) {
+		/* execvpe(3) (glibc, not POSIX -- execvp()'s explicit-envp
+		 * sibling, the same relationship execve() has to execv()):
+		 * self contains a slash or is an absolute path, so this is
+		 * used as-is with no PATH search, same as --exec-vp above,
+		 * but through execvpe()'s own entry point rather than
+		 * through execvp() (which only reaches it indirectly). */
+		char *envp[3];
+		char sysroot[512];
+		const char *sr = getenv("SystemRoot");
+		envp[0] = (char *)"NTLIBC_TEST_ENV=hello world";
+		if (sr) { snprintf(sysroot, sizeof sysroot, "SystemRoot=%s", sr); envp[1] = sysroot; }
+		else envp[1] = (char *)"SystemRoot=C:\\Windows";
+		envp[2] = 0;
+		setenv("NTLIBC_TEST_ABSENT", "1", 1);   /* must not leak past an explicit envp */
+		execvpe(self, build_argv(self, "--argv-env"), envp);
 	} else if (!strcmp(role, "--exec-l")) {
 		execl(self, self, "--argvl", ARGVL_1, ARGVL_2, (char *)0);
 	} else if (!strcmp(role, "--exec-le")) {
@@ -979,6 +995,7 @@ int main(int argc, char **argv)
 	CHECK(run_role(argv[0], "--exec-v") == 0);
 	CHECK(run_role(argv[0], "--exec-vp") == 0);
 	CHECK(run_role(argv[0], "--exec-ve") == 0);
+	CHECK(run_role(argv[0], "--exec-vpe") == 0);
 #if defined(__linux__) && !defined(_NTLIBC_NATIVE_BUILD)
 	/* src/process/exec.c's real, in-place execve() on Linux: getpid()
 	 * must be unchanged across the exec, not merely the exec'd
