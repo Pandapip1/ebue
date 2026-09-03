@@ -1,23 +1,17 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Linux's real <grp.h> backend -- the "group" database's "files"
- * service, mirroring src/misc/linux/pwd.c exactly (real
- * /etc/group(5) parsing, gated by __nsswitch_order("group", ...), the
- * same first-match-wins full-file scan, the same growable-shared-
- * buffer-for-the-non-_r-forms shape). See that file's own header for
- * the reasoning this one does not repeat, and src/misc/nt/grp.c for
- * the pre-existing, behavior-unchanged NT sibling.
+ * Linux's real <grp.h> backend -- the "group" database's "files" service,
+ * mirroring src/misc/linux/pwd.c exactly. See that file's header for the
+ * reasoning this one does not repeat, and src/misc/nt/grp.c for the NT
+ * sibling.
  *
  * The one real structural difference from pwd.c: gr_mem is a
- * variable-length NULL-terminated array of member-name strings, not a
- * fixed handful of scalar fields, so fill_from_fields() below packs a
- * pointer array plus its pointed-to strings into the buffer --
- * src/misc/nt/grp.c's own fill_current()/fill_current_r() (a
- * one-or-two-member version of the identical layout, including the
- * same pointer-alignment padding computation) is this function's
- * direct model, generalized to however many members one real
- * /etc/group line actually lists.
+ * variable-length NULL-terminated array of member-name strings, so
+ * fill_from_fields() below packs a pointer array plus its pointed-to
+ * strings into the buffer, generalizing src/misc/nt/grp.c's
+ * fill_current()/fill_current_r() layout to however many members one
+ * real /etc/group line lists.
  */
 #include <grp.h>
 #include <stdio.h>
@@ -64,17 +58,13 @@ static int split_group_line(char *line, struct grp_fields *f)
 	return 1;
 }
 
-/* fill_from_fields(): packs gr_name, gr_mem's pointer array, and
- * gr_mem's pointed-to member strings into buf (bufsz bytes) --
- * ERANGE/needp contract identical to src/misc/linux/pwd.c's own
- * function of the same name. Layout: name string, then pointer-
- * aligned (nmem+1) char* array, then each member's own NUL-terminated
- * copy (the comma-separated `members` field re-split into buf, not
- * mutated in its original getline() buffer -- that buffer may belong
- * to a caller-agnostic shared scratch area getgrent() reuses across
- * calls, so writing into it here would be a real, live bug the moment
- * two records' member lists were compared against each other). gr/f
- * required, same reasoning as pwd.c's identical function. */
+/* fill_from_fields(): packs gr_name, gr_mem's pointer array, and gr_mem's
+ * pointed-to member strings into buf (bufsz bytes) -- ERANGE/needp
+ * contract identical to src/misc/linux/pwd.c's own function of the same
+ * name. Layout: name string, then pointer-aligned (nmem+1) char* array,
+ * then each member's own NUL-terminated copy (the comma-separated
+ * `members` field re-split into buf, not mutated in its original
+ * getline() buffer, which getgrent() reuses across calls). */
 static int fill_from_fields(struct group *gr, const struct grp_fields *f,
                              char *buf, size_t bufsz, size_t *needp)
     __attribute__((nonnull(1, 2)));
@@ -191,11 +181,7 @@ static int fill_shared(enum match_kind kind, const char *name, gid_t gid)
 }
 
 /* errno save/restore on the not-found path: same reasoning as
- * src/misc/linux/pwd.c's identical getpwnam()/getpwuid() -- real file
- * I/O can leave errno touched even though the overall scan succeeded
- * (found nothing), and getgrnam.html's "errno shall not be changed"
- * on a clean miss is a real requirement, not automatically true just
- * because nothing in this file's own code sets errno directly. */
+ * src/misc/linux/pwd.c's identical getpwnam()/getpwuid(). */
 struct group *getgrnam(const char *name)
 {
 	int saved_errno = errno;

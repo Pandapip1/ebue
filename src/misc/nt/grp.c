@@ -1,52 +1,27 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * NT's <grp.h> backend. Pure relocation, zero behavior change -- see
- * src/misc/nt/pwd.c's identical banner paragraph for why this moved
- * out of the platform-SHARED src/misc/grp.c into src/misc/nt/;
- * src/misc/linux/grp.c is Linux's real, file-backed sibling.
+ * NT's <grp.h> backend -- see src/misc/nt/pwd.c's banner for the same
+ * reasoning applied to <pwd.h>; src/misc/linux/grp.c is Linux's real,
+ * file-backed sibling.
  *
- * <grp.h>: NT has no /etc/group, but this library has exactly one gid.
- * getgid()/getegid() (src/unistd/ids.c) always report 1000 and
- * setgid()/setegid() are no-ops, so "the current group" is the only
- * group this library can ever be asked about honestly -- and, exactly
- * as for <pwd.h> (src/misc/pwd.c), it is genuinely knowable:
+ * NT has no /etc/group, but this library has exactly one gid (getgid()
+ * always reports 1000), so "the current group" is the only group this
+ * library can ever be asked about honestly:
  *
  *   gr_name -- the same %USERNAME%-then-%USER% lookup src/misc/pwd.c's
- *              current_name() uses for pw_name.  NT has no group-name
- *              database this library can query without LSA (see
- *              src/misc/pwd.c's header comment for why a SID route was
- *              rejected there; the same absence of Lsa/Sid exports in
- *              tools/ntdll.def applies here), so there is no
- *              independent string to name this one group with.  Naming
- *              it after the user matches the "user private group"
- *              convention several real Unix systems already use for a
- *              lone user's sole group (Fedora/RHEL's useradd default,
- *              for one) -- it is not a fabricated name, it is the one
- *              genuinely NT-derivable string tied to this account.
- *   gr_gid  -- getgid(), not a separate constant, for the same
- *              structural reason pw_uid calls getuid(): this can never
- *              drift out of sync with src/unistd/ids.c.
- *   gr_mem  -- {gr_name, NULL}.  The current user genuinely is a member
- *              of this group (its gid *is* getgid()), and there is no
- *              second member to report or omit -- unlike a real
- *              /etc/group, which conventionally leaves primary members
- *              out of gr_mem, there is no primary-vs-supplementary
- *              distinction to draw here: this library has exactly one
- *              user and exactly one group, full stop.
+ *              current_name() uses. NT has no group-name database this
+ *              library can query without LSA, so naming the group after
+ *              the user matches the "user private group" convention
+ *              several real Unix systems use (Fedora/RHEL's useradd
+ *              default, for one).
+ *   gr_gid  -- getgid(), not a separate constant.
+ *   gr_mem  -- {gr_name, NULL}: the current user genuinely is the only
+ *              member of this group, so there's no primary-vs-
+ *              supplementary distinction to draw.
  *
- * Any *other* name or gid is refused cleanly (NULL / *result = NULL,
- * errno untouched, per getgrnam.html/getgrgid.html's "requested entry
- * was not found" case) rather than answered with a fabricated record.
- *
- * getgrent()/setgrent()/endgrent() (XSI, getgrent.html): implemented
- * for the same reason src/misc/pwd.c implements getpwent() -- the
- * "database" genuinely has exactly one entry, so "rewind, yield it,
- * then EOF" is the honest enumeration of it.
- *
- * As with pwd.c: if neither %USERNAME% nor %USER% is set, the group's
- * name is unknowable and every one of these functions reports "not
- * found" (or, for getgrent(), end-of-file) rather than invent one.
+ * Any *other* name or gid is refused cleanly (NULL, errno untouched) --
+ * there is no database to enumerate a second entry out of.
  */
 #include <grp.h>
 #include <unistd.h>
@@ -56,24 +31,18 @@
 #include <stdint.h>
 
 /* Non-reentrant getgrnam()/getgrgid()/getgrent() share this static
- * storage; none of these functions are required to be thread-safe
- * (getgrnam.html DESCRIPTION: "The getgrnam() function need not be
- * thread-safe."). */
+ * storage; none of these functions are required to be thread-safe. */
 static struct group g_gr;
 static char *g_grmem[2];
 /* Grown on demand rather than fixed, for the reason spelled out in
- * src/misc/pwd.c beside g_pwbuf: getgrnam.html lists [ERANGE] only for
- * getgrnam_r()/getgrgid_r(), where it describes a CALLER-supplied
- * buffer, so the non-_r forms have no way to report that this internal
- * one was too small.  The fixed 272 bytes this used to be was reachable
- * by any program that set a long enough %USERNAME%.  See fill_shared(). */
+ * src/misc/pwd.c beside g_pwbuf: [ERANGE] is only defined for
+ * getgrnam_r()/getgrgid_r(), so the non-_r forms have no way to report
+ * that this internal buffer was too small. See fill_shared(). */
 static char *g_grbuf;
 static size_t g_grbufsz;
 
 /* current_name(): identical lookup to src/misc/pwd.c's -- kept as a
- * separate static rather than shared across translation units so this
- * file has no link-time dependency on pwd.c (either can be dropped
- * from a build without the other). */
+ * separate static so this file has no link-time dependency on pwd.c. */
 static const char *current_name(void)
 {
 	const char *n = getenv("USERNAME");
@@ -85,21 +54,9 @@ static const char *current_name(void)
 /* fill_current(): pack the current group's record into buf (bufsz
  * bytes): the name once, plus a two-element gr_mem pointer array
  * (gr_mem[0] aliases the same stored name; gr_mem is not a second
- * copy).  Returns 1 on success, 0 if the name is unknowable (treated
- * as "not found" by every caller), or ERANGE if buf is too small --
- * in which case *needp is set to the size that would do.
- *
- * gr/mem both required: `gr->gr_name = buf;` and `mem[0] = buf;` are
- * unconditional once name is known and bufsz suffices, neither
- * guarded by a NULL check of its own pointer, and every real caller
- * (fill_shared()'s &g_gr/g_grmem, fill_current_r()'s own forwarded
- * gr/mem, getgrnam_r()/getgrgid_r()'s own forwarded grp, itself now
- * required at those two functions' own contract) passes a real
- * struct/array. buf is deliberately NOT marked, same reasoning as
- * src/misc/pwd.c's identical fill_current(): `if (nl > bufsz) return
- * ERANGE;` guards it, and a real caller may pass NULL together with
- * bufsz == 0. needp is left unmarked too, guarded by its own
- * `if (needp)`. */
+ * copy). Returns 1 on success, 0 if the name is unknowable (treated as
+ * "not found" by every caller), or ERANGE if buf is too small, in which
+ * case *needp is set to the size that would do. */
 static int fill_current(struct group *gr, char **mem, char *buf, size_t bufsz, size_t *needp)
     __attribute__((nonnull(1, 2)));
 static int fill_current(struct group *gr, char **mem, char *buf, size_t bufsz, size_t *needp)
@@ -124,18 +81,9 @@ static int fill_current(struct group *gr, char **mem, char *buf, size_t bufsz, s
 /* getgrnam_r()/getgrgid_r() need their own two-element gr_mem array per
  * call (the caller-supplied buffer has no room set aside for pointers),
  * so each _r call carves one out of its own buffer: enough leading
- * padding to bring buf up to pointer alignment (a caller-supplied
- * char[] buffer carries no alignment guarantee beyond char, and
- * mem[0]/mem[1] are accessed as char* here, so an unaligned store into
- * them is exactly the kind of thing UBSan's alignment check exists to
- * catch), then the two pointers, then the name after that.
- *
- * gr required: forwarded, unguarded, into fill_current()'s own
- * required gr above -- the readdir_r-forwarding shape again. buf is
- * NOT required despite the `(uintptr_t)buf % sizeof(char *)`
- * computation just below: that is pointer arithmetic, not a
- * dereference, and buf is subsequently forwarded into fill_current()'s
- * own (deliberately unmarked) buf. */
+ * padding to bring buf up to pointer alignment (a caller-supplied char[]
+ * buffer carries no alignment guarantee beyond char, and mem[0]/mem[1]
+ * are accessed as char* here), then the two pointers, then the name. */
 static int fill_current_r(struct group *gr, char *buf, size_t bufsz)
     __attribute__((nonnull(1)));
 static int fill_current_r(struct group *gr, char *buf, size_t bufsz)
@@ -143,12 +91,8 @@ static int fill_current_r(struct group *gr, char *buf, size_t bufsz)
 	size_t pad, need;
 	char **mem;
 
-	/* "Not found" (no current_name()) must win over ERANGE regardless
-	 * of how small buf is -- same ordering as src/misc/pwd.c's
-	 * fill_current(), and the reason getgrgid_r()/getgrnam_r() can be
-	 * called with a 1-byte buffer and still get a clean "not found"
-	 * rather than a spurious ERANGE when there is nothing to look up
-	 * in the first place. */
+	/* "Not found" (no current_name()) must win over ERANGE regardless of
+	 * how small buf is -- same ordering as src/misc/pwd.c's fill_current(). */
 	if (!current_name()) return 0;
 
 	pad = (sizeof(char *) - ((uintptr_t)buf % sizeof(char *))) % sizeof(char *);
@@ -160,14 +104,9 @@ static int fill_current_r(struct group *gr, char *buf, size_t bufsz)
 	return fill_current(gr, mem, buf, bufsz, 0);
 }
 
-/* getgrnam.html RETURN VALUE: "If the requested entry was not found,
- * errno shall not be changed." */
 /* fill_current() into the shared buffer, growing it if it does not fit.
- * Returns 1 on success, 0 for "not found", never ERANGE.  Same rationale
- * and the same allocation-failure policy as src/misc/pwd.c's
- * fill_shared(): an errno POSIX does not list for these functions must
- * not escape them, and [ENOMEM] is not listed either, so a failed
- * allocation is reported as "not found" with errno untouched. */
+ * Returns 1 on success, 0 for "not found", never ERANGE -- same rationale
+ * and allocation-failure policy as src/misc/pwd.c's fill_shared(). */
 static int fill_shared(void)
 {
 	size_t need = 0;

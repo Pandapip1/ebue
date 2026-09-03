@@ -2,12 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * NT implementation of src/internal/plat_misc.h -- see that header for
- * the contract each function makes.  Everything here was, until this
- * file existed, inline inside src/misc/sched.c, times.c and
- * resource.c; nothing changed in substance, only location and the
- * addition of a POSIX-shaped return (errno already set) in place of a
- * raw NTSTATUS or a status-shaped decision the front door had to make
- * for itself.
+ * the contract each function makes.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -87,11 +82,10 @@ int __plat_process_times_self(unsigned long long *user100ns, unsigned long long 
 	return 0;
 }
 
-/* This process's nice<->NT-base-priority mapping.  See include/sys/
- * resource.h for the full writeup: only three priority classes are
- * actually reachable from an unprivileged caller, and the finer-grained
- * ProcessBasePriority class is STATUS_NOT_IMPLEMENTED on the Wine this
- * project's own CI runs against. */
+/* This process's nice<->NT-base-priority mapping: only three priority
+ * classes are reachable from an unprivileged caller, and the finer-
+ * grained ProcessBasePriority class is STATUS_NOT_IMPLEMENTED on the
+ * Wine this project's CI runs against. */
 static UCHAR priorityclass_from_nice(int nice)
 {
 	if (nice <= 0) return PROCESS_PRIOCLASS_NORMAL;
@@ -208,22 +202,16 @@ void __plat_job_apply_limits(rlim_t nproc_cur, rlim_t cpu_cur, rlim_t as_cur, rl
 
 /* HKLM\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName,
  * value "ComputerName" -- the registry location this node's real name
- * lives at, independent of any process's own environment.  Returns 0
- * and fills `out` (NUL-terminated, up to outsz bytes) on success, -1 on
- * any failure (key missing, value missing, wrong type, NtOpenKey/
- * NtQueryValueKey not implemented by the ntdll underneath) -- every
- * failure is treated identically by the one caller, __plat_uname()
- * below, which falls back to gethostname()'s env-based answer rather
- * than failing outright. */
+ * lives at, independent of any process's own environment. Returns 0 and
+ * fills `out` on success, -1 on any failure; the one caller,
+ * __plat_uname() below, falls back to gethostname()'s env-based answer. */
 static int nt_registry_computername(char *out, size_t outsz)
 {
-	/* Spelled as WCHAR-array initializer lists, not L"..." literals -- see
-	 * src/internal/afd.h's identical banner on AFD_TRANSPORT_TCP: a wide
-	 * string literal's element type is the compiler's native wchar_t,
-	 * 32-bit on a non-Windows-targeting compiler, while src/internal/
+	/* Spelled as WCHAR-array initializer lists, not L"..." literals: a wide
+	 * string literal's element type is the compiler's native wchar_t
+	 * (32-bit on a non-Windows-targeting compiler), while src/internal/
 	 * nt.h's WCHAR is `unsigned short` -- a real array-element type
-	 * mismatch under the native ASan/fuzz build (tools/asan-build.sh),
-	 * not just a lint nit. */
+	 * mismatch under the native ASan/fuzz build. */
 	static const WCHAR keypath[] = {
 		'\\','R','e','g','i','s','t','r','y','\\','M','a','c','h','i','n','e','\\',
 		'S','Y','S','T','E','M','\\','C','u','r','r','e','n','t','C','o','n','t','r','o','l','S','e','t','\\',
@@ -265,11 +253,8 @@ static int nt_registry_computername(char *out, size_t outsz)
 	    info->DataLength / sizeof(WCHAR), out, outsz);
 	if (n < 0) return -1;
 	/* The registry value is not guaranteed NUL-terminated within
-	 * DataLength (RtlInitUnicodeString-style APIs never require it);
-	 * __utf16_to_utf8_buf converts exactly the code units named above
-	 * and does not add a terminator of its own if the input carried a
-	 * trailing NUL WCHAR already counted in DataLength -- strip it here
-	 * so out is a clean C string either way. */
+	 * DataLength; strip a trailing NUL if present so out is a clean C
+	 * string either way. */
 	if (n > 0 && out[n - 1] == '\0') n--;
 	if ((size_t)n < outsz) out[n] = '\0';
 	else if (outsz) out[outsz - 1] = '\0';

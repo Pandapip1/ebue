@@ -3,34 +3,19 @@
  *
  * Linux's real <pwd.h> backend -- the "passwd" NSS database's "files"
  * service: a genuine /etc/passwd(5) parser, gated by a real
- * /etc/nsswitch.conf lookup (src/internal/nsswitch.h) the same way
- * src/netdb/linux/ gates the "hosts" database. src/misc/nt/pwd.c is
- * the pre-existing, behavior-unchanged NT sibling (NT has no
- * /etc/passwd at all; see that file's own header for why single-user
- * synthesis is the honest answer there).
+ * /etc/nsswitch.conf lookup (src/internal/nsswitch.h). src/misc/nt/pwd.c
+ * is the NT sibling (NT has no /etc/passwd at all).
  *
  * There is exactly one recognized service for "passwd" in this file
- * ("files" -- no LDAP/NIS/systemd-userdb backend is built, matching
- * this library's own scope: no directory-service backend for
- * passwd/group). So __nsswitch_order("passwd", ...) is consulted
- * for exactly one fact: is "files" present in the configured order at
- * all. If an admin's nsswitch.conf explicitly configures passwd with
- * a service this library does not implement (or an empty list), every
- * lookup below honestly reports "not found" -- the only backend this
- * library has was turned off, not silently ignored.
+ * ("files"; no LDAP/NIS/systemd-userdb backend is built). If an admin's
+ * nsswitch.conf explicitly configures passwd with a service this library
+ * does not implement (or an empty list), every lookup below honestly
+ * reports "not found".
  *
- * Buffer-packing shape (fill_from_fields(), the growable shared
- * buffer in getpwnam()/getpwuid(), the caller-buffer path in
- * getpwnam_r()/getpwuid_r()) is deliberately the same shape
- * src/misc/nt/pwd.c's fill_current()/fill_shared() already established
- * -- name/pw_dir/pw_shell packed back-to-back into one buffer, ERANGE
- * only ever reported to the _r forms (getpwnam.html: the non-_r forms
- * have no [ERANGE] in their ERRORS list, so getpwnam()/getpwuid() grow
- * their own shared buffer instead of ever returning it, exactly like
- * the NT file's own comment explains). getpwent()/setpwent()/
- * endpwent() enumerate the REAL file sequentially (a FILE* plus a
- * persistent getline() buffer, both reset by setpwent()/endpwent()) --
- * genuine enumeration of a real, potentially-multi-entry database,
+ * Buffer-packing shape (fill_from_fields()) mirrors src/misc/nt/pwd.c's
+ * fill_current()/fill_shared(): name/pw_dir/pw_shell packed back-to-back
+ * into one buffer, ERANGE only ever reported to the _r forms.
+ * getpwent()/setpwent()/endpwent() enumerate the REAL file sequentially,
  * unlike the NT file's honest one-entry version of the same functions.
  */
 #include <pwd.h>
@@ -51,14 +36,11 @@ struct pwd_fields {
 	char *shell;
 };
 
-/* split_passwd_line(): splits `line` (one /etc/passwd record, as
- * handed back by getline() -- still carrying its trailing '\n', if
- * any) in place on ':', the real /etc/passwd(5) field separator.
- * Returns 0 (a malformed/short line -- fewer than 7 fields) without
- * touching *f, so callers skip it and read the next line rather than
- * fabricate a record from a corrupt one. line/f required: every real
- * caller passes a getline()-returned buffer (never NULL once rd != -1)
- * and the address of its own local fields struct. */
+/* split_passwd_line(): splits `line` (one /etc/passwd record from
+ * getline(), still carrying its trailing '\n') in place on ':', the real
+ * /etc/passwd(5) field separator. Returns 0 (a malformed/short line)
+ * without touching *f, so callers skip it and read the next line rather
+ * than fabricate a record from a corrupt one. */
 static int split_passwd_line(char *line, struct pwd_fields *f)
     __attribute__((nonnull(1, 2)));
 static int split_passwd_line(char *line, struct pwd_fields *f)
@@ -89,9 +71,7 @@ static int split_passwd_line(char *line, struct pwd_fields *f)
 
 /* fill_from_fields(): packs pw_name/pw_dir/pw_shell into buf (bufsz
  * bytes) -- see src/misc/nt/pwd.c's identical fill_current() for the
- * ERANGE/needp contract this mirrors exactly. pw/f required (every
- * real caller passes a real struct passwd and a filled pwd_fields);
- * buf deliberately not required, guarded by the size check. */
+ * ERANGE/needp contract this mirrors exactly. */
 static int fill_from_fields(struct passwd *pw, const struct pwd_fields *f,
                              char *buf, size_t bufsz, size_t *needp)
     __attribute__((nonnull(1, 2)));
@@ -133,13 +113,10 @@ static int passwd_files_enabled(void)
 enum match_kind { MATCH_NAME, MATCH_UID };
 
 /* scan_passwd(): one full pass over /etc/passwd (or its test-fixture
- * override), first-match-wins -- the same simplicity real nss_files
- * uses (no index, no cache), acceptable here for the same reason it is
- * in glibc's own fallback path: this is a config file, not a hot-path
- * database. Returns 0 (not found / passwd's "files" service disabled),
- * 1 (found, pw/buf filled), or ERANGE (found, buf too small -- *needp
- * set). pw required: forwarded, unguarded, into fill_from_fields()'s
- * own required pw. */
+ * override), first-match-wins -- the same simplicity real nss_files uses
+ * (no index, no cache), acceptable since this is a config file, not a
+ * hot-path database. Returns 0 (not found / "files" service disabled), 1
+ * (found), or ERANGE (found, buf too small, *needp set). */
 static int scan_passwd(enum match_kind kind, const char *name, uid_t uid,
                         struct passwd *pw, char *buf, size_t bufsz, size_t *needp)
     __attribute__((nonnull(4)));
@@ -192,17 +169,11 @@ static int fill_shared(enum match_kind kind, const char *name, uid_t uid)
 	return r == ERANGE ? 0 : r;
 }
 
-/* getpwnam.html RETURN VALUE: "If the requested entry was not found,
- * errno shall not be changed." Unlike src/misc/nt/pwd.c's identical-
- * shaped functions (whose only internal work is getenv(), which never
- * touches errno), this backend does real file I/O -- fopen()/getline()/
- * fclose() succeeding is not the same promise as "errno is left
- * exactly as the caller set it": a real underlying syscall can set
- * errno as an ordinary side effect of succeeding (this is normal,
- * permitted C-library behavior everywhere; errno is only meaningful
- * after a call that itself reports failure). So a genuine "not found"
- * here must explicitly restore the errno the caller had on entry,
- * rather than assume the scan left it alone. */
+/* getpwnam.html: errno must not change when not found. Unlike
+ * src/misc/nt/pwd.c's getenv()-only functions, this backend does real
+ * file I/O -- a successful syscall can set errno as an ordinary side
+ * effect of succeeding -- so a genuine "not found" here must explicitly
+ * restore the errno the caller had on entry. */
 struct passwd *getpwnam(const char *name)
 {
 	int saved_errno = errno;
@@ -251,10 +222,7 @@ int getpwuid_r(uid_t uid, struct passwd *pwd, char *buffer,
  * /etc/passwd. g_pwent_f/g_pwent_open_tried are reset together by
  * setpwent()/endpwent(); g_pwent_line/g_pwent_linesz are getline()'s
  * own persistent scratch buffer, deliberately NOT reset by either --
- * reusing it across getpwent() calls avoids reallocating on every
- * single line of a real, possibly-long /etc/passwd, and getline()
- * itself grows it safely on demand regardless of what it already
- * holds. */
+ * reusing it avoids reallocating on every line of a long /etc/passwd. */
 static FILE *g_pwent_f;
 static int g_pwent_open_tried;
 static char *g_pwent_line;
@@ -271,12 +239,9 @@ void endpwent(void)
 	setpwent();
 }
 
-/* getpwent.html RETURN VALUE: "On end-of-file, getpwent() shall
- * return a null pointer and shall not change the setting of errno."
- * Same real-file-I/O reasoning as getpwnam()/getpwuid() above applies
- * to every "return 0" path here, so all of them restore the errno
- * this call started with rather than assume nothing along the way
- * touched it. */
+/* getpwent.html: errno unchanged at end-of-file. Same real-file-I/O
+ * reasoning as getpwnam()/getpwuid() above: every "return 0" path here
+ * restores the errno this call started with. */
 struct passwd *getpwent(void)
 {
 	int saved_errno = errno;
@@ -299,12 +264,8 @@ struct passwd *getpwent(void)
 			if (!nb) { errno = saved_errno; return 0; }
 			g_pwbuf = nb;
 			g_pwbufsz = need;
-			/* `fl`'s pointers are unaffected by growing
-			 * g_pwbuf (a wholly separate allocation) and
-			 * already reference the still-valid, already-
-			 * split g_pwent_line, so reusing the same fl
-			 * against the newly-grown buffer is exactly
-			 * fill_shared()'s own retry shape. */
+			/* `fl`'s pointers are unaffected by growing g_pwbuf (a
+			 * separate allocation) and still reference g_pwent_line. */
 			r = fill_from_fields(&g_pw, &fl, g_pwbuf, g_pwbufsz, &need);
 		}
 		if (r != 1) { errno = saved_errno; return 0; }
