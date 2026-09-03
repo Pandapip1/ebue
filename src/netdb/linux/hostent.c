@@ -3,28 +3,19 @@
  *
  * gethostbyname()/h_errno: a legacy/XSI extension outside this edition
  * of POSIX, kept as a real, disclosed addition -- see include/netdb.h's
- * own banner for why, and for why herror()/hstrerror() are not
- * included alongside it.
+ * own banner for why herror()/hstrerror() are not included alongside it.
  *
- * This is a second, thinner front door onto the exact same
- * __hosts_resolve() walk src/netdb/linux/addrinfo.c's getaddrinfo()
- * already uses -- not a second resolver, and not a second nsswitch
- * order decision.
+ * A second, thinner front door onto the same __hosts_resolve() walk
+ * getaddrinfo() (addrinfo.c) already uses -- not a second resolver or
+ * nsswitch order decision.
  *
- * Non-reentrant, growable shared static storage: the same pattern
- * src/misc/pwd.c's fill_shared()/g_pw/g_pwbuf already establishes for
- * exactly the same "POSIX-sanctioned static-storage function, no
- * caller-supplied buffer to size, but no bound on the real answer's
- * size either" shape (there, %USERPROFILE%/%ComSpec%; here, an
- * unbounded number of A records for a real DNS name). h_name,
- * h_addr_list (n+1 pointers, each pointing at a 4-byte address, the
- * array NUL-pointer-terminated per <netdb.h>'s own DESCRIPTION) and
- * their backing bytes all live in one packed, growable buffer;
- * h_aliases is a separate static {NULL} array (this file tracks no
- * alias list -- see src/netdb/linux/hosts.c's own banner on why
- * reverse/alias enumeration is out of scope -- but the member itself
- * must still be a valid non-NULL "terminated by a null pointer" array
- * per DESCRIPTION, which a single static {NULL} already is).
+ * Non-reentrant, growable shared static storage, the same pattern
+ * src/misc/pwd.c's fill_shared() uses for an unbounded real answer
+ * with no caller-supplied buffer to size. h_name, h_addr_list (NUL-
+ * pointer-terminated per <netdb.h>) and their backing bytes live in
+ * one packed buffer; h_aliases is a separate static {NULL} array,
+ * since this file tracks no alias list (see hosts.c's banner) but the
+ * member must still be a valid non-NULL terminated array.
  */
 #include <netdb.h>
 #include <netinet/in.h>
@@ -45,15 +36,11 @@ static char *g_hebuf;
 static size_t g_hebufsz;
 static char *g_he_aliases[1]; /* always {NULL}; see this file's banner */
 
-/* fill_he(): packs gethostbyname()'s answer for `name` into buf
- * (bufsz bytes). Returns 1 on success, 0 on a clean failure (h_errno
- * already set to which one), or ERANGE if buf is too small (*needp
- * set, h_errno left untouched -- not yet a real failure). pw/buf
- * follow src/misc/pwd.c's fill_current() precedent exactly: g_he is
- * required (every real call site passes &g_he, unconditional writes
- * below), buf is deliberately not required (the `if (need > bufsz)`
- * guard covers every dereference of it, and gethostbyname()'s own
- * first probing call legitimately passes bufsz == 0). */
+/* Packs gethostbyname()'s answer for `name` into buf (bufsz bytes).
+ * Returns 1 on success, 0 on a clean failure (h_errno set), or ERANGE
+ * if buf is too small (*needp set, h_errno untouched -- not yet a
+ * real failure): gethostbyname()'s own first probing call
+ * legitimately passes bufsz == 0. */
 static int fill_he(const char *name, char *buf, size_t bufsz, size_t *needp)
     __attribute__((nonnull(1)));
 static int fill_he(const char *name, char *buf, size_t bufsz, size_t *needp)
@@ -130,23 +117,17 @@ struct hostent *gethostbyname(const char *name)
 	return &g_he;
 }
 
-/* sethostent()/gethostent()/endhostent(): endhostent.html's sequential
- * host-database walk, one struct hostent per line of the same /etc/hosts
- * this file's gethostbyname() and hosts.c's __hosts_lookup() already
- * read -- via __hosts_read_entry() (hosts.c), which shares that file's
- * own line-shape rules rather than re-deriving them. One address per
- * entry (a hosts(5) line names exactly one address), h_addrtype/h_length
- * always AF_INET/4 -- this implementation never parses an IPv6 line
- * (see hosts.c's own banner) -- and up to GHE_MAX_ALIASES trailing name
- * tokens as h_aliases, the real per-line alias list this database
- * actually has (unlike gethostbyname()'s own g_he_aliases, always {NULL}
- * -- see this file's top banner -- gethostent() walks one line at a
- * time and so has real aliases available for free).
+/* sethostent()/gethostent()/endhostent(): sequential host-database
+ * walk, one struct hostent per line of the same /etc/hosts this
+ * file's gethostbyname() and hosts.c's __hosts_lookup() read, via
+ * __hosts_read_entry() (hosts.c). One address per entry, h_addrtype/
+ * h_length always AF_INET/4 (no IPv6 line is ever parsed -- see
+ * hosts.c's banner), and up to GHE_MAX_ALIASES trailing name tokens
+ * as h_aliases -- real per-line aliases, unlike gethostbyname()'s own
+ * g_he_aliases (always {NULL}).
  *
  * Non-reentrant static storage, same house style as fill_he()/g_he
- * above: a single shared static entry struct is exactly what
- * endhostent.html's own "read the next entry" contract describes,
- * global connection state included. */
+ * above. */
 #define GHE_MAX_ALIASES 16
 #define GHE_ALIASBUF_SZ 512
 

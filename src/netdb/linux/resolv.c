@@ -5,56 +5,23 @@
  * -- a real, minimal UDP stub resolver. Reads nameservers from
  * /etc/resolv.conf(5) (or its test-fixture override, see
  * src/internal/nss_paths.h), sends a real RFC 1035 A-record query
- * over a real UDP socket, and parses a real response, including the
- * one RFC 1035 label-compression case a real response can actually
- * contain (a pointer to an earlier name in the same message).
+ * over a real UDP socket, and parses a real response, including
+ * RFC 1035 label compression (a pointer to an earlier name in the
+ * same message).
  *
- * ============================================================
- * SCOPE, PRECISELY
- * ============================================================
- *   - UDP only. No TCP fallback on a truncated (TC bit) response --
- *     a real gap for any answer that does not fit a UDP datagram
- *     (large TXT/DNSSEC records, mainly), but this resolver only ever
- *     asks for A records, which have never needed TCP fallback in
- *     practice. Disclosed, not silently absent.
- *   - A records (IPv4) only. No AAAA/IPv6 -- matches this project's
- *     socket layer, which has no AF_INET6 transport yet either (see
- *     <sys/socket.h>'s own banner); asking a real DNS server for AAAA
- *     records this library could never use the answers to would be
- *     gold-plating, not correctness.
- *   - No DNSSEC (no EDNS0 OPT record, no RRSIG/DNSKEY parsing, no AD
- *     bit interpretation): this is a stub resolver trusting its
- *     configured nameserver, the same trust model /etc/resolv.conf
- *     itself already assumes.
- *   - No search-list/ndots/domain processing from resolv.conf --
- *     `name` is queried exactly as given, verbatim. "search"/"domain"/
- *     "options" directives parse without error (skipped) but do not
- *     change behavior.
- *   - Compression: this resolver's own OWN query never emits a
- *     compressed name (nothing to compress in one question), but a
- *     real server's RESPONSE routinely compresses the question name
- *     it echoes back and every answer RR's owner name against it --
- *     skip_name() below follows real 0xC0-tagged pointers (bounded
- *     against an infinite loop) because a parser that only handled
- *     the uncompressed case would fail against real nameservers, not
- *     just gold-plate against a hypothetical one.
- *   - This bypasses the public socket()/connect()/send()/recv() front
- *     door entirely and issues its own real socket(2)/connect(2)/
- *     setsockopt(2)/sendto(2)/recvfrom(2)/close(2) syscalls, following
- *     the exact raw-syscall pattern src/socket/linux/plat_socket.c
- *     itself already uses (same aarch64/x86_64 asm, same is_sys_error()
- *     convention) -- because that front door is AF_INET/SOCK_STREAM
- *     only today (<sys/socket.h>'s own banner: SOCK_DGRAM is declared
- *     "so it compiles" but socket()'s own EPROTOTYPE check in
- *     src/socket/socket.c refuses anything but SOCK_STREAM). Building
- *     real UDP support into that shared, cross-platform front door --
- *     which would also need an NT body, explicitly out of scope here
- *     -- is a separate, deliberately staged piece of work
- *     (test/networking-audit.md sec 4-6); this resolver does not wait
- *     on it or duplicate its intent, exactly the same call
- *     src/dlfcn/linux/plat_dlfcn.c already made for raw mmap()/
- *     munmap()/mprotect() bypassing <sys/mman.h>'s own front door (see
- *     that file's matching banner paragraph).
+ * Scope, deliberately: UDP only, no TCP fallback on a truncated (TC
+ * bit) response -- never needed in practice, since this resolver only
+ * ever asks for A records. A records (IPv4) only, no AAAA/IPv6 --
+ * matches this project's socket layer, which has no AF_INET6
+ * transport yet. No DNSSEC: a stub resolver trusting its configured
+ * nameserver, the same trust model resolv.conf itself assumes. No
+ * search-list/ndots/domain processing -- `name` is queried exactly as
+ * given; "search"/"domain"/"options" directives parse without error
+ * but do nothing. Bypasses the public socket()/connect()/send()/
+ * recv() front door entirely and issues its own raw socket(2)/
+ * connect(2)/setsockopt(2)/sendto(2)/recvfrom(2)/close(2) syscalls
+ * (same pattern src/socket/linux/plat_socket.c uses), because that
+ * front door only supports SOCK_STREAM today.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -127,20 +94,15 @@ static int is_sys_error(long ret)
 #define QUERY_TIMEOUT_SEC 2
 #define QUERY_ATTEMPTS_PER_SERVER 3
 
-/* parse_resolv_conf(): "nameserver <ipv4>[:<port>]" lines, up to
- * MAX_NAMESERVERS of them. The "[:<port>]" suffix is NOT real
- * resolv.conf(5) syntax (a real nameserver line is always a bare
- * address, always port 53) -- it is this file's own disclosed
- * testability extension (see src/internal/nss_paths.h's banner for
- * the same TZ/HOSTALIASES-precedented reasoning), so this file's own
- * tests can point resolv.conf at a fixture DNS server bound to an
- * unprivileged ephemeral port without needing CAP_NET_BIND_SERVICE
- * for port 53. A token with more than one ':' is a real IPv6
- * nameserver literal (e.g. "::1"); this resolver has no IPv6
- * transport (see this file's own banner) and skips such a line
- * cleanly rather than mis-parsing it. Other directives ("domain",
- * "search", "options", ...) parse without error and are ignored --
- * see this file's SCOPE banner. */
+/* "nameserver <ipv4>[:<port>]" lines, up to MAX_NAMESERVERS of them.
+ * The "[:<port>]" suffix is NOT real resolv.conf(5) syntax -- it is
+ * this file's own disclosed testability extension (see
+ * src/internal/nss_paths.h's banner), letting tests point resolv.conf
+ * at a fixture server on an unprivileged port without
+ * CAP_NET_BIND_SERVICE. A token with more than one ':' is a real IPv6
+ * literal (e.g. "::1"); this resolver has no IPv6 transport and skips
+ * such a line cleanly. Other directives ("domain", "search",
+ * "options", ...) parse without error and are ignored. */
 static int parse_resolv_conf(struct sockaddr_in *out)
 {
 	FILE *f;
@@ -173,18 +135,12 @@ static int parse_resolv_conf(struct sockaddr_in *out)
 		if (colon) {
 			unsigned long v;
 			*colon = '\0';
-			/* strtoul(), not atoi(): atoi() (src/stdlib/atoi.c)
-			 * is implemented on top of strtod()'s general
-			 * floating-point parser, which on this project's
-			 * aarch64 port needs a soft-float128 long-double
-			 * conversion helper this environment's -nostdlib
-			 * link has no compiler-rt to satisfy -- a real,
-			 * environment-specific link failure this file's own
-			 * native-clang verification pass hit directly, not
-			 * hypothetical. strtoul() has no such dependency
-			 * (confirmed against its own object file's undefined
-			 * symbols) and is exactly as sufficient for parsing
-			 * an unsigned decimal port number. */
+			/* strtoul(), not atoi(): atoi() is built on
+			 * strtod()'s float parser, which on this project's
+			 * aarch64 port needs a soft-float128 helper this
+			 * -nostdlib build has no compiler-rt to satisfy -- a
+			 * real link failure hit directly, not hypothetical.
+			 * strtoul() has no such dependency. */
 			v = strtoul(colon + 1, NULL, 10);
 			if (v == 0 || v > 65535) continue;
 			port = (int)v;
@@ -281,17 +237,12 @@ static int skip_name(const unsigned char *msg, int msglen, int off)
 
 static int be16(const unsigned char *p) { return (p[0] << 8) | p[1]; }
 
-/* parse_response(): validates the header against `id`, maps a
- * non-zero RCODE to *reason (NXDOMAIN is handled by the caller, not
- * here -- see this file's banner), and on RCODE 0 walks the question
- * section (to skip it) and then the answer section, collecting A/IN
- * records. Any malformed field beyond the header is treated as "stop
- * parsing, keep what was already collected" rather than a hard
- * failure: a real answer this resolver cares about (an A record) is
- * always the substance of the FIRST answers, so a truncated or
- * oddly-shaped tail (an unrelated RR type this resolver does not need
- * to understand fully) should not discard genuine results already
- * found. */
+/* Validates the header against `id`, maps a non-zero RCODE to
+ * *reason, and on RCODE 0 walks the question section (to skip it)
+ * then the answer section, collecting A/IN records. A malformed field
+ * past the header stops parsing but keeps what was already collected,
+ * rather than discarding real answers over an unrelated RR type or
+ * truncated tail this resolver does not need to understand. */
 static int parse_response(const unsigned char *msg, int len, uint16_t id,
                            struct in_addr *addrs, int maxaddrs,
                            enum __dns_fail *reason, int *is_nxdomain)

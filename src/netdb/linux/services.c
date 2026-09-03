@@ -2,34 +2,22 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * getservbyname()/getservbyport()/setservent()/getservent()/endservent():
- * https://pubs.opengroup.org/onlinepubs/9699919799/functions/
- * endservent.html. A real /etc/services(5) parser, the same
- * "real-database-or-honestly-empty" shape as src/netdb/linux/hosts.c --
- * endservent.html itself says the database's own storage "is
- * unspecified", so a flat-file parser reading the one real system
- * database every Linux distribution actually ships is squarely inside
- * that latitude, not a deviation from it.
+ * a real /etc/services(5) parser, same "real-database-or-honestly-
+ * empty" shape as hosts.c -- endservent.html's own DESCRIPTION says
+ * the database's storage "is unspecified", so a flat-file parser
+ * reading the one real system database every Linux distribution ships
+ * is squarely inside that latitude.
  *
- * Line shape: "name port/proto [alias...] [# comment]" -- real
- * /etc/services entries also carry a trailing comment on the SAME line
- * as an alias would (e.g. "ssh 22/tcp # comment", with no alias), which
- * this parser's own whitespace tokenizer would otherwise swallow whole
- * words of into a bogus extra alias; the '#' cut (same as every other
- * parser in this directory) happens before any tokenizing at all, so
- * that never happens.
+ * Line shape: "name port/proto [alias...] [# comment]" -- the '#' cut
+ * happens before any tokenizing (same as every other parser here), so
+ * a trailing comment on the same line as an alias is never swallowed
+ * into a bogus extra alias.
  *
- * s_port stores the port ALREADY in network byte order (htons()'d at
- * parse time) -- endservent.html's own struct servent member
- * description ("s_port: A value which, when converted to uint16_t,
- * yields the port number in network byte order") and test/
- * posix-netdb.c's own assertion (`(uint16_t)se->s_port == htons(80)`)
- * both require exactly that, matching every real implementation.
+ * s_port stores the port already in network byte order (htons()'d at
+ * parse time), matching endservent.html's own member description and
+ * test/posix-netdb.c's assertion.
  *
- * Non-reentrant static storage: same house style as src/netdb/linux/
- * hostent.c's g_he (endservent.html's own DESCRIPTION already documents
- * global "next entry" position state for getservent(), which is
- * unavoidably non-reentrant by construction regardless of storage
- * choice).
+ * Non-reentrant static storage, same house style as hostent.c's g_he.
  */
 #include <netdb.h>
 #include <netinet/in.h>
