@@ -303,6 +303,13 @@ int __util_awk_main(int argc, char **argv)
 	}
 
 	prog = awk_parse_program(progtext);
+	/* progtext is heap-owned only in the -f path (load_progfiles());
+	 * the bare-program-text path above points it at argv[i], which
+	 * must not be freed. awk_parse_program() never retains src past
+	 * its own return (its lexer just walks it; token text is copied
+	 * separately), so it is safe to free here regardless of whether
+	 * parsing succeeded. */
+	if (have_f) free(progtext);
 	if (!prog) { awk_fatal_armed = 0; return 2; }
 
 	awk_interp_init(&ip, prog);

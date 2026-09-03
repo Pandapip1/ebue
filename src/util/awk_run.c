@@ -1085,7 +1085,13 @@ static char *awk_format(struct awk_interp *ip, const char *fmt, struct awk_value
 					skip = 1;
 					break;
 				}
-				if (arg == &dummy) v_free(&dummy);
+				/* Freeing dummy here, before sv is used below, used to
+				 * free-then-read it: for an exhausted-argument %s/%c
+				 * conversion, sv is v_str(&dummy, ...)'s return value
+				 * -- a pointer straight into dummy.str -- so freeing
+				 * dummy first left both snprintf() calls below reading
+				 * already-freed memory. dummy is freed once, after its
+				 * string's last use, instead. */
 				if (!skip) {
 					switch (atype) {
 					case AT_LL: need = snprintf(NULL, 0, subfmt, llv); break;
@@ -1105,6 +1111,7 @@ static char *awk_format(struct awk_interp *ip, const char *fmt, struct awk_value
 						free(buf);
 					}
 				}
+				if (arg == &dummy) v_free(&dummy);
 			}
 		}
 	}
