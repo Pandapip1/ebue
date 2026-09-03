@@ -133,16 +133,10 @@ void __pthread_run_specific_destructors(void) { }
  * never pthread_create(). */
 void __sig_current_mask_install(const sigset_t *mask) { (void)mask; }
 
-/* __plat_thread_resume(): declared in plat_thread.h but owned by the
- * process subsystem's backend (src/process/nt/plat_process.c on NT,
- * src/process/linux/plat_process.c on Linux -- see this project's own
- * cross-session ownership history for __plat_process_resume()/
- * __plat_thread_resume()/__plat_event_set(), each declared in two
- * headers with one canonical owner). Not linking the real process
- * backend here (it would pull in fork/exec/clone machinery this test
- * has no use for) -- pthread_create() itself is out of scope (see
- * this file's own banner), so this call site is never reached at
- * runtime; a real implementation would just be `return 0` regardless
- * (Linux's own __plat_process_linux.c reports the identical no-op:
- * nothing __plat_thread_spawn() creates is ever suspended). */
-int __plat_thread_resume(__plat_handle_t th) { (void)th; return 0; }
+/* __plat_thread_resume(): NOT stubbed here (would collide, duplicate
+ * symbol, with the REAL definition src/thread/linux/plat_thread.c now
+ * carries -- that file is already linked into this harness's own FILES
+ * list). pthread_create() itself is still out of scope for this test
+ * (see this file's own banner), so the real function's own
+ * suspend_table lookup simply finds nothing and returns success, the
+ * same no-op behavior this stub used to hardcode. */

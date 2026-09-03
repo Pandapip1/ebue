@@ -293,15 +293,16 @@ int __plat_process_fork(struct __plat_fork_result *out)
 	return __PLAT_FORK_PARENT;
 }
 
-int __plat_thread_resume(__plat_handle_t th)
-{
-	(void)th;
-	/* Canonical implementation for both plat_process.h and plat_thread.h's
-	 * identically-named declaration. Nothing this pilot creates is ever
-	 * created suspended: clone(2)/execve(2) hand back something already
-	 * running, so this is unconditionally a no-op success. */
-	return 0;
-}
+/* __plat_thread_resume(): declared in both plat_process.h and
+ * plat_thread.h, but defined in src/thread/linux/plat_thread.c (ODR) --
+ * that file's own __plat_thread_spawn() is now a real create-suspended
+ * primitive (a clone()'d thread gated on a manual-reset event, since
+ * clone(2)/execve(2) themselves have no OS-level "start suspended"
+ * concept), and __plat_thread_resume() needs its suspend_table to find
+ * which gate, if any, a given handle is waiting on. This file's own
+ * __plat_process_fork() always hands back __PLAT_HANDLE_NULL for
+ * out->thread, so fork.c's own call to __plat_thread_resume() finds
+ * nothing to do and is a plain no-op success on this backend. */
 
 /* ---- wait.c: wait4(2), and the peek/query split Linux's one-shot ----- */
 /* ---- reap does not offer natively -------------------------------------- */

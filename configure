@@ -374,6 +374,19 @@ tryflag CFLAGS_C99FSE -std=c99
 tryflag CFLAGS_C99FSE -nostdinc
 tryflag CFLAGS_C99FSE -fno-builtin
 
+# Without this, clang/gcc on aarch64 emit calls to an outline-atomics
+# runtime dispatcher (__aarch64_have_lse_atomics et al, resolved via
+# libgcc's lse-init.o calling glibc's own getauxval()) for the plain
+# __atomic_* builtins this tree's Linux backends use directly -- this
+# -nostdlib build links against neither a hosted libgcc/compiler-rt nor
+# glibc, so any test binary that actually links (not just compiles to
+# a .a) fails with "undefined reference to `__getauxval'". Already
+# diagnosed and fixed the identical way in tools/linux-build-crt.sh's
+# own CFLAGS; tryflag's probe naturally no-ops this on a non-aarch64
+# target or a compiler that does not recognize the flag (confirmed:
+# platform=nt's tcc), so no platform/arch guard is needed here.
+tryflag CFLAGS_C99FSE -mno-outline-atomics
+
 if test "$debug" = yes ; then
 CFLAGS_AUTO=-g
 fi

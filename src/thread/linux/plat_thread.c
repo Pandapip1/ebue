@@ -35,12 +35,15 @@
  *   by testing to make the child invisible to wait4() (ECHILD) despite
  *   being real and running.
  *
- *   __plat_wait_one() below only understands a handle this file produced
- *   via __plat_semaphore_create()/__plat_event_create() (a struct
- *   ntlibc_linux_sync*), never a thread handle from __plat_thread_spawn()
- *   (which boxes a pid) -- unlike NT's HANDLE, which unifies every
- *   waitable kind. Passing a thread handle here would dereference garbage;
- *   nothing in this port's scope does that.
+ *   __plat_wait_one() below understands two, structurally distinguished
+ *   handle domains rather than unifying every waitable kind the way NT's
+ *   HANDLE does: a struct ntlibc_linux_sync* this file produced via
+ *   __plat_semaphore_create()/__plat_event_create() (always mmap(2)-page-
+ *   aligned), or a boxed pid+1 thread handle from __plat_thread_spawn()
+ *   (essentially never page-aligned) -- pthread_join()'s own generic
+ *   __plat_wait_one() call needs the latter to work, joining via a plain
+ *   wait4(2) (see __plat_thread_spawn()'s own comment on why this backend's
+ *   spawned "threads" are wait4()-joinable in the first place).
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -62,10 +65,12 @@
 #define SYS_mmap   222
 #define SYS_munmap 215
 #define SYS_futex  98
+#define SYS_wait4  260
 #elif defined(__x86_64__)
 #define SYS_mmap   9
 #define SYS_munmap 11
 #define SYS_futex  202
+#define SYS_wait4  61
 #elif defined(__i386__)
 /* SYS_mmap2, not the old single-struct-arg SYS_mmap (90) -- takes six
  * plain-register arguments like every other syscall this file calls,
@@ -74,6 +79,7 @@
 #define SYS_mmap   192
 #define SYS_munmap 91
 #define SYS_futex  240
+#define SYS_wait4  114
 #else
 #error "plat_thread.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
 #endif
@@ -304,11 +310,33 @@ int __plat_semaphore_getvalue(__plat_handle_t h, int *value)
 int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout, // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; alert and timeout flags have distinct roles
                     long long relative_ticks)
 {
-	struct ntlibc_linux_sync *obj = (struct ntlibc_linux_sync *)h;
+	struct ntlibc_linux_sync *obj;
 	struct linux_timespec ts, *tsp = 0;
 	(void)alertable; /* Linux has no APC-alertable-wait concept; every wait
 	                  * here is non-alertable, so __PLAT_WAIT_INTR is never
 	                  * produced. */
+	/* A boxed pid+1 thread handle from __plat_thread_spawn(), not a
+	 * struct ntlibc_linux_sync* -- pthread_join() (src/thread/pthread.c)
+	 * calls this same generic front door on a THREAD handle exactly the
+	 * way it does for a mutex/cond/rwlock wait object, but this backend's
+	 * thread handle is a different domain (see this file's banner).
+	 * Distinguished the same structural way __plat_wait_any()'s
+	 * handle_is_boxed_fd() below tells a boxed fd apart from a real
+	 * sync object: every sync object this file hands out is mmap(2)-
+	 * page-aligned, while a boxed pid (pid+1) essentially never is.
+	 * wait4(2) is this backend's real join primitive -- this file's own
+	 * banner: spawned threads are "joined with plain wait4() rather than
+	 * a futex-on-ctid join". No caller anywhere in this tree asks for a
+	 * TIMED wait on a thread handle (no pthread_timedjoin_np() exists
+	 * here), so has_timeout is not honored on this path. */
+	if (((unsigned long)h & 4095UL) != 0) {
+		long pid = (long)h - 1;
+		long status = 0;
+		long r = raw_syscall(SYS_wait4, pid, (long)&status, 0L, 0L, 0L, 0L);
+		if (is_sys_error(r)) { errno = (int)-r; return __PLAT_WAIT_ERROR; }
+		return __PLAT_WAIT_OK;
+	}
+	obj = (struct ntlibc_linux_sync *)h;
 	if (has_timeout) {
 		long long ticks = relative_ticks < 0 ? -relative_ticks : relative_ticks;
 		ts.tv_sec = (long)(ticks / 10000000LL);
@@ -343,11 +371,37 @@ int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout, // NOLINT
 }
 
 /* ---- thread lifecycle ----------------------------------------------------
- * Only __plat_thread_spawn(): see this file's banner for the CLONE_VM-only
- * scope and for why the resulting handle cannot be passed to
- * __plat_wait_one() above. `create_suspended` has no primitive on this
- * backend and no caller needs it. __plat_thread_resume() belongs to
- * src/process/nt/plat_process.c, not here (ODR).
+ * `create_suspended` invariant (WHY this matters, not just NT plumbing):
+ * pthread_create() (src/thread/pthread.c) spawns the new thread suspended,
+ * THEN stores thread->handle, increments the process-wide live_threads
+ * count, and stores *output -- all while the new thread is provably not
+ * yet running -- and only resumes it once that bookkeeping is committed.
+ * If the new thread could start running thread_entry() before that
+ * bookkeeping lands, and it happens to run to completion immediately (a
+ * trivial start routine, entirely plausible on real hardware racing a
+ * multi-instruction window), finish() would decrement live_threads before
+ * pthread_create()'s own increment ever executed -- undercounting a live
+ * thread by one, in the worst case racing live_threads down to 0 while
+ * the main thread is still running and triggering finish()'s `if (last)
+ * exit(0);` to tear down the whole process out from under its creator.
+ * This is a real ordering hazard, not an NT-only convenience: it applies
+ * identically here since CLONE_VM starts the child running concurrently,
+ * on a real separate CPU, the instant clone(2) returns in it. So this
+ * backend gives create_suspended a real primitive rather than passing
+ * create_suspended=0 from pthread_create() on this platform: clone(2) has
+ * no OS-level "start suspended" concept, but the same net effect -- the
+ * child provably cannot execute the caller's entry point until told to --
+ * is achieved by starting every clone()'d thread at a small trampoline
+ * (start_trampoline() below) that blocks on a manual-reset event
+ * (`gate`) the parent only sets from __plat_thread_resume(), once its own
+ * bookkeeping is done.
+ *
+ * `suspend_table` bridges __plat_thread_spawn()'s local `gate` object to
+ * the LATER, separate __plat_thread_resume(handle) call: the boxed pid+1
+ * handle this function returns carries no room for a second pointer, so
+ * the association is kept in this small fixed table (same technique
+ * src/process/linux/plat_process.c's own reap_cache uses for pid ->
+ * exit-status), keyed by tid and cleared once resumed.
  *
  * A SERIOUS CONFIRMED CONSEQUENCE of no CLONE_SETTLS: every spawned thread
  * shares the CALLING thread's TLS region, since aarch64 Linux TLS is
@@ -362,6 +416,64 @@ int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout, // NOLINT
  * program's linked TLS segment plus CLONE_SETTLS. Any code relying on
  * independent __thread storage across threads spawned here must know
  * about this first. */
+struct linux_thread_start {
+	__plat_thread_entry_t entry;
+	void *arg;
+	struct ntlibc_linux_sync *gate; /* NULL: run immediately, not suspended */
+};
+
+static unsigned __PLAT_APC_CALL start_trampoline(void *argument)
+{
+	struct linux_thread_start *start = argument;
+	__plat_thread_entry_t entry = start->entry;
+	void *arg = start->arg;
+	struct ntlibc_linux_sync *gate = start->gate;
+	/* Every field is copied out to locals before this waits (or, on the
+	 * un-suspended path, before entry() ever touches the stack): the
+	 * header lives at the LOW end of this thread's own mmap()'d stack
+	 * (see __plat_thread_spawn() below), which entry()'s own real stack
+	 * usage will eventually grow down into. */
+	if (gate) __plat_wait_one((__plat_handle_t)gate, 0, 0, 0);
+	return entry(arg);
+}
+
+#define SUSPEND_SLOTS 64
+struct suspend_slot { int tid; struct ntlibc_linux_sync *gate; };
+static struct suspend_slot suspend_table[SUSPEND_SLOTS];
+
+static int suspend_table_store(int tid, struct ntlibc_linux_sync *gate)
+{
+	int i, stored = -1;
+	__plat_fast_lock();
+	for (i = 0; i < SUSPEND_SLOTS; i++) {
+		if (!suspend_table[i].tid) {
+			suspend_table[i].tid = tid;
+			suspend_table[i].gate = gate;
+			stored = 0;
+			break;
+		}
+	}
+	__plat_fast_unlock();
+	return stored;
+}
+
+static struct ntlibc_linux_sync *suspend_table_take(int tid)
+{
+	int i;
+	struct ntlibc_linux_sync *gate = 0;
+	__plat_fast_lock();
+	for (i = 0; i < SUSPEND_SLOTS; i++) {
+		if (suspend_table[i].tid == tid) {
+			gate = suspend_table[i].gate;
+			suspend_table[i].tid = 0;
+			suspend_table[i].gate = 0;
+			break;
+		}
+	}
+	__plat_fast_unlock();
+	return gate;
+}
+
 int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
                         size_t stack_size, int create_suspended, // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; stack size and suspension flag have distinct roles
                         __plat_handle_t *out)
@@ -369,8 +481,8 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
 	size_t sz;
 	long stack_ret, pid, flags;
 	void *top;
-
-	if (create_suspended) { errno = ENOTSUP; return -1; }
+	struct linux_thread_start *start;
+	struct ntlibc_linux_sync *gate = 0;
 
 	sz = stack_size ? stack_size : DEFAULT_STACK_BYTES;
 	stack_ret = raw_syscall(SYS_mmap, 0, (long)sz, PROT_READ | PROT_WRITE,
@@ -378,25 +490,52 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
 	if (is_sys_error(stack_ret)) { errno = (int)-stack_ret; return -1; }
 	top = (void *)(stack_ret + (long)sz);
 
+	if (create_suspended) {
+		if (alloc_sync(&gate) < 0) {
+			int e = errno;
+			raw_syscall(SYS_munmap, stack_ret, (long)sz, 0, 0, 0, 0);
+			errno = e;
+			return -1;
+		}
+		gate->futex = 0;
+		gate->max = 0;
+		gate->kind = NTLIBC_LX_SYNC_EVENT;
+	}
+
+	/* The header start_trampoline() reads sits at the LOW end of the
+	 * mmap()'d region -- the stack grows down from `top`, so this is the
+	 * address furthest from where the stack pointer starts. */
+	start = (struct linux_thread_start *)stack_ret;
+	start->entry = entry;
+	start->arg = arg;
+	start->gate = gate;
+
 	flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | LINUX_SIGCHLD;
-	pid = __ntlibc_linux_clone(entry, top, flags, arg);
+	pid = __ntlibc_linux_clone(start_trampoline, top, flags, start);
 	if (pid < 0) {
 		int e = (int)-pid;
 		raw_syscall(SYS_munmap, stack_ret, (long)sz, 0, 0, 0, 0);
 		errno = e;
 		return -1;
 	}
+	if (gate && suspend_table_store((int)pid, gate) < 0) {
+		/* Table exhausted: the child is already running and blocked on
+		 * `gate` forever with no way for a future __plat_thread_resume()
+		 * to find it. Wake it immediately instead of leaving it stuck --
+		 * degrades create_suspended to a (rare, disclosed) no-op rather
+		 * than losing the thread. */
+		__plat_event_set((__plat_handle_t)gate);
+	}
 	/* Boxed as pid+1, echoing plat_fd.c's fd+1 encoding, but this is a
 	 * DIFFERENT handle namespace and the two must never be crossed. The
-	 * mmap()'d stack is intentionally leaked; no destroy path exists yet. */
+	 * mmap()'d stack (and, for a suspended create, the `gate` event) is
+	 * intentionally leaked; no destroy path exists yet. */
 	*out = (__plat_handle_t)(pid + 1);
 	return 0;
 }
 
 /* Boxed like __plat_thread_spawn() above (tid+1): gettid(2) never fails
- * and is stable for the thread's whole lifetime. See this file's banner
- * for why __plat_wait_one() cannot wait on a thread handle -- this
- * identifies the thread but cannot yet be used to block on its exit. */
+ * and is stable for the thread's whole lifetime. */
 #if defined(__aarch64__)
 #define SYS_gettid 178
 #elif defined(__x86_64__)
@@ -756,9 +895,21 @@ void __plat_named_mutant_release(__plat_handle_t lock)
 }
 
 /* ---- thread lifecycle, the remaining functions -----------------------
- * __plat_thread_resume() belongs to src/process/linux/plat_process.c
- * (a no-op: nothing this backend spawns is ever created suspended).
- */
+ * __plat_thread_resume() is the canonical implementation for both
+ * plat_thread.h's and plat_process.h's identically-named declaration
+ * (src/process/fork.c calls it too, with r.thread always
+ * __PLAT_HANDLE_NULL on this backend -- see src/process/linux/
+ * plat_process.c's own __plat_process_fork(); the lookup below simply
+ * finds nothing for that handle and returns success). It lives here,
+ * not in plat_process.c, because it needs __plat_thread_spawn()'s own
+ * suspend_table above. */
+int __plat_thread_resume(__plat_handle_t h)
+{
+	struct ntlibc_linux_sync *gate = suspend_table_take((int)((long)h - 1));
+	if (gate) __plat_event_set((__plat_handle_t)gate);
+	return 0;
+}
+
 #if defined(__aarch64__)
 #define SYS_kill_lx    129
 #define SYS_getpid_lx  172
