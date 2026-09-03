@@ -3,7 +3,9 @@
  *
  * Linux implementation of src/internal/plat_dirent.h -- see that header,
  * and src/mman/linux/plat_mem.c's own banner for the raw-syscall
- * discipline this file follows.
+ * discipline this file follows. Supports aarch64, x86_64 and i386 --
+ * see the SYS_getdents64/SYS_lseek #if block below for the real,
+ * genuinely-different-per-arch numbers.
  *
  * src/dirent/readdir.c's __dirstream_next() and src/dirent/getdents.c's
  * getdents() decode through the backend-neutral __plat_dir_decode_one()
@@ -38,19 +40,37 @@
  * so hosted include ownership and unused-include advice do not apply. */
 // NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
+#include <stddef.h> /* offsetof() -- this file's own __lx_dirent64 _Static_assert below */
 #include <string.h>
 #include "plat_dirent.h"
 #include "ownership_stubs.h"
 
-/* aarch64 Linux syscall numbers, confirmed against this host's own
- * asm-generic/unistd.h. lseek = 62, matching
- * src/unistd/linux/plat_fd.c's own SYS_lseek. */
+/* Linux syscall numbers -- aarch64 confirmed against this host's own
+ * asm-generic/unistd.h; x86_64/i386 confirmed against a real
+ * x86_64-linux-gnu glibc's own asm/unistd_64.h/unistd_32.h, two
+ * genuinely different tables from aarch64's (and each other), not a
+ * fixed offset. i386 has a real, direct getdents64(2) at 220 in this
+ * kernel ABI generation -- no legacy getdents(2) fallback needed. */
+#if defined(__aarch64__)
 #define SYS_getdents64 61
 #define SYS_lseek      62
+#elif defined(__x86_64__)
+#define SYS_getdents64 217
+#define SYS_lseek        8
+#elif defined(__i386__)
+#define SYS_getdents64 220
+#define SYS_lseek       19
+#else
+#error "plat_dirent.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
-/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
- * the call path -- see src/mman/linux/plat_mem.c's banner for why
- * `extern long syscall(long, ...)` is wrong here. */
+/* A minimal 6-argument raw syscall: no host libc in the call path --
+ * see src/mman/linux/plat_mem.c's banner for why `extern long
+ * syscall(long, ...)` is wrong here. Three per-arch bodies, same
+ * "own syscall table per file" discipline crt/linux/crt1.c and
+ * src/fcntl/linux/plat_fcntl.c already use: aarch64's `svc #0`,
+ * x86_64's `syscall`, i386's register-starved `int $0x80`. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
@@ -66,6 +86,47 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 		: "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#else
+#error "plat_dirent.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 static int is_sys_error(long ret)
 {
@@ -102,7 +163,25 @@ ssize_t __plat_dir_read(__plat_handle_t h, void *buf, size_t bufsize, int restar
  * member (d_name[]) rather than a fixed-size buffer: the compiler's own
  * natural (unpacked) layout for u64/u64/u16/u8/char[] already puts
  * d_name at offset 19 with no padding, matching the real kernel layout
- * exactly, so no explicit packing pragma is needed either. */
+ * exactly, so no explicit packing pragma is needed either.
+ *
+ * UNLIKE struct stat or struct sigaction elsewhere in this porting
+ * series (see src/process/linux/plat_process.c's/src/signal/linux/
+ * plat_signal.c's own banners for those two real per-arch layout
+ * fights), linux_dirent64 does NOT need a per-arch variant here: the
+ * kernel's own fs/readdir.c defines this struct once, shared verbatim
+ * by every architecture's getdents64(2) -- not a per-arch uapi/asm/
+ * header the way struct stat is. Confirmed by a second, independent
+ * real source beyond this file's own single-host oracle: this repo's
+ * own third_party/ltp/testcases/kernel/syscalls/getdents/getdents.h
+ * (upstream Linux Test Project, itself built and run across many real
+ * architectures) declares the identical struct linux_dirent64 -- u64
+ * d_ino, s64 d_off, unsigned short d_reclen, unsigned char d_type,
+ * char d_name[] -- with no #ifdef per architecture at all. All three
+ * of this field set's offsets (0/8/16/18/19) already fall on the
+ * natural alignment for every member on every one of aarch64/x86_64/
+ * i386 (nothing here needs 8-byte alignment past offset 8), so no
+ * arch introduces a padding gap the other two lack either. */
 struct __lx_dirent64 { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	unsigned long long d_ino;
 	long long d_off;
@@ -110,6 +189,15 @@ struct __lx_dirent64 { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-
 	unsigned char d_type;
 	char d_name[];
 };
+/* This struct's one real ABI-critical invariant, sanity-checked at
+ * compile time rather than trusted by inspection alone -- see
+ * src/process/linux/plat_process.c's own raw_stat_prefix _Static_assert
+ * for the identical discipline (turning silent compiler-padding
+ * surprises into a build failure instead of a decode bug): d_name must
+ * land at real kernel offset 19 on whichever of the three architectures
+ * above this file is compiled for. */
+_Static_assert(offsetof(struct __lx_dirent64, d_name) == 19,
+               "linux_dirent64 layout mismatch for this architecture");
 
 int __plat_dir_decode_one(const void *buf, size_t buflen, size_t *pos, struct __dirent_raw *out)
 {
