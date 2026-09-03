@@ -724,6 +724,44 @@ static void test_linux_fixture_erange_boundary(void)
 	fixture_env_clear();
 }
 
+/* getpwuid.html ERRORS [ERANGE], same boundary-pinning style as
+ * test_linux_fixture_erange_boundary() above but through getpwuid_r()
+ * rather than getpwnam_r() -- the two share fill_from_fields() in
+ * src/misc/linux/pwd.c but reach it through different scan_passwd()
+ * match modes (MATCH_UID vs MATCH_NAME), so this exercises the uid path
+ * for real rather than assuming the two are interchangeable. */
+static void test_linux_fixture_erange_boundary_uid(void)
+{
+	struct passwd pw, *result;
+	char buf[512];
+	size_t need;
+
+	fixture_write(FIX_PASSWD, "frank:x:5006:5006:Frank Example:/home/frank:/bin/fsh\n");
+	fixture_write(FIX_NSSWITCH, "passwd: files\n");
+	fixture_env_set();
+
+	need = strlen("frank") + 1 + strlen("/home/frank") + 1 + strlen("/bin/fsh") + 1;
+
+	result = (struct passwd *)0x1;
+	CHECK(getpwuid_r(5006, &pw, buf, need - 1, &result) == ERANGE);
+	CHECK(result == NULL);
+
+	result = NULL;
+	CHECK(getpwuid_r(5006, &pw, buf, need, &result) == 0);
+	CHECK(result == &pw);
+	if (result == &pw) {
+		CHECK(strcmp(pw.pw_name, "frank") == 0);
+		CHECK(pw.pw_gid == 5006);
+		CHECK(strcmp(pw.pw_shell, "/bin/fsh") == 0);
+	}
+
+	result = (struct passwd *)0x1;
+	CHECK(getpwuid_r(59999, &pw, buf, sizeof buf, &result) == 0);
+	CHECK(result == NULL);
+
+	fixture_env_clear();
+}
+
 /* This project's own nsswitch.conf gating: an admin who configures
  * "passwd" with no service this library implements gets an honest
  * "not found" for a user that genuinely IS in /etc/passwd -- the
@@ -780,6 +818,7 @@ int main(void)
 	test_linux_fixture_lookup();
 	test_linux_fixture_getpwent_sequence();
 	test_linux_fixture_erange_boundary();
+	test_linux_fixture_erange_boundary_uid();
 	test_linux_fixture_nsswitch_disables_files();
 	test_linux_fixture_missing_nsswitch_defaults_to_files();
 

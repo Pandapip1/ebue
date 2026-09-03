@@ -660,6 +660,48 @@ static void test_linux_fixture_erange_boundary(void)
 	fixture_env_clear();
 }
 
+/* getgrgid.html ERRORS [ERANGE], same boundary-pinning style as
+ * test_linux_fixture_erange_boundary() above but through getgrgid_r()
+ * rather than getgrnam_r() -- the two share fill_from_fields() in
+ * src/misc/linux/grp.c but reach it through different scan_group() match
+ * modes (MATCH_GID vs MATCH_NAME), so this exercises the gid path for
+ * real rather than assuming the two are interchangeable. */
+static void test_linux_fixture_erange_boundary_gid(void)
+{
+	struct group gr, *result;
+	char buf[512];
+	size_t need, namelen, pad, memberbytes;
+
+	fixture_write(FIX_GROUP, "frank:x:6006:gwen,hal\n");
+	fixture_write(FIX_NSSWITCH, "group: files\n");
+	fixture_env_set();
+
+	namelen = strlen("frank") + 1;
+	pad = (sizeof(char *) - ((uintptr_t)(buf + namelen) % sizeof(char *))) % sizeof(char *);
+	memberbytes = strlen("gwen,hal") + 1;
+	need = namelen + pad + 3 * sizeof(char *) + memberbytes;
+
+	result = (struct group *)0x1;
+	CHECK(getgrgid_r(6006, &gr, buf, need - 1, &result) == ERANGE);
+	CHECK(result == NULL);
+
+	result = NULL;
+	CHECK(getgrgid_r(6006, &gr, buf, need, &result) == 0);
+	CHECK(result == &gr);
+	if (result == &gr) {
+		CHECK(strcmp(gr.gr_name, "frank") == 0);
+		CHECK(gr.gr_mem[0] != NULL && strcmp(gr.gr_mem[0], "gwen") == 0);
+		CHECK(gr.gr_mem[1] != NULL && strcmp(gr.gr_mem[1], "hal") == 0);
+		CHECK(gr.gr_mem[2] == NULL);
+	}
+
+	result = (struct group *)0x1;
+	CHECK(getgrgid_r(69999, &gr, buf, sizeof buf, &result) == 0);
+	CHECK(result == NULL);
+
+	fixture_env_clear();
+}
+
 static void test_linux_fixture_nsswitch_disables_files(void)
 {
 	struct group *gr;
@@ -1446,6 +1488,7 @@ int main(int argc, char **argv)
 	test_linux_fixture_lookup();
 	test_linux_fixture_getgrent_sequence();
 	test_linux_fixture_erange_boundary();
+	test_linux_fixture_erange_boundary_gid();
 	test_linux_fixture_nsswitch_disables_files();
 	test_linux_fixture_missing_nsswitch_defaults_to_files();
 #endif
