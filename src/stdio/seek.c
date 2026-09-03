@@ -34,20 +34,9 @@ int fseeko(FILE *f, off_t off, int whence)
 		}
 		off -= (off_t)adjust;
 	}
-	/* Seek FIRST, discard the buffered read-ahead only once it has
-	 * succeeded.  fseek.html: on failure "the file offset ... shall
-	 * remain unchanged", and ftello() reconstructs the logical position
-	 * as the underlying offset minus whatever is still unread in the
-	 * buffer -- so throwing the buffer away before a seek that then
-	 * fails loses exactly the term that makes that reconstruction
-	 * correct, and ftell() starts reporting the read-ahead point.
-	 *
-	 * Reachable since fmemopen() began rejecting a seek past the end of
-	 * a fixed buffer: fmemopen(buf, 10, "r+"), read to position 5, then
-	 * fseek(f, 6, SEEK_CUR) is refused -- and ftell() answered 10, the
-	 * point __fill() had read ahead to, instead of the unchanged 5.
-	 * Nothing has moved when the seek fails, so nothing needs
-	 * discarding. */
+	/* Seek first, discard the buffered read-ahead only once it succeeds:
+	 * on failure the offset must remain unchanged, and ftello() needs the
+	 * unread buffer contents to reconstruct the logical position. */
 	r = __file_seek(f, off, whence);
 	if (r < 0) return -1;
 	f->rpos = f->rend = 0;

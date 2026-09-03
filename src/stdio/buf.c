@@ -1,16 +1,12 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The buffering layer: one buffer per FILE, used for reading ahead or
- * for collecting bytes to write, never both at once.  Switching
- * direction flushes a pending write, or seeks back over bytes read
- * ahead but not yet consumed by the caller -- the same trick fseek
- * uses, since "the caller asked to write now" is exactly the situation
- * fseek normally handles.
+ * One buffer per FILE, used for reading ahead or writing, never both at
+ * once; switching direction flushes a pending write or seeks back over
+ * unconsumed read-ahead, the same trick fseek uses.
  *
  * __file_read/__file_write/__file_seek are the one place a fd and a
- * fmemopen/open_memstream block look the same: everything above this
- * file only ever touches a FILE through them.
+ * fmemopen/open_memstream block look the same.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
@@ -45,26 +41,11 @@ ssize_t __file_read(FILE *f, void *buf withtok(writable_span(n)), size_t n)
 	return read(f->fd, buf, n);
 }
 
-/* Publish an open_memstream()/open_wmemstream() buffer to the caller's
- * pointer and size.
- *
- * open_memstream.html: "the pointer ... and the size ... shall be
- * updated" after a successful fflush() or fclose(), and *sizep is "the
- * smaller of the current buffer length and the number of characters
- * between the beginning of the buffer and the current file position
- * indicator".
- *
- * BOTH HALVES OF THAT WERE WRONG.  The size stored was mem_len alone --
- * the high-water length -- so after seeking BACKWARD *sizep kept
- * describing bytes past the position, and it was only ever written from
- * the write path, so an fflush() that followed a seek published nothing
- * at all.  Measured against glibc: write "hello world", seek to 5,
- * fflush -> glibc reports 5, this reported 11.
- *
- * open_wmemstream.html: sizep is "the number of wide characters", so the
- * byte count is divided down.  The minimum is taken FIRST and divided
- * after, because both operands are byte counts; dividing first would
- * round each independently. */
+/* Publishes an open_memstream()/open_wmemstream() buffer to the caller's
+ * pointer and size after fflush()/fclose(). *sizep is min(mem_pos,
+ * mem_len), not mem_len alone, so a seek-then-fflush reports the position
+ * and not the high-water mark. The min is taken before dividing for the
+ * wide case since both operands are byte counts. */
 static void mem_publish(FILE *f)
 {
 	size_t n;
@@ -81,20 +62,11 @@ ssize_t __file_write(FILE *f, const void *buf withtok(readable_span(n)), size_t 
 	if (f->is_mem) {
 		size_t avail;
 		size_t need;
-		/* The terminator this block keeps past mem_len is one null
-		 * BYTE for a byte stream and one null WIDE CHARACTER for an
-		 * open_wmemstream() one, which is why it is a width and not a
-		 * literal 1: mem_* are byte counts in both cases (so the growth
-		 * arithmetic here is shared), and only the terminator and the
-		 * reported size differ. */
+		/* mem_* stay byte counts even for open_wmemstream(), so term is
+		 * the terminator width (a wide NUL or a byte NUL). */
 		size_t term = f->wmem ? sizeof(wchar_t) : 1;
-		/* fmemopen.html, append modes: the position is reset to the end
-		 * of the contents before each write, so a write goes there and
-		 * not to wherever the caller last seeked.  Without this,
-		 * fmemopen(buf, 10, "a+") on "hello" followed by a seek to 0
-		 * and a 3-byte write produced "h104o" where "hello104" is
-		 * required -- the write landed at the seek position and
-		 * overwrote live content. */
+		/* fmemopen append mode resets the position to the end of the
+		 * contents before every write, regardless of the last seek. */
 		if (f->mem_append) f->mem_pos = f->mem_len;
 		if (f->mem_dynamic) {
 			if (f->mem_pos > (size_t)LLONG_MAX ||
@@ -171,13 +143,8 @@ long long __file_seek(FILE *f, long long off, int whence)
 		}
 		pos = base + off;
 		if (pos < 0) { errno = EINVAL; return -1; }
-		/* fmemopen.html: "An attempt to seek a memory buffer stream to
-		 * a negative position or to a position larger than the buffer
-		 * size shall fail."  A FIXED buffer has a size to exceed; an
-		 * open_memstream() buffer grows on demand, so only the negative
-		 * half of that clause applies to it and mem_dynamic is exempt
-		 * here.  Without this an fmemopen(buf, 10, "r+") stream would
-		 * seek to 11 and report ftell() == 11 for a ten-byte buffer. */
+		/* A fixed fmemopen() buffer rejects a seek past its size; a
+		 * growable open_memstream() one has no such ceiling. */
 		if (!f->mem_dynamic && (unsigned long long)pos > f->mem_size) {
 			errno = EINVAL;
 			return -1;
@@ -217,22 +184,15 @@ int __fflush_locked(FILE *f)
 	}
 	f->wpos = 0;
 
-	/* fflush.html DESCRIPTION: for a stream open for reading, "the file
-	 * offset of the underlying open file description shall be set to
-	 * the file position of the stream, and any [ungetc()] characters
-	 * ... that have not subsequently been read from the stream shall be
-	 * discarded (without further changing the file offset)." __fill()
-	 * may have read ahead of where the caller has actually consumed, so
-	 * the fd has to be seeked back by exactly that much. A memory-backed
-	 * stream (fmemopen/open_memstream) has no separate fd offset -- its
-	 * "position" is mem_pos, which read-ahead never moves apart from the
-	 * stream's own view -- so there is nothing to resync there. */
+	/* fflush() on a readable stream must seek the fd back over whatever
+	 * __fill() read ahead of what the caller actually consumed; a
+	 * memory-backed stream has no separate fd offset to resync. */
 	if (f->readable) {
 		long long ahead = (long long)(f->rend - f->rpos);
 		if (ahead && !f->is_mem) {
 			if (__file_seek(f, -ahead, SEEK_CUR) < 0) {
-				/* A non-seekable stream has no underlying offset to
-				 * resynchronise.  Its buffered input remains live. */
+				/* Non-seekable: no underlying offset to resync; the
+				 * buffered input remains live. */
 				if (errno == ESPIPE) {
 					mem_publish(f);
 					return 0;
@@ -244,10 +204,8 @@ int __fflush_locked(FILE *f)
 		f->nwunget = 0;
 		f->rpos = f->rend = 0;
 	}
-	/* "shall be updated ... after a successful fflush() or fclose()" --
-	 * and a seek since the last write may have moved the position, which
-	 * is what *sizep is measured against, so this cannot be left to the
-	 * write path alone. */
+	/* A seek since the last write may have moved the position that
+	 * *sizep is measured against, so this can't be left to the write path. */
 	mem_publish(f);
 	return 0;
 }
@@ -300,11 +258,8 @@ int fflush(FILE *f)
 
 int setvbuf(FILE *__restrict f, char *__restrict buf, int mode, size_t size) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
-	/* setvbuf.html RETURN VALUE: "Otherwise, it shall return a non-zero
-	 * value if an invalid value is given for type ...".  _IOLBF is a
-	 * real mode here, not a synonym for full buffering -- rw.c flushes
-	 * on '\n' when bufmode == _IOLBF -- so all three of _IOFBF/_IOLBF/
-	 * _IONBF are genuinely honored and anything else is rejected. */
+	/* _IOLBF is a real mode, not a synonym for full buffering: rw.c
+	 * flushes on '\n' when bufmode == _IOLBF. */
 	if (mode != _IOFBF && mode != _IOLBF && mode != _IONBF) {
 		errno = EINVAL;
 		return -1;

@@ -110,11 +110,9 @@ FILE *fdopen(int fd, const char *mode)
 	f = __file_new(fd, flags);
 	if (!f) return 0;
 	if ((flags & O_APPEND) && (flags & O_ACCMODE) != O_RDONLY) {
-		/* fdopen(...,"a") establishes append mode even when the caller
-		 * opened the descriptor without O_APPEND.  Keep the shared fd
-		 * description in that mode so writes after an intervening seek
-		 * still append, and seed the stream position from the current end
-		 * so ftello() can include buffered, unflushed output. */
+		/* fdopen(...,"a") establishes append mode even if the fd was
+		 * opened without O_APPEND; seed the position from the current end
+		 * so ftello() includes buffered output. */
 		desc->flags |= O_APPEND;
 		if (fseek(f, 0, SEEK_END) < 0) {
 			__file_free(f);
@@ -203,50 +201,18 @@ void flockfile(FILE *f) { (void)f; }
 int ftrylockfile(FILE *f) { (void)f; return 0; }
 void funlockfile(FILE *f) { (void)f; }
 
-/* exit() calls this to flush and close everything still open, the way a
- * real process shutdown (or _exit after a clean run) is expected to
- * leave nothing buffered unwritten.
+/* exit() calls this to flush and close everything still open.
  *
- * WHY THE RE-ENTRANCY GUARD.  This is not defensive programming; it
- * closes a measured infinite recursion that ended in a fault.  A flush
- * here can itself raise a signal whose default action is to terminate,
- * and the terminate path comes straight back through this function:
- *
- *     fflush(f) -> write() -> STATUS_PIPE_BROKEN
- *               -> __raise_internal(SIGPIPE)          [src/unistd/write.c]
- *               -> default action is terminate        [src/signal/signal.c]
- *               -> __stdio_exit()                     [here]
- *               -> fflush(f) ...
- *
- * and the second pass re-flushes the SAME stream, because the buffer it
- * is trying to drain was never drained -- the write that would have
- * emptied it did not return.  Measured on a pipe whose read end had
- * closed: roughly 1 MB of stack consumed, then EXCEPTION_STACK_OVERFLOW
- * (0xC00000FD).  Worse than the fault itself, the process then died
- * reporting exit code 0 -- the overflow destroys the
- * __ENCODE_SIGNAL_EXIT(SIGPIPE) that should have been reported -- so a
- * crashed program looked to its parent like a successful one.  (A plain
- * unbuffered SIGPIPE death from the same library exits 13, correctly.)
- *
- * The guard is deliberately on the WHOLE function rather than per-FILE.
- * Once a fatal signal is being delivered the process is ending; flushing
- * what we can once and then getting out of the way is the whole
- * contract, and a second entry has, by construction, nothing new to
- * flush that the first entry is not already inside of.  A per-FILE
- * "flush in progress" flag would let the remaining streams still be
- * flushed after a broken one, which is strictly more output but also a
- * second place for this same cycle to hide; if that is ever wanted it
- * should come with its own test for the two-broken-pipes case.
- *
- * Note this leaves the streams AFTER the offending one unflushed on the
- * signal path.  That is a deliberate loss and not a regression in
- * behaviour anyone could have relied on: the alternative on that path
- * was a stack overflow, which flushed nothing at all.  It is also closer
- * to POSIX, where death by an unhandled signal does not flush stdio.
- *
- * The vectored exception handler calls this too (src/signal/signal.c),
- * which is how the stack-overflow handler used to re-enter the same
- * cycle with no stack left; the guard covers that call site as well. */
+ * The re-entrancy guard closes a measured infinite recursion: a flush
+ * hitting a broken pipe raises SIGPIPE, whose default terminate action
+ * calls back into __stdio_exit() (also reached via the vectored exception
+ * handler in src/signal/signal.c), which re-flushes the same undrained
+ * stream. On a closed pipe this consumed the stack (EXCEPTION_STACK_OVERFLOW)
+ * and clobbered the encoded SIGPIPE exit status, so a crashed process
+ * reported exit code 0 instead of 13. The guard covers the whole function,
+ * not per-FILE, since a second entry has nothing new to flush that the
+ * first isn't already inside of; this deliberately leaves later streams
+ * unflushed on that path, which is still closer to POSIX than the crash. */
 void __stdio_exit(void)
 {
 	static int in_progress;

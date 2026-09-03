@@ -222,28 +222,10 @@ ssize_t getdelim(char **__restrict buf, size_t *__restrict n, int delim, FILE *_
 	char *b;
 	int c;
 
-	/* clang-analyzer-unix.Malloc (clang-tidy 21 only; the pinned 18 does
- * not do this) reports four findings across getdelim() and getline()
- * that its own trace contradicts.  Every one begins with the same two
- * notes on the *same* source location -- getline()'s `return
- * getdelim(...)`: "Memory is released", and then "Calling 'getdelim'".
- * The analyzer applies its conservative summary of the call, in which
- * the callee may free `*buf`, and then *also* inlines that same call
- * and walks the body -- so the one realloc that legitimately frees the
- * caller's block is counted twice, and everything downstream of it is
- * use-after-free.  One call cannot release `*buf` twice.
- *
- * It is visible here and not on main only because removing fgetln()
- * from this translation unit changed what the analyzer had budget to
- * explore; the code below is unchanged in that respect.  Suppressed per
- * site rather than over a broad suppression region, so unix.Malloc still
- * checks the rest of this function -- it is the check most likely to
- * catch a real defect in it.
- */
-
-/* getdelim.html ERRORS: "[EINVAL] lineptr or n is a null pointer."
-	 * The rest of this function stores through both unconditionally, so
-	 * the check has to come first rather than being half-applied. */
+	/* clang-tidy 21's unix.Malloc double-counts the one legitimate realloc
+	 * in getline()'s inlined call to getdelim() as a double-free; one call
+	 * cannot release `*buf` twice.  Suppressed per site so the rest of the
+	 * function still gets checked. */
 	if (!buf || !n) { errno = EINVAL; return -1; }
 	cap = *buf ? *n : 0;
 	b = *buf;
