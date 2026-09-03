@@ -75,10 +75,6 @@ static int gbuf_push(struct gbuf *b, char c)
 	return 0;
 }
 
-/* s is required: `s[i]` is indexed directly whenever the loop runs, and
- * every real call site passes a real substring pointer regardless of
- * length. b is left unmarked -- only ever forwarded into gbuf_push(),
- * which states its own contract above. */
 static int gbuf_push_n(struct gbuf *b, const char *s, size_t n)
     __attribute__((nonnull(2)));
 static int gbuf_push_n(struct gbuf *b, const char *s, size_t n)
@@ -124,13 +120,7 @@ static char *xstrdup(const char *s)
  * containing '(' '{' '`' etc. can't desync the count. Known, accepted
  * gap: a *double*-quoted region inside one of these (e.g. the classic
  * "$(echo "hi")") is not specially handled, since scan_word's Q_DOUBLE
- * state has no matching awareness of command substitution either --
- * out of scope for this bounded fix, same as the double-quote branch's
- * other limits. */
-/* pp is required by all four copy_*quoted()/copy_balanced() helpers
- * below: each dereferences `*pp` unconditionally as its first statement.
- * b is left unmarked in each -- only ever forwarded into gbuf_push(),
- * which states its own contract above. */
+ * state has no matching awareness of command substitution either. */
 static int copy_squoted(const char **pp, struct gbuf *b) __attribute__((nonnull(1)));
 static int copy_squoted(const char **pp, struct gbuf *b)
 {
@@ -224,12 +214,9 @@ struct token {
 	char *text;   /* T_WORD: raw word text, __malloc'd, owned by caller */
 	int ionum;    /* T_IONUM: the parsed value */
 	/* Where this token begins in the source `__sh_parse()` was handed.
-	 * Only XCU 2.9.5's function definition needs it -- the body is kept
-	 * as raw source text (sh.h's sh_command.func_text says why), and
-	 * "raw source text" has to mean an exact substring of the program,
-	 * not a reconstruction.  Recorded for every token because the
-	 * extent is delimited by the token *after* the body, which can be
-	 * any of them. */
+	 * Only function definitions need it -- func_text must be an exact
+	 * substring of the program, delimited by the token *after* the body
+	 * (which can be any of them), so every token records this. */
 	const char *start;
 };
 
@@ -256,12 +243,11 @@ struct lexer {
 	const char *p;
 	const char *tokstart;   /* where the token being returned began */
 	struct pending_hd *pending_head, *pending_tail;
-	/* Bumped once per "<<"/"<<-" redirection registered (parse_redirect()
-	 * below), and never decremented -- including by drain_heredocs(),
-	 * unlike pending_head/pending_tail. parse_funcdef() needs exactly
-	 * this: "did the body contain a here-document at all", which
-	 * pending_head cannot answer once the very newline that ends the
-	 * body's line has already drained it (see the long comment there). */
+	/* Bumped once per "<<"/"<<-" redirection registered, never
+	 * decremented (unlike pending_head/pending_tail). parse_funcdef()
+	 * needs "did the body contain a here-document at all", which
+	 * pending_head can't answer once drained by the newline ending the
+	 * body's line. */
 	unsigned long hd_seen;
 	int err;
 	char errbuf[256];
@@ -280,10 +266,6 @@ static void format_parse_error(char *dst, size_t size, const char *fmt, va_list 
 	}
 }
 
-/* lx is required: `if (!lx->err && lx->errbuflen)` is this function's
- * first statement. fmt is left unmarked -- only touched (via vsnprintf())
- * inside that conditional block, and every real call site passes a
- * literal format string anyway. */
 static void lex_errf(struct lexer *lx, const char *fmt, ...) __attribute__((nonnull(1)));
 static void lex_errf(struct lexer *lx, const char *fmt, ...)
 {
@@ -301,12 +283,6 @@ static void lex_errf(struct lexer *lx, const char *fmt, ...)
  * exactly the processing XCU 2.7.4 requires before comparing candidate
  * terminator lines. *quoted is set if any quoting/escaping was present
  * at all, which per 2.7.4 disables expansions within the body. */
-/* raw and quoted are both required: `while (*p)` (p aliases raw)
- * dereferences raw at least once unconditionally on entry, even for an
- * empty string, and `*quoted = 0;` is this function's first statement.
- * drain_heredocs() below is the only caller, always with a real
- * heredoc-delimiter word and the address of a real redir's own
- * heredoc_quoted field. */
 static char *strip_delim(const char *raw, int *quoted) __attribute__((nonnull(1, 2)));
 static char *strip_delim(const char *raw, int *quoted)
 {
@@ -483,11 +459,9 @@ static struct token next_raw_token(struct lexer *lx)
 		if (c == ' ' || c == '\t') { lx->p++; continue; }
 		if (c == '\\' && lx->p[1] == '\n') { lx->p += 2; continue; }
 		if (c == '#') { while (*lx->p && *lx->p != '\n') lx->p++; continue; }
-		/* Past every `continue` above, so lx->p is now the first
-		 * character of a real token rather than of the blanks, the
-		 * escaped newline or the comment in front of it.  Recorded on
-		 * the lexer instead of threaded through mktok()'s dozen call
-		 * sites; advance() copies it onto the token it just got. */
+		/* Past every `continue` above, so lx->p is the first character of
+		 * a real token. Recorded on the lexer instead of threaded through
+		 * mktok()'s dozen call sites; advance() copies it onto the token. */
 		lx->tokstart = lx->p;
 		if (c == 0) {
 			if (lx->pending_head && drain_heredocs(lx)) return mktok(T_ERROR);
@@ -530,20 +504,13 @@ static struct token next_raw_token(struct lexer *lx)
 			alldig = len > 0;
 			for (i = 0; i < len; i++) if (!isdigit((unsigned char)w[i])) { alldig = 0; break; }
 			if (alldig && (*lx->p == '<' || *lx->p == '>')) {
-				/* 2.10.1 puts no length on an IO_NUMBER ("made up
-				 * solely of digits" immediately followed by '<' or
-				 * '>'), but the value has to end up in a redirection's
-				 * `fd`, an int, and a digit string that does not fit
-				 * one is not a file descriptor any redirection could
-				 * name.  Accumulating it unchecked was signed overflow
-				 * -- undefined behaviour, and where it did not trap it
-				 * handed the redirection whatever the wrap produced,
-				 * possibly negative, as its fd.  So the multiply is
-				 * guarded and an out-of-range digit string is
-				 * diagnosed here rather than silently wrapped, or
-				 * silently demoted to a WORD (which would turn
-				 * "2147483648<x" into a command *named* 2147483648 --
-				 * a different program, accepted without a word). */
+				/* 2.10.1 puts no length limit on an IO_NUMBER, but the value
+				 * has to fit a redirection's `fd`, an int. Accumulating it
+				 * unchecked was signed overflow (UB); the multiply is
+				 * guarded and an out-of-range digit string is diagnosed
+				 * here rather than wrapped or demoted to a WORD (which
+				 * would turn "2147483648<x" into a command *named*
+				 * 2147483648, a different program). */
 				int v = 0, ovf = 0;
 				for (i = 0; i < len; i++) {
 					int d = w[i] - '0';
@@ -579,17 +546,12 @@ static void advance(struct parser *p)
 {
 	if (p->cur.type == T_WORD) { __free(p->cur.text); p->cur.text = 0; }
 	if (p->had_error) {
-		/* Leaving p->cur as a T_WORD whose text has just been freed and
-		 * NULLed breaks the invariant every T_WORD consumer relies on --
-		 * is_resword() strcmp()s it, is_name() walks it, xstrdup() takes
-		 * its length -- so an error would arm a null dereference for any
-		 * caller that inspects the token before it checks had_error.
-		 * Every current caller does check first, which is why this has
-		 * never fired; that is a property of the callers, not of the
-		 * token, and there are now several places that ask "is this
-		 * word a reserved word?" before doing anything else.  Handing
-		 * back T_ERROR keeps the invariant true at the source instead of
-		 * relying on each new caller to remember. */
+		/* Leaving p->cur as a T_WORD whose text was just freed and NULLed
+		 * would arm a null dereference for any caller (is_resword(),
+		 * is_name(), xstrdup(), ...) that inspects the token before
+		 * checking had_error. Handing back T_ERROR keeps that invariant
+		 * true at the source instead of relying on every caller to check
+		 * first. */
 		p->cur = mktok(T_ERROR);
 		return;
 	}
@@ -683,23 +645,18 @@ static struct sh_redir *parse_redir(struct parser *p)
 
 /* ---- compound commands (XCU 2.9.4) -----------------------------------
  *
- * `if`, `while`, `until` and `for` all have the shape 2.9.4 opens by
- * describing -- "each of these compound commands has a reserved word or
- * control operator at the beginning, and a corresponding terminator
- * reserved word or operator at the end" -- so the machinery is built
- * once: a set of reserved words that end the compound-list currently
- * being parsed, and one parse_list() that stops on any of them.
- * '(' ')' and '{' '}' were already two hard-coded flags of exactly this
- * kind and become two more bits of the same mask.
+ * `if`, `while`, `until` and `for` all have a reserved word/operator at
+ * each end (2.9.4), so the machinery is built once: a set of reserved
+ * words that end the compound-list currently being parsed, and one
+ * parse_list() that stops on any of them. '(' ')' and '{' '}' become two
+ * more bits of the same mask.
  *
  * Reserved words are recognised the same way `!`, `{` and `}` already
- * were (sh.h's banner): a bare, unquoted WORD token whose text is
- * exactly the word, and only where the grammar expects one.  That is
- * XCU 2.10.1's rule 1, including its note -- "because at this point
- * <quotation-mark> characters are retained in the token, quoted strings
- * cannot be recognized as reserved words" -- which falls out for free
- * here, since parse.c keeps word text raw, so `"fi"` is the four-
- * character token "\"fi\"" and simply is not the word `fi`. */
+ * are: a bare, unquoted WORD token whose text is exactly the word, only
+ * where the grammar expects one (XCU 2.10.1 rule 1). Since parse.c keeps
+ * word text raw, `"fi"` is the token "\"fi\"" and simply isn't the word
+ * `fi`, satisfying 2.10.1's "quoted strings cannot be recognized as
+ * reserved words" for free. */
 #define ST_RPAREN 0x01
 #define ST_RBRACE 0x02
 #define ST_THEN   0x04
@@ -711,11 +668,6 @@ static struct sh_redir *parse_redir(struct parser *p)
 static struct sh_list *parse_list(struct parser *p, unsigned stops);
 
 /* A bare, unquoted WORD token whose text is exactly `w`. */
-/* p is required: `p->cur.type == T_WORD` is dereferenced unconditionally
- * in the return expression's left operand (evaluated regardless of its
- * truth, by C's own evaluation rules). w is left unmarked -- only
- * reached via strcmp() and only when the left operand is already true
- * (short-circuit `&&`), never dereferenced by this function itself. */
 static int is_resword(struct parser *p, const char *w) __attribute__((nonnull(1)));
 static int is_resword(struct parser *p, const char *w)
 {
@@ -750,35 +702,25 @@ static int at_group_stop(struct parser *p, unsigned stops)
 	return 0;
 }
 
-/* Reserved words that can only ever appear *inside* a construct, never
- * at the start of a command.  Seeing one in command position means the
- * program is malformed -- `fi` with no `if`, a `then` the parser has
- * already walked past -- and XCU 2.10.1 rule 1 says the token
- * identifier for the reserved word results there, i.e. it is a syntax
- * error rather than a command named "fi".  Diagnosing it here is what
- * keeps script.c's refuse-before-anything-runs preflight property
- * intact for these words even though they are implemented and so are
- * not on its reserved-word refusal list: without this they would fall
- * through to a simple command, fail PATH lookup, and exit 127 with a
- * true statement about a fiction.
+/* Reserved words that can only ever appear *inside* a construct, never at
+ * the start of a command. Seeing one in command position (`fi` with no
+ * `if`, a `then` already walked past) means the program is malformed --
+ * XCU 2.10.1 rule 1 makes it a syntax error rather than a command named
+ * "fi". Diagnosing it here keeps script.c's refuse-before-anything-runs
+ * property intact for words that, being implemented, aren't on its
+ * reserved-word refusal list.
  *
- * `case`/`esac` are deliberately absent: the `case` construct is not
- * implemented yet, so `case` still lexes as an ordinary WORD and
- * script.c's preflight still refuses it by name with a message that
- * says so. */
+ * `case`/`esac` are deliberately absent: `case` isn't implemented yet, so
+ * it still lexes as an ordinary WORD and script.c's preflight refuses it
+ * by name instead. */
 static const char *const misplaced_reswords[] = {
 	"then", "else", "elif", "fi", "do", "done", "in", 0
 };
 
-/* Every sh_command allocation goes through here.  A kind that forgets
- * to initialise one of its variant's fields reads uninitialised memory
- * in free.c's per-kind walk long before anything notices in the
- * executor -- so there is exactly one place that decides what an unset
- * field is.  Zeroing the whole union rather than field-by-field is what
- * keeps this correct across parse.c's own in-place kind mutations
- * (SUBSHELL/BRACE/FUNCDEF): whichever variant a later `c->kind = ...`
- * switches to, its fields already read as zero without this function
- * having to know about the switch. */
+/* Every sh_command allocation goes through here, zeroing the whole union
+ * rather than field-by-field: whichever variant a later in-place
+ * `c->kind = ...` (SUBSHELL/BRACE/FUNCDEF) switches to, its fields
+ * already read as zero without this function needing to know about it. */
 static struct sh_command *new_command(struct parser *p, enum sh_cmd_kind kind)
 {
 	struct sh_command *c = __malloc(sizeof *c);
@@ -944,36 +886,26 @@ static struct sh_command *parse_command(struct parser *p);
  *
  *   fname ( ) compound-command [ io-redirect ... ]
  *
- * Called with `fname` already consumed (the caller owns the string and
- * hands ownership over on success) and p->cur sitting on the '('.
- * `cmd` is the sh_command the caller already allocated as
- * SH_CMD_SIMPLE; this converts it in place, which is what lets the
- * caller fall through to the ordinary simple-command loop when the
- * lookahead turns out not to be a definition after all.
+ * Called with `fname` already consumed and p->cur sitting on the '('.
+ * `cmd` is the sh_command the caller already allocated as SH_CMD_SIMPLE;
+ * this converts it in place, letting the caller fall through to the
+ * ordinary simple-command loop when the lookahead turns out not to be a
+ * definition.
  *
  * Two things are checked here rather than deferred:
- *
- *  - fname must not be a 2.14 special built-in: "the application shall
- *    ensure that it is a name (see XBD Name) and that it is not the
- *    name of a special built-in utility".  It has to be a *parse*
- *    error, because 2.9.1's search order runs special built-ins at step
- *    1a and functions only at step 1c -- so a `set() { ... }` that was
- *    accepted could never be called, and a definition that silently
- *    never takes effect is precisely the undiagnosable wrongness
- *    script.c's refusal preflight exists to prevent.  A *regular* built-in
- *    is fine and is not checked: 1c beats 1d, so `test() { ... }`
+ *  - fname must not be a special built-in: this has to be a *parse*
+ *    error, since 2.9.1 runs special built-ins at step 1a and functions
+ *    only at 1c, so an accepted `set() { ... }` could never be called.
+ *    A *regular* built-in is fine: 1c beats 1d, so `test() { ... }`
  *    legitimately shadows this shell's `test`.
- *  - the body must be a compound command.  2.9.5's grammar admits
- *    nothing else, and `f() echo hi` would otherwise be silently
- *    accepted as something the re-parse at call time could not run.
+ *  - the body must be a compound command; 2.9.5's grammar admits nothing
+ *    else.
  *
- * The body is then captured as the source text between the token that
- * starts it and the token that follows it -- see sh.h's func_text.  It
- * is parsed first, and the resulting AST thrown away: parsing is how
- * the extent is found (the parser is the only thing that knows where a
- * compound command ends), and validating the body at definition time
- * rather than at first call is what keeps a syntax error inside a
- * function from surfacing halfway through a build script. */
+ * The body is captured as the source text between the starting and
+ * following token (sh.h's func_text). It's parsed first purely to find
+ * that extent, then the AST is thrown away: validating at definition
+ * time keeps a syntax error inside a function from surfacing halfway
+ * through a build script. */
 // NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_command *parse_funcdef(struct parser *p, struct sh_command *cmd, char *fname)
 {
@@ -982,12 +914,10 @@ static struct sh_command *parse_funcdef(struct parser *p, struct sh_command *cmd
 	const char *start, *end;
 	unsigned long hd0;
 
-	/* Flipped here, before any u.funcdef field is written below, rather
-	 * than once the definition is fully parsed: cmd arrives as
-	 * SH_CMD_SIMPLE with an all-zero union (new_command()), and every
-	 * `goto fail` between here and the end reaches free_command() -- so
-	 * kind must already name the variant whose fields (possibly still
-	 * zero, possibly partially filled) that free will read. */
+	/* Flipped here, before any u.funcdef field is written, since every
+	 * `goto fail` between here and the end reaches free_command(), which
+	 * must already see the variant whose (possibly still-zero) fields it
+	 * will read. */
 	cmd->kind = SH_CMD_FUNCDEF;
 
 	advance(p);   /* '(' */
@@ -1018,56 +948,33 @@ static struct sh_command *parse_funcdef(struct parser *p, struct sh_command *cmd
 	body = parse_command(p);
 	if (!body) goto fail;      /* perr() already issued */
 
-	/* The body was parsed to find its extent, and is normally thrown
-	 * away here -- but not when it contains a here-document, for two
-	 * independent reasons that both need it kept alive.
+	/* The body was parsed to find its extent, and is normally thrown away
+	 * here -- but not when it contains a here-document, for two
+	 * independent reasons found by fuzz/fuzz_shparse.c that both need it
+	 * kept alive:
 	 *
-	 * 1. Memory safety.  A `<<` inside the body registers a `struct
-	 *    pending_hd` holding a borrowed pointer to that redirection
-	 *    (see parse_redirect()), and the queue is drained at the next
-	 *    <newline> or at EOF, not at the end of the body.  So whenever
-	 *    the token *after* the body is neither of those -- `|`, `&`,
-	 *    `&&`, `||`, all of which parse_command() leaves for the
-	 *    caller -- the entry is still live at this point, and freeing
-	 *    the body here left drain_heredocs() reading `h->redir->word`
-	 *    out of freed memory.  Found by fuzz/fuzz_shparse.c, whose
-	 *    report named parse.c's drain (`f()(<<E)&` is the ten-byte
-	 *    reduction, and `f()( a <<E )|b` with a real terminator line
-	 *    reproduces it just as well).
+	 * 1. Memory safety: a `<<` inside the body registers a pending_hd
+	 *    holding a borrowed pointer to that redirection, drained at the
+	 *    next <newline> or EOF, not at the end of the body. If the token
+	 *    after the body is `|`/`&`/`&&`/`||` instead, the entry is still
+	 *    live, and freeing the body here left drain_heredocs() reading
+	 *    freed memory (`f()(<<E)&`).
+	 * 2. Reprint correctness: when the token after the body IS that
+	 *    <newline>/EOF, the peek that finds it also drains the heredoc
+	 *    first, so print_command()'s FUNCDEF case reprints func_text
+	 *    containing a bare "<<DELIM" with no body/terminator -- those live
+	 *    only in the about-to-be-freed redir. Reparsing then swallows
+	 *    whatever follows in the enclosing list as the phantom heredoc's
+	 *    body (issues #4/#7).
 	 *
-	 * 2. Reprint correctness.  When the token after the body IS the
-	 *    line's <newline> (or EOF), that very peek is what drains the
-	 *    heredoc (next_raw_token() drains on producing T_NEWLINE/T_EOF)
-	 *    -- so by the time this line runs, pending_head is *already*
-	 *    empty again even though a here-document was genuinely part of
-	 *    the body. print_command()'s FUNCDEF case reprints func_text
-	 *    verbatim, which still contains the bare "<<DELIM" operator
-	 *    text with no body or terminator line after it -- those live
-	 *    only in the (about to be freed) redir this function's caller
-	 *    never sees again. Reparsing that output then reads whatever
-	 *    happens to follow, in the ENCLOSING list, as this phantom
-	 *    heredoc's body, silently swallowing it (or erroring if no
-	 *    line ever matches the delimiter) -- the fixed point print.c's
-	 *    banner promises fails, and not by a wrong byte but by an
-	 *    entire trailing command going missing. Found by
-	 *    fuzz/fuzz_shparse.c (issues #4/#7); minimal reproduction is
-	 *    `f() (:)<<X` + a terminated body + a following command, e.g.
-	 *    `f() (:)<<X\nbody\nX\necho hi\n` -- printed as
-	 *    `f() (:)<<X\necho hi\n`, which reparses with "echo hi" mistaken
-	 *    for the heredoc's own unterminated body.
-	 *
-	 * hd_seen (never decremented, unlike pending_head/pending_tail --
-	 * see struct lexer) answers the question this needs, "did the body
-	 * register a here-document at all", which pending_head cannot once
-	 * case 2 has already drained it. Keeping the body alive is the
-	 * whole fix for both cases: drain_heredocs() writes the drained
-	 * body/delimiter straight into the redir sitting inside it, so
-	 * print.c's queue_nested_heredocs_command() finds them whether the
-	 * drain already happened (case 2) or happens later through the
-	 * still-live borrowed pointer (case 1). Unchanged -- the common
-	 * case, every function definition in every script that uses no
-	 * here-document -- and this frees as before: the body lives in
-	 * cmd->u.funcdef.func_body until the enclosing sh_list is freed. */
+	 * hd_seen (never decremented, unlike pending_head/pending_tail)
+	 * answers "did the body register a here-document at all", which
+	 * pending_head can't once case 2 has drained it. Keeping the body
+	 * alive fixes both: drain_heredocs() writes into the redir sitting
+	 * inside it, so print.c's queue_nested_heredocs_command() finds it
+	 * either way. Unchanged in the common case (no here-document): the
+	 * body lives in cmd->u.funcdef.func_body until the enclosing sh_list
+	 * is freed. */
 	if (p->lx.hd_seen != hd0) cmd->u.funcdef.func_body = body;
 	else                      free_command(body);
 	end = p->cur.start;        /* the token after the body -- T_EOF has
