@@ -40,10 +40,10 @@
  * its -n "not implemented" refusal).
  *
  * NO SPAWN, NO WRITE RISK BEYOND THIS HARNESS'S OWN FIXTURES. cmp(1p)
- * never invokes another program (checked while reading src/util/cmp.c in
- * full, per this task's own instruction -- no exec/system/popen/fork
- * anywhere in the file) and never opens any path for writing at all --
- * both operands are opened "rb" only (cmp_open()). FILE1/FILE2 are the
+ * never invokes another program (checked by reading src/util/cmp.c in
+ * full -- no exec/system/popen/fork anywhere in the file) and never
+ * opens any path for writing at all -- both operands are opened "rb"
+ * only (cmp_open()). FILE1/FILE2 are the
  * only files this harness itself ever creates, both capped at DATA_CAP
  * and truncated fresh every call.
  *
@@ -55,10 +55,10 @@
  *
  * WHAT IS CHECKED. This file's own header comment's EXIT STATUS section
  * verbatim: "0 The files are identical. 1 The files are different ...
- * >1 An error occurred." -- and reading __util_cmp_main() in full (as
- * this task requires) shows every `return` in it is exactly 0, 1 or 2,
- * never any value past 2, so the assertion below checks that real,
- * narrower range rather than a looser ">1" guess.
+ * >1 An error occurred." -- and reading __util_cmp_main() in full shows
+ * every `return` in it is exactly 0, 1 or 2, never any value past 2, so
+ * the assertion below checks that real, narrower range rather than a
+ * looser ">1" guess.
  */
 #include <stdio.h>
 #include <stdlib.h>

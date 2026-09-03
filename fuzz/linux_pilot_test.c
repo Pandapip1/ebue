@@ -14,9 +14,9 @@
  * The one thing it does NOT go through ntlibc for is opening the test
  * file in the first place: ntlibc's own open() front door still calls
  * NT-only path resolution directly (__ntpath_at, src/fcntl/open.c) and
- * was explicitly out of scope for this pilot (see the report). A raw
- * openat(2) stands in for it here, exactly the same shape of
- * scaffolding fuzz/ntstubs.c already uses for the native ASan build.
+ * was explicitly out of scope for this pilot. A raw openat(2) stands in
+ * for it here, exactly the same shape of scaffolding fuzz/ntstubs.c
+ * already uses for the native ASan build.
  */
 #include <sys/mman.h>
 #include <unistd.h>
@@ -48,11 +48,7 @@ int main(void)
 	const char msg1[] = "hello from ntlibc on linux";
 	const char msg2[] = "HELLO-FROM-NTLIBC-ON-LINUX"; /* same length */
 
-	/* ntlibc's own open() front door still resolves paths through NT-
-	 * only machinery (__ntpath_at) and was explicitly out of scope for
-	 * this pilot (see the report) -- a raw openat(2) stands in for it
-	 * here, exactly the shape of scaffolding fuzz/ntstubs.c already
-	 * uses for the native ASan build. */
+	/* open() itself is out of scope here -- see this file's own banner. */
 	rawfd = syscall(SYS_openat, AT_FDCWD, "/tmp/ntlibc-linux-pilot-test",
 	                O_CREAT | O_TRUNC | O_RDWR, 0644L);
 	if (rawfd < 0) { printf("FAIL - raw openat setup (errno=%ld)\n", -rawfd); return 1; }

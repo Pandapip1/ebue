@@ -13,9 +13,9 @@
  * owned by a different subsystem (thread, signal, mman's own front door,
  * malloc, aio, WOW64 detection). Six OTHER sessions are porting those
  * subsystems to Linux in parallel, each in an isolated worktree this one
- * cannot see -- so per this task's own instructions, every one of them is
- * stubbed here, LOCAL TO THIS TEST HARNESS ONLY, rather than given a real
- * implementation that would collide with or preempt that other work.
+ * cannot see -- so every one of them is stubbed here, LOCAL TO THIS TEST
+ * HARNESS ONLY, rather than given a real implementation that would
+ * collide with or preempt that other work.
  * Every stub below is a no-op or a fixed "nothing pending" answer, which
  * is exactly correct for a test process that has no threads, no pending
  * AIO, no alarm, no signal-delivery thread and no WOW64 involved to begin

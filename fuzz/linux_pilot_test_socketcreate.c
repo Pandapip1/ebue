@@ -18,7 +18,8 @@
  * bind() lets the kernel choose one -- then getsockname()'s absence from
  * this pilot's link set is worked around by using a fixed high port
  * instead, retried if already in use, since getsockname() is not one of
- * the five front doors this task ports).  A second socket connect()s to
+ * the five socket-creation front doors this pilot links).  A second
+ * socket connect()s to
  * it. Because both sockets are real kernel TCP sockets on loopback with a
  * backlog already installed, connect() completes as soon as the kernel's
  * SYN queue accepts the handshake -- it does NOT need accept() to have
@@ -42,10 +43,9 @@ static int failures;
 	if (!(cond)) { printf("FAIL - %s (errno=%d)\n", msg, errno); failures++; } \
 } while (0)
 
-/* A fixed high port, retried on EADDRINUSE: this pilot's link set has no
- * getsockname() (out of the five socket-creation front doors this task
- * ports), so binding to port 0 and discovering the kernel's chosen port
- * is not available here the way a full program could do it. */
+/* A fixed high port, retried on EADDRINUSE -- see this file's own banner
+ * for why getsockname() is not available to discover the kernel's
+ * choice instead. */
 #define BASE_PORT 58231
 #define PORT_TRIES 8
 

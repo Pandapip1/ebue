@@ -60,7 +60,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* src/wordexp/internal.h is not on this harness's include path. */
 int __wordexp_arith(const char *expr, long *result, int flags);
 
 extern void oracle_mismatch_i(const char *, const char *, long long, long long);

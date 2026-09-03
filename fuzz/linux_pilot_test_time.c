@@ -96,11 +96,11 @@ int main(void)
 		CHECK(ret1 == 0, "clock_gettime(CLOCK_MONOTONIC) first read succeeded");
 
 		/* A real sleep, via the same raw-syscall discipline as the rest
-		 * of this pilot -- nanosleep(2) is not itself part of this
-		 * assignment's scope (that is src/time/timespec's sibling
-		 * clock_nanosleep.c, not converted here), so this is scaffolding
-		 * exactly like fuzz/linux_pilot_test.c's raw openat() stand-in
-		 * for open(), not a claim that ntlibc's own sleep is under test. */
+		 * of this pilot -- nanosleep(2) is not itself in scope here
+		 * (that is src/time/timespec's sibling clock_nanosleep.c, not
+		 * converted here), so this is scaffolding exactly like fuzz/
+		 * linux_pilot_test.c's raw openat() stand-in for open(), not a
+		 * claim that ntlibc's own sleep is under test. */
 		sleep_req.tv_sec = 0;
 		sleep_req.tv_nsec = 20000000L; /* 20ms */
 		rc = syscall(SYS_nanosleep, &sleep_req, (void *)0);
@@ -165,7 +165,7 @@ int main(void)
 
 	/* --- time/stime.c + time/clock_gettime.c: clock_settime(CLOCK_REALTIME) ---
 	 * Setting the system clock needs CAP_SYS_TIME; this pilot runs
-	 * unprivileged (see the report), so the expected, correct outcome is
+	 * unprivileged, so the expected, correct outcome is
 	 * EPERM from the kernel by way of this backend's raw clock_settime(2)
 	 * -- proving errno actually propagates end to end from the syscall
 	 * through __plat_realtime_set() to the caller, the same shape of
