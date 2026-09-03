@@ -1297,12 +1297,13 @@ static int open_needed(const char *dir, const char *name, char *pathbuf, size_t 
 		(void)snprintf(pathbuf, pathbuf_sz, "%s%s", dir, name);
 		fd = open(pathbuf, O_RDONLY);
 	}
-	if (fd < 0 && strlen(name) < pathbuf_sz) {
+	if (fd >= 0) return fd;
+	if (strlen(name) >= pathbuf_sz) { errno = ENAMETOOLONG; return -1; }
+	{
 		size_t i, length = strlen(name);
 		for (i = 0; i <= length; i++) pathbuf[i] = name[i];
-		fd = open(name, O_RDONLY);
 	}
-	return fd;
+	return open(name, O_RDONLY);
 }
 
 /* ---- dependency-tree bookkeeping --------------------------------------
