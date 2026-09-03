@@ -66,8 +66,13 @@
 #include "libc.h"
 #include "plat_stat.h"
 
-/* aarch64 Linux syscall numbers, confirmed against this host's own
- * <sys/syscall.h>. */
+/* Linux syscall numbers -- aarch64 confirmed against this host's own
+ * <sys/syscall.h>; x86_64/i386 confirmed against this host's own
+ * /nix/store linux-headers asm/unistd_64.h / asm/unistd_32.h.
+ * fchmodat2 is 452 on every arch here -- a recent addition sharing the
+ * same cross-arch numbering scheme plat_misc.c's own banner documents
+ * for pidfd_open/pidfd_send_signal. */
+#if defined(__aarch64__)
 #define SYS_fchmod    52
 #define SYS_fchmodat  53
 #define SYS_fchmodat2 452
@@ -78,15 +83,44 @@
 #define SYS_fstatfs   44
 #define SYS_utimensat 88
 #define SYS_umask     166
+#elif defined(__x86_64__)
+#define SYS_fchmod    91
+#define SYS_fchmodat  268
+#define SYS_fchmodat2 452
+#define SYS_mkdirat   258
+#define SYS_mknodat   259
+#define SYS_statx     332
+#define SYS_statfs    137
+#define SYS_fstatfs   138
+#define SYS_utimensat 280
+#define SYS_umask     95
+#elif defined(__i386__)
+#define SYS_fchmod    94
+#define SYS_fchmodat  306
+#define SYS_fchmodat2 452
+#define SYS_mkdirat   296
+#define SYS_mknodat   297
+#define SYS_statx     383
+#define SYS_statfs    99
+#define SYS_fstatfs   100
+#define SYS_utimensat 320
+#define SYS_umask     60
+#else
+#error "plat_stat.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 #define AT_EMPTY_PATH_LX     0x1000
 #define STATX_BASIC_STATS_LX 0x7ff
 
-/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
- * the call path. NOT `extern long syscall(long, ...)`, which resolves to
- * the HOST's real glibc at link time and sets glibc's OWN errno on
- * failure rather than the raw kernel -errno this file's translation
- * requires. */
+/* A minimal 6-argument raw syscall: no host libc in the call path. NOT
+ * `extern long syscall(long, ...)`, which resolves to the HOST's real
+ * glibc at link time and sets glibc's OWN errno on failure rather than
+ * the raw kernel -errno this file's translation requires. Three
+ * per-arch bodies, same "own syscall table per file" discipline this
+ * tree already uses (see src/dirent/linux/plat_dirent.c's own
+ * raw_syscall()): aarch64's `svc #0`, x86_64's `syscall`, i386's
+ * register-starved `int $0x80`. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
@@ -102,6 +136,47 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 		: "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#else
+#error "plat_stat.c: unsupported architecture (expected __aarch64__, __x86_64__ or __i386__)"
+#endif
 
 static int is_sys_error(long ret)
 {
@@ -161,8 +236,37 @@ struct __lx_statx { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl
 };
 
 /* The kernel's raw struct statfs (fstatfs(2)), confirmed field-for-field
- * against this host's own <sys/statfs.h>: identical to glibc's own struct
- * statfs on every 64-bit Linux architecture. */
+ * against this host's own <sys/statfs.h> / asm-generic/statfs.h:
+ * identical to glibc's own struct statfs on every 64-bit Linux
+ * architecture. i386 genuinely differs, not just in overall struct
+ * size: asm-generic/statfs.h's own __statfs_word is __kernel_long_t
+ * (`long`, 8 bytes) on every 64-bit arch here, but plain `__u32`
+ * (unsigned, 4 bytes) on 32-bit ones -- i386's own C `long` happens to
+ * also be 4 bytes wide, so a `long`-typed field would still be the
+ * right SIZE there, but the wrong SIGN (the kernel's field is always
+ * unsigned): this file only ever reads these fields and immediately
+ * casts them to an unsigned type in statfs_to_statvfs() below, so a
+ * signed `long` re-interpretation of a value with bit 31 set would
+ * sign-extend to a huge, wrong 64-bit value on the cast -- unsigned
+ * int on i386 avoids that gap entirely rather than relying on every
+ * real-world field value happening to stay under 2^31. */
+#if defined(__i386__)
+struct __lx_statfs { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
+	unsigned int f_type;
+	unsigned int f_bsize;
+	unsigned int f_blocks;
+	unsigned int f_bfree;
+	unsigned int f_bavail;
+	unsigned int f_files;
+	unsigned int f_ffree;
+	int f_fsid[2];
+	unsigned int f_namelen;
+	unsigned int f_frsize;
+	unsigned int f_flags;
+	unsigned int f_spare[4];
+};
+#define LX_STATFS_SIZE 64
+#else
 struct __lx_statfs { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	long f_type;
 	long f_bsize;
@@ -177,6 +281,19 @@ struct __lx_statfs { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dc
 	long f_flags;
 	long f_spare[4];
 };
+#define LX_STATFS_SIZE 120
+#endif
+/* Hand-computed from the real field list above (7 __statfs_word fields
+ * + f_fsid's 2 ints + 3 more __statfs_word fields + a 4-element
+ * __statfs_word spare array, no gaps: every field here is the same
+ * width, so there is no alignment padding to account for either way):
+ * 120 bytes on the two 64-bit arches (7+3+4=14 fields * 8 bytes = 112,
+ * plus f_fsid's 8 bytes = 120), 64 bytes on i386 (14 fields * 4 bytes
+ * = 56, plus f_fsid's 8 bytes = 64) -- sanity-checked below rather
+ * than trusted by inspection alone, same discipline as
+ * src/dirent/linux/plat_dirent.c's own __lx_dirent64 assert. */
+_Static_assert(sizeof(struct __lx_statfs) == LX_STATFS_SIZE,
+               "__lx_statfs layout mismatch for this architecture");
 
 static dev_t pack_dev(unsigned major, unsigned minor)
 {
