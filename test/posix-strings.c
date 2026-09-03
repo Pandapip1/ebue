@@ -103,8 +103,8 @@ static void test_strcasecmp_folds_before_comparing(void)
 /* ffs.html DESCRIPTION/RETURN VALUE: "find the first bit set (beginning
  * with the least significant bit) ... Bits are numbered starting at
  * one (the least significant bit) ... If i is 0, then ffs() shall
- * return 0."  Every bit position is swept, not sampled, per the task
- * brief -- ffs's whole contract is a per-bit-position table. */
+ * return 0."  Every bit position is swept, not sampled -- ffs's whole
+ * contract is a per-bit-position table. */
 static void test_ffs_every_bit(void)
 {
 	int bit;
@@ -696,9 +696,9 @@ static void test_utime_enametoolong(void)
  * 404s), and it is absent from the base-definitions header index. It
  * is a glibc/BSD extension ntlibc ships for source compatibility;
  * gated behind _GNU_SOURCE/_BSD_SOURCE in include/endian.h. Recorded
- * as an extension, tested only for internal self-consistency per the
- * task brief: __BYTE_ORDER names a real endianness, and the
- * byte-swap helpers actually swap. */
+ * as an extension, tested only for internal self-consistency:
+ * __BYTE_ORDER names a real endianness, and the byte-swap helpers
+ * actually swap. */
 static void test_endian_internal_consistency(void)
 {
 	CHECK(__BYTE_ORDER == __LITTLE_ENDIAN || __BYTE_ORDER == __BIG_ENDIAN);

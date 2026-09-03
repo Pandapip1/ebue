@@ -293,8 +293,8 @@ static void test_getpwent_one_entry_then_eof(void)
 	endpwent();
 }
 
-/* The motivating case (task brief): "~" (current user, no name after
- * the tilde) expansion, the way glob(3)/gnulib's glob.c resolves it --
+/* The motivating case: "~" (current user, no name after the tilde)
+ * expansion, the way glob(3)/gnulib's glob.c resolves it --
  * look up the current login name via getpwnam() and use pw_dir as the
  * expansion, then confirm that directory is real and usable, not just
  * a non-NULL string.  Only meaningful when have_user() -- without a
@@ -537,7 +537,7 @@ int main(void)
  * Linux: a real audit of src/misc/linux/pwd.c's file-backed <pwd.h> --
  * getpwnam()/getpwuid()/getpwent()/setpwent()/endpwent() (and the _r
  * forms) against a genuine /etc/passwd, gated by a genuine
- * /etc/nsswitch.conf. Two tiers, per this pass's own task brief:
+ * /etc/nsswitch.conf. Two tiers:
  *
  *   1. A handful of facts asserted against THIS HOST's real
  *      /etc/passwd, never mutated -- the same strategy test/posix-

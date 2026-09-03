@@ -92,12 +92,12 @@ const char *const __rpath[] = { "no-such-rpath-dir", "C:\\Windows\\System32", 0 
  * (include/ntlibc/rpath.h, implemented in src/internal/rpath.c) wrap
  * exactly the two ntdll entry points a real dlopen()/dlsym() would
  * also use -- LdrLoadDll()/LdrGetProcedureAddress(). <dlfcn.h> and
- * src/dlfcn/dlfcn.c (a sibling agent's later pass) now exist and are
- * exercised directly below, unfenced, alongside this original
- * lower-level demonstration -- see dlfcn.c's own header comment for
- * how RTLD_* mode/scope semantics, dlclose()'s refcounting, and
- * dlerror()'s single-shot contract were each resolved on top of these
- * same rpath.c primitives, and include/dlfcn.h for the fuller design
+ * src/dlfcn/dlfcn.c now exist and are exercised directly below,
+ * unfenced, alongside this original lower-level demonstration -- see
+ * dlfcn.c's own header comment for how RTLD_* mode/scope semantics,
+ * dlclose()'s refcounting, and dlerror()'s single-shot contract were
+ * each resolved on top of these same rpath.c primitives, and
+ * include/dlfcn.h for the fuller design
  * rationale (RTLD_LOCAL's genuine N/A status, the $ORIGIN-vs-plain-
  * search decision for a bare filename, and dlopen(NULL, ...)'s limits
  * on a -nostdlib image).
