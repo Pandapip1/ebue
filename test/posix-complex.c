@@ -61,6 +61,11 @@
  * says "shall return ... +0" would hide the bug the clause exists for.
  */
 
+/* M_PI and friends (used below in carg/cexp/casin/etc.'s assertions) are
+ * feature-test gated in include/math.h; same define most other tests in
+ * test/ already carry for the same reason (see test/posix-glob.c's
+ * comment on this exact define, and test/posix-math.c's copy of it). */
+#define _GNU_SOURCE
 #include <stdio.h>
 
 #include "test-policy.h"
@@ -83,6 +88,14 @@ static int fails;
 
 static void test_posix_complex_creal_cimag_conj(void)
 {
+	/* tcc rejects `_Complex` outright at parse time (see include/
+	 * complex.h's header comment) and sets __STDC_NO_COMPLEX__ rather
+	 * than defining `complex`/I -- so this whole probe body, which
+	 * needs real complex-typed locals, has nothing it can build under
+	 * __TINYC__.  Guarding on the standard feature-test macro instead
+	 * of __TINYC__ directly keeps this correct for any future compiler
+	 * that also lacks complex support. */
+#ifndef __STDC_NO_COMPLEX__
 	double complex z = 3.0 + 4.0 * I;
 	double complex c;
 
@@ -151,6 +164,7 @@ static void test_posix_complex_creal_cimag_conj(void)
 	CHECK(signbit(cimag(c)) != 0);
 	CHECK(isinf(crealf(cprojf(INFINITY + 0.0f * I))));
 	CHECK(isinf(creall(cprojl(INFINITY + 0.0L * I))));
+#endif /* !__STDC_NO_COMPLEX__ */
 }
 #endif
 
@@ -167,6 +181,10 @@ static void test_posix_complex_creal_cimag_conj(void)
 
 static void test_posix_complex_cexp_clog_cpow_csqrt(void)
 {
+	/* See test_posix_complex_creal_cimag_conj's comment above: tcc has
+	 * no _Complex at all, and __STDC_NO_COMPLEX__ is the standard way
+	 * this header (include/complex.h) says so. */
+#ifndef __STDC_NO_COMPLEX__
 	double complex c;
 
 	/* cexp.html: "shall compute the complex exponent of z, defined as
@@ -231,6 +249,7 @@ static void test_posix_complex_cexp_clog_cpow_csqrt(void)
 	CHECK(fabsf(crealf(cpowf(2.0f + 0.0f * I, 10.0f + 0.0f * I))
 		    - 1024.0f) < 1e-2f);
 	CHECK(fabsl(cimagl(csqrtl(-1.0L + 0.0L * I)) - 1.0L) < 1e-9L);
+#endif /* !__STDC_NO_COMPLEX__ */
 }
 #endif
 
@@ -248,6 +267,10 @@ static void test_posix_complex_cexp_clog_cpow_csqrt(void)
 
 static void test_posix_complex_ctrig_and_chyperbolic(void)
 {
+	/* See test_posix_complex_creal_cimag_conj's comment above: tcc has
+	 * no _Complex at all, and __STDC_NO_COMPLEX__ is the standard way
+	 * this header (include/complex.h) says so. */
+#ifndef __STDC_NO_COMPLEX__
 	double complex c;
 
 	/* ccos.html / csin.html / ctan.html: "shall compute the complex
@@ -306,6 +329,7 @@ static void test_posix_complex_ctrig_and_chyperbolic(void)
 	CHECK(fabsf(crealf(csinf(0.0f + 0.0f * I))) < 1e-5f);
 	CHECK(fabsl(creall(csinhl(0.0L + 0.0L * I))) < 1e-9L);
 	CHECK(fabsf(crealf(ctanhf(0.0f + 0.0f * I))) < 1e-5f);
+#endif /* !__STDC_NO_COMPLEX__ */
 }
 #endif
 
@@ -323,6 +347,10 @@ static void test_posix_complex_ctrig_and_chyperbolic(void)
 
 static void test_posix_complex_inverse_branch_cuts(void)
 {
+	/* See test_posix_complex_creal_cimag_conj's comment above: tcc has
+	 * no _Complex at all, and __STDC_NO_COMPLEX__ is the standard way
+	 * this header (include/complex.h) says so. */
+#ifndef __STDC_NO_COMPLEX__
 	double complex c;
 
 	/* casin.html: "shall compute the complex arc sine of z, with
@@ -408,6 +436,7 @@ static void test_posix_complex_inverse_branch_cuts(void)
 	CHECK(fabsl(creall(cacoshl(1.0L + 0.0L * I))) < 1e-9L);
 	CHECK(fabsl(creall(casinhl(0.0L + 0.0L * I))) < 1e-9L);
 	CHECK(fabsl(creall(catanhl(0.0L + 0.0L * I))) < 1e-9L);
+#endif /* !__STDC_NO_COMPLEX__ */
 }
 #endif
 
