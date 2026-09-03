@@ -212,6 +212,20 @@ int pthread_create(pthread_t *__restrict output,
 	return 0;
 }
 
+/* Undoes pthread_join()'s `joining` claim if a cancellation unwinds through
+ * the wait below instead of that function returning normally -- otherwise a
+ * canceled joiner would leave its target permanently unjoinable (thread_
+ * usable()/pthread_join() itself both treat a stuck `joining` as ESRCH
+ * forever after). */
+static void join_cleanup(void *argument) __attribute__((nonnull(1)));
+static void join_cleanup(void *argument)
+{
+	pthread_t thread = argument;
+	__plat_fast_lock();
+	thread->joining = 0;
+	__plat_fast_unlock();
+}
+
 int pthread_join(pthread_t thread, void **result)
 {
 	int wait_result;
@@ -228,10 +242,25 @@ int pthread_join(pthread_t thread, void **result)
 	}
 	thread->joining = 1;
 	__plat_fast_unlock();
-	/* __PLAT_WAIT_INTR (NT's STATUS_USER_APC/STATUS_ALERTED) counts as
-	 * completed below: both statuses satisfy NT_SUCCESS(), so only a
-	 * genuine wait failure takes this branch. */
-	wait_result = __plat_wait_one(thread->handle, 1, 0, 0);
+	/* pthread_join() is a POSIX cancellation point, the same way
+	 * sem_wait()/sem_timedwait() are: __pthread_testcancel() before the
+	 * wait catches a cancellation requested before this call was ever
+	 * reached (pthread_cancel() sets cancel_pending unconditionally,
+	 * independent of whether the target thread is blocked yet), and
+	 * after the wait it distinguishes a real STATUS_USER_APC/ALERTED
+	 * cancellation wakeup from any other alertable-wait return -- the
+	 * target thread has NOT necessarily exited just because the wait
+	 * was interrupted, so treating __PLAT_WAIT_INTR as "join complete"
+	 * would read stale thread->result and close a handle the target may
+	 * still own. */
+	pthread_cleanup_push(join_cleanup, thread);
+	__pthread_testcancel();
+	for (;;) {
+		wait_result = __plat_wait_one(thread->handle, 1, 0, 0);
+		if (wait_result != __PLAT_WAIT_INTR) break;
+		__pthread_testcancel();
+	}
+	pthread_cleanup_pop(0);
 	if (wait_result == __PLAT_WAIT_ERROR) {
 		__plat_fast_lock();
 		thread->joining = 0;

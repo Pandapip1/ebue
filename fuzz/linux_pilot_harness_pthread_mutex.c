@@ -94,13 +94,24 @@ int sched_get_priority_min(int policy)
 #undef RtlReleasePebLock
 void RtlAcquirePebLock(void) { }
 void RtlReleasePebLock(void) { }
-void __pthread_cancel_defer_enter(void) { }
-void __pthread_cancel_defer_leave(void) { }
 void __pthread_run_specific_destructors(void) { }
 
 /* pthread_create()'s own path (__pthread_adopt_current()), unreached by
  * this test, which spawns workers via __plat_thread_spawn() directly. */
 void __sig_current_mask_install(const sigset_t *mask) { (void)mask; }
+
+/* src/thread/pthread_cancel.c is linked here for real now (pthread.c's
+ * pthread_join() calls its __pthread_testcancel()), so
+ * __pthread_cancel_defer_enter()/_leave() are no longer stubbed above --
+ * this file supplies the genuine ones. redirect_async_cancel(), reached
+ * only from pthread_cancel() itself (never called by this test), is the
+ * one function in that file whose own reference this harness still can't
+ * satisfy for real: arch/$(ARCH)/src/cancel_trampoline.S is real
+ * assembly, out of scope for a mutex pilot the same way process_exists()
+ * was above. Stubbed the same honest way: provably unreached here, so a
+ * body that never returns is a truthful stand-in for its _Noreturn
+ * contract. */
+_Noreturn void __pthread_cancel_trampoline(void) { for (;;) ; }
 
 /* __plat_thread_resume() is NOT stubbed here -- it would collide with
  * the real definition src/thread/linux/plat_thread.c carries, already
