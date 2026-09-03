@@ -4,30 +4,19 @@
 // DeclScanner -- a real AST walk, replacing tools/linkcheck.sh's inline
 // hand-rolled awk scanner for "what functions does this header declare".
 //
-// The awk scanner did character-at-a-time comment/string stripping and
-// treated "the first identifier immediately followed by '('" as a
-// declarator name.  That heuristic breaks on two patterns that now appear
-// in the headers:
+// The awk scanner treated "the first identifier immediately followed by
+// '('" as a declarator name, which breaks on two patterns now common in
+// the headers: `// NOLINTBEGIN(...)`/`NOLINTEND(...)` (the awk only strips
+// /* */ comments, never //, so it parses "NOLINTBEGIN" as a declarator),
+// and `withtok(token_name)` (include/ownership.h) used as a prefix
+// attribute before a return type, where the match lands on `withtok(`
+// instead of the real declarator after it. Neither is patchable in
+// general -- any heuristic that doesn't know what a declaration is will
+// misparse the next macro-attribute idiom -- so this walks the real
+// clang AST instead.
 //
-//   - `// NOLINTBEGIN(...)` / `// NOLINTEND(...)` clang-tidy suppression
-//     comments: the awk only strips /* */ comments, never // ones, so it
-//     parses "NOLINTBEGIN" as if it were a 3-argument function declarator.
-//   - `withtok(token_name)` (include/ownership.h) used as a *prefix*
-//     attribute before a declaration's return type, e.g.
-//         withtok(heap_allocated)
-//         void *malloc (size_t);
-//     The awk's "first identifier followed by '('" match lands on
-//     `withtok(` itself, before it ever reaches `malloc(`.
-//
-// Neither is a text-scanning bug that can be patched away in general: any
-// heuristic that does not actually know what a declaration is will find a
-// new way to misparse the next macro-attribute idiom.  This walks the real
-// clang AST instead, so it only ever reports what the compiler itself
-// parsed as a top-level function declaration.
-//
-// Usage: run once per header, in C mode, with this project's own
-// -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -I... flags (see tools/linkcheck.sh),
-// e.g.:
+// Usage: run once per header, in C mode, with this project's own CFLAGS
+// (see tools/linkcheck.sh), e.g.:
 //
 //   clang-18 -std=c99 -fsyntax-only $CFLAGS \
 //     -Xclang -load -Xclang ntlibc-declscan.so \
@@ -39,32 +28,25 @@
 //
 //   name  header  fixed_argc  undefined_ok(0/1)
 //
-// "header" is printed exactly as given via the plugin argument (the same
-// string the caller passed as $header on argv), not re-derived from the
-// AST -- so the declfile format tools/linkcheck.sh already consumes
-// (reason_for(), the worklist builder, etc.) needs no changes at all.
+// "header" is printed exactly as given via the plugin argument, not
+// re-derived from the AST, so linkcheck.sh's declfile format needs no
+// changes.
 //
 // A function is skipped when doesThisDeclarationHaveABody() is true: a
-// static-inline function defined right in the header (endian.h's inline
-// bswaps) is already defined everywhere it's included, not something to
-// link-check. FunctionDecl is the only Decl kind matched, so typedefs
-// (including function-pointer typedefs like signal.h's sig_t) and any
-// top-level variable declaration are naturally excluded.
+// static-inline function defined right in the header is already defined
+// everywhere it's included, not something to link-check. FunctionDecl is
+// the only Decl kind matched, so typedefs and top-level variables are
+// naturally excluded.
 //
 // fixed_argc is FD->getNumParams(): clang already treats an explicit
-// `(void)` parameter list as zero parameters (a real prototype, not
-// FunctionNoProtoType), matching the old scanner's `void` special case
-// with no extra work; an unprototyped bare `()` also yields zero
-// parameters, matching the old scanner's fallback for that shape too.
+// `(void)` parameter list as zero parameters, matching the old scanner's
+// `void` special case, and an unprototyped bare `()` also yields zero.
 //
-// undefined_ok is computed by searching the raw header source text, from
-// this declaration's own start offset up to the next top-level
-// declaration's start offset (or end of file, for the last one), for the
-// substring "undefined-ok:". This deliberately over-includes any trailing
-// same-line comment and any blank/comment lines before the next real
-// declaration -- exactly what the old awk scanner's line-level "hasmark"
-// flag effectively did too, and every marker actually used in the headers
-// today sits on the declaration's own line.
+// undefined_ok is computed by searching the raw header source, from this
+// declaration's start offset to the next top-level declaration's start
+// (or EOF), for the substring "undefined-ok:" -- matching the old awk
+// scanner's line-level "hasmark" flag, since every marker in use today
+// sits on the declaration's own line.
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
