@@ -9,15 +9,11 @@
 
 /* pread/pwrite pass an explicit ByteOffset to NtReadFile/NtWriteFile, but
  * our file handles are opened FILE_SYNCHRONOUS_IO_NONALERT, and for such
- * handles the file system sets FileObject->CurrentByteOffset to the end
- * of the transfer (see ReactOS drivers/filesystems/vfatfs/rw.c, the
- * FO_SYNCHRONOUS_IO check after the read completes; Wine does the same
- * with lseek in dlls/ntdll/unix/file.c NtReadFile).  POSIX wants the
- * position left alone, so callers save it with __fd_pos_save before the
- * transfer and put it back with __fd_pos_restore afterwards.
- *
- * This is not atomic with respect to other threads using the same fd,
- * but this libc has no threads, so that is fine. */
+ * handles the filesystem sets FileObject->CurrentByteOffset to the end of
+ * the transfer regardless. POSIX wants the position left alone, so
+ * callers save it with __fd_pos_save before the transfer and restore it
+ * with __fd_pos_restore afterwards. Not atomic against other threads
+ * sharing the fd, but this libc has none. */
 
 int __fd_pos_save(HANDLE h, long long *pos)
 {

@@ -2,21 +2,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * __vfs_resolve_at()/__vfs_open_dir() for Linux -- see src/internal/
- * nt/vfs_resolve.c's own banner for why this split exists and why
- * this half is a few lines rather than a port of that one's NT-
- * specific NtQueryAttributesFile-based probing: the overlay that file
- * implements exists to compensate for NT having no real filesystem
- * rooted at / at all (so no real /dev, no real /dev/null) -- a real
- * Linux process already has all of that, natively, for real, so the
- * fallback this whole subsystem exists to provide is simply never
- * needed here. Every path is native; __vfs_resolve_at() always
- * returns __VFS_NONE and __vfs_open_dir() is consequently never
- * reached at all (nothing on this platform ever gets back __VFS_ROOT/
- * __VFS_DEV to ask it for a synthetic directory handle in the first
- * place -- its own two real callers, src/fcntl/nt/plat_fcntl.c and
- * src/stat/nt/plat_stat.c, are themselves NT-only), kept here only so
- * the portable src/internal/libc.h declaration has something to link
- * against on every platform.
+ * nt/vfs_resolve.c's own banner for why this split exists: the overlay
+ * that file implements compensates for NT having no real filesystem
+ * rooted at / at all, which a real Linux process already has natively,
+ * so the fallback is never needed here. Every path is native;
+ * __vfs_resolve_at() always returns __VFS_NONE and __vfs_open_dir() is
+ * consequently never reached, kept here only so the portable
+ * src/internal/libc.h declaration has something to link against.
  */
 
 /* This translation unit implements ntlibc's freestanding -nostdinc
