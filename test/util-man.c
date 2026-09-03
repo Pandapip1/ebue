@@ -434,6 +434,66 @@ static const char CONDTEST_1[] =
 	".B \\*[nestbranch]\n"
 	".B \\*[nestinner]\n";
 
+/* ==== fixture page 1d: exercises Tier 5 tables (.TS/.TE) -- see src/
+ * util/man.c's own "TABLES" header comment for the exact grammar.
+ * Hand-written (a genuine .TS-using real-world man page excerpt was
+ * not easy to source at this fixture's small size without pulling in
+ * a much larger real page), but matching real troff tbl syntax
+ * exactly -- same rigor as CONDTEST_1/MACROTEST_1 above.
+ *
+ * Three tables:
+ *  - A boxed table whose FIRST format line ("c s s") spans a title
+ *    across the row (columns 2/3 are `s`, consuming no data field),
+ *    while every following row uses the SECOND ("l l n") format line
+ *    -- exactly real tbl's "last format line repeats" rule, and this
+ *    file's own "alignment/width is taken from the last format line"
+ *    documented simplification (see header comment). The final row
+ *    (after a `_` single-rule row) leaves its middle field empty
+ *    (two adjacent tabs) to exercise a genuinely missing cell, and
+ *    its numeric field has a fractional part to prove real decimal-
+ *    point column alignment against the other numeric cells.
+ *  - A second, boxless table (no options line at all) proving plain
+ *    (non-`box`) rendering uses no border characters.
+ *  - A third table combining `allbox` with a custom `tab(:)` field
+ *    separator on one options line, proving multiple option keywords
+ *    parse together and the custom separator is honoured instead of
+ *    a literal tab. */
+static const char TBLTEST_1[] =
+	".TH TBLTEST 1 \"2026\" \"ntlibc test\" \"ntlibc Test Suite\"\n"
+	".SH NAME\n"
+	"tbltest \\- exercise tbl table rendering\n"
+	".SH TABLES\n"
+	".TS\n"
+	"box;\n"
+	"c s s\n"
+	"l l n.\n"
+	"Element Summary\n"
+	"Name\tKind\tBytes\n"
+	"Alpha\tint\t1\n"
+	"Beta\tlong\t42\n"
+	"Gamma\tdouble\t3.5\n"
+	"_\n"
+	"Total\t\t46.5\n"
+	".TE\n"
+	"Text after the boxed table must still render normally.\n"
+	".TS\n"
+	"l l\n"
+	"l l.\n"
+	"Plain\tNoBox\n"
+	"one\t1\n"
+	"two\t2\n"
+	".TE\n"
+	"Text after the second, box-less table.\n"
+	".TS\n"
+	"allbox tab(:);\n"
+	"c c\n"
+	"l l.\n"
+	"Col1:Col2\n"
+	"xray:yankee\n"
+	"papa:quebec\n"
+	".TE\n"
+	"Text after the third, allbox/custom-separator table.\n";
+
 /* ==== fixture page 2: a real, unmodified 210-line prefix of GNU grep's
  * own grep.1 (gzip -dc'd by hand from a real Linux system's
  * /nix/store copy of gnugrep-3.12) -- see this file's own header. */
@@ -1086,6 +1146,167 @@ static void test_conditionals(void)
 	CHECK(plain_contains("nest-true-inner"));
 }
 
+/* ---- small layout-inspection helpers for test_tables() below ----------
+ * Table rendering is column-positional in a way plain_contains()/
+ * out_contains() can't check (e.g. "these two numbers' decimal points
+ * land in the same output column", "this specific line has no box
+ * characters on it") -- these walk `buf` line by line the same way
+ * strip_overstrike() above already does. */
+
+/* Returns a pointer to the start of the first line in `buf` containing
+ * `needle`, or NULL. */
+static const char *find_line(const char *buf, const char *needle)
+{
+	const char *p = buf;
+	size_t nlen = strlen(needle);
+	while (*p) {
+		const char *nl = strchr(p, '\n');
+		size_t linelen = nl ? (size_t)(nl - p) : strlen(p);
+		size_t k;
+		for (k = 0; k + nlen <= linelen; k++)
+			if (!memcmp(p + k, needle, nlen)) return p;
+		if (!nl) break;
+		p = nl + 1;
+	}
+	return 0;
+}
+
+/* Offset of the first '.' within the line starting at `line_start`
+ * (not searching past its own '\n'), or -1 if that line has none. */
+static long dot_offset(const char *line_start)
+{
+	const char *nl = strchr(line_start, '\n');
+	size_t linelen = nl ? (size_t)(nl - line_start) : strlen(line_start);
+	size_t i;
+	for (i = 0; i < linelen; i++) if (line_start[i] == '.') return (long)i;
+	return -1;
+}
+
+/* True if the line starting at `line_start` contains `ch` before its
+ * own '\n' -- used to prove a box-less table's rows carry no stray
+ * '|'/'+' box-drawing characters. */
+static int line_has_char(const char *line_start, char ch)
+{
+	const char *nl = strchr(line_start, '\n');
+	size_t linelen = nl ? (size_t)(nl - line_start) : strlen(line_start);
+	size_t i;
+	for (i = 0; i < linelen; i++) if (line_start[i] == ch) return 1;
+	return 0;
+}
+
+/* True if the line starting at `line_start` contains `needle` before
+ * its own '\n' -- a line-bounded strstr(), not memmem() (this test
+ * file's own default `make check` build has no _XOPEN_SOURCE/
+ * _GNU_SOURCE feature-test macro defined -- see this file's own
+ * top-of-file comment on test_envp -- so memmem() isn't declared
+ * there). */
+static int line_has_substr(const char *line_start, const char *needle)
+{
+	const char *nl = strchr(line_start, '\n');
+	size_t linelen = nl ? (size_t)(nl - line_start) : strlen(line_start);
+	size_t nlen = strlen(needle);
+	size_t k;
+	for (k = 0; k + nlen <= linelen; k++)
+		if (!memcmp(line_start + k, needle, nlen)) return 1;
+	return 0;
+}
+
+/* Counts lines in `buf` whose first non-space character is `ch` --
+ * every man_tbl_emit_border() line (top/bottom border, `_`/`=` rule
+ * row, and each allbox inter-row separator) starts with '+', so this
+ * counts exactly how many border/rule lines a table rendered. */
+static int count_lines_starting_with(const char *buf, char ch)
+{
+	int count = 0;
+	const char *p = buf;
+	while (*p) {
+		const char *q = p;
+		while (*q == ' ') q++;
+		if (*q == ch) count++;
+		{
+			const char *nl = strchr(p, '\n');
+			if (!nl) break;
+			p = nl + 1;
+		}
+	}
+	return count;
+}
+
+static void test_tables(void)
+{
+	const char *gamma_line, *total_line, *one_line;
+	char *argv[3];
+	argv[0] = (char *)"man"; argv[1] = (char *)"tbltest"; argv[2] = 0;
+	CHECK(run(man_path, argv) == 0);
+	slurp_both();
+
+	/* Table 1 (boxed): the "c s s" title row's own single field
+	 * ("Element Summary") must render whole -- the `s` columns beside
+	 * it consume no data field of their own (see src/util/man.c's own
+	 * "TABLES" header comment) -- and every later row's real content
+	 * must appear, proving field-to-column assignment survived a
+	 * format line with spans in it. */
+	CHECK(plain_contains("Element Summary"));
+	CHECK(plain_contains("Name") && plain_contains("Kind") && plain_contains("Bytes"));
+	CHECK(plain_contains("Alpha") && plain_contains("int"));
+	CHECK(plain_contains("Beta") && plain_contains("long"));
+	CHECK(plain_contains("Gamma") && plain_contains("double"));
+	CHECK(plain_contains("Total"));
+
+	CHECK(out_contains("|"));
+
+	/* Real decimal-point column alignment: Gamma's "3.5" and the
+	 * final row's "46.5" are both real (non-span, non-blank) cells in
+	 * the same numeric column, so their '.' must land in the exact
+	 * same output column -- not just "both present somewhere". */
+	gamma_line = find_line(plainbuf, "Gamma");
+	total_line = find_line(plainbuf, "46.5");
+	CHECK(gamma_line != 0 && total_line != 0);
+	if (gamma_line && total_line) {
+		long gdot = dot_offset(gamma_line), tdot = dot_offset(total_line);
+		CHECK(gdot > 0 && gdot == tdot);
+	}
+
+	/* Table 1's final row ("Total\t\t46.5") has a genuinely EMPTY
+	 * middle field (two adjacent tabs) -- Total's own Kind column must
+	 * be blank, not "double" or "long" leaking down from an earlier
+	 * row. */
+	total_line = find_line(plainbuf, "Total");
+	CHECK(total_line != 0);
+	if (total_line) CHECK(!line_has_substr(total_line, "double") && !line_has_substr(total_line, "long"));
+
+	CHECK(plain_contains("Text after the boxed table must still render normally."));
+
+	/* Table 2: no options line at all -- plain rendering must carry
+	 * NO box-drawing characters on its own data rows. */
+	CHECK(plain_contains("Plain") && plain_contains("NoBox"));
+	one_line = find_line(plainbuf, "one");
+	CHECK(one_line != 0);
+	if (one_line) CHECK(!line_has_char(one_line, '|') && !line_has_char(one_line, '+'));
+	CHECK(plain_contains("two"));
+	CHECK(plain_contains("Text after the second, box-less table."));
+
+	/* Table 3: `allbox tab(:);` -- two option keywords on one options
+	 * line, AND a custom `:` field separator instead of a literal tab
+	 * (proving man_render_table() actually switched its split
+	 * character, not just parsed and ignored `tab(:)`). */
+	CHECK(plain_contains("Col1") && plain_contains("Col2"));
+	CHECK(plain_contains("xray") && plain_contains("yankee"));
+	CHECK(plain_contains("papa") && plain_contains("quebec"));
+	CHECK(plain_contains("Text after the third, allbox/custom-separator table."));
+
+	/* Every man_tbl_emit_border() line (top/bottom borders, `_`/`=`
+	 * rule rows, allbox inter-row separators) starts with '+' -- a
+	 * page-wide count proves both boxed tables drew exactly the
+	 * border/rule lines this fixture's own shape calls for, and that
+	 * table 2 (no box option at all) drew none of its own: table 1
+	 * contributes 3 (top border, the `_` rule row, bottom border);
+	 * table 2 contributes 0; table 3 (`allbox`, 3 data rows, no rule
+	 * rows) contributes 4 (top border, one separator after each of
+	 * its first two rows, bottom border). */
+	CHECK(count_lines_starting_with(plainbuf, '+') == 3 + 0 + 4);
+}
+
 static void test_section_operand_restricts_search(void)
 {
 	char *argv[4];
@@ -1289,6 +1510,11 @@ int main(int argc, char **argv)
 		write_file(condpath, CONDTEST_1);
 	}
 	{
+		char tblpath[400];
+		snprintf(tblpath, sizeof tblpath, "%s/tbltest.1", man1dir);
+		write_file(tblpath, TBLTEST_1);
+	}
+	{
 		char greppath[400];
 		snprintf(greppath, sizeof greppath, "%s/grep.1", man1dir);
 		write_grep1_excerpt(greppath);
@@ -1319,6 +1545,7 @@ int main(int argc, char **argv)
 	test_registers();
 	test_macros();
 	test_conditionals();
+	test_tables();
 	test_section_operand_restricts_search();
 	test_no_such_page();
 	test_apropos_dash_k();
