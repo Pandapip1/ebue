@@ -8,9 +8,15 @@
 #include <stdlib.h>
 #include <inttypes.h>
 
-int abs(int a) { return a > 0 ? a : -a; }
-long labs(long a) { return a > 0 ? a : -a; }
-long long llabs(long long a) { return a > 0 ? a : -a; }
-intmax_t imaxabs(intmax_t a) { return a > 0 ? a : -a; }
+/* Negating a might overflow: INT_MIN (etc.) has no representable
+ * positive counterpart, so a plain `-a` is undefined right at the one
+ * input where callers most need a defined answer. Negating the
+ * unsigned reinterpretation instead wraps modulo 2**N (C99 6.2.5p9),
+ * giving the same bit pattern every existing caller already relies on
+ * (abs(INT_MIN) == INT_MIN) without the intermediate UB. */
+int abs(int a) { return a > 0 ? a : (int)-(unsigned)a; }
+long labs(long a) { return a > 0 ? a : (long)-(unsigned long)a; }
+long long llabs(long long a) { return a > 0 ? a : (long long)-(unsigned long long)a; }
+intmax_t imaxabs(intmax_t a) { return a > 0 ? a : (intmax_t)-(uintmax_t)a; }
 
 // NOLINTEND(misc-include-cleaner)

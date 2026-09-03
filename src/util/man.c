@@ -815,6 +815,7 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <ctype.h>
+#include <limits.h>
 #include <time.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
@@ -1235,6 +1236,20 @@ static void man_mac_remove(struct man_mactab *t, const char *name)
 	}
 }
 
+/* Signed `long` arithmetic that might overflow, defined by widening
+ * through the unsigned wraparound C99 6.2.5p9 guarantees rather than
+ * ever evaluating the signed +, -, or unary - that would overflow.
+ * troff number registers and \n(x/.if expressions have no overflow
+ * diagnostic of their own -- a register set to a huge value, or
+ * auto-incremented past LONG_MAX, is just a huge or wrapped register
+ * value in real troff, not a fatal error -- so these keep that
+ * silent-wraparound behaviour without going through the signed UB
+ * that reached it before. */
+static long man_wrap_neg(long v) { return (long)-(unsigned long)v; }
+static long man_wrap_add(long a, long b) { return (long)((unsigned long)a + (unsigned long)b); }
+static long man_wrap_sub(long a, long b) { return (long)((unsigned long)a - (unsigned long)b); }
+static long man_wrap_mul(long a, long b) { return (long)((unsigned long)a * (unsigned long)b); }
+
 /* Escape/glyph decoder: appends the rendering of one chunk of raw
  * troff text (a whole text line, or one macro argument) to `out`,
  * expanding the escapes this file's own header comment documents.
@@ -1328,7 +1343,8 @@ static int decode_text(struct man_regtab *regs, struct man_buf *out, const char 
 				 * register: real troff treats it as starting at 0
 				 * with a 0 step, so the result is 0 either way. */
 				if (r && r->kind == MAN_REG_NUMBER) {
-					r->num += decr ? -r->incr : r->incr;
+					r->num = decr ? man_wrap_sub(r->num, r->incr)
+					              : man_wrap_add(r->num, r->incr);
 					v = r->num;
 				} else {
 					v = 0;
@@ -1477,8 +1493,11 @@ static long man_cond_parse_atom(struct man_regtab *regs, const char *s, size_t n
 			k = man_read_reg_name(s, n, k, regname, sizeof regname);
 			if (autoincr) {
 				struct man_reg *r = man_reg_find(regs, regname);
-				if (r && r->kind == MAN_REG_NUMBER) { r->num += decr ? -r->incr : r->incr; v = r->num; }
-				else v = 0;
+				if (r && r->kind == MAN_REG_NUMBER) {
+					r->num = decr ? man_wrap_sub(r->num, r->incr)
+					              : man_wrap_add(r->num, r->incr);
+					v = r->num;
+				} else v = 0;
 			} else {
 				v = man_lookup_number(regs, regname);
 			}
@@ -1536,7 +1555,7 @@ static long man_cond_parse_factor(struct man_regtab *regs, const char *s, size_t
 		k++;
 		*i = k;
 		v = man_cond_parse_factor(regs, s, n, i);
-		return neg ? -v : v;
+		return neg ? man_wrap_neg(v) : v;
 	}
 	*i = k;
 	return man_cond_parse_atom(regs, s, n, i);
@@ -1553,9 +1572,21 @@ static long man_cond_parse_term(struct man_regtab *regs, const char *s, size_t n
 			k++;
 			*i = k;
 			rhs = man_cond_parse_factor(regs, s, n, i);
-			if (op == '*') v *= rhs;
-			else if (rhs != 0) v = (op == '/') ? v / rhs : v % rhs;
-			else v = 0; /* division/modulo by zero: honest 0, not a crash */
+			if (op == '*') {
+				v = man_wrap_mul(v, rhs);
+			} else if (rhs == 0) {
+				v = 0; /* division/modulo by zero: honest 0, not a crash */
+			} else if (v == LONG_MIN && rhs == -1) {
+				/* The one division whose mathematical quotient
+				 * (-LONG_MIN) does not fit back in a long; two's
+				 * complement wraps that to LONG_MIN itself, so
+				 * man_wrap_neg gives the same answer a plain
+				 * `v / rhs` would be undefined behaviour reaching
+				 * for here. The matching remainder is exactly 0. */
+				v = (op == '/') ? man_wrap_neg(v) : 0;
+			} else {
+				v = (op == '/') ? v / rhs : v % rhs;
+			}
 		} else break;
 	}
 	return v;
@@ -1572,7 +1603,7 @@ static long man_cond_parse_expr(struct man_regtab *regs, const char *s, size_t n
 			k++;
 			*i = k;
 			rhs = man_cond_parse_term(regs, s, n, i);
-			v = (op == '+') ? v + rhs : v - rhs;
+			v = (op == '+') ? man_wrap_add(v, rhs) : man_wrap_sub(v, rhs);
 		} else break;
 	}
 	return v;
@@ -2448,7 +2479,7 @@ static int man_do_nr(struct man_ctx *c, struct man_argv *a)
 		struct man_reg *existing = man_reg_find(&c->regs, a->v[0]);
 		long current = (existing && existing->kind == MAN_REG_NUMBER) ? existing->num : 0;
 		int relative = val.data[0] == '+' || val.data[0] == '-';
-		long newval = relative ? current + parsed : parsed;
+		long newval = relative ? man_wrap_add(current, parsed) : parsed;
 		ok = man_reg_set_number(&c->regs, a->v[0], newval, incr, have_incr);
 	}
 
