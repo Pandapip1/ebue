@@ -380,3 +380,34 @@ void push_vector_element_past_cap(void)
 	vec.cap = 4;
 	vec.n = 5;
 } /* memory-contract-expect */
+
+/* fields_established (see include/ownership.h's own comment): a helper
+ * that trusts its caller to have already established the incoming
+ * n/cap/v relationship. */
+void grow_established_vector(struct fixture_vector *vec fields_established)
+{
+	if (vec->n == vec->cap) {
+		unsigned newcap = vec->cap ? vec->cap * 2 : 4;
+		unsigned *g = allocate_array(newcap, sizeof *g);
+		if (!g) return;
+		vec->v = g;
+		vec->cap = newcap;
+	}
+	vec->n++;
+}
+
+/* The caller-side violation: claims cap=8 without ever allocating v --
+ * the precondition genuinely does not hold before this call, and must
+ * be caught HERE, not silently trusted (the first marker below). Once
+ * inlined, the callee's own vec->n++ (n==cap is false, so growth is
+ * skipped entirely) is ALSO independently caught by the ordinary write-
+ * time check from the earlier commit, reported at this function's own
+ * exit -- two real findings for one root cause, not a duplicate. */
+void call_established_vector_unsafely(void)
+{
+	struct fixture_vector vec;
+	vec.v = 0;
+	vec.n = 0;
+	vec.cap = 8;
+	grow_established_vector(&vec); /* memory-contract-expect */
+} /* memory-contract-expect */

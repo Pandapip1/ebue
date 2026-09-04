@@ -386,6 +386,31 @@ static void collectRecordSpanContracts(
   }
 }
 
+/* fields_established (see include/ownership.h's own comment for the
+ * two-sided contract this implements): true exactly when Parameter
+ * carries the bare "fields_established" annotation. Unlike withtok(...)
+ * this takes no argument -- the struct type it points to already fully
+ * specifies which fields pair via its OWN field-level
+ * withtok(readable_elements(...))/withtok(writable_elements(...)). */
+static bool hasFieldsEstablished(const ParmVarDecl *Parameter) {
+  for (const AnnotateAttr *Attribute : Parameter->specific_attrs<AnnotateAttr>())
+    if (Attribute->getAnnotation() == "fields_established")
+      return true;
+  return false;
+}
+
+/* The RecordDecl a fields_established parameter's type points to, or
+ * null if Parameter does not carry the annotation or is not shaped like
+ * a pointer to a struct. */
+static const RecordDecl *fieldsEstablishedRecord(const ParmVarDecl *Parameter) {
+  if (!hasFieldsEstablished(Parameter))
+    return nullptr;
+  QualType Type = Parameter->getType();
+  if (!Type->isPointerType())
+    return nullptr;
+  return Type->getPointeeType()->getAsRecordDecl();
+}
+
 static const MemRegion *carrierRegion(const Expr *Expression,
                                       CheckerContext &C) {
   if (!Expression)
@@ -2267,6 +2292,62 @@ public:
       if (A && B && Extent)
         State = State->set<AssumedDisjointExtent>({A, B}, *Extent);
     }
+    // fields_established (see include/ownership.h's comment and
+    // checkPreCall's mirror-image verification below): seed the real
+    // DynamicExtent for each contracted pointer field's INITIAL value,
+    // from the struct's OWN field values at function entry, so a
+    // standalone analysis of this function (no visible caller, e.g.
+    // --analyze's own per-function entry points, or an opaque/non-
+    // inlined call site) can still judge the function's own internal
+    // field mutations fairly. This is the callee-side half of the
+    // contract; checkPreCall independently verifies, at every REAL call
+    // site, that the caller's own current state actually proves the
+    // same fields before this ever runs -- so a caller that never
+    // established the invariant is still caught there, regardless of
+    // what this seeds. A field carrying more than one contract (this
+    // tree's own readable_elements(n)+writable_elements(cap) pairing)
+    // seeds once per contract in field-declaration order; the later
+    // (conventionally larger, writable-capacity) one wins the shared
+    // DynamicExtent entry -- a precision choice for the callee's own
+    // reasoning only, since soundness rests entirely on the call-site
+    // check below, not on this seed being the tightest possible bound.
+    for (const ParmVarDecl *Parameter : Function->parameters()) {
+      const RecordDecl *Record = fieldsEstablishedRecord(Parameter);
+      if (!Record)
+        continue;
+      SmallVector<RecordSpanContract, 2> Contracts;
+      collectRecordSpanContracts(Record, C.getASTContext(), Contracts);
+      const MemRegion *StructRegion =
+          State->getSVal(State->getLValue(Parameter, C.getLocationContext()))
+              .getAsRegion();
+      if (!StructRegion)
+        continue;
+      for (const RecordSpanContract &Contract : Contracts) {
+        std::optional<Loc> PointerLoc =
+            State->getLValue(Contract.Pointer, loc::MemRegionVal(StructRegion))
+                .getAs<Loc>();
+        std::optional<Loc> LengthLoc =
+            State->getLValue(Contract.Length, loc::MemRegionVal(StructRegion))
+                .getAs<Loc>();
+        if (!PointerLoc || !LengthLoc)
+          continue;
+        const MemRegion *PointerRegion =
+            State->getSVal(*PointerLoc).getAsRegion();
+        if (!PointerRegion)
+          continue;
+        SVal LengthValue = State->getSVal(*LengthLoc);
+        if (Contract.Scale != 1)
+          LengthValue = C.getSValBuilder().evalBinOp(
+              State, BO_Mul, LengthValue,
+              C.getSValBuilder().makeIntVal(Contract.Scale,
+                                            C.getASTContext().getSizeType()),
+              C.getASTContext().getSizeType());
+        if (std::optional<DefinedOrUnknownSVal> DefinedLength =
+                LengthValue.getAs<DefinedOrUnknownSVal>())
+          State = setDynamicExtent(State, PointerRegion->getBaseRegion(),
+                                   *DefinedLength, C.getSValBuilder());
+      }
+    }
     if (State != C.getState())
       C.addTransition(State);
   }
@@ -2431,6 +2512,59 @@ public:
         ContractState =
             ContractState->set<AssumedDisjointExtent>({A, B}, *Extent);
     }
+    // fields_established's caller-side half: whatever checkBeginFunction
+    // seeds for the callee is only a convenience for that function's OWN
+    // internal reasoning (see its comment) -- the actual obligation is
+    // enforced HERE, against the CALLER's real, current knowledge of the
+    // argument's fields, exactly the same way a plain withtok(...)
+    // Require parameter's span is proven against the caller's state
+    // above rather than merely trusted. A caller that has not actually
+    // established the invariant (e.g. passed a struct whose count field
+    // was bumped without the matching reallocation) is reported here,
+    // at the call, not silently believed.
+    if (Function)
+      for (unsigned Index = 0;
+           Index < Function->getNumParams() && Index < Call.getNumArgs();
+           ++Index) {
+        const RecordDecl *Record =
+            fieldsEstablishedRecord(Function->getParamDecl(Index));
+        if (!Record)
+          continue;
+        SmallVector<RecordSpanContract, 2> Contracts;
+        collectRecordSpanContracts(Record, C.getASTContext(), Contracts);
+        const MemRegion *StructRegion = Call.getArgSVal(Index).getAsRegion();
+        if (!StructRegion)
+          continue;
+        for (const RecordSpanContract &Contract : Contracts) {
+          std::optional<Loc> PointerLoc =
+              C.getState()
+                  ->getLValue(Contract.Pointer, loc::MemRegionVal(StructRegion))
+                  .getAs<Loc>();
+          std::optional<Loc> LengthLoc =
+              C.getState()
+                  ->getLValue(Contract.Length, loc::MemRegionVal(StructRegion))
+                  .getAs<Loc>();
+          if (!PointerLoc || !LengthLoc)
+            continue;
+          SVal PointerValue = C.getState()->getSVal(*PointerLoc);
+          SVal LengthValue = C.getState()->getSVal(*LengthLoc);
+          if (Contract.Scale != 1)
+            LengthValue = C.getSValBuilder().evalBinOp(
+                C.getState(), BO_Mul, LengthValue,
+                C.getSValBuilder().makeIntVal(Contract.Scale,
+                                              C.getASTContext().getSizeType()),
+                C.getASTContext().getSizeType());
+          if (PointerValue.isUnknownOrUndef() || LengthValue.isUnknownOrUndef())
+            continue;
+          if (!spanProven(PointerValue, LengthValue, C.getState(), C,
+                          /*UseAssumedSpans=*/false))
+            reportFieldSpan(
+                "struct argument passed to a fields_established parameter "
+                "is not proven to already satisfy its own paired-field "
+                "extent invariant before this call",
+                Call.getOriginExpr(), C.getState(), C);
+        }
+      }
     ContractState =
         recordGrantProofs(ContractState, Call, Spans, Disjoint);
     if (ContractState != C.getState())

@@ -518,3 +518,33 @@ void push_vector_element(void)
 	vec.n = 0;
 	vec.n = 1;
 }
+
+/* fields_established (see include/ownership.h's own comment): a helper
+ * that takes an ALREADY-consistent vector and grows it further. Its own
+ * standalone analysis (no visible caller, e.g. --analyze's own per-
+ * function entry point) has to trust the incoming n/cap/v relationship
+ * to judge its OWN internal growth fairly -- exactly src/util/patch.c's
+ * apply_section/apply_ed_section's own outbuf shape. */
+void grow_established_vector(struct fixture_vector *vec fields_established)
+{
+	if (vec->n == vec->cap) {
+		unsigned newcap = vec->cap ? vec->cap * 2 : 4;
+		unsigned *g = allocate_array(newcap, sizeof *g);
+		if (!g) return;
+		vec->v = g;
+		vec->cap = newcap;
+	}
+	vec->n++;
+}
+
+/* The caller-side half of the same contract: genuinely establishing the
+ * invariant (a freshly zeroed vector: 0 <= 0) before calling a
+ * fields_established parameter is provably sufficient. */
+void call_established_vector_safely(void)
+{
+	struct fixture_vector vec;
+	vec.v = 0;
+	vec.n = 0;
+	vec.cap = 0;
+	grow_established_vector(&vec);
+}

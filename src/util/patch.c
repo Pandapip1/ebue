@@ -1003,9 +1003,17 @@ static int push_reject(struct hunk ***rejects, size_t *n, size_t *cap, struct hu
  * building the result into `outbuf` by copying the untouched source
  * spans between matched hunks (see this file's header comment for why
  * matching is bounded below by `src`, never revisiting content an
- * earlier hunk already consumed). */
+ * earlier hunk already consumed).
+ *
+ * outbuf's own n/cap/v invariant is genuinely established before every
+ * real call: __util_patch_main's one call site (below) always runs
+ * `memset(&outbuf, 0, sizeof outbuf);` immediately before calling this
+ * (0 <= 0 trivially), and this function's own body never assumes
+ * anything more than that -- it only ever grows outbuf via lb_push,
+ * never shrinks or otherwise second-guesses its incoming state. */
 static int apply_section(struct patchfile *pf, struct linebuf *target, const char *define, int loose,
-                          int ignore_applied, struct linebuf *outbuf, struct hunk ***rejects, size_t *nrejects, size_t *rejcap)
+                          int ignore_applied, struct linebuf *outbuf fields_established,
+                          struct hunk ***rejects, size_t *nrejects, size_t *rejcap)
 {
 	size_t hi, src = 0;
 	long offset = 0;
@@ -1055,8 +1063,14 @@ static int apply_section(struct patchfile *pf, struct linebuf *target, const cha
 }
 
 /* Ed scripts splice directly into a mutable working copy of the target
- * -- see this file's header comment for why no matching is needed. */
-static int apply_ed_section(struct patchfile *pf, struct linebuf *target, struct linebuf *outbuf)
+ * -- see this file's header comment for why no matching is needed.
+ *
+ * outbuf's own invariant is established the same way apply_section's is:
+ * __util_patch_main's one call site (below) always runs
+ * `memset(&outbuf, 0, sizeof outbuf);` immediately before calling this,
+ * and this function only ever grows outbuf via lb_push. */
+static int apply_ed_section(struct patchfile *pf, struct linebuf *target,
+                            struct linebuf *outbuf fields_established)
 {
 	struct linebuf work;
 	size_t i;
