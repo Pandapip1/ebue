@@ -182,6 +182,6 @@ int __util_write_main(int argc, char **argv)
 	                            * usefully retry against */
 
 out:
-	if (opened_real) close(wfd);
+	if (opened_real) (void)close(wfd);
 	return status;
 }
