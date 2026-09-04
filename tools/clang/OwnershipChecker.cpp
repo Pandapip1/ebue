@@ -2868,15 +2868,40 @@ public:
 // ever built from BO_Add/BO_Sub/BO_Mul over other such expressions and
 // integer literals (never a comparison, a bitwise op, or a call result),
 // so only that much of the grammar is implemented here. A SymbolCast is
-// rejected outright for the identical reason ArithmeticZ3Proof::translate
-// rejects one: Clang 18 exposes only a SymbolCast's destination type, not
-// its real source type, and a chain of narrowing/widening casts folded
-// into one node could make the operand's own type an unsafe substitute.
-// Any shape translate() cannot decompose, including a rejected cast,
-// simply yields "not proven" here too -- exactly like the ad hoc prover
-// it backs up -- so this can only ever turn an existing "not proven" into
-// "proven", never the reverse: a genuine soundness improvement, not a
-// suppression.
+// handled the same narrow way SizeCastChecker's own CastZ3Proof::translate
+// already does (see that function's block comment): trusted only when the
+// cast's operand already has the exact same bit width as the cast's own
+// type, since that is the one shape where Clang 18's missing accessor for
+// a SymbolCast's private source type cannot matter -- no extension or
+// truncation happens at all, so the bit pattern is unchanged and
+// Algebra.convert() below can soundly reinterpret it under the
+// destination's own signedness. A width mismatch -- the one case a folded
+// multi-step cast chain could actually make Cast->getOperand()->getType()
+// an unsafe substitute for -- still falls through to "not proven".
+//
+// That SymbolCast case alone is NOT sufficient, though: confirmed
+// empirically against line_input_result_bounds_the_buffer
+// (tools/lint-ownership-fixtures/pointer-safe.c, a `long length =
+// getline(...)` result cast to size_t to build the buffer's extent, where
+// `long` and `size_t` are the same width on every target this project
+// builds for -- LP64 aarch64/x86_64, ILP32 i386) that Clang's own
+// SValBuilder::evalCast does not even emit a SymbolCast node for a
+// same-width integer cast -- it silently keeps the operand's own
+// pre-cast, now-stale type instead. `(size_t)length + 1` therefore
+// reaches translate() as a SymIntExpr whose LHS symbol still reports
+// SIGNED `long`, combined with a literal `1` SValBuilder independently
+// built as UNSIGNED size_t. literal() and apply() below accept that
+// mismatch and settle it the way real C's usual arithmetic conversions
+// would (see apply()'s own comment) rather than requiring Clang to have
+// already pre-converted both operands into one matching domain, which is
+// what the old sameDomain-gated design silently assumed and this
+// same-width elision breaks.
+//
+// Any shape translate() cannot decompose, including a still-rejected
+// cast, simply yields "not proven" here too -- exactly like the ad hoc
+// prover it backs up -- so this can only ever turn an existing "not
+// proven" into "proven", never the reverse: a genuine soundness
+// improvement, not a suppression.
 class OwnershipZ3Engine {
 public:
   z3::context Context;
@@ -2904,33 +2929,58 @@ class OwnershipZ3Proof {
            Type->isUnsignedIntegerOrEnumerationType()};
   }
 
-  // The RHS of a SymIntExpr/LHS of an IntSymExpr is only ever trusted when
-  // its own width and signedness already exactly match the operand it is
-  // being combined with -- the same domain SValBuilder itself builds these
-  // literals in for an ordinary arithmetic node. A mismatch (some far rarer
-  // shape this narrow translator was not built for) simply fails the
-  // query rather than guessing a conversion.
+  // A SymIntExpr/IntSymExpr literal is trusted in its OWN reported width
+  // and signedness -- it is a fresh constant SValBuilder built directly
+  // for this one operation (see the two translate() call sites below),
+  // never inherited from an earlier, possibly-stale cast the way a
+  // symbolic operand's own getType() can be (see apply()'s comment for
+  // why that distinction matters here).
   std::optional<ntlibc::algebra::SemanticResult>
-  literal(const llvm::APSInt &Value, ntlibc::algebra::CType Type) const {
-    if (Value.getBitWidth() != Type.Width || Value.isUnsigned() != Type.Unsigned)
-      return std::nullopt;
+  literal(const llvm::APSInt &Value) const {
+    ntlibc::algebra::CType Type{Value.getBitWidth(), Value.getBitWidth(),
+                                Value.isUnsigned()};
     llvm::SmallString<40> Text;
     Value.toString(Text, 10, false, false);
     return Algebra.input(ZCtx.bv_val(Text.c_str(), Type.Width), Type);
   }
 
+  // Left and Right are each trusted in their OWN reported type, but that
+  // type can be STALE: confirmed empirically (a real, minimal getline()
+  // repro, matching line_input_result_bounds_the_buffer in
+  // tools/lint-ownership-fixtures/pointer-safe.c) that Clang's own
+  // SValBuilder::evalCast ELIDES the SymbolCast wrapper entirely for a
+  // same-width cast -- `(size_t)length + 1`'s SymIntExpr keeps
+  // `length`'s own pre-cast SIGNED `long` type on the symbolic operand,
+  // with no SymbolCast node anywhere to see, while the `+ 1` literal is
+  // independently built via SValBuilder::makeIntVal(1, SizeTy) --
+  // UNSIGNED. Calling straight into ScalarSMT's *Converted entry points
+  // (as this used to) would either reject that mismatch outright or --
+  // worse, if the mismatch were papered over by forcing one side into
+  // the other's type -- perform the addition in the WRONG domain: e.g.
+  // computing "length + 1" as SIGNED `long` arithmetic manufactures a
+  // signed-overflow obligation at length == LONG_MAX that the real
+  // program never has, since the real source casts to size_t (defined,
+  // unsigned, no-overflow) *before* adding.  ScalarSMT's own non-
+  // Converted add/subtract/multiply already exist to settle exactly this
+  // ambiguity the way real C does: usualArithmeticType() picks the
+  // correct common domain (same width, mixed signedness converts to
+  // UNSIGNED; a genuine width mismatch promotes the narrower side) and
+  // convert()s both operands into it before combining them, so the
+  // signed-overflow-only-in-the-stale-domain trap above cannot occur, and
+  // (unlike the old sameDomain-gated *Converted call) a genuine, honestly
+  // different-width pair -- never elided the way a same-width cast is,
+  // so each side's own reported type is trustworthy -- can now be
+  // combined too, instead of being rejected outright.
   std::optional<ntlibc::algebra::SemanticResult>
   apply(BinaryOperator::Opcode Op, const ntlibc::algebra::SemanticResult &Left,
        const ntlibc::algebra::SemanticResult &Right) const {
-    if (!Left.Type.sameDomain(Right.Type))
-      return std::nullopt;
     switch (Op) {
     case BO_Add:
-      return Algebra.addConverted(Left, Right);
+      return Algebra.add(Left, Right);
     case BO_Sub:
-      return Algebra.subtractConverted(Left, Right);
+      return Algebra.subtract(Left, Right);
     case BO_Mul:
-      return Algebra.multiplyConverted(Left, Right);
+      return Algebra.multiply(Left, Right);
     default:
       return std::nullopt;
     }
@@ -2947,15 +2997,24 @@ class OwnershipZ3Proof {
           "ntlibc_ownership_bounds_" + std::to_string(Data->getSymbolID());
       return Algebra.input(ZCtx.bv_const(Name.c_str(), Type.Width), Type);
     }
-    if (isa<SymbolCast>(Sym))
-      return std::nullopt;
+    if (const auto *Cast = dyn_cast<SymbolCast>(Sym)) {
+      QualType OperandType = Cast->getOperand()->getType();
+      if (OperandType.isNull() || !OperandType->isIntegerType() ||
+          AST.getIntWidth(OperandType) != Type.Width)
+        return std::nullopt;
+      std::optional<ntlibc::algebra::SemanticResult> Operand =
+          translate(Cast->getOperand(), Depth + 1);
+      if (!Operand)
+        return std::nullopt;
+      return Algebra.convert(*Operand, Type);
+    }
     if (const auto *Binary = dyn_cast<SymIntExpr>(Sym)) {
       std::optional<ntlibc::algebra::SemanticResult> Left =
           translate(Binary->getLHS(), Depth + 1);
       if (!Left)
         return std::nullopt;
       std::optional<ntlibc::algebra::SemanticResult> Right =
-          literal(Binary->getRHS(), Left->Type);
+          literal(Binary->getRHS());
       if (!Right)
         return std::nullopt;
       return apply(Binary->getOpcode(), *Left, *Right);
@@ -2966,7 +3025,7 @@ class OwnershipZ3Proof {
       if (!Right)
         return std::nullopt;
       std::optional<ntlibc::algebra::SemanticResult> Left =
-          literal(Binary->getLHS(), Right->Type);
+          literal(Binary->getLHS());
       if (!Left)
         return std::nullopt;
       return apply(Binary->getOpcode(), *Left, *Right);
