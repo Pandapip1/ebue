@@ -30,6 +30,7 @@
 #endif
 #include "libc.h"
 #include "ntlibc/delayload.h"
+#include "unsafe_pointer.h"
 
 void *ntlibc_delayLoadHelper2(ntlibc_delay_descr_t *descr, ntlibc_delay_thunk_t *piat)
 {
@@ -43,7 +44,12 @@ void *ntlibc_delayLoadHelper2(ntlibc_delay_descr_t *descr, ntlibc_delay_thunk_t 
 	 * rather than being passed separately -- so the descriptor alone
 	 * (plus this one slot pointer) is enough, matching the real ABI's
 	 * two-argument helper shape. */
-	index = (unsigned long)(piat - descr->iat);
+	/* piat is the hand-written delay-load thunk stub's own argument,
+	 * computed there as `base + <RVA>` (same shape __delayLoadHelper2's
+	 * own comment on this identical pattern describes) -- nothing in
+	 * this TU sees that assembly to prove it shares provenance with
+	 * descr->iat. */
+	index = (unsigned long)unsafe_assume_shared_provenance(piat - descr->iat);
 
 	/* *descr->modhandle below is a disclosed, deliberately unmarked
 	 * residual, surfaced only after descr's own nonnull mark let this

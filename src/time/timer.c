@@ -23,6 +23,7 @@
 #include <errno.h>
 #include "libc.h"
 #include "plat_time.h"
+#include "unsafe_pointer.h"
 
 struct posix_timer {
 	int active;
@@ -126,7 +127,10 @@ static void timer_signal(struct posix_timer *timer, long long expirations)
 	memset(&si, 0, sizeof si);
 	si.si_signo = timer->event.sigev_signo;
 	si.si_code = SI_TIMER;
-	si.si_timerid = (int)(timer - timers);
+	/* timer is checked into the fixed `timers` table by a DIFFERENT
+	 * function (timer_create(), via timer_lookup()) earlier in the
+	 * program -- an invariant this function's own body cannot see. */
+	si.si_timerid = (int)unsafe_assume_shared_provenance(timer - timers);
 	si.si_overrun = timer->overrun;
 	si.si_value = timer->event.sigev_value;
 	/* A timer expiration is process-directed. The manager is an internal

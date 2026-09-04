@@ -47,6 +47,7 @@
 #include "libc.h"
 #include "sh.h"
 #include "ownership_stubs.h"
+#include "unsafe_pointer.h"
 
 /* __sh_free_words()/__sh_free_redirs() live in free.c alongside
  * __sh_list_free() (which needs the same logic to free a whole parsed
@@ -980,11 +981,19 @@ static struct sh_command *parse_funcdef(struct parser *p, struct sh_command *cmd
 	end = p->cur.start;        /* the token after the body -- T_EOF has
 	                            * one too, pointing at the NUL, so there
 	                            * is no end-of-input special case */
-	if (end < start) end = start;
-	while (end > start && isspace((unsigned char)end[-1])) end--;
+	/* start and end are both p->cur.start read at two different points
+	 * while parsing the same function body (see start's own assignment
+	 * above); the invariant that nothing changes what buffer `p`
+	 * tokenizes between those two reads lives in the whole recursive-
+	 * descent parser's shape, not in any one function's local
+	 * reasoning. */
+	if (unsafe_assume_shared_provenance(end < start)) end = start;
+	while (unsafe_assume_shared_provenance(end > start) &&
+	      isspace((unsigned char)end[-1])) end--;
 
 	cmd->u.funcdef.name = fname;
-	cmd->u.funcdef.func_text = xstrndup(start, (size_t)(end - start));
+	cmd->u.funcdef.func_text =
+	    xstrndup(start, (size_t)unsafe_assume_shared_provenance(end - start));
 	if (!cmd->u.funcdef.func_text) { cmd->u.funcdef.name = 0; perr(p, "out of memory"); goto fail; }
 	return cmd;
 fail:

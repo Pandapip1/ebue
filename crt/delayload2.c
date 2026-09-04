@@ -63,6 +63,7 @@
 #include "pe.h"
 #include "rtlib.h"
 #include "ntlibc/rpath.h"
+#include "unsafe_pointer.h"
 
 /* Real (linker-built) delay-load descriptor, PE/COFF spec 4.3. Every
  * *RVA field is an offset from the image base; see the file header
@@ -155,7 +156,11 @@ void *__delayLoadHelper2(void *vdescr, void **piat)
 	nametable = (ULONG *)(base + descr->ImportNameTableRVA);
 	dllname = (const char *)(base + descr->DllNameRVA);
 
-	index = (unsigned long)(piat - iat);
+	/* piat is the hand-written delay-load thunk stub's (crt/delayload1.asm)
+	 * own argument, computed there as `base + <RVA>` -- the same
+	 * computation `iat` just made in C above -- but nothing in this TU
+	 * sees that assembly to prove the two share provenance. */
+	index = (unsigned long)unsafe_assume_shared_provenance(piat - iat);
 	/* Each name-table entry is an RVA to a 2-byte "hint" (unused, always
 	 * 0 here) followed by the NUL-terminated import name; skip the hint
 	 * the same way the real loader does. */
@@ -167,7 +172,16 @@ void *__delayLoadHelper2(void *vdescr, void **piat)
 	 * slot. See the file header comment for why a range check against
 	 * the owning DLL's mapped image, not a sentinel compare, is what
 	 * distinguishes this from "still holds the thunk's own address". */
-	if (dll && ntlibc_pe_dll_range(dll, &rstart, &rend) && *piat >= rstart && *piat < rend)
+	/* *piat and rstart/rend come from two independent sources this
+	 * function's own body cannot relate: *piat is whatever a prior
+	 * resolution already stored into the IAT slot, while rstart/rend are
+	 * ntlibc_pe_dll_range()'s runtime query of the OWNING dll's mapped
+	 * image -- a human-verified PE loader invariant (a resolved IAT slot
+	 * always holds an address inside its own DLL's mapping), not
+	 * something derivable from this function's local pointer arithmetic. */
+	if (dll && ntlibc_pe_dll_range(dll, &rstart, &rend) &&
+	    unsafe_assume_shared_provenance(*piat >= rstart) &&
+	    unsafe_assume_shared_provenance(*piat < rend))
 		return *piat;
 
 	if (!dll) {
