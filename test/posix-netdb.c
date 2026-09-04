@@ -692,7 +692,18 @@ static void test_netdb_gethostbyname_fixture(void)
  * separate process rather than a thread so it has its own address
  * space and cannot be confused with the parent's own env vars/fixture
  * files mid-test.
- * ================================================================== */
+ *
+ * Linux-only: these are raw Linux syscall numbers (see each arch's ND_SYS_*
+ * table below), meaningful only because src/netdb/nt/plat_netdb.c's own
+ * banner says the real resolver "exists only for native Linux" -- NT's
+ * getaddrinfo() is an EAI_FAIL stub, so there is nothing here for a real
+ * DNS round trip to prove on that platform. Also a real compile-time
+ * necessity for arm64: __aarch64__ is defined for arm64-win32-tcc too, but
+ * that backend has no 'svc' instruction encoder at all (it targets NT,
+ * which is entered through ntdll thunks, never a raw SVC), so building
+ * this unconditionally broke the Windows/arm64 build with a hard "ARM64
+ * instruction 'svc' not implemented" compiler error. */
+#if defined(__linux__)
 
 #if defined(__aarch64__)
 #define ND_SYS_socket      198
@@ -859,6 +870,9 @@ static void fake_dns_server(int portfd)
 	_exit(0);
 }
 
+#endif /* defined(__linux__) */
+
+#if defined(__linux__)
 static void test_netdb_dns_udp_roundtrip(void)
 {
 	int pfd[2];
@@ -924,6 +938,15 @@ static void test_netdb_dns_udp_roundtrip(void)
 	CHECK(waitpid(child, &status, 0) == child);
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
+#else
+/* See the fake_dns_server() banner above: outside native Linux there is
+ * no real resolver backend for this to prove anything against. */
+static void test_netdb_dns_udp_roundtrip(void)
+{
+	printf("SKIP posix-netdb DNS UDP round trip (no real resolver backend "
+	       "on this platform -- see src/netdb/nt/plat_netdb.c)\n");
+}
+#endif /* defined(__linux__) */
 
 int main(void)
 {
