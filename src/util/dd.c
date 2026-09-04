@@ -426,7 +426,7 @@ int __util_dd_main(int argc, char **argv)
 	} else {
 		ofd = 1;
 	}
-	if (ofd < 0) { __util_diagf("dd: %s: %s\n", o.of_path, strerror(errno)); if (ifd > 0) close(ifd); return 1; }
+	if (ofd < 0) { __util_diagf("dd: %s: %s\n", o.of_path, strerror(errno)); if (ifd > 0) (void)close(ifd); return 1; }
 
 	if (dd_position(ifd, o.skip, o.ibs, 1, o.if_path ? o.if_path : "stdin") < 0) { had_error = 1; goto summary; }
 	if (dd_position(ofd, o.seek, o.obs, 0, o.of_path ? o.of_path : "stdout") < 0) { had_error = 1; goto summary; }
