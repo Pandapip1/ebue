@@ -411,12 +411,23 @@ jobs:
         if: matrix.stage == 'ownership'
         env:
           Z3_VERSION: 5.1.0
+          # Pinned to the z3-5.1.0-x64-glibc-2.39.zip asset of the
+          # Z3Prover/z3 "z3-5.1.0" GitHub release, cross-checked against
+          # that release's own API-reported digest (and its 54326027-byte
+          # size) as well as two independent local downloads -- not
+          # derived from anything fetched at CI time, so a compromised or
+          # MITM'd asset is caught here rather than trusted straight into
+          # every ownership run's proof toolchain. Update this alongside
+          # Z3_VERSION and the asset name below if the pinned release ever
+          # bumps.
+          Z3_SHA256: f47be8d27d3230e823bf1eeede2fe0abaca55bb78d0b59974370e6689a92284a
         run: |
           set -eu
           z3_dir="$RUNNER_TEMP/z3-$Z3_VERSION"
           asset="z3-$Z3_VERSION-x64-glibc-2.39"
           curl -fsSL -o "$RUNNER_TEMP/z3.zip" \
             "https://github.com/Z3Prover/z3/releases/download/z3-$Z3_VERSION/$asset.zip"
+          echo "$Z3_SHA256  $RUNNER_TEMP/z3.zip" | sha256sum -c -
           unzip -q "$RUNNER_TEMP/z3.zip" -d "$RUNNER_TEMP"
           mv "$RUNNER_TEMP/$asset" "$z3_dir"
           mkdir -p "$z3_dir/pkgconfig"
