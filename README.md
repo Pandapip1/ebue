@@ -150,12 +150,16 @@ same Z3-backed algebra as it proves out.
 `tools/lint.sh` implements 22 such stages in total (the checkers above,
 plus compiler warnings, `clang-tidy`, `cppcheck`, `shellcheck`, and a few
 source-level policy scripts), each run in its own subshell to its own
-log so they execute concurrently. `make lint` runs 20 of them
-(`LINT_REQUIRED_STAGES` in the Makefile); CI runs most of that same set
-as one job per stage. `totality` and `arithub` — the
-relational-arithmetic Z3 proof stages — are invoked directly
-(`tools/lint.sh totality arithub`) rather than through `make lint` or CI
-today.
+log so they execute concurrently. `make lint` runs 18 of them
+(`LINT_REQUIRED_STAGES` in the Makefile, kept in sync with
+`tools/lint.sh`'s own default set); CI runs that same set as one job per
+stage. Four stages are opt-in only, invoked directly
+(`tools/lint.sh sizearith totality arithub provenance`) rather than
+through `make lint` or CI: `sizearith`, `totality` and `arithub` because
+their findings still need triage against the codebase, and `provenance`
+because removing `PointerProvenanceChecker.cpp`'s exemption table
+surfaced real findings at previously-exempted call sites, moving it to
+the same opt-in status until those are triaged too.
 
 ## Generated files, the pre-push gate, and dependency updates
 
