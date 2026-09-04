@@ -381,7 +381,7 @@ static int deliver_message(const char *path, const char *login, const char *to_h
 	}
 	if (flock(fd, LOCK_EX) < 0) {
 		__util_diagf("mailx: %s: %s\n", path, strerror(errno));
-		close(fd);
+		(void)close(fd);
 		free(msg);
 		return -1;
 	}
@@ -391,7 +391,10 @@ static int deliver_message(const char *path, const char *login, const char *to_h
 		rc = 0;
 
 	flock(fd, LOCK_UN);
-	close(fd);
+	if (close(fd) < 0 && rc == 0) {
+		__util_diagf("mailx: %s: %s\n", path, strerror(errno));
+		rc = -1;
+	}
 	free(msg);
 	return rc;
 }
@@ -425,7 +428,7 @@ static int do_send(const struct passwd *me, const char *subject, char **rcpts, i
 	if (!subject) {
 		if (isatty(0)) {
 			fprintf(stderr, "Subject: ");
-			fflush(stderr);
+			(void)fflush(stderr);
 			if (!fgets(subjbuf, sizeof subjbuf, stdin)) subjbuf[0] = 0;
 			subjbuf[strcspn(subjbuf, "\n")] = 0;
 			subject = subjbuf;
@@ -658,8 +661,8 @@ static int interactive_loop(int fd, const char *label, char *buf, size_t len, st
 	(void)len;
 
 	for (;;) {
-		if (!isatty(0)) { fprintf(stderr, "& "); fflush(stderr); }
-		else { printf("& "); fflush(stdout); }
+		if (!isatty(0)) { fprintf(stderr, "& "); (void)fflush(stderr); }
+		else { printf("& "); (void)fflush(stdout); }
 		if (!fgets(line, sizeof line, stdin)) {
 			/* EOF at the prompt behaves like `quit`. */
 			return rewrite_mailbox(fd, label, buf, msgs, n) == 0 ? 0 : 1;
@@ -762,21 +765,21 @@ static int do_receive(const struct passwd *me, const char *path, int headers_onl
 	}
 	if (flock(fd, want_write ? LOCK_EX : LOCK_SH) < 0) {
 		__util_diagf("mailx: %s: %s\n", path, strerror(errno));
-		close(fd);
+		(void)close(fd);
 		return 1;
 	}
 
 	if (slurp_fd(fd, &buf, &len) < 0) {
 		__util_diagf("mailx: %s: %s\n", path, strerror(errno));
 		flock(fd, LOCK_UN);
-		close(fd);
+		(void)close(fd);
 		return 1;
 	}
 
 	if (parse_mbox(buf, len, path, &msgs, &n) < 0) {
 		free(buf);
 		flock(fd, LOCK_UN);
-		close(fd);
+		(void)close(fd);
 		return 1;
 	}
 
@@ -785,7 +788,7 @@ static int do_receive(const struct passwd *me, const char *path, int headers_onl
 		free(buf);
 		free(msgs);
 		flock(fd, LOCK_UN);
-		close(fd);
+		(void)close(fd);
 		return 0;
 	}
 
@@ -804,7 +807,10 @@ static int do_receive(const struct passwd *me, const char *path, int headers_onl
 	free(buf);
 	free(msgs);
 	flock(fd, LOCK_UN);
-	close(fd);
+	if (close(fd) < 0 && rc == 0) {
+		__util_diagf("mailx: %s: %s\n", path, strerror(errno));
+		rc = 1;
+	}
 	return rc;
 }
 
@@ -819,7 +825,7 @@ static int do_test_for_mail(const struct passwd *me)
 	fd = open(path, O_RDONLY);
 	if (fd < 0) return 1;
 	n = read(fd, &c, 1);
-	close(fd);
+	(void)close(fd);
 	return (n == 1 && c == 'F') ? 0 : 1;
 }
 
