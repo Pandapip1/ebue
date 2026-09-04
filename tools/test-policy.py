@@ -347,6 +347,22 @@ def probe(mode: str, fences: list[Fence]) -> int:
             (TEST_DIR / "test-policy.h").read_bytes()
         )
         os.symlink(ROOT / "src", tmp / "src")
+        # Probe executables are compiled directly into `tmp` (see
+        # `executable` below), but run_probe() must NOT run them with `tmp`
+        # itself as the working directory: test/posix-spawn.c's
+        # test_spawnp_path_search() puts its own argv[0] directory on PATH
+        # and then asserts posix_spawn() -- which must NOT search PATH --
+        # fails to find a bare filename that is "on PATH and nowhere near
+        # the working directory". If the working directory IS `tmp`, that
+        # assumption breaks: the bare filename names a probe-N.exe that
+        # genuinely sits in `tmp` too, so it resolves as an ordinary
+        # relative pathname (CWD-relative, no PATH search involved) and the
+        # spawn legitimately succeeds -- a false STALE, not a real
+        # posix_spawn() bug. A separate run directory keeps the probe's
+        # working directory from ever coinciding with the directory an
+        # executable was built into.
+        run_dir = tmp / "run"
+        run_dir.mkdir()
         for number, group in enumerate(groups(fences), 1):
             disposition = group[0].disposition
             label = group[0].case_name or ",".join(f.ident for f in group)
@@ -373,7 +389,7 @@ def probe(mode: str, fences: list[Fence]) -> int:
                     print(f"         {line}")
                 failures += 1
                 continue
-            outcome, output = run_probe(executable, cfg, tmp, label)
+            outcome, output = run_probe(executable, cfg, run_dir, label)
             if disposition == "PASS" and outcome == "PASS":
                 print(f"PASS     {label}")
             elif disposition == "FLAKY" and outcome in {"PASS", "FAIL"} and mode != "strict":
