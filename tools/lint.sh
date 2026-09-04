@@ -1181,7 +1181,7 @@ stage_ownership() {
 	require_tool llvm-config-18 || return $missing
 	require_tool pkg-config || return $missing
 	if ! pkg-config --exists z3; then
-		report_missing "Z3 development headers and library are not installed, so the memory contract's no-wrap side condition cannot be proved."
+		report_missing "Z3 development headers and library are not installed, so the memory contract's no-wrap side condition and pointer extent bounds beyond the ad hoc linear prover cannot be proved."
 		return $missing
 	fi
 	if ! z3_flags=$(pkg-config --cflags --libs z3); then
@@ -1224,7 +1224,15 @@ stage_ownership() {
 	# llvm-config and pkg-config deliberately return shell words, not one
 	# argument.
 	# shellcheck disable=SC2046,SC2086
-	clang++-18 -fPIC -shared -DOWNERSHIP_CHECKER_BUNDLE \
+	# -fexceptions must follow --cxxflags, not precede it: --cxxflags
+	# carries LLVM's own -fno-exceptions, and the later flag wins (see
+	# stage_arithub's identical build for the same requirement). Both
+	# NTLIBC_MEMORY_CONTRACT_Z3 (MemoryContractChecker.cpp's no-wrap side
+	# condition) and NTLIBC_OWNERSHIP_Z3 (OwnershipChecker.cpp's extent
+	# bounds fallback) share this one -fexceptions, since z3++.h's `throw
+	# exception(...)` calls are compiled into this one translation unit
+	# either way.
+	clang++-18 -fPIC -shared -DOWNERSHIP_CHECKER_BUNDLE -DNTLIBC_OWNERSHIP_Z3 \
 		$(llvm-config-18 --cxxflags) $memory_contract_cxxflags \
 		tools/clang/OwnershipChecker.cpp \
 		tools/clang/AllocationLifetimeChecker.cpp \

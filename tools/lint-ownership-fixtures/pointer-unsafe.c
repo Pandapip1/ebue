@@ -78,3 +78,19 @@ int failed_line_input_does_not_validate_the_buffer(void *stream)
 		return 0;
 	return *line; /* ownership-expect: pointer-null */
 }
+
+/* The adversarial twin of pointer-safe.c's doubled_extent_via_
+ * multiplication_index: the terminator is written one byte PAST the
+ * doubled extent (`2 * n + 1` against an allocation of only `n + n + 1`
+ * bytes, i.e. valid indices 0..2n), a genuinely out-of-bounds access.
+ * Both the ad hoc prover and the new z3ExtentProvenInBounds fallback
+ * must still report this -- the fallback proving a real, different
+ * shape (the sibling fixture) must never loosen this one: Z3 correctly
+ * finds a counterexample (any n) rather than proving sufficiency. */
+char *doubled_extent_off_by_one_via_multiplication_index(size_t n)
+{
+	char *d = __malloc(n + n + 1);
+	if (!d) return 0;
+	d[2 * n + 1] = 0; /* ownership-expect: pointer-extent-z3 */
+	return d;
+}

@@ -359,3 +359,27 @@ int wide_scan_return_value_extent_is_trusted(wchar_t *s, const wchar_t *accept)
 	s += wcsspn(s, accept);
 	return *s;
 }
+
+/* A "write two copies of an n-byte value back to back, then terminate"
+ * idiom (allocate exactly enough for both copies plus a NUL, then write
+ * the terminator at the doubled offset). The extent is `n + n + 1` -- an
+ * additive tree collectLinearTerms() decomposes fine, accumulating the
+ * repeated symbol `n` into coefficient 2 -- but the terminator's index is
+ * written as the semantically equal, structurally different `2 * n`: a
+ * BO_Mul node collectLinearTerms() cannot decompose at all, so it folds
+ * the whole node in as one opaque term keyed by ITS OWN pointer identity,
+ * which can never cancel against a plain occurrence of the symbol `n` on
+ * the other side. That is exactly the "cancels opaque subexpressions only
+ * by raw pointer/AST-node identity, not semantic equality" gap named in
+ * linearExtentProvenInBounds's own comments: the ad hoc prover reports
+ * "not proven" here. z3ExtentProvenInBounds proves it directly instead --
+ * `n + n + 1 == 2 * n + 1` is exact ring arithmetic, true for every value
+ * of `n` including under unsigned wraparound, since doubling and self-
+ * addition are bit-identical modulo 2^width. */
+char *doubled_extent_via_multiplication_index(size_t n)
+{
+	char *d = __malloc(n + n + 1);
+	if (!d) return 0;
+	d[2 * n] = 0;
+	return d;
+}

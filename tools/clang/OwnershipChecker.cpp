@@ -21,6 +21,10 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#ifdef NTLIBC_OWNERSHIP_Z3
+#include "ExactCScalarSMT.h"
+#include "z3++.h"
+#endif
 
 #include <cctype>
 #include <cstdint>
@@ -2845,6 +2849,209 @@ public:
   }
 };
 
+#ifdef NTLIBC_OWNERSHIP_Z3
+// A genuine Z3-backed fallback for ValidPointerChecker's own ad hoc
+// linear-arithmetic bound prover (collectLinearTerms()/
+// linearExtentProvenInBounds()/peelElementWidthFactor() below), used only
+// when that prover reports "not proven": it only ever peels a single
+// top-level BO_Mul node (never a nested one) off the extent expression,
+// and only decomposes an additive (BO_Add/BO_Sub) tree into per-symbol
+// coefficients, folding anything else -- including any other BO_Mul it
+// meets -- in as one opaque, pointer-identity-only term. This bridge asks
+// the exact same "is the access provably within the region's dynamic
+// extent" question directly of Z3 instead, via ExactCScalarSMT.h's
+// ScalarSMT -- the same shared C-arithmetic algebra TotalityChecker.cpp
+// and SizeCastChecker.cpp already trust for width/signedness promotion
+// and per-operation overflow/wrap -- so this never reimplements those
+// conversion rules itself. Deliberately narrower than SizeCastChecker's
+// own ArithmeticZ3Proof translator: an extent/index expression is only
+// ever built from BO_Add/BO_Sub/BO_Mul over other such expressions and
+// integer literals (never a comparison, a bitwise op, or a call result),
+// so only that much of the grammar is implemented here. A SymbolCast is
+// rejected outright for the identical reason ArithmeticZ3Proof::translate
+// rejects one: Clang 18 exposes only a SymbolCast's destination type, not
+// its real source type, and a chain of narrowing/widening casts folded
+// into one node could make the operand's own type an unsafe substitute.
+// Any shape translate() cannot decompose, including a rejected cast,
+// simply yields "not proven" here too -- exactly like the ad hoc prover
+// it backs up -- so this can only ever turn an existing "not proven" into
+// "proven", never the reverse: a genuine soundness improvement, not a
+// suppression.
+class OwnershipZ3Engine {
+public:
+  z3::context Context;
+  z3::solver Solver;
+
+  OwnershipZ3Engine() : Solver(Context) {
+    z3::params Parameters(Context);
+    // Matches SizeCastChecker's ArithmeticZ3Engine: Z3's deterministic
+    // resource counter is the primary query budget, with a generous wall
+    // clock only as a pathological safety stop.
+    Parameters.set("rlimit", 1000000u);
+    Parameters.set("timeout", 2000u);
+    Solver.set(Parameters);
+  }
+};
+
+class OwnershipZ3Proof {
+  z3::context &ZCtx;
+  z3::solver &Solver;
+  ASTContext &AST;
+  ntlibc::algebra::ScalarSMT Algebra;
+
+  ntlibc::algebra::CType cType(QualType Type) const {
+    return {AST.getIntWidth(Type), AST.getIntWidth(Type),
+           Type->isUnsignedIntegerOrEnumerationType()};
+  }
+
+  // The RHS of a SymIntExpr/LHS of an IntSymExpr is only ever trusted when
+  // its own width and signedness already exactly match the operand it is
+  // being combined with -- the same domain SValBuilder itself builds these
+  // literals in for an ordinary arithmetic node. A mismatch (some far rarer
+  // shape this narrow translator was not built for) simply fails the
+  // query rather than guessing a conversion.
+  std::optional<ntlibc::algebra::SemanticResult>
+  literal(const llvm::APSInt &Value, ntlibc::algebra::CType Type) const {
+    if (Value.getBitWidth() != Type.Width || Value.isUnsigned() != Type.Unsigned)
+      return std::nullopt;
+    llvm::SmallString<40> Text;
+    Value.toString(Text, 10, false, false);
+    return Algebra.input(ZCtx.bv_val(Text.c_str(), Type.Width), Type);
+  }
+
+  std::optional<ntlibc::algebra::SemanticResult>
+  apply(BinaryOperator::Opcode Op, const ntlibc::algebra::SemanticResult &Left,
+       const ntlibc::algebra::SemanticResult &Right) const {
+    if (!Left.Type.sameDomain(Right.Type))
+      return std::nullopt;
+    switch (Op) {
+    case BO_Add:
+      return Algebra.addConverted(Left, Right);
+    case BO_Sub:
+      return Algebra.subtractConverted(Left, Right);
+    case BO_Mul:
+      return Algebra.multiplyConverted(Left, Right);
+    default:
+      return std::nullopt;
+    }
+  }
+
+  std::optional<ntlibc::algebra::SemanticResult>
+  translate(SymbolRef Sym, unsigned Depth = 0) {
+    if (!Sym || Depth > 24 || Sym->getType().isNull() ||
+        !Sym->getType()->isIntegerType())
+      return std::nullopt;
+    ntlibc::algebra::CType Type = cType(Sym->getType());
+    if (const auto *Data = dyn_cast<SymbolData>(Sym)) {
+      std::string Name =
+          "ntlibc_ownership_bounds_" + std::to_string(Data->getSymbolID());
+      return Algebra.input(ZCtx.bv_const(Name.c_str(), Type.Width), Type);
+    }
+    if (isa<SymbolCast>(Sym))
+      return std::nullopt;
+    if (const auto *Binary = dyn_cast<SymIntExpr>(Sym)) {
+      std::optional<ntlibc::algebra::SemanticResult> Left =
+          translate(Binary->getLHS(), Depth + 1);
+      if (!Left)
+        return std::nullopt;
+      std::optional<ntlibc::algebra::SemanticResult> Right =
+          literal(Binary->getRHS(), Left->Type);
+      if (!Right)
+        return std::nullopt;
+      return apply(Binary->getOpcode(), *Left, *Right);
+    }
+    if (const auto *Binary = dyn_cast<IntSymExpr>(Sym)) {
+      std::optional<ntlibc::algebra::SemanticResult> Right =
+          translate(Binary->getRHS(), Depth + 1);
+      if (!Right)
+        return std::nullopt;
+      std::optional<ntlibc::algebra::SemanticResult> Left =
+          literal(Binary->getLHS(), Right->Type);
+      if (!Left)
+        return std::nullopt;
+      return apply(Binary->getOpcode(), *Left, *Right);
+    }
+    if (const auto *Binary = dyn_cast<SymSymExpr>(Sym)) {
+      std::optional<ntlibc::algebra::SemanticResult> Left =
+          translate(Binary->getLHS(), Depth + 1);
+      std::optional<ntlibc::algebra::SemanticResult> Right =
+          translate(Binary->getRHS(), Depth + 1);
+      if (!Left || !Right)
+        return std::nullopt;
+      return apply(Binary->getOpcode(), *Left, *Right);
+    }
+    return std::nullopt;
+  }
+
+public:
+  OwnershipZ3Proof(OwnershipZ3Engine &Engine, ASTContext &AST)
+      : ZCtx(Engine.Context), Solver(Engine.Solver), AST(AST),
+        Algebra(ZCtx, cType(AST.IntTy), cType(AST.UnsignedIntTy)) {
+    Solver.reset();
+  }
+
+  // Proves `index * ElemWidth + Required <= Extent`, in bytes, with every
+  // step -- the extent expression, the index expression, and this
+  // function's own element-width scale/add -- computed with the exact
+  // bit-precise C semantics (including defined unsigned wrap) ScalarSMT
+  // already gives every other Z3-backed checker in this tree, and
+  // rejected as "not proven" the instant any step's Defined proposition
+  // could fail (a genuine UB path, e.g. signed overflow, in the extent or
+  // index computation itself makes the resulting bit pattern untrustworthy
+  // regardless of what it happens to compute to).
+  std::optional<bool> proveOffsetInBounds(SymbolRef ExtentSym,
+                                          SymbolRef IndexSym,
+                                          CharUnits ElemWidth,
+                                          CharUnits Required) {
+    std::optional<ntlibc::algebra::SemanticResult> Extent =
+        translate(ExtentSym);
+    std::optional<ntlibc::algebra::SemanticResult> Index =
+        translate(IndexSym);
+    if (!Extent || !Index)
+      return std::nullopt;
+    ntlibc::algebra::CType SizeT = cType(AST.getSizeType());
+    std::optional<ntlibc::algebra::SemanticResult> ExtentWide =
+        Algebra.convert(*Extent, SizeT);
+    std::optional<ntlibc::algebra::SemanticResult> IndexWide =
+        Algebra.convert(*Index, SizeT);
+    if (!ExtentWide || !IndexWide)
+      return std::nullopt;
+    std::optional<ntlibc::algebra::SemanticResult> WidthLiteral =
+        Algebra.input(
+            ZCtx.bv_val(static_cast<uint64_t>(ElemWidth.getQuantity()),
+                       SizeT.Width),
+            SizeT);
+    std::optional<ntlibc::algebra::SemanticResult> RequiredLiteral =
+        Algebra.input(
+            ZCtx.bv_val(static_cast<uint64_t>(Required.getQuantity()),
+                       SizeT.Width),
+            SizeT);
+    if (!WidthLiteral || !RequiredLiteral)
+      return std::nullopt;
+    std::optional<ntlibc::algebra::SemanticResult> Scaled =
+        Algebra.multiplyConverted(*IndexWide, *WidthLiteral);
+    std::optional<ntlibc::algebra::SemanticResult> Access =
+        Scaled ? Algebra.addConverted(*Scaled, *RequiredLiteral)
+              : std::nullopt;
+    if (!Access)
+      return std::nullopt;
+    z3::expr Sufficient = z3::uge(ExtentWide->Value, Access->Value);
+    z3::expr Obligation =
+        !(ExtentWide->Defined && Access->Defined && Sufficient);
+    Solver.add(Obligation);
+    return ntlibc::algebra::provesUnsatisfiable(Solver);
+  }
+};
+
+static OwnershipZ3Engine &ownershipZ3Engine() {
+  // A thread-local context/solver, reused (and reset) across queries,
+  // avoids repeated Z3 initialization -- the same rationale as
+  // SizeCastChecker's identical arithmeticZ3Engine().
+  static thread_local OwnershipZ3Engine Engine;
+  return Engine;
+}
+#endif
+
 class ValidPointerChecker
     : public Checker<check::PreStmt<UnaryOperator>,
                      check::PreStmt<ArraySubscriptExpr>,
@@ -3234,6 +3441,31 @@ class ValidPointerChecker
            static_cast<uint64_t>(Constant) >= static_cast<uint64_t>(Required);
   }
 
+#ifdef NTLIBC_OWNERSHIP_Z3
+  // The genuine Z3-backed fallback (OwnershipZ3Proof, above) for exactly
+  // the shapes linearExtentProvenInBounds documents it cannot handle:
+  // nested multiplication, and a provably-equal-but-differently-derived
+  // symbol whose opaque subexpressions do not share pointer identity with
+  // anything on the other side. Deliberately queried in raw byte units
+  // (unlike linearExtentProvenInBounds, this never peels ElemWidth off
+  // the extent first) since OwnershipZ3Proof computes the real, bit-
+  // precise `index * ElemWidth` product itself.
+  static bool z3ExtentProvenInBounds(const ElementRegion *Element,
+                                     SVal BaseExtent, CharUnits Width,
+                                     CheckerContext &C) {
+    SymbolRef ExtentSym = BaseExtent.getAsSymbol();
+    SymbolRef IndexSym = Element->getIndex().getAsSymbol();
+    if (!ExtentSym || !IndexSym)
+      return false;
+    CharUnits ElemWidth =
+        C.getASTContext().getTypeSizeInChars(Element->getElementType());
+    OwnershipZ3Proof Proof(ownershipZ3Engine(), C.getASTContext());
+    std::optional<bool> Proven =
+        Proof.proveOffsetInBounds(ExtentSym, IndexSym, ElemWidth, Width);
+    return Proven && *Proven;
+  }
+#endif
+
   static bool alignmentProven(const MemRegion *Region, QualType Type,
                               ASTContext &Ctx) {
     if (Type.isNull() || Type->isIncompleteType())
@@ -3559,7 +3791,15 @@ public:
         isa_and_nonnull<SymbolExtent>(BaseExtent.getAsSymbol());
     if (!NoRealExtentInfo) {
       if (const auto *Element = dyn_cast<ElementRegion>(Region)) {
-        if (linearExtentProvenInBounds(Element, BaseExtent, Width, C)) {
+        // z3ExtentProvenInBounds only ever runs once the ad hoc prover
+        // above has already reported "not proven" -- a genuine soundness
+        // improvement on top of it, never a substitute: if Z3 also can't
+        // prove it, the finding below still fires exactly as before.
+        if (linearExtentProvenInBounds(Element, BaseExtent, Width, C)
+#ifdef NTLIBC_OWNERSHIP_Z3
+            || z3ExtentProvenInBounds(Element, BaseExtent, Width, C)
+#endif
+        ) {
           if (!alignmentProven(Region, Type, C.getASTContext()))
             report("dereference alignment is not proven valid", Statement,
                    State, C);
