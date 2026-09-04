@@ -548,3 +548,38 @@ void call_established_vector_safely(void)
 	vec.cap = 0;
 	grow_established_vector(&vec);
 }
+
+/* Mirrors src/util/patch.c's linebuf_insert_block()/src/glob/glob.c's
+ * pv_push()/comp_push(): once `cap`'s own allocation (here allocate_array,
+ * real code's __util_reallocarray/__malloc) establishes v's real
+ * DynamicExtent as `cap * sizeof(*v)`, a growth guard's FALSE branch
+ * (folded here to an early return on the TRUE branch, to keep this
+ * fixture to the single path that matters) records only the UNSCALED
+ * relation `need <= cap` via checkBranchCondition/ProvenLessEqual -- but
+ * the real obligation flushRecordSpanObligations poses is the ELEMENT-
+ * SIZE-SCALED `need * sizeof(*v) <= DynamicExtent(v)`. An explicit prior
+ * bound on cap (mirroring src/internal/libc.h's own
+ * __array_next_capacity's `maximum = (size_t)-1 / element_size; if
+ * (current > maximum) return 0;` check) is what makes `cap *
+ * sizeof(*v)` genuinely provable not to overflow -- see
+ * MemoryContractZ3Proof::provesScaledAtLeast's own comment
+ * (tools/clang/MemoryContractChecker.cpp) for exactly why that side
+ * proof, not just the unscaled relation alone, is required before the
+ * scaled inequality can be trusted. tools/lint-memory-contract-
+ * fixtures/unsafe.c's grow_vector_scaled_relation_unbounded is the
+ * adversarial twin: the IDENTICAL unscaled relation, but with no such
+ * bound on cap, so the no-wrap side obligation is genuinely
+ * unsatisfiable and the finding must still be reported. */
+void grow_vector_scaled_relation_bounded(size_t cap, size_t need)
+{
+	struct fixture_vector vec;
+	unsigned *g;
+	if (cap > 1000000000u) return;
+	g = allocate_array(cap, sizeof *g);
+	if (!g) return;
+	vec.v = g;
+	vec.cap = cap;
+	vec.n = 0;
+	if (vec.n + need > vec.cap) return;
+	vec.n += need;
+}
