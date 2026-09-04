@@ -8,6 +8,7 @@ tokdef fixture_readable_span l_unlimited implicit_drop extent_at_least zero_vacu
 tokdef fixture_writable_span l_unlimited implicit_drop extent_at_least zero_vacuous;
 tokdef fixture_disjoint_span l_unlimited implicit_drop disjoint_extent zero_vacuous;
 tokdef fixture_readable_elements l_unlimited implicit_drop element_extent zero_vacuous;
+tokdef fixture_writable_elements l_unlimited implicit_drop element_extent zero_vacuous;
 
 void *memcpy(void *destination withtok(fixture_writable_span(length))
 	withtok(fixture_disjoint_span(source, length)),
@@ -19,6 +20,8 @@ void *__malloc(size_t length);
 void *opaque_allocator(size_t length);
 withtok(fixture_writable_span(length))
 void *allocate_unknown_extent(size_t length);
+withtok(fixture_writable_span(count * size))
+void *allocate_array(size_t count, size_t size);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 void consume_bytes(const void *source withtok(fixture_readable_span(length)),
@@ -329,3 +332,51 @@ void consume_wrapping_bounded_prefix(const char *s, size_t requested)
 	if (requested > available) return;
 	consume_bytes(s, requested - 1); /* memory-contract-expect */
 }
+
+/* src/util/patch.c's own `struct linebuf` shape: a pointer field paired
+ * with both a readable count (n) and a writable capacity (cap). */
+struct fixture_vector {
+	unsigned *v withtok(fixture_readable_elements(n))
+		withtok(fixture_writable_elements(cap));
+	size_t n, cap;
+};
+
+/* A helper that grows cap without ever reallocating v to match -- exactly
+ * the "helper that reallocates without updating the length field, or vice
+ * versa" desync this checker exists to catch.  v's real allocation extent
+ * stays sized for the OLD, smaller capacity. */
+void grow_vector_forgets_pointer(void)
+{
+	struct fixture_vector vec;
+	unsigned *g = allocate_array(4, sizeof *g);
+	if (!g) return;
+	vec.v = g;
+	vec.cap = 4;
+	vec.cap = 8;
+} /* memory-contract-expect */
+
+/* The opposite desync: v is reallocated to a SMALLER buffer, but cap is
+ * left at its old, now-overstated value. */
+void shrink_vector_forgets_length(void)
+{
+	struct fixture_vector vec;
+	unsigned *g = allocate_array(8, sizeof *g);
+	if (!g) return;
+	vec.v = g;
+	vec.cap = 8;
+	unsigned *smaller = allocate_array(2, sizeof *smaller);
+	if (!smaller) return;
+	vec.v = smaller;
+} /* memory-contract-expect */
+
+/* n (the readable-elements pairing, not cap) is pushed past v's real
+ * extent directly. */
+void push_vector_element_past_cap(void)
+{
+	struct fixture_vector vec;
+	unsigned *g = allocate_array(4, sizeof *g);
+	if (!g) return;
+	vec.v = g;
+	vec.cap = 4;
+	vec.n = 5;
+} /* memory-contract-expect */

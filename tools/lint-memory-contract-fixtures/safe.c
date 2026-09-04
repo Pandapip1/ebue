@@ -466,3 +466,55 @@ size_t fill_z3_bounded_allocation(
 	memcpy(d, source, l);
 	return cap - l;
 }
+
+/* src/util/patch.c's own `struct linebuf` shape: a pointer field paired
+ * with both a readable count (n, the number of elements actually in use)
+ * and a writable capacity (cap, the real allocation size in elements). */
+struct fixture_vector {
+	unsigned *v withtok(fixture_readable_elements(n))
+		withtok(fixture_writable_elements(cap));
+	size_t n, cap;
+};
+
+/* src/util/patch.c's own pointer-then-length ordering: `lb->v = g;
+ * lb->cap = newcap;` are two separate statements, not one atomic update.
+ * Both settle within this function body's one block, so the deferred
+ * field-span check (checkPostStmt<CompoundStmt>) only judges cap against
+ * v's real DynamicExtent once both writes have actually landed -- not on
+ * the (still-consistent, since cap hasn't grown yet) intermediate state
+ * right after `vec.v = g;` alone. */
+void grow_vector_pointer_first(void)
+{
+	struct fixture_vector vec;
+	unsigned *g = allocate_array(4, sizeof *g);
+	if (!g) return;
+	vec.v = g;
+	vec.cap = 4;
+	vec.n = 0;
+}
+
+/* src/glob/glob.c's own opposite ordering: `out.n = out.cap =
+ * pglob->gl_pathc;` is written before `out.v = __malloc(...)`.  The
+ * length field settles first this time, but the deferred check still
+ * only fires once both fields have landed at the end of the block, so
+ * the ordering itself does not matter to the proof. */
+void grow_vector_length_first(void)
+{
+	struct fixture_vector vec;
+	vec.cap = 4;
+	unsigned *g = allocate_array(4, sizeof *g);
+	if (!g) return;
+	vec.v = g;
+}
+
+/* A read-count push that never exceeds the just-established capacity. */
+void push_vector_element(void)
+{
+	struct fixture_vector vec;
+	unsigned *g = allocate_array(4, sizeof *g);
+	if (!g) return;
+	vec.v = g;
+	vec.cap = 4;
+	vec.n = 0;
+	vec.n = 1;
+}

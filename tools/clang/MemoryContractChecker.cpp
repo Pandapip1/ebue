@@ -68,6 +68,63 @@ using SymbolRelation = std::pair<SymbolRef, SymbolRef>;
 REGISTER_SET_WITH_PROGRAMSTATE(ProvenLessEqual, SymbolRelation)
 REGISTER_SET_WITH_PROGRAMSTATE(ProvenLessThan, SymbolRelation)
 
+/* Persisted, path-sensitive tracking for struct fields carrying a
+ * readable_elements/writable_elements-style withtok(family(length))
+ * contract (see FieldSpanContract below): fieldSpanContract/assumeFieldSpan
+ * only ever read these annotations as a transient snapshot to satisfy an
+ * OUTGOING call's precondition -- nothing previously enforced that a
+ * struct's pointer field and its paired length field actually stay in
+ * agreement with each other as the struct is mutated. A helper that
+ * reallocates the pointer field without updating the length field (or vice
+ * versa) previously went completely undetected.
+ *
+ * The two fields are written by two separate statements, not atomically
+ * (`lb->v = g; lb->cap = newcap;` in src/util/patch.c, or -- the opposite
+ * order -- `out.n = out.cap = pglob->gl_pathc;` before `out.v =
+ * __malloc(...)` in src/glob/glob.c), so checking the invariant eagerly at
+ * every single write would false-positive on the intermediate state of
+ * whichever field is written first. checkBind (below) only records which
+ * (aggregate, pointer field, length field) triple was disturbed and by
+ * which statement; the actual proof is deferred to checkEndFunction (the
+ * same stable point GrantedSpanProof's own deferred check already uses),
+ * where both fields necessarily hold their settled values for this
+ * update -- a CompoundStmt's own exit was tried first and dropped: Clang's
+ * ExprEngine never visits an ordinary `{ ... }` block (function body,
+ * if-body, ...) as a Stmt in its own right the way it visits expressions,
+ * so check::PostStmt<CompoundStmt> silently never fires for one; only a
+ * GNU statement-expression (`({ ... })`) would reach it, which is not
+ * this shape. checkEndFunction fires exactly once per path regardless,
+ * so it alone is both necessary and sufficient here. The proof itself
+ * reuses spanProven exactly as the call-boundary check above does, but
+ * against the pointer's real DynamicExtent rather than an unverified
+ * assumption.
+ *
+ * The map's VALUE is a snapshot of both fields, not just a Stmt* to
+ * re-read the store from later: liveness-driven dead-binding cleanup
+ * (SymbolReaper/ProgramState::cleanupState) is free to discard a struct
+ * field's binding once nothing downstream reads it again -- which is
+ * exactly the common case for a helper that writes a struct's pointer and
+ * length fields and then returns without itself reading either back. A
+ * deferred re-read via getLValue/getSVal at checkEndFunction can
+ * therefore silently observe Unknown for a field this checker itself
+ * just watched get bound (confirmed empirically: an earlier version of
+ * this mechanism that deferred the read, not just the proof, saw exactly
+ * this). Capturing each write's own new value (the Bind callback's own
+ * Value parameter) and the OTHER field's then-current value together, at
+ * the moment of the write -- carrying the peer value forward from any
+ * earlier snapshot for the same key rather than re-deriving it --
+ * sidesteps that pruning entirely: by the time the deferred check runs,
+ * both slots already hold whatever was last known, with no further store
+ * query required. */
+using RecordSpanTouchKey =
+    std::pair<std::pair<const MemRegion *, const FieldDecl *>,
+             const FieldDecl *>;
+using RecordSpanSnapshot =
+    std::pair<std::pair<DefinedOrUnknownSVal, DefinedOrUnknownSVal>,
+             const Stmt *>;
+REGISTER_MAP_WITH_PROGRAMSTATE(TouchedRecordSpan, RecordSpanTouchKey,
+                               RecordSpanSnapshot)
+
 namespace {
 
 using ntlibc::algebra::findTokenSort;
@@ -237,6 +294,47 @@ static const MemberExpr *pointerMember(const Expr *Expression) {
   return nullptr;
 }
 
+/* Shared by fieldSpanContract (which resolves a POINTER FIELD from an
+ * access expression and only ever needed its first matching contract) and
+ * collectRecordSpanContracts below (which needs every contract on every
+ * field of a record, because a single field can carry more than one
+ * withtok(...) -- src/util/patch.c's `struct linebuf`'s `v` field carries
+ * both readable_elements(n) and writable_elements(cap)). */
+static bool parseFieldSpanAnnotation(StringRef Annotation,
+                                     const RecordDecl *Record,
+                                     ASTContext &Context, QualType Pointee,
+                                     const FieldDecl *&Length,
+                                     uint64_t &Scale) {
+  if (!Annotation.consume_front("withtok:") || !Annotation.ends_with(")"))
+    return false;
+  size_t Open = Annotation.find('(');
+  if (Open == StringRef::npos)
+    return false;
+  StringRef Family = Annotation.take_front(Open).trim();
+  const TypedefNameDecl *Token = findTokenSort(Context, Family);
+  bool ByteExtent = hasQualifier(Token, "qual:extent_at_least");
+  bool ElementExtent = hasQualifier(Token, "qual:element_extent");
+  if (!ByteExtent && !ElementExtent)
+    return false;
+  StringRef LengthName =
+      Annotation.slice(Open + 1, Annotation.size() - 1).trim();
+  Length = nullptr;
+  for (const FieldDecl *Candidate : Record->fields())
+    if (Candidate->getName() == LengthName) {
+      Length = Candidate;
+      break;
+    }
+  if (!Length)
+    return false;
+  Scale = 1;
+  if (ElementExtent) {
+    if (Pointee->isIncompleteType())
+      return false;
+    Scale = Context.getTypeSizeInChars(Pointee).getQuantity();
+  }
+  return true;
+}
+
 static std::optional<FieldSpanContract>
 fieldSpanContract(const Expr *Expression, ASTContext &Context) {
   const MemberExpr *Member = pointerMember(Expression);
@@ -246,38 +344,46 @@ fieldSpanContract(const Expr *Expression, ASTContext &Context) {
     return std::nullopt;
   const RecordDecl *Record = Pointer->getParent();
   for (const AnnotateAttr *Attribute : Pointer->specific_attrs<AnnotateAttr>()) {
-    StringRef Annotation = Attribute->getAnnotation();
-    if (!Annotation.consume_front("withtok:") || !Annotation.ends_with(")"))
-      continue;
-    size_t Open = Annotation.find('(');
-    if (Open == StringRef::npos)
-      continue;
-    StringRef Family = Annotation.take_front(Open).trim();
-    const TypedefNameDecl *Token = findTokenSort(Context, Family);
-    bool ByteExtent = hasQualifier(Token, "qual:extent_at_least");
-    bool ElementExtent = hasQualifier(Token, "qual:element_extent");
-    if (!ByteExtent && !ElementExtent)
-      continue;
-    StringRef LengthName =
-        Annotation.slice(Open + 1, Annotation.size() - 1).trim();
     const FieldDecl *Length = nullptr;
-    for (const FieldDecl *Candidate : Record->fields())
-      if (Candidate->getName() == LengthName) {
-        Length = Candidate;
-        break;
-      }
-    if (!Length)
-      continue;
     uint64_t Scale = 1;
-    if (ElementExtent) {
-      QualType Pointee = Pointer->getType()->getPointeeType();
-      if (Pointee->isIncompleteType())
-        continue;
-      Scale = Context.getTypeSizeInChars(Pointee).getQuantity();
-    }
-    return FieldSpanContract{Member, Length, Scale};
+    if (parseFieldSpanAnnotation(Attribute->getAnnotation(), Record, Context,
+                                 Pointer->getType()->getPointeeType(), Length,
+                                 Scale))
+      return FieldSpanContract{Member, Length, Scale};
   }
   return std::nullopt;
+}
+
+struct RecordSpanContract {
+  const FieldDecl *Pointer;
+  const FieldDecl *Length;
+  uint64_t Scale;
+};
+
+/* Every readable_elements/writable_elements-style contract on Record's
+ * fields, keyed by raw FieldDecl rather than by an access expression --
+ * unlike fieldSpanContract above, this supports check::Bind (which only
+ * ever gives a written MemRegion, never a source Expr) and returns every
+ * contract on a field, not just the first. */
+static void collectRecordSpanContracts(
+    const RecordDecl *Record, ASTContext &Context,
+    SmallVectorImpl<RecordSpanContract> &Out) {
+  if (!Record)
+    return;
+  for (const FieldDecl *Pointer : Record->fields()) {
+    if (!Pointer->getType()->isPointerType())
+      continue;
+    for (const AnnotateAttr *Attribute :
+        Pointer->specific_attrs<AnnotateAttr>()) {
+      const FieldDecl *Length = nullptr;
+      uint64_t Scale = 1;
+      if (parseFieldSpanAnnotation(Attribute->getAnnotation(), Record,
+                                   Context,
+                                   Pointer->getType()->getPointeeType(),
+                                   Length, Scale))
+        Out.push_back({Pointer, Length, Scale});
+    }
+  }
 }
 
 static const MemRegion *carrierRegion(const Expr *Expression,
@@ -701,6 +807,7 @@ class MemoryContractChecker
   mutable std::unique_ptr<BugType> TokenBT;
   mutable std::unique_ptr<BugType> RedundantBT;
   mutable std::unique_ptr<BugType> MovableBT;
+  mutable std::unique_ptr<BugType> FieldSpanBT;
 
   static bool hasName(const CallEvent &Call, StringRef Wanted) {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
@@ -1286,6 +1393,29 @@ public:
     C.emitReport(std::move(Report));
   }
 
+  void reportFieldSpan(StringRef Reason, const Stmt *Statement,
+                       ProgramStateRef State, CheckerContext &C) const {
+    if (!Statement)
+      return;
+    ExplodedNode *Node = C.generateNonFatalErrorNode(State);
+    if (!Node)
+      return;
+    if (!FieldSpanBT)
+      FieldSpanBT = std::make_unique<BugType>(
+          this, "Unproven paired field span", categories::MemoryError);
+    const SourceManager &SM = C.getSourceManager();
+    std::string Message =
+        (Reason + "; origin '" +
+         SM.getFilename(SM.getExpansionLoc(Statement->getBeginLoc())) +
+         "'; context '" + context(C) + "'; expression '" + text(Statement, C) +
+         "'; site '" + site(Statement, C) + "'")
+            .str();
+    auto Report =
+        std::make_unique<PathSensitiveBugReport>(*FieldSpanBT, Message, Node);
+    Report->addRange(Statement->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+
   bool spanProven(SVal Pointer, SVal Length, ProgramStateRef State,
                   CheckerContext &C, bool UseAssumedSpans = true) const {
     if (State->isNull(Length).isConstrainedTrue())
@@ -1829,8 +1959,90 @@ public:
     return State;
   }
 
+  // Called from checkEndFunction, the one point (see the TouchedRecordSpan
+  // comment above for why CompoundStmt-exit does not work) every touched
+  // pair's update is guaranteed to have fully settled. Consumes the
+  // (Pointer, Length) value snapshot checkBind already captured for each
+  // touched pair -- not a fresh store re-read, which dead-binding cleanup
+  // may have already discarded by this point (see TouchedRecordSpan's
+  // comment) -- so a pointer-then-length or length-then-pointer update is
+  // judged only once both writes have actually landed, using whichever
+  // value each field was last known to hold.
+  ProgramStateRef
+  flushRecordSpanObligations(ProgramStateRef State, CheckerContext &C) const {
+    for (const auto &Entry : State->get<TouchedRecordSpan>()) {
+      const FieldDecl *Pointer = Entry.first.first.second;
+      const FieldDecl *Length = Entry.first.second;
+      SVal PointerValue = Entry.second.first.first;
+      SVal LengthValue = Entry.second.first.second;
+      const Stmt *Site = Entry.second.second;
+      State = State->remove<TouchedRecordSpan>(Entry.first);
+      if (PointerValue.isUnknownOrUndef() || LengthValue.isUnknownOrUndef())
+        continue;
+      SmallVector<RecordSpanContract, 2> Contracts;
+      collectRecordSpanContracts(Pointer->getParent(), C.getASTContext(),
+                                 Contracts);
+      uint64_t Scale = 1;
+      bool Found = false;
+      for (const RecordSpanContract &Contract : Contracts)
+        if (Contract.Pointer == Pointer && Contract.Length == Length) {
+          Scale = Contract.Scale;
+          Found = true;
+          break;
+        }
+      if (!Found)
+        continue;
+      if (Scale != 1)
+        LengthValue = C.getSValBuilder().evalBinOp(
+            State, BO_Mul, LengthValue,
+            C.getSValBuilder().makeIntVal(Scale,
+                                          C.getASTContext().getSizeType()),
+            C.getASTContext().getSizeType());
+      if (!spanProven(PointerValue, LengthValue, State, C,
+                      /*UseAssumedSpans=*/false))
+        reportFieldSpan(
+            "paired length field is not proven within its pointer field's "
+            "real allocation extent",
+            Site, State, C);
+    }
+    return State;
+  }
+
+  // checkBind fires once per write, BEFORE the engine applies it -- so
+  // C.getState() here still reflects every EARLIER write but not this one.
+  // For the field actually being written, its new value is exactly Value
+  // (the Bind callback's own parameter); for the field's PAIRED partner,
+  // reuse whatever value the last touch of this same key already
+  // captured (Prior), and only fall back to reading the store when this
+  // is the pair's first touch -- the same read-back this file's other
+  // mechanisms already rely on, and still safe here because nothing has
+  // had a chance to prune it between then and now.
+  static ProgramStateRef recordFieldSpanTouch(
+      ProgramStateRef State, const RecordSpanTouchKey &Key,
+      bool WrittenIsPointer, SVal Value, const Stmt *BindStmt,
+      const MemRegion *Base, const FieldDecl *OtherField,
+      CheckerContext &C) {
+    DefinedOrUnknownSVal NewValue =
+        Value.getAs<DefinedOrUnknownSVal>().value_or(UnknownVal());
+    DefinedOrUnknownSVal OtherValue = UnknownVal();
+    if (const RecordSpanSnapshot *Prior = State->get<TouchedRecordSpan>(Key)) {
+      OtherValue = WrittenIsPointer ? Prior->first.second : Prior->first.first;
+    } else if (std::optional<Loc> OtherLoc =
+                   State->getLValue(OtherField, loc::MemRegionVal(Base))
+                       .getAs<Loc>()) {
+      OtherValue =
+          State->getSVal(*OtherLoc).getAs<DefinedOrUnknownSVal>().value_or(
+              UnknownVal());
+    }
+    DefinedOrUnknownSVal PointerValue = WrittenIsPointer ? NewValue : OtherValue;
+    DefinedOrUnknownSVal LengthValue = WrittenIsPointer ? OtherValue : NewValue;
+    return State->set<TouchedRecordSpan>(
+        Key, {{PointerValue, LengthValue}, BindStmt});
+  }
+
 public:
-  void checkBind(SVal Location, SVal, const Stmt *, CheckerContext &C) const {
+  void checkBind(SVal Location, SVal Value, const Stmt *BindStmt,
+                CheckerContext &C) const {
     const auto *Function =
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
     const MemRegion *Bound = Location.getAsRegion();
@@ -1855,6 +2067,23 @@ public:
       for (const DisjointParameterKey &Key : Remove)
         State = State->remove<GrantedDisjointProof>(Key);
       break;
+    }
+    if (const auto *Field = dyn_cast<FieldRegion>(Bound)) {
+      SmallVector<RecordSpanContract, 2> Contracts;
+      collectRecordSpanContracts(Field->getDecl()->getParent(),
+                                 C.getASTContext(), Contracts);
+      const MemRegion *Base = Field->getSuperRegion();
+      for (const RecordSpanContract &Contract : Contracts) {
+        bool WrittenIsPointer = Contract.Pointer == Field->getDecl();
+        bool WrittenIsLength = Contract.Length == Field->getDecl();
+        if (!WrittenIsPointer && !WrittenIsLength)
+          continue;
+        RecordSpanTouchKey Key{{Base, Contract.Pointer}, Contract.Length};
+        const FieldDecl *OtherField =
+            WrittenIsPointer ? Contract.Length : Contract.Pointer;
+        State = recordFieldSpanTouch(State, Key, WrittenIsPointer, Value,
+                                     BindStmt, Base, OtherField, C);
+      }
     }
     if (State != C.getState())
       C.addTransition(State);
@@ -2172,6 +2401,17 @@ public:
     SmallVector<DisjointContract, 1> Disjoint;
     tokenContracts(Function, Spans, Disjoint);
     ProgramStateRef State = C.getState();
+    // Discharge every TouchedRecordSpan obligation this function's own
+    // frame accumulated (see that map's comment above for why this is
+    // the only reliable point to do it). Flush unconditionally and
+    // first, before any of the return-type-driven early returns below,
+    // so a struct desync a helper leaves behind is still caught at that
+    // helper's own exit regardless of its return type.
+    ProgramStateRef Flushed = flushRecordSpanObligations(State, C);
+    if (Flushed != State) {
+      C.addTransition(Flushed);
+      State = Flushed;
+    }
     if (!Function->getReturnType()->isVoidType()) {
       if (!Return || !Return->getRetValue())
         return;
