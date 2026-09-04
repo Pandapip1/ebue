@@ -57,5 +57,43 @@
 #define unsafe_assume_valid_pointer(expr) (expr)
 #endif
 
+/* unsafe_assume_shared_provenance(expr) -- the same marker idea as
+ * unsafe_assume_valid_pointer() above, for
+ * tools/clang/PointerProvenanceChecker.cpp's OTHER provenance check: a
+ * pointer subtraction or ordered comparison (`<`, `<=`, `>`, `>=`)
+ * between two pointers the checker cannot prove share an allocation or a
+ * contract-registered element relation. expr is the whole subtraction or
+ * comparison expression, e.g.
+ * `unsafe_assume_shared_provenance(p < end)`, not either operand
+ * separately -- wrapping only one operand would leave the checker
+ * looking at an ordinary, unmarked BinaryOperator.
+ *
+ * Real uses are the same shape as unsafe_assume_valid_pointer()'s: two
+ * pointers a human has read and can justify as the same object or the
+ * same contract-registered array by an invariant established somewhere
+ * this one expression's own local reasoning cannot see -- a hand-written
+ * assembly stub's own address computation, a fixed table another
+ * function populated earlier, or a caller contract a function's
+ * parameters document but cannot express in C's type system. Every real
+ * call site carries its own substantive comment stating that invariant;
+ * this macro only makes the assumption visible and machine-checkable,
+ * exactly as unsafe_assume_valid_pointer() does -- see that macro's own
+ * comment above for the full mechanism (expands to nothing outside the
+ * analyzer, and PointerProvenanceChecker.cpp's isUnsafeAssumeShared
+ * Provenance()/isMarkerRedundant() give it the identical scoped-to-one-
+ * use and redundancy-detection guarantees).
+ */
+#ifdef __clang_analyzer__
+#define unsafe_assume_shared_provenance(expr) \
+	(__extension__({ \
+		__typeof__(expr) __ntlibc_unsafe_shared_prov__ \
+			__attribute__((annotate("ntlibc_unsafe_assume_shared_provenance"))) \
+			= (expr); \
+		__ntlibc_unsafe_shared_prov__; \
+	}))
+#else
+#define unsafe_assume_shared_provenance(expr) (expr)
+#endif
+
 #endif
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

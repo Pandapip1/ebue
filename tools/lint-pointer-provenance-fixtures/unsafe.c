@@ -211,3 +211,38 @@ void *unmarked_cast_still_flagged(unsigned long value) {
 void *redundant_marker_constant_sentinel(void) {
   return unsafe_assume_valid_pointer((void *)(long)-1); /* pointer-provenance-expect */
 }
+
+/* unsafe_assume_shared_provenance(expr) -- same inlined marker as safe.c's
+ * copy; see that file's marked_unprovable_difference() for proof the
+ * marker actually suppresses the one subtraction it wraps. */
+#ifdef __clang_analyzer__
+#define unsafe_assume_shared_provenance(expr) \
+  (__extension__({ \
+    __typeof__(expr) __ntlibc_unsafe_shared_prov__ \
+      __attribute__((annotate("ntlibc_unsafe_assume_shared_provenance"))) \
+      = (expr); \
+    __ntlibc_unsafe_shared_prov__; \
+  }))
+#else
+#define unsafe_assume_shared_provenance(expr) (expr)
+#endif
+
+/* The marker resolves only the one subtraction it is applied to. An
+ * unmarked, otherwise-identical pointer subtraction of the very same
+ * parameters, right next to a marked one, must still be flagged -- the
+ * same non-blanket-loosening property unmarked_cast_still_flagged()
+ * above proves for unsafe_assume_valid_pointer(). */
+long unmarked_subtraction_still_flagged(int *left, int *right) {
+  long marked = unsafe_assume_shared_provenance(left - right);
+  long unmarked = left - right; /* pointer-provenance-expect */
+  return marked + unmarked;
+}
+
+/* The marker wraps a subtraction between two pointers into the SAME
+ * array -- the exact shape safe.c's own same_array_difference() already
+ * proves safe with no marker at all. The marker covers no real gap
+ * here: this must produce the "marker is redundant" diagnostic, not the
+ * normal "unproven" finding, and not silent acceptance either. */
+long redundant_marker_same_array(int *items) {
+  return unsafe_assume_shared_provenance(&items[3] - &items[1]); /* pointer-provenance-expect */
+}
