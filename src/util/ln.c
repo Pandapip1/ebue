@@ -54,7 +54,7 @@ static int link_one(const char *src, const char *dst, int opt_s, int opt_f)
 		/* lstat, not stat: an existing target that is itself a
 		 * dangling symlink must still be removed to "allow the
 		 * link", even though stat() on it would fail. */
-		if (lstat(dst, &st) == 0) unlink(dst);
+		if (lstat(dst, &st) == 0) (void)unlink(dst);
 	}
 	if (opt_s) return symlink(src, dst);
 	return link(src, dst);
