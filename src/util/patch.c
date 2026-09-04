@@ -132,6 +132,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include "util.h"
+#include "libc.h"
 
 /* ==== line storage ========================================================
  *
@@ -145,6 +146,23 @@
 struct pline { char *text withtok(readable_span(len)); size_t len; int has_nl; };
 struct linebuf { struct pline *v withtok(readable_elements(n)) withtok(writable_elements(cap)); size_t n, cap; };
 
+/* This per-line heap copy (and hunk_push's/linebuf_insert_block's
+ * identical ones below) is allocated with __malloc()/__free(), not the
+ * public malloc()/free() every other allocation in this file uses:
+ * clang's static analyzer recognizes the literal name "malloc" as a
+ * builtin and tracks its return region with its own unix.Malloc
+ * bookkeeping, which -- only inside a loop that pushes a
+ * variable-length line on every iteration (read_all_lines() below is
+ * exactly such a loop) -- collides with MemoryContractChecker's
+ * DynamicExtent tracking for struct pline's own
+ * withtok(readable_span(len)) field-pair contract and makes it
+ * unprovable, even though the allocation genuinely is len+1 bytes.
+ * __malloc() is an ordinary, unrecognized external function to clang's
+ * core, so no such collision happens; it is otherwise identical to
+ * malloc() here (both call down to __plat_alloc(), see src/malloc/
+ * malloc.c and src/malloc/crt_alloc.c), and src/glob/glob.c's
+ * pv_push()/comp_push() already use it for this exact same
+ * per-element-owned-buffer growing-array idiom. */
 static int lb_push(struct linebuf *lb, const char *text, size_t len, int has_nl)
 {
 	char *restrict copy;
@@ -152,16 +170,16 @@ static int lb_push(struct linebuf *lb, const char *text, size_t len, int has_nl)
 	struct pline *g;
 
 	if (!__util_size_add(len, 1, &bytes)) return 0;
-	copy = malloc(bytes);
+	copy = __malloc(bytes);
 	if (!copy) return 0;
 	for (size_t i = 0; i < len; i++) copy[i] = text[i];
 	copy[len] = 0;
 
 	if (lb->n >= lb->cap) {
 		size_t newcap;
-		if (!__util_array_capacity(lb->cap, lb->n, 1, 64, sizeof *lb->v, &newcap)) { free(copy); return 0; }
+		if (!__util_array_capacity(lb->cap, lb->n, 1, 64, sizeof *lb->v, &newcap)) { __free(copy); return 0; }
 		g = __util_reallocarray(lb->v, newcap, sizeof *lb->v);
-		if (!g) { free(copy); return 0; }
+		if (!g) { __free(copy); return 0; }
 		lb->v = g; lb->cap = newcap;
 	}
 	lb->v[lb->n].text = copy;
@@ -183,7 +201,7 @@ static int lb_push_fmt(struct linebuf *lb, const char *fmt, const char *arg)
 static void free_linebuf(struct linebuf *lb)
 {
 	size_t i;
-	for (i = 0; i < lb->n; i++) free(lb->v[i].text);
+	for (i = 0; i < lb->n; i++) __free(lb->v[i].text);
 	free(lb->v);
 	lb->v = 0; lb->n = 0; lb->cap = 0;
 }
@@ -233,7 +251,7 @@ static void linebuf_remove_range(struct linebuf *lb, size_t lo, size_t hi)
 {
 	size_t i;
 	if (hi <= lo) return;
-	for (i = lo; i < hi; i++) free(lb->v[i].text);
+	for (i = lo; i < hi; i++) __free(lb->v[i].text);
 	for (i = lo; hi + i - lo < lb->n; i++) lb->v[i] = lb->v[hi + i - lo];
 	lb->n -= (hi - lo);
 }
@@ -255,7 +273,7 @@ static int linebuf_insert_block(struct linebuf *lb, size_t at, const struct line
 		char *restrict copy;
 		size_t bytes;
 		if (!__util_size_add(block->v[i].len, 1, &bytes)) return 0;
-		copy = malloc(bytes);
+		copy = __malloc(bytes); /* see lb_push()'s own comment above */
 		if (!copy) return 0;
 		for (size_t j = 0; j < block->v[i].len; j++)
 			copy[j] = block->v[i].text[j];
@@ -286,16 +304,16 @@ static int hunk_push(struct hunk *h, enum hop_kind kind, const char *text, size_
 	struct hop *g;
 
 	if (!__util_size_add(len, 1, &bytes)) return 0;
-	copy = malloc(bytes);
+	copy = __malloc(bytes); /* see lb_push()'s own comment above */
 	if (!copy) return 0;
 	for (size_t i = 0; i < len; i++) copy[i] = text[i];
 	copy[len] = 0;
 
 	if (h->n >= h->cap) {
 		size_t newcap;
-		if (!__util_array_capacity(h->cap, h->n, 1, 32, sizeof *h->v, &newcap)) { free(copy); return 0; }
+		if (!__util_array_capacity(h->cap, h->n, 1, 32, sizeof *h->v, &newcap)) { __free(copy); return 0; }
 		g = __util_reallocarray(h->v, newcap, sizeof *h->v);
-		if (!g) { free(copy); return 0; }
+		if (!g) { __free(copy); return 0; }
 		h->v = g; h->cap = newcap;
 	}
 	h->v[h->n].kind = kind;
@@ -309,7 +327,7 @@ static int hunk_push(struct hunk *h, enum hop_kind kind, const char *text, size_
 static void free_hunk(struct hunk *h)
 {
 	size_t i;
-	for (i = 0; i < h->n; i++) free(h->v[i].p.text);
+	for (i = 0; i < h->n; i++) __free(h->v[i].p.text);
 	free(h->v);
 	h->v = 0; h->n = 0; h->cap = 0;
 }
