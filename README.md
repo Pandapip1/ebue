@@ -30,12 +30,12 @@ architecture guessed from the compiler or set explicitly via
 
 ## Supported Windows versions
 
-<!-- ntlibc-min-ntdll: 6.1 -->
-**Windows 7 / Server 2008 R2 (NTDLL 6.1) or newer, for i386, x86_64 and
+<!-- ntlibc-min-ntdll: 6.0 -->
+**Windows Vista / Server 2008 (NTDLL 6.0) or newer, for i386, x86_64 and
 aarch64 alike.** (aarch64 additionally requires an ARM64 build of
 Windows, which did not exist before Windows 10 — that is a fact about
 when Microsoft shipped Windows for that architecture at all, not a
-separate ntdll floor; the 6.1 figure below is computed the same way,
+separate ntdll floor; the 6.0 figure below is computed the same way,
 from the same import list, for all three architectures.)
 
 This is a floor, not a preference. ntlibc imports from `ntdll.dll` and
@@ -44,27 +44,32 @@ export is not a call that fails at runtime — the loader refuses the whole
 image before any of its code runs. So the minimum supported version is
 the maximum, over every import, of the version that first exported it.
 
-Today two imports set it, both from `src/internal/utf.c`, the UTF-8 ↔
-UTF-16 conversion that every path-taking and string-taking function goes
-through:
+Today four imports set it, all used by `fork`/`exec`
+(`src/process/nt/plat_process.c`):
 
 | Import | First exported by NTDLL | Reference |
 | --- | --- | --- |
-| `RtlUTF8ToUnicodeN` | 6.1 (Windows 7) | [names61.htm](https://www.geoffchappell.com/studies/windows/win32/ntdll/history/names61.htm) |
-| `RtlUnicodeToUTF8N` | 6.1 (Windows 7) | [names61.htm](https://www.geoffchappell.com/studies/windows/win32/ntdll/history/names61.htm) |
+| `NtCreateThreadEx` | 6.0 (Vista) | [names60.htm](https://www.geoffchappell.com/studies/windows/win32/ntdll/history/names60.htm) |
+| `RtlCloneUserProcess` | 6.0 (Vista) | [names60.htm](https://www.geoffchappell.com/studies/windows/win32/ntdll/history/names60.htm) |
+| `RtlCreateProcessParametersEx` | 6.0 (Vista) | [names60.htm](https://www.geoffchappell.com/studies/windows/win32/ntdll/history/names60.htm) |
+| `RtlExitUserProcess` | 6.0 (Vista) | [names60.htm](https://www.geoffchappell.com/studies/windows/win32/ntdll/history/names60.htm) |
 
-Because `utf.c` is reachable from nearly everything, this is not a floor
-that only some programs hit: the great majority of the PE executables
+Until this changed, the floor was Windows 7 (NTDLL 6.1), imposed by
+`RtlUTF8ToUnicodeN`/`RtlUnicodeToUTF8N` — the UTF-8 ↔ UTF-16 conversion
+every path-taking and string-taking function goes through
+(`src/internal/utf.c`), which the great majority of the PE executables
 this tree builds — the 80 utilities under `bin/` plus `sh/main.c` — import
-those two names directly.
+directly. `utf.c` converts in-tree now, so it imports neither name, and
+the floor dropped to whatever the next-highest import required.
 
-Below Windows 7 the next floors down are Vista (`RtlCloneUserProcess`,
-`RtlCreateProcessParametersEx` — `fork`/`exec`), then Server 2003 SP1
+Below Vista the next floor down is Server 2003 SP1
 (`RtlDosPathNameToNtPathName_U_WithStatus`, and on i386 the `NtWow64*`
-pair), then XP. Replacing the two UTF-8 conversions with in-tree code
-would therefore lower the floor to Vista and no further — one release of
-an OS that is itself long out of support — which is why the library
-carries the Windows 7 floor rather than a fallback.
+pair), then XP. Replacing the four `fork`/`exec` imports above with
+something Server-2003-compatible is not on the table the way the UTF-8
+conversions were: `RtlCloneUserProcess` and `NtCreateThreadEx` are the
+documented way to create a process/thread from a running one at all, with
+no in-tree substitute to hand-roll — so 6.0 is where this floor stays
+absent a real replacement for process/thread creation itself.
 
 Every export in [`tools/ntdll.def`](tools/ntdll.def) carries the NTDLL
 version it was first exported from, with the sources cited in that
@@ -74,7 +79,7 @@ in the marker above — so this section cannot go stale with respect to
 what the library actually imports.
 
 Note on NT *behaviour* versus NT *exports*: a few call sites do ask for
-things newer than 6.1 (`FileDispositionInformationEx`,
+things newer than 6.0 (`FileDispositionInformationEx`,
 `FileRenameInformationEx`; both Windows 10). Those are not load-time
 failures — NT rejects the request and the call site falls back to the
 pre-`Ex` information class — so they do not raise the floor.
