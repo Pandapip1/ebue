@@ -27,6 +27,7 @@
 
 // NOLINTBEGIN(misc-include-cleaner)
 #include "linux/tls.h"
+#include "unsafe_pointer.h"
 
 #if defined(__aarch64__)
 
@@ -82,13 +83,32 @@ void *__ntlibc_linux_tls_block_create(void)
 	mm = raw_syscall(SYS_mmap, 0, (long)alloc_size, PROT_READ | PROT_WRITE,
 	                 MAP_PRIVATE | MAP_ANONYMOUS, -1L, 0L);
 	if ((unsigned long)mm >= (unsigned long)-4095L) return 0; /* allocation failed */
-	base = (unsigned char *)mm;
+	/* mm is the raw mmap(2) syscall's own return-register value, just
+	 * checked above (the `>= -4095` idiom this file's raw_syscall()
+	 * ABI uses for "negative errno") to be a real success, not an
+	 * encoded error. This aarch64 raw-syscall ABI's success contract is
+	 * that the return register holds the mapped virtual address the
+	 * kernel actually chose (we passed addr=0, i.e. MAP_ANONYMOUS
+	 * let-the-kernel-choose) -- there is no pointer anywhere in this
+	 * translation unit for that address to be derived from; the kernel
+	 * mapping it is the entire reason it is valid. */
+	base = unsafe_assume_valid_pointer((unsigned char *)mm);
 
 	data = base + tcb_size;
 	data = (unsigned char *)(((unsigned long)data + data_align - 1) & ~(data_align - 1));
 
 	if (tls_filesz) {
-		const unsigned char *source = (const unsigned char *)tls_vaddr;
+		/* tls_vaddr == __ntlibc_linux_tls_layout.vaddr, the PT_TLS
+		 * segment's own link-time virtual address as the kernel/loader
+		 * mapped this executable -- crt1.c's linux_setup_tls() (already
+		 * exempt below, same reasoning) populates
+		 * __ntlibc_linux_tls_layout once from the real ELF program
+		 * headers this process was loaded from, at a fixed load bias of
+		 * 0 for a non-PIE static binary. Copying tls_filesz bytes from
+		 * it below is exactly PT_TLS's own contract: the file-backed
+		 * initializer image for every thread's TLS block. */
+		const unsigned char *source =
+		    unsafe_assume_valid_pointer((const unsigned char *)tls_vaddr);
 		for (i = 0; i < tls_filesz; i++) data[i] = source[i];
 	}
 	for (i = tls_filesz; i < tls_memsz; i++) data[i] = 0;
@@ -101,7 +121,10 @@ void *__ntlibc_linux_tls_block_create(void)
 	                                                                * predecessor's behavior in
 	                                                                * crt1.c: a bootstrap-only,
 	                                                                * essentially-never-hit path */
-	dtv = (void **)dtv_mm;
+	/* dtv_mm is a second raw mmap(2) return value, same syscall-ABI
+	 * success contract just justified for `mm` above (checked
+	 * non-error immediately above this line). */
+	dtv = unsafe_assume_valid_pointer((void **)dtv_mm);
 	for (i = 0; i < TLS_DTV_INITIAL_CAPACITY; i++) dtv[i] = 0;
 
 	tp = data - tcb_size;

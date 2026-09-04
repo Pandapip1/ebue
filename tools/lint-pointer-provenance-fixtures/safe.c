@@ -86,3 +86,31 @@ long registry_relation_survives_content_mutation(unsigned i) {
   mutate_element_contents(p);
   return safe_registry_index(p);
 }
+
+/* unsafe_assume_valid_pointer(expr) -- src/internal/unsafe_pointer.h's
+ * real marker, inlined here since these fixtures compile with no
+ * include path (matching this file's own inlined
+ * returns_element_of/parameter_element_of macros above). See
+ * PointerProvenanceChecker.cpp's isUnsafeAssumeValidPointer() for how
+ * it is recognised, and unsafe.c's unmarked_cast_still_flagged() for
+ * proof this does not blanket-loosen the checker. */
+#ifdef __clang_analyzer__
+#define unsafe_assume_valid_pointer(expr) \
+  (__extension__({ \
+    __typeof__(expr) __ntlibc_unsafe_ptr__ \
+      __attribute__((annotate("ntlibc_unsafe_assume_valid_pointer"))) \
+      = (expr); \
+    __ntlibc_unsafe_ptr__; \
+  }))
+#else
+#define unsafe_assume_valid_pointer(expr) (expr)
+#endif
+
+/* A marked integer-to-pointer conversion with no provable pointer
+ * derivation anywhere in this file -- the same shape as the real
+ * marked call sites in src/ (a raw syscall or kernel-populated value
+ * with no base/len pair anywhere to prove from) -- must be resolved,
+ * not flagged. */
+void *marked_unprovable_cast(unsigned long value) {
+  return unsafe_assume_valid_pointer((void *)value);
+}

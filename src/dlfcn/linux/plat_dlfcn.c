@@ -215,6 +215,7 @@
 #include <sys/mman.h>
 #include <pthread.h>
 #include "plat_dlfcn.h"
+#include "unsafe_pointer.h"
 
 static int table_bytes(size_t count, size_t element_size, size_t *out)
 {
@@ -1469,8 +1470,27 @@ static int apply_one_irelative(struct dlobj *obj, const struct reloc *r,
 		       (unsigned long long)r->r_offset);
 		return -1;
 	}
-	loc = ADDR(obj, r->r_offset);
-	resolver = (unsigned long (*)(void))ADDR(obj, (unsigned long)r->r_addend);
+	/* ADDR() reconstructs a pointer from this object's real mapped load
+	 * bias (obj->bias, set once when load_object() mmap()'d the image
+	 * -- see that already-audited function's own NamedException entry
+	 * below) plus an ELF-relocation-computed virtual address; the same
+	 * bias+vaddr reconstruction apply_one_reloc()/apply_reloc_table()
+	 * already perform for every other relocation type (both already
+	 * exempt below), IRELATIVE entries just reach it through this
+	 * separate, later pass instead (see this function's own banner).
+	 * r->r_offset -- the relocation SLOT this yields the address of --
+	 * is proven inside [lo, hi) by the bounds check immediately above. */
+	loc = unsafe_assume_valid_pointer(ADDR(obj, r->r_offset));
+	/* Same ADDR() reconstruction as `loc` above, but keyed by a
+	 * DIFFERENT field (r_addend, the resolver's own address) that has
+	 * no equivalent bounds check available -- an ifunc resolver's
+	 * target isn't range-limited to the relocated object the way a
+	 * relocation slot is -- so this remains a human-justified ELF/ABI
+	 * assumption (the relocation's own r_addend, by R_*_IRELATIVE's
+	 * defined contract, holds resolver()'s runtime address), not a
+	 * provable range like `loc` above. */
+	resolver = unsafe_assume_valid_pointer(
+	    (unsigned long (*)(void))ADDR(obj, (unsigned long)r->r_addend));
 	*loc = resolver();
 	return 0;
 }
@@ -1513,7 +1533,17 @@ static int apply_irelative_table(struct dlobj *obj, uint64_t tbl_vaddr, uint64_t
 	Elf64_Rela *relas;
 	size_t count, i;
 	if (!tbl_vaddr || !tbl_size) return 0;
-	relas = ADDR(obj, tbl_vaddr);
+	/* tbl_vaddr is DT_JMPREL/an irelative-table PT_DYNAMIC entry's own
+	 * link-time virtual address; ADDR() reconstructs its runtime
+	 * location the same way every other section/table address in this
+	 * loader does, from obj->bias (this object's real, already-mapped
+	 * load bias) plus that ELF-declared vaddr. Every element this table
+	 * yields is separately bounds-checked against [lo, hi) inside the
+	 * loop below (r->r_offset, see apply_one_irelative()) before use;
+	 * the table base itself has no independent extent to check beyond
+	 * tbl_size, already required nonzero above and used only to bound
+	 * the loop count. */
+	relas = unsafe_assume_valid_pointer(ADDR(obj, tbl_vaddr));
 	count = tbl_size / sizeof(Elf64_Rela);
 	for (i = 0; i < count; i++) {
 		struct reloc rec;

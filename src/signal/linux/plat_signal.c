@@ -43,6 +43,7 @@
                          * a type-only use across a still-NT-shaped seam. */
 #include "plat_signal.h"
 #include "linux/sync.h"
+#include "unsafe_pointer.h"
 
 /* Linux syscall numbers -- aarch64 confirmed via a throwaway host
  * program printing the SYS_* macros from <sys/syscall.h>, the same
@@ -228,7 +229,15 @@ __plat_handle_t __plat_sigevent_create(int initially_signalled)
 	                   (long)(EFD_SEMAPHORE_LX | EFD_CLOEXEC_LX));
 	int fd;
 	if (is_sys_error(ret)) return __PLAT_HANDLE_NULL;
-	fd = __fd_install((HANDLE)(long)ret, O_CLOEXEC, 0);
+	/* ret is the eventfd2(2) syscall's own return-register value, just
+	 * proven a real success (not an encoded -errno) by is_sys_error()
+	 * immediately above; a successful eventfd2(2) returns a small
+	 * nonnegative file descriptor number by the Linux syscall ABI's own
+	 * contract. HANDLE is void* only because this internal
+	 * __fd_install() signature is still NT-shaped (this file's own
+	 * banner above); on this backend it carries the plain descriptor
+	 * number, never dereferenced. */
+	fd = __fd_install(unsafe_assume_valid_pointer((HANDLE)(long)ret), O_CLOEXEC, 0);
 	if (fd < 0) { syscall(SYS_close, ret, 0L, 0L, 0L, 0L, 0L); return __PLAT_HANDLE_NULL; }
 	return box(fd);
 }
