@@ -14,6 +14,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/MemRegion.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/RangedConstraintManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
 #include "LifecycleAlgebra.h"
@@ -3042,11 +3043,61 @@ class OwnershipZ3Proof {
     return std::nullopt;
   }
 
+  // Asserts that Expression (already-translated, in Ranges' own bit
+  // width) lies within one of Ranges' disjoint intervals. Mirrors
+  // SizeCastChecker.cpp's CastZ3Proof::addRange exactly -- see that
+  // function for the reasoning -- adapted only to take a raw z3::expr
+  // (this class's translate() wraps it in a SemanticResult; callers pass
+  // ->Value) instead of building one from a NonLoc/QualType pair.
+  void addRange(const z3::expr &Expression, const RangeSet &Ranges) {
+    if (!Expression.is_bv() || Ranges.isEmpty() ||
+        Expression.get_sort().bv_size() != Ranges.getBitWidth())
+      return;
+    std::optional<z3::expr> Union;
+    for (const Range &R : Ranges) {
+      llvm::SmallString<40> FromText, ToText;
+      R.From().toString(FromText, 10, false, false);
+      R.To().toString(ToText, 10, false, false);
+      z3::expr From = ZCtx.bv_val(FromText.c_str(), Ranges.getBitWidth());
+      z3::expr To = ZCtx.bv_val(ToText.c_str(), Ranges.getBitWidth());
+      z3::expr Member = R.getConcreteValue()
+                            ? Expression == From
+                            : Ranges.isUnsigned()
+                                  ? z3::ule(From, Expression) &&
+                                        z3::ule(Expression, To)
+                                  : From <= Expression && Expression <= To;
+      Union = Union ? std::optional<z3::expr>(*Union || Member)
+                    : std::optional<z3::expr>(Member);
+    }
+    if (Union && Union->is_bool())
+      Solver.add(*Union);
+  }
+
 public:
-  OwnershipZ3Proof(OwnershipZ3Engine &Engine, ASTContext &AST)
+  // State supplies every symbol's own already-established path constraint
+  // (a prior `if (n > 0) ...`/`if (len >= cap) return;`-style guard,
+  // recorded by Clang's own RangeConstraintManager) -- without it, this
+  // class previously had to consider every symbol fully unconstrained
+  // across its ENTIRE type range, which is unsound-adjacent in the
+  // opposite direction from the ad hoc prover's own bug: it makes Z3
+  // *too conservative*, unable to prove access patterns real,
+  // already-guarded code relies on (src/util/ed.c's read_line_stdin:
+  // `long got = getline(...); if (got > 0 && buf[got - 1] == '\n') ...`
+  // is exactly this shape -- `got`'s own state-tracked range already
+  // rules out the pathological got == LONG_MIN case a fully-unconstrained
+  // symbol would otherwise force this class to entertain). Every symbol
+  // getConstraintMap(State) has a range for is fed in exactly the same
+  // way SizeCastChecker.cpp's CastZ3Proof already does for its own
+  // (differently-scoped) solver.
+  OwnershipZ3Proof(OwnershipZ3Engine &Engine, ASTContext &AST,
+                   ProgramStateRef State)
       : ZCtx(Engine.Context), Solver(Engine.Solver), AST(AST),
         Algebra(ZCtx, cType(AST.IntTy), cType(AST.UnsignedIntTy)) {
     Solver.reset();
+    for (const auto &Entry : getConstraintMap(State))
+      if (std::optional<ntlibc::algebra::SemanticResult> Result =
+              translate(Entry.first))
+        addRange(Result->Value, Entry.second);
   }
 
   // Proves `index * ElemWidth + Required <= Extent`, in bytes, with every
@@ -3364,20 +3415,22 @@ class ValidPointerChecker
 
   // Generalizes the single-symbol cancellation above (the original
   // shape this was built for was strictly "extent = S + K, index = S")
-  // to the far more common real shape in this tree's own path-handling
-  // code: an allocation sized from the SUM of two or more independent
-  // length symbols, indexed by an expression that reuses only SOME of
-  // them. src/env/setenv.c's `s = malloc(l1 + l2 + 2); ...; s[l1] =
-  // '=';` (a name, a '=', a value and a NUL) and
-  // src/internal/rpath.c's join() -- `p = __malloc(dl + 1 + tl + 1);
-  // ...; p[dl] = '\\'; ...; p[dl + 1 + tl] = 0;` (a directory, a
-  // separator, a tail and a NUL) are both exactly this: the extent is
-  // "index's own symbols, PLUS at least one more nonnegative term",
-  // which is provably sufficient by plain arithmetic once the shared
-  // symbols are identified and cancelled -- no different in kind from
-  // the S+K case, just with more terms on one or both sides. Recognizing
-  // this syntactically (as the S+K lemma above already does for its own
-  // narrower shape) needs no solver help either.
+  // to any number of summed/subtracted symbols on either side, so long
+  // as they cancel COMPLETELY: e.g. an allocation sized from the SUM of
+  // two independent length symbols, indexed by an expression that reuses
+  // ALL of them (linear_combination_extent_cancels's `s[l1 + 1 + l2]` in
+  // tools/lint-ownership-fixtures/pointer-safe.c, mirroring src/env/
+  // setenv.c's own `s = malloc(l1 + l2 + 2); ...; s[l1 + 1] = value...`-
+  // shaped writes) is no different in kind from the S+K case once the
+  // shared symbols are identified and cancelled. A genuine LEFTOVER term
+  // -- one or more symbols present in the extent but never referenced by
+  // the index, so the cancellation leaves a real margin rather than an
+  // exact match -- is deliberately NOT trusted by linearExtentProvenInBounds
+  // below despite still being "provable" in plain, unbounded integer
+  // arithmetic: see that function's own block comment for the confirmed
+  // real counterexample (a leftover term does not stay safely ordered
+  // once the summed symbols can wrap size_t, which nothing here bounds
+  // them away from).
   //
   // collectLinearTerms() walks a SymExpr built purely from BO_Add/BO_Sub
   // over other SymExprs and integer literals -- which is exactly what
@@ -3418,28 +3471,67 @@ class ValidPointerChecker
     Terms[Sym] += Negate ? -1 : 1;
   }
 
-  // Strictly more general than the old sameSymbolExtentProvenInBounds
-  // (folded into this function): "extent = S + K, index = S" is just
-  // the case where every term cancels to zero except the constant, which
-  // this reaches the same way, with no special-casing needed -- perfect
-  // cancellation never depends on any symbol's sign, only a leftover
-  // term does. A leftover term is only trusted when it is a symbol whose
-  // own type is unsigned (so it cannot be negative by construction --
-  // every length/offset symbol this idiom ever sums is a size_t) and its
-  // net coefficient is positive (subtracted more than it was added is
-  // never trusted, since that could shrink the real remaining space by
-  // an amount this function has no way to bound).
+  // ONLY trusted when EVERY symbol's net coefficient cancels to exactly
+  // zero (no leftover term of either sign) AND the leftover Constant
+  // exactly equals Required, i.e. Extent and "Index*ElemWidth + Required"
+  // reduce to the literal same closed-form bit-vector expression. That
+  // exactness requirement is not pedantry: this function's Constant is
+  // plain int64_t bookkeeping over the EXACT (unbounded) integer value of
+  // each term, but the real access it is standing in for is evaluated as
+  // wrapping, modular size_t arithmetic. Two bit-vector values that are
+  // EXACTLY EQUAL stay equal under any wraparound (X == X regardless of
+  // what X wraps to), so a zero-margin match is safe unconditionally --
+  // but two values merely known, in exact arithmetic, to differ by some
+  // fixed positive amount are NOT safely ordered once wraparound is
+  // possible: X and X+K can independently wrap at different points, so
+  // "X+K is the bigger one" is not a bit-vector tautology. Confirmed
+  // empirically (both against a real Z3 query and against a hand-picked
+  // adversarial value) for exactly the two shapes this function used to
+  // trust with a nonzero margin:
+  //   - a leftover term (formerly trusted when unsigned with a positive
+  //     net coefficient): src/env/setenv.c's `s = malloc(l1 + l2 + 2);
+  //     s[l1] = '=';` -- with l1 == SIZE_MAX - 1 and l2 == 0, `l1 + l2 +
+  //     2` wraps to 0 (a 0-byte real allocation) while the index `l1`
+  //     itself does not wrap, so the write genuinely lands far
+  //     out-of-bounds. The old code proved this "safe" unconditionally
+  //     from the symbolic shape alone, without ever checking whether l1
+  //     or l2 could reach a value where that matters -- a real, if
+  //     impractical (both operands would need to be actual in-memory
+  //     string lengths near SIZE_MAX/2), false "proven" verdict.
+  //   - a nonzero margin with FULL cancellation and no multiplication
+  //     involved at all: `d = malloc(n + 2); d[n] = x;` (Constant 2,
+  //     Required 1, margin 1) has the identical wraparound counterexample
+  //     at n == SIZE_MAX - 1 (extent wraps to 0, index does not).
+  //   - a nonzero margin THROUGH an element-width peel (tools/lint-
+  //     ownership-fixtures/pointer-unsafe.c's element_width_leftover_
+  //     margin_not_provably_bounded, mirroring src/env/setenv.c's `ne =
+  //     realloc(__environ, sizeof(char *) * (n + 2)); ne[n] = s;`):
+  //     margin 1 element, and Z3 independently confirms n == 2^61 - 2
+  //     wraps `sizeof(char *) * (n + 2)` to 0 while `n * sizeof(char *)`
+  //     does not -- the same class of counterexample, reached through a
+  //     real multiplication this time rather than pure addition.
+  // A zero-margin, fully-cancelled case (same_symbol_extent_cancels,
+  // linear_combination_extent_cancels's `s[l1 + 1 + l2] = 0`,
+  // element_width_is_peeled's `ne[n + 1] = 0`, putenv()'s `putenv_
+  // strings[nputenv++] = s`) has no such counterexample: Extent and
+  // Access are the same expression, so the comparison is reflexive
+  // regardless of wraparound, exactly the "X == X" case above -- and
+  // z3ExtentProvenInBounds below proves it too (a trivial query for Z3),
+  // so nothing already genuinely safe is lost by this tightening.
   // getDynamicExtent() always answers in BYTES, but a NON-byte element
-  // array's own index (`ne[n]`) is naturally expressed in ELEMENTS, not
-  // bytes -- so the two are not directly comparable the way the
+  // array's own index (`ne[n + 1]`) is naturally expressed in ELEMENTS,
+  // not bytes -- so the two are not directly comparable the way the
   // byte-stride case above compares them. This codebase's other
   // extremely common allocation idiom is exactly this mismatch:
   // `realloc(p, sizeof(*p) * (n + K))` growing a POINTER (or struct)
   // array rather than a byte buffer -- src/env/setenv.c's `ne =
-  // realloc(__environ, sizeof(char *) * (n + 2)); ne[n] = s; ne[n + 1]
-  // = 0;` and putenv()'s `putenv_strings = realloc(..., sizeof(char *)
-  // * (nputenv + 1)); putenv_strings[nputenv++] = s;` are both this
-  // shape. Peeling a top-level `ElemWidth * (...)` factor off the
+  // realloc(__environ, sizeof(char *) * (n + 2)); ...; ne[n + 1] = 0;`
+  // and putenv()'s `putenv_strings = realloc(..., sizeof(char *) *
+  // (nputenv + 1)); putenv_strings[nputenv++] = s;` are both this shape
+  // (both zero-margin: see linearExtentProvenInBounds's own comment for
+  // why `ne[n] = s;` on the SAME allocation, one element short of the
+  // full extent, is a different, NOT-trusted margin shape). Peeling a
+  // top-level `ElemWidth * (...)` factor off the
   // extent expression converts it back to the same element-count units
   // the index is already naturally in, after which the exact same
   // linear-term cancellation below applies unchanged -- the required
@@ -3487,17 +3579,17 @@ class ValidPointerChecker
     collectLinearTerms(ExtentSym, false, Terms, Constant);
     collectLinearTerms(IndexSym, true, Terms, Constant);
 
-    for (const auto &Entry : Terms) {
-      if (Entry.second == 0)
-        continue;
-      if (Entry.second < 0)
+    // Every symbol must cancel to exactly zero -- see this function's own
+    // block comment above for why a leftover term of EITHER sign is a
+    // real, confirmed wraparound risk, not just the negative-coefficient
+    // case this used to single out.
+    for (const auto &Entry : Terms)
+      if (Entry.second != 0)
         return false;
-      QualType SymType = Entry.first->getType();
-      if (SymType.isNull() || !SymType->isUnsignedIntegerOrEnumerationType())
-        return false;
-    }
-    return Constant >= 0 &&
-           static_cast<uint64_t>(Constant) >= static_cast<uint64_t>(Required);
+    // Zero margin only, for the identical reason: Constant strictly
+    // greater than Required is exactly the "X vs X+K" shape that is not
+    // safely ordered under wraparound.
+    return Constant == Required;
   }
 
 #ifdef NTLIBC_OWNERSHIP_Z3
@@ -3518,7 +3610,7 @@ class ValidPointerChecker
       return false;
     CharUnits ElemWidth =
         C.getASTContext().getTypeSizeInChars(Element->getElementType());
-    OwnershipZ3Proof Proof(ownershipZ3Engine(), C.getASTContext());
+    OwnershipZ3Proof Proof(ownershipZ3Engine(), C.getASTContext(), C.getState());
     std::optional<bool> Proven =
         Proof.proveOffsetInBounds(ExtentSym, IndexSym, ElemWidth, Width);
     return Proven && *Proven;
