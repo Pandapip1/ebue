@@ -790,11 +790,21 @@ int main(void)
 		 * "all ok" -- see the file banner and the SKIP line(s) above for
 		 * which assertion groups never ran at all. Exit 77 rather than 0
 		 * so tools/run-tests.py reports this run in its own bucket instead
-		 * of silently counting it as a pass. */
+		 * of silently counting it as a pass.
+		 *
+		 * `unverified` only ever comes from test_sockopt_no_network(),
+		 * test_getname_no_network() and network_probe() above -- all
+		 * unconditional and unrelated to the two NTLIBC_TEST-fenced cases
+		 * in this file.  A tools/test-policy.py probe recompiles this
+		 * whole file to validate ONE fenced case in isolation, and those
+		 * unconditional checks still run alongside it; without this
+		 * guard, a missing network stack here (see the file banner) would
+		 * report the OTHER fenced case's probe UNRESOLVED too, regardless
+		 * of that case's own result. */
 		printf("posix-socket: %d assertion group(s) unverified in this "
 		       "environment (see SKIP lines above); no failures in what "
 		       "did run\n", unverified);
-		return 77;
+		if (!NTLIBC_TEST_POLICY_PROBE) return 77;
 	}
 	printf("posix-socket: all ok\n");
 	return 0;

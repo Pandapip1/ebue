@@ -1465,10 +1465,21 @@ int main(int argc, char **argv)
 
 	if (fails) { printf("posix-spawn: failures: %d\n", fails); return 1; }
 	if (unverified) {
+		/* `unverified` only ever comes from test_spawnp_path_search()
+		 * above, which is unconditional and unrelated to either of this
+		 * file's two NTLIBC_TEST-fenced cases.  A tools/test-policy.py
+		 * probe recompiles this whole file to validate ONE fenced case in
+		 * isolation, and test_spawnp_path_search() still runs alongside
+		 * it; without this guard, its argv[0]-shape environment gap would
+		 * report the OTHER fenced case's probe UNRESOLVED too, regardless
+		 * of that case's own result.  (The environment round-trip gate at
+		 * the top of main() is a real precondition of both fenced cases
+		 * themselves -- they call posix_spawn()/posix_spawnp() too -- so
+		 * its own `return 77` stays unconditional.) */
 		printf("posix-spawn: %d assertion group(s) unverified in this "
 		       "environment (see SKIP lines above); no failures in what "
 		       "did run\n", unverified);
-		return 77;
+		if (!NTLIBC_TEST_POLICY_PROBE) return 77;
 	}
 	printf("posix-spawn: all ok\n");
 	return 0;
