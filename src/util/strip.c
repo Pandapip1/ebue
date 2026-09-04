@@ -511,16 +511,16 @@ static int read_whole_file(const char *path,
 	f = fopen(path, "rb");
 	if (!f) return -1;
 	if (fseek(f, 0, SEEK_END) != 0 || (sz = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0) {
-		fclose(f);
+		(void)fclose(f);
 		errno = EIO;
 		return -1;
 	}
 	buf = malloc((size_t)sz ? (size_t)sz : 1);
-	if (!buf) { fclose(f); errno = ENOMEM; return -1; }
+	if (!buf) { (void)fclose(f); errno = ENOMEM; return -1; }
 	if (sz && fread(buf, 1, (size_t)sz, f) != (size_t)sz) {
-		free(buf); fclose(f); errno = EIO; return -1;
+		free(buf); (void)fclose(f); errno = EIO; return -1;
 	}
-	fclose(f);
+	(void)fclose(f);
 	__ownership_readable_span(buf, (size_t)sz);
 	*out = buf;
 	*outsize = (size_t)sz;
@@ -546,26 +546,26 @@ static int write_atomic(const char *path, const unsigned char *buf, size_t size,
 	f = fopen(tmppath, "wb");
 	if (!f) return -1;
 	if (size && fwrite(buf, 1, size, f) != size) {
-		fclose(f);
-		unlink(tmppath);
+		(void)fclose(f);
+		(void)unlink(tmppath);
 		errno = EIO;
 		return -1;
 	}
 	if (fclose(f) != 0) {
 		int saved = errno;
-		unlink(tmppath);
+		(void)unlink(tmppath);
 		errno = saved;
 		return -1;
 	}
 	if (chmod(tmppath, mode & 07777) != 0) {
 		int saved = errno;
-		unlink(tmppath);
+		(void)unlink(tmppath);
 		errno = saved;
 		return -1;
 	}
 	if (rename(tmppath, path) != 0) {
 		int saved = errno;
-		unlink(tmppath);
+		(void)unlink(tmppath);
 		errno = saved;
 		return -1;
 	}

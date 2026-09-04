@@ -235,7 +235,7 @@ static int create_one(const char *path, const struct line_array *body,
 	fprintf(out, "\001h%05u\n", sum);
 	if (fwrite(buf, 1, buflen, out) != buflen) {
 		__util_diagf("admin: %s: %s\n", path, strerror(errno));
-		free(buf); fclose(out); return 1;
+		free(buf); (void)fclose(out); return 1;
 	}
 	free(buf);
 	if (fclose(out) != 0) { __util_diagf("admin: %s: %s\n", path, strerror(errno)); return 1; }
@@ -293,10 +293,10 @@ int __util_admin_main(int argc, char **argv)
 		if (!f) { __util_diagf("admin: %s: %s\n", iname, strerror(errno)); return 1; }
 		if (!read_lines(f, &body)) {
 			__util_diagf("admin: %s: %s\n", *iname ? iname : "(standard input)", strerror(errno));
-			if (f != stdin) fclose(f);
+			if (f != stdin) (void)fclose(f);
 			return 1;
 		}
-		if (f != stdin) fclose(f);
+		if (f != stdin) (void)fclose(f);
 	}
 
 	/* -t's descriptive text, if given -- required to name a real file
@@ -317,10 +317,10 @@ int __util_admin_main(int argc, char **argv)
 		}
 		if (!read_lines(f, &text)) {
 			__util_diagf("admin: %s: %s\n", tname, strerror(errno));
-			fclose(f); line_array_free(&body);
+			(void)fclose(f); line_array_free(&body);
 			return 1;
 		}
-		fclose(f);
+		(void)fclose(f);
 	}
 
 	/* -y's comment, or the same default real historical SCCS admin

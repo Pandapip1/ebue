@@ -361,7 +361,7 @@ static int process_file(const char *path, int opt_g, int opt_u, int opt_p, int o
 	}
 
 	buf = read_whole_file(fd, &size);
-	close(fd);
+	(void)close(fd);
 	if (!buf) {
 		__util_diagf("nm: %s: %s\n", path, strerror(errno));
 		return 1;

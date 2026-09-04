@@ -41,7 +41,7 @@ int daemon(int nochdir, int noclose)
 			    dup2(fd, STDOUT_FILENO) < 0 ||
 			    dup2(fd, STDERR_FILENO) < 0)
 				return -1;
-			if (fd > STDERR_FILENO) close(fd);
+			if (fd > STDERR_FILENO) (void)close(fd);
 		}
 		/* open() failing here is not daemon()'s own failure --
 		 * glibc's daemon() takes the same view and skips the

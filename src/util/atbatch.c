@@ -46,7 +46,7 @@ int __atbatch_submit(const char *queue, time_t run_at, const char *srcfile,
 	f = __spool_new_job(dir, id_out, id_out_sz, path, sizeof path);
 	if (!f) return -1;
 	if (snprintf(tmp, sizeof tmp, "%s.tmp", path) >= (int)sizeof tmp) {
-		fclose(f);
+		(void)fclose(f);
 		errno = ENAMETOOLONG;
 		return -1;
 	}
@@ -93,7 +93,7 @@ int __atbatch_submit(const char *queue, time_t run_at, const char *srcfile,
 	}
 	if (ferror(srcfile ? src : stdin)) goto fail;
 
-	if (src) fclose(src);
+	if (src) (void)fclose(src);
 	free(cwd);
 	if (fclose(f) != 0) return -1;
 	if (__spool_publish_job(path) < 0) return -1;
@@ -101,10 +101,10 @@ int __atbatch_submit(const char *queue, time_t run_at, const char *srcfile,
 
 fail:
 	saved_errno = errno;
-	if (src) fclose(src);
+	if (src) (void)fclose(src);
 	free(cwd);
-	fclose(f);
-	unlink(tmp);
+	(void)fclose(f);
+	(void)unlink(tmp);
 	errno = saved_errno;
 	return -1;
 }

@@ -797,21 +797,21 @@ static int materialize(const struct pax_member *m, const char *destpath,
 		}
 		return 0;
 	case PAX_SYMLINK:
-		if (exists) unlink(destpath);
+		if (exists) (void)unlink(destpath);
 		if (symlink(m->linkname, destpath) < 0) {
 			__util_diagf("pax: %s: %s\n", destpath, strerror(errno));
 			return -1;
 		}
 		return 0;
 	case PAX_HARDLINK:
-		if (exists) unlink(destpath);
+		if (exists) (void)unlink(destpath);
 		if (link(m->linkname, destpath) < 0) {
 			__util_diagf("pax: %s: %s\n", destpath, strerror(errno));
 			return -1;
 		}
 		return 0;
 	case PAX_FIFO:
-		if (exists) unlink(destpath);
+		if (exists) (void)unlink(destpath);
 		if (mkfifo(destpath, (mode_t)(m->mode & 07777)) < 0) {
 			__util_diagf("pax: %s: %s\n", destpath, strerror(errno));
 			return -1;
@@ -819,7 +819,7 @@ static int materialize(const struct pax_member *m, const char *destpath,
 		return 0;
 	case PAX_CHR:
 	case PAX_BLK:
-		if (exists) unlink(destpath);
+		if (exists) (void)unlink(destpath);
 		if (mknod(destpath, (mode_t)((m->mode & 07777) | (m->type == PAX_CHR ? S_IFCHR : S_IFBLK)), 0) < 0) {
 			__util_diagf("pax: %s: %s\n", destpath, strerror(errno));
 			return -1;
@@ -828,7 +828,7 @@ static int materialize(const struct pax_member *m, const char *destpath,
 	case PAX_REG:
 	default: {
 		int fd;
-		if (exists) unlink(destpath);
+		if (exists) (void)unlink(destpath);
 		fd = open(destpath, O_WRONLY | O_CREAT | O_TRUNC, (mode_t)(m->mode & 07777));
 		if (fd < 0) {
 			__util_diagf("pax: %s: %s\n", destpath, strerror(errno));
@@ -836,7 +836,7 @@ static int materialize(const struct pax_member *m, const char *destpath,
 			return -1;
 		}
 		if (reader) {
-			if (pax_reader_copy_data(reader, m, fd) < 0) { close(fd); return -1; }
+			if (pax_reader_copy_data(reader, m, fd) < 0) { (void)close(fd); return -1; }
 		} else if (srcfd >= 0) {
 			char buf[65536];
 			ssize_t n;
@@ -845,7 +845,7 @@ static int materialize(const struct pax_member *m, const char *destpath,
 				while (left > 0) {
 					__ownership_readable_span(p, (size_t)left);
 					ssize_t w = write(fd, p, (size_t)left);
-					if (w < 0) { __util_diagf("pax: %s: %s\n", destpath, strerror(errno)); close(fd); return -1; }
+					if (w < 0) { __util_diagf("pax: %s: %s\n", destpath, strerror(errno)); (void)close(fd); return -1; }
 					p += w; left -= w;
 				}
 			}
@@ -974,7 +974,7 @@ static void write_emit(const char *path, const struct stat *st, void *ud)
 		__util_diagf("pax: %s: error writing archive member\n", path);
 		ctx->failed = 1;
 	}
-	if (fd >= 0) close(fd);
+	if (fd >= 0) (void)close(fd);
 }
 
 /* Reads one pathname per line from stdin ("[i]f no file operands are
@@ -1132,7 +1132,7 @@ static int do_list_or_read(const char *archive, char **patterns, int npat, int c
 		}
 	}
 
-	if (archive) fclose(r.f);
+	if (archive) (void)fclose(r.f);
 	return failed ? 1 : 0;
 }
 
@@ -1159,7 +1159,7 @@ static void copy_emit(const char *path, const struct stat *st, void *ud)
 	opts.newer_only = ctx->newer_only;
 	opts.verbose = ctx->verbose;
 	if (materialize(&m, destpath, NULL, fd, &opts) < 0) ctx->failed = 1;
-	if (fd >= 0) close(fd);
+	if (fd >= 0) (void)close(fd);
 }
 
 static int do_copy(char **files, int nfiles, const char *directory, int no_recurse,

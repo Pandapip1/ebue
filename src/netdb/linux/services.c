@@ -124,10 +124,10 @@ struct servent *getservbyname(const char *name, const char *proto)
 		if (!parse_serv_line(line)) continue;
 		if (strcmp(g_se_name, name) != 0) continue;
 		if (proto && strcmp(g_se_proto, proto) != 0) continue;
-		fclose(f);
+		(void)fclose(f);
 		return &g_se;
 	}
-	fclose(f);
+	(void)fclose(f);
 	return NULL;
 }
 
@@ -141,10 +141,10 @@ struct servent *getservbyport(int port, const char *proto)
 		if (!parse_serv_line(line)) continue;
 		if (g_se.s_port != port) continue;
 		if (proto && strcmp(g_se_proto, proto) != 0) continue;
-		fclose(f);
+		(void)fclose(f);
 		return &g_se;
 	}
-	fclose(f);
+	(void)fclose(f);
 	return NULL;
 }
 
@@ -175,5 +175,5 @@ struct servent *getservent(void)
 
 void endservent(void)
 {
-	if (g_servf) { fclose(g_servf); g_servf = NULL; }
+	if (g_servf) { (void)fclose(g_servf); g_servf = NULL; }
 }

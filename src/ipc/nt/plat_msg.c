@@ -187,7 +187,7 @@ static struct msg_meta *read_meta(int id)
 	if (fd < 0) { free(m); errno = saved; return NULL; }
 	got = read(fd, m, sizeof *m);
 	saved = errno;
-	close(fd);
+	(void)close(fd);
 	if (got != (ssize_t)sizeof *m || m->magic != MSG_MAGIC) {
 		free(m);
 		errno = EINVAL;
@@ -209,15 +209,19 @@ static int write_meta(int id, const struct msg_meta *m)
 	if (fd < 0) { errno = saved; return -1; }
 	put = write(fd, m, sizeof *m);
 	saved = put == (ssize_t)sizeof *m ? 0 : (errno ? errno : EIO);
-	close(fd);
+	if (close(fd) < 0 && !saved) saved = errno ? errno : EIO;
 	if (saved) { errno = saved; return -1; }
 	return 0;
 }
 
-static void delete_queue(int id)
+static int delete_queue(int id)
 {
 	char *path = id_path(id);
-	if (path) { unlink(path); free(path); }
+	int result;
+	if (!path) return -1;
+	result = unlink(path);
+	free(path);
+	return result;
 }
 
 static int find_by_key(key_t key)
@@ -244,7 +248,7 @@ static int find_by_key(key_t key)
 		if (!cand->removed && cand->key == key) { found = id; free(cand); break; }
 		free(cand);
 	}
-	closedir(d);
+	(void)closedir(d);
 	return found;
 }
 
@@ -298,14 +302,23 @@ int msgget(key_t key, int msgflg)
 		lseek(ctrfd, 0, SEEK_SET);
 		if (n > 0 && (size_t)n < sizeof buf &&
 		    write(ctrfd, buf, (size_t)n) != n) {
-			close(ctrfd);
+			(void)close(ctrfd);
 			free(ctrpath);
 			__plat_named_mutant_release(lock);
 			return -1;
 		}
-		ftruncate(ctrfd, n > 0 && (size_t)n < sizeof buf ? n : 0);
+		if (ftruncate(ctrfd, n > 0 && (size_t)n < sizeof buf ? n : 0) < 0) {
+			(void)close(ctrfd);
+			free(ctrpath);
+			__plat_named_mutant_release(lock);
+			return -1;
+		}
 	}
-	close(ctrfd);
+	if (close(ctrfd) < 0) {
+		free(ctrpath);
+		__plat_named_mutant_release(lock);
+		return -1;
+	}
 	free(ctrpath);
 
 	memset(&m, 0, sizeof m);
@@ -489,8 +502,7 @@ int msgctl(int msqid, int cmd, struct msqid_ds *buf)
 		result = 0;
 		break;
 	case IPC_RMID:
-		delete_queue(msqid);
-		result = 0;
+		result = delete_queue(msqid);
 		break;
 	default:
 		errno = EINVAL;

@@ -150,8 +150,8 @@ static int do_list(void)
 		__util_diagf("crontab: no crontab for current user\n");
 		return 1;
 	}
-	while ((c = fgetc(f)) != EOF) if (fputc(c, stdout) == EOF) { fclose(f); return 1; }
-	fclose(f);
+	while ((c = fgetc(f)) != EOF) if (fputc(c, stdout) == EOF) { (void)fclose(f); return 1; }
+	(void)fclose(f);
 	return fflush(stdout) == 0 ? 0 : 1;
 }
 
@@ -185,10 +185,10 @@ static int install_crontab(FILE *src, long *bad_line)
 	out = fopen(tmp, "w");
 	if (!out) return -1;
 	while ((c = fgetc(src)) != EOF) {
-		if (fputc(c, out) == EOF) { fclose(out); unlink(tmp); return -1; }
+		if (fputc(c, out) == EOF) { (void)fclose(out); (void)unlink(tmp); return -1; }
 	}
-	if (fclose(out) != 0) { unlink(tmp); return -1; }
-	if (rename(tmp, path) < 0) { unlink(tmp); return -1; }
+	if (fclose(out) != 0) { (void)unlink(tmp); return -1; }
+	if (rename(tmp, path) < 0) { (void)unlink(tmp); return -1; }
 	return 0;
 }
 
@@ -233,7 +233,7 @@ static int do_edit(void)
 	if (fd < 0) { __util_diagf("crontab: cannot create temporary file: %s\n", strerror(errno)); return 1; }
 
 	tf = fdopen(fd, "w");
-	if (!tf) { close(fd); unlink(tmpl); return 1; }
+	if (!tf) { (void)close(fd); (void)unlink(tmpl); return 1; }
 	cur = fopen(path, "r");
 	if (cur) {
 		int c;
@@ -242,7 +242,7 @@ static int do_edit(void)
 	}
 	if (fclose(tf) != 0) {
 		__util_diagf("crontab: %s: %s\n", tmpl, strerror(errno));
-		unlink(tmpl);
+		(void)unlink(tmpl);
 		return 1;
 	}
 
@@ -253,7 +253,7 @@ static int do_edit(void)
 	resolved = __find_program(editor, 1);
 	if (!resolved) {
 		__util_diagf("crontab: %s: not found\n", editor);
-		unlink(tmpl);
+		(void)unlink(tmpl);
 		return 1;
 	}
 	argv2[0] = resolved;
@@ -263,12 +263,12 @@ static int do_edit(void)
 	free(resolved);
 	if (pid < 0) {
 		__util_diagf("crontab: cannot run editor: %s\n", strerror(errno));
-		unlink(tmpl);
+		(void)unlink(tmpl);
 		return 1;
 	}
 	if (waitpid(pid, &status, 0) < 0) {
 		__util_diagf("crontab: waitpid: %s\n", strerror(errno));
-		unlink(tmpl);
+		(void)unlink(tmpl);
 		return 1;
 	}
 	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
@@ -279,12 +279,12 @@ static int do_edit(void)
 	tf = fopen(tmpl, "r");
 	if (!tf) { __util_diagf("crontab: cannot reopen %s: %s\n", tmpl, strerror(errno)); return 1; }
 	if (install_crontab(tf, &bad_line) < 0) {
-		fclose(tf);
+		(void)fclose(tf);
 		__util_diagf("crontab: line %ld: bad crontab entry -- edits left in %s\n", bad_line, tmpl);
 		return 1;
 	}
-	fclose(tf);
-	unlink(tmpl);
+	(void)fclose(tf);
+	(void)unlink(tmpl);
 	return 0;
 }
 
@@ -299,7 +299,7 @@ int __util_crontab_main(
 		int rc;
 		if (!f) { __util_diagf("crontab: %s: %s\n", argv[1], strerror(errno)); return 1; }
 		rc = do_install_from(f);
-		fclose(f);
+		(void)fclose(f);
 		return rc;
 	}
 	if (argc == 1) return do_install_from(stdin);

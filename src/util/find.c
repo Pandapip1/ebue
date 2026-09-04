@@ -568,7 +568,7 @@ static int confirm_exec(char *const argv2[])
 	size_t i;
 	for (i = 0; argv2[i]; i++) fprintf(stderr, "%s ", argv2[i]);
 	fprintf(stderr, "? ");
-	fflush(stderr);
+	(void)fflush(stderr);
 	return confirm();
 }
 

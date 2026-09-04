@@ -181,7 +181,7 @@ int __util_unexpand_main(
 					continue;
 				}
 				unexpand_stream(f, &tl, effective_a);
-				if (f != stdin) fclose(f);
+				if (f != stdin) (void)fclose(f);
 			}
 		}
 	}

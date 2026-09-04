@@ -87,10 +87,10 @@ FILE *__spool_new_job(const char *dir, char *id_out, size_t id_out_sz,
 		fd = open(tmp, O_CREAT | O_EXCL | O_WRONLY, 0600);
 		if (fd >= 0) {
 			FILE *f = fdopen(fd, "w");
-			if (!f) { int e = errno; close(fd); unlink(tmp); errno = e; return 0; }
+			if (!f) { int e = errno; (void)close(fd); (void)unlink(tmp); errno = e; return 0; }
 			if (snprintf(id_out, id_out_sz, "%ld", id) >= (int)id_out_sz) {
-				fclose(f);
-				unlink(tmp);
+				(void)fclose(f);
+				(void)unlink(tmp);
 				errno = ENAMETOOLONG;
 				return 0;
 			}
@@ -134,7 +134,7 @@ int __spool_job_header(const char *path, time_t *run_at, char *queue, size_t que
 			break;
 		}
 	}
-	fclose(f);
+	(void)fclose(f);
 	if (!have) errno = ENOENT;
 	return have ? 0 : -1;
 }

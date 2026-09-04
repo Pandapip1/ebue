@@ -204,7 +204,7 @@ int __util_fold_main(
 				continue;
 			}
 			fold_stream(f, width, opt_b, opt_s);
-			if (f != stdin) fclose(f);
+			if (f != stdin) (void)fclose(f);
 		}
 	}
 

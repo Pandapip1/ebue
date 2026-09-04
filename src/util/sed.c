@@ -232,7 +232,7 @@ static FILE *wfile_get(struct wfile_table *t, const char *name)
 	if (!f) return 0;
 	t->entries[t->n].name = strdup(name);
 	if (!t->entries[t->n].name) {
-		if (f != stdout && f != stderr) fclose(f);
+		if (f != stdout && f != stderr) (void)fclose(f);
 		return 0;
 	}
 	t->entries[t->n].f = f;
@@ -316,7 +316,7 @@ static void flush_appends(struct append_queue *q)
 				size_t got;
 				while ((got = fread(buf, 1, sizeof buf, rf)) > 0)
 					fwrite(buf, 1, got, stdout);
-				fclose(rf);
+				(void)fclose(rf);
 			}
 		}
 	}
@@ -385,8 +385,8 @@ static int script_buf_append_file(struct buf *b, const char *path, int need_lead
 	f = !strcmp(path, "-") ? stdin : fopen(path, "rb");
 	if (!f) return -1;
 	while ((got = fread(chunk, 1, sizeof chunk, f)) > 0)
-		if (buf_append(b, chunk, got) < 0) { if (f != stdin) fclose(f); return -1; }
-	if (f != stdin) fclose(f);
+		if (buf_append(b, chunk, got) < 0) { if (f != stdin) (void)fclose(f); return -1; }
+	if (f != stdin) (void)fclose(f);
 	return 0;
 }
 
@@ -1556,11 +1556,11 @@ int __util_sed_main(int argc, char **argv)
 			}
 			if (read_all_input(f, &in) < 0) {
 				__util_diagf("sed: out of memory reading %s\n", files[fi]);
-				if (f != stdin) fclose(f);
+				if (f != stdin) (void)fclose(f);
 				free_program(&pr); free_input(&in); free(files);
 				return 1;
 			}
-			if (f != stdin) fclose(f);
+			if (f != stdin) (void)fclose(f);
 		}
 	}
 	free(files);

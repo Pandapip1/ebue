@@ -1019,11 +1019,11 @@ static char *bi_include(struct m4_state *st, const char *path, int required)
 		return strdup("");
 	}
 	if (slurp(f, &buf, &len) < 0) {
-		fclose(f);
+		(void)fclose(f);
 		if (required) { __util_diagf("m4: include: %s: read error\n", path); st->had_error = 1; }
 		return strdup("");
 	}
-	fclose(f);
+	(void)fclose(f);
 	return buf;
 }
 
@@ -1249,7 +1249,7 @@ static char *bi_mkstemp(struct m4_state *st, const char *tmpl)
 		st->had_error = 1;
 		return strdup("");
 	}
-	close(fd);
+	(void)close(fd);
 	return strdup(buf);
 }
 
@@ -1726,7 +1726,7 @@ int __util_m4_main(int argc, char **argv)
 				st.had_error = 1;
 				bufs[fi] = NULL;
 			}
-			if (!is_stdin) fclose(f);
+			if (!is_stdin) (void)fclose(f);
 		}
 		for (fi = nfiles - 1; fi >= 0; fi--)
 			if (bufs[fi]) push_frame(&st, bufs[fi], lens[fi]);

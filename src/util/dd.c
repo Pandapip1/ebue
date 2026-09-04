@@ -426,7 +426,7 @@ int __util_dd_main(int argc, char **argv)
 	} else {
 		ofd = 1;
 	}
-	if (ofd < 0) { __util_diagf("dd: %s: %s\n", o.of_path, strerror(errno)); if (ifd > 0) close(ifd); return 1; }
+	if (ofd < 0) { __util_diagf("dd: %s: %s\n", o.of_path, strerror(errno)); if (ifd > 0) (void)close(ifd); return 1; }
 
 	if (dd_position(ifd, o.skip, o.ibs, 1, o.if_path ? o.if_path : "stdin") < 0) { had_error = 1; goto summary; }
 	if (dd_position(ofd, o.seek, o.obs, 0, o.of_path ? o.of_path : "stdout") < 0) { had_error = 1; goto summary; }
@@ -457,7 +457,7 @@ summary:
 	__util_diagf("%" PRIuMAX "+%" PRIuMAX " records in\n%" PRIuMAX "+%" PRIuMAX " records out\n",
 		in_full, in_partial, out_full, out_partial);
 
-	if (ifd > 0) close(ifd);
+	if (ifd > 0) (void)close(ifd);
 	if (ofd > 1 && close(ofd) < 0) {
 		__util_diagf("dd: closing '%s': %s\n", o.of_path ? o.of_path : "stdout", strerror(errno));
 		had_error = 1;

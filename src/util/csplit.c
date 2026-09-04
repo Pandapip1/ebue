@@ -210,7 +210,7 @@ static int remember_created(struct created *c, const char *name)
 static void cleanup_created(struct created *c, int keep)
 {
 	int i;
-	if (!keep) for (i = 0; i < c->n; i++) unlink(c->names[i]);
+	if (!keep) for (i = 0; i < c->n; i++) (void)unlink(c->names[i]);
 	for (i = 0; i < c->n; i++) free(c->names[i]);
 	free((void *)c->names);
 }

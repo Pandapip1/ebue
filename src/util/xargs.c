@@ -281,7 +281,7 @@ static int prompt_confirm(void)
 {
 	int c, first = -1;
 	fputs("?...", stderr);
-	fflush(stderr);
+	(void)fflush(stderr);
 	while ((c = getchar()) != EOF && c != '\n')
 		if (first < 0 && c != ' ' && c != '\t') first = c;
 	return first == 'y' || first == 'Y';

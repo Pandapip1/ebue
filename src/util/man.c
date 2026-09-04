@@ -4338,7 +4338,7 @@ static int man_builtin_pager(const char *styled, size_t len, int height)
 			char resp[64];
 			if (fflush(stdout) < 0) return -1;
 			fputs("\033[1m--More--\033[0m", stderr);
-			fflush(stderr);
+			(void)fflush(stderr);
 			if (!fgets(resp, sizeof resp, stdin)) { fputc('\n', stderr); break; }
 			fputc('\r', stderr);
 			if (resp[0] == 'q' || resp[0] == 'Q') break;
@@ -4380,18 +4380,18 @@ static int man_run_external_pager(const char *pager, const char *styled, size_t 
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return -1; }
 	f = fdopen(fd, "wb");
-	if (!f) { close(fd); unlink(tmpl); free(tmpl); return -1; }
-	if (man_render_write(f, styled, len, MAN_RENDER_OVERSTRIKE) < 0) { fclose(f); unlink(tmpl); free(tmpl); return -1; }
-	if (fclose(f) != 0) { unlink(tmpl); free(tmpl); return -1; }
+	if (!f) { (void)close(fd); (void)unlink(tmpl); free(tmpl); return -1; }
+	if (man_render_write(f, styled, len, MAN_RENDER_OVERSTRIKE) < 0) { (void)fclose(f); (void)unlink(tmpl); free(tmpl); return -1; }
+	if (fclose(f) != 0) { (void)unlink(tmpl); free(tmpl); return -1; }
 
 	pcopy = strdup(pager);
-	if (!pcopy) { unlink(tmpl); free(tmpl); return -1; }
+	if (!pcopy) { (void)unlink(tmpl); free(tmpl); return -1; }
 	/* Split $PAGER on whitespace only -- no shell-quoting support, a
 	 * deliberate, documented limit (see this file's own header
 	 * comment). */
 	for (tok = strtok_r(pcopy, " \t", &save); tok && argc < 62; tok = strtok_r(0, " \t", &save))
 		argv[argc++] = tok;
-	if (argc == 0) { free(pcopy); unlink(tmpl); free(tmpl); return -1; }
+	if (argc == 0) { free(pcopy); (void)unlink(tmpl); free(tmpl); return -1; }
 	argv[argc++] = tmpl;
 	argv[argc] = 0;
 
@@ -4403,7 +4403,7 @@ static int man_run_external_pager(const char *pager, const char *styled, size_t 
 	}
 
 	free(pcopy);
-	unlink(tmpl);
+	(void)unlink(tmpl);
 	free(tmpl);
 	return rc;
 }
@@ -4520,9 +4520,9 @@ static int man_read_file(const char *path, char **out, size_t *outlen)
 			__util_diagf("man: %s: page too large, truncating at %d bytes\n", path, MAN_MAX_PAGE_SIZE);
 			break;
 		}
-		if (!mbuf_append(&b, chunk, r)) { mbuf_free(&b); fclose(f); return 0; }
+		if (!mbuf_append(&b, chunk, r)) { mbuf_free(&b); (void)fclose(f); return 0; }
 	}
-	fclose(f);
+	(void)fclose(f);
 	*out = b.data ? b.data : strdup("");
 	*outlen = b.len;
 	return *out != 0;
@@ -4709,7 +4709,7 @@ static int man_apropos(char **manpath, char **keywords, size_t nkeywords)
 				}
 				mbuf_free(&desc);
 			}
-			closedir(dp);
+			(void)closedir(dp);
 		}
 	}
 	return any;

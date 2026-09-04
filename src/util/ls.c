@@ -420,19 +420,19 @@ static int read_directory(const struct ls_opts *o, const char *dir, struct entry
 		if (!o->a && !o->A && de->d_name[0] == '.') continue;
 		if (o->A && (is_dot || is_dotdot)) continue;
 
-		if (grow_entries(&arr, &n, &cap) < 0) { closedir(dp); goto nomem; }
+		if (grow_entries(&arr, &n, &cap) < 0) { (void)closedir(dp); goto nomem; }
 		arr[n].name = malloc(namelen + 1);
-		if (!arr[n].name) { closedir(dp); goto nomem; }
+		if (!arr[n].name) { (void)closedir(dp); goto nomem; }
 		memcpy(arr[n].name, de->d_name, namelen);
 		arr[n].name[namelen] = 0;
 
 		full = join_path(dir, de->d_name);
-		if (!full) { closedir(dp); goto nomem; }
+		if (!full) { (void)closedir(dp); goto nomem; }
 		arr[n].stat_ok = lstat(full, &arr[n].st) == 0;
 		free(full);
 		n++;
 	}
-	closedir(dp);
+	(void)closedir(dp);
 	*outp = arr;
 	*np = n;
 	return 0;
