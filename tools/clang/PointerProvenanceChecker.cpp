@@ -52,7 +52,8 @@ namespace {
 class PointerProvenanceChecker
     : public Checker<check::PreStmt<BinaryOperator>, check::PreStmt<CastExpr>,
                       check::PreStmt<ReturnStmt>, check::PreCall,
-                      check::PostCall, check::BeginFunction, check::Bind> {
+                      check::PostCall, check::BeginFunction, check::Bind,
+                      check::EndAnalysis> {
   mutable std::unique_ptr<BugType> BT;
   // Distinct BugType for reportRedundantMarker(): a marker's exemption
   // being redundant is the opposite finding from BT's "unproven" one
@@ -63,6 +64,27 @@ class PointerProvenanceChecker
   mutable llvm::DenseMap<const VarDecl *, bool> RegistryEligibility;
   mutable llvm::SmallVector<const VarDecl *, 4> ContractRegistries;
   mutable bool ContractRegistriesInitialized = false;
+
+  // SharedProvenanceMarkerObservation / SharedProvenanceMarkerObservations:
+  // see recordSharedProvenanceMarkerObservation() below for why
+  // unsafe_assume_shared_provenance()'s redundancy verdict has to be
+  // accumulated across every explored path before it can be trusted,
+  // unlike unsafe_assume_valid_pointer()'s. AllPathsProven starts true on
+  // the first path that reaches a given marked Operation and is ANDed with
+  // every later path's result, so it ends up true only if every explored
+  // path proved the site by ordinary logic. Node is a representative
+  // ExplodedNode from the first path that reached the marker, captured
+  // once (not re-captured on later visits) purely so checkEndAnalysis() has
+  // something to build a PathSensitiveBugReport from -- the report's own
+  // message text is built from the Operation AST node, not from Node's
+  // location, so which explored path Node came from doesn't matter.
+  struct SharedProvenanceMarkerObservation {
+    bool AllPathsProven;
+    const ExplodedNode *Node;
+  };
+  mutable llvm::DenseMap<const BinaryOperator *,
+                         SharedProvenanceMarkerObservation>
+      SharedProvenanceMarkerObservations;
 
   // Transitive: `p = strstr(...); p2 = strstr(p + 2, ...);` (fnmatch.c's
   // bracket_match(), walking from one "[:class:]" delimiter to the
@@ -96,13 +118,19 @@ class PointerProvenanceChecker
     return resolveAlias(Region->getBaseRegion(), State);
   }
 
-  static std::string text(const Stmt *Statement, CheckerContext &C) {
-    const SourceManager &SM = C.getSourceManager();
+  // text()/context(): given directly (SourceManager, LangOptions) and a
+  // LocationContext rather than a CheckerContext, so both can be called
+  // either from an ordinary path callback (which has a live CheckerContext)
+  // or from checkEndAnalysis() (which only has the BugReporter and an
+  // already-captured ExplodedNode -- see
+  // recordSharedProvenanceMarkerObservation() below).
+  static std::string text(const Stmt *Statement, const SourceManager &SM,
+                          const LangOptions &LangOpts) {
     StringRef Raw =
         Lexer::getSourceText(CharSourceRange::getTokenRange(
                                  SM.getSpellingLoc(Statement->getBeginLoc()),
                                  SM.getSpellingLoc(Statement->getEndLoc())),
-                             SM, C.getLangOpts());
+                             SM, LangOpts);
     std::string Result;
     bool Space = false;
     for (char Character : Raw) {
@@ -118,8 +146,8 @@ class PointerProvenanceChecker
     return Result.empty() ? Statement->getStmtClassName() : Result;
   }
 
-  static std::string context(CheckerContext &C) {
-    const Decl *Current = C.getLocationContext()->getDecl();
+  static std::string context(const LocationContext *LC) {
+    const Decl *Current = LC->getDecl();
     if (const auto *Named = dyn_cast_or_null<NamedDecl>(Current))
       return Named->getQualifiedNameAsString();
     return Current ? Current->getDeclKindName() : "unknown";
@@ -681,25 +709,28 @@ class PointerProvenanceChecker
            isOpaqueApcContext(Cast, C);
   }
 
-  // isMarkerRedundant: generic support for detecting when any unsafe_*-
-  // style marker (isUnsafeAssumeValidPointer() for CastExpr,
-  // isUnsafeAssumeSharedProvenance() for BinaryOperator below -- a
-  // natural future extension is any later marker some other checker
-  // adds) has stopped covering a real
-  // provenance gap. OrdinaryProof is a callable re-running whatever
-  // checks would normally have proven the guarded site safe WITHOUT the
-  // marker's exemption -- isProvenByOrdinaryLogic() for
-  // isUnsafeAssumeValidPointer(), isProvenSharedProvenance() for
-  // isUnsafeAssumeSharedProvenance(). If OrdinaryProof() now succeeds on
-  // its own, the marker no longer covers anything: whatever gap it was
-  // written to paper over has since closed (e.g. a later checker
-  // extension learned to prove that shape), and a human should remove
-  // the now-decorative marker rather than have it silently keep
-  // exempting an already-provable site forever. This is the single
-  // choke point every marker-redundancy check should route through, so
-  // adding the same treatment to another marker later is "call this
-  // with that marker's own ordinary-proof predicate," not "reinvent the
-  // check."
+  // isMarkerRedundant: generic support for detecting when an unsafe_*-style
+  // marker has stopped covering a real provenance gap. OrdinaryProof is a
+  // callable re-running whatever checks would normally have proven the
+  // guarded site safe WITHOUT the marker's exemption. If OrdinaryProof()
+  // succeeds, the marker no longer covers anything: whatever gap it was
+  // written to paper over has since closed (e.g. a later checker extension
+  // learned to prove that shape), and a human should remove the
+  // now-decorative marker rather than have it silently keep exempting an
+  // already-provable site forever.
+  //
+  // This is sound ONLY when OrdinaryProof is path-insensitive -- true for
+  // isProvenByOrdinaryLogic() (isUnsafeAssumeValidPointer()'s ordinary
+  // proof), which is pure AST syntax and so answers identically on every
+  // path that reaches the same Cast, meaning the single explored path a
+  // PreStmt callback sees is already every path that matters. Calling this
+  // directly with a path-sensitive OrdinaryProof (isProvenSharedProvenance()
+  // for isUnsafeAssumeSharedProvenance()) would silently answer "exists a
+  // path where it's provable" instead of the "provable on every path" a
+  // real redundancy verdict requires -- see
+  // recordSharedProvenanceMarkerObservation() and checkEndAnalysis() below
+  // for how that marker's verdict is instead accumulated across the whole
+  // function before being decided.
   template <typename OrdinaryProofFn>
   static bool isMarkerRedundant(OrdinaryProofFn OrdinaryProof) {
     return OrdinaryProof();
@@ -786,8 +817,8 @@ class PointerProvenanceChecker
     std::string Message =
         (Reason + "; origin '" +
          SM.getFilename(SM.getExpansionLoc(Statement->getBeginLoc())) +
-         "'; context '" + context(C) + "'; expression '" + text(Statement, C) +
-         "'")
+         "'; context '" + context(C.getLocationContext()) + "'; expression '" +
+         text(Statement, SM, C.getLangOpts()) + "'")
             .str();
     auto Report = std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
     Report->addRange(Statement->getSourceRange());
@@ -801,26 +832,33 @@ class PointerProvenanceChecker
   // message from report()'s "unproven" finding: this is a request to
   // remove now-decorative source, not an unproven-provenance judgment
   // call.
+  //
+  // Takes an already-obtained Node and BugReporter, rather than a
+  // CheckerContext, so the same function serves both the cast marker (whose
+  // redundancy verdict is decided immediately, from the live CheckerContext
+  // at the one callback site that sees it) and the shared-provenance marker
+  // (whose verdict can only be trusted once every explored path has been
+  // seen -- see checkEndAnalysis() below -- by which point the callback
+  // that originally observed Statement has long since returned).
   void reportRedundantMarker(StringRef MarkerName, const Stmt *Statement,
-                             CheckerContext &C) const {
-    ExplodedNode *Node = C.generateNonFatalErrorNode();
-    if (!Node)
-      return;
+                             const ExplodedNode *Node,
+                             BugReporter &BR) const {
     if (!RedundantMarkerBT)
       RedundantMarkerBT = std::make_unique<BugType>(
           this, "Redundant provenance marker", categories::MemoryError);
-    const SourceManager &SM = C.getSourceManager();
+    const SourceManager &SM = BR.getSourceManager();
     std::string Message =
         (MarkerName + "() is no longer necessary here: this conversion is "
          "now provable without it; consider removing the marker; origin '" +
          SM.getFilename(SM.getExpansionLoc(Statement->getBeginLoc())) +
-         "'; context '" + context(C) + "'; expression '" +
-         text(Statement, C) + "'")
+         "'; context '" + context(Node->getLocationContext()) +
+         "'; expression '" +
+         text(Statement, SM, BR.getContext().getLangOpts()) + "'")
             .str();
     auto Report = std::make_unique<PathSensitiveBugReport>(*RedundantMarkerBT,
                                                             Message, Node);
     Report->addRange(Statement->getSourceRange());
-    C.emitReport(std::move(Report));
+    BR.emitReport(std::move(Report));
   }
 
   // isProvenSharedProvenance: every non-marker check this checker has for
@@ -828,9 +866,18 @@ class PointerProvenanceChecker
   // provenance-preserving on its own -- exactly the sequence
   // checkPreStmt(BinaryOperator) below runs, in order, before it ever
   // consults isUnsafeAssumeSharedProvenance(). Factored out for the same
-  // reason isProvenByOrdinaryLogic() is above: so it can be re-run
-  // standalone wherever unsafe_assume_shared_provenance()'s exemption
-  // needs testing for redundancy via isMarkerRedundant().
+  // reason isProvenByOrdinaryLogic() is above, but with one crucial
+  // difference from it: this predicate reads ProgramState (baseRegion() and
+  // elementRegistry() both dereference State), so it is path-sensitive --
+  // the very same Operation AST node can answer differently on two
+  // different explored paths (e.g. a loop-carried pointer whose region
+  // identity the analyzer's bounded widening only manages to track on some
+  // iterations). isProvenByOrdinaryLogic() has no such problem (it is pure
+  // AST syntax), which is exactly why the cast marker's redundancy check
+  // may safely ask "does OrdinaryProof() succeed on the one path that
+  // reached this callback" and treat that as the answer for every path.
+  // This function's callers must not make that same assumption: see
+  // recordSharedProvenanceMarkerObservation() immediately below.
   bool isProvenSharedProvenance(const BinaryOperator *Operation,
                                 CheckerContext &C) const {
     ProgramStateRef State = C.getState();
@@ -856,6 +903,61 @@ class PointerProvenanceChecker
     return LeftRegistry && LeftRegistry == RightRegistry;
   }
 
+  // recordSharedProvenanceMarkerObservation: called from
+  // checkPreStmt(BinaryOperator) once per explored path that reaches a
+  // BinaryOperator wrapped in unsafe_assume_shared_provenance(), instead of
+  // deciding redundancy right there. isProvenSharedProvenance() being
+  // path-sensitive means "OrdinaryProof succeeded on this path" is not the
+  // question a "remove this marker" verdict needs answered -- it needs
+  // "OrdinaryProof succeeds on every path that reaches this marker", which
+  // is only knowable once every path has been explored. So: AND this
+  // path's result into whatever has been seen so far for this exact
+  // Operation (true until proven otherwise, since AND-with-nothing-yet
+  // should not force a false), and capture one representative ExplodedNode
+  // the first time this Operation is seen, purely so checkEndAnalysis()
+  // below has a node to build a PathSensitiveBugReport from. The verdict
+  // itself is read back out of SharedProvenanceMarkerObservations in
+  // checkEndAnalysis(), once this function's entire ExplodedGraph is done.
+  //
+  // Only paths where the marker's own enclosing function is this graph's
+  // top frame (C.getLocationContext()->inTopFrame(), i.e. the analyzer is
+  // analyzing that function directly rather than having inlined it into
+  // some caller) get recorded. A marker exists to cover what its OWN
+  // function's body cannot see about its caller (see e.g. timer.c's
+  // timer_signal(), whose comment on this exact marker says so explicitly:
+  // "an invariant this function's own body cannot see"), which is exactly
+  // the question the analyzer answers by treating that function as its own
+  // top-level entry point with an opaque, unconstrained parameter -- the
+  // same "no assumptions about which caller" contract the marker itself
+  // was written to satisfy, and the same thing a human tests by hand when
+  // removing the marker and re-analyzing that function on its own. A path
+  // reached by inlining into some particular caller instead answers a
+  // narrower, caller-specific question (can THIS ONE caller always prove
+  // it), which can look decided (even unanimously "provable" within that
+  // one caller's own graph) purely because that caller happens to always
+  // supply a friendly pointer, while a different, unanalyzed caller could
+  // still supply one the function's own body cannot vouch for. Recording
+  // those inlined-frame observations anyway would launder a single lucky
+  // caller's local proof into a blanket "the marker is dead code"
+  // verdict -- unsound in exactly the same shape as the original per-path
+  // bug this mechanism exists to fix.
+  void recordSharedProvenanceMarkerObservation(const BinaryOperator *Operation,
+                                               bool ProvenOnThisPath,
+                                               CheckerContext &C) const {
+    if (!C.getLocationContext()->inTopFrame())
+      return;
+    auto Existing = SharedProvenanceMarkerObservations.find(Operation);
+    if (Existing == SharedProvenanceMarkerObservations.end()) {
+      SharedProvenanceMarkerObservations.insert(
+          {Operation,
+           {ProvenOnThisPath, C.generateNonFatalErrorNode()}});
+      return;
+    }
+    Existing->second.AllPathsProven &= ProvenOnThisPath;
+    if (!Existing->second.Node)
+      Existing->second.Node = C.generateNonFatalErrorNode();
+  }
+
 public:
   void checkPreStmt(const BinaryOperator *Operation, CheckerContext &C) const {
     BinaryOperatorKind Opcode = Operation->getOpcode();
@@ -870,13 +972,16 @@ public:
       return;
 
     // OrdinaryProof: see checkPreStmt(CastExpr)'s own OrdinaryProof
-    // comment below -- same reasoning, same deferred-lambda shape, for
-    // unsafe_assume_shared_provenance() instead of
-    // unsafe_assume_valid_pointer().
+    // comment below for the shape -- but unlike that one, this call's
+    // result must NOT be fed straight into isMarkerRedundant(): it is only
+    // this one explored path's answer, and isProvenSharedProvenance() is
+    // path-sensitive (see that function's own comment). Marked operations
+    // are instead handed to recordSharedProvenanceMarkerObservation() to
+    // accumulate across every path; the actual redundancy verdict is
+    // decided later, in checkEndAnalysis(), once accumulation is complete.
     auto OrdinaryProof = [&] { return isProvenSharedProvenance(Operation, C); };
     if (isUnsafeAssumeSharedProvenance(Operation, C.getASTContext())) {
-      if (isMarkerRedundant(OrdinaryProof))
-        reportRedundantMarker("unsafe_assume_shared_provenance", Operation, C);
+      recordSharedProvenanceMarkerObservation(Operation, OrdinaryProof(), C);
       return;
     }
     if (OrdinaryProof())
@@ -906,8 +1011,11 @@ public:
       // safe anyway, the marker covers no real gap here -- say so,
       // rather than silently accepting an exemption that turned out to
       // be unnecessary.
-      if (isMarkerRedundant(OrdinaryProof))
-        reportRedundantMarker("unsafe_assume_valid_pointer", Cast, C);
+      if (isMarkerRedundant(OrdinaryProof)) {
+        if (ExplodedNode *Node = C.generateNonFatalErrorNode())
+          reportRedundantMarker("unsafe_assume_valid_pointer", Cast, Node,
+                                C.getBugReporter());
+      }
       return;
     }
     if (OrdinaryProof())
@@ -1139,6 +1247,45 @@ public:
       State = State->set<NeedleAlias>(SR->getSymbol(), Haystack);
       C.addTransition(State);
     }
+  }
+
+  // checkEndAnalysis: fires once per analyzed entry point (each top-level
+  // function body the analyzer chooses to analyze standalone gets its own
+  // ExplodedGraph and its own single checkEndAnalysis call, after every
+  // path through it has been explored and before the engine moves on to
+  // the next entry point) -- see
+  // recordSharedProvenanceMarkerObservation()'s comment for why the
+  // shared-provenance marker's redundancy verdict has to wait until here
+  // rather than being decided inside checkPreStmt(BinaryOperator).
+  //
+  // Every observation accumulated during this just-finished graph's
+  // exploration is read out and cleared here: any BinaryOperator whose
+  // ordinary proof succeeded on every path that reached it (AllPathsProven)
+  // gets the redundant-marker diagnostic, using the representative Node
+  // captured on the first such path. A marker that was reached by zero
+  // paths (e.g. genuinely dead code) is silently skipped rather than
+  // treated as vacuously redundant -- Node stays null in that case, since
+  // recordSharedProvenanceMarkerObservation() is itself only ever called
+  // from a path that did reach it.
+  //
+  // recordSharedProvenanceMarkerObservation()'s inTopFrame() restriction
+  // means a given marked Operation is only ever recorded from the one
+  // graph where its own enclosing function is the top-level entry point
+  // (never from a graph that merely inlined that function into some
+  // caller), so it is only ever decided here once, in that graph's own
+  // checkEndAnalysis() call. The map is still cleared unconditionally
+  // after every graph regardless -- this checker's own instance persists
+  // across every top-level entry point in the translation unit, and a
+  // clean slate per graph is simpler to reason about than trusting that
+  // no marker belonging to the graph just finished remains unprocessed.
+  void checkEndAnalysis(ExplodedGraph &, BugReporter &BR, ExprEngine &) const {
+    for (const auto &Entry : SharedProvenanceMarkerObservations) {
+      const SharedProvenanceMarkerObservation &Observation = Entry.second;
+      if (Observation.AllPathsProven && Observation.Node)
+        reportRedundantMarker("unsafe_assume_shared_provenance", Entry.first,
+                              Observation.Node, BR);
+    }
+    SharedProvenanceMarkerObservations.clear();
   }
 };
 
