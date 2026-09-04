@@ -733,6 +733,88 @@ public:
 class ArrayIndexChecker : public Checker<check::PreStmt<ArraySubscriptExpr>> {
   mutable std::unique_ptr<BugType> BT;
 
+  // include/ownership.h's elements_withtok(token_name, extent_name) marks a
+  // pointer parameter as having extent_name's value elements; it already
+  // documents this exact fact for every argc/argv-shaped utility entry point
+  // (elements_withtok(null_terminated, argc)) purely so OwnershipChecker's
+  // linear-token tracking can name the array's length.  A plain pointer
+  // parameter has no dynamic extent this checker's DynamicExtent query can
+  // ever discover on its own -- the allocation that ultimately backs argv
+  // happened in the OS loader or a distant caller, never in a statement this
+  // translation unit can see -- so every index into it was unprovable by
+  // construction, regardless of how tightly a loop guards it against argc.
+  // Reading the same annotation OwnershipChecker already consumes costs
+  // nothing new to the source and states nothing this checker did not
+  // already effectively assume by leaving every such access unproven; it
+  // only turns a permanent "cannot know" into a real bound.  This is the
+  // same trust boundary the file already relies on for ntlibc_arith_range
+  // (rangeContract() below) and for ordinary nonnull/alloc_size attributes:
+  // a declared parameter contract is taken as an axiom, not independently
+  // reverified.  A lie in the annotation is a lie this checker inherits
+  // exactly the way a wrong nonnull annotation would deceive any consumer.
+  static std::optional<StringRef>
+  elementCountParamName(const ParmVarDecl *Param) {
+    for (const AnnotateAttr *Attr : Param->specific_attrs<AnnotateAttr>()) {
+      StringRef Text = Attr->getAnnotation();
+      if (!Text.consume_front("elements_withtok:"))
+        continue;
+      StringRef Token = Text.split(':').second;
+      if (Token.empty())
+        continue;
+      return Token;
+    }
+    return std::nullopt;
+  }
+
+  // A second, independent bound for Subscript's index, read straight from a
+  // declared element-count contract: compares Idx directly against whatever
+  // integer parameter the contract names, in that parameter's own native
+  // symbol, rather than routing through DynamicExtent's byte extent and
+  // back (a multiply-then-divide the plain RangeConstraintManager this file
+  // uses for ArrayIndex has no general algebra to cancel back to the loop
+  // guard's own "index < count" symbol).  Comparing the literal count
+  // parameter directly is exactly what a same-statement guard against argc
+  // already established for the constraint manager -- this only has to ask
+  // the same question about the same two symbols the source already
+  // relates.  Purely additive: a null result changes nothing, since the
+  // caller only consults this after its own DynamicExtent-based proof
+  // already failed.
+  static std::optional<NonLoc>
+  contractElementCount(const ArraySubscriptExpr *Subscript,
+                       CheckerContext &C) {
+    const auto *Function =
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
+    if (!Function)
+      return std::nullopt;
+    ProgramStateRef State = C.getState();
+    const LocationContext *LCtx = C.getLocationContext();
+    const MemRegion *BaseRegion = C.getSVal(Subscript->getBase()).getAsRegion();
+    if (!BaseRegion)
+      return std::nullopt;
+    for (const ParmVarDecl *Parameter : Function->parameters()) {
+      if (!Parameter->getType()->isPointerType())
+        continue;
+      std::optional<StringRef> ExtentName = elementCountParamName(Parameter);
+      if (!ExtentName)
+        continue;
+      SVal PointerValue = State->getSVal(State->getLValue(Parameter, LCtx));
+      if (PointerValue.getAsRegion() != BaseRegion)
+        continue;
+      const ParmVarDecl *CountParameter = nullptr;
+      for (const ParmVarDecl *Candidate : Function->parameters())
+        if (Candidate->getName() == *ExtentName) {
+          CountParameter = Candidate;
+          break;
+        }
+      if (!CountParameter || !CountParameter->getType()->isIntegerType())
+        continue;
+      SVal CountValue = State->getSVal(State->getLValue(CountParameter, LCtx));
+      if (std::optional<NonLoc> Defined = CountValue.getAs<NonLoc>())
+        return Defined;
+    }
+    return std::nullopt;
+  }
+
   static std::string sourceText(const Expr *Expr, CheckerContext &C) {
     const SourceManager &SM = C.getSourceManager();
     SourceLocation Begin = SM.getSpellingLoc(Expr->getBeginLoc());
@@ -810,6 +892,17 @@ public:
                                      Subscript->getIdx()->getType());
       if (!Outside)
         return;
+      // The DynamicExtent-based proof above failed; try the declared
+      // element-count contract as a second, independent bound before
+      // concluding this access is unproven.
+      if (std::optional<NonLoc> ContractCount =
+              contractElementCount(Subscript, C)) {
+        ProgramStateRef ContractOutside = State->assumeInBound(
+            *DefinedIndex, *ContractCount, false,
+            Subscript->getIdx()->getType());
+        if (!ContractOutside)
+          return;
+      }
     }
 
     ExplodedNode *Node = C.generateNonFatalErrorNode(Outside);

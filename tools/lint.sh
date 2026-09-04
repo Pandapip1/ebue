@@ -905,6 +905,12 @@ stage_sizearith() {
 		out=$builddir/$arch.cast-range.log
 		pardir=$(mktemp -d "$builddir/cast-range.XXXXXX") || return 1
 		# Each analyzer owns a log, avoiding interleaved path diagnostics.
+		# NTLIBC_OWNERSHIP_ANALYSIS turns on include/ownership.h's
+		# elements_withtok(token, extent) attribute, already written on
+		# every argc/argv-shaped utility entry point purely for
+		# OwnershipChecker's benefit.  ntlibc.ArrayIndex reads the same
+		# attribute to learn a pointer parameter's element count where no
+		# statement in this translation unit could otherwise tell it one.
 		# shellcheck disable=SC2086,SC2016
 		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
 			f=$1; clang=$2; plugin=$3; target=$4; shift 4
@@ -912,6 +918,7 @@ stage_sizearith() {
 			# shellcheck disable=SC2086
 			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
 				-Xclang -analyzer-checker=ntlibc.SizeCast,ntlibc.ArrayIndex,ntlibc.TaggedResult \
+				-DNTLIBC_OWNERSHIP_ANALYSIS \
 				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
 				> "'"$pardir"'/$id.log" 2>&1
 		' _ {} clang-18 "$plugin" "$target" $flags
