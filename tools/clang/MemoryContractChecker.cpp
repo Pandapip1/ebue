@@ -11,11 +11,17 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/RangedConstraintManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
 #include "TokenAlgebra.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+
+#ifdef NTLIBC_MEMORY_CONTRACT_Z3
+#include "ExactCScalarSMT.h"
+#include "z3++.h"
+#endif
 
 #include <cctype>
 #include <limits>
@@ -419,6 +425,273 @@ static ProgramStateRef assumeFieldSpan(const Expr *Expression,
              : State;
 }
 
+#ifdef NTLIBC_MEMORY_CONTRACT_Z3
+// A narrow bridge from the range constraint manager (and this checker's own
+// ProvenLessEqual/ProvenLessThan relations, see checkBranchCondition above)
+// to Z3.  It exists solely to discharge the no-wrap side condition that
+// sameSymbolSpanProven's shared-affine-root lemma below otherwise proves
+// with SValBuilder::getMaxValue(): that call only ever reports a single
+// symbol's own range constraints, so it can never combine a relation
+// between two *different* symbolic expressions -- exactly what
+// ProvenLessEqual/ProvenLessThan exist to record, precisely because the
+// range constraint manager cannot represent it -- with a concrete bound on
+// the other side. Encoding both kinds of fact as Z3 bit-vector assertions
+// and asking Z3 to refute the wrap event proves what the coarse per-symbol
+// range check structurally cannot. A missing translation or an
+// inconclusive solver result merely leaves the obligation exactly as
+// unproven as it was before this fallback existed; it can never turn an
+// UNSAT into a false proof.
+class MemoryContractZ3Engine {
+public:
+  z3::context Context;
+  z3::solver Solver;
+
+  MemoryContractZ3Engine() : Solver(Context) {
+    // Same budget as SizeCastChecker.cpp's ArithmeticZ3Engine: a generous
+    // wall-clock stop only for pathological queries, not a knob ordinary
+    // proofs are expected to depend on.
+    z3::params Parameters(Context);
+    Parameters.set("rlimit", 1000000u);
+    Parameters.set("timeout", 2000u);
+    Solver.set(Parameters);
+  }
+};
+
+class MemoryContractZ3Proof {
+  z3::context &ZCtx;
+  z3::solver &Solver;
+  ASTContext &AST;
+  ntlibc::algebra::ScalarSMT Algebra;
+
+  static bool isUnsigned(QualType Type) {
+    return Type->isUnsignedIntegerOrEnumerationType();
+  }
+
+  ntlibc::algebra::CType cType(QualType Type) const {
+    return {AST.getIntWidth(Type), AST.getIntWidth(Type), isUnsigned(Type)};
+  }
+
+  z3::expr bitVector(const llvm::APSInt &Value, unsigned Width) {
+    llvm::APInt Bits = Value;
+    if (Bits.getBitWidth() < Width)
+      Bits = Value.isUnsigned() ? Bits.zext(Width) : Bits.sext(Width);
+    else if (Bits.getBitWidth() > Width)
+      Bits = Bits.trunc(Width);
+    llvm::SmallString<80> Text;
+    Bits.toString(Text, 10, false, false);
+    return ZCtx.bv_val(Text.c_str(), Width);
+  }
+
+  // Deliberately narrower than a general expression translator: this proof
+  // only ever needs to reconstruct the plain arithmetic building the root
+  // symbol that decomposeAffine/symbolicConstantDifference already
+  // isolated, never comparisons or casts. SymbolCast is rejected outright
+  // for the same private-FromTy reason SizeCastChecker.cpp's own translator
+  // rejects it: Clang 18 does not expose the cast's real source type, so
+  // guessing its extension semantics could unsoundly manufacture a proof.
+  std::optional<z3::expr> translate(SymbolRef Symbol, unsigned Depth = 0) {
+    if (!Symbol || Depth > 24 || Symbol->getType().isNull() ||
+        !Symbol->getType()->isIntegerType() || isa<SymbolCast>(Symbol))
+      return std::nullopt;
+    unsigned Width = AST.getIntWidth(Symbol->getType());
+    if (const auto *Data = dyn_cast<SymbolData>(Symbol)) {
+      std::string Name = "clang_sym_" + std::to_string(Data->getSymbolID());
+      return ZCtx.bv_const(Name.c_str(), Width);
+    }
+    auto Arithmetic = [&](const z3::expr &Left, const z3::expr &Right,
+                          BinaryOperator::Opcode Opcode,
+                          QualType OperandType) -> std::optional<z3::expr> {
+      if (Left.get_sort().bv_size() != Right.get_sort().bv_size() ||
+          (Opcode != BO_Add && Opcode != BO_Sub && Opcode != BO_Mul))
+        return std::nullopt;
+      ntlibc::algebra::CType Type = cType(OperandType);
+      std::optional<ntlibc::algebra::SemanticResult> L =
+          Algebra.input(Left, Type);
+      std::optional<ntlibc::algebra::SemanticResult> R =
+          Algebra.input(Right, Type);
+      if (!L || !R)
+        return std::nullopt;
+      std::optional<ntlibc::algebra::SemanticResult> Result =
+          Opcode == BO_Add    ? Algebra.addConverted(*L, *R)
+          : Opcode == BO_Sub  ? Algebra.subtractConverted(*L, *R)
+                              : Algebra.multiplyConverted(*L, *R);
+      return Result ? std::optional<z3::expr>(Result->Value) : std::nullopt;
+    };
+    if (const auto *Binary = dyn_cast<SymSymExpr>(Symbol)) {
+      QualType LeftType = Binary->getLHS()->getType();
+      QualType RightType = Binary->getRHS()->getType();
+      if (LeftType.isNull() || RightType.isNull() ||
+          AST.getIntWidth(LeftType) != Width ||
+          AST.getIntWidth(RightType) != Width ||
+          isUnsigned(LeftType) != isUnsigned(Symbol->getType()) ||
+          isUnsigned(RightType) != isUnsigned(Symbol->getType()))
+        return std::nullopt;
+      std::optional<z3::expr> Left = translate(Binary->getLHS(), Depth + 1);
+      std::optional<z3::expr> Right = translate(Binary->getRHS(), Depth + 1);
+      if (!Left || !Right)
+        return std::nullopt;
+      return Arithmetic(*Left, *Right, Binary->getOpcode(), LeftType);
+    }
+    if (const auto *Binary = dyn_cast<SymIntExpr>(Symbol)) {
+      QualType LeftType = Binary->getLHS()->getType();
+      if (LeftType.isNull() || AST.getIntWidth(LeftType) != Width ||
+          Binary->getRHS().getBitWidth() != Width ||
+          Binary->getRHS().isUnsigned() != isUnsigned(LeftType))
+        return std::nullopt;
+      std::optional<z3::expr> Left = translate(Binary->getLHS(), Depth + 1);
+      if (!Left)
+        return std::nullopt;
+      z3::expr Right = bitVector(Binary->getRHS(), Width);
+      return Arithmetic(*Left, Right, Binary->getOpcode(), LeftType);
+    }
+    if (const auto *Binary = dyn_cast<IntSymExpr>(Symbol)) {
+      QualType RightType = Binary->getRHS()->getType();
+      if (RightType.isNull() || AST.getIntWidth(RightType) != Width ||
+          Binary->getLHS().getBitWidth() != Width ||
+          Binary->getLHS().isUnsigned() != isUnsigned(RightType))
+        return std::nullopt;
+      std::optional<z3::expr> Right = translate(Binary->getRHS(), Depth + 1);
+      if (!Right)
+        return std::nullopt;
+      z3::expr Left = bitVector(Binary->getLHS(), Width);
+      return Arithmetic(Left, *Right, Binary->getOpcode(), RightType);
+    }
+    return std::nullopt;
+  }
+
+  void addRange(const z3::expr &Expression, const RangeSet &Ranges) {
+    if (!Expression.is_bv() || Ranges.isEmpty() ||
+        Expression.get_sort().bv_size() != Ranges.getBitWidth())
+      return;
+    std::optional<z3::expr> Union;
+    for (const Range &R : Ranges) {
+      z3::expr From = bitVector(R.From(), Ranges.getBitWidth());
+      z3::expr To = bitVector(R.To(), Ranges.getBitWidth());
+      z3::expr Member = R.getConcreteValue()
+                            ? Expression == From
+                            : Ranges.isUnsigned()
+                                  ? z3::ule(From, Expression) &&
+                                        z3::ule(Expression, To)
+                                  : From <= Expression && Expression <= To;
+      Union = Union ? std::optional<z3::expr>(*Union || Member)
+                    : std::optional<z3::expr>(Member);
+    }
+    if (Union && Union->is_bool())
+      Solver.add(*Union);
+  }
+
+  void addRelation(SymbolRef LeftSymbol, SymbolRef RightSymbol, bool Strict) {
+    if (!LeftSymbol || !RightSymbol || LeftSymbol->getType().isNull() ||
+        RightSymbol->getType().isNull())
+      return;
+    std::optional<z3::expr> Left = translate(LeftSymbol);
+    std::optional<z3::expr> Right = translate(RightSymbol);
+    if (!Left || !Right)
+      return;
+    std::optional<ntlibc::algebra::SemanticResult> LeftInput =
+        Algebra.input(*Left, cType(LeftSymbol->getType()));
+    std::optional<ntlibc::algebra::SemanticResult> RightInput =
+        Algebra.input(*Right, cType(RightSymbol->getType()));
+    if (!LeftInput || !RightInput)
+      return;
+    // less() applies the real C usual-arithmetic-conversion rules via the
+    // shared algebra before comparing, exactly as the source comparison
+    // that established this relation did.
+    std::optional<z3::expr> LessThanRight = Algebra.less(*LeftInput, *RightInput);
+    if (!LessThanRight)
+      return;
+    z3::expr Fact = *LessThanRight;
+    if (!Strict) {
+      std::optional<z3::expr> RightBeforeLeft =
+          Algebra.less(*RightInput, *LeftInput);
+      if (!RightBeforeLeft)
+        return;
+      Fact = !*RightBeforeLeft;
+    }
+    if (Fact.is_bool())
+      Solver.add(Fact);
+  }
+
+  // ProvenLessEqual/ProvenLessThan record relations between two distinct
+  // symbolic expressions -- exactly what the range constraint manager (and
+  // therefore getMaxValue) cannot represent. Asserting them into the same
+  // solver as the concrete range facts above is what lets Z3 chain
+  // "a <= b" with a concrete bound on b into a bound on a, closing cases
+  // the single-symbol getMaxValue() check can never reach.
+  void addRelations(ProgramStateRef State) {
+    for (const SymbolRelation &Relation : State->get<ProvenLessEqual>())
+      addRelation(Relation.first, Relation.second, /*Strict=*/false);
+    for (const SymbolRelation &Relation : State->get<ProvenLessThan>())
+      addRelation(Relation.first, Relation.second, /*Strict=*/true);
+  }
+
+public:
+  MemoryContractZ3Proof(MemoryContractZ3Engine &Engine, ProgramStateRef State,
+                        ASTContext &AST)
+      : ZCtx(Engine.Context), Solver(Engine.Solver), AST(AST),
+        Algebra(ZCtx, cType(AST.IntTy), cType(AST.UnsignedIntTy)) {
+    Solver.reset();
+    for (const auto &Entry : getConstraintMap(State))
+      if (std::optional<z3::expr> Expression = translate(Entry.first))
+        addRange(*Expression, Entry.second);
+    addRelations(State);
+  }
+
+  // Proves that `Base + Offset` cannot overflow/wrap BaseType, given every
+  // range and relational fact already known on this path. Only an UNSAT
+  // wrap event discharges the obligation; SAT, timeout, and every
+  // untranslatable shape leave it exactly as unproven as getMaxValue alone
+  // left it.
+  bool provesNoWrap(SymbolRef Base, QualType BaseType, uint64_t Offset) {
+    if (!Base || BaseType.isNull() || !BaseType->isIntegerType())
+      return false;
+    std::optional<z3::expr> BaseExpr = translate(Base);
+    if (!BaseExpr)
+      return false;
+    unsigned Width = AST.getIntWidth(BaseType);
+    if (BaseExpr->get_sort().bv_size() != Width)
+      return false;
+    ntlibc::algebra::CType Domain = cType(BaseType);
+    std::optional<ntlibc::algebra::SemanticResult> BaseInput =
+        Algebra.input(*BaseExpr, Domain);
+    if (!BaseInput)
+      return false;
+    llvm::APSInt OffsetValue(Width, Domain.Unsigned);
+    OffsetValue = Offset;
+    std::optional<ntlibc::algebra::SemanticResult> OffsetInput =
+        Algebra.input(bitVector(OffsetValue, Width), Domain);
+    if (!OffsetInput)
+      return false;
+    std::optional<ntlibc::algebra::SemanticResult> Result =
+        Algebra.addConverted(*BaseInput, *OffsetInput);
+    if (!Result)
+      return false;
+    z3::expr Violation = (Domain.Unsigned ? Result->Events.UnsignedWrap
+                                          : Result->Events.SignedOverflow)
+                             .simplify();
+    if (!Violation.is_bool())
+      return false;
+    Solver.add(Violation);
+    return ntlibc::algebra::provesUnsatisfiable(Solver);
+  }
+};
+
+static MemoryContractZ3Engine &memoryContractZ3Engine() {
+  // Static-analyzer callbacks are serial within one translation-unit
+  // process; lint.sh provides process parallelism across translation
+  // units. Reusing both context and solver avoids repeated Z3
+  // initialization, matching SizeCastChecker.cpp's identical engine.
+  static thread_local MemoryContractZ3Engine Engine;
+  return Engine;
+}
+
+static bool noWrapProvenZ3(SymbolRef Base, QualType BaseType, uint64_t Offset,
+                           ProgramStateRef State, ASTContext &AST) {
+  MemoryContractZ3Proof Proof(memoryContractZ3Engine(), State, AST);
+  return Proof.provesNoWrap(Base, BaseType, Offset);
+}
+#endif // NTLIBC_MEMORY_CONTRACT_Z3
+
 class MemoryContractChecker
     : public Checker<check::PreCall, check::PostCall, check::BeginFunction,
                      check::EndFunction, check::Bind,
@@ -680,6 +953,17 @@ class MemoryContractChecker
               C.getSValBuilder().getMaxValue(State, Length);
           if (Maximum && *Maximum <= Limit)
             return true;
+#ifdef NTLIBC_MEMORY_CONTRACT_Z3
+          // getMaxValue only sees LengthSymbol's own range constraints; it
+          // cannot combine a proven relation to another symbol (see
+          // MemoryContractZ3Proof's comment above) with that other
+          // symbol's own range.  Fall back to a real Z3 proof before
+          // giving up on this side condition.
+          if (noWrapProvenZ3(LengthSymbol, LengthType,
+                             static_cast<uint64_t>(*Difference), State,
+                             C.getASTContext()))
+            return true;
+#endif
         }
       }
     }
@@ -720,7 +1004,17 @@ class MemoryContractChecker
     Limit -= Delta;
     const llvm::APSInt *Maximum = C.getSValBuilder().getMaxValue(
         State, C.getSValBuilder().makeSymbolVal(ExtentBase));
-    return Maximum && *Maximum <= Limit;
+    if (Maximum && *Maximum <= Limit)
+      return true;
+#ifdef NTLIBC_MEMORY_CONTRACT_Z3
+    // Same fallback as above: getMaxValue(ExtentBase) alone cannot use a
+    // proven relation to a different bounded symbol.
+    if (noWrapProvenZ3(ExtentBase, BaseType,
+                       static_cast<uint64_t>(ExtentOffset), State,
+                       C.getASTContext()))
+      return true;
+#endif
+    return false;
   }
 
   // The allocator-extent lemma above only closes the DESTINATION side of

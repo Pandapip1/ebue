@@ -440,3 +440,29 @@ void fill_strictly_guarded_contracted_suffix(
 	if (length >= remaining) return;
 	memcpy(buffer + offset, source, length);
 }
+
+/* `l <= cap` is a relation between two DISTINCT symbolic expressions, not
+ * a direct concrete-int range on `l` itself -- checkBranchCondition
+ * records it in ProvenLessEqual precisely because the range constraint
+ * manager (and therefore SValBuilder::getMaxValue(), the fast path
+ * sameSymbolSpanProven tries first) cannot represent a fact about one
+ * symbol in terms of another. Only combining that relation with `cap`'s
+ * own concrete range fact (`cap <= 1000`) proves `l + 1` cannot wrap
+ * size_t when sizing the allocation below; the coarse per-symbol
+ * getMaxValue() check can only ever see `l`'s own (here: unconstrained)
+ * range and so cannot discharge this side condition -- only the Z3
+ * fallback in MemoryContractZ3Proof, which asserts both facts together,
+ * can. `cap` is read again after the copy so it remains live (and its
+ * range constraint un-reaped) at the memcpy site, matching how a real
+ * capacity value would ordinarily still be used afterward. */
+size_t fill_z3_bounded_allocation(
+	const char *source withtok(fixture_readable_span(l)), size_t l,
+	size_t cap)
+{
+	if (cap > 1000) return 0;
+	if (l > cap) return 0;
+	char *d = __malloc(l + 1);
+	if (!d) return 0;
+	memcpy(d, source, l);
+	return cap - l;
+}
