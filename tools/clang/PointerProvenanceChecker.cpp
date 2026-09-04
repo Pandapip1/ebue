@@ -657,132 +657,6 @@ class PointerProvenanceChecker
            Name == "signal_apc" || Name == "__plat_thread_queue_apc";
   }
 
-  // A short, explicit, auditable list of (file suffix, function) pairs
-  // where a finding has been individually read and judged genuine but
-  // irreducible: the provenance crosses a boundary no C-level static
-  // analysis can see across (hand-written assembly, kernel ABI, hardware
-  // fault handler), and no source-level rewrite removes it. Each entry
-  // names the specific function it covers, not a type or value, so this
-  // table can only grow by someone reading a function and writing down
-  // why -- tools/lint.sh's own discipline: "findings get reported and
-  // judged, not blanket-silenced."
-  //
-  //   crt/delayload2.c __delayLoadHelper2
-  //   src/internal/delayload.c ntlibc_delayLoadHelper2
-  //     `piat` is computed by the hand-written delay-load thunk stub
-  //     (crt/delayload1.asm) as `base + <RVA>`, same as `iat`'s C-side
-  //     computation nearby, but nothing in this TU sees that assembly.
-  //   src/thread/aio.c lookup
-  //   src/time/timer.c timer_signal
-  //     Both check a pointer for membership in a fixed global table
-  //     (`requests`/`timers`) carved out by a *different* function
-  //     (submit()/timer_create()) earlier in the program, an invariant
-  //     established nowhere this function's own body can see.
-  //   src/thread/pthread.c pthread_getattr_np
-  //     `teb->NtTib.StackBase`/`StackLimit` are two fields of one
-  //     THREAD_INFORMATION_BLOCK the kernel populated via an opaque
-  //     NtQueryInformationThread out-parameter; each field load looks
-  //     like an independent unconstrained symbol even though both bound
-  //     the same OS-allocated stack.
-  //   src/signal/signal.c exception_handler
-  //     `ExceptionInformation[1]` is the CPU-supplied faulting address
-  //     for access-violation exceptions in NT's EXCEPTION_RECORD; the
-  //     hardware fault handler produced it, not any C expression.
-  //   src/sh/parse.c parse_funcdef
-  //     `start` and `end` are both `p->cur.start` read at two points
-  //     while parsing the same function body; the invariant that nothing
-  //     changes what buffer `p` tokenizes lives in the whole recursive-
-  //     descent parser's shape, not in any one function.
-  //   src/fcntl/fcntl.c fcntl
-  //     fcntl(2)'s vararg type depends on `cmd`; every conforming
-  //     implementation reads it once via one word-sized type
-  //     (`intptr_t`) and reinterprets, since a vararg list can't be
-  //     re-read with a different type per case.
-  //   src/stdio/scanf.c vfscanf_st
-  //   src/stdio/scanf.c vswscanf_impl
-  //     The %p conversion specifier's whole contract (C11 7.21.6.2p12)
-  //     is turning text back into a pointer; no compile-time provenance
-  //     is possible for the feature itself. The exemption is scoped to
-  //     these two functions, not the cast shape -- unsafe.c's
-  //     integer_pointer() fixture still requires flagging the general
-  //     integer-to-pointer cast.
-  //   Linux kernel mapping-return functions listed below
-  //     mmap(2)/shmat(2)/brk(2) return an address in a signed
-  //     machine-word syscall register; converting that ABI word to a
-  //     pointer is the operation these functions exist to perform, and
-  //     the same applies to crt1.c's kernel-supplied initial
-  //     stack/TLS/ELF addresses.
-  //   Linux box()/install/open/pipe/process functions listed below
-  //     __plat_handle_t is an opaque one-word carrier shared with the NT
-  //     backend; Linux fds/pids/tids are integers encoded in it and
-  //     never dereferenced. Each listed function is an explicit ABI
-  //     boundary, not a blanket exemption.
-  //   src/dlfcn/linux/plat_dlfcn.c loader functions listed below
-  //     ELF defines load addresses and symbol/relocation values as
-  //     integer virtual addresses; reconstructing pointers from the
-  //     mapped image's load bias is the dynamic loader's required ABI
-  //     operation. The file validates every range before use.
-  struct NamedException {
-    const char *FileSuffix;
-    const char *Function;
-  };
-  static bool isNamedException(CheckerContext &C) {
-    static const NamedException Exceptions[] = {
-        {"crt/delayload2.c", "__delayLoadHelper2"},
-        {"src/internal/delayload.c", "ntlibc_delayLoadHelper2"},
-        {"src/thread/aio.c", "lookup"},
-        {"src/time/timer.c", "timer_signal"},
-        {"src/thread/pthread.c", "pthread_getattr_np"},
-        {"src/signal/signal.c", "exception_handler"},
-        {"src/sh/parse.c", "parse_funcdef"},
-        {"src/fcntl/fcntl.c", "fcntl"},
-        {"src/stdio/scanf.c", "vfscanf_st"},
-        {"src/stdio/scanf.c", "vswscanf_impl"},
-        {"crt/linux/crt1.c", "find_tls_phdr"},
-        {"crt/linux/crt1.c", "linux_setup_tls"},
-        {"src/dlfcn/linux/plat_dlfcn.c", "raw_mmap"},
-        {"src/dlfcn/linux/plat_dlfcn.c", "resolve_main_symbol"},
-        {"src/dlfcn/linux/plat_dlfcn.c", "apply_one_reloc"},
-        {"src/dlfcn/linux/plat_dlfcn.c", "apply_reloc_table"},
-        {"src/dlfcn/linux/plat_dlfcn.c", "__plat_dlopen"},
-        {"src/dlfcn/linux/plat_dlfcn.c", "__plat_dlsym"},
-        {"src/dlfcn/linux/plat_dlfcn.c", "resolve_export"},
-        {"src/dlfcn/linux/plat_dlfcn.c", "setup_object_tls"},
-        {"src/dlfcn/linux/plat_dlfcn.c", "run_ctors"},
-        {"src/dlfcn/linux/plat_dlfcn.c", "load_object"},
-        {"src/ipc/linux/plat_sysvipc.c", "shmat"},
-        {"src/fcntl/linux/plat_fcntl.c", "__plat_open"},
-        {"src/internal/linux/plat_fd_init.c", "install_std"},
-        {"src/malloc/linux/plat_malloc.c", "__plat_pages_alloc"},
-        {"src/misc/linux/plat_misc.c", "box_fd"},
-        {"src/mman/linux/plat_mem.c", "__plat_mem_map_file"},
-        {"src/mman/linux/plat_mem.c", "__plat_mem_reserve"},
-        {"src/process/linux/plat_process.c", "__plat_process_fork"},
-        {"src/process/linux/plat_process.c", "__plat_process_spawn"},
-        {"src/signal/linux/plat_signal.c", "__plat_kill_open"},
-        {"src/signal/linux/plat_signal.c", "box"},
-        {"src/signal/linux/plat_signal.c", "open_shared_stop_event"},
-        {"src/socket/linux/plat_socket.c", "box"},
-        {"src/thread/linux/plat_thread.c", "alloc_sync"},
-        {"src/thread/linux/plat_thread.c", "map_named_sem"},
-        {"src/thread/linux/plat_thread.c", "__plat_thread_spawn"},
-        {"src/thread/linux/plat_thread.c", "__plat_thread_duplicate_self"},
-        {"src/thread/linux/plat_thread.c", "__plat_named_mutant_acquire"},
-        {"src/unistd/linux/plat_fd.c", "__plat_dup"},
-        {"src/unistd/linux/plat_brk.c", "raw_brk"},
-        {"src/unistd/linux/plat_unistd.c", "__plat_pipe"},
-    };
-    std::string Fn = context(C);
-    const SourceManager &SM = C.getSourceManager();
-    StringRef File = SM.getFilename(SM.getExpansionLoc(
-        C.getLocationContext()->getDecl()->getBeginLoc()));
-    for (const NamedException &Exception : Exceptions) {
-      if (Fn == Exception.Function && File.ends_with(Exception.FileSuffix))
-        return true;
-    }
-    return false;
-  }
-
   void report(StringRef Reason, const Stmt *Statement,
               CheckerContext &C) const {
     ExplodedNode *Node = C.generateNonFatalErrorNode();
@@ -838,8 +712,6 @@ public:
         RightRegistry = registryStorage(Registry, C);
     if (LeftRegistry && LeftRegistry == RightRegistry)
       return;
-    if (isNamedException(C))
-      return;
     report(
         Subtraction
             ? "pointer subtraction operands are not proven to share provenance"
@@ -858,8 +730,6 @@ public:
     if (isClientIdAssignment(Cast, C))
       return;
     if (isOpaqueApcContext(Cast, C))
-      return;
-    if (isNamedException(C))
       return;
     report(
         "integer-to-pointer conversion is not proven provenance-preserving",
