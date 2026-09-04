@@ -59,14 +59,15 @@
  * defaults to 10.0.
  *
  * *** This is not ntlibc's minimum supported Windows version. ***
- * That floor is Windows 7 / NTDLL 6.1, set by the ntdll exports this
+ * That floor is Windows Vista / NTDLL 6.0, set by the ntdll exports this
  * library imports (tools/ntdll.def); it is a statement about which
- * *imports* must resolve.  (The gate that gives that floor a marker and
- * a lint stage of its own, tools/lint-minver.sh, is not on main as of
- * this commit -- it lives on the min-windows-version branch.)  A platform can satisfy
- * the import floor while reporting an older kernel version here --
- * ReactOS does exactly that, implementing and exporting
- * RtlUTF8ToUnicodeN/RtlUnicodeToUTF8N while reporting 5.2.  Nothing in
+ * *imports* must resolve.  tools/lint-minver.sh (`make minver`) is the
+ * gate that keeps that floor and the marker README.md declares it under
+ * in sync with the actual import list.  A platform can satisfy the
+ * import floor while reporting an older kernel version here -- ReactOS
+ * does exactly that, targeting NT 5.2 above while still implementing and
+ * exporting ntdll names newer than that (see tools/ntdll.def's own
+ * header for the current list and the versions behind them).  Nothing in
  * this file may be read as lowering or raising that floor.
  */
 #include "libc.h"

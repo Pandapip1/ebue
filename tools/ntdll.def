@@ -17,11 +17,12 @@
 ; guard: it fails if any export lacks an annotation, or if the maximum
 ; annotation is not the floor declared in README.md.
 ;
-; Today that maximum is 6.1 -- Windows 7 -- and it is imposed by exactly
-; two names, RtlUTF8ToUnicodeN and RtlUnicodeToUTF8N (src/internal/utf.c,
-; the UTF-8 <-> UTF-16 conversion every path-taking function goes
-; through).  Drop those two and the next floor down is 6.0 (Vista), from
-; RtlCloneUserProcess and RtlCreateProcessParametersEx.
+; Today that maximum is 6.0 -- Vista -- imposed by NtCreateThreadEx,
+; RtlCloneUserProcess, RtlCreateProcessParametersEx and RtlExitUserProcess
+; (fork/exec).  It used to be 6.1 (Windows 7), from RtlUTF8ToUnicodeN and
+; RtlUnicodeToUTF8N (the UTF-8 <-> UTF-16 conversion every path-taking
+; function goes through); src/internal/utf.c no longer imports either --
+; it converts in-tree now -- so that floor dropped out from under it.
 ;
 ; The versions are Geoff Chappell's per-release "exports added for NTDLL
 ; x.y" lists, which is the only systematic public record of this:
@@ -168,6 +169,4 @@ RtlSetEnvironmentVariable               ; 3.51
 RtlSizeHeap                             ; 3.51
 RtlTimeFieldsToTime                     ; 3.51
 RtlTimeToTimeFields                     ; 3.51
-RtlUTF8ToUnicodeN                       ; 6.1
-RtlUnicodeToUTF8N                       ; 6.1
 RtlUnwind                               ; 3.51

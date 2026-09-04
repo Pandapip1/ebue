@@ -3,13 +3,24 @@
  *
  * src/internal/utf.c, and src/stdlib/mbtowc.c / mbrtowc.c.
  *
- * What is and is not under test here matters.  utf.c is a *wrapper*: the
- * conversions themselves are ntdll's RtlUTF8ToUnicodeN and
- * RtlUnicodeToUTF8N, which a native build does not have, and which
- * fuzz/ntstubs.c reimplements from their documented behaviour.  So this
- * harness is not evidence about ntdll's converter.  What it does test is
- * ntlibc's own part: the buffer arithmetic utf.c performs around those
- * calls, and the two size claims its allocations rest on --
+ * What is and is not under test here matters, and it changed: utf.c's
+ * UTF-8 <-> UTF-16 conversions used to be a thin wrapper around ntdll's
+ * RtlUTF8ToUnicodeN and RtlUnicodeToUTF8N, which a native build does not
+ * have -- fuzz/ntstubs.c reimplemented them from their documented
+ * behaviour just so this harness had something to link against, and this
+ * comment used to say (correctly, then) that the harness was not
+ * evidence about ntdll's real converter.  utf.c now carries its own
+ * from-scratch, platform-independent codec (see its header for why:
+ * dropping the ntdll dependency dropped ntlibc's minimum supported
+ * Windows version), so this native build now runs the *exact same*
+ * conversion code the PE build does.  fuzz/ntstubs.c's RtlUTF8ToUnicodeN
+ * / RtlUnicodeToUTF8N are unreachable from here as a result -- nothing
+ * in utf.c calls them any more -- but are kept for other ntstubs.c
+ * consumers (its own cmdline_to_argv()).
+ *
+ * What is still true, and is what this harness actually checks: the
+ * buffer arithmetic utf.c performs around the conversion, and the two
+ * size claims its allocations rest on --
  *
  *     "UTF-16 is never longer in code units than UTF-8 is in bytes"
  *     "UTF-8 is at most 3 bytes per UTF-16 code unit"

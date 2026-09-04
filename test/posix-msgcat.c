@@ -354,20 +354,22 @@
  * <iconv.h> -- inventory: "src/internal/utf.c already implements UTF
  *   conversions internally; ... mostly a stable-name wrapper around
  *   that plus a small codeset table".  Re-checked, and this is the note
- *   most out of date.  src/internal/utf.c is ntdll-backed
- *   (RtlUTF8ToUnicodeN / RtlUnicodeToUTF8N) and whole-string:
- *   __utf8_to_utf16() mallocs, converts everything, returns.  It has
- *   none of iconv()'s shape -- no conversion descriptor, no incremental
- *   pointer advance, no resumable state, no partial-output case.
+ *   most out of date.  src/internal/utf.c is whole-string:
+ *   __utf8_to_utf16() mallocs, converts everything, returns -- true
+ *   whether the conversion underneath is ntdll's RtlUTF8ToUnicodeN /
+ *   RtlUnicodeToUTF8N (as it was) or the in-tree hand-rolled codec
+ *   utf.c carries now (as it is; see tools/ntdll.def's history for why).
+ *   Either way it has none of iconv()'s shape -- no conversion
+ *   descriptor, no incremental pointer advance, no resumable state, no
+ *   partial-output case.
  *
  *   The evidence for both halves of that, from the two files:
  *
- *     $ grep -n 'RtlUTF8ToUnicodeN\|RtlUnicodeToUTF8N\|__malloc'
- *         src/internal/utf.c
- *     20: w = __malloc((inlen + 1) * sizeof(WCHAR));
- *     23: st = RtlUTF8ToUnicodeN(w, inlen * sizeof(WCHAR), &outlen, s, inlen);
- *     38: st = RtlUnicodeToUTF8N(out, (ULONG)(outsz - 1), &outlen, w, ...);
- *     51: char *s = __malloc(cap);
+ *     $ grep -n '^static int utf\|__malloc(' src/internal/utf.c
+ *     60: static int utf8_to_utf16n(WCHAR *dst, ULONG dstbytes, ULONG *written,
+ *     116: static int utf16_to_utf8n(char *dst, ULONG dstbytes, ULONG *written,
+ *     179: w = __malloc(allocation);
+ *     227: char *s = __malloc(cap);
  *
  *     $ grep -n 'EILSEQ\|size_t)-2\|__opaque' src/stdlib/mbrtowc.c
  *     26: int mbsinit(const mbstate_t *st) { return !st ||
@@ -1524,13 +1526,15 @@ static void test_strfmon_alignment_pads_to_equal_length(void)
    WHAT IT IS BUILT ON, and one correction worth keeping.
    test/POSIX-HEADER-INVENTORY.md pointed at src/internal/utf.c.
    Re-checked 2026-08-25, that was the wrong file and
-   src/misc/iconv.c does not use it: utf.c converts whole strings
-   through ntdll's RtlUTF8ToUnicodeN / RtlUnicodeToUTF8N and mallocs
-   its result, so it has no conversion descriptor, no incremental
-   pointer advance, no resumable state and no partial-output case --
-   none of the four things the clauses above are about.  The decoder
-   and encoder are written out in pure C instead, which also keeps
-   this working identically on the native asan build.
+   src/misc/iconv.c does not use it: utf.c converts whole strings (via
+   ntdll's RtlUTF8ToUnicodeN / RtlUnicodeToUTF8N at the time, an
+   in-tree hand-rolled codec since -- see tools/ntdll.def's history)
+   and mallocs its result, so it has no conversion descriptor, no
+   incremental pointer advance, no resumable state and no
+   partial-output case -- none of the four things the clauses above
+   are about.  The decoder and encoder used here are written out in
+   pure C instead, which also keeps this working identically on the
+   native asan build.
 
    The three assertions that carry the most weight are the ones about
    where the pointers are LEFT, not about what came out: after EILSEQ,
