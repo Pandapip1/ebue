@@ -904,7 +904,7 @@ static bool zeroProvenZ3(SymbolRef Symbol, ProgramStateRef State,
 class MemoryContractChecker
     : public Checker<check::PreCall, check::PostCall, check::BeginFunction,
                      check::EndFunction, check::Bind,
-                     check::BranchCondition> {
+                     check::BranchCondition, check::LiveSymbols> {
   mutable std::unique_ptr<BugType> SpanBT;
   mutable std::unique_ptr<BugType> OverlapBT;
   mutable std::unique_ptr<BugType> TokenBT;
@@ -2650,6 +2650,93 @@ public:
                                   C.getSValBuilder()));
     if (Failed)
       C.addTransition(removeGrantProofs(Failed, Call, Spans, Disjoint));
+  }
+
+  // TouchedRecordSpan's own comment already explains why the (Pointer,
+  // Length) VALUES are captured as a snapshot rather than re-read from the
+  // store at checkEndFunction: liveness-driven dead-binding cleanup would
+  // otherwise silently return Unknown for a field nothing downstream reads
+  // again. That snapshot protects the VALUES themselves (the checker holds
+  // its own copy of each SVal in its private GDM state), but not the RANGE
+  // CONSTRAINTS those values may depend on: ProgramState::cleanupState
+  // prunes ConstraintRangeTy entries for any symbol the SymbolReaper does
+  // not consider live, and holding a symbol inside a checker's own private
+  // GDM map (TouchedRecordSpan is exactly that) does not by itself count --
+  // only an explicit checkLiveSymbols vote keeps the SymbolReaper from
+  // reaping it. Confirmed via a minimal reproduction of glob.c's own
+  // `out.cap = pglob->gl_pathc; if (out.cap) { out.v = __malloc(out.cap *
+  // sizeof *out.v); ... } return 0;` shape (one field, one branch, one
+  // return): the analyzer's own trace records "Assuming field 'cap' is 0"
+  // on the false branch (a real constraint IS added on that path), yet by
+  // the time checkEndFunction's flush runs at the return statement,
+  // getConstraintMap(State) comes back completely empty -- every range
+  // fact on the path has already been reaped, because nothing ever marked
+  // any of them live. Without this, both spanProven's plain isNull() check
+  // and 906b757c's own Z3 provesZero bridge have nothing left to prove
+  // from: an empty constraint map lets Z3 satisfy "scaled length != 0"
+  // trivially, so what should be a provable zero-length vacuous case
+  // (out.cap == 0 on that path, therefore out.cap * elementSize == 0)
+  // reports as unproven instead. Marking every symbol a still-pending
+  // TouchedRecordSpan obligation references keeps its constraints alive
+  // exactly as long as the obligation itself survives -- the entry is
+  // removed by flushRecordSpanObligations the moment it is judged, so this
+  // stops protecting the symbol on the very next liveness pass after that,
+  // the same bounded lifetime the snapshot values themselves already have.
+  //
+  // Marking the captured Pointer/Length VALUES alone is not sufficient by
+  // itself, though: src/util/patch.c's own `struct pline.text`/`.len` pair
+  // (readable_span, not the growable-array shape above) showed a second,
+  // narrower instance of the identical class of bug. Minimal reproduction
+  // (a `bytes; size_add(len, 1, &bytes); copy = __malloc(bytes); ...
+  // pl->text = copy; pl->len = len;` shape, matching lb_push() exactly):
+  // a bounded loop copying `len` bytes before the two field writes causes
+  // the analyzer to explore several concretely-bounded loop trip counts,
+  // and by the time `pl->len = len;` runs, the STORE genuinely holds a
+  // concrete value for `len` on that path (confirmed via a debug dump: the
+  // captured LengthValue prints as a plain concrete integer, e.g. "1
+  // U64b") -- so the captured snapshot itself carries no symbol to mark
+  // live at all. The DynamicExtent established for `copy` back at the
+  // `__malloc(bytes)` call, however, is `len_symbol + 1` -- a SEPARATE,
+  // still-symbolic expression that must relate to the SAME `len_symbol`'s
+  // range (narrowed to that one concrete value on this path) to prove
+  // `Extent >= Length`. Nothing marks `len_symbol` itself live merely
+  // because it appears inside an Extent computed long before this
+  // obligation's own two field-writing statements ever ran, so its range
+  // is reaped by the same loop-widening cleanup pass, and the proof fails
+  // for exactly the reason above even though the snapshot values
+  // themselves are intact.
+  //
+  // checkPostCall (below) already keeps AllocatedSpanExtent, a parallel
+  // COPY of every declaredReturnSpanExtent-established DynamicExtent, in
+  // this checker's own GDM specifically because that state (unlike
+  // clang's core DynamicExtentMap) is never auto-pruned -- so the Extent
+  // expression's own STRUCTURE always survives to flush time regardless
+  // of this fix. Walking that already-preserved copy here and marking
+  // every leaf symbol its expression tree references (SymExpr::symbols())
+  // closes the gap without needing a SValBuilder (unavailable in this
+  // callback) to query clang's core map directly: only a pointer region
+  // with a PENDING obligation on it is considered, so this stays scoped
+  // to symbols a still-open proof might actually need, the same bounded
+  // lifetime as the rest of this function.
+  void checkLiveSymbols(ProgramStateRef State, SymbolReaper &SR) const {
+    auto markSValLive = [&SR](SVal Value) {
+      if (SymbolRef Symbol = Value.getAsSymbol())
+        for (const SymExpr *Leaf : Symbol->symbols())
+          SR.markLive(Leaf);
+      if (const MemRegion *Region = Value.getAsRegion())
+        SR.markLive(Region);
+    };
+    for (const auto &Entry : State->get<TouchedRecordSpan>()) {
+      SVal PointerValue = Entry.second.first.first;
+      SVal LengthValue = Entry.second.first.second;
+      markSValLive(PointerValue);
+      markSValLive(LengthValue);
+      if (const MemRegion *PointerRegion = PointerValue.getAsRegion())
+        if (const DefinedOrUnknownSVal *Extent =
+                State->get<AllocatedSpanExtent>(
+                    PointerRegion->getBaseRegion()))
+          markSValLive(*Extent);
+    }
   }
 
   void checkEndFunction(const ReturnStmt *Return, CheckerContext &C) const {
