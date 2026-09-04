@@ -157,7 +157,7 @@ static int scan_group(enum match_kind kind, const char *name, gid_t gid,
 	}
 
 	free(line);
-	fclose(f);
+	(void)fclose(f);
 	return result;
 }
 
@@ -237,7 +237,7 @@ static size_t g_grent_linesz;
 
 void setgrent(void)
 {
-	if (g_grent_f) { fclose(g_grent_f); g_grent_f = 0; }
+	if (g_grent_f) { (void)fclose(g_grent_f); g_grent_f = 0; }
 	g_grent_open_tried = 0;
 }
 

@@ -32,7 +32,7 @@ void setusershell(void)
 
 void endusershell(void)
 {
-	if (shells_fp) { fclose(shells_fp); shells_fp = 0; }
+	if (shells_fp) { (void)fclose(shells_fp); shells_fp = 0; }
 }
 
 /* getusershell.html: "shall return successive lines" -- comment lines

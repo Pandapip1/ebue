@@ -143,11 +143,11 @@ int __nsswitch_order(const char *db, enum __nss_service *out, int max)
 			if (n < max) out[n] = svc;
 			n++;
 		}
-		fclose(f);
+		(void)fclose(f);
 		return n < max ? n : max;
 	}
 
-	fclose(f);
+	(void)fclose(f);
 	/* File exists but never mentions this database: same documented
 	 * default as a missing file. */
 	default_order(db, out, max, &n);

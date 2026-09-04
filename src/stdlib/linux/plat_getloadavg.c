@@ -29,7 +29,7 @@ int getloadavg(double *a, int n)
 	f = fopen("/proc/loadavg", "r");
 	if (!f) return -1;
 	got = fscanf(f, "%lf %lf %lf", &v[0], &v[1], &v[2]);
-	fclose(f);
+	(void)fclose(f);
 	if (got < 1) return -1;
 	if (got > n) got = n; /* caller asked for fewer samples than the file has */
 	for (i = 0; i < got; i++) a[i] = v[i];

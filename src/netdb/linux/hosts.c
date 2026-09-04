@@ -113,7 +113,7 @@ int __hosts_lookup(const char *name, struct in_addr *addrs, int maxaddrs,
 		found++;
 	}
 
-	fclose(f);
+	(void)fclose(f);
 	return found;
 }
 
@@ -154,7 +154,7 @@ int __hosts_lookup_reverse(const struct in_addr *addr, char *name, size_t namesz
 		found = 1;
 	}
 
-	fclose(f);
+	(void)fclose(f);
 	return found;
 }
 

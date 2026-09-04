@@ -110,10 +110,10 @@ struct netent *getnetbyname(const char *name)
 	while (fgets(line, sizeof line, f) != NULL) {
 		if (!parse_net_line(line)) continue;
 		if (strcmp(g_ne_name, name) != 0) continue;
-		fclose(f);
+		(void)fclose(f);
 		return &g_ne;
 	}
-	fclose(f);
+	(void)fclose(f);
 	return NULL;
 }
 
@@ -131,10 +131,10 @@ struct netent *getnetbyaddr(uint32_t net, int type)
 	while (fgets(line, sizeof line, f) != NULL) {
 		if (!parse_net_line(line)) continue;
 		if (g_ne.n_net != net) continue;
-		fclose(f);
+		(void)fclose(f);
 		return &g_ne;
 	}
-	fclose(f);
+	(void)fclose(f);
 	return NULL;
 }
 
@@ -164,5 +164,5 @@ struct netent *getnetent(void)
 
 void endnetent(void)
 {
-	if (g_netf) { fclose(g_netf); g_netf = NULL; }
+	if (g_netf) { (void)fclose(g_netf); g_netf = NULL; }
 }

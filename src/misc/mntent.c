@@ -32,7 +32,7 @@ int endmntent(FILE *f)
 	/* mntent(3): "endmntent() always returns 1." Errors closing a
 	 * read-only mount table are not this caller's problem to react to
 	 * differently -- there is nothing left to flush. */
-	if (f) fclose(f);
+	if (f) (void)fclose(f);
 	return 1;
 }
 

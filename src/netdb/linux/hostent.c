@@ -184,5 +184,5 @@ struct hostent *gethostent(void)
 
 void endhostent(void)
 {
-	if (g_hostf) { fclose(g_hostf); g_hostf = NULL; }
+	if (g_hostf) { (void)fclose(g_hostf); g_hostf = NULL; }
 }

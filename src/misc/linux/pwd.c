@@ -146,7 +146,7 @@ static int scan_passwd(enum match_kind kind, const char *name, uid_t uid,
 	}
 
 	free(line);
-	fclose(f);
+	(void)fclose(f);
 	return result;
 }
 
@@ -230,7 +230,7 @@ static size_t g_pwent_linesz;
 
 void setpwent(void)
 {
-	if (g_pwent_f) { fclose(g_pwent_f); g_pwent_f = 0; }
+	if (g_pwent_f) { (void)fclose(g_pwent_f); g_pwent_f = 0; }
 	g_pwent_open_tried = 0;
 }
 

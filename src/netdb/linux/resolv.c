@@ -189,7 +189,7 @@ static int parse_resolv_conf(struct sockaddr_in *out)
 		out[n].sin_port = htons((uint16_t)port);
 		n++;
 	}
-	fclose(f);
+	(void)fclose(f);
 	return n;
 }
 

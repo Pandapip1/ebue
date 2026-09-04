@@ -117,7 +117,7 @@ int __fd_close_all_cloexec(void)
 {
 	int i;
 	for (i = 0; i < FD_MAX; i++)
-		if (__fds[i].h && (__fds[i].flags & O_CLOEXEC)) close(i);
+		if (__fds[i].h && (__fds[i].flags & O_CLOEXEC)) (void)close(i);
 	return 0;
 }
 

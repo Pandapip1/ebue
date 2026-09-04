@@ -101,10 +101,10 @@ struct protoent *getprotobyname(const char *name)
 	while (fgets(line, sizeof line, f) != NULL) {
 		if (!parse_proto_line(line)) continue;
 		if (strcmp(g_pe_name, name) != 0) continue;
-		fclose(f);
+		(void)fclose(f);
 		return &g_pe;
 	}
-	fclose(f);
+	(void)fclose(f);
 	return NULL;
 }
 
@@ -117,10 +117,10 @@ struct protoent *getprotobynumber(int proto)
 	while (fgets(line, sizeof line, f) != NULL) {
 		if (!parse_proto_line(line)) continue;
 		if (g_pe.p_proto != proto) continue;
-		fclose(f);
+		(void)fclose(f);
 		return &g_pe;
 	}
-	fclose(f);
+	(void)fclose(f);
 	return NULL;
 }
 
@@ -148,5 +148,5 @@ struct protoent *getprotoent(void)
 
 void endprotoent(void)
 {
-	if (g_protof) { fclose(g_protof); g_protof = NULL; }
+	if (g_protof) { (void)fclose(g_protof); g_protof = NULL; }
 }
