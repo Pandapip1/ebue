@@ -44,24 +44,10 @@
 #     known bug, which is what the next paragraph is for.
 #
 # KNOWN, FENCED DEFECTS.  printf.c's three sites are real and are not
-# fixed -- they are fenced in test/posix-stdio.c, and this project's
-# convention is that a fenced defect is recorded, not green-lit, and
-# does not red-line a shared gate.  So they are listed in
-# tools/widthmod-known.txt, keyed by file and by the exact text of the
-# offending line, and reported on every run as KNOWN rather than
-# counted as findings.  A NEW site is a finding and fails.
-#
-# The list has its own floor, and it is the point of keeping the record
-# in a file a machine reads: AN ENTRY THAT MATCHES NOTHING IS A
-# FAILURE.  If printf.c is fixed and the entry stays, the check says so
-# and names it, instead of the record quietly outliving the defect --
-# which is exactly the failure that cost this project two agent cycles
-# (an open-findings list of eight items, all fixed, still recorded as
-# open).  Keyed on line TEXT rather than line number for the same
-# reason: a number goes stale on any edit above it, and a stale key
-# would silently stop matching, turning a recorded defect back into a
-# finding or -- worse, if the entry is later "fixed" by renumbering --
-# into nothing at all.
+# fixed -- they are fenced in test/posix-stdio.c.  They are reported as
+# ordinary findings, the same as any other site this rule catches: every
+# run reports every real site live, with no separate "known, recorded,
+# not counted" tier and no file a machine reads to tell the two apart.
 #
 # WHY THIS SHAPE AND NOT THE OBVIOUS ONE.  The obvious rule is "flag
 # va_arg(ap, long) in a tree where long is 32-bit".  Measured against
@@ -109,7 +95,6 @@ cd "$srcdir" || exit 1
 : "${LINT_STRICT:=1}"
 
 paths=${*:-src}
-knownfile=tools/widthmod-known.txt
 
 # $paths is a deliberately unquoted, space-separated list of CLI
 # arguments (default: "src"); word-splitting it is the point.
@@ -119,29 +104,17 @@ files=$(find $paths -type f -name '*.c' 2>/dev/null)
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"' EXIT INT TERM
 : > "$work/findings"
-: > "$work/known"
-: > "$work/matched"
 
 nfiles=0
 nlines=0
 nexempt=0
 njudged=0
 findings=0
-nknown=0
 
 for f in $files; do
 	nfiles=$((nfiles + 1))
-	awk -v F="$f" -v KNOWNFILE="$knownfile" '
+	awk -v F="$f" '
 		function has(s) { return index(line, s) > 0 }
-		BEGIN {
-			# FILE<TAB>SOURCE-LINE-TEXT<TAB>REASON
-			while ((getline kl < KNOWNFILE) > 0) {
-				if (kl ~ /^#/ || kl ~ /^[ \t]*$/) continue
-				if (split(kl, kf, "\t") < 3) continue
-				known[kf[1], kf[2]] = kf[3]
-			}
-			close(KNOWNFILE)
-		}
 		{
 			line = $0
 			if (!has("LM_z") && !has("LM_t")) { prev = line; next }
@@ -159,14 +132,8 @@ for f in $files; do
 			if (has("LM_z") && !has("size_t")) bad = "LM_z without size_t"
 			if (has("LM_t") && !has("ptrdiff_t"))
 				bad = (bad == "" ? "" : bad " and ") "LM_t without ptrdiff_t"
-			if (bad != "") {
-				key = line
-				sub(/^[ \t]+/, "", key); sub(/[ \t]+$/, "", key)
-				if ((F SUBSEP key) in known)
-					printf "K\t%s\t%s\t%s:%d: %s [known: %s]\n", F, key, F, FNR, bad, known[F, key]
-				else
-					printf "F\t-\t-\t%s:%d: %s -- on LLP64 size_t and ptrdiff_t are 64 bits and long is 32; see src/stdio/scanf.c:495,496,617,618 for the form this tree already uses, or add a widthmod-ok: comment with a reason\n", F, FNR, bad
-			}
+			if (bad != "")
+				printf "F\t-\t-\t%s:%d: %s -- on LLP64 size_t and ptrdiff_t are 64 bits and long is 32; see src/stdio/scanf.c:495,496,617,618 for the form this tree already uses, or add a widthmod-ok: comment with a reason\n", F, FNR, bad
 			prev = line
 		}
 		END { printf "C\t%d\t%d\t%d\t-\n", seen + 0, exempt + 0, judged + 0 }
@@ -177,10 +144,6 @@ for f in $files; do
 		F)
 			printf '%s\n' "$msg" >> "$work/findings"
 			findings=$((findings + 1)) ;;
-		K)
-			printf '%s\n' "$msg" >> "$work/known"
-			printf '%s\t%s\n' "$a" "$b" >> "$work/matched"
-			nknown=$((nknown + 1)) ;;
 		C)
 			nlines=$((nlines + a))
 			nexempt=$((nexempt + b))
@@ -223,39 +186,11 @@ if [ "$nlines" -gt 0 ] && [ "$njudged" -eq 0 ]; then
 	floor_failed=1
 fi
 
-# The known-defect list must not outlive the defect.  An entry that
-# matched nothing this run means either the site was fixed and the record
-# was not updated -- which is precisely the failure that cost this
-# project two agent cycles, an open-findings list of eight items all of
-# which had been fixed -- or the line was edited and the key no longer
-# matches, in which case the site is now being judged as if it were new
-# and somebody should look.  Either way it is a failure that names the
-# entry, not a quiet mismatch.
-sort -u -o "$work/matched" "$work/matched" 2>/dev/null || :
-grep -v -e '^#' -e '^[[:space:]]*$' "$knownfile" 2>/dev/null | cut -f1,2 | sort -u > "$work/declared"
-nkdecl=$(grep -c . "$work/declared" || true)
-stale=$(comm -23 "$work/declared" "$work/matched" 2>/dev/null || true)
-if [ -n "$stale" ]; then
-	printf 'lint-widthmod: FAILED -- %s names site(s) that no longer exist:\n' "$knownfile" >&2
-	printf '%s\n' "$stale" | sed 's/^/    /' >&2
-	printf 'lint-widthmod: either the defect was fixed and the entry must go in the same\n' >&2
-	printf 'lint-widthmod: commit (delete it, and unfence the test that records it), or the\n' >&2
-	printf 'lint-widthmod: line was edited and the entry must be re-keyed.  A known-defect\n' >&2
-	printf 'lint-widthmod: record that outlives its defect is worse than no record.\n' >&2
-	floor_failed=1
-fi
-
 [ "$floor_failed" -ne 0 ] && exit 1
 
-if [ "$nknown" -gt 0 ]; then
-	printf 'lint-widthmod: %d known, fenced site(s) matching all %d entry/entries in %s\n' \
-		"$nknown" "$nkdecl" "$knownfile"
-	printf 'lint-widthmod: (recorded, reported every run, not counted as findings):\n'
-	sed 's/^/  /' "$work/known"
-fi
 if [ "$findings" -eq 0 ]; then
-	printf 'lint-widthmod: no new findings (%d LM_z/LM_t line(s) in %d file(s): %d judged, %d exempt, %d known)\n' \
-		"$nlines" "$nfiles" "$njudged" "$nexempt" "$nknown"
+	printf 'lint-widthmod: no findings (%d LM_z/LM_t line(s) in %d file(s): %d judged, %d exempt)\n' \
+		"$nlines" "$nfiles" "$njudged" "$nexempt"
 	exit 0
 fi
 cat "$work/findings"
@@ -264,7 +199,7 @@ cat "$work/findings"
 # stage_* functions reach via show_findings() directly.  A no-op unless
 # GITHUB_ACTIONS=true; see tools/lint-gh-annotate.sh's header.
 tools/lint-gh-annotate.sh error "$work/findings"
-printf 'lint-widthmod: %d NEW finding(s) (%d LM_z/LM_t line(s) in %d file(s): %d judged, %d exempt, %d known)\n' \
-	"$findings" "$nlines" "$nfiles" "$njudged" "$nexempt" "$nknown"
+printf 'lint-widthmod: %d finding(s) (%d LM_z/LM_t line(s) in %d file(s): %d judged, %d exempt)\n' \
+	"$findings" "$nlines" "$nfiles" "$njudged" "$nexempt"
 [ "$LINT_STRICT" = 0 ] && exit 0
 exit 1

@@ -6,8 +6,7 @@
 This is a deliberately small C lexer, not a regular-expression grep.  It
 keeps source positions while masking comments and literals, balances call
 parentheses, and examines the actual size argument of the allocators used by
-this tree.  Existing debt is recorded by exact source expression in
-tools/sizearith-known.txt; new sites and stale entries both fail the stage.
+this tree.  Every site found is reported live, every run.
 
 Integer casts are handled separately by the Clang path-sensitive checker;
 this lexer does not guess from type, variable, or limit names.  Checked
@@ -26,7 +25,6 @@ from dataclasses import dataclass
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-KNOWN = ROOT / "tools/sizearith-known.txt"
 FIXTURES = ROOT / "tools/lint-sizearith-fixtures"
 ALLOC_SIZE_ARGS = {
     "malloc": (0,),
@@ -59,10 +57,6 @@ class Site:
     path: str
     line: int
     snippet: str
-
-    @property
-    def key(self) -> tuple[str, str, str]:
-        return self.rule, self.path, self.snippet
 
 
 def mask_noncode(source: str) -> str:
@@ -319,18 +313,6 @@ def scan(path: pathlib.Path) -> list[Site]:
     return list(dict.fromkeys(sites))
 
 
-def read_known() -> collections.Counter[tuple[str, str, str]]:
-    known: collections.Counter[tuple[str, str, str]] = collections.Counter()
-    for number, raw in enumerate(KNOWN.read_text(encoding="utf-8").splitlines(), 1):
-        if not raw or raw.startswith("#"):
-            continue
-        fields = raw.split("\t")
-        if len(fields) != 4:
-            raise SystemExit(f"{KNOWN.relative_to(ROOT)}:{number}: expected four tab-separated fields")
-        known[(fields[0], fields[1], fields[2])] += 1
-    return known
-
-
 def fixture_test() -> None:
     expected: collections.Counter[tuple[str, str, int]] = collections.Counter()
     actual: collections.Counter[tuple[str, str, int]] = collections.Counter()
@@ -366,47 +348,21 @@ def source_files(arguments: list[str]) -> list[pathlib.Path]:
 
 def main() -> int:
     fixture_test()
-    emit = False
     arguments = sys.argv[1:]
-    if arguments[:1] == ["--emit-baseline"]:
-        emit = True
-        arguments = arguments[1:]
     files = source_files(arguments)
     if not files:
         print("lint-sizearith: FAILED -- no .c files scanned", file=sys.stderr)
         return 1
     sites = [site for path in files for site in scan(path)]
-    if emit:
-        for site in sites:
-            print("\t".join((*site.key, "existing site; remove while completing the checked-size audit")))
-        return 0
-
-    scanned = {path.relative_to(ROOT).as_posix() for path in files}
-    remaining = collections.Counter(
-        {key: count for key, count in read_known().items() if key[1] in scanned}
-    )
-    new: list[Site] = []
-    matched = 0
     for site in sites:
-        if remaining[site.key]:
-            remaining[site.key] -= 1
-            matched += 1
-        else:
-            new.append(site)
-    stale = list(remaining.elements())
-    for site in new:
         print(f"{site.path}:{site.line}: {site.rule}: {site.snippet}")
         print("  use checked size/growth conversion or a mechanically visible bound")
-    for rule, path, snippet in stale:
-        print(f"{KNOWN.relative_to(ROOT)}: stale {rule} entry: {path}: {snippet}", file=sys.stderr)
-    if new or stale:
-        print(f"lint-sizearith: {len(new)} new finding(s), {len(stale)} stale baseline entry/entries, "
-              f"{matched} known site(s) in {len(files)} file(s)")
-        if stale or os.environ.get("LINT_STRICT", "1") != "0":
+    if sites:
+        print(f"lint-sizearith: {len(sites)} finding(s) in {len(files)} file(s)")
+        if os.environ.get("LINT_STRICT", "1") != "0":
             return 1
         return 0
-    print(f"lint-sizearith: no new findings ({matched} known site(s), "
-          f"{len(sites)} site(s) classified in {len(files)} file(s); fixtures passed)")
+    print(f"lint-sizearith: no findings ({len(files)} file(s) scanned; fixtures passed)")
     return 0
 
 

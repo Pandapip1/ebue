@@ -95,50 +95,13 @@
 #     non-empty.
 #
 # ---------------------------------------------------------------------
-# The baseline
+# The report
 # ---------------------------------------------------------------------
 #
-# tools/unreferenced-baseline.txt holds a single number: the count this
-# tree is known to have.
-#
-# It is a one-way ratchet, and deliberately asymmetric:
-#
-#   count > baseline  -> FAIL, naming the whole list.
-#   count < baseline  -> PASS, printing "lower the baseline to N".
-#
-# The asymmetry is the point, and it is a decision rather than an
-# oversight.  This number moves *downward* as a side effect of work that
-# has nothing to do with this check: the POSIX clause audits landing
-# through today took it from the 165 the analysis measured at 082ed2c to
-# 56, by writing assertions for the math.h f/l tail, getc, mkdirat,
-# linkat, fchownat, mkfifo, mknod, fexecve, gets, getlogin and the whole
-# *_unlocked read side.  Failing on a fall would mean every one of those
-# commits was blocked by this script until its author edited a file they
-# had never heard of, in a tree where several audits are in flight at
-# once.  That is how a check acquires a LINT_STRICT=0 in someone's shell
-# profile and stops meaning anything.  A rise is different: it is either
-# a new public function nobody tested or a test that stopped referencing
-# one, and both are exactly what this exists to surface.
-#
-# What happens when a legitimately new declaration lands unreferenced:
-# this fails, and the author chooses -- write the test, or raise the
-# baseline by one in the same commit with the reason in the message.
-# That is a deliberate choice to make "shipping a public function with no
-# test" cost one visible line, not an accident of the mechanism.  If it
-# ever proves to be the wrong trade, the answer is to argue about the
-# trade, not to widen the tolerance quietly.
-#
-# The honest limit of a count: it cannot see a swap.  Giving function A a
-# test while adding function B with none is a net zero and passes.  A
-# committed *name list* would catch that and was the alternative; it was
-# not taken because the list is 56 names today and would churn on every
-# commit that adds a public function, and because the analysis this
-# implements (test/verification-measures.md, M2) explicitly ranks
-# "report-only against a committed baseline count first" ahead of "a hard
-# failure on new unreferenced functions", calling the latter a later and
-# separate decision.  The full sorted list is written to
-# obj/lint/unreferenced.txt on every run, so promoting the baseline from
-# a count to that list is a one-line change when somebody wants it.
+# Every declared-and-implemented function no test references is a
+# finding, reported live, every run, with no ratchet and no committed
+# count to compare against: a nonzero count fails.  The full sorted list
+# is written to obj/lint/unreferenced.txt on every run.
 #
 # Usage:
 #   tools/lint-unreferenced.sh
@@ -151,8 +114,8 @@
 #                      floors: a run that compiled nothing is a broken
 #                      run, not a report of zero findings.
 #
-# Exit status is 1 if the finding count exceeds the baseline, or if any
-# floor was not met.
+# Exit status is 1 if the finding count is nonzero, or if any floor was
+# not met.
 #
 # The declared/implemented sets (which functions a header prototypes,
 # and which a .c file actually defines) come from a real clang AST walk,
@@ -568,15 +531,6 @@ findings=$(grep -c . "$workdir/unreferenced" || true)
 mkdir -p obj/lint
 cp "$workdir/unreferenced" obj/lint/unreferenced.txt
 
-baselinefile=tools/unreferenced-baseline.txt
-baseline=$(grep -v '^[[:space:]]*#' "$baselinefile" 2>/dev/null | grep -E '^[0-9]+$' | head -n 1)
-if [ -z "$baseline" ]; then
-	printf 'lint-unreferenced: FAILED -- %s holds no baseline count.\n' "$baselinefile" >&2
-	printf 'lint-unreferenced: without one there is nothing to compare against, and this\n' >&2
-	printf 'lint-unreferenced: check reduces to printing a number nobody reads.\n' >&2
-	exit 1
-fi
-
 printf 'lint-unreferenced: %s declared, %s implemented, %s both.\n' \
 	"$ndecl" "$nimpl" "$ndeclimpl"
 printf 'lint-unreferenced: %s name(s) referenced: %s undefined symbol(s) over %d compiled\n' \
@@ -587,22 +541,15 @@ printf 'lint-unreferenced:   %s call name(s) recovered from buildable policy fen
 	"$npolicy"
 printf 'lint-unreferenced: %s declaration(s) excluded as macro-shadowed: %s\n' \
 	"$nshadow" "$(tr '\n' ' ' < "$workdir/shadowed")"
-printf 'lint-unreferenced: %s declared-and-implemented function(s) no test references' "$findings"
-printf ' (baseline %s)\n' "$baseline"
+printf 'lint-unreferenced: %s declared-and-implemented function(s) no test references\n' "$findings"
 printf 'lint-unreferenced: full list -> obj/lint/unreferenced.txt\n'
 
-if [ "$findings" -gt "$baseline" ]; then
-	printf 'lint-unreferenced: FAILED -- %d exceeds the baseline of %d.\n' \
-		"$findings" "$baseline" >&2
-	printf 'lint-unreferenced: newly unreferenced (or newly implemented with no test):\n' >&2
+if [ "$findings" -gt 0 ]; then
+	printf 'lint-unreferenced: FAILED -- %d declared-and-implemented function(s) no test\n' \
+		"$findings" >&2
+	printf 'lint-unreferenced: references:\n' >&2
 	sed 's/^/lint-unreferenced:   /' obj/lint/unreferenced.txt >&2
 	[ "$LINT_STRICT" = 0 ] && exit 0
 	exit 1
-fi
-if [ "$findings" -lt "$baseline" ]; then
-	printf 'lint-unreferenced: the count went DOWN (%d < %d) -- lower %s to %d\n' \
-		"$findings" "$baseline" "$baselinefile" "$findings"
-	printf 'lint-unreferenced: to tighten the ratchet.  Not a failure: see this script\n'
-	printf 'lint-unreferenced: header for why a fall is a nudge and a rise is not.\n'
 fi
 exit 0
