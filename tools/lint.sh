@@ -1172,6 +1172,15 @@ stage_ownership() {
 	require_tool clang-18 || return $missing
 	require_tool clang++-18 || return $missing
 	require_tool llvm-config-18 || return $missing
+	require_tool pkg-config || return $missing
+	if ! pkg-config --exists z3; then
+		report_missing "Z3 development headers and library are not installed, so the memory contract's no-wrap side condition cannot be proved."
+		return $missing
+	fi
+	if ! z3_flags=$(pkg-config --cflags --libs z3); then
+		report_missing "pkg-config could not resolve Z3 compiler and linker flags."
+		return $missing
+	fi
 	libdir=$(llvm-config-18 --libdir)
 	clang_cpp=$(find "$libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' \
 		-print 2>/dev/null | sort | head -n 1)
@@ -1193,27 +1202,16 @@ stage_ownership() {
 		tools/clang/LifecycleAlgebraTest.cpp -o "$lifecycle_test" || return 1
 	"$lifecycle_test" || return 1
 
-	# MemoryContractChecker.cpp's own no-wrap side condition falls back to a
-	# real Z3 proof (see MemoryContractZ3Proof) when Z3 development files
-	# are available, the same way stage_arithub's SizeCastChecker.cpp does.
-	# Unlike stage_arithub this is a soft dependency: OwnershipChecker.cpp
-	# and AllocationLifetimeChecker.cpp share this plugin binary and must
-	# keep working even where Z3 is not installed, so a missing Z3 merely
-	# falls back to MemoryContractChecker's prior getMaxValue()-only proof
-	# instead of failing the whole stage.
-	memory_contract_cxxflags=
-	z3_flags=
-	if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists z3 2>/dev/null &&
-		z3_flags=$(pkg-config --cflags --libs z3 2>/dev/null); then
-		# -fexceptions must follow --cxxflags, not precede it: --cxxflags
-		# carries LLVM's own -fno-exceptions, and the later flag wins (see
-		# stage_arithub's identical build for the same requirement --
-		# z3++.h's `throw exception(...)` calls fail to compile without it).
-		memory_contract_cxxflags="-DNTLIBC_MEMORY_CONTRACT_Z3 -fexceptions"
-	else
-		z3_flags=
-		note "Z3 development headers/library are not installed; MemoryContractChecker keeps its prior getMaxValue()-only no-wrap proof."
-	fi
+	# MemoryContractChecker.cpp's own no-wrap side condition uses a real Z3
+	# proof (see MemoryContractZ3Proof), the same way stage_arithub's
+	# SizeCastChecker.cpp does. Z3 is a hard requirement for this stage (see
+	# the pkg-config check above), so the flag is always defined here.
+	#
+	# -fexceptions must follow --cxxflags, not precede it: --cxxflags
+	# carries LLVM's own -fno-exceptions, and the later flag wins (see
+	# stage_arithub's identical build for the same requirement -- z3++.h's
+	# `throw exception(...)` calls fail to compile without it).
+	memory_contract_cxxflags="-DNTLIBC_MEMORY_CONTRACT_Z3 -fexceptions"
 
 	plugin=$builddir/ntlibc-ownership-checker.so
 	# llvm-config and pkg-config deliberately return shell words, not one
