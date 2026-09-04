@@ -742,6 +742,56 @@ class OwnershipChecker
     if (!Scanned)
       return;
     QualType SizeTy = C.getASTContext().getSizeType();
+    // strlen()/wcslen() (unlike strcspn/strspn and their wide-character
+    // counterparts, which can legitimately stop at 0 on a NON-empty
+    // string whose very first element already satisfies the stop
+    // condition) have a fact none of the other scan-extent functions
+    // share: the scan's result is 0 if and only if the scanned buffer's
+    // own first element is already 0 -- that is what "length" means for
+    // a NUL-terminated string. When this same state already proves the
+    // first element nonzero (a preceding `if (!s || !*s) return ...;`-
+    // style guard, the shape src/misc/basename.c/dirname.c's `i =
+    // strlen(s) - 1;` and src/string/wcsrchr.c's `p = s + wcslen(s);`
+    // both follow), the checker can soundly conclude Scanned != 0 too --
+    // a real fact about the SAME buffer this scan just read, not a new
+    // assumption. Without it, `i = strlen(s) - 1` (and any later re-
+    // decrement of it, e.g. a second loop iteration's `i - 1`) has to
+    // additionally entertain the symbolically-reachable-but-source-
+    // impossible Scanned == 0 branch, which underflows the subtraction
+    // to a huge value near SIZE_MAX and defeats the extent proof for
+    // every access downstream of it, regardless of how tightly the
+    // extent itself is otherwise bounded.
+    if (hasName(Call, "strlen") || hasName(Call, "wcslen")) {
+      if (const auto *Super = dyn_cast<SubRegion>(Region)) {
+        const ElementRegion *FirstElement =
+            C.getSValBuilder().getRegionManager().getElementRegion(
+                ElemTy, Builder.makeZeroArrayIndex(), Super,
+                C.getASTContext());
+        SVal FirstValue = State->getSVal(FirstElement);
+        SVal FirstIsZero = Builder.evalBinOp(
+            State, BO_EQ, FirstValue, Builder.makeZeroVal(ElemTy),
+            Builder.getConditionType());
+        if (std::optional<DefinedOrUnknownSVal> FirstIsZeroCondition =
+                FirstIsZero.getAs<DefinedOrUnknownSVal>()) {
+          // The only way to learn "the first element cannot be 0" from
+          // a ConstraintManager that only ever narrows ranges (never
+          // proves a positive fact outright) is to ask it whether the
+          // OPPOSITE assumption is feasible: if assuming "first element
+          // == 0" produces no state at all, every path already rules
+          // that value out, so it really is provably nonzero here.
+          if (!State->assume(*FirstIsZeroCondition, true)) {
+            SVal NotEmpty = Builder.evalBinOp(
+                State, BO_NE, *Scanned, Builder.makeZeroVal(SizeTy),
+                Builder.getConditionType());
+            if (std::optional<DefinedOrUnknownSVal> NotEmptyCondition =
+                    NotEmpty.getAs<DefinedOrUnknownSVal>())
+              if (ProgramStateRef Bounded =
+                      State->assume(*NotEmptyCondition, true))
+                State = Bounded;
+          }
+        }
+      }
+    }
     SVal Elements = Builder.evalBinOp(State, BO_Add, *Scanned,
                                       Builder.makeIntVal(1, SizeTy), SizeTy);
     SVal Bytes =
@@ -2972,9 +3022,74 @@ class OwnershipZ3Proof {
   // different-width pair -- never elided the way a same-width cast is,
   // so each side's own reported type is trustworthy -- can now be
   // combined too, instead of being rejected outright.
+  // A relational comparison (BO_LT and friends) is itself an ordinary,
+  // int-typed C value -- 0 or 1 -- and RangeConstraintManager tracks it
+  // exactly like any other symbol: getConstraintMap(State) can hand back
+  // a comparison SymExpr narrowed to the single concrete range {1} (a
+  // prior `if (slen < blen) ...`-style guard proved it true) or {0}
+  // (proved false). util_basename.c's `if (slen > 0 && slen < blen &&
+  // ...) base[blen - slen] = 0;` is exactly this shape: the `slen <
+  // blen` guard is a real, already-established path fact, but before
+  // this case existed apply() rejected the comparison opcode outright
+  // (its default case), so translate() failed for that constraint-map
+  // entry and the fact was silently dropped instead of reaching the
+  // solver -- indistinguishable, to the rest of this class, from never
+  // having been guarded at all.  Building the comparison via
+  // ScalarSMT::less() (the same usual-arithmetic-conversions-aware
+  // helper CastZ3Proof would use) and re-encoding its boolean result as
+  // an ordinary 0/1 bit-vector in the comparison's own reported type
+  // lets it flow through the EXISTING translate()/addRange plumbing
+  // unchanged: the constructor's addRange call still just asserts "this
+  // value lies in the constraint map's range", and a {1}/{0} range now
+  // asserts the real relation (or its negation) instead of being
+  // silently dropped. A wider range (the comparison's truth value
+  // genuinely unknown on this path) still round-trips harmlessly, since
+  // "ite(cmp, 1, 0) is in {0, 1}" is a tautology that adds nothing.
+  std::optional<ntlibc::algebra::SemanticResult>
+  comparisonResult(BinaryOperator::Opcode Op,
+                   const ntlibc::algebra::SemanticResult &Left,
+                   const ntlibc::algebra::SemanticResult &Right,
+                   const ntlibc::algebra::CType &ResultType) const {
+    std::optional<z3::expr> Ascending = Algebra.less(Left, Right);
+    std::optional<z3::expr> Descending = Algebra.less(Right, Left);
+    if (!Ascending || !Descending)
+      return std::nullopt;
+    // z3::expr has no default constructor, so the switch below must
+    // initialize True on every reachable path; BO_LT's own case does
+    // that just like every other one, rather than relying on a value
+    // set before the switch.
+    z3::expr True = ZCtx.bool_val(false);
+    switch (Op) {
+    case BO_LT:
+      True = *Ascending;
+      break;
+    case BO_GT:
+      True = *Descending;
+      break;
+    case BO_LE:
+      True = !*Descending;
+      break;
+    case BO_GE:
+      True = !*Ascending;
+      break;
+    case BO_EQ:
+      True = !*Ascending && !*Descending;
+      break;
+    case BO_NE:
+      True = *Ascending || *Descending;
+      break;
+    default:
+      return std::nullopt;
+    }
+    z3::expr Value = z3::ite(True, ZCtx.bv_val(1, ResultType.Width),
+                             ZCtx.bv_val(0, ResultType.Width));
+    return Algebra.input(Value, ResultType);
+  }
+
   std::optional<ntlibc::algebra::SemanticResult>
   apply(BinaryOperator::Opcode Op, const ntlibc::algebra::SemanticResult &Left,
-       const ntlibc::algebra::SemanticResult &Right) const {
+       const ntlibc::algebra::SemanticResult &Right,
+       const ntlibc::algebra::CType &ResultType) const {
     switch (Op) {
     case BO_Add:
       return Algebra.add(Left, Right);
@@ -2982,6 +3097,13 @@ class OwnershipZ3Proof {
       return Algebra.subtract(Left, Right);
     case BO_Mul:
       return Algebra.multiply(Left, Right);
+    case BO_LT:
+    case BO_GT:
+    case BO_LE:
+    case BO_GE:
+    case BO_EQ:
+    case BO_NE:
+      return comparisonResult(Op, Left, Right, ResultType);
     default:
       return std::nullopt;
     }
@@ -3018,7 +3140,7 @@ class OwnershipZ3Proof {
           literal(Binary->getRHS());
       if (!Right)
         return std::nullopt;
-      return apply(Binary->getOpcode(), *Left, *Right);
+      return apply(Binary->getOpcode(), *Left, *Right, Type);
     }
     if (const auto *Binary = dyn_cast<IntSymExpr>(Sym)) {
       std::optional<ntlibc::algebra::SemanticResult> Right =
@@ -3029,7 +3151,7 @@ class OwnershipZ3Proof {
           literal(Binary->getLHS());
       if (!Left)
         return std::nullopt;
-      return apply(Binary->getOpcode(), *Left, *Right);
+      return apply(Binary->getOpcode(), *Left, *Right, Type);
     }
     if (const auto *Binary = dyn_cast<SymSymExpr>(Sym)) {
       std::optional<ntlibc::algebra::SemanticResult> Left =
@@ -3038,7 +3160,7 @@ class OwnershipZ3Proof {
           translate(Binary->getRHS(), Depth + 1);
       if (!Left || !Right)
         return std::nullopt;
-      return apply(Binary->getOpcode(), *Left, *Right);
+      return apply(Binary->getOpcode(), *Left, *Right, Type);
     }
     return std::nullopt;
   }
