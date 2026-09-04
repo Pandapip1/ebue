@@ -43,11 +43,334 @@ REGISTER_SET_WITH_PROGRAMSTATE(ArithmeticContractOutputValid,
 REGISTER_SET_WITH_PROGRAMSTATE(ArithmeticWideReducer, const MemRegion *)
 #ifdef NTLIBC_ARITHMETIC_Z3
 REGISTER_MAP_WITH_PROGRAMSTATE(ArithmeticZ3BranchFact, SymbolRef, bool)
+// A second, SizeCast-scoped branch-fact map -- deliberately not shared with
+// ArithmeticZ3BranchFact above, so recording a fact here can only ever
+// affect CastZ3Proof's own query, never arithub's.  It exists because
+// getConstraintMap(State) -- the mechanism ArithmeticZ3Proof relies on for
+// its own facts -- was observed empty at every ntlibc.SizeCast callback on
+// a real, minimal guarded-cast test case in this Clang 18 build, for a
+// plain `if (room > 1000) return 0;` guard as much as for a `count < room`
+// comparison between two live symbols: the diagnostic path notes already
+// show the engine evaluated and assumed both ("Assuming 'room' is <=
+// 1000", "Assuming 'count' is < 'room'"), but neither leaves a queryable
+// trace of itself in that map by the time the guarded cast is reached.
+// eval::Assume is the one checker callback that sees every such SVal
+// directly as the engine assumes it, before whatever this build's
+// constraint manager does or does not keep of it afterward -- so this map
+// records every comparison assumption unconditionally, making this
+// checker's Z3 proof power self-sufficient rather than dependent on that
+// other map being populated.
+REGISTER_MAP_WITH_PROGRAMSTATE(CastZ3BranchFact, SymbolRef, bool)
 #endif
 
 namespace {
 
-class SizeCastChecker : public Checker<check::PreStmt<ExplicitCastExpr>> {
+#ifdef NTLIBC_ARITHMETIC_Z3
+// A small Z3 bridge scoped to ntlibc.SizeCast alone -- deliberately a
+// separate context/solver/translate() from arithub's ArithmeticZ3Proof
+// below, so this extension can only ever change SizeCast's own findings,
+// never arithub's (ntlibc.Divisor/ShiftCount/SignedArithmetic/
+// ArithmeticContract).
+//
+// The gap this closes: expressionInterval()/symbolInterval() above are
+// pure interval arithmetic over one symbol at a time, backed by
+// bisectInterval()'s binary search over concrete assumeInclusiveRange()
+// queries.  That binary search asks the state "is X within [lo, hi]?" for
+// literal, concrete [lo, hi] -- it can only ever discover a bound on X
+// that is already a plain number, never one expressed in terms of a
+// second live symbol.  So a guard shaped like `if (x < y) ... (T)x ...`
+// (y itself independently bounded, e.g. by its own declared type or an
+// earlier `if (y <= 0) return;`) leaves x's own tracked range untouched by
+// this file's existing machinery, even though x < y together with y's own
+// known bound already entails a real bound on x sufficient to prove the
+// cast -- confirmed both on a synthetic fixture (see
+// tools/lint-cast-range-fixtures/relational.c) and while investigating
+// real sites such as src/misc/resource.c's __fsize_clamp().
+//
+// Z3 has no such limitation, but only if it is actually given the
+// relational fact: CastZ3BranchFact below is populated from eval::Assume,
+// not from getConstraintMap(State) the way arithub's ArithmeticZ3Proof
+// reads its own facts -- getConstraintMap() was observed empty at every
+// ntlibc.SizeCast callback on real, minimal guarded-cast cases in this
+// Clang 18 build, for a plain symbol-vs-literal guard as much as for a
+// symbol-vs-symbol one (see CastZ3BranchFact's own comment for how this
+// was confirmed).  Asserting every such recorded fact and asking whether
+// the cast's source value can then lie outside the destination range is
+// decidable in one Z3 query.
+class CastZ3Engine {
+public:
+  z3::context Context;
+  z3::solver Solver;
+
+  CastZ3Engine() : Solver(Context) {
+    z3::params Parameters(Context);
+    Parameters.set("rlimit", 1000000u);
+    Parameters.set("timeout", 2000u);
+    Solver.set(Parameters);
+  }
+};
+
+static CastZ3Engine &castZ3Engine() {
+  // Static-analyzer callbacks are serial within one translation-unit
+  // process; lint.sh provides process parallelism across translation
+  // units (see arithmeticZ3Engine()'s identical rationale below).
+  static thread_local CastZ3Engine Engine;
+  return Engine;
+}
+
+class CastZ3Proof {
+  z3::context &ZCtx;
+  z3::solver &Solver;
+  ASTContext &AST;
+
+  static bool isUnsigned(QualType Type) {
+    return Type->isUnsignedIntegerOrEnumerationType();
+  }
+
+  z3::expr bitVector(const llvm::APSInt &Value, unsigned Width) {
+    llvm::APInt Bits = Value;
+    if (Bits.getBitWidth() < Width)
+      Bits = Value.isUnsigned() ? Bits.zext(Width) : Bits.sext(Width);
+    else if (Bits.getBitWidth() > Width)
+      Bits = Bits.trunc(Width);
+    llvm::SmallString<80> Text;
+    Bits.toString(Text, 10, false, false);
+    return ZCtx.bv_val(Text.c_str(), Width);
+  }
+
+  // Deliberately smaller than ArithmeticZ3Proof::translate() below: this
+  // class only ever needs to relate a cast's source value to ranges other
+  // symbols are already independently known to hold, never to model an
+  // arithmetic operation's own overflow/wrap/narrowing events, so plain
+  // wrapping bit-vector +/-/* is exactly C's defined modular semantics for
+  // those opcodes with no ScalarSMT SemanticResult bookkeeping needed.
+  //
+  // ArithmeticZ3Proof::translate() rejects every SymbolCast outright,
+  // because Clang 18 exposes no accessor for a SymbolCast's private source
+  // type and a chain of narrowing/widening casts folded into one node
+  // cannot be replayed without it. That risk is specifically a *width*
+  // risk (choosing the wrong extension). It does not exist when the
+  // cast's operand already has the exact same bit width as the cast's own
+  // type: no extension or truncation happens at all, so the bit pattern
+  // this function must produce is bit-for-bit identical to the operand's
+  // own bit pattern regardless of what the private source type was --
+  // reinterpreting a same-width value's sign is a narrower, genuinely
+  // sound case the shared class does not attempt.
+  std::optional<z3::expr> translate(const SymExpr *Expression,
+                                    unsigned Depth = 0) {
+    if (!Expression || Depth > 24 || Expression->getType().isNull() ||
+        !Expression->getType()->isIntegerType())
+      return std::nullopt;
+    unsigned Width = AST.getIntWidth(Expression->getType());
+    if (const auto *Data = dyn_cast<SymbolData>(Expression)) {
+      std::string Name = "ntlibc_cast_sym_" + std::to_string(Data->getSymbolID());
+      return ZCtx.bv_const(Name.c_str(), Width);
+    }
+    if (const auto *Cast = dyn_cast<SymbolCast>(Expression)) {
+      QualType OperandType = Cast->getOperand()->getType();
+      if (OperandType.isNull() || !OperandType->isIntegerType() ||
+          AST.getIntWidth(OperandType) != Width)
+        return std::nullopt;
+      return translate(Cast->getOperand(), Depth + 1);
+    }
+
+    auto Apply = [&](const z3::expr &Left, const z3::expr &Right,
+                     BinaryOperator::Opcode Opcode,
+                     QualType OperandType) -> std::optional<z3::expr> {
+      if (Left.get_sort().bv_size() != Right.get_sort().bv_size())
+        return std::nullopt;
+      switch (Opcode) {
+      case BO_Add:
+        return Left + Right;
+      case BO_Sub:
+        return Left - Right;
+      case BO_Mul:
+        return Left * Right;
+      case BO_And:
+        return Left & Right;
+      case BO_EQ:
+      case BO_NE:
+      case BO_LT:
+      case BO_LE:
+      case BO_GT:
+      case BO_GE: {
+        bool OperandUnsigned = isUnsigned(OperandType);
+        z3::expr Predicate = [&]() -> z3::expr {
+          switch (Opcode) {
+          case BO_EQ:
+            return Left == Right;
+          case BO_NE:
+            return Left != Right;
+          case BO_LT:
+            return OperandUnsigned ? z3::ult(Left, Right) : Left < Right;
+          case BO_LE:
+            return OperandUnsigned ? z3::ule(Left, Right) : Left <= Right;
+          case BO_GT:
+            return OperandUnsigned ? z3::ugt(Left, Right) : Left > Right;
+          default: // BO_GE: the only remaining opcode this case can reach.
+            return OperandUnsigned ? z3::uge(Left, Right) : Left >= Right;
+          }
+        }();
+        unsigned ResultWidth = Width;
+        return z3::ite(Predicate, ZCtx.bv_val(1, ResultWidth),
+                       ZCtx.bv_val(0, ResultWidth));
+      }
+      default:
+        return std::nullopt;
+      }
+    };
+
+    // Every shape below requires the two operands to share one bit width --
+    // required for the bit-vector operator itself, since Apply() rejects
+    // mismatched widths regardless. A *signedness* mismatch is additionally
+    // rejected only for comparison opcodes, where the wrong predicate
+    // (z3::ult vs plain <) would be a genuinely wrong answer: Add/Sub/Mul/And
+    // are ordinary two's-complement bit-vector operators whose raw result is
+    // identical no matter how either operand's bits are interpreted, so
+    // rejecting those on a signedness mismatch alone would only discard sound
+    // facts, e.g. plain `(long long)x - y` where Clang represents the
+    // explicitly-cast operand `x` by its own pre-cast (and thus differently
+    // signed, same-width) symbol rather than wrapping a SymbolCast around it.
+    auto SameWidth = [&](QualType Left, QualType Right) {
+      return !Left.isNull() && !Right.isNull() && Left->isIntegerType() &&
+             Right->isIntegerType() &&
+             AST.getIntWidth(Left) == AST.getIntWidth(Right);
+    };
+    if (const auto *Binary = dyn_cast<SymSymExpr>(Expression)) {
+      QualType LeftType = Binary->getLHS()->getType();
+      QualType RightType = Binary->getRHS()->getType();
+      if (!SameWidth(LeftType, RightType) ||
+          (BinaryOperator::isComparisonOp(Binary->getOpcode()) &&
+           isUnsigned(LeftType) != isUnsigned(RightType)))
+        return std::nullopt;
+      std::optional<z3::expr> Left = translate(Binary->getLHS(), Depth + 1);
+      std::optional<z3::expr> Right = translate(Binary->getRHS(), Depth + 1);
+      if (!Left || !Right)
+        return std::nullopt;
+      return Apply(*Left, *Right, Binary->getOpcode(), LeftType);
+    }
+    if (const auto *Binary = dyn_cast<SymIntExpr>(Expression)) {
+      QualType LeftType = Binary->getLHS()->getType();
+      if (LeftType.isNull() || !LeftType->isIntegerType() ||
+          Binary->getRHS().getBitWidth() != AST.getIntWidth(LeftType) ||
+          (BinaryOperator::isComparisonOp(Binary->getOpcode()) &&
+           Binary->getRHS().isUnsigned() != isUnsigned(LeftType)))
+        return std::nullopt;
+      std::optional<z3::expr> Left = translate(Binary->getLHS(), Depth + 1);
+      if (!Left || Left->get_sort().bv_size() != AST.getIntWidth(LeftType))
+        return std::nullopt;
+      z3::expr Right = bitVector(Binary->getRHS(), Left->get_sort().bv_size());
+      return Apply(*Left, Right, Binary->getOpcode(), LeftType);
+    }
+    if (const auto *Binary = dyn_cast<IntSymExpr>(Expression)) {
+      QualType RightType = Binary->getRHS()->getType();
+      if (RightType.isNull() || !RightType->isIntegerType() ||
+          Binary->getLHS().getBitWidth() != AST.getIntWidth(RightType) ||
+          (BinaryOperator::isComparisonOp(Binary->getOpcode()) &&
+           Binary->getLHS().isUnsigned() != isUnsigned(RightType)))
+        return std::nullopt;
+      std::optional<z3::expr> Right = translate(Binary->getRHS(), Depth + 1);
+      if (!Right || Right->get_sort().bv_size() != AST.getIntWidth(RightType))
+        return std::nullopt;
+      z3::expr Left = bitVector(Binary->getLHS(), Right->get_sort().bv_size());
+      return Apply(Left, *Right, Binary->getOpcode(), RightType);
+    }
+    return std::nullopt;
+  }
+
+  std::optional<z3::expr> translate(NonLoc Value, QualType Type) {
+    if (std::optional<nonloc::ConcreteInt> Integer =
+            Value.getAs<nonloc::ConcreteInt>())
+      return bitVector(Integer->getValue(), AST.getIntWidth(Type));
+    return translate(Value.getAsSymbol());
+  }
+
+  void addRange(const z3::expr &Expression, const RangeSet &Ranges) {
+    if (!Expression.is_bv() || Ranges.isEmpty() ||
+        Expression.get_sort().bv_size() != Ranges.getBitWidth())
+      return;
+    std::optional<z3::expr> Union;
+    for (const Range &R : Ranges) {
+      z3::expr From = bitVector(R.From(), Ranges.getBitWidth());
+      z3::expr To = bitVector(R.To(), Ranges.getBitWidth());
+      z3::expr Member = R.getConcreteValue()
+                            ? Expression == From
+                            : Ranges.isUnsigned()
+                                  ? z3::ule(From, Expression) &&
+                                        z3::ule(Expression, To)
+                                  : From <= Expression && Expression <= To;
+      Union = Union ? std::optional<z3::expr>(*Union || Member)
+                    : std::optional<z3::expr>(Member);
+    }
+    if (Union && Union->is_bool())
+      Solver.add(*Union);
+  }
+
+public:
+  CastZ3Proof(CastZ3Engine &Engine, ProgramStateRef State, ASTContext &AST)
+      : ZCtx(Engine.Context), Solver(Engine.Solver), AST(AST) {
+    Solver.reset();
+    for (const auto &Entry : getConstraintMap(State))
+      if (std::optional<z3::expr> Expression = translate(Entry.first))
+        addRange(*Expression, Entry.second);
+    for (const auto &Entry : State->get<CastZ3BranchFact>()) {
+      std::optional<z3::expr> Comparison = translate(Entry.first);
+      if (!Comparison || !Comparison->is_bv())
+        continue;
+      // Apply()'s comparison case always returns a z3::ite bit-vector
+      // {0,1}, mirroring how RangeSet already represents a Boolean-typed
+      // SVal elsewhere in this file (an int-typed 0/1, not a Z3 Bool) --
+      // so the recorded fact is an equality against that same encoding.
+      z3::expr Fact = *Comparison == ZCtx.bv_val(Entry.second ? 1 : 0,
+                                                 Comparison->get_sort().bv_size());
+      if (Fact.is_bool())
+        Solver.add(Fact);
+    }
+  }
+
+  // Proves that Value (of type SourceType) always lies within
+  // [DestMin, DestMax] under every currently-known path constraint.  Only
+  // an UNSAT answer for "Value can lie outside that range" discharges the
+  // obligation, matching every other Z3 consumer in this file: SAT,
+  // timeout, and unknown all preserve the finding.
+  bool provesRepresentable(NonLoc Value, QualType SourceType,
+                           const llvm::APSInt &DestMin,
+                           const llvm::APSInt &DestMax) {
+    std::optional<z3::expr> Source = translate(Value, SourceType);
+    if (!Source)
+      return false;
+    unsigned SourceWidth = AST.getIntWidth(SourceType);
+    if (Source->get_sort().bv_size() != SourceWidth)
+      return false;
+    bool SourceUnsigned = isUnsigned(SourceType);
+
+    // One extra guard bit above the wider of Source/Dest keeps every
+    // value -- including an unsigned source's or dest's own maximum --
+    // representable as an ordinary signed CommonWidth-bit integer, so a
+    // single signed comparison below is correct regardless of either
+    // side's original signedness.
+    unsigned CommonWidth =
+        std::max(SourceWidth, DestMin.getBitWidth()) + 1;
+    z3::expr SourceWide = SourceUnsigned
+                              ? z3::zext(*Source, CommonWidth - SourceWidth)
+                              : z3::sext(*Source, CommonWidth - SourceWidth);
+    z3::expr LowerWide = bitVector(DestMin, CommonWidth);
+    z3::expr UpperWide = bitVector(DestMax, CommonWidth);
+    z3::expr OutsideRange = SourceWide < LowerWide || SourceWide > UpperWide;
+    if (!OutsideRange.is_bool())
+      return false;
+    Solver.add(OutsideRange);
+    return ntlibc::algebra::provesUnsatisfiable(Solver);
+  }
+};
+#endif
+
+class SizeCastChecker
+    : public Checker<check::PreStmt<ExplicitCastExpr>
+#ifdef NTLIBC_ARITHMETIC_Z3
+                     , eval::Assume
+#endif
+                     > {
   mutable std::unique_ptr<BugType> BT;
 
 public:
@@ -694,12 +1017,13 @@ public:
     bool Disjoint = llvm::APSInt::compareValues(Lower, Upper) > 0;
     SVal Value = C.getSVal(Cast->getSubExpr());
     std::optional<NonLoc> Defined = Value.getAs<NonLoc>();
-    ProgramStateRef Outside = C.getState();
+    ProgramStateRef PathState = C.getState();
+    ProgramStateRef Outside = PathState;
     if (Defined && !Disjoint) {
       bool SourceUnsigned = Source->isUnsignedIntegerOrEnumerationType();
       llvm::APSInt From = asSourceType(Lower, SourceBits, SourceUnsigned);
       llvm::APSInt To = asSourceType(Upper, SourceBits, SourceUnsigned);
-      Outside = C.getState()->assumeInclusiveRange(*Defined, From, To, false);
+      Outside = PathState->assumeInclusiveRange(*Defined, From, To, false);
       if (!Outside)
         return;
     }
@@ -707,6 +1031,21 @@ public:
         contains(typeInterval(Ctx, Dest),
                  expressionInterval(Cast->getSubExpr(), C)))
       return;
+#ifdef NTLIBC_ARITHMETIC_Z3
+    // The interval-only proof above gave up.  Ask the SizeCast-scoped Z3
+    // bridge whether every range Clang's own engine has already narrowed
+    // on this real path (PathState, not the report-only Outside state
+    // above -- that state was itself constructed by *assuming* the value
+    // falls outside the safe overlap, which would bias the query) jointly
+    // entails that Value fits in [DestMin, DestMax].  Purely additive: a
+    // failed query changes nothing, since the existing report path below
+    // still runs exactly as it always has.
+    if (Defined && SourceBits <= MathBits && DestBits <= MathBits) {
+      CastZ3Proof Proof(castZ3Engine(), PathState, Ctx);
+      if (Proof.provesRepresentable(*Defined, Source, DestMin, DestMax))
+        return;
+    }
+#endif
 
     ExplodedNode *Node = C.generateNonFatalErrorNode(Outside);
     if (!Node)
@@ -728,6 +1067,33 @@ public:
     Report->addRange(Cast->getSourceRange());
     C.emitReport(std::move(Report));
   }
+
+#ifdef NTLIBC_ARITHMETIC_Z3
+  // Records a relational fact so CastZ3Proof can assert it later.  This is
+  // deliberately not limited to symbol-vs-symbol (SymSymExpr) comparisons:
+  // empirically, getConstraintMap(State) -- the mechanism this file's
+  // other Z3 bridge (ArithmeticZ3Proof) relies on for ordinary
+  // symbol-vs-*concrete* facts too -- was observed returning completely
+  // empty on real, minimal guarded-cast test cases in this Clang 18 build
+  // (confirmed by dumping it directly: a plain `if (room > 1000) return
+  // 0;` guard, whose effect the plain diagnostic path text already shows
+  // as "Assuming 'room' is <= 1000", produced zero entries by the time the
+  // guarded return statement's cast was reached). Recording *every*
+  // comparison assumption here -- symbol-vs-concrete and
+  // symbol-vs-symbol alike -- makes this checker's own Z3 proof power
+  // self-sufficient rather than depending on that map being populated.
+  // Purely additive to ProgramState: never rejects or narrows anything the
+  // engine's own constraint manager already decided, only remembers a fact
+  // it would otherwise drop or that this class cannot otherwise recover.
+  ProgramStateRef evalAssume(ProgramStateRef State, SVal Condition,
+                             bool Assumption) const {
+    SymbolRef Symbol = Condition.getAsSymbol();
+    const auto *Comparison = dyn_cast_or_null<BinarySymExpr>(Symbol);
+    if (!Comparison || !BinaryOperator::isComparisonOp(Comparison->getOpcode()))
+      return State;
+    return State->set<CastZ3BranchFact>(Symbol, Assumption);
+  }
+#endif
 };
 
 class ArrayIndexChecker : public Checker<check::PreStmt<ArraySubscriptExpr>> {
