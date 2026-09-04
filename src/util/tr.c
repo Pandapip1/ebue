@@ -148,8 +148,10 @@ static const struct char_class classes[] = {
 static int push_byte(unsigned char **buf, size_t *n, size_t *cap, unsigned char b)
 {
 	if (*n == *cap) {
-		size_t newcap = *cap ? *cap * 2 : 32;
-		unsigned char *tmp = realloc(*buf, newcap);
+		size_t newcap;
+		unsigned char *tmp;
+		if (!__util_array_capacity(*cap, *n, 1, 32, 1, &newcap)) return -1;
+		tmp = realloc(*buf, newcap);
 		if (!tmp) return -1;
 		*buf = tmp;
 		*cap = newcap;
