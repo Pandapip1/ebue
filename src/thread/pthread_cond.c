@@ -139,7 +139,36 @@ static void unlink_waiter(struct cond_data *cond, struct cond_waiter *waiter)
 	waiter->linked = 0;
 }
 
-static void cond_wait_cleanup(void *argument) __attribute__((nonnull(1)));
+/* Real, source-visible tokens for LockDisciplineChecker.cpp's
+ * ntlibc.LockDiscipline stage (tools/clang/LockHandoffContracts.h). A
+ * function attaches one to its own declaration to assert a real lock
+ * hand-off contract the checker cannot derive from the generic
+ * pthread_*lock()/pthread_*unlock() protocol table alone, because the
+ * function itself is not one of those calls. Both expand to nothing
+ * outside the analyzer, so ordinary builds (including tcc, which never
+ * sees past the #ifdef) are unaffected. */
+#ifdef __clang_analyzer__
+#define lock_requires_held_on_entry(argument) \
+	__attribute__((annotate("ntlibc_lock_requires_held_on_entry:" #argument)))
+#define lock_acquires_for_caller \
+	__attribute__((annotate("ntlibc_lock_acquires_for_caller")))
+#else
+#define lock_requires_held_on_entry(argument)
+#define lock_acquires_for_caller
+#endif
+
+/* cond_wait_cleanup is the pthread_cleanup_push() handler cond_wait
+ * registers for its wait: if cancelled, the cancellation machinery
+ * invokes this handler to restore the "mutex locked" postcondition on
+ * the cancellation path, for the code that resumes after, not for
+ * itself to release. Its mutex is cleanup->mutex, a struct field
+ * reached through its lone void* argument, so it cannot be named by
+ * parameter index the way cond_wait's lock_requires_held_on_entry()
+ * below can -- lock_acquires_for_caller instead tells the checker that
+ * whichever region this function's own pthread_mutex_lock() call
+ * resolves to and successfully acquires is exempt, once acquired. */
+static void cond_wait_cleanup(void *argument)
+    __attribute__((nonnull(1))) lock_acquires_for_caller;
 static void cond_wait_cleanup(void *argument)
 {
 	struct cond_cleanup *cleanup = argument;
@@ -160,8 +189,23 @@ static void cond_wait_cleanup(void *argument)
 }
 
 
+/* cond_wait() is pthread_cond_wait()/pthread_cond_timedwait()'s shared
+ * implementation: POSIX requires the mutex argument to those two public
+ * functions to already be locked on entry and locked again on every
+ * return. The generic protocol table in LockDisciplineChecker.cpp
+ * enforces the first half at pthread_cond_wait()/pthread_cond_timedwait()'s
+ * own call sites, but cond_wait is a separate function that table never
+ * sees a call to -- without lock_requires_held_on_entry() below,
+ * cond_wait's own first pthread_mutex_unlock(mutex) call would look
+ * indistinguishable from releasing a lock nobody acquired. The checker
+ * seeds the designated argument (index 1, mutex) as held on entry and
+ * exempts it from the end-of-function "exits while held" check; the
+ * exemption survives the region's own later release/reacquire cycle
+ * below, covering both early returns that never touch the mutex and the
+ * ordinary full wait-and-reacquire path. */
 static int cond_wait(pthread_cond_t *__restrict cond,
 	pthread_mutex_t *__restrict mutex withtok(pthread_mutex_locked), const struct timespec *absolute)
+	lock_requires_held_on_entry(1)
 {
 	struct cond_data *data;
 	struct cond_waiter *waiter;
