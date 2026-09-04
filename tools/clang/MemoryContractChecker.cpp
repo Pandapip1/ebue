@@ -780,6 +780,72 @@ public:
     Solver.add(Violation);
     return ntlibc::algebra::provesUnsatisfiable(Solver);
   }
+
+  // Proves Extent's value is never smaller than Length's, from the two
+  // symbols' full expression trees -- not just a shared root plus a
+  // constant offset the way sameSymbolSpanProven's syntactic checks
+  // above require. Those checks can only recognize a shared SymExpr
+  // POINTER (Clang's SymbolManager interns identical expressions built
+  // from the SAME evalBinOp call, but does not retroactively unify two
+  // SEPARATELY-built ones) or an ADD/SUB linear decomposition; a
+  // multiplication by a scale factor -- exactly this file's own
+  // scaledSpanLength/Contract.Scale shape, needed whenever a
+  // readable_elements/writable_elements-scaled length is compared
+  // against a DynamicExtent established by a completely separate
+  // expression evaluation (the allocating call's own argument, computed
+  // once, long before this proof ever runs) -- routinely produces two
+  // symbolically-distinct-but-semantically-identical SymIntExpr
+  // instances neither of those checks can see through. Translating both
+  // through the same bitvector algebra this file already uses for
+  // no-wrap proofs sidesteps SymExpr identity entirely: Z3 only sees the
+  // resulting bitvector structure, so `sym * 8` proves equal to `sym * 8`
+  // regardless of which evalBinOp call built which instance.
+  bool provesAtLeast(SymbolRef ExtentSymbol, SymbolRef LengthSymbol) {
+    if (!ExtentSymbol || !LengthSymbol || ExtentSymbol->getType().isNull() ||
+        LengthSymbol->getType().isNull())
+      return false;
+    std::optional<z3::expr> ExtentExpr = translate(ExtentSymbol);
+    std::optional<z3::expr> LengthExpr = translate(LengthSymbol);
+    if (!ExtentExpr || !LengthExpr)
+      return false;
+    std::optional<ntlibc::algebra::SemanticResult> ExtentInput =
+        Algebra.input(*ExtentExpr, cType(ExtentSymbol->getType()));
+    std::optional<ntlibc::algebra::SemanticResult> LengthInput =
+        Algebra.input(*LengthExpr, cType(LengthSymbol->getType()));
+    if (!ExtentInput || !LengthInput)
+      return false;
+    // Prove Extent >= Length by refuting its negation (Extent < Length),
+    // the same "assert the violation, ask for UNSAT" shape provesNoWrap
+    // and addRelation above both already use.
+    std::optional<z3::expr> LessThan = Algebra.less(*ExtentInput, *LengthInput);
+    if (!LessThan)
+      return false;
+    Solver.add(*LessThan);
+    return ntlibc::algebra::provesUnsatisfiable(Solver);
+  }
+
+  // Proves Symbol's value is always zero -- needed for exactly the same
+  // reason provesAtLeast above is: State->isNull() on a COMPOUND value
+  // (e.g. a readable_elements/writable_elements length scaled by this
+  // file's own Contract.Scale, `count_symbol * elementSize`) only
+  // consults the constraint manager's range fact for that compound
+  // symbol ITSELF. Constraining count_symbol == 0 on some path does not
+  // retroactively narrow the SEPARATE, already-built `count_symbol * K`
+  // symbol's own range -- the two are different symbolic identities to
+  // the range constraint manager even though one is derived from the
+  // other. Translating through the same bitvector algebra lets Z3 fold
+  // the multiplication using the range fact on the underlying factor
+  // instead of requiring the compound's OWN range to already say so.
+  bool provesZero(SymbolRef Symbol) {
+    if (!Symbol || Symbol->getType().isNull())
+      return false;
+    std::optional<z3::expr> Expr = translate(Symbol);
+    if (!Expr)
+      return false;
+    z3::expr NotZero = *Expr != ZCtx.bv_val(0, Expr->get_sort().bv_size());
+    Solver.add(NotZero);
+    return ntlibc::algebra::provesUnsatisfiable(Solver);
+  }
 };
 
 static MemoryContractZ3Engine &memoryContractZ3Engine() {
@@ -795,6 +861,18 @@ static bool noWrapProvenZ3(SymbolRef Base, QualType BaseType, uint64_t Offset,
                            ProgramStateRef State, ASTContext &AST) {
   MemoryContractZ3Proof Proof(memoryContractZ3Engine(), State, AST);
   return Proof.provesNoWrap(Base, BaseType, Offset);
+}
+
+static bool spanCoveredZ3(SymbolRef ExtentSymbol, SymbolRef LengthSymbol,
+                          ProgramStateRef State, ASTContext &AST) {
+  MemoryContractZ3Proof Proof(memoryContractZ3Engine(), State, AST);
+  return Proof.provesAtLeast(ExtentSymbol, LengthSymbol);
+}
+
+static bool zeroProvenZ3(SymbolRef Symbol, ProgramStateRef State,
+                         ASTContext &AST) {
+  MemoryContractZ3Proof Proof(memoryContractZ3Engine(), State, AST);
+  return Proof.provesZero(Symbol);
 }
 #endif // NTLIBC_MEMORY_CONTRACT_Z3
 
@@ -1086,6 +1164,25 @@ class MemoryContractChecker
       if ((EL == LL && ER == LR) || (EL == LR && ER == LL))
         return true;
     }
+#ifdef NTLIBC_MEMORY_CONTRACT_Z3
+    // The two structural checks above (a shared SymExpr pointer, and a
+    // SymSymExpr*SymSymExpr product with matching factors) both require
+    // syntactic identity of at least part of the expression tree. A
+    // scale-multiplied length compared against a DynamicExtent that was
+    // established by a SEPARATE evalBinOp call over the SAME underlying
+    // symbol and constant (this file's own scaledSpanLength/
+    // Contract.Scale shape, and MemoryContractChecker's field-span
+    // enforcement's Scale multiplication above) produces a SymIntExpr
+    // pair (`sym * K` on both sides) that is semantically identical but
+    // not the same SymExpr instance, and neither prior check recognizes
+    // it. Try a real Z3 proof of Extent >= Length over the full
+    // expression trees before falling through to the narrower
+    // shared-base/constant-offset check below, which requires exactly
+    // the same kind of syntactic base identity this is meant to route
+    // around.
+    if (spanCoveredZ3(ExtentSymbol, LengthSymbol, State, C.getASTContext()))
+      return true;
+#endif
     SymbolRef ExtentBase, LengthBase;
     int64_t ExtentOffset, LengthOffset;
     if (!decomposeAffine(Extent, ExtentBase, ExtentOffset))
@@ -1420,6 +1517,23 @@ public:
                   CheckerContext &C, bool UseAssumedSpans = true) const {
     if (State->isNull(Length).isConstrainedTrue())
       return true;
+#ifdef NTLIBC_MEMORY_CONTRACT_Z3
+    // isNull() only consults the constraint manager's own range fact for
+    // Length's exact symbolic identity. A scaled length built via this
+    // file's own Contract.Scale multiplication (count_symbol * elemSize)
+    // is a DIFFERENT symbol than count_symbol itself, so constraining
+    // count_symbol == 0 on some path does not automatically narrow the
+    // already-built product's own range -- see MemoryContractZ3Proof::
+    // provesZero's comment. zero_vacuous's whole point is that a
+    // genuinely zero-length operation needs no span proof at all, so
+    // this is worth a real Z3 attempt before falling through to the
+    // extent-based checks below, which cannot help when Pointer itself
+    // never got a real extent (the common case for zero_vacuous's own
+    // "operation trivially skipped" shape).
+    if (SymbolRef LengthSymbol = Length.getAsSymbol())
+      if (zeroProvenZ3(LengthSymbol, State, C.getASTContext()))
+        return true;
+#endif
     auto ExtentProvesLength = [&](SVal Extent) {
       if (Extent.isUnknownOrUndef() || Length.isUnknownOrUndef())
         return false;
@@ -2401,16 +2515,31 @@ public:
     SmallVector<DisjointContract, 1> Disjoint;
     tokenContracts(Function, Spans, Disjoint);
     ProgramStateRef State = C.getState();
-    // Discharge every TouchedRecordSpan obligation this function's own
-    // frame accumulated (see that map's comment above for why this is
-    // the only reliable point to do it). Flush unconditionally and
-    // first, before any of the return-type-driven early returns below,
-    // so a struct desync a helper leaves behind is still caught at that
-    // helper's own exit regardless of its return type.
-    ProgramStateRef Flushed = flushRecordSpanObligations(State, C);
-    if (Flushed != State) {
-      C.addTransition(Flushed);
-      State = Flushed;
+    // Discharge every TouchedRecordSpan obligation accumulated so far --
+    // but ONLY at the outermost frame of this analysis, never an inlined
+    // callee's own return. Inlining shares the CALLER's ProgramState with
+    // the callee (that is the entire point of inlining -- precise
+    // cross-function reasoning), so checkEndFunction fires for every
+    // inlined callee's own return too, not just the top-level entry
+    // function's. Flushing there was observed to misfire in practice:
+    // src/glob/glob.c's `glob()` writes `out.v`/`out.cap` itself, then
+    // calls small inlined helpers (find_slash, has_meta, ...) that touch
+    // neither field -- yet an unconditional flush fired (and mis-
+    // attributed its report to the helper's own name, since context()
+    // reads the CURRENT location context) at the FIRST such helper's
+    // return, well before `glob()` had actually finished its own update,
+    // because nothing distinguished "this frame is exiting" from "some
+    // inlined callee sharing my state happened to return". Restricting
+    // the flush to Frame->inTopFrame() is the same guard checkPreCall's
+    // isManualProofCall migration diagnostic already uses for an
+    // identical inlining-visibility concern.
+    const auto *Frame = dyn_cast_or_null<StackFrameContext>(C.getLocationContext());
+    if (Frame && Frame->inTopFrame()) {
+      ProgramStateRef Flushed = flushRecordSpanObligations(State, C);
+      if (Flushed != State) {
+        C.addTransition(Flushed);
+        State = Flushed;
+      }
     }
     if (!Function->getReturnType()->isVoidType()) {
       if (!Return || !Return->getRetValue())
