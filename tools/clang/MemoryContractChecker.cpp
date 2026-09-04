@@ -68,6 +68,63 @@ using SymbolRelation = std::pair<SymbolRef, SymbolRef>;
 REGISTER_SET_WITH_PROGRAMSTATE(ProvenLessEqual, SymbolRelation)
 REGISTER_SET_WITH_PROGRAMSTATE(ProvenLessThan, SymbolRelation)
 
+/* Persisted, path-sensitive tracking for struct fields carrying a
+ * readable_elements/writable_elements-style withtok(family(length))
+ * contract (see FieldSpanContract below): fieldSpanContract/assumeFieldSpan
+ * only ever read these annotations as a transient snapshot to satisfy an
+ * OUTGOING call's precondition -- nothing previously enforced that a
+ * struct's pointer field and its paired length field actually stay in
+ * agreement with each other as the struct is mutated. A helper that
+ * reallocates the pointer field without updating the length field (or vice
+ * versa) previously went completely undetected.
+ *
+ * The two fields are written by two separate statements, not atomically
+ * (`lb->v = g; lb->cap = newcap;` in src/util/patch.c, or -- the opposite
+ * order -- `out.n = out.cap = pglob->gl_pathc;` before `out.v =
+ * __malloc(...)` in src/glob/glob.c), so checking the invariant eagerly at
+ * every single write would false-positive on the intermediate state of
+ * whichever field is written first. checkBind (below) only records which
+ * (aggregate, pointer field, length field) triple was disturbed and by
+ * which statement; the actual proof is deferred to checkEndFunction (the
+ * same stable point GrantedSpanProof's own deferred check already uses),
+ * where both fields necessarily hold their settled values for this
+ * update -- a CompoundStmt's own exit was tried first and dropped: Clang's
+ * ExprEngine never visits an ordinary `{ ... }` block (function body,
+ * if-body, ...) as a Stmt in its own right the way it visits expressions,
+ * so check::PostStmt<CompoundStmt> silently never fires for one; only a
+ * GNU statement-expression (`({ ... })`) would reach it, which is not
+ * this shape. checkEndFunction fires exactly once per path regardless,
+ * so it alone is both necessary and sufficient here. The proof itself
+ * reuses spanProven exactly as the call-boundary check above does, but
+ * against the pointer's real DynamicExtent rather than an unverified
+ * assumption.
+ *
+ * The map's VALUE is a snapshot of both fields, not just a Stmt* to
+ * re-read the store from later: liveness-driven dead-binding cleanup
+ * (SymbolReaper/ProgramState::cleanupState) is free to discard a struct
+ * field's binding once nothing downstream reads it again -- which is
+ * exactly the common case for a helper that writes a struct's pointer and
+ * length fields and then returns without itself reading either back. A
+ * deferred re-read via getLValue/getSVal at checkEndFunction can
+ * therefore silently observe Unknown for a field this checker itself
+ * just watched get bound (confirmed empirically: an earlier version of
+ * this mechanism that deferred the read, not just the proof, saw exactly
+ * this). Capturing each write's own new value (the Bind callback's own
+ * Value parameter) and the OTHER field's then-current value together, at
+ * the moment of the write -- carrying the peer value forward from any
+ * earlier snapshot for the same key rather than re-deriving it --
+ * sidesteps that pruning entirely: by the time the deferred check runs,
+ * both slots already hold whatever was last known, with no further store
+ * query required. */
+using RecordSpanTouchKey =
+    std::pair<std::pair<const MemRegion *, const FieldDecl *>,
+             const FieldDecl *>;
+using RecordSpanSnapshot =
+    std::pair<std::pair<DefinedOrUnknownSVal, DefinedOrUnknownSVal>,
+             const Stmt *>;
+REGISTER_MAP_WITH_PROGRAMSTATE(TouchedRecordSpan, RecordSpanTouchKey,
+                               RecordSpanSnapshot)
+
 namespace {
 
 using ntlibc::algebra::findTokenSort;
@@ -237,6 +294,47 @@ static const MemberExpr *pointerMember(const Expr *Expression) {
   return nullptr;
 }
 
+/* Shared by fieldSpanContract (which resolves a POINTER FIELD from an
+ * access expression and only ever needed its first matching contract) and
+ * collectRecordSpanContracts below (which needs every contract on every
+ * field of a record, because a single field can carry more than one
+ * withtok(...) -- src/util/patch.c's `struct linebuf`'s `v` field carries
+ * both readable_elements(n) and writable_elements(cap)). */
+static bool parseFieldSpanAnnotation(StringRef Annotation,
+                                     const RecordDecl *Record,
+                                     ASTContext &Context, QualType Pointee,
+                                     const FieldDecl *&Length,
+                                     uint64_t &Scale) {
+  if (!Annotation.consume_front("withtok:") || !Annotation.ends_with(")"))
+    return false;
+  size_t Open = Annotation.find('(');
+  if (Open == StringRef::npos)
+    return false;
+  StringRef Family = Annotation.take_front(Open).trim();
+  const TypedefNameDecl *Token = findTokenSort(Context, Family);
+  bool ByteExtent = hasQualifier(Token, "qual:extent_at_least");
+  bool ElementExtent = hasQualifier(Token, "qual:element_extent");
+  if (!ByteExtent && !ElementExtent)
+    return false;
+  StringRef LengthName =
+      Annotation.slice(Open + 1, Annotation.size() - 1).trim();
+  Length = nullptr;
+  for (const FieldDecl *Candidate : Record->fields())
+    if (Candidate->getName() == LengthName) {
+      Length = Candidate;
+      break;
+    }
+  if (!Length)
+    return false;
+  Scale = 1;
+  if (ElementExtent) {
+    if (Pointee->isIncompleteType())
+      return false;
+    Scale = Context.getTypeSizeInChars(Pointee).getQuantity();
+  }
+  return true;
+}
+
 static std::optional<FieldSpanContract>
 fieldSpanContract(const Expr *Expression, ASTContext &Context) {
   const MemberExpr *Member = pointerMember(Expression);
@@ -246,38 +344,71 @@ fieldSpanContract(const Expr *Expression, ASTContext &Context) {
     return std::nullopt;
   const RecordDecl *Record = Pointer->getParent();
   for (const AnnotateAttr *Attribute : Pointer->specific_attrs<AnnotateAttr>()) {
-    StringRef Annotation = Attribute->getAnnotation();
-    if (!Annotation.consume_front("withtok:") || !Annotation.ends_with(")"))
-      continue;
-    size_t Open = Annotation.find('(');
-    if (Open == StringRef::npos)
-      continue;
-    StringRef Family = Annotation.take_front(Open).trim();
-    const TypedefNameDecl *Token = findTokenSort(Context, Family);
-    bool ByteExtent = hasQualifier(Token, "qual:extent_at_least");
-    bool ElementExtent = hasQualifier(Token, "qual:element_extent");
-    if (!ByteExtent && !ElementExtent)
-      continue;
-    StringRef LengthName =
-        Annotation.slice(Open + 1, Annotation.size() - 1).trim();
     const FieldDecl *Length = nullptr;
-    for (const FieldDecl *Candidate : Record->fields())
-      if (Candidate->getName() == LengthName) {
-        Length = Candidate;
-        break;
-      }
-    if (!Length)
-      continue;
     uint64_t Scale = 1;
-    if (ElementExtent) {
-      QualType Pointee = Pointer->getType()->getPointeeType();
-      if (Pointee->isIncompleteType())
-        continue;
-      Scale = Context.getTypeSizeInChars(Pointee).getQuantity();
-    }
-    return FieldSpanContract{Member, Length, Scale};
+    if (parseFieldSpanAnnotation(Attribute->getAnnotation(), Record, Context,
+                                 Pointer->getType()->getPointeeType(), Length,
+                                 Scale))
+      return FieldSpanContract{Member, Length, Scale};
   }
   return std::nullopt;
+}
+
+struct RecordSpanContract {
+  const FieldDecl *Pointer;
+  const FieldDecl *Length;
+  uint64_t Scale;
+};
+
+/* Every readable_elements/writable_elements-style contract on Record's
+ * fields, keyed by raw FieldDecl rather than by an access expression --
+ * unlike fieldSpanContract above, this supports check::Bind (which only
+ * ever gives a written MemRegion, never a source Expr) and returns every
+ * contract on a field, not just the first. */
+static void collectRecordSpanContracts(
+    const RecordDecl *Record, ASTContext &Context,
+    SmallVectorImpl<RecordSpanContract> &Out) {
+  if (!Record)
+    return;
+  for (const FieldDecl *Pointer : Record->fields()) {
+    if (!Pointer->getType()->isPointerType())
+      continue;
+    for (const AnnotateAttr *Attribute :
+        Pointer->specific_attrs<AnnotateAttr>()) {
+      const FieldDecl *Length = nullptr;
+      uint64_t Scale = 1;
+      if (parseFieldSpanAnnotation(Attribute->getAnnotation(), Record,
+                                   Context,
+                                   Pointer->getType()->getPointeeType(),
+                                   Length, Scale))
+        Out.push_back({Pointer, Length, Scale});
+    }
+  }
+}
+
+/* fields_established (see include/ownership.h's own comment for the
+ * two-sided contract this implements): true exactly when Parameter
+ * carries the bare "fields_established" annotation. Unlike withtok(...)
+ * this takes no argument -- the struct type it points to already fully
+ * specifies which fields pair via its OWN field-level
+ * withtok(readable_elements(...))/withtok(writable_elements(...)). */
+static bool hasFieldsEstablished(const ParmVarDecl *Parameter) {
+  for (const AnnotateAttr *Attribute : Parameter->specific_attrs<AnnotateAttr>())
+    if (Attribute->getAnnotation() == "fields_established")
+      return true;
+  return false;
+}
+
+/* The RecordDecl a fields_established parameter's type points to, or
+ * null if Parameter does not carry the annotation or is not shaped like
+ * a pointer to a struct. */
+static const RecordDecl *fieldsEstablishedRecord(const ParmVarDecl *Parameter) {
+  if (!hasFieldsEstablished(Parameter))
+    return nullptr;
+  QualType Type = Parameter->getType();
+  if (!Type->isPointerType())
+    return nullptr;
+  return Type->getPointeeType()->getAsRecordDecl();
 }
 
 static const MemRegion *carrierRegion(const Expr *Expression,
@@ -674,6 +805,72 @@ public:
     Solver.add(Violation);
     return ntlibc::algebra::provesUnsatisfiable(Solver);
   }
+
+  // Proves Extent's value is never smaller than Length's, from the two
+  // symbols' full expression trees -- not just a shared root plus a
+  // constant offset the way sameSymbolSpanProven's syntactic checks
+  // above require. Those checks can only recognize a shared SymExpr
+  // POINTER (Clang's SymbolManager interns identical expressions built
+  // from the SAME evalBinOp call, but does not retroactively unify two
+  // SEPARATELY-built ones) or an ADD/SUB linear decomposition; a
+  // multiplication by a scale factor -- exactly this file's own
+  // scaledSpanLength/Contract.Scale shape, needed whenever a
+  // readable_elements/writable_elements-scaled length is compared
+  // against a DynamicExtent established by a completely separate
+  // expression evaluation (the allocating call's own argument, computed
+  // once, long before this proof ever runs) -- routinely produces two
+  // symbolically-distinct-but-semantically-identical SymIntExpr
+  // instances neither of those checks can see through. Translating both
+  // through the same bitvector algebra this file already uses for
+  // no-wrap proofs sidesteps SymExpr identity entirely: Z3 only sees the
+  // resulting bitvector structure, so `sym * 8` proves equal to `sym * 8`
+  // regardless of which evalBinOp call built which instance.
+  bool provesAtLeast(SymbolRef ExtentSymbol, SymbolRef LengthSymbol) {
+    if (!ExtentSymbol || !LengthSymbol || ExtentSymbol->getType().isNull() ||
+        LengthSymbol->getType().isNull())
+      return false;
+    std::optional<z3::expr> ExtentExpr = translate(ExtentSymbol);
+    std::optional<z3::expr> LengthExpr = translate(LengthSymbol);
+    if (!ExtentExpr || !LengthExpr)
+      return false;
+    std::optional<ntlibc::algebra::SemanticResult> ExtentInput =
+        Algebra.input(*ExtentExpr, cType(ExtentSymbol->getType()));
+    std::optional<ntlibc::algebra::SemanticResult> LengthInput =
+        Algebra.input(*LengthExpr, cType(LengthSymbol->getType()));
+    if (!ExtentInput || !LengthInput)
+      return false;
+    // Prove Extent >= Length by refuting its negation (Extent < Length),
+    // the same "assert the violation, ask for UNSAT" shape provesNoWrap
+    // and addRelation above both already use.
+    std::optional<z3::expr> LessThan = Algebra.less(*ExtentInput, *LengthInput);
+    if (!LessThan)
+      return false;
+    Solver.add(*LessThan);
+    return ntlibc::algebra::provesUnsatisfiable(Solver);
+  }
+
+  // Proves Symbol's value is always zero -- needed for exactly the same
+  // reason provesAtLeast above is: State->isNull() on a COMPOUND value
+  // (e.g. a readable_elements/writable_elements length scaled by this
+  // file's own Contract.Scale, `count_symbol * elementSize`) only
+  // consults the constraint manager's range fact for that compound
+  // symbol ITSELF. Constraining count_symbol == 0 on some path does not
+  // retroactively narrow the SEPARATE, already-built `count_symbol * K`
+  // symbol's own range -- the two are different symbolic identities to
+  // the range constraint manager even though one is derived from the
+  // other. Translating through the same bitvector algebra lets Z3 fold
+  // the multiplication using the range fact on the underlying factor
+  // instead of requiring the compound's OWN range to already say so.
+  bool provesZero(SymbolRef Symbol) {
+    if (!Symbol || Symbol->getType().isNull())
+      return false;
+    std::optional<z3::expr> Expr = translate(Symbol);
+    if (!Expr)
+      return false;
+    z3::expr NotZero = *Expr != ZCtx.bv_val(0, Expr->get_sort().bv_size());
+    Solver.add(NotZero);
+    return ntlibc::algebra::provesUnsatisfiable(Solver);
+  }
 };
 
 static MemoryContractZ3Engine &memoryContractZ3Engine() {
@@ -690,17 +887,30 @@ static bool noWrapProvenZ3(SymbolRef Base, QualType BaseType, uint64_t Offset,
   MemoryContractZ3Proof Proof(memoryContractZ3Engine(), State, AST);
   return Proof.provesNoWrap(Base, BaseType, Offset);
 }
+
+static bool spanCoveredZ3(SymbolRef ExtentSymbol, SymbolRef LengthSymbol,
+                          ProgramStateRef State, ASTContext &AST) {
+  MemoryContractZ3Proof Proof(memoryContractZ3Engine(), State, AST);
+  return Proof.provesAtLeast(ExtentSymbol, LengthSymbol);
+}
+
+static bool zeroProvenZ3(SymbolRef Symbol, ProgramStateRef State,
+                         ASTContext &AST) {
+  MemoryContractZ3Proof Proof(memoryContractZ3Engine(), State, AST);
+  return Proof.provesZero(Symbol);
+}
 #endif // NTLIBC_MEMORY_CONTRACT_Z3
 
 class MemoryContractChecker
     : public Checker<check::PreCall, check::PostCall, check::BeginFunction,
                      check::EndFunction, check::Bind,
-                     check::BranchCondition> {
+                     check::BranchCondition, check::LiveSymbols> {
   mutable std::unique_ptr<BugType> SpanBT;
   mutable std::unique_ptr<BugType> OverlapBT;
   mutable std::unique_ptr<BugType> TokenBT;
   mutable std::unique_ptr<BugType> RedundantBT;
   mutable std::unique_ptr<BugType> MovableBT;
+  mutable std::unique_ptr<BugType> FieldSpanBT;
 
   static bool hasName(const CallEvent &Call, StringRef Wanted) {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
@@ -979,6 +1189,25 @@ class MemoryContractChecker
       if ((EL == LL && ER == LR) || (EL == LR && ER == LL))
         return true;
     }
+#ifdef NTLIBC_MEMORY_CONTRACT_Z3
+    // The two structural checks above (a shared SymExpr pointer, and a
+    // SymSymExpr*SymSymExpr product with matching factors) both require
+    // syntactic identity of at least part of the expression tree. A
+    // scale-multiplied length compared against a DynamicExtent that was
+    // established by a SEPARATE evalBinOp call over the SAME underlying
+    // symbol and constant (this file's own scaledSpanLength/
+    // Contract.Scale shape, and MemoryContractChecker's field-span
+    // enforcement's Scale multiplication above) produces a SymIntExpr
+    // pair (`sym * K` on both sides) that is semantically identical but
+    // not the same SymExpr instance, and neither prior check recognizes
+    // it. Try a real Z3 proof of Extent >= Length over the full
+    // expression trees before falling through to the narrower
+    // shared-base/constant-offset check below, which requires exactly
+    // the same kind of syntactic base identity this is meant to route
+    // around.
+    if (spanCoveredZ3(ExtentSymbol, LengthSymbol, State, C.getASTContext()))
+      return true;
+#endif
     SymbolRef ExtentBase, LengthBase;
     int64_t ExtentOffset, LengthOffset;
     if (!decomposeAffine(Extent, ExtentBase, ExtentOffset))
@@ -1286,10 +1515,50 @@ public:
     C.emitReport(std::move(Report));
   }
 
+  void reportFieldSpan(StringRef Reason, const Stmt *Statement,
+                       ProgramStateRef State, CheckerContext &C) const {
+    if (!Statement)
+      return;
+    ExplodedNode *Node = C.generateNonFatalErrorNode(State);
+    if (!Node)
+      return;
+    if (!FieldSpanBT)
+      FieldSpanBT = std::make_unique<BugType>(
+          this, "Unproven paired field span", categories::MemoryError);
+    const SourceManager &SM = C.getSourceManager();
+    std::string Message =
+        (Reason + "; origin '" +
+         SM.getFilename(SM.getExpansionLoc(Statement->getBeginLoc())) +
+         "'; context '" + context(C) + "'; expression '" + text(Statement, C) +
+         "'; site '" + site(Statement, C) + "'")
+            .str();
+    auto Report =
+        std::make_unique<PathSensitiveBugReport>(*FieldSpanBT, Message, Node);
+    Report->addRange(Statement->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+
   bool spanProven(SVal Pointer, SVal Length, ProgramStateRef State,
                   CheckerContext &C, bool UseAssumedSpans = true) const {
     if (State->isNull(Length).isConstrainedTrue())
       return true;
+#ifdef NTLIBC_MEMORY_CONTRACT_Z3
+    // isNull() only consults the constraint manager's own range fact for
+    // Length's exact symbolic identity. A scaled length built via this
+    // file's own Contract.Scale multiplication (count_symbol * elemSize)
+    // is a DIFFERENT symbol than count_symbol itself, so constraining
+    // count_symbol == 0 on some path does not automatically narrow the
+    // already-built product's own range -- see MemoryContractZ3Proof::
+    // provesZero's comment. zero_vacuous's whole point is that a
+    // genuinely zero-length operation needs no span proof at all, so
+    // this is worth a real Z3 attempt before falling through to the
+    // extent-based checks below, which cannot help when Pointer itself
+    // never got a real extent (the common case for zero_vacuous's own
+    // "operation trivially skipped" shape).
+    if (SymbolRef LengthSymbol = Length.getAsSymbol())
+      if (zeroProvenZ3(LengthSymbol, State, C.getASTContext()))
+        return true;
+#endif
     auto ExtentProvesLength = [&](SVal Extent) {
       if (Extent.isUnknownOrUndef() || Length.isUnknownOrUndef())
         return false;
@@ -1829,8 +2098,90 @@ public:
     return State;
   }
 
+  // Called from checkEndFunction, the one point (see the TouchedRecordSpan
+  // comment above for why CompoundStmt-exit does not work) every touched
+  // pair's update is guaranteed to have fully settled. Consumes the
+  // (Pointer, Length) value snapshot checkBind already captured for each
+  // touched pair -- not a fresh store re-read, which dead-binding cleanup
+  // may have already discarded by this point (see TouchedRecordSpan's
+  // comment) -- so a pointer-then-length or length-then-pointer update is
+  // judged only once both writes have actually landed, using whichever
+  // value each field was last known to hold.
+  ProgramStateRef
+  flushRecordSpanObligations(ProgramStateRef State, CheckerContext &C) const {
+    for (const auto &Entry : State->get<TouchedRecordSpan>()) {
+      const FieldDecl *Pointer = Entry.first.first.second;
+      const FieldDecl *Length = Entry.first.second;
+      SVal PointerValue = Entry.second.first.first;
+      SVal LengthValue = Entry.second.first.second;
+      const Stmt *Site = Entry.second.second;
+      State = State->remove<TouchedRecordSpan>(Entry.first);
+      if (PointerValue.isUnknownOrUndef() || LengthValue.isUnknownOrUndef())
+        continue;
+      SmallVector<RecordSpanContract, 2> Contracts;
+      collectRecordSpanContracts(Pointer->getParent(), C.getASTContext(),
+                                 Contracts);
+      uint64_t Scale = 1;
+      bool Found = false;
+      for (const RecordSpanContract &Contract : Contracts)
+        if (Contract.Pointer == Pointer && Contract.Length == Length) {
+          Scale = Contract.Scale;
+          Found = true;
+          break;
+        }
+      if (!Found)
+        continue;
+      if (Scale != 1)
+        LengthValue = C.getSValBuilder().evalBinOp(
+            State, BO_Mul, LengthValue,
+            C.getSValBuilder().makeIntVal(Scale,
+                                          C.getASTContext().getSizeType()),
+            C.getASTContext().getSizeType());
+      if (!spanProven(PointerValue, LengthValue, State, C,
+                      /*UseAssumedSpans=*/false))
+        reportFieldSpan(
+            "paired length field is not proven within its pointer field's "
+            "real allocation extent",
+            Site, State, C);
+    }
+    return State;
+  }
+
+  // checkBind fires once per write, BEFORE the engine applies it -- so
+  // C.getState() here still reflects every EARLIER write but not this one.
+  // For the field actually being written, its new value is exactly Value
+  // (the Bind callback's own parameter); for the field's PAIRED partner,
+  // reuse whatever value the last touch of this same key already
+  // captured (Prior), and only fall back to reading the store when this
+  // is the pair's first touch -- the same read-back this file's other
+  // mechanisms already rely on, and still safe here because nothing has
+  // had a chance to prune it between then and now.
+  static ProgramStateRef recordFieldSpanTouch(
+      ProgramStateRef State, const RecordSpanTouchKey &Key,
+      bool WrittenIsPointer, SVal Value, const Stmt *BindStmt,
+      const MemRegion *Base, const FieldDecl *OtherField,
+      CheckerContext &C) {
+    DefinedOrUnknownSVal NewValue =
+        Value.getAs<DefinedOrUnknownSVal>().value_or(UnknownVal());
+    DefinedOrUnknownSVal OtherValue = UnknownVal();
+    if (const RecordSpanSnapshot *Prior = State->get<TouchedRecordSpan>(Key)) {
+      OtherValue = WrittenIsPointer ? Prior->first.second : Prior->first.first;
+    } else if (std::optional<Loc> OtherLoc =
+                   State->getLValue(OtherField, loc::MemRegionVal(Base))
+                       .getAs<Loc>()) {
+      OtherValue =
+          State->getSVal(*OtherLoc).getAs<DefinedOrUnknownSVal>().value_or(
+              UnknownVal());
+    }
+    DefinedOrUnknownSVal PointerValue = WrittenIsPointer ? NewValue : OtherValue;
+    DefinedOrUnknownSVal LengthValue = WrittenIsPointer ? OtherValue : NewValue;
+    return State->set<TouchedRecordSpan>(
+        Key, {{PointerValue, LengthValue}, BindStmt});
+  }
+
 public:
-  void checkBind(SVal Location, SVal, const Stmt *, CheckerContext &C) const {
+  void checkBind(SVal Location, SVal Value, const Stmt *BindStmt,
+                CheckerContext &C) const {
     const auto *Function =
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
     const MemRegion *Bound = Location.getAsRegion();
@@ -1855,6 +2206,23 @@ public:
       for (const DisjointParameterKey &Key : Remove)
         State = State->remove<GrantedDisjointProof>(Key);
       break;
+    }
+    if (const auto *Field = dyn_cast<FieldRegion>(Bound)) {
+      SmallVector<RecordSpanContract, 2> Contracts;
+      collectRecordSpanContracts(Field->getDecl()->getParent(),
+                                 C.getASTContext(), Contracts);
+      const MemRegion *Base = Field->getSuperRegion();
+      for (const RecordSpanContract &Contract : Contracts) {
+        bool WrittenIsPointer = Contract.Pointer == Field->getDecl();
+        bool WrittenIsLength = Contract.Length == Field->getDecl();
+        if (!WrittenIsPointer && !WrittenIsLength)
+          continue;
+        RecordSpanTouchKey Key{{Base, Contract.Pointer}, Contract.Length};
+        const FieldDecl *OtherField =
+            WrittenIsPointer ? Contract.Length : Contract.Pointer;
+        State = recordFieldSpanTouch(State, Key, WrittenIsPointer, Value,
+                                     BindStmt, Base, OtherField, C);
+      }
     }
     if (State != C.getState())
       C.addTransition(State);
@@ -1923,6 +2291,74 @@ public:
           .getAs<DefinedOrUnknownSVal>();
       if (A && B && Extent)
         State = State->set<AssumedDisjointExtent>({A, B}, *Extent);
+    }
+    // fields_established (see include/ownership.h's comment and
+    // checkPreCall's mirror-image verification below): seed the real
+    // DynamicExtent for each contracted pointer field's INITIAL value,
+    // from the struct's OWN field values at function entry, so a
+    // standalone analysis of this function (no visible caller, e.g.
+    // --analyze's own per-function entry points, or an opaque/non-
+    // inlined call site) can still judge the function's own internal
+    // field mutations fairly. This is the callee-side half of the
+    // contract; checkPreCall independently verifies, at every REAL call
+    // site, that the caller's own current state actually proves the
+    // same fields before this ever runs -- so a caller that never
+    // established the invariant is still caught there, regardless of
+    // what this seeds. A field carrying more than one contract (this
+    // tree's own readable_elements(n)+writable_elements(cap) pairing)
+    // seeds once per contract in field-declaration order; the later
+    // (conventionally larger, writable-capacity) one wins the shared
+    // DynamicExtent entry -- a precision choice for the callee's own
+    // reasoning only, since soundness rests entirely on the call-site
+    // check below, not on this seed being the tightest possible bound.
+    for (const ParmVarDecl *Parameter : Function->parameters()) {
+      const RecordDecl *Record = fieldsEstablishedRecord(Parameter);
+      if (!Record)
+        continue;
+      SmallVector<RecordSpanContract, 2> Contracts;
+      collectRecordSpanContracts(Record, C.getASTContext(), Contracts);
+      const MemRegion *StructRegion =
+          State->getSVal(State->getLValue(Parameter, C.getLocationContext()))
+              .getAsRegion();
+      if (!StructRegion)
+        continue;
+      // A fresh symbolic pointer parameter's pointee starts out as a
+      // bare, untyped SymbolicRegion. The analyzer's own evaluation of a
+      // REAL `lb->field` MemberExpr later casts that same region to the
+      // pointee's record type first (an ElementRegion at index zero,
+      // clang's standard "view this opaque block as type T" idiom) --
+      // without this same cast here, getLValue below would build a
+      // FieldRegion on the UNCAST base, which compares unequal to the
+      // FieldRegion the real source statements produce even though both
+      // ultimately name the same bytes, silently defeating the seed.
+      if (std::optional<const MemRegion *> Cast =
+              C.getStoreManager().castRegion(StructRegion, Parameter->getType()))
+        StructRegion = *Cast;
+      for (const RecordSpanContract &Contract : Contracts) {
+        std::optional<Loc> PointerLoc =
+            State->getLValue(Contract.Pointer, loc::MemRegionVal(StructRegion))
+                .getAs<Loc>();
+        std::optional<Loc> LengthLoc =
+            State->getLValue(Contract.Length, loc::MemRegionVal(StructRegion))
+                .getAs<Loc>();
+        if (!PointerLoc || !LengthLoc)
+          continue;
+        const MemRegion *PointerRegion =
+            State->getSVal(*PointerLoc).getAsRegion();
+        if (!PointerRegion)
+          continue;
+        SVal LengthValue = State->getSVal(*LengthLoc);
+        if (Contract.Scale != 1)
+          LengthValue = C.getSValBuilder().evalBinOp(
+              State, BO_Mul, LengthValue,
+              C.getSValBuilder().makeIntVal(Contract.Scale,
+                                            C.getASTContext().getSizeType()),
+              C.getASTContext().getSizeType());
+        if (std::optional<DefinedOrUnknownSVal> DefinedLength =
+                LengthValue.getAs<DefinedOrUnknownSVal>())
+          State = setDynamicExtent(State, PointerRegion->getBaseRegion(),
+                                   *DefinedLength, C.getSValBuilder());
+      }
     }
     if (State != C.getState())
       C.addTransition(State);
@@ -2088,6 +2524,59 @@ public:
         ContractState =
             ContractState->set<AssumedDisjointExtent>({A, B}, *Extent);
     }
+    // fields_established's caller-side half: whatever checkBeginFunction
+    // seeds for the callee is only a convenience for that function's OWN
+    // internal reasoning (see its comment) -- the actual obligation is
+    // enforced HERE, against the CALLER's real, current knowledge of the
+    // argument's fields, exactly the same way a plain withtok(...)
+    // Require parameter's span is proven against the caller's state
+    // above rather than merely trusted. A caller that has not actually
+    // established the invariant (e.g. passed a struct whose count field
+    // was bumped without the matching reallocation) is reported here,
+    // at the call, not silently believed.
+    if (Function)
+      for (unsigned Index = 0;
+           Index < Function->getNumParams() && Index < Call.getNumArgs();
+           ++Index) {
+        const RecordDecl *Record =
+            fieldsEstablishedRecord(Function->getParamDecl(Index));
+        if (!Record)
+          continue;
+        SmallVector<RecordSpanContract, 2> Contracts;
+        collectRecordSpanContracts(Record, C.getASTContext(), Contracts);
+        const MemRegion *StructRegion = Call.getArgSVal(Index).getAsRegion();
+        if (!StructRegion)
+          continue;
+        for (const RecordSpanContract &Contract : Contracts) {
+          std::optional<Loc> PointerLoc =
+              C.getState()
+                  ->getLValue(Contract.Pointer, loc::MemRegionVal(StructRegion))
+                  .getAs<Loc>();
+          std::optional<Loc> LengthLoc =
+              C.getState()
+                  ->getLValue(Contract.Length, loc::MemRegionVal(StructRegion))
+                  .getAs<Loc>();
+          if (!PointerLoc || !LengthLoc)
+            continue;
+          SVal PointerValue = C.getState()->getSVal(*PointerLoc);
+          SVal LengthValue = C.getState()->getSVal(*LengthLoc);
+          if (Contract.Scale != 1)
+            LengthValue = C.getSValBuilder().evalBinOp(
+                C.getState(), BO_Mul, LengthValue,
+                C.getSValBuilder().makeIntVal(Contract.Scale,
+                                              C.getASTContext().getSizeType()),
+                C.getASTContext().getSizeType());
+          if (PointerValue.isUnknownOrUndef() || LengthValue.isUnknownOrUndef())
+            continue;
+          if (!spanProven(PointerValue, LengthValue, C.getState(), C,
+                          /*UseAssumedSpans=*/false))
+            reportFieldSpan(
+                "struct argument passed to a fields_established parameter "
+                "is not proven to already satisfy its own paired-field "
+                "extent invariant before this call",
+                Call.getOriginExpr(), C.getState(), C);
+        }
+      }
     ContractState =
         recordGrantProofs(ContractState, Call, Spans, Disjoint);
     if (ContractState != C.getState())
@@ -2163,6 +2652,93 @@ public:
       C.addTransition(removeGrantProofs(Failed, Call, Spans, Disjoint));
   }
 
+  // TouchedRecordSpan's own comment already explains why the (Pointer,
+  // Length) VALUES are captured as a snapshot rather than re-read from the
+  // store at checkEndFunction: liveness-driven dead-binding cleanup would
+  // otherwise silently return Unknown for a field nothing downstream reads
+  // again. That snapshot protects the VALUES themselves (the checker holds
+  // its own copy of each SVal in its private GDM state), but not the RANGE
+  // CONSTRAINTS those values may depend on: ProgramState::cleanupState
+  // prunes ConstraintRangeTy entries for any symbol the SymbolReaper does
+  // not consider live, and holding a symbol inside a checker's own private
+  // GDM map (TouchedRecordSpan is exactly that) does not by itself count --
+  // only an explicit checkLiveSymbols vote keeps the SymbolReaper from
+  // reaping it. Confirmed via a minimal reproduction of glob.c's own
+  // `out.cap = pglob->gl_pathc; if (out.cap) { out.v = __malloc(out.cap *
+  // sizeof *out.v); ... } return 0;` shape (one field, one branch, one
+  // return): the analyzer's own trace records "Assuming field 'cap' is 0"
+  // on the false branch (a real constraint IS added on that path), yet by
+  // the time checkEndFunction's flush runs at the return statement,
+  // getConstraintMap(State) comes back completely empty -- every range
+  // fact on the path has already been reaped, because nothing ever marked
+  // any of them live. Without this, both spanProven's plain isNull() check
+  // and 906b757c's own Z3 provesZero bridge have nothing left to prove
+  // from: an empty constraint map lets Z3 satisfy "scaled length != 0"
+  // trivially, so what should be a provable zero-length vacuous case
+  // (out.cap == 0 on that path, therefore out.cap * elementSize == 0)
+  // reports as unproven instead. Marking every symbol a still-pending
+  // TouchedRecordSpan obligation references keeps its constraints alive
+  // exactly as long as the obligation itself survives -- the entry is
+  // removed by flushRecordSpanObligations the moment it is judged, so this
+  // stops protecting the symbol on the very next liveness pass after that,
+  // the same bounded lifetime the snapshot values themselves already have.
+  //
+  // Marking the captured Pointer/Length VALUES alone is not sufficient by
+  // itself, though: src/util/patch.c's own `struct pline.text`/`.len` pair
+  // (readable_span, not the growable-array shape above) showed a second,
+  // narrower instance of the identical class of bug. Minimal reproduction
+  // (a `bytes; size_add(len, 1, &bytes); copy = __malloc(bytes); ...
+  // pl->text = copy; pl->len = len;` shape, matching lb_push() exactly):
+  // a bounded loop copying `len` bytes before the two field writes causes
+  // the analyzer to explore several concretely-bounded loop trip counts,
+  // and by the time `pl->len = len;` runs, the STORE genuinely holds a
+  // concrete value for `len` on that path (confirmed via a debug dump: the
+  // captured LengthValue prints as a plain concrete integer, e.g. "1
+  // U64b") -- so the captured snapshot itself carries no symbol to mark
+  // live at all. The DynamicExtent established for `copy` back at the
+  // `__malloc(bytes)` call, however, is `len_symbol + 1` -- a SEPARATE,
+  // still-symbolic expression that must relate to the SAME `len_symbol`'s
+  // range (narrowed to that one concrete value on this path) to prove
+  // `Extent >= Length`. Nothing marks `len_symbol` itself live merely
+  // because it appears inside an Extent computed long before this
+  // obligation's own two field-writing statements ever ran, so its range
+  // is reaped by the same loop-widening cleanup pass, and the proof fails
+  // for exactly the reason above even though the snapshot values
+  // themselves are intact.
+  //
+  // checkPostCall (below) already keeps AllocatedSpanExtent, a parallel
+  // COPY of every declaredReturnSpanExtent-established DynamicExtent, in
+  // this checker's own GDM specifically because that state (unlike
+  // clang's core DynamicExtentMap) is never auto-pruned -- so the Extent
+  // expression's own STRUCTURE always survives to flush time regardless
+  // of this fix. Walking that already-preserved copy here and marking
+  // every leaf symbol its expression tree references (SymExpr::symbols())
+  // closes the gap without needing a SValBuilder (unavailable in this
+  // callback) to query clang's core map directly: only a pointer region
+  // with a PENDING obligation on it is considered, so this stays scoped
+  // to symbols a still-open proof might actually need, the same bounded
+  // lifetime as the rest of this function.
+  void checkLiveSymbols(ProgramStateRef State, SymbolReaper &SR) const {
+    auto markSValLive = [&SR](SVal Value) {
+      if (SymbolRef Symbol = Value.getAsSymbol())
+        for (const SymExpr *Leaf : Symbol->symbols())
+          SR.markLive(Leaf);
+      if (const MemRegion *Region = Value.getAsRegion())
+        SR.markLive(Region);
+    };
+    for (const auto &Entry : State->get<TouchedRecordSpan>()) {
+      SVal PointerValue = Entry.second.first.first;
+      SVal LengthValue = Entry.second.first.second;
+      markSValLive(PointerValue);
+      markSValLive(LengthValue);
+      if (const MemRegion *PointerRegion = PointerValue.getAsRegion())
+        if (const DefinedOrUnknownSVal *Extent =
+                State->get<AllocatedSpanExtent>(
+                    PointerRegion->getBaseRegion()))
+          markSValLive(*Extent);
+    }
+  }
+
   void checkEndFunction(const ReturnStmt *Return, CheckerContext &C) const {
     const auto *Function =
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
@@ -2172,6 +2748,32 @@ public:
     SmallVector<DisjointContract, 1> Disjoint;
     tokenContracts(Function, Spans, Disjoint);
     ProgramStateRef State = C.getState();
+    // Discharge every TouchedRecordSpan obligation accumulated so far --
+    // but ONLY at the outermost frame of this analysis, never an inlined
+    // callee's own return. Inlining shares the CALLER's ProgramState with
+    // the callee (that is the entire point of inlining -- precise
+    // cross-function reasoning), so checkEndFunction fires for every
+    // inlined callee's own return too, not just the top-level entry
+    // function's. Flushing there was observed to misfire in practice:
+    // src/glob/glob.c's `glob()` writes `out.v`/`out.cap` itself, then
+    // calls small inlined helpers (find_slash, has_meta, ...) that touch
+    // neither field -- yet an unconditional flush fired (and mis-
+    // attributed its report to the helper's own name, since context()
+    // reads the CURRENT location context) at the FIRST such helper's
+    // return, well before `glob()` had actually finished its own update,
+    // because nothing distinguished "this frame is exiting" from "some
+    // inlined callee sharing my state happened to return". Restricting
+    // the flush to Frame->inTopFrame() is the same guard checkPreCall's
+    // isManualProofCall migration diagnostic already uses for an
+    // identical inlining-visibility concern.
+    const auto *Frame = dyn_cast_or_null<StackFrameContext>(C.getLocationContext());
+    if (Frame && Frame->inTopFrame()) {
+      ProgramStateRef Flushed = flushRecordSpanObligations(State, C);
+      if (Flushed != State) {
+        C.addTransition(Flushed);
+        State = Flushed;
+      }
+    }
     if (!Function->getReturnType()->isVoidType()) {
       if (!Return || !Return->getRetValue())
         return;

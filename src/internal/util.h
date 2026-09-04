@@ -101,7 +101,22 @@ static inline int __util_size_mul(size_t a, size_t b, size_t *out)
 	return 1;
 }
 
+/* Both wrappers' own writable_span contract is `count * element_size`, not
+ * `bytes`: the checked local is invisible outside this function body, so
+ * MemoryContractChecker's declaredReturnSpanExtent (which only ever reads
+ * a withtok(...) expression against the FUNCTION's own parameters) has to
+ * be given the same product its callers already compute their own
+ * capacity from. Without this, every caller's later write to the paired
+ * count/cap field these allocations back (src/util/patch.c's
+ * `struct linebuf`, src/glob/glob.c's `struct pv`/`struct comp`,
+ * src/wordexp/wordexp.c's `struct pv`/`struct fbuf`) is unprovable by
+ * construction -- not because the write is wrong, but because nothing
+ * ever recorded how big the buffer actually is -- which is exactly the
+ * gap that made MemoryContractChecker's new field-span enforcement
+ * (checkEndFunction's TouchedRecordSpan flush) unusably noisy against
+ * this tree until this was added. */
 withtok(heap_allocated)
+withtok(writable_span(count * element_size))
 static inline void *__util_mallocarray(size_t count, size_t element_size)
 {
 	size_t bytes;
@@ -110,6 +125,7 @@ static inline void *__util_mallocarray(size_t count, size_t element_size)
 }
 
 withtok(heap_allocated)
+withtok(writable_span(count * element_size))
 static inline void *__util_reallocarray(
 	void *ptr consume_if_nonnull_return(heap_allocated), size_t count,
 	size_t element_size)

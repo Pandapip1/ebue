@@ -56,5 +56,21 @@
 	__attribute__((annotate("handle:" #handle_name)))
 #define static_handle(handle_name) \
 	__attribute__((annotate("static_handle:" #handle_name)))
+/* A pointer-to-struct parameter whose pointee type carries its own
+ * withtok(readable_elements(...))/withtok(writable_elements(...)) field
+ * contracts (see include/memory_tokens.h). fields_established is a real,
+ * two-sided obligation, not a blind trust of whatever the fields happen
+ * to hold: MemoryContractChecker's checkPreCall independently verifies,
+ * from the CALLER's own current knowledge, that every one of those field
+ * contracts already holds for the argument BEFORE allowing the call --
+ * exactly the same "prove it at the call site" discipline withtok(...)
+ * Require parameters already get. Only once that is satisfied does
+ * checkBeginFunction seed the callee's own reasoning (so a function
+ * analyzed on its own, with no visible caller, is not forced to treat an
+ * incoming struct's fields as permanently unprovable). Omitting this on
+ * a parameter that is actually mutated is always safe -- the checker
+ * just treats the incoming fields as unconstrained, as it always did. */
+#define fields_established \
+	__attribute__((annotate("fields_established")))
 
 #endif

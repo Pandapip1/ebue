@@ -19,7 +19,12 @@ DIAGNOSTIC = re.compile(
     r"(memory operation span is not proven valid|memcpy ranges are not proven nonoverlapping|"
     r"declared memory token addition is not proven by function body|"
     r"manual memory proof axiom is redundant|"
-    r"manual memory proof axiom can be narrowed); "
+    r"manual memory proof axiom can be narrowed|"
+    r"paired length field is not proven within its pointer field's real "
+    r"allocation extent|"
+    r"struct argument passed to a fields_established parameter is not "
+    r"proven to already satisfy its own paired-field extent invariant "
+    r"before this call); "
     r"origin '(.*)'; context '(.*)'; expression '(.*)'; site '(.*)' "
     r"\[ntlibc\.MemoryContract\]$"
 )
