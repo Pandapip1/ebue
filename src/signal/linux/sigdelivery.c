@@ -45,6 +45,7 @@
 #include "libc.h"
 #include "plat_signal.h"
 #include "plat_thread.h"
+#include "unsafe_pointer.h"
 
 static __plat_handle_t wake_event;   /* real eventfd; 0 = not running */
 static __plat_handle_t lock_sem;     /* real binary semaphore; 0 = no locking done */
@@ -141,7 +142,15 @@ void __sig_delivery_reinit_after_fork(void)
  * `data` is deliberately unused: see this file's banner. */
 int __sig_try_deliver_remote_info(int pid, int sig, const void *data) // NOLINT(bugprone-easily-swappable-parameters) -- fixed signal-delivery contract; process ID and signal number have distinct roles
 {
-	__plat_handle_t h = (__plat_handle_t)(long)pid;
+	/* `h` is built the same bare-pid way __plat_kill_open()
+	 * (src/signal/linux/plat_signal.c, already exempt below) builds one
+	 * for a non-child target -- see this function's own comment above.
+	 * pid is the caller's own process ID argument (kill(2)'s own target
+	 * PID namespace, checked meaningful by __plat_kill_terminate()
+	 * itself below via the real tgkill(2)/kill(2) syscall); like
+	 * __plat_kill_open()'s box(), __plat_handle_t here carries that
+	 * plain PID integer directly, never dereferenced as memory. */
+	__plat_handle_t h = unsafe_assume_valid_pointer((__plat_handle_t)(long)pid);
 	(void)data;
 	return __plat_kill_terminate(h, __ENCODE_SIGNAL_EXIT(sig)) == 0;
 }
@@ -158,7 +167,9 @@ int __sig_try_deliver_remote_nondefault(int pid, int sig) // NOLINT(bugprone-eas
 	__plat_handle_t h;
 
 	if (!__plat_sig_remote_disposition_nondefault((pid_t)pid, sig)) return 0;
-	h = (__plat_handle_t)(long)pid;
+	/* Same bare-pid __plat_handle_t construction as
+	 * __sig_try_deliver_remote_info() above, same justification. */
+	h = unsafe_assume_valid_pointer((__plat_handle_t)(long)pid);
 	return __plat_kill_terminate(h, __ENCODE_SIGNAL_EXIT(sig)) == 0;
 }
 

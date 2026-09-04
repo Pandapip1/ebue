@@ -657,6 +657,60 @@ class PointerProvenanceChecker
            Name == "signal_apc" || Name == "__plat_thread_queue_apc";
   }
 
+  // isUnsafeAssumeValidPointer: true if Cast is (modulo the parens the
+  // wrapping macro itself introduces) the direct initializer of a
+  // compiler-generated local variable carrying the
+  // "ntlibc_unsafe_assume_valid_pointer" annotation. This is exactly
+  // what src/internal/unsafe_pointer.h's unsafe_assume_valid_pointer(expr)
+  // macro expands to, under the analyzer only: a GNU statement
+  // expression declaring one such local, scoped to that single use,
+  // initialized directly from expr and yielded as the whole expression's
+  // value -- a real build sees a plain `(expr)` and pays nothing.
+  //
+  // This is a source-visible alternative to the NamedException table
+  // below, not a replacement for it: NamedException stays for the
+  // handful of already-audited boundary crossings recorded there, but
+  // any newly-discovered finding of this same irreducible-provenance
+  // shape should be marked here instead, at the cast itself, rather than
+  // added to that table. The distinguishing feature is where the
+  // exemption is visible. NamedException is an opaque (file, function)
+  // pair a reader looking at the call site cannot see at all -- only
+  // this checker's own source names it. unsafe_assume_valid_pointer()
+  // sits at the literal expression being converted, appears in the same
+  // diff that adds it, and its own name says plainly what it is: an
+  // unverified human assumption, never mistakable for a proof. Because
+  // the annotation attaches to one compiler-generated local scoped to
+  // one use (not to the cast's own type, not to the enclosing function,
+  // not to any named source variable the programmer could reuse), it can
+  // never silence a second, unmarked, otherwise-identical cast written
+  // right next to it -- see this checker's own
+  // tools/lint-pointer-provenance-fixtures/{safe,unsafe}.c coverage of
+  // both directions.
+  static bool isUnsafeAssumeValidPointer(const CastExpr *Cast,
+                                         ASTContext &Ctx) {
+    DynTypedNode Current = DynTypedNode::create(*Cast);
+    for (unsigned Depth = 0; Depth < 4; ++Depth) {
+      auto Parents = Ctx.getParents(Current);
+      if (Parents.size() != 1)
+        return false;
+      const DynTypedNode &Parent = Parents[0];
+      if (const auto *Variable = Parent.get<VarDecl>()) {
+        for (const auto *Attribute :
+             Variable->specific_attrs<AnnotateAttr>())
+          if (Attribute->getAnnotation() ==
+              "ntlibc_unsafe_assume_valid_pointer")
+            return true;
+        return false;
+      }
+      const Stmt *Statement = Parent.get<Stmt>();
+      if (!Statement ||
+          (!isa<ParenExpr>(Statement) && !isa<CastExpr>(Statement)))
+        return false;
+      Current = Parent;
+    }
+    return false;
+  }
+
   // A short, explicit, auditable list of (file suffix, function) pairs
   // where a finding has been individually read and judged genuine but
   // irreducible: the provenance crosses a boundary no C-level static
@@ -858,6 +912,8 @@ public:
     if (isClientIdAssignment(Cast, C))
       return;
     if (isOpaqueApcContext(Cast, C))
+      return;
+    if (isUnsafeAssumeValidPointer(Cast, C.getASTContext()))
       return;
     if (isNamedException(C))
       return;

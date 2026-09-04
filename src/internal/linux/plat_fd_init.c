@@ -49,6 +49,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include "libc.h"
+#include "unsafe_pointer.h"
 
 #if defined(__aarch64__)
 #define SYS_statx 291
@@ -238,7 +239,18 @@ static void install_inherited(void)
 		flags = is_sys_error(flflags) ? 0 : ((unsigned)flflags & (O_ACCMODE | O_APPEND | O_NONBLOCK));
 		if (fdflags & FD_CLOEXEC_LX) flags |= O_CLOEXEC; /* should not happen (see banner) -- recorded faithfully if it somehow does */
 
-		__fd_install_at(fd, (HANDLE)(long)(fd + 1), flags, type);
+		/* This is the same "+1" fd-to-HANDLE boxing __plat_dup_to()
+		 * (src/unistd/linux/plat_fd.c), __plat_kill_open()'s box_fd(),
+		 * and every other Linux __plat_handle_t producer already use
+		 * (see PointerProvenanceChecker.cpp's own NamedException
+		 * comment on __plat_handle_t): HANDLE/__plat_handle_t is void*
+		 * only because plat_handle.h commits every backend to one
+		 * pointer-sized carrier, never dereferenced on this backend --
+		 * the real payload is the plain descriptor number `fd`, which
+		 * this loop's own `for (fd = 3; fd < FD_MAX; fd++)` bounds to
+		 * a small nonnegative int, boxed +1 so 0 stays free for
+		 * __PLAT_HANDLE_NULL. */
+		__fd_install_at(fd, unsafe_assume_valid_pointer((HANDLE)(long)(fd + 1)), flags, type);
 	}
 }
 

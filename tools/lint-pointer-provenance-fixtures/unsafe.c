@@ -171,3 +171,31 @@ registry_consumer_fn expose_consumer(void) { return address_taken_consumer; }
 long exercise_address_taken_consumer(unsigned i) {
   return address_taken_consumer(&other_registry[i]);
 }
+
+/* unsafe_assume_valid_pointer(expr) -- same inlined marker as safe.c's
+ * copy (fixtures compile with no include path); see that file's
+ * marked_unprovable_cast() for proof the marker actually suppresses
+ * the one cast it wraps. */
+#ifdef __clang_analyzer__
+#define unsafe_assume_valid_pointer(expr) \
+  (__extension__({ \
+    __typeof__(expr) __ntlibc_unsafe_ptr__ \
+      __attribute__((annotate("ntlibc_unsafe_assume_valid_pointer"))) \
+      = (expr); \
+    __ntlibc_unsafe_ptr__; \
+  }))
+#else
+#define unsafe_assume_valid_pointer(expr) (expr)
+#endif
+
+/* The marker resolves only the one cast it is applied to. An unmarked,
+ * otherwise-identical integer-to-pointer conversion of the very same
+ * parameter, in the very same function, right next to a marked one,
+ * must still be flagged -- proving this is not a blanket loosening of
+ * the checker for the whole function, the translation unit, or even
+ * the one source variable the marked cast happens to be assigned to. */
+void *unmarked_cast_still_flagged(unsigned long value) {
+  void *marked = unsafe_assume_valid_pointer((void *)value);
+  void *unmarked = (void *)value; /* pointer-provenance-expect */
+  return marked ? marked : unmarked;
+}

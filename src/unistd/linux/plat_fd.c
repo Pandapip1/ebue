@@ -24,6 +24,7 @@
 // NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include "plat_fd.h"
+#include "unsafe_pointer.h"
 
 /* Linux syscall numbers, confirmed against arch/x86/entry/syscalls/
  * syscall_{64,32}.tbl (x86_64/i386) and this host's own headers
@@ -290,7 +291,15 @@ int __plat_dup_to(__plat_handle_t h, int newfd, __plat_handle_t old, int inherit
 	ret = raw_syscall(SYS_dup3, (long)oldfd, (long)newfd,
 	                  inheritable ? 0L : (long)O_CLOEXEC_LX, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
-	*out = (__plat_handle_t)(ret + 1);
+	/* ret is dup3(2)'s own return-register value, just proven a real
+	 * success (not an encoded -errno) by is_sys_error() immediately
+	 * above; the Linux syscall ABI's dup3(2) contract guarantees a
+	 * successful call returns the new descriptor number, which by
+	 * dup3(2)'s own semantics equals `newfd`. Boxed +1 into
+	 * __plat_handle_t the same way box_fd()/box() (both already exempt
+	 * below) box every other real Linux fd this library hands out as an
+	 * opaque handle -- see plat_handle.h -- never dereferenced. */
+	*out = unsafe_assume_valid_pointer((__plat_handle_t)(ret + 1));
 	return 0;
 }
 
