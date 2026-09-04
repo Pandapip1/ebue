@@ -189,7 +189,7 @@ static int ar_foreach(const char *path, ar_visit_fn visit, void *ctx)
 	if (fread(magic, 1, AR_MAGIC_LEN, ar) != AR_MAGIC_LEN ||
 	    memcmp(magic, AR_MAGIC, AR_MAGIC_LEN) != 0) {
 		__util_diagf("ar: %s: not an archive (bad magic)\n", path);
-		fclose(ar);
+		(void)fclose(ar);
 		return -1;
 	}
 
@@ -224,7 +224,7 @@ static int ar_foreach(const char *path, ar_visit_fn visit, void *ctx)
 		if (fseek(ar, data_off + skip, SEEK_SET) != 0) break;
 	}
 
-	fclose(ar);
+	(void)fclose(ar);
 	return rc;
 }
 
@@ -370,7 +370,7 @@ static int read_all_headers(const char *path,
 	if (!ar) { *out = NULL; *nout = 0; return -1; }
 	if (fread(magic, 1, AR_MAGIC_LEN, ar) != AR_MAGIC_LEN ||
 	    memcmp(magic, AR_MAGIC, AR_MAGIC_LEN) != 0) {
-		fclose(ar);
+		(void)fclose(ar);
 		*out = NULL; *nout = 0;
 		return -2;
 	}
@@ -380,15 +380,15 @@ static int read_all_headers(const char *path,
 		long skip;
 		size_t got = fread(raw, 1, AR_HDR_LEN, ar);
 		if (got == 0) break;
-		if (got != AR_HDR_LEN || parse_header(raw, &rm.m) < 0) { fclose(ar); free(arr); *out = NULL; *nout = 0; return -3; }
+		if (got != AR_HDR_LEN || parse_header(raw, &rm.m) < 0) { (void)fclose(ar); free(arr); *out = NULL; *nout = 0; return -3; }
 		rm.data_off = ftell(ar);
 		if (rm.m.name[0] != 0) {
 			if (n == cap) {
 				size_t newcap;
 				struct rewrite_member *na;
-				if (!__util_array_capacity(cap, n, 1, 16, sizeof *arr, &newcap)) { fclose(ar); free(arr); return -4; }
+				if (!__util_array_capacity(cap, n, 1, 16, sizeof *arr, &newcap)) { (void)fclose(ar); free(arr); return -4; }
 				na = __util_reallocarray(arr, newcap, sizeof *arr);
-				if (!na) { fclose(ar); free(arr); return -4; }
+				if (!na) { (void)fclose(ar); free(arr); return -4; }
 				arr = na; cap = newcap;
 			}
 			arr[n++] = rm;
@@ -396,7 +396,7 @@ static int read_all_headers(const char *path,
 		skip = rm.m.size + (rm.m.size & 1);
 		if (fseek(ar, rm.data_off + skip, SEEK_SET) != 0) break;
 	}
-	fclose(ar);
+	(void)fclose(ar);
 	*out = arr;
 	*nout = (int)n;
 	return 0;
@@ -428,8 +428,8 @@ static int emit_member(FILE *out, const struct ar_member *m, FILE *src_ar, long 
 	if (path) {
 		FILE *in = fopen(path, "rb");
 		if (!in) return -1;
-		if (copy_bytes(in, out, 0, m->size) < 0) { fclose(in); return -1; }
-		fclose(in);
+		if (copy_bytes(in, out, 0, m->size) < 0) { (void)fclose(in); return -1; }
+		(void)fclose(in);
 	} else {
 		if (copy_bytes(src_ar, out, off, m->size) < 0) return -1;
 	}
@@ -480,7 +480,7 @@ static int do_delete(const char *archive, char **files, int nfiles, int verbose)
 
 	snprintf(tmppath, sizeof tmppath, "%s.artmp", archive);
 	tmp = fopen(tmppath, "wb");
-	if (!tmp) { fclose(src); free(arr); __util_diagf("ar: %s: %s\n", tmppath, strerror(errno)); return 1; }
+	if (!tmp) { (void)fclose(src); free(arr); __util_diagf("ar: %s: %s\n", tmppath, strerror(errno)); return 1; }
 	fwrite(AR_MAGIC, 1, AR_MAGIC_LEN, tmp);
 
 	for (i = 0; i < n; i++) {

@@ -182,7 +182,7 @@ static int do_list(const char *dir, const char *qfilter, char **ids, int nids)
 			if (qfilter && strcmp(queue, qfilter)) continue;
 			print_job_line(stdout, id, run_at, queue);
 		}
-		closedir(dp);
+		(void)closedir(dp);
 	}
 	return status;
 }
@@ -198,7 +198,7 @@ static int do_remove(const char *dir, char **ids, int nids)
 		if (job_path(dir, ids[i], "job", jpath, sizeof jpath) == 0 && unlink(jpath) == 0)
 			had = 1;
 		if (job_path(dir, ids[i], "out", opath, sizeof opath) == 0)
-			unlink(opath); /* fine if it never ran yet -- ENOENT is not an error here */
+			(void)unlink(opath); /* fine if it never ran yet -- ENOENT is not an error here */
 		if (!had) {
 			__util_diagf("at: %s: no such job\n", ids[i]);
 			status = 1;

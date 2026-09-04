@@ -158,7 +158,9 @@ static void reap_finished(void)
 		int status;
 		pid_t r = waitpid(g_running[i].pid, &status, WNOHANG);
 		if (r == g_running[i].pid) {
-			unlink(g_running[i].running_path);
+			if (unlink(g_running[i].running_path) < 0)
+				fprintf(stderr, "atd: cannot clean up %s: %s\n",
+				        g_running[i].running_path, strerror(errno));
 			g_running[i] = g_running[g_nrunning - 1];
 			g_nrunning--;
 			continue;
@@ -261,7 +263,7 @@ static void poll_once(const char *dir)
 		strcpy(g_running[g_nrunning].running_path, running);
 		g_nrunning++;
 	}
-	closedir(dp);
+	(void)closedir(dp);
 }
 
 int __util_atd_main(int argc, char **argv)
