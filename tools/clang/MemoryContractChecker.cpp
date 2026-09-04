@@ -2322,6 +2322,18 @@ public:
               .getAsRegion();
       if (!StructRegion)
         continue;
+      // A fresh symbolic pointer parameter's pointee starts out as a
+      // bare, untyped SymbolicRegion. The analyzer's own evaluation of a
+      // REAL `lb->field` MemberExpr later casts that same region to the
+      // pointee's record type first (an ElementRegion at index zero,
+      // clang's standard "view this opaque block as type T" idiom) --
+      // without this same cast here, getLValue below would build a
+      // FieldRegion on the UNCAST base, which compares unequal to the
+      // FieldRegion the real source statements produce even though both
+      // ultimately name the same bytes, silently defeating the seed.
+      if (std::optional<const MemRegion *> Cast =
+              C.getStoreManager().castRegion(StructRegion, Parameter->getType()))
+        StructRegion = *Cast;
       for (const RecordSpanContract &Contract : Contracts) {
         std::optional<Loc> PointerLoc =
             State->getLValue(Contract.Pointer, loc::MemRegionVal(StructRegion))
