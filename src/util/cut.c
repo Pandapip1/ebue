@@ -321,7 +321,7 @@ int __util_cut_main(
 			}
 			if (mode == 'f') process_field_mode(f, ranges, nranges, delim, opt_s);
 			else process_char_mode(f, ranges, nranges, mode == 'b');
-			if (f != stdin) fclose(f);
+			if (f != stdin) (void)fclose(f);
 		}
 	}
 

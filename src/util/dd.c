@@ -457,7 +457,7 @@ summary:
 	__util_diagf("%" PRIuMAX "+%" PRIuMAX " records in\n%" PRIuMAX "+%" PRIuMAX " records out\n",
 		in_full, in_partial, out_full, out_partial);
 
-	if (ifd > 0) close(ifd);
+	if (ifd > 0) (void)close(ifd);
 	if (ofd > 1 && close(ofd) < 0) {
 		__util_diagf("dd: closing '%s': %s\n", o.of_path ? o.of_path : "stdout", strerror(errno));
 		had_error = 1;

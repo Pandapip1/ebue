@@ -730,7 +730,7 @@ static regex_t *resolve_ere(struct awk_interp *ip, struct awk_node *node)
 static void free_stream_val(void *p)
 {
 	struct awk_stream *st = p;
-	if (st->is_pipe) pclose(st->f); else fclose(st->f);
+	if (st->is_pipe) (void)pclose(st->f); else (void)fclose(st->f);
 	free(st);
 }
 
@@ -903,7 +903,7 @@ static int read_next_main_record(struct awk_interp *ip, char **out)
 		if (!ip->curfile && !advance_to_next_argv_file(ip)) return 0;
 		rec = read_record_rs(ip, ip->curfile, &got);
 		if (got) { *out = rec; return 1; }
-		if (!ip->curfile_is_stdin) fclose(ip->curfile);
+		if (!ip->curfile_is_stdin) (void)fclose(ip->curfile);
 		ip->curfile = NULL;
 	}
 }
@@ -2149,7 +2149,7 @@ int awk_interp_run(struct awk_interp *ip)
 void awk_interp_free(struct awk_interp *ip)
 {
 	int i;
-	if (ip->curfile && !ip->curfile_is_stdin) fclose(ip->curfile);
+	if (ip->curfile && !ip->curfile_is_stdin) (void)fclose(ip->curfile);
 	awk_htab_free(&ip->globals, free_cell_val);
 	awk_htab_free(&ip->streams, free_stream_val);
 	for (i = 0; i < (int)ip->recmp.nbuckets; i++) {

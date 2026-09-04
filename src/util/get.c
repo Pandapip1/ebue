@@ -91,15 +91,15 @@ static int read_whole_file(const char *path, struct sfile *out)
 
 	if (!f) return -1;
 	buf = malloc(cap);
-	if (!buf) { fclose(f); return -1; }
+	if (!buf) { (void)fclose(f); return -1; }
 	for (;;) {
 		size_t got;
 		if (len + 1 >= cap) {
 			size_t newcap;
 			char *g;
-			if (!__util_array_capacity(cap, cap, 1, 65536, 1, &newcap)) { free(buf); fclose(f); return -1; }
+			if (!__util_array_capacity(cap, cap, 1, 65536, 1, &newcap)) { free(buf); (void)fclose(f); return -1; }
 			g = realloc(buf, newcap);
-			if (!g) { free(buf); fclose(f); return -1; }
+			if (!g) { free(buf); (void)fclose(f); return -1; }
 			buf = g; cap = newcap;
 		}
 		__ownership_writable_span(buf + len, cap - len - 1);
@@ -107,8 +107,8 @@ static int read_whole_file(const char *path, struct sfile *out)
 		len += got;
 		if (got == 0) break;
 	}
-	if (ferror(f)) { free(buf); fclose(f); return -1; }
-	fclose(f);
+	if (ferror(f)) { free(buf); (void)fclose(f); return -1; }
+	(void)fclose(f);
 	buf[len] = 0;
 	out->buf = buf;
 	out->len = len;

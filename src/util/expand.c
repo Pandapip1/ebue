@@ -95,7 +95,7 @@ int __util_expand_main(
 				continue;
 			}
 			expand_stream(f, &tl);
-			if (f != stdin) fclose(f);
+			if (f != stdin) (void)fclose(f);
 		}
 	}
 

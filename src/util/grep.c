@@ -199,7 +199,7 @@ static int add_pattern_file(struct pat_list *pl, const char *path)
 		if (pl_add(pl, line, (size_t)len) < 0) { rc = -1; break; }
 	}
 	free(line);
-	fclose(f);
+	(void)fclose(f);
 	return rc;
 }
 

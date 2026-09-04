@@ -168,7 +168,7 @@ static char *load_progfiles(char **files, int nfiles)
 		}
 		while ((n = fread(chunk, 1, sizeof chunk, f)) > 0)
 			buf_grow_append(&buf, &len, &cap, chunk, n);
-		if (f != stdin) fclose(f);
+		if (f != stdin) (void)fclose(f);
 		if (len == 0 || buf[len - 1] != '\n') buf_grow_append(&buf, &len, &cap, "\n", 1);
 	}
 	if (!buf) buf = strdup("");
