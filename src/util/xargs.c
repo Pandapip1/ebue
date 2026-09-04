@@ -106,8 +106,10 @@ static int buf_putc(struct buf *b, int ch) __attribute__((nonnull(1)));
 static int buf_putc(struct buf *b, int ch)
 {
 	if (b->len + 1 > b->cap) {
-		size_t ncap = b->cap ? b->cap * 2 : 64;
-		char *np = realloc(b->p, ncap);
+		size_t ncap;
+		char *np;
+		if (!__util_array_capacity(b->cap, b->len, 1, 64, 1, &ncap)) return -1;
+		np = realloc(b->p, ncap);
 		if (!np) return -1;
 		b->p = np;
 		b->cap = ncap;
