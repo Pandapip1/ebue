@@ -855,6 +855,15 @@ stage_sizearith() {
 	require_tool clang-18 || return $missing
 	require_tool clang++-18 || return $missing
 	require_tool llvm-config-18 || return $missing
+	require_tool pkg-config || return $missing
+	if ! pkg-config --exists z3; then
+		report_missing "Z3 development headers and library are not installed, so the SizeCast relational-bound fallback cannot be proved."
+		return $missing
+	fi
+	if ! z3_flags=$(pkg-config --cflags --libs z3); then
+		report_missing "pkg-config could not resolve Z3 compiler and linker flags."
+		return $missing
+	fi
 	libdir=$(llvm-config-18 --libdir)
 	clang_cpp=$(find "$libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' \
 		-print 2>/dev/null | sort | head -n 1)
@@ -864,11 +873,25 @@ stage_sizearith() {
 	fi
 
 	plugin=$builddir/ntlibc-size-cast-checker.so
-	# llvm-config deliberately returns shell words, not one argument.
-	# shellcheck disable=SC2046
-	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
+	# NTLIBC_ARITHMETIC_Z3 turns on both SizeCastChecker.cpp's own
+	# CastZ3Proof fallback (a same-width relational bound Clang's
+	# interval-only RangeConstraintManager cannot combine on its own --
+	# see CastZ3Proof's own comment) and arithub's ArithmeticZ3Proof; both
+	# checkers live in this one translation unit and this one plugin, the
+	# same way NTLIBC_OWNERSHIP_ANALYSIS below turns on ArrayIndex's
+	# elements_withtok contract reading.
+	#
+	# -fexceptions must follow --cxxflags, not precede it: --cxxflags
+	# carries LLVM's own -fno-exceptions, and the later flag wins (see
+	# stage_arithub's identical build for the same requirement -- z3++.h's
+	# `throw exception(...)` calls fail to compile outright otherwise).
+	# llvm-config and pkg-config deliberately return shell words, not one
+	# argument.
+	# shellcheck disable=SC2046,SC2086
+	clang++-18 -fPIC -shared -DNTLIBC_ARITHMETIC_Z3 \
+		$(llvm-config-18 --cxxflags) -fexceptions \
 		tools/clang/SizeCastChecker.cpp -o "$plugin" "$clang_cpp" \
-		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
+		$(llvm-config-18 --ldflags --libs --system-libs) $z3_flags || return 1
 
 	fixture_log=$builddir/cast-range-fixtures.log
 	: > "$fixture_log"
