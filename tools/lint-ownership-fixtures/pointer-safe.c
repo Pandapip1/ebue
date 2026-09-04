@@ -248,36 +248,48 @@ char *same_symbol_extent_cancels(size_t n)
 
 /* The generalization one level up from same_symbol_extent_cancels: an
  * allocation sized from the SUM of two or more independent length
- * symbols, indexed by an expression that reuses only some of them.
- * src/internal/rpath.c's join() -- `p = __malloc(dl + 1 + tl + 1); ...;
- * p[dl] = '\\'; ...; p[dl + 1 + tl] = 0;` -- is exactly this shape (a
- * directory, a separator, a tail and a NUL); this mirrors it with a
- * name-then-value idiom instead (src/env/setenv.c's real body). Neither
- * write can be related to the allocation by pointer-identity of a
- * single shared symbol the way same_symbol_extent_cancels's `d[n]` can
- * -- both sides need the linear-term decomposition
- * linearExtentProvenInBounds() adds to actually cancel. */
+ * symbols, indexed by an expression that reuses ALL of them -- a
+ * name-then-value idiom loosely mirroring src/env/setenv.c's real body
+ * (`s = malloc(l1 + l2 + 2); ...`). The write cannot be related to the
+ * allocation by pointer-identity of a single shared symbol the way
+ * same_symbol_extent_cancels's `d[n]` can -- it needs the linear-term
+ * decomposition linearExtentProvenInBounds() adds to actually cancel --
+ * but it is still a ZERO-MARGIN match: `l1 + 1 + l2` and the extent's
+ * own `l1 + l2 + 2` reduce to the identical closed-form expression
+ * (differing only by the trailing `+ 1` this access itself needs), so
+ * the comparison is reflexive and safe under wraparound regardless of
+ * l1/l2's actual values. tools/lint-ownership-fixtures/pointer-unsafe.c's
+ * linear_combination_extent_leftover_term_not_provably_bounded is the
+ * adversarial twin: the SAME allocation, but a write that leaves a real
+ * (unsigned, exact-arithmetic-only) margin instead of an exact match,
+ * which is NOT safe and must still be reported -- see
+ * linearExtentProvenInBounds's own block comment in OwnershipChecker.cpp
+ * for the confirmed wraparound counterexample. */
 char *linear_combination_extent_cancels(size_t l1, size_t l2)
 {
 	char *s = __malloc(l1 + l2 + 2);
 	if (!s) return 0;
-	s[l1] = '=';
 	s[l1 + 1 + l2] = 0;
 	return s;
 }
 
 /* getDynamicExtent() always answers in bytes, but a non-byte element
- * array's own index is naturally in ELEMENTS -- src/env/setenv.c's
- * `ne = realloc(__environ, sizeof(char *) * (n + 2)); ne[n] = s; ne[n +
- * 1] = 0;` is the real body this mirrors. linearExtentProvenInBounds()
- * peels the `sizeof(char *) * (...)` factor off the extent expression
- * before applying the same cancellation same_symbol_extent_cancels/
- * linear_combination_extent_cancels above already exploit. */
+ * array's own index is naturally in ELEMENTS -- src/env/setenv.c's `ne =
+ * realloc(__environ, sizeof(char *) * (n + 2)); ...; ne[n + 1] = 0;` is
+ * the real body this mirrors. linearExtentProvenInBounds() peels the
+ * `sizeof(char *) * (...)` factor off the extent expression before
+ * applying the same zero-margin cancellation same_symbol_extent_cancels/
+ * linear_combination_extent_cancels above already exploit (`n + 1` here
+ * against a peeled extent of `n + 2`, needing exactly one more element,
+ * same shape as those). tools/lint-ownership-fixtures/pointer-unsafe.c's
+ * element_width_leftover_margin_not_provably_bounded is the adversarial
+ * twin: `ne[n] = s;` on this SAME allocation, one element short of the
+ * full extent -- a real margin through the element-width peel, not an
+ * exact match, and NOT safe for the identical wraparound reason. */
 char **element_width_is_peeled(char **environ, size_t n, char *s)
 {
 	char **ne = realloc(environ, sizeof(char *) * (n + 2));
 	if (!ne) return 0;
-	ne[n] = s;
 	ne[n + 1] = 0;
 	return ne;
 }
