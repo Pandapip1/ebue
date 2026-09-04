@@ -73,3 +73,10 @@ oom-*
 /sh-main-out.txt
 /sh-main-err.txt
 tmp-*
+
+# `nix build`'s result symlink, and direnv's per-directory cache -- neither
+# is ever the same across machines, so neither belongs in the repo even
+# though flake.nix/flake.lock (what actually pins the dev shell) do.
+/result
+/result-*
+/.direnv/
