@@ -225,7 +225,7 @@ int __util_paste_main(int argc, char **argv)
 
 	{
 		int j;
-		for (j = 0; j < nfiles; j++) if (files[j] && files[j] != stdin) fclose(files[j]);
+		for (j = 0; j < nfiles; j++) if (files[j] && files[j] != stdin) (void)fclose(files[j]);
 	}
 	free(files);
 	if (delims != default_delim) free(delims);

@@ -1102,13 +1102,13 @@ static int write_rejects(const char *rejpath, struct hunk **rejects, size_t n)
 	for (i = 0; i < n; i++) {
 		struct hunk *h = rejects[i];
 		size_t k;
-		if (fprintf(f, "@@ -%ld,%ld +%ld,%ld @@\n", h->old_start, h->old_count, h->new_start, h->new_count) < 0) { fclose(f); return -1; }
+		if (fprintf(f, "@@ -%ld,%ld +%ld,%ld @@\n", h->old_start, h->old_count, h->new_start, h->new_count) < 0) { (void)fclose(f); return -1; }
 		for (k = 0; k < h->n; k++) {
 			char pfx;
 			if (h->v[k].kind == HOP_CTX) pfx = ' ';
 			else if (h->v[k].kind == HOP_DEL) pfx = '-';
 			else pfx = '+';
-			if (fprintf(f, "%c%s\n", pfx, h->v[k].p.text) < 0) { fclose(f); return -1; }
+			if (fprintf(f, "%c%s\n", pfx, h->v[k].p.text) < 0) { (void)fclose(f); return -1; }
 		}
 	}
 	return fclose(f) == 0 ? 0 : -1;
@@ -1244,9 +1244,9 @@ int __util_patch_main(int argc, char **argv)
 				have_target = 1;
 				if (read_all_lines(tf, &target) < 0) {
 					__util_diagf("patch: %s: error reading file\n", path);
-					fclose(tf); free_linebuf(&target); free(path); exit_status = 2; break;
+					(void)fclose(tf); free_linebuf(&target); free(path); exit_status = 2; break;
 				}
-				fclose(tf);
+				(void)fclose(tf);
 			} else {
 				have_target = 0;
 			}
