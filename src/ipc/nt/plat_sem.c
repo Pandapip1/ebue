@@ -172,7 +172,7 @@ static int read_meta(int id, struct sem_meta *m)
 	if (fd < 0) { errno = saved; return -1; }
 	got = read(fd, m, sizeof *m);
 	saved = errno;
-	close(fd);
+	(void)close(fd);
 	if (got != (ssize_t)sizeof *m || m->magic != SEM_MAGIC) { errno = EINVAL; return -1; }
 	errno = saved;
 	return 0;
@@ -190,15 +190,19 @@ static int write_meta(int id, const struct sem_meta *m)
 	if (fd < 0) { errno = saved; return -1; }
 	put = write(fd, m, sizeof *m);
 	saved = put == (ssize_t)sizeof *m ? 0 : (errno ? errno : EIO);
-	close(fd);
+	if (close(fd) < 0 && !saved) saved = errno ? errno : EIO;
 	if (saved) { errno = saved; return -1; }
 	return 0;
 }
 
-static void delete_set(int id)
+static int delete_set(int id)
 {
 	char *path = id_path(id);
-	if (path) { unlink(path); free(path); }
+	int result;
+	if (!path) return -1;
+	result = unlink(path);
+	free(path);
+	return result;
 }
 
 static int find_by_key(key_t key, struct sem_meta *m)
@@ -223,7 +227,7 @@ static int find_by_key(key_t key, struct sem_meta *m)
 		if (read_meta(id, &cand) < 0) continue;
 		if (!cand.removed && cand.key == key) { found = id; if (m) *m = cand; break; }
 	}
-	closedir(d);
+	(void)closedir(d);
 	return found;
 }
 
@@ -284,14 +288,23 @@ int semget(key_t key, int nsems, int semflg)
 		lseek(ctrfd, 0, SEEK_SET);
 		if (n > 0 && (size_t)n < sizeof buf &&
 		    write(ctrfd, buf, (size_t)n) != n) {
-			close(ctrfd);
+			(void)close(ctrfd);
 			free(ctrpath);
 			__plat_named_mutant_release(lock);
 			return -1;
 		}
-		ftruncate(ctrfd, n > 0 && (size_t)n < sizeof buf ? n : 0);
+		if (ftruncate(ctrfd, n > 0 && (size_t)n < sizeof buf ? n : 0) < 0) {
+			(void)close(ctrfd);
+			free(ctrpath);
+			__plat_named_mutant_release(lock);
+			return -1;
+		}
 	}
-	close(ctrfd);
+	if (close(ctrfd) < 0) {
+		free(ctrpath);
+		__plat_named_mutant_release(lock);
+		return -1;
+	}
 	free(ctrpath);
 
 	memset(&m, 0, sizeof m);
@@ -463,8 +476,7 @@ int semctl(int semid, int semnum, int cmd, ...)
 		break;
 	}
 	case IPC_RMID:
-		delete_set(semid);
-		result = 0;
+		result = delete_set(semid);
 		break;
 	default:
 		goto einval;

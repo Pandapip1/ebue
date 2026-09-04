@@ -196,7 +196,7 @@ static int read_meta(int id, struct shm_meta *m)
 	if (fd < 0) { errno = saved; return -1; }
 	got = read(fd, m, sizeof *m);
 	saved = errno;
-	close(fd);
+	(void)close(fd);
 	if (got != (ssize_t)sizeof *m || m->magic != SHM_MAGIC) {
 		errno = EINVAL;
 		return -1;
@@ -217,17 +217,19 @@ static int write_meta(int id, const struct shm_meta *m)
 	if (fd < 0) { errno = saved; return -1; }
 	put = write(fd, m, sizeof *m);
 	saved = put == (ssize_t)sizeof *m ? 0 : (errno ? errno : EIO);
-	close(fd);
+	if (close(fd) < 0 && !saved) saved = errno ? errno : EIO;
 	if (saved) { errno = saved; return -1; }
 	return 0;
 }
 
-static void delete_segment(int id)
+static int delete_segment(int id)
 {
 	char *meta = id_path(id, ".meta");
 	char *data = id_path(id, ".data");
-	if (meta) { unlink(meta); free(meta); }
-	if (data) { unlink(data); free(data); }
+	int result = 0;
+	if (meta) { if (unlink(meta) < 0) result = -1; free(meta); } else result = -1;
+	if (data) { if (unlink(data) < 0) result = -1; free(data); } else result = -1;
+	return result;
 }
 
 /* Linear scan of every "<id>.meta" record for one whose stored key
@@ -263,7 +265,7 @@ static int find_by_key(key_t key, struct shm_meta *m)
 			break;
 		}
 	}
-	closedir(d);
+	(void)closedir(d);
 	return found;
 }
 
@@ -327,14 +329,23 @@ int shmget(key_t key, size_t size, int shmflg)
 		lseek(ctrfd, 0, SEEK_SET);
 		if (n > 0 && (size_t)n < sizeof buf &&
 		    write(ctrfd, buf, (size_t)n) != n) {
-			close(ctrfd);
+			(void)close(ctrfd);
 			free(ctrpath);
 			__plat_named_mutant_release(lock);
 			return -1;
 		}
-		ftruncate(ctrfd, n > 0 && (size_t)n < sizeof buf ? n : 0);
+		if (ftruncate(ctrfd, n > 0 && (size_t)n < sizeof buf ? n : 0) < 0) {
+			(void)close(ctrfd);
+			free(ctrpath);
+			__plat_named_mutant_release(lock);
+			return -1;
+		}
 	}
-	close(ctrfd);
+	if (close(ctrfd) < 0) {
+		free(ctrpath);
+		__plat_named_mutant_release(lock);
+		return -1;
+	}
 	free(ctrpath);
 
 	datapath = id_path(id, ".data");
@@ -343,14 +354,21 @@ int shmget(key_t key, size_t size, int shmflg)
 	if (fd < 0) { free(datapath); __plat_named_mutant_release(lock); return -1; }
 	if (ftruncate(fd, (off_t)size) < 0) {
 		int saved = errno;
-		close(fd);
-		unlink(datapath);
+		(void)close(fd);
+		(void)unlink(datapath);
 		free(datapath);
 		__plat_named_mutant_release(lock);
 		errno = saved;
 		return -1;
 	}
-	close(fd);
+	if (close(fd) < 0) {
+		int saved = errno;
+		(void)unlink(datapath);
+		free(datapath);
+		__plat_named_mutant_release(lock);
+		errno = saved;
+		return -1;
+	}
 	free(datapath);
 
 	memset(&m, 0, sizeof m);
@@ -398,7 +416,7 @@ void *shmat(int shmid, const void *shmaddr, int shmflg)
 
 	prot = (shmflg & SHM_RDONLY) ? PROT_READ : (PROT_READ | PROT_WRITE);
 	addr = mmap(NULL, m.segsz, prot, MAP_SHARED, fd, 0);
-	close(fd);
+	(void)close(fd);
 	if (addr == MAP_FAILED) { __plat_named_mutant_release(lock); return (void *)-1; }
 
 	for (i = 0; i < SHM_ATTACH_MAX; i++) if (!attach_table[i].used) { slot = i; break; }
@@ -490,15 +508,17 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf)
 		write_meta(shmid, &m);
 		__plat_named_mutant_release(lock);
 		return 0;
-	case IPC_RMID:
+	case IPC_RMID: {
+		int result = 0;
 		if (m.nattch) {
 			m.removed = 1;
 			write_meta(shmid, &m);
 		} else {
-			delete_segment(shmid);
+			result = delete_segment(shmid);
 		}
 		__plat_named_mutant_release(lock);
-		return 0;
+		return result;
+	}
 	default:
 		__plat_named_mutant_release(lock);
 		errno = EINVAL;
