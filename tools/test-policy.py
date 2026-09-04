@@ -235,6 +235,7 @@ def compile_probe(source: Path, output: Path, cfg: dict[str, str]) -> subprocess
     command.extend(shlex.split(cfg.get("CFLAGS_C99FSE", "")))
     command.extend(shlex.split(cfg.get("CFLAGS_AUTO", "")))
     command.extend([
+        "-DNTLIBC_TEST_POLICY_PROBE=1",
         f"-I{ROOT / 'arch' / arch}",
         f"-I{ROOT / 'arch' / 'generic'}",
         f"-I{ROOT / 'obj' / 'include'}",

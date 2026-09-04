@@ -4130,11 +4130,23 @@ int main(int argc, char **argv)
 		 * as "all ok" -- see the SKIP line(s) above for which
 		 * assertion groups never ran.  Exit 77 so tools/run-tests.py
 		 * reports this in its own bucket instead of counting it as a
-		 * pass.  Same convention as test/posix-tail.c. */
+		 * pass.  Same convention as test/posix-tail.c.
+		 *
+		 * `unverified` only ever comes from test_glob_err_callback()
+		 * and test_glob_noescape() above -- both unconditional and
+		 * unrelated to every NTLIBC_TEST-fenced case in this file.  A
+		 * tools/test-policy.py probe recompiles this whole file to
+		 * validate ONE fenced case in isolation, and those two
+		 * unconditional checks still run alongside it; without this
+		 * guard, an environment gap in either one (Wine not revoking
+		 * this process's own opendir() access, or a filesystem
+		 * refusing a literal '*' in a filename) would report every
+		 * OTHER fenced case's probe UNRESOLVED too, regardless of
+		 * that case's own result. */
 		printf("posix-glob: %d assertion group(s) unverified in this "
 		       "environment (see SKIP lines above); no failures in what "
 		       "did run\n", unverified);
-		return 77;
+		if (!NTLIBC_TEST_POLICY_PROBE) return 77;
 	}
 	printf("posix-glob: all ok (fnmatch/glob/wordexp/search/ftw/regex implemented; remaining fences are documented N/A or environment gaps)\n");
 	return 0;

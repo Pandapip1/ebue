@@ -11,4 +11,16 @@
 
 #define NTLIBC_TEST(disposition, case_name) 0
 
+/* Nonzero only inside a tools/test-policy.py probe compilation (which
+ * defines it via -D), where exactly one NTLIBC_TEST case above is
+ * enabled to validate that case's disposition in isolation.  A file
+ * that also runs its own environment-dependent live checks
+ * unconditionally in main() -- outside any NTLIBC_TEST fence, e.g.
+ * test/posix-glob.c's test_glob_err_callback()/test_glob_noescape() --
+ * can read this to keep an unrelated live check's environment gap from
+ * being misread as the one probed case's own verdict. */
+#ifndef NTLIBC_TEST_POLICY_PROBE
+#define NTLIBC_TEST_POLICY_PROBE 0
+#endif
+
 #endif
