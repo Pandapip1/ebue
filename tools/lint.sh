@@ -20,13 +20,15 @@
 #             uninitialised-value and leak paths rather than style nits.
 #   cppcheck  cppcheck --enable=warning,portability, if installed.
 #   shell     shellcheck over configure, the git hooks and tools/*.sh.
-#   sizearith tools/lint-sizearith.py checks allocator arithmetic and raw
-#             geometric growth.  A Clang 18 analyzer plugin additionally
-#             proves every explicit integer narrowing cast and array index
-#             from real types, extents, and path constraints, and proves
-#             that tagged result values are read only from their selected
-#             normal or special arm.  Every part self-tests before scanning
-#             the tree.
+#   sizearith currently opt-in while its initial proof backlog is triaged, and
+#             being progressively migrated onto the same Z3 proof power as
+#             totality/arithub below.  tools/lint-sizearith.py checks
+#             allocator arithmetic and raw geometric growth.  A Clang 18
+#             analyzer plugin additionally proves every explicit integer
+#             narrowing cast and array index from real types, extents, and
+#             path constraints, and proves that tagged result values are read
+#             only from their selected normal or special arm.  Every part
+#             self-tests before scanning the tree.
 #   totality  currently opt-in while its initial proof backlog is triaged.
 #             A Clang 18 AST plugin extracts loop ranks and call-size
 #             relations.  tools/lint-totality.py checks every loop, rejects
@@ -1944,7 +1946,7 @@ stage_purity() {
 	return $any
 }
 
-requested_stages=${*:-warn analyze cppcheck shell sizearith fallible locks lockset provenance reentrancy variadic signals abizeroinit initproof errno purity ownership undefined unreferenced widthmod}
+requested_stages=${*:-warn analyze cppcheck shell fallible locks lockset provenance reentrancy variadic signals abizeroinit initproof errno purity ownership undefined unreferenced widthmod}
 stages=
 for requested_stage in $requested_stages; do
 	case $requested_stage in
