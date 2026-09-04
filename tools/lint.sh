@@ -1170,6 +1170,15 @@ stage_ownership() {
 	require_tool clang-18 || return $missing
 	require_tool clang++-18 || return $missing
 	require_tool llvm-config-18 || return $missing
+	require_tool pkg-config || return $missing
+	if ! pkg-config --exists z3; then
+		report_missing "Z3 development headers and library are not installed, so pointer extent bounds cannot be proved beyond the ad hoc linear prover."
+		return $missing
+	fi
+	if ! z3_flags=$(pkg-config --cflags --libs z3); then
+		report_missing "pkg-config could not resolve Z3 compiler and linker flags."
+		return $missing
+	fi
 	libdir=$(llvm-config-18 --libdir)
 	clang_cpp=$(find "$libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' \
 		-print 2>/dev/null | sort | head -n 1)
@@ -1192,15 +1201,22 @@ stage_ownership() {
 	"$lifecycle_test" || return 1
 
 	plugin=$builddir/ntlibc-ownership-checker.so
-	# llvm-config deliberately returns shell words, not one argument.
-	# shellcheck disable=SC2046
-	clang++-18 -fPIC -shared -DOWNERSHIP_CHECKER_BUNDLE \
-		$(llvm-config-18 --cxxflags) \
+	# llvm-config and pkg-config deliberately return shell words, not one
+	# argument.
+	# shellcheck disable=SC2046,SC2086
+	# -fexceptions must follow --cxxflags, not precede it: --cxxflags
+	# carries LLVM's own -fno-exceptions, and the later flag wins.
+	# Without this (as stage_arithub's identical build already has it),
+	# z3++.h's `throw exception(...)` calls (only reachable from
+	# OwnershipChecker.cpp's own NTLIBC_OWNERSHIP_Z3-guarded code, but
+	# still compiled by this one shared translation unit) fail to build.
+	clang++-18 -fPIC -shared -DOWNERSHIP_CHECKER_BUNDLE -DNTLIBC_OWNERSHIP_Z3 \
+		$(llvm-config-18 --cxxflags) -fexceptions \
 		tools/clang/OwnershipChecker.cpp \
 		tools/clang/AllocationLifetimeChecker.cpp \
 		tools/clang/MemoryContractChecker.cpp \
 		-o "$plugin" "$clang_cpp" \
-		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
+		$(llvm-config-18 --ldflags --libs --system-libs) $z3_flags || return 1
 
 	fixture_log=$builddir/ownership-fixtures.log
 	: > "$fixture_log"
