@@ -1193,16 +1193,39 @@ stage_ownership() {
 		tools/clang/LifecycleAlgebraTest.cpp -o "$lifecycle_test" || return 1
 	"$lifecycle_test" || return 1
 
+	# MemoryContractChecker.cpp's own no-wrap side condition falls back to a
+	# real Z3 proof (see MemoryContractZ3Proof) when Z3 development files
+	# are available, the same way stage_arithub's SizeCastChecker.cpp does.
+	# Unlike stage_arithub this is a soft dependency: OwnershipChecker.cpp
+	# and AllocationLifetimeChecker.cpp share this plugin binary and must
+	# keep working even where Z3 is not installed, so a missing Z3 merely
+	# falls back to MemoryContractChecker's prior getMaxValue()-only proof
+	# instead of failing the whole stage.
+	memory_contract_cxxflags=
+	z3_flags=
+	if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists z3 2>/dev/null &&
+		z3_flags=$(pkg-config --cflags --libs z3 2>/dev/null); then
+		# -fexceptions must follow --cxxflags, not precede it: --cxxflags
+		# carries LLVM's own -fno-exceptions, and the later flag wins (see
+		# stage_arithub's identical build for the same requirement --
+		# z3++.h's `throw exception(...)` calls fail to compile without it).
+		memory_contract_cxxflags="-DNTLIBC_MEMORY_CONTRACT_Z3 -fexceptions"
+	else
+		z3_flags=
+		note "Z3 development headers/library are not installed; MemoryContractChecker keeps its prior getMaxValue()-only no-wrap proof."
+	fi
+
 	plugin=$builddir/ntlibc-ownership-checker.so
-	# llvm-config deliberately returns shell words, not one argument.
-	# shellcheck disable=SC2046
+	# llvm-config and pkg-config deliberately return shell words, not one
+	# argument.
+	# shellcheck disable=SC2046,SC2086
 	clang++-18 -fPIC -shared -DOWNERSHIP_CHECKER_BUNDLE \
-		$(llvm-config-18 --cxxflags) \
+		$(llvm-config-18 --cxxflags) $memory_contract_cxxflags \
 		tools/clang/OwnershipChecker.cpp \
 		tools/clang/AllocationLifetimeChecker.cpp \
 		tools/clang/MemoryContractChecker.cpp \
 		-o "$plugin" "$clang_cpp" \
-		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
+		$(llvm-config-18 --ldflags --libs --system-libs) $z3_flags || return 1
 
 	fixture_log=$builddir/ownership-fixtures.log
 	: > "$fixture_log"
