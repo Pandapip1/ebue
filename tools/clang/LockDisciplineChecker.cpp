@@ -12,6 +12,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
+#include "LockHandoffContracts.h"
 
 #include <cctype>
 #include <memory>
@@ -29,8 +30,11 @@ REGISTER_MAP_WITH_PROGRAMSTATE(LockAcquirers, const MemRegion *,
 // checkEndFunction's "function exits while a lock is held" report:
 // ending while holding this lock is a deliberate hand-off (to the
 // caller, or, for a pthread_cleanup_push() handler, the cancellation
-// machinery). See RequiresHeldOnEntry/AcquiresLockForCaller below for
-// the two ways a region gets tagged.
+// machinery). A function opts into this via a
+// ntlibc_lock_requires_held_on_entry/ntlibc_lock_acquires_for_caller
+// __attribute__((annotate(...))) on its own declaration -- see
+// LockHandoffContracts.h and handoffContract() below for the two ways a
+// region gets tagged from that annotation.
 REGISTER_MAP_WITH_PROGRAMSTATE(HandoffExempt, const MemRegion *,
                                const StackFrameContext *)
 
@@ -48,52 +52,6 @@ enum class LockOperation : unsigned char {
 struct LockCall {
   LockOperation Operation;
   unsigned Argument;
-};
-
-// A (function name, argument index) pair whose designated lock argument
-// is, by contract, already held by the caller when the function is
-// entered, and handed back held on every return path.
-//
-// cond_wait() is pthread_cond_wait()/pthread_cond_timedwait()'s shared
-// implementation: POSIX requires the mutex argument to those two public
-// functions to already be locked on entry and locked again on every
-// return. protocolFor()'s RequireHeld entry enforces the first half at
-// their call sites, but cond_wait is a separate function the by-name
-// protocol table never sees a call to. Without this entry, cond_wait's
-// own first pthread_mutex_unlock(mutex) call looks indistinguishable
-// from releasing a lock nobody acquired (a real false positive; see
-// unsafe.c's unlocked_release).
-//
-// checkBeginFunction seeds the region as held and tags it exempt in
-// HandoffExempt. The exemption, once set, is never cleared for that
-// stack frame -- it survives the region's own later release/reacquire
-// cycle (cond_wait unlocks then relocks the same mutex before
-// returning), covering both early returns that never touch the mutex
-// and the ordinary full wait-and-reacquire path.
-struct HandoffParameter {
-  const char *Function;
-  unsigned Argument;
-};
-constexpr HandoffParameter RequiresHeldOnEntry[] = {
-    {"cond_wait", 1},
-};
-
-// Functions that acquire a lock purely to hand it off held to whatever
-// runs next, not to release it themselves -- checkPostCall tags the
-// acquired region as HandoffExempt the moment acquisition succeeds,
-// rather than seeding it in advance the way RequiresHeldOnEntry does.
-//
-// cond_wait_cleanup is the pthread_cleanup_push() handler cond_wait
-// registers for its wait: if cancelled, the cancellation machinery
-// invokes this handler to restore the "mutex locked" postcondition on
-// the cancellation path, for the code that resumes after, not for
-// itself to release. It can't use RequiresHeldOnEntry's parameter-index
-// seeding since its mutex is cleanup->mutex, a struct field reached
-// through its lone void* argument -- there's no fixed region until the
-// real pthread_mutex_lock(cleanup->mutex) call resolves that
-// indirection, exactly when checkPostCall tags it.
-constexpr const char *AcquiresLockForCaller[] = {
-    "cond_wait_cleanup",
 };
 
 class LockDisciplineChecker
@@ -137,18 +95,36 @@ class LockDisciplineChecker
     return Call.getArgSVal(Protocol.Argument).getAsRegion();
   }
 
-  // True if the function currently being analyzed is one of
-  // AcquiresLockForCaller's names -- see that table's comment.
+  // Function's own ntlibc_lock_requires_held_on_entry/
+  // ntlibc_lock_acquires_for_caller annotation, if it (or any of its
+  // other redeclarations -- a forward declaration is where these are
+  // conventionally attached, e.g. src/thread/pthread_cond.c's
+  // cond_wait_cleanup) carries one of the given kind. Real AST
+  // inspection of a source-visible attribute, not a name match: see
+  // LockHandoffContracts.h.
+  static std::optional<ntlibc::LockHandoffContract>
+  handoffContract(const FunctionDecl *Function, ntlibc::LockHandoffKind Kind) {
+    if (!Function)
+      return std::nullopt;
+    for (const FunctionDecl *Redeclaration : Function->redecls()) {
+      for (const auto *Attribute :
+           Redeclaration->specific_attrs<AnnotateAttr>()) {
+        std::optional<ntlibc::LockHandoffContract> Contract =
+            ntlibc::parseLockHandoff(Attribute->getAnnotation());
+        if (Contract && Contract->Kind == Kind)
+          return Contract;
+      }
+    }
+    return std::nullopt;
+  }
+
+  // True if the function currently being analyzed carries
+  // ntlibc_lock_acquires_for_caller.
   static bool acquiresForCaller(CheckerContext &C) {
     const auto *Function =
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
-    if (!Function || !Function->getIdentifier())
-      return false;
-    StringRef Name = Function->getName();
-    for (const char *Entry : AcquiresLockForCaller)
-      if (Name == Entry)
-        return true;
-    return false;
+    return handoffContract(Function, ntlibc::LockHandoffKind::AcquiresForCaller)
+        .has_value();
   }
 
   // True if Call's own CallExpr is (modulo enclosing parentheses and
@@ -289,11 +265,12 @@ public:
         Succeeded = Succeeded->remove<LockAcquirers>(Region);
       } else {
         Succeeded = Succeeded->set<LockAcquirers>(Region, C.getStackFrame());
-        // See AcquiresLockForCaller's comment: cond_wait_cleanup's
-        // pthread_mutex_lock(cleanup->mutex) resolves here to whatever
-        // region cleanup->mutex actually names, which is exactly the
-        // region this acquisition is tagging -- there is no way to know
-        // that region in advance of this call succeeding.
+        // See LockHandoffContracts.h's AcquiresForCaller comment:
+        // cond_wait_cleanup's pthread_mutex_lock(cleanup->mutex)
+        // resolves here to whatever region cleanup->mutex actually
+        // names, which is exactly the region this acquisition is
+        // tagging -- there is no way to know that region in advance of
+        // this call succeeding.
         if (acquiresForCaller(C))
           Succeeded = Succeeded->set<HandoffExempt>(Region, C.getStackFrame());
       }
@@ -326,31 +303,25 @@ public:
   void checkBeginFunction(CheckerContext &C) const {
     const auto *Function =
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
-    if (!Function || !Function->getIdentifier())
+    std::optional<ntlibc::LockHandoffContract> Contract = handoffContract(
+        Function, ntlibc::LockHandoffKind::RequiresHeldOnEntry);
+    if (!Contract || Contract->Argument >= Function->getNumParams())
       return;
-    StringRef Name = Function->getName();
+    const ParmVarDecl *Param = Function->getParamDecl(Contract->Argument);
     ProgramStateRef State = C.getState();
-    bool Changed = false;
-    for (const HandoffParameter &Entry : RequiresHeldOnEntry) {
-      if (Name != Entry.Function || Entry.Argument >= Function->getNumParams())
-        continue;
-      const ParmVarDecl *Param = Function->getParamDecl(Entry.Argument);
-      Loc ParamLoc = State->getLValue(Param, C.getLocationContext());
-      const MemRegion *Region = State->getSVal(ParamLoc).getAsRegion();
-      if (!Region)
-        continue;
-      // Seed the precondition (checkPreCall's Release check needs this
-      // to not misread the caller's already-held lock as unheld -- see
-      // RequiresHeldOnEntry's comment) and tag the region exempt from
-      // the end-of-function leak check in the same step: both halves of
-      // this function's contract share one region, discovered once,
-      // here.
-      State = State->set<HeldLocks>(Region, HeldKind::Write);
-      State = State->set<HandoffExempt>(Region, C.getStackFrame());
-      Changed = true;
-    }
-    if (Changed)
-      C.addTransition(State);
+    Loc ParamLoc = State->getLValue(Param, C.getLocationContext());
+    const MemRegion *Region = State->getSVal(ParamLoc).getAsRegion();
+    if (!Region)
+      return;
+    // Seed the precondition (checkPreCall's Release check needs this to
+    // not misread the caller's already-held lock as unheld -- see
+    // LockHandoffContracts.h's RequiresHeldOnEntry comment) and tag the
+    // region exempt from the end-of-function leak check in the same
+    // step: both halves of this function's contract share one region,
+    // discovered once, here.
+    State = State->set<HeldLocks>(Region, HeldKind::Write);
+    State = State->set<HandoffExempt>(Region, C.getStackFrame());
+    C.addTransition(State);
   }
 
   void checkEndFunction(const ReturnStmt *Return, CheckerContext &C) const {
