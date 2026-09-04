@@ -46,6 +46,7 @@
                          * apply directly to a raw Linux wait4(2) status. */
 #include "libc.h"
 #include "plat_process.h"
+#include "unsafe_pointer.h"
 
 /* Linux syscall numbers -- aarch64 confirmed against this host's own
  * <sys/syscall.h>; x86_64/i386 confirmed against a real x86_64-linux-gnu
@@ -281,7 +282,10 @@ int __plat_process_fork(struct __plat_fork_result *out)
 	if (pid == 0) return __PLAT_FORK_CHILD;
 	if (is_sys_error(pid)) { errno = (int)-pid; return -1; }
 
-	out->process = (__plat_handle_t)(long)box_pid((int)pid);
+	/* __plat_handle_t is an opaque one-word carrier shared with the NT
+	 * backend; box_pid() is a documentation no-op (this file's banner)
+	 * -- the real payload is the bare Linux pid, never dereferenced. */
+	out->process = unsafe_assume_valid_pointer((__plat_handle_t)(long)box_pid((int)pid));
 	/* No suspended clone thread to hand back: clone(2) without CLONE_VM
 	 * starts the child running immediately, like glibc's own fork(). */
 	out->thread = __PLAT_HANDLE_NULL;
@@ -635,7 +639,9 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 		}
 	}
 
-	*out_process = (__plat_handle_t)(long)box_pid((int)pid);
+	/* Boxing, not dereference -- see __plat_process_fork()'s own comment
+	 * above on the identical box_pid() encoding. */
+	*out_process = unsafe_assume_valid_pointer((__plat_handle_t)(long)box_pid((int)pid));
 	/* No job-object concept on Linux -- see __plat_process_fork()'s own
 	 * comment just above, which applies here identically. */
 	*out_job = __PLAT_HANDLE_NULL;

@@ -51,6 +51,7 @@
 #include <unistd.h>   /* syscall()'s own public prototype (-Wmissing-prototypes) */
 #include "libc.h"
 #include "plat_unistd.h"
+#include "unsafe_pointer.h"
 
 /* Linux syscall numbers, confirmed against this host's own
  * <sys/syscall.h> (aarch64) / a real x86_64-linux-gnu glibc's asm/
@@ -383,8 +384,11 @@ int __plat_pipe(__plat_handle_t *rp, __plat_handle_t *wp, int inheritable)
 	int fds[2] = {-1, -1};
 	long ret = raw_syscall(SYS_pipe2, (long)fds, (long)(inheritable ? 0 : O_CLOEXEC), 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
-	*rp = (__plat_handle_t)(long)(fds[0] + 1);
-	*wp = (__plat_handle_t)(long)(fds[1] + 1);
+	/* __plat_handle_t is an opaque one-word carrier shared with the NT
+	 * backend; the real payload here is the plain fd number, boxed +1
+	 * so 0 stays free for __PLAT_HANDLE_NULL, never dereferenced. */
+	*rp = unsafe_assume_valid_pointer((__plat_handle_t)(long)(fds[0] + 1));
+	*wp = unsafe_assume_valid_pointer((__plat_handle_t)(long)(fds[1] + 1));
 	return 0;
 }
 

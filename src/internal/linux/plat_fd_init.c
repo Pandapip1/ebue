@@ -206,7 +206,10 @@ static void install_std(int fd)
 	 * for fd 0, O_WRONLY for 1/2: write() refuses an O_RDONLY descriptor
 	 * and O_RDONLY is 0, so getting this wrong for an inherited
 	 * stdout/stderr would silently break writes to it. */
-	__fd_install_at(fd, (HANDLE)(long)(fd + 1), fd == 0 ? O_RDONLY : O_WRONLY, type);
+	/* Boxing, not dereference -- see install_inherited()'s own comment
+	 * below on the identical +1 HANDLE encoding. */
+	__fd_install_at(fd, unsafe_assume_valid_pointer((HANDLE)(long)(fd + 1)),
+	                fd == 0 ? O_RDONLY : O_WRONLY, type);
 }
 
 /* Every descriptor above 2 that is still open when a freshly exec'd
@@ -241,9 +244,8 @@ static void install_inherited(void)
 
 		/* This is the same "+1" fd-to-HANDLE boxing __plat_dup_to()
 		 * (src/unistd/linux/plat_fd.c), __plat_kill_open()'s box_fd(),
-		 * and every other Linux __plat_handle_t producer already use
-		 * (see PointerProvenanceChecker.cpp's own NamedException
-		 * comment on __plat_handle_t): HANDLE/__plat_handle_t is void*
+		 * and every other Linux __plat_handle_t producer already use:
+		 * HANDLE/__plat_handle_t is void*
 		 * only because plat_handle.h commits every backend to one
 		 * pointer-sized carrier, never dereferenced on this backend --
 		 * the real payload is the plain descriptor number `fd`, which

@@ -682,14 +682,16 @@ class PointerProvenanceChecker
   }
 
   // isMarkerRedundant: generic support for detecting when any unsafe_*-
-  // style marker (today only isUnsafeAssumeValidPointer() below; a
+  // style marker (isUnsafeAssumeValidPointer() for CastExpr,
+  // isUnsafeAssumeSharedProvenance() for BinaryOperator below -- a
   // natural future extension is any later marker some other checker
   // adds) has stopped covering a real
   // provenance gap. OrdinaryProof is a callable re-running whatever
   // checks would normally have proven the guarded site safe WITHOUT the
-  // marker's exemption -- isProvenByOrdinaryLogic() above, for
-  // isUnsafeAssumeValidPointer(). If OrdinaryProof() now succeeds on its
-  // own, the marker no longer covers anything: whatever gap it was
+  // marker's exemption -- isProvenByOrdinaryLogic() for
+  // isUnsafeAssumeValidPointer(), isProvenSharedProvenance() for
+  // isUnsafeAssumeSharedProvenance(). If OrdinaryProof() now succeeds on
+  // its own, the marker no longer covers anything: whatever gap it was
   // written to paper over has since closed (e.g. a later checker
   // extension learned to prove that shape), and a human should remove
   // the now-decorative marker rather than have it silently keep
@@ -703,35 +705,34 @@ class PointerProvenanceChecker
     return OrdinaryProof();
   }
 
-  // isUnsafeAssumeValidPointer: true if Cast is (modulo the parens the
-  // wrapping macro itself introduces) the direct initializer of a
-  // compiler-generated local variable carrying the
-  // "ntlibc_unsafe_assume_valid_pointer" annotation. This is exactly
-  // what src/internal/unsafe_pointer.h's unsafe_assume_valid_pointer(expr)
-  // macro expands to, under the analyzer only: a GNU statement
+  // hasAnnotatedAncestor: true if Node is (modulo the parens the
+  // wrapping marker macro itself introduces) the direct initializer of a
+  // compiler-generated local variable carrying the AnnotationName
+  // annotation. This is exactly what src/internal/unsafe_pointer.h's
+  // marker macros expand to, under the analyzer only: a GNU statement
   // expression declaring one such local, scoped to that single use,
-  // initialized directly from expr and yielded as the whole expression's
-  // value -- a real build sees a plain `(expr)` and pays nothing.
+  // initialized directly from the marked expression and yielded as the
+  // whole expression's value -- a real build sees a plain `(expr)` and
+  // pays nothing.
   //
   // This is the sole source-visible mechanism for a genuinely irreducible
   // provenance finding now: the opaque (file, function) NamedException
   // table this checker used to carry alongside it (an allowlist entry
   // invisible at the actual call site -- only this checker's own source
-  // named it) was removed once this marker existed as an honest
-  // alternative. unsafe_assume_valid_pointer() sits at the literal
-  // expression being converted, appears in the same diff that adds it,
-  // and its own name says plainly what it is: an unverified human
-  // assumption, never mistakable for a proof. Because the annotation
-  // attaches to one compiler-generated local scoped to one use (not to
-  // the cast's own type, not to the enclosing function, not to any named
-  // source variable the programmer could reuse), it can never silence a
-  // second, unmarked, otherwise-identical cast written right next to it
-  // -- see this checker's own
-  // tools/lint-pointer-provenance-fixtures/{safe,unsafe}.c coverage of
-  // both directions.
-  static bool isUnsafeAssumeValidPointer(const CastExpr *Cast,
-                                         ASTContext &Ctx) {
-    DynTypedNode Current = DynTypedNode::create(*Cast);
+  // named it) was removed once these markers existed as an honest
+  // alternative. A marker sits at the literal expression it covers,
+  // appears in the same diff that adds it, and its own name says plainly
+  // what it is: an unverified human assumption, never mistakable for a
+  // proof. Because the annotation attaches to one compiler-generated
+  // local scoped to one use (not to the marked expression's own type,
+  // not to the enclosing function, not to any named source variable the
+  // programmer could reuse), it can never silence a second, unmarked,
+  // otherwise-identical expression written right next to it -- see this
+  // checker's own tools/lint-pointer-provenance-fixtures/{safe,unsafe}.c
+  // coverage of both directions, for both markers below.
+  static bool hasAnnotatedAncestor(const Stmt *Node, StringRef AnnotationName,
+                                   ASTContext &Ctx) {
+    DynTypedNode Current = DynTypedNode::create(*Node);
     for (unsigned Depth = 0; Depth < 4; ++Depth) {
       auto Parents = Ctx.getParents(Current);
       if (Parents.size() != 1)
@@ -740,8 +741,7 @@ class PointerProvenanceChecker
       if (const auto *Variable = Parent.get<VarDecl>()) {
         for (const auto *Attribute :
              Variable->specific_attrs<AnnotateAttr>())
-          if (Attribute->getAnnotation() ==
-              "ntlibc_unsafe_assume_valid_pointer")
+          if (Attribute->getAnnotation() == AnnotationName)
             return true;
         return false;
       }
@@ -752,6 +752,26 @@ class PointerProvenanceChecker
       Current = Parent;
     }
     return false;
+  }
+
+  // isUnsafeAssumeValidPointer: Cast is wrapped in
+  // unsafe_assume_valid_pointer() -- see hasAnnotatedAncestor() above.
+  static bool isUnsafeAssumeValidPointer(const CastExpr *Cast,
+                                         ASTContext &Ctx) {
+    return hasAnnotatedAncestor(Cast, "ntlibc_unsafe_assume_valid_pointer",
+                                Ctx);
+  }
+
+  // isUnsafeAssumeSharedProvenance: Operation (a pointer subtraction or
+  // ordered comparison) is wrapped in unsafe_assume_shared_provenance()
+  // -- see hasAnnotatedAncestor() above. The macro wraps the whole
+  // BinaryOperator (not either operand separately), the same way
+  // unsafe_assume_valid_pointer() wraps a whole CastExpr, so one marked
+  // comparison can never cover a second, unmarked one beside it.
+  static bool isUnsafeAssumeSharedProvenance(const BinaryOperator *Operation,
+                                             ASTContext &Ctx) {
+    return hasAnnotatedAncestor(
+        Operation, "ntlibc_unsafe_assume_shared_provenance", Ctx);
   }
 
   void report(StringRef Reason, const Stmt *Statement,
@@ -803,6 +823,39 @@ class PointerProvenanceChecker
     C.emitReport(std::move(Report));
   }
 
+  // isProvenSharedProvenance: every non-marker check this checker has for
+  // proving a pointer subtraction or ordered comparison Operation
+  // provenance-preserving on its own -- exactly the sequence
+  // checkPreStmt(BinaryOperator) below runs, in order, before it ever
+  // consults isUnsafeAssumeSharedProvenance(). Factored out for the same
+  // reason isProvenByOrdinaryLogic() is above: so it can be re-run
+  // standalone wherever unsafe_assume_shared_provenance()'s exemption
+  // needs testing for redundancy via isMarkerRedundant().
+  bool isProvenSharedProvenance(const BinaryOperator *Operation,
+                                CheckerContext &C) const {
+    ProgramStateRef State = C.getState();
+    const LocationContext *LC = C.getLocationContext();
+    const MemRegion *Left =
+        baseRegion(State->getSVal(Operation->getLHS(), LC), State);
+    const MemRegion *Right =
+        baseRegion(State->getSVal(Operation->getRHS(), LC), State);
+    if (Left && Right && Left == Right)
+      return true;
+    const MemRegion *LeftRegistry =
+        elementRegistry(State->getSVal(Operation->getLHS(), LC), State);
+    const MemRegion *RightRegistry =
+        elementRegistry(State->getSVal(Operation->getRHS(), LC), State);
+    if (const VarDecl *Registry = directRegistryExpression(
+            Operation->getLHS(), C.getASTContext()))
+      if (registryEligible(Registry, C.getASTContext()))
+        LeftRegistry = registryStorage(Registry, C);
+    if (const VarDecl *Registry = directRegistryExpression(
+            Operation->getRHS(), C.getASTContext()))
+      if (registryEligible(Registry, C.getASTContext()))
+        RightRegistry = registryStorage(Registry, C);
+    return LeftRegistry && LeftRegistry == RightRegistry;
+  }
+
 public:
   void checkPreStmt(const BinaryOperator *Operation, CheckerContext &C) const {
     BinaryOperatorKind Opcode = Operation->getOpcode();
@@ -816,27 +869,17 @@ public:
     if (!Subtraction && !Ordering)
       return;
 
-    ProgramStateRef State = C.getState();
-    const LocationContext *LC = C.getLocationContext();
-    const MemRegion *Left =
-        baseRegion(State->getSVal(Operation->getLHS(), LC), State);
-    const MemRegion *Right =
-        baseRegion(State->getSVal(Operation->getRHS(), LC), State);
-    if (Left && Right && Left == Right)
+    // OrdinaryProof: see checkPreStmt(CastExpr)'s own OrdinaryProof
+    // comment below -- same reasoning, same deferred-lambda shape, for
+    // unsafe_assume_shared_provenance() instead of
+    // unsafe_assume_valid_pointer().
+    auto OrdinaryProof = [&] { return isProvenSharedProvenance(Operation, C); };
+    if (isUnsafeAssumeSharedProvenance(Operation, C.getASTContext())) {
+      if (isMarkerRedundant(OrdinaryProof))
+        reportRedundantMarker("unsafe_assume_shared_provenance", Operation, C);
       return;
-    const MemRegion *LeftRegistry =
-        elementRegistry(State->getSVal(Operation->getLHS(), LC), State);
-    const MemRegion *RightRegistry =
-        elementRegistry(State->getSVal(Operation->getRHS(), LC), State);
-    if (const VarDecl *Registry = directRegistryExpression(
-            Operation->getLHS(), C.getASTContext()))
-      if (registryEligible(Registry, C.getASTContext()))
-        LeftRegistry = registryStorage(Registry, C);
-    if (const VarDecl *Registry = directRegistryExpression(
-            Operation->getRHS(), C.getASTContext()))
-      if (registryEligible(Registry, C.getASTContext()))
-        RightRegistry = registryStorage(Registry, C);
-    if (LeftRegistry && LeftRegistry == RightRegistry)
+    }
+    if (OrdinaryProof())
       return;
     report(
         Subtraction

@@ -27,6 +27,7 @@
 #include <sys/mman.h>
 #include <errno.h>
 #include "plat_mem.h"
+#include "unsafe_pointer.h"
 
 /* Linux syscall numbers -- aarch64 confirmed against this host's own
  * <sys/syscall.h> rather than assumed; x86_64/i386 confirmed against
@@ -174,7 +175,9 @@ int __plat_mem_reserve(void **base_inout, size_t len, int prot)
 	long ret = raw_syscall(SYS_mmap, (long)*base_inout, (long)len, (long)prot,
 	                       (long)(MAP_PRIVATE | MAP_ANONYMOUS), -1L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
-	*base_inout = (void *)ret;
+	/* mmap(2) returns the mapped address in a signed machine-word
+	 * syscall register. */
+	*base_inout = unsafe_assume_valid_pointer((void *)ret);
 	return 0;
 }
 
@@ -244,7 +247,9 @@ int __plat_mem_map_file(__plat_handle_t fh, int prot, int flags, off_t off,
 		errno = (-ret == ENOMEM) ? ENOMEM : ENOTSUP;
 		return -1;
 	}
-	*base_inout = (void *)ret;
+	/* mmap(2) returns the mapped address in a signed machine-word
+	 * syscall register. */
+	*base_inout = unsafe_assume_valid_pointer((void *)ret);
 	return 0;
 }
 

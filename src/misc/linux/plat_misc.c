@@ -35,6 +35,7 @@
 #include <sys/utsname.h>
 #include "plat_misc.h"
 #include "plat_fd.h"
+#include "unsafe_pointer.h"
 
 /* aarch64 Linux syscall numbers, confirmed against this host's own
  * <sys/syscall.h>. */
@@ -208,7 +209,10 @@ static int is_sys_error(long ret)
 }
 
 static int unbox_fd(__plat_handle_t h) { return (int)((long)h - 1); }
-static __plat_handle_t box_fd(int fd) { return (__plat_handle_t)(long)(fd + 1); }
+/* __plat_handle_t is an opaque one-word carrier shared with the NT
+ * backend; the real payload here is the plain fd number, boxed +1 so 0
+ * stays free for __PLAT_HANDLE_NULL, never dereferenced. */
+static __plat_handle_t box_fd(int fd) { return unsafe_assume_valid_pointer((__plat_handle_t)(long)(fd + 1)); }
 
 /* pidfd -> pid side table for __plat_priority_get()/_set(): fixed size,
  * round-robin overwrite when full. Bounded rather than dynamic since this

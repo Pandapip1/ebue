@@ -24,6 +24,7 @@
 #include "libc.h"
 #include "plat_thread.h"
 #include "plat_fd.h"
+#include "unsafe_pointer.h"
 
 enum request_state {
 	REQ_FREE,
@@ -435,7 +436,12 @@ static struct aio_request *lookup(const struct aiocb *cb)
 	struct aio_request *request;
 	if (!cb || !cb->__opaque) return 0;
 	request = cb->__opaque;
-	if (request < requests || request >= requests + AIO_MAX ||
+	/* request is cb->__opaque, an opaque value submit() populated by
+	 * storing a pointer into the fixed `requests` table -- an invariant
+	 * established by that DIFFERENT function, earlier in the program,
+	 * that this function's own body cannot see. */
+	if (unsafe_assume_shared_provenance(request < requests) ||
+	    unsafe_assume_shared_provenance(request >= requests + AIO_MAX) ||
 	    request->state == REQ_FREE || request->cb != cb) return 0;
 	return request;
 }

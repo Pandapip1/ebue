@@ -31,6 +31,7 @@
 #include "libc.h"
 #include "plat_exit.h"
 #include "linux/tls.h"
+#include "unsafe_pointer.h"
 
 int main(int, char **, char **);
 
@@ -207,7 +208,13 @@ static struct elf_phdr *find_tls_phdr(long *auxv, unsigned long *load_bias_out)
 	 * guarantees AT_PHDR points to a real, mapped program header table
 	 * whenever it's present at all. */
 	for (i = 0; i < phnum; i++) {
-		struct elf_phdr *ph = (struct elf_phdr *)(phdr + i * phent);
+		/* phdr is AT_PHDR, straight out of the kernel-populated auxv --
+		 * the kernel's ELF auxv contract guarantees it points to a real,
+		 * mapped program header table whenever it's present at all
+		 * (checked above), not something this loop derives from a
+		 * pointer anywhere in this translation unit. */
+		struct elf_phdr *ph =
+		    unsafe_assume_valid_pointer((struct elf_phdr *)(phdr + i * phent));
 		if (ph->p_type == PT_TLS) tls = ph;
 		else if (ph->p_type == PT_PHDR) *load_bias_out = phdr - (unsigned long)ph->p_vaddr;
 	}

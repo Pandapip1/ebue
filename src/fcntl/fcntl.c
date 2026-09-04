@@ -14,6 +14,7 @@
 #include "libc.h"
 #include "plat_fd.h"
 #include "plat_fcntl.h"
+#include "unsafe_pointer.h"
 
 struct record_lock_state {
 	__plat_handle_t h;
@@ -192,7 +193,15 @@ int fcntl(int fd, int cmd, ...)
 	case F_GETLK:
 	case F_SETLK:
 	case F_SETLKW:
-		return record_lock(fd, f, cmd, (struct flock *)arg);
+		/* fcntl(2)'s vararg type depends on `cmd`; `arg` was read out of
+		 * the vararg list once, above, as intptr_t, since a vararg list
+		 * cannot be re-read with a different type per case. Every
+		 * conforming implementation of this call reinterprets that one
+		 * word as a `struct flock *` here -- the caller's own contract
+		 * for F_GETLK/F_SETLK/F_SETLKW, not something this function's
+		 * body can derive. */
+		return record_lock(fd, f, cmd,
+		                   unsafe_assume_valid_pointer((struct flock *)arg));
 	default:
 		errno = EINVAL;
 		return -1;

@@ -68,6 +68,7 @@
 #include <limits.h>
 #include "libc.h"
 #include "plat_fcntl.h"
+#include "unsafe_pointer.h"
 
 /* Linux syscall numbers, confirmed against arch/x86/entry/syscalls/
  * syscall_{64,32}.tbl (x86_64/i386) and this host's own headers
@@ -316,7 +317,11 @@ int __plat_open(int dirfd, const char *path, int flags, unsigned mode,
 	default:          *typeout = __FD_FILE; break; /* S_IFREG, S_IFBLK, or anything else */
 	}
 
-	*out = (__plat_handle_t)(long)(fd + 1);
+	/* __plat_handle_t is an opaque one-word carrier shared with the NT
+	 * backend; this backend's real payload is the plain fd number,
+	 * boxed +1 so 0 stays free for __PLAT_HANDLE_NULL, never
+	 * dereferenced. */
+	*out = unsafe_assume_valid_pointer((__plat_handle_t)(long)(fd + 1));
 	return 0;
 }
 

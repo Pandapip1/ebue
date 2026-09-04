@@ -212,7 +212,10 @@ static int is_sys_error(long ret)
 #define EFD_CLOEXEC_LX   02000000
 
 static int unbox(__plat_handle_t h) { return (int)((long)h - 1); }
-static __plat_handle_t box(int fd) { return (__plat_handle_t)(long)(fd + 1); }
+/* __plat_handle_t is an opaque one-word carrier shared with the NT
+ * backend; the real payload here is the plain fd number, boxed +1 so 0
+ * stays free for __PLAT_HANDLE_NULL, never dereferenced. */
+static __plat_handle_t box(int fd) { return unsafe_assume_valid_pointer((__plat_handle_t)(long)(fd + 1)); }
 
 /* This process's __fds[] table (src/internal/fd.c) and the kernel's real fd
  * numbering must stay in sync: __fd_alloc(0) assumes every real, long-lived
@@ -384,7 +387,10 @@ int __plat_kill_open(pid_t pid, int want_suspend_resume, __plat_handle_t *out) /
 		errno = ((int)-ret == EPERM) ? EPERM : ESRCH;
 		return -1;
 	}
-	*out = (__plat_handle_t)(long)pid;
+	/* __plat_handle_t is an opaque one-word carrier shared with the NT
+	 * backend; this backend's real payload is the bare Linux pid,
+	 * never dereferenced (see this function's own comment above). */
+	*out = unsafe_assume_valid_pointer((__plat_handle_t)(long)pid);
 	return 0;
 }
 
@@ -684,7 +690,10 @@ static int open_shared_stop_event(const struct _UNICODE_STRING *name, int *creat
 	           (long)(PROT_READ_PS | PROT_WRITE_PS), (long)MAP_SHARED_PS, fd, 0L);
 	syscall(SYS_close, fd, 0L, 0L, 0L, 0L, 0L);
 	if (is_sys_error(r)) { errno = (int)-r; return -1; }
-	*out = (struct ntlibc_linux_sync *)r;
+	/* mmap(2) returns the mapped address in a signed machine-word
+	 * syscall register; this backing store's whole point is being
+	 * reinterpreted as struct ntlibc_linux_sync. */
+	*out = unsafe_assume_valid_pointer((struct ntlibc_linux_sync *)r);
 	if (*created) { (*out)->futex = 0; (*out)->max = 0; (*out)->kind = 2 /* NTLIBC_LX_SYNC_EVENT */; }
 	return 0;
 }

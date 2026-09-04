@@ -53,6 +53,7 @@
 #include <sys/sem.h>
 #include <stdarg.h>
 #include <errno.h>
+#include "unsafe_pointer.h"
 
 /* Linux syscall numbers -- aarch64 confirmed against this host's own
  * kernel headers (arch/arm64/include/uapi/asm/unistd.h, via the
@@ -386,7 +387,9 @@ void *shmat(int shmid, const void *shmaddr, int shmflg)
 {
 	long ret = raw_syscall(SYS_shmat, (long)shmid, (long)shmaddr, (long)shmflg, 0, 0, 0);
 	if (is_sys_error(ret)) { errno = (int)-ret; return (void *)-1; }
-	return (void *)ret;
+	/* shmat(2) returns the mapped address in a signed machine-word
+	 * syscall register, same as mmap(2). */
+	return unsafe_assume_valid_pointer((void *)ret);
 }
 
 int shmdt(const void *shmaddr)

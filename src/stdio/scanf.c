@@ -46,6 +46,7 @@
 #include <errno.h>
 #include <wchar.h>
 #include "stdio_impl.h"
+#include "unsafe_pointer.h"
 
 enum { LM_NONE, LM_hh, LM_h, LM_l, LM_ll, LM_j, LM_z, LM_t, LM_L };
 
@@ -978,7 +979,13 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 				}
 				unrd(&sc, c);
 				if (!any) goto done;
-				if (assign) { *pp = (void *)(uintptr_t)uv; nmatched++; }
+				/* %p's whole contract (C11 7.21.6.2p12) is turning text
+				 * back into a pointer; no compile-time provenance is
+				 * possible for the conversion specifier itself. */
+				if (assign) {
+					*pp = unsafe_assume_valid_pointer((void *)(uintptr_t)uv);
+					nmatched++;
+				}
 				break;
 			}
 			case 'n':

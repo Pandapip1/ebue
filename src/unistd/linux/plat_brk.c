@@ -25,6 +25,7 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <errno.h>
+#include "unsafe_pointer.h"
 
 /* Linux syscall number -- aarch64 confirmed against this host's own
  * <asm-generic/unistd.h>; x86_64/i386 confirmed against this host's own
@@ -106,7 +107,11 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 
 static void *raw_brk(void *addr)
 {
-	return (void *)raw_syscall(SYS_brk, (long)addr, 0L, 0L, 0L, 0L, 0L);
+	/* brk(2) returns the (possibly unchanged) break address in a
+	 * signed machine-word syscall register; converting that ABI word
+	 * to a pointer is the operation this function exists to perform. */
+	return unsafe_assume_valid_pointer(
+	    (void *)raw_syscall(SYS_brk, (long)addr, 0L, 0L, 0L, 0L, 0L));
 }
 
 /* The kernel's own idea of the break, queried once via brk(0) -- a pure

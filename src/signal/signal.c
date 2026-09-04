@@ -40,6 +40,7 @@
 #include "plat_signal.h"
 #include "plat_fd.h"
 #include "plat_misc.h"
+#include "unsafe_pointer.h"
 #ifdef NTLIBC_USE_KERNEL32
 #include "kernel32.h"
 #endif
@@ -1309,7 +1310,14 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 
 	switch (excode) {
 	case EXCEPTION_ACCESS_VIOLATION: {
-		void *addr = (void *)ep->ExceptionRecord->ExceptionInformation[1];
+		/* ExceptionInformation[1] is the CPU-supplied faulting address
+		 * for access-violation exceptions in NT's own EXCEPTION_RECORD
+		 * -- the hardware fault handler produced this value, not any C
+		 * expression this function's body could derive it from (see
+		 * this function's own fault_addr assignment below for the
+		 * identical pattern). */
+		void *addr = unsafe_assume_valid_pointer(
+		    (void *)ep->ExceptionRecord->ExceptionInformation[1]);
 		code = segv_code(addr);
 		if (code == SEGV_MAPERR && __mman_fault_is_object_error(addr)) {
 			sig = SIGBUS;
@@ -1395,8 +1403,14 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 	/* Fault metadata is thread-local, so another thread may deliver while the
 	 * application handler runs without inheriting this exception's siginfo. */
 	fault_active = 1;
+	/* ExceptionInformation[1] is the CPU-supplied faulting address for
+	 * access-violation exceptions in NT's own EXCEPTION_RECORD -- the
+	 * hardware fault handler produced this value, not any C expression
+	 * this function's body could derive it from. */
 	fault_addr = (excode == EXCEPTION_ACCESS_VIOLATION || excode == EXCEPTION_IN_PAGE_ERROR)
-	           ? (void *)ep->ExceptionRecord->ExceptionInformation[1] : NULL;
+	           ? unsafe_assume_valid_pointer(
+	                 (void *)ep->ExceptionRecord->ExceptionInformation[1])
+	           : NULL;
 	fault_si_code = code;
 	__raise_internal(sig);
 	fault_active = 0;

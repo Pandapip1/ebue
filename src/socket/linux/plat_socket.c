@@ -33,6 +33,7 @@
 #include <netinet/in.h>
 #include <errno.h>
 #include "plat_socket.h"
+#include "unsafe_pointer.h"
 
 /* aarch64/x86_64 Linux syscall numbers, confirmed against each host's own
  * <sys/syscall.h>. Neither arch has a separate SYS_recv/SYS_send: glibc's
@@ -166,7 +167,10 @@ static int unbox(__plat_handle_t h)
  * (socket(2), accept4(2)) rather than operating on an already-boxed one. */
 static __plat_handle_t box(int fd)
 {
-	return (__plat_handle_t)(long)(fd + 1);
+	/* __plat_handle_t is an opaque one-word carrier shared with the NT
+	 * backend; the real payload here is the plain fd number, boxed +1
+	 * so 0 stays free for __PLAT_HANDLE_NULL, never dereferenced. */
+	return unsafe_assume_valid_pointer((__plat_handle_t)(long)(fd + 1));
 }
 
 /* ntlibc's own <sys/socket.h> SOL_SOCKET/SO_REUSEADDR are a private

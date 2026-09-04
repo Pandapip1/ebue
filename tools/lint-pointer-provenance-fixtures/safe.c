@@ -114,3 +114,29 @@ long registry_relation_survives_content_mutation(unsigned i) {
 void *marked_unprovable_cast(unsigned long value) {
   return unsafe_assume_valid_pointer((void *)value);
 }
+
+/* unsafe_assume_shared_provenance(expr) -- src/internal/unsafe_pointer.h's
+ * other real marker, inlined here for the same reason
+ * unsafe_assume_valid_pointer() is above. See
+ * PointerProvenanceChecker.cpp's isUnsafeAssumeSharedProvenance() for how
+ * it is recognised, and unsafe.c's unmarked_subtraction_still_flagged()
+ * for proof this does not blanket-loosen the checker. */
+#ifdef __clang_analyzer__
+#define unsafe_assume_shared_provenance(expr) \
+  (__extension__({ \
+    __typeof__(expr) __ntlibc_unsafe_shared_prov__ \
+      __attribute__((annotate("ntlibc_unsafe_assume_shared_provenance"))) \
+      = (expr); \
+    __ntlibc_unsafe_shared_prov__; \
+  }))
+#else
+#define unsafe_assume_shared_provenance(expr) (expr)
+#endif
+
+/* A marked pointer subtraction between two unrelated arrays -- the same
+ * shape as the real marked call sites in src/ (two pointers a caller
+ * contract asserts are the same object, with no base/len pair in this
+ * function to prove it from) -- must be resolved, not flagged. */
+long marked_unprovable_difference(int *left, int *right) {
+  return unsafe_assume_shared_provenance(left - right);
+}
