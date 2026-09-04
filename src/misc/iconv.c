@@ -39,13 +39,16 @@
  *
  * WHAT IT IS BUILT ON, and what it deliberately is not.
  * src/internal/utf.c is the wrong foundation and is not used: it
- * converts whole strings through ntdll's RtlUTF8ToUnicodeN /
- * RtlUnicodeToUTF8N and mallocs its result, so it has no conversion
- * descriptor, no incremental pointer advance, no resumable state and no
- * partial-output case -- none of the four things the clauses above are
- * about.  The decoder and encoder here are written out in pure C, for
- * the same reason src/stdlib/mbrtowc.c is: no ntdll call, so this works
- * identically on the PE legs and on the native asan build.
+ * converts whole strings and mallocs its result, so it has no
+ * conversion descriptor, no incremental pointer advance, no resumable
+ * state and no partial-output case -- none of the four things the
+ * clauses above are about.  (That was ntdll's RtlUTF8ToUnicodeN /
+ * RtlUnicodeToUTF8N doing the actual conversion; it is an in-tree
+ * hand-rolled codec now, see tools/ntdll.def's history, but the
+ * whole-string shape that rules it out here is unchanged.)  The decoder
+ * and encoder here are written out in pure C, for the same reason
+ * src/stdlib/mbrtowc.c is: no ntdll call, so this works identically on
+ * the PE legs and on the native asan build.
  *
  * They are written out rather than layered on mbrtowc()/wcrtomb(),
  * which was the other candidate.  Those carry a pending surrogate in

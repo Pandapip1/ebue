@@ -3972,15 +3972,19 @@ ULONG NTAPI RtlNtStatusToDosError(NTSTATUS st) { return (ULONG)st & 0xffff; }
 /*
  * RtlUTF8ToUnicodeN / RtlUnicodeToUTF8N.
  *
- * These two are ntdll's, not ntlibc's -- src/internal/utf.c is a wrapper
- * around them.  Written from the documented behaviour (malformed input is
- * replaced with U+FFFD and reported as STATUS_SOME_NOT_MAPPED; a short
- * destination is filled as far as it goes and reported as
- * STATUS_BUFFER_TOO_SMALL), so that what the utf harness actually
- * exercises is utf.c's *buffer sizing*: the "UTF-16 is never longer in
- * code units than UTF-8 is in bytes" and "at most 3 bytes per code unit"
- * claims it allocates on.  It does not exercise ntdll's converter, and is
- * not evidence about it.
+ * These two are ntdll's, not ntlibc's.  src/internal/utf.c used to be a
+ * wrapper around them -- these were written from their documented
+ * behaviour (malformed input replaced with U+FFFD and reported as
+ * STATUS_SOME_NOT_MAPPED; a short destination filled as far as it goes
+ * and reported as STATUS_BUFFER_TOO_SMALL) so that fuzz_utf.c had
+ * something to link against natively -- but utf.c now carries its own
+ * in-tree codec and calls neither.  RtlUnicodeToUTF8N stays live for a
+ * second, unrelated reason: cmdline_to_argv() below (this file's own
+ * command-line reconstruction, used by every fuzz harness that spawns a
+ * process) calls it directly.  RtlUTF8ToUnicodeN has no remaining caller
+ * in this file; it is kept, rather than deleted, so the pair -- and this
+ * comment's account of what each one's documented behaviour is -- stays
+ * next to nt.h's declaration of it.
  */
 #define REPL 0xFFFDu
 
