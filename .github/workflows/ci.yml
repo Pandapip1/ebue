@@ -368,7 +368,7 @@ jobs:
           - { stage: initproof, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: errno, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: purity, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: ownership, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: ownership, packages: "clang-18 libclang-18-dev llvm-18-dev libz3-dev pkg-config" }
           - { stage: undefined, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: unreferenced, packages: "clang clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: widthmod, packages: "" }
