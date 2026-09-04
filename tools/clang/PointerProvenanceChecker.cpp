@@ -54,6 +54,11 @@ class PointerProvenanceChecker
                       check::PreStmt<ReturnStmt>, check::PreCall,
                       check::PostCall, check::BeginFunction, check::Bind> {
   mutable std::unique_ptr<BugType> BT;
+  // Distinct BugType for reportRedundantMarker(): a marker's exemption
+  // being redundant is the opposite finding from BT's "unproven" one
+  // (the checker DID prove the conversion safe here), so it gets its
+  // own category rather than reusing BT's.
+  mutable std::unique_ptr<BugType> RedundantMarkerBT;
   mutable llvm::DenseMap<const FunctionDecl *, bool> RelationEligibility;
   mutable llvm::DenseMap<const VarDecl *, bool> RegistryEligibility;
   mutable llvm::SmallVector<const VarDecl *, 4> ContractRegistries;
@@ -657,6 +662,48 @@ class PointerProvenanceChecker
            Name == "signal_apc" || Name == "__plat_thread_queue_apc";
   }
 
+  // isProvenByOrdinaryLogic: every non-marker, non-NamedException check
+  // this checker has for proving an integer-to-pointer Cast provenance-
+  // preserving on its own -- exactly the sequence checkPreStmt(CastExpr)
+  // below runs, in order, before it ever consults
+  // isUnsafeAssumeValidPointer() or isNamedException(). Factored out so
+  // it can be re-run standalone, as a self-contained question, wherever
+  // an unsafe_*-style marker's exemption needs testing for redundancy:
+  // "would this cast have been proven safe even with the marker
+  // temporarily ignored?" See isMarkerRedundant() below, and this
+  // checker's own tools/lint-pointer-provenance-fixtures/unsafe.c
+  // redundant_marker_constant_sentinel() for a marked cast where this
+  // now answers yes.
+  static bool isProvenByOrdinaryLogic(const CastExpr *Cast,
+                                      CheckerContext &C) {
+    const Expr *Source = Cast->getSubExpr();
+    return isConstantSentinel(Source, C.getASTContext()) ||
+           derivesFromPointer(Source) || isClientIdAssignment(Cast, C) ||
+           isOpaqueApcContext(Cast, C);
+  }
+
+  // isMarkerRedundant: generic support for detecting when any unsafe_*-
+  // style marker (today only isUnsafeAssumeValidPointer() below; a
+  // natural future extension is isNamedException(), and any later
+  // marker some other checker adds) has stopped covering a real
+  // provenance gap. OrdinaryProof is a callable re-running whatever
+  // checks would normally have proven the guarded site safe WITHOUT the
+  // marker's exemption -- isProvenByOrdinaryLogic() above, for
+  // isUnsafeAssumeValidPointer(). If OrdinaryProof() now succeeds on its
+  // own, the marker no longer covers anything: whatever gap it was
+  // written to paper over has since closed (e.g. a later checker
+  // extension learned to prove that shape), and a human should remove
+  // the now-decorative marker rather than have it silently keep
+  // exempting an already-provable site forever. This is the single
+  // choke point every marker-redundancy check should route through, so
+  // adding the same treatment to another marker later is "call this
+  // with that marker's own ordinary-proof predicate," not "reinvent the
+  // check."
+  template <typename OrdinaryProofFn>
+  static bool isMarkerRedundant(OrdinaryProofFn OrdinaryProof) {
+    return OrdinaryProof();
+  }
+
   // isUnsafeAssumeValidPointer: true if Cast is (modulo the parens the
   // wrapping macro itself introduces) the direct initializer of a
   // compiler-generated local variable carrying the
@@ -857,6 +904,35 @@ class PointerProvenanceChecker
     C.emitReport(std::move(Report));
   }
 
+  // reportRedundantMarker: emitted in place of silent acceptance when
+  // isMarkerRedundant() finds that MarkerName's exemption at Statement
+  // was not actually needed -- the checker's own ordinary proof logic
+  // would have cleared this site anyway. A distinct, clearly-worded
+  // message from report()'s "unproven" finding: this is a request to
+  // remove now-decorative source, not an unproven-provenance judgment
+  // call.
+  void reportRedundantMarker(StringRef MarkerName, const Stmt *Statement,
+                             CheckerContext &C) const {
+    ExplodedNode *Node = C.generateNonFatalErrorNode();
+    if (!Node)
+      return;
+    if (!RedundantMarkerBT)
+      RedundantMarkerBT = std::make_unique<BugType>(
+          this, "Redundant provenance marker", categories::MemoryError);
+    const SourceManager &SM = C.getSourceManager();
+    std::string Message =
+        (MarkerName + "() is no longer necessary here: this conversion is "
+         "now provable without it; consider removing the marker; origin '" +
+         SM.getFilename(SM.getExpansionLoc(Statement->getBeginLoc())) +
+         "'; context '" + context(C) + "'; expression '" +
+         text(Statement, C) + "'")
+            .str();
+    auto Report = std::make_unique<PathSensitiveBugReport>(*RedundantMarkerBT,
+                                                            Message, Node);
+    Report->addRange(Statement->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+
 public:
   void checkPreStmt(const BinaryOperator *Operation, CheckerContext &C) const {
     BinaryOperatorKind Opcode = Operation->getOpcode();
@@ -904,16 +980,26 @@ public:
   void checkPreStmt(const CastExpr *Cast, CheckerContext &C) const {
     if (Cast->getCastKind() != CK_IntegralToPointer)
       return;
-    const Expr *Source = Cast->getSubExpr();
-    if (isConstantSentinel(Source, C.getASTContext()))
+    // OrdinaryProof: "would this cast be proven safe with the
+    // unsafe_assume_valid_pointer() marker's exemption temporarily
+    // ignored?" -- exactly the checks that, unmarked, already make this
+    // function return early below. Deferred to a lambda (rather than
+    // called eagerly here) so it runs at most once per cast: either
+    // inside isMarkerRedundant() when the marker is present, or directly
+    // on the unmarked path, never both.
+    auto OrdinaryProof = [&] { return isProvenByOrdinaryLogic(Cast, C); };
+    if (isUnsafeAssumeValidPointer(Cast, C.getASTContext())) {
+      // The marker exempts this cast from the "unproven" finding either
+      // way; the only question is which diagnostic (if any) to emit. If
+      // the checker's own ordinary logic would have proven this cast
+      // safe anyway, the marker covers no real gap here -- say so,
+      // rather than silently accepting an exemption that turned out to
+      // be unnecessary.
+      if (isMarkerRedundant(OrdinaryProof))
+        reportRedundantMarker("unsafe_assume_valid_pointer", Cast, C);
       return;
-    if (derivesFromPointer(Source))
-      return;
-    if (isClientIdAssignment(Cast, C))
-      return;
-    if (isOpaqueApcContext(Cast, C))
-      return;
-    if (isUnsafeAssumeValidPointer(Cast, C.getASTContext()))
+    }
+    if (OrdinaryProof())
       return;
     if (isNamedException(C))
       return;

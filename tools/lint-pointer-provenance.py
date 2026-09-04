@@ -19,7 +19,9 @@ DIAGNOSTIC = re.compile(
     r"(pointer subtraction operands are not proven to share provenance|"
     r"ordered pointer operands are not proven to share provenance|"
     r"integer-to-pointer conversion is not proven provenance-preserving|"
-    r"element relation contract is not proven); "
+    r"element relation contract is not proven|"
+    r"\w+\(\) is no longer necessary here: this conversion is now provable "
+    r"without it; consider removing the marker); "
     r"origin '(.*)'; context '(.*)'; expression '(.*)' "
     r"\[ntlibc\.PointerProvenance\]$"
 )

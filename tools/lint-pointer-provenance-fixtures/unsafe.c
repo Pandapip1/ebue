@@ -199,3 +199,15 @@ void *unmarked_cast_still_flagged(unsigned long value) {
   void *unmarked = (void *)value; /* pointer-provenance-expect */
   return marked ? marked : unmarked;
 }
+
+/* The marker wraps a constant sentinel -- the exact shape safe.c's own
+ * constant_sentinel() already proves safe with no marker at all (see
+ * isConstantSentinel()). The checker's ordinary logic would have
+ * cleared this cast whether or not the marker was ever applied, so the
+ * marker covers no real gap here: this must produce the distinct
+ * "marker is redundant" diagnostic (reportRedundantMarker(), routed
+ * through isMarkerRedundant()/isProvenByOrdinaryLogic()), not the
+ * normal "unproven" finding, and not silent acceptance either. */
+void *redundant_marker_constant_sentinel(void) {
+  return unsafe_assume_valid_pointer((void *)(long)-1); /* pointer-provenance-expect */
+}
