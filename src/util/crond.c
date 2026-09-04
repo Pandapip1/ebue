@@ -188,7 +188,7 @@ static void reload_crontab(const char *path)
 			n++;
 		}
 	}
-	fclose(f);
+	(void)fclose(f);
 	g_entries = arr;
 	g_nentries = n;
 }
@@ -243,7 +243,9 @@ static void reap_finished(void)
 		int status;
 		pid_t r = waitpid(g_running[i].pid, &status, WNOHANG);
 		if (r == g_running[i].pid) {
-			unlink(g_running[i].stdin_path);
+			if (unlink(g_running[i].stdin_path) < 0)
+				fprintf(stderr, "crond: cannot clean up %s: %s\n",
+				        g_running[i].stdin_path, strerror(errno));
 			g_running[i] = g_running[g_nrunning - 1];
 			g_nrunning--;
 			continue;
@@ -287,7 +289,8 @@ static void run_entry(const char *crontabs_dir, const struct cron_entry *e, time
 	log = fopen(logpath, "a");
 	if (log) {
 		fprintf(log, "==== %s: %s ====\n", ct ? ct : "?", cmd);
-		fclose(log);
+		if (fclose(log) < 0)
+			fprintf(stderr, "crond: %s: %s\n", logpath, strerror(errno));
 	}
 
 	if (snprintf(stdin_path, sizeof stdin_path, "%s/cron.stdin.XXXXXX", crontabs_dir) >= (int)sizeof stdin_path) {
@@ -299,16 +302,16 @@ static void run_entry(const char *crontabs_dir, const struct cron_entry *e, time
 	sf = fdopen(fd, "w");
 	if (sf) {
 		fputs(stdin_body, sf);
-		if (fclose(sf) != 0) { unlink(stdin_path); free(cmd); free(stdin_body); return; }
+		if (fclose(sf) != 0) { (void)unlink(stdin_path); free(cmd); free(stdin_body); return; }
 	} else {
-		close(fd);
+		(void)close(fd);
 	}
 
 	sh_path = __find_program("sh", 1);
-	if (!sh_path) { unlink(stdin_path); free(cmd); free(stdin_body); return; }
+	if (!sh_path) { (void)unlink(stdin_path); free(cmd); free(stdin_body); return; }
 
 	if (posix_spawn_file_actions_init(&fa) != 0) {
-		free(sh_path); unlink(stdin_path); free(cmd); free(stdin_body);
+		free(sh_path); (void)unlink(stdin_path); free(cmd); free(stdin_body);
 		return;
 	}
 	(void)posix_spawn_file_actions_addopen(&fa, 0, stdin_path, O_RDONLY, 0);
@@ -325,7 +328,7 @@ static void run_entry(const char *crontabs_dir, const struct cron_entry *e, time
 		strcpy(g_running[g_nrunning].stdin_path, stdin_path);
 		g_nrunning++;
 	} else {
-		unlink(stdin_path);
+		(void)unlink(stdin_path);
 	}
 	posix_spawn_file_actions_destroy(&fa);
 	free(sh_path);
