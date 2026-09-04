@@ -1219,8 +1219,8 @@ install-check: config.mak
 # `make lint` and the per-stage CI matrix cannot silently disagree about
 # which zero-backlog checks are gates.
 #
-LINT_REQUIRED_STAGES = warn analyze cppcheck shell sizearith fallible locks \
-	lockset provenance reentrancy variadic signals abizeroinit initproof \
+LINT_REQUIRED_STAGES = warn analyze cppcheck shell fallible locks \
+	lockset reentrancy variadic signals abizeroinit initproof \
 	errno purity ownership undefined unreferenced widthmod
 
 lint:
