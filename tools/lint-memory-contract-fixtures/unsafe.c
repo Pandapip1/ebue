@@ -411,3 +411,25 @@ void call_established_vector_unsafely(void)
 	vec.cap = 8;
 	grow_established_vector(&vec); /* memory-contract-expect */
 } /* memory-contract-expect */
+
+/* Adversarial twin of tools/lint-memory-contract-fixtures/safe.c's
+ * grow_vector_scaled_relation_bounded: the IDENTICAL unscaled relation
+ * `need <= cap` is provable via the SAME guard, but nothing bounds cap
+ * itself, so `cap * sizeof(*v)` genuinely CAN overflow (e.g. cap == 2^62,
+ * sizeof(*v) == 4: `cap * sizeof(*v)` wraps to 0 while `need *
+ * sizeof(*v)` need not) -- the no-wrap side obligation
+ * MemoryContractZ3Proof::provesScaledAtLeast's own comment requires is
+ * NOT satisfiable here, so the scaled inequality must NOT be trusted and
+ * this finding must still be reported. */
+void grow_vector_scaled_relation_unbounded(size_t cap, size_t need)
+{
+	struct fixture_vector vec;
+	unsigned *g;
+	g = allocate_array(cap, sizeof *g);
+	if (!g) return;
+	vec.v = g;
+	vec.cap = cap;
+	vec.n = 0;
+	if (vec.n + need > vec.cap) return;
+	vec.n += need;
+} /* memory-contract-expect */

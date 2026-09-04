@@ -849,6 +849,269 @@ public:
     return ntlibc::algebra::provesUnsatisfiable(Solver);
   }
 
+  // Peels exactly one top-level `Root * Scale` (or `Scale * Root`)
+  // multiplication off Symbol, where Scale is a compile-time-constant
+  // operand -- the exact shape scaledSpanLength/flushRecordSpanObligations
+  // (this file's own Contract.Scale multiplication) and
+  // declaredReturnSpanExtent's element-count*element-size product both
+  // build. A SymbolCast wrapper (if any) is stripped first, matching every
+  // other structural match in this file (see MemoryContractChecker::
+  // stripCasts's own call sites) -- inlined here rather than shared with
+  // that method since it is defined later in the file, on the outer
+  // checker class, and this proof class has no access to it.
+  static bool decomposeScaledProduct(SymbolRef Symbol, SymbolRef &Root,
+                                     llvm::APSInt &Scale) {
+    while (const auto *Cast = dyn_cast_or_null<SymbolCast>(Symbol))
+      Symbol = Cast->getOperand();
+    if (const auto *Product = dyn_cast_or_null<SymIntExpr>(Symbol)) {
+      if (Product->getOpcode() != BO_Mul)
+        return false;
+      Root = Product->getLHS();
+      Scale = Product->getRHS();
+      return true;
+    }
+    if (const auto *Product = dyn_cast_or_null<IntSymExpr>(Symbol)) {
+      if (Product->getOpcode() != BO_Mul)
+        return false;
+      Root = Product->getRHS();
+      Scale = Product->getLHS();
+      return true;
+    }
+    return false;
+  }
+
+  // Proves Root's own product with the compile-time constant Scale cannot
+  // overflow/wrap Root's type -- the multiplicative analogue of
+  // provesNoWrap above (that one proves a SUM cannot wrap; this one a
+  // PRODUCT), needed as provesScaledAtLeast's side obligation below.
+  //
+  // Scoped with push()/pop() around its own violation assumption: unlike
+  // every other prove* method in this class, this one's PURPOSE is to
+  // leave a NEW, permanent fact (the negation of that same violation)
+  // behind in the Solver for a later query in the same Proof object to
+  // build on, not to report a yes/no answer on its own. The assumption
+  // used only to refute itself must not linger once it has served that
+  // purpose: every method here shares one Solver with no push()/pop() of
+  // its own (each free-function wrapper below constructs a fresh Proof,
+  // which resets the Solver, and calls exactly one prove* method), so an
+  // already-refuted assumption left permanently in place would make every
+  // later query against this same Solver trivially UNSAT -- i.e. appear
+  // to prove anything -- which is exactly the unsoundness this scoping
+  // avoids.
+  bool provesNoOverflow(SymbolRef Root, const llvm::APSInt &Scale) {
+    if (!Root || Root->getType().isNull() || !Root->getType()->isIntegerType())
+      return false;
+    std::optional<z3::expr> RootExpr = translate(Root);
+    if (!RootExpr)
+      return false;
+    unsigned Width = AST.getIntWidth(Root->getType());
+    if (RootExpr->get_sort().bv_size() != Width)
+      return false;
+    ntlibc::algebra::CType Domain = cType(Root->getType());
+    std::optional<ntlibc::algebra::SemanticResult> RootInput =
+        Algebra.input(*RootExpr, Domain);
+    if (!RootInput)
+      return false;
+    std::optional<ntlibc::algebra::SemanticResult> ScaleInput =
+        Algebra.input(bitVector(Scale, Width), Domain);
+    if (!ScaleInput)
+      return false;
+    std::optional<ntlibc::algebra::SemanticResult> Result =
+        Algebra.multiplyConverted(*RootInput, *ScaleInput);
+    if (!Result)
+      return false;
+    z3::expr Violation = (Domain.Unsigned ? Result->Events.UnsignedWrap
+                                          : Result->Events.SignedOverflow)
+                             .simplify();
+    if (!Violation.is_bool())
+      return false;
+    Solver.push();
+    Solver.add(Violation);
+    bool NoOverflow = ntlibc::algebra::provesUnsatisfiable(Solver);
+    Solver.pop();
+    if (!NoOverflow)
+      return false;
+    Solver.add(!Violation);
+    return true;
+  }
+
+  // The concrete-Length counterpart to provesAtLeast above: proves
+  // ExtentSymbol's value is never smaller than the concrete constant
+  // Length. Needed because a SMALL, CONCRETELY-known element count has no
+  // SymbolRef at all -- a fully concrete `n + 1` scaled by a compile-time
+  // element size folds to a bare nonloc::ConcreteInt, not a SymIntExpr --
+  // so provesAtLeast's own `!LengthSymbol` guard rejects it outright
+  // before ever reaching Z3.
+  //
+  // Confirmed via an instrumented, Z3-enabled debug build run against the
+  // real tree: src/glob/glob.c's comp_push/pv_push and src/util/patch.c's
+  // lb_push all reach flushRecordSpanObligations with a bare CONCRETE
+  // scaled length (a small, concretely-unrolled loop trip count) compared
+  // against a SYMBOLIC Extent, so provesAtLeast's `!LengthSymbol` guard
+  // was rejecting every one of them before this method existed. This
+  // method genuinely proves a MINORITY of those occurrences -- whichever
+  // exploration paths happen to still carry a directly-attached range
+  // fact on the exact scaled expression ExtentSymbol itself (e.g.
+  // `(nc_sym * 8) >= 16`), left over from these helpers' own unrelated
+  // overflow sanity comparison (`if (oldbytes > bytes) return -1;`,
+  // comparing two ALREADY element-size-scaled byte counts) that Clang's
+  // native RangeConstraintManager happened to track under that exact
+  // compound symbolic identity. It does NOT close the real, reported
+  // findings themselves: those come from the MAJORITY of paths -- every
+  // push that does NOT re-enter the growth branch at all -- where NOTHING
+  // re-establishes any relation between the current (concrete) count and
+  // the (symbolic, carried over from an earlier growth call) capacity on
+  // that specific path; the invariant is true by construction of the
+  // real growth algorithm, but nothing in a single path's own comparisons
+  // re-derives it, so there is no fact of any kind -- scaled or unscaled,
+  // range or relational -- left for a scaling lemma to work from. See
+  // provesScaledAtLeast's own closing comment for the honest full
+  // characterization.
+  //
+  // This needs no separate no-wrap side proof of its own, unlike
+  // provesScaledAtLeast below: it translates ExtentSymbol -- whatever its
+  // internal structure -- exactly as built, and only ever consults
+  // whatever range/relational facts this Proof's constructor already
+  // loaded for that exact expression. That is precisely the same
+  // "translate the real expression, trust already-established facts
+  // about its real wrapped value" contract provesAtLeast (symbol vs.
+  // symbol) already relies on with no extra gating; this is only a
+  // bare-concrete-RHS extension of it, not a new soundness argument.
+  bool provesAtLeastConcrete(SymbolRef ExtentSymbol,
+                            const llvm::APSInt &Length) {
+    if (!ExtentSymbol || ExtentSymbol->getType().isNull())
+      return false;
+    std::optional<z3::expr> ExtentExpr = translate(ExtentSymbol);
+    if (!ExtentExpr)
+      return false;
+    ntlibc::algebra::CType Domain = cType(ExtentSymbol->getType());
+    std::optional<ntlibc::algebra::SemanticResult> ExtentInput =
+        Algebra.input(*ExtentExpr, Domain);
+    if (!ExtentInput)
+      return false;
+    std::optional<ntlibc::algebra::SemanticResult> LengthInput =
+        Algebra.input(bitVector(Length, ExtentExpr->get_sort().bv_size()),
+                      Domain);
+    if (!LengthInput)
+      return false;
+    std::optional<z3::expr> LessThan = Algebra.less(*ExtentInput, *LengthInput);
+    if (!LessThan)
+      return false;
+    Solver.add(*LessThan);
+    return ntlibc::algebra::provesUnsatisfiable(Solver);
+  }
+
+  // Closes the proof gap this file's own field-span enforcement
+  // (flushRecordSpanObligations) exposes whenever checkBranchCondition
+  // records a relation between the UNSCALED values a source comparison
+  // actually compared (e.g. `n + need <= cap`, from a guard shaped like
+  // `if (lb->n + need > lb->cap) grow();`), while flushRecordSpanObliga-
+  // tions poses the SCALED obligation `(n + need) * K <=
+  // DynamicExtent(v)`, K the element size -- comparing an index-space
+  // relation against a byte-space extent established by a wholly
+  // separate expression (the allocating call's own count*element_size
+  // argument). `A <= B` in the WRAPPING bit-vector domain
+  // checkBranchCondition recorded does NOT imply `A*K <= B*K` in that
+  // same domain merely because it holds as an exact, unbounded-integer
+  // relation: B*K can wrap to a value SMALLER than A*K even though the
+  // true, unbounded product B*K is the larger one (e.g. A=1, B=2^62, K=8
+  // on a 64-bit size_t: A*K=8, but B*K wraps to 0) -- the identical class
+  // of bug ValidPointerChecker's own linearExtentProvenInBounds fix
+  // (873bf28c) confirmed with a concrete counterexample for the unscaled
+  // ADDITIVE case, one multiplication away from this one. The only sound
+  // way to close this is a genuine side proof that B*K itself cannot
+  // overflow (provesNoOverflow above): once that holds, A*K cannot
+  // overflow either (A <= B as true naturals, so A*K <= B*K as true
+  // naturals, so A*K's true value already fits since B*K's does), and the
+  // wrapped and true products then coincide on BOTH sides, so the wrapped
+  // comparison provesAtLeast performs below exactly mirrors the
+  // already-known unscaled relation.
+  //
+  // Verified sound and effective via tools/lint-memory-contract-
+  // fixtures/{safe,unsafe}.c's grow_vector_scaled_relation_{bounded,
+  // unbounded} pair -- but NOT, it turns out, what closes any of
+  // src/glob/glob.c's/src/util/patch.c's real findings: instrumented
+  // measurement against the real tree found their relevant length value
+  // is always a bare CONCRETE integer (a small, concretely-unrolled loop
+  // trip count) by the time it reaches here, never a second scaled
+  // symbol this branch could decompose. See provesAtLeastConcrete above
+  // for the lemma that DOES apply to their actual shape, and
+  // provesScaledAtLeast's own closing comment below for why even that one
+  // only closes a minority of them.
+  bool provesScaledSymbolAtLeast(SymbolRef ExtentSymbol,
+                                 SymbolRef LengthSymbol) {
+    SymbolRef ExtentRoot, LengthRoot;
+    llvm::APSInt ExtentScale, LengthScale;
+    if (!decomposeScaledProduct(ExtentSymbol, ExtentRoot, ExtentScale) ||
+        !decomposeScaledProduct(LengthSymbol, LengthRoot, LengthScale) ||
+        llvm::APSInt::compareValues(ExtentScale, LengthScale) != 0)
+      return false;
+    return provesNoOverflow(ExtentRoot, ExtentScale) &&
+           provesAtLeast(ExtentSymbol, LengthSymbol);
+  }
+
+  // Dispatches to whichever of the two lemmas above fits Length's actual
+  // shape: provesScaledSymbolAtLeast when it is itself a second scaled
+  // symbol (the shape this whole family of lemmas was originally built
+  // to close), or the simpler, unconditionally-sound
+  // provesAtLeastConcrete when it is a bare concrete integer -- the shape
+  // that turned out to be the real one behind every one of this
+  // extension's actual real-tree findings. See each lemma's own comment
+  // for why only the symbolic branch needs provesNoOverflow's side proof:
+  // a concrete Length is compared directly against whatever facts are
+  // already loaded for ExtentSymbol's own exact expression, with no
+  // separate relation to scale up in the first place.
+  bool provesScaledAtLeast(SymbolRef ExtentSymbol, SVal Length) {
+    if (SymbolRef LengthSymbol = Length.getAsSymbol())
+      return provesScaledSymbolAtLeast(ExtentSymbol, LengthSymbol);
+    if (std::optional<nonloc::ConcreteInt> Concrete =
+            Length.getAs<nonloc::ConcreteInt>())
+      return provesAtLeastConcrete(ExtentSymbol, Concrete->getValue());
+    return false;
+  }
+
+  // Honest characterization of what this whole family of lemmas does NOT
+  // close, measured directly (an instrumented, Z3-enabled debug build,
+  // dumping every ExtentSymbol/LengthSymbol pair and constraint-map entry
+  // this Proof ever saw, run against the real src/glob/glob.c and
+  // src/util/patch.c): comp_push's, pv_push's, and lb_push's real
+  // findings are NOT an unscaled-relation-needs-scaling gap at all. Each
+  // push function's growth guard (comp_push/pv_push: `if (cl->n ==
+  // cl->cap)`; lb_push: `if (lb->n >= lb->cap)`) only ever re-establishes
+  // a used-count/capacity relation on the PATH THAT ACTUALLY GROWS. Every
+  // OTHER push -- the common case, and the one every real finding here
+  // traces back to -- takes the "no growth needed" branch without any
+  // fresh comparison against the (by then already-widened, opaque)
+  // capacity symbol at all: comp_push's/pv_push's guard is an EQUALITY
+  // test between two symbols, whose FALSE outcome (`n != cap`) yields no
+  // ordering fact in either direction, symbolically or via Clang's native
+  // range constraints; lb_push's own `>=` guard IS a genuine ordering
+  // test, but by the time loop widening has run, the count side is
+  // typically a fresh, small CONCRETE trip count while the capacity side
+  // is an opaque symbol carried over from an earlier growth call several
+  // iterations back, and Clang's range constraint manager attaches the
+  // resulting fact (`cap_sym > n_concrete`) as a bare LOWER bound on
+  // cap_sym with no upper bound at all -- which is not enough: without
+  // ALSO ruling out cap_sym being large enough for cap_sym*K to wrap
+  // (provesNoOverflow's own job, and it correctly declines here since no
+  // upper bound exists to rule that out), a lower bound alone cannot license
+  // the scaled inequality (the identical A=1,B=2^62,K=8 counterexample
+  // this file's own commentary already gives applies unchanged whether
+  // B's lower bound came from a symbol-vs-symbol relation or a plain
+  // symbol-vs-concrete range). The real invariant -- capacity always
+  // strictly exceeds the used count -- is true by construction of the
+  // growth algorithm itself, procedurally maintained across many
+  // iterations, but nothing in any SINGLE path's own comparisons
+  // re-derives it once several iterations of widening have passed; no
+  // relation-scaling lemma, however sound, has anything to scale when the
+  // unscaled fact was never re-established on that path to begin with.
+  // Closing this for real would need tracking the growth invariant itself
+  // across iterations (e.g. a genuine loop-invariant/widening extension,
+  // or a formal postcondition contract on __array_next_capacity/
+  // __util_array_capacity's own out-parameter) -- a materially different,
+  // larger change than extending the Z3 bridge to scale an
+  // already-established relation, and out of this change's scope.
+
   // Proves Symbol's value is always zero -- needed for exactly the same
   // reason provesAtLeast above is: State->isNull() on a COMPOUND value
   // (e.g. a readable_elements/writable_elements length scaled by this
@@ -892,6 +1155,20 @@ static bool spanCoveredZ3(SymbolRef ExtentSymbol, SymbolRef LengthSymbol,
                           ProgramStateRef State, ASTContext &AST) {
   MemoryContractZ3Proof Proof(memoryContractZ3Engine(), State, AST);
   return Proof.provesAtLeast(ExtentSymbol, LengthSymbol);
+}
+
+// See MemoryContractZ3Proof::provesScaledAtLeast's own comment: bridges an
+// UNSCALED relation or plain range fact (checkBranchCondition's own
+// ProvenLessEqual/ProvenLessThan, or Clang's native single-symbol range
+// constraint, both already loaded into the Solver by this Proof's own
+// constructor) through a shared element-size scale factor, via a genuine
+// no-wrap side proof on the extent side's own scaled product. Length is
+// passed as a full SVal, not a SymbolRef, so a bare concrete length (no
+// SymbolRef at all) can still be handled -- see provesAtLeastConcrete.
+static bool scaledSpanCoveredZ3(SymbolRef ExtentSymbol, SVal Length,
+                                ProgramStateRef State, ASTContext &AST) {
+  MemoryContractZ3Proof Proof(memoryContractZ3Engine(), State, AST);
+  return Proof.provesScaledAtLeast(ExtentSymbol, Length);
 }
 
 static bool zeroProvenZ3(SymbolRef Symbol, ProgramStateRef State,
@@ -1206,6 +1483,24 @@ class MemoryContractChecker
     // the same kind of syntactic base identity this is meant to route
     // around.
     if (spanCoveredZ3(ExtentSymbol, LengthSymbol, State, C.getASTContext()))
+      return true;
+    // spanCoveredZ3 above only proves Extent >= Length when the two
+    // expression trees are otherwise IDENTICAL once translated -- a ring
+    // identity, safe under wraparound regardless of whether any relation
+    // between distinct subexpressions is even provable (see its own
+    // comment). It cannot bridge a genuine INEQUALITY -- either between
+    // two DIFFERENT unscaled symbols (checkBranchCondition's own
+    // ProvenLessEqual/ProvenLessThan, e.g. `n + need <= cap` from a guard
+    // shaped like `if (lb->n + need > lb->cap) grow();`) or between an
+    // unscaled symbol and a plain concrete bound (Clang's own native
+    // range constraint from a guard where one side was already concrete,
+    // e.g. `if (lb->n >= lb->cap)` with `lb->n` still a small concrete
+    // loop-trip count) -- through a shared scale factor; that needs the
+    // dedicated no-wrap side proof MemoryContractZ3Proof::
+    // provesScaledAtLeast performs. Length (the original SVal, not
+    // LengthSymbol) is passed through so a bare concrete length -- which
+    // has no SymbolRef at all -- is not silently dropped here either.
+    if (scaledSpanCoveredZ3(ExtentSymbol, Length, State, C.getASTContext()))
       return true;
 #endif
     SymbolRef ExtentBase, LengthBase;
