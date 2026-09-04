@@ -1293,7 +1293,20 @@ static void test_setpgroup_other_group(void)
 	like it: unbounded recursive self-spawning, each level paying real
 	Wine process-creation cost, is what timed out.  Fixed by giving the
 	child a "noop" argv[1] so it dispatches into child_main() and exits
-	at once, like every other child in this file. */
+	at once, like every other child in this file.
+
+	A later CI run (this fence's Wine still unavailable to run locally)
+	reported this fence STALE (PASS produced FAIL), again a bug in this
+	TEST rather than in posix_spawn(): it asserted sched_priority 5
+	round-tripped through getpriority() unchanged, but a non-self
+	getpriority() query goes through the real NT priority class rather
+	than the self_nice cache (see the assertion's own comment, below),
+	and src/misc/nt/plat_misc.c's priorityclass_from_nice() only
+	distinguishes three classes -- every nice value in [1,9] applies as
+	BELOW_NORMAL and reads back as that class's one representative nice
+	value, 2, not the value that was asked for.  Fixed by asserting with
+	2, the one value in that bucket the round trip actually preserves,
+	instead of 5. */
 static void test_setschedparam_applied(void)
 {
 	posix_spawnattr_t at;
@@ -1302,7 +1315,22 @@ static void test_setschedparam_applied(void)
 	int status;
 	char *argv[3];
 
-	par.sched_priority = 5;
+	/* 2, not some other value in setpriority()'s always-allowed
+	 * [0, NZERO-1] range: the readback below queries a pid that is not
+	 * self, which -- unlike the self_nice cache getpriority() returns
+	 * for self (src/misc/resource.c) -- goes through the real NT
+	 * priority class and back, and that round trip is lossy by design.
+	 * src/misc/nt/plat_misc.c's priorityclass_from_nice() only ever
+	 * reaches the three priority classes an unprivileged caller can
+	 * set (NORMAL/BELOW_NORMAL/IDLE), so any nice value in [1,9] is
+	 * indistinguishable from any other once applied; its inverse,
+	 * nice_from_baseprio(), maps back to one representative nice value
+	 * per class (0, 2, 4). 2 is BELOW_NORMAL's representative, so it is
+	 * the one value in that bucket the round trip actually preserves --
+	 * an arbitrary value like 5 would apply fine but read back as 2,
+	 * which is a fact about this mapping's granularity, not a defect in
+	 * posix_spawn(). */
+	par.sched_priority = 2;
 	CHECK(posix_spawnattr_init(&at) == 0);
 	CHECK(posix_spawnattr_setschedparam(&at, &par) == 0);
 	CHECK(posix_spawnattr_setschedpolicy(&at, 0) == 0);
@@ -1312,13 +1340,11 @@ static void test_setschedparam_applied(void)
 	 * recurses instead of exiting. */
 	argv[0] = (char *)self; argv[1] = (char *)"noop"; argv[2] = 0;
 	CHECK(posix_spawn(&pid, self, 0, &at, argv, environ) == 0);
-	/* getpriority() for a pid that is not self queries the child's
-	 * real NT priority class directly (src/misc/resource.c); read
-	 * before waitpid() reaps it, since __child_remove() closes the
-	 * handle that query needs.  5 is within setpriority()'s own
-	 * always-allowed [0, NZERO-1] range (src/misc/resource.c), so
-	 * this is not expected to need any privilege this process lacks. */
-	CHECK(getpriority(PRIO_PROCESS, (id_t)pid) == 5);
+	/* getpriority() for a pid that is not self queries the child's real
+	 * NT priority class directly (src/misc/resource.c); read before
+	 * waitpid() reaps it, since __child_remove() closes the handle that
+	 * query needs. */
+	CHECK(getpriority(PRIO_PROCESS, (id_t)pid) == 2);
 	CHECK(waitpid(pid, &status, 0) == pid);
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 	posix_spawnattr_destroy(&at);
