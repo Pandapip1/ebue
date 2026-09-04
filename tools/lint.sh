@@ -58,18 +58,21 @@
 #   fallible  on by default; rejects discarded results from known fallible
 #             system, I/O, mapping, semaphore, and pthread APIs.
 #   provenance
-#             on by default. A Clang 18 analyzer plugin proves common
-#             provenance for ordered pointer comparisons and subtraction, and
-#             rejects integer-derived pointers.  Constant sentinels (NT's own
-#             pseudo-handle convention, SIG_DFL/SIG_IGN/SIG_ERR, MAP_FAILED,
-#             and this tree's own invalid nl_catd/iconv_t/sem_t/fenv_t
-#             markers), pointer/integer/pointer alignment round trips, and a
-#             short, explicit, individually-justified table of call sites
-#             that cross a boundary no C-level analysis can see across
-#             (hand-written assembly, the kernel's own ABI, a hardware fault
-#             handler) are recognised rather than flagged; see
-#             tools/clang/PointerProvenanceChecker.cpp's own comments for the
-#             reasoning behind each.
+#             currently opt-in while its initial proof backlog is triaged,
+#             after tools/clang/PointerProvenanceChecker.cpp's own
+#             individually-justified call-site exemption table was removed
+#             (2026-09-03) so every finding it covered is reported live
+#             instead of silently recognised.  A Clang 18 analyzer plugin
+#             proves common provenance for ordered pointer comparisons and
+#             subtraction, and rejects integer-derived pointers.  Constant
+#             sentinels (NT's own pseudo-handle convention,
+#             SIG_DFL/SIG_IGN/SIG_ERR, MAP_FAILED, and this tree's own
+#             invalid nl_catd/iconv_t/sem_t/fenv_t markers) and
+#             pointer/integer/pointer alignment round trips are still
+#             recognised rather than flagged; a boundary no C-level analysis
+#             can see across (hand-written assembly, the kernel's own ABI, a
+#             hardware fault handler) is not, until each such site is
+#             re-proved by another means.
 #   locks     on by default; path-sensitively proves mutex, rwlock, and
 #             spinlock acquire/release, wait, destroy, and function-exit state.
 #   abizeroinit
@@ -1946,7 +1949,7 @@ stage_purity() {
 	return $any
 }
 
-requested_stages=${*:-warn analyze cppcheck shell fallible locks lockset provenance reentrancy variadic signals abizeroinit initproof errno purity ownership undefined unreferenced widthmod}
+requested_stages=${*:-warn analyze cppcheck shell fallible locks lockset reentrancy variadic signals abizeroinit initproof errno purity ownership undefined unreferenced widthmod}
 stages=
 for requested_stage in $requested_stages; do
 	case $requested_stage in

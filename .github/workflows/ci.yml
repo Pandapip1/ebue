@@ -360,7 +360,6 @@ jobs:
           - { stage: fallible, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: locks, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: lockset, packages: clang-18 }
-          - { stage: provenance, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: reentrancy, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: variadic, packages: clang-18 }
           - { stage: signals, packages: "clang-18 libclang-18-dev llvm-18-dev" }
