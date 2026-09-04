@@ -409,7 +409,10 @@ static void *raw_mmap(void *addr, size_t len, int prot, int flags, int fd, long 
 {
 	long ret = raw_syscall(SYS_mmap, (long)addr, (long)len, (long)prot, (long)flags, (long)fd, off);
 	if (is_sys_error(ret)) { errno = (int)-ret; return MAP_FAILED; }
-	return (void *)ret;
+	/* mmap(2) returns the mapped address in a signed machine-word
+	 * syscall register; converting that ABI word to a pointer is the
+	 * operation this function exists to perform. */
+	return unsafe_assume_valid_pointer((void *)ret);
 }
 #endif
 static int raw_munmap(void *addr, size_t len)
@@ -875,8 +878,14 @@ static void *resolve_main_symbol(const char *name)
 		Elf_Sym *s = &self_syms[i];
 		if (s->st_shndx == SHN_UNDEF) continue;
 		if (s->st_name == 0) continue;
+		/* st_value is an ELF symbol table entry's own numeric field, an
+		 * already-absolute virtual address for a non-PIE main image --
+		 * ELF defines symbol values as integer addresses, and
+		 * reconstructing a pointer from one is this loader's own
+		 * required ABI operation, not something derivable from a
+		 * pointer anywhere in this translation unit. */
 		if (strcmp(self_strs + s->st_name, name) == 0)
-			return (void *)(uintptr_t)s->st_value; /* non-PIE: already absolute */
+			return unsafe_assume_valid_pointer((void *)(uintptr_t)s->st_value); /* non-PIE: already absolute */
 	}
 	return NULL;
 }
@@ -944,8 +953,12 @@ static void *resolve_export(struct dlobj *obj, const char *name)
 		if (STB_LOCAL(s->st_info)) continue;
 		if (STV_VISIBILITY(s->st_other) != STV_DEFAULT &&
 		    STV_VISIBILITY(s->st_other) != STV_PROTECTED) continue;
+		/* ADDR() reconstructs a pointer from this object's real mapped
+		 * load bias plus an ELF-symbol-value virtual address -- see
+		 * apply_one_irelative() below for the full ADDR() reasoning,
+		 * shared by every call site in this file. */
 		if (strcmp(obj->dynstr + s->st_name, name) == 0)
-			return ADDR(obj, s->st_value);
+			return unsafe_assume_valid_pointer(ADDR(obj, s->st_value));
 	}
 	return NULL;
 }
@@ -1168,7 +1181,8 @@ static int setup_object_tls(struct dlobj *obj, const Elf_Phdr *pt_tls)
 	data = block + TLS_TCB_HEADER_SIZE;
 	data = (unsigned char *)(((uintptr_t)data + data_align - 1) & ~(uintptr_t)(data_align - 1));
 
-	memcpy(data, ADDR(obj, pt_tls->p_vaddr), pt_tls->p_filesz);
+	/* ADDR() reconstruction -- see apply_one_irelative() below. */
+	memcpy(data, unsafe_assume_valid_pointer(ADDR(obj, pt_tls->p_vaddr)), pt_tls->p_filesz);
 	memset(data + pt_tls->p_filesz, 0, pt_tls->p_memsz - pt_tls->p_filesz);
 
 	modtcb = data - TLS_TCB_HEADER_SIZE; /* always >= block: data was rounded UP
@@ -1230,7 +1244,9 @@ static int apply_one_reloc(struct dlobj *obj, const struct reloc *r,
 		       (unsigned long long)r->r_offset);
 		return -1;
 	}
-	loc = ADDR(obj, r->r_offset);
+	/* ADDR() reconstruction -- see apply_one_irelative() below. Bounds
+	 * of r->r_offset are already proven inside [lo, hi) above. */
+	loc = unsafe_assume_valid_pointer(ADDR(obj, r->r_offset));
 
 	switch (r->r_type) {
 #if defined(__aarch64__)
@@ -1420,7 +1436,11 @@ static int apply_reloc_table(struct dlobj *obj, uint64_t tbl_vaddr, uint64_t tbl
 	Elf64_Rela *relas;
 	size_t count, i;
 	if (!tbl_vaddr || !tbl_size) return 0;
-	relas = ADDR(obj, tbl_vaddr);
+	/* ADDR() reconstruction of the table base -- see
+	 * apply_one_irelative() below. No independent extent to check
+	 * beyond tbl_size, already required nonzero above and used only to
+	 * bound the loop count. */
+	relas = unsafe_assume_valid_pointer(ADDR(obj, tbl_vaddr));
 	count = tbl_size / sizeof(Elf64_Rela);
 	for (i = 0; i < count; i++) {
 		struct reloc rec;
@@ -1471,12 +1491,11 @@ static int apply_one_irelative(struct dlobj *obj, const struct reloc *r,
 		return -1;
 	}
 	/* ADDR() reconstructs a pointer from this object's real mapped load
-	 * bias (obj->bias, set once when load_object() mmap()'d the image
-	 * -- see that already-audited function's own NamedException entry
-	 * below) plus an ELF-relocation-computed virtual address; the same
+	 * bias (obj->bias, set once when load_object() mmap()'d the image)
+	 * plus an ELF-relocation-computed virtual address; the same
 	 * bias+vaddr reconstruction apply_one_reloc()/apply_reloc_table()
-	 * already perform for every other relocation type (both already
-	 * exempt below), IRELATIVE entries just reach it through this
+	 * already perform for every other relocation type (both marked the
+	 * same way, below), IRELATIVE entries just reach it through this
 	 * separate, later pass instead (see this function's own banner).
 	 * r->r_offset -- the relocation SLOT this yields the address of --
 	 * is proven inside [lo, hi) by the bounds check immediately above. */
@@ -1574,7 +1593,9 @@ static void run_ctors(struct dlobj *obj, Elf_Dyn *dyn)
 	Elf_Dyn *d_init_arraysz = find_dyn_ptr(dyn, DT_INIT_ARRAYSZ);
 
 	if (d_init) {
-		void (*init_fn)(void) = (void (*)(void))ADDR(obj, d_init->d_val);
+		/* ADDR() reconstruction -- see apply_one_irelative() below. */
+		void (*init_fn)(void) =
+		    unsafe_assume_valid_pointer((void (*)(void))ADDR(obj, d_init->d_val));
 		init_fn();
 	}
 	if (d_init_array && d_init_arraysz) {
@@ -1583,8 +1604,9 @@ static void run_ctors(struct dlobj *obj, Elf_Dyn *dyn)
 		 * architecture, which is 4 bytes on i386 -- the same "loc must
 		 * track the target's own native word size, not a hardcoded 64
 		 * bits" reasoning apply_one_reloc()'s own `unsigned long *loc`
-		 * follows. */
-		uintptr_t *arr = ADDR(obj, d_init_array->d_val);
+		 * follows. ADDR() reconstruction of the array base itself --
+		 * see apply_one_irelative() below. */
+		uintptr_t *arr = unsafe_assume_valid_pointer(ADDR(obj, d_init_array->d_val));
 		size_t count = d_init_arraysz->d_val / sizeof(uintptr_t);
 		size_t i;
 		for (i = 0; i < count; i++) {
@@ -1596,8 +1618,13 @@ static void run_ctors(struct dlobj *obj, Elf_Dyn *dyn)
 			 * applied by apply_reloc_table() above, like any other
 			 * data pointer (confirmed against this file's own test
 			 * fixture) -- NOT a link-time vaddr this function itself
-			 * would need to re-bias through ADDR(). */
-			void (*fn)(void) = (void (*)(void))(uintptr_t)arr[i];
+			 * would need to re-bias through ADDR(). The relocation
+			 * pass that established this ran in a DIFFERENT function
+			 * (apply_reloc_table(), earlier in load_object()'s own
+			 * sequence), an invariant this function's own body cannot
+			 * see. */
+			void (*fn)(void) =
+			    unsafe_assume_valid_pointer((void (*)(void))(uintptr_t)arr[i]);
 			fn();
 		}
 	}
@@ -1859,7 +1886,11 @@ static struct dlobj *load_object(const char *file, int depth)
 		vstart = pgdown(ph->p_vaddr);
 		filelen = pgup((ph->p_vaddr - vstart) + ph->p_filesz);
 		memend = pgup((ph->p_vaddr - vstart) + ph->p_memsz);
-		segbase = (void *)(obj->bias + vstart);
+		/* Same bias+vaddr reconstruction as ADDR() -- see
+		 * apply_one_irelative() below -- just not spelled through that
+		 * macro since vstart is already page-aligned, not a raw
+		 * ELF-declared vaddr. */
+		segbase = unsafe_assume_valid_pointer((void *)(obj->bias + vstart));
 
 		if (ph->p_filesz > 0) {
 			void *r = raw_mmap(segbase, filelen, PROT_READ | PROT_WRITE,
@@ -1909,7 +1940,8 @@ static struct dlobj *load_object(const char *file, int depth)
 #endif
 
 	{
-		Elf_Dyn *dyn = ADDR(obj, pt_dynamic->p_vaddr);
+		/* ADDR() reconstruction -- see apply_one_irelative() below. */
+		Elf_Dyn *dyn = unsafe_assume_valid_pointer(ADDR(obj, pt_dynamic->p_vaddr));
 		Elf_Dyn *d_hash = find_dyn_ptr(dyn, DT_HASH);
 		Elf_Dyn *d_symtab = find_dyn_ptr(dyn, DT_SYMTAB);
 		Elf_Dyn *d_strtab = find_dyn_ptr(dyn, DT_STRTAB);
@@ -1945,13 +1977,19 @@ static struct dlobj *load_object(const char *file, int depth)
 			goto fail;
 		}
 
-		obj->dynsym = ADDR(obj, d_symtab->d_val);
-		obj->dynstr = ADDR(obj, d_strtab->d_val);
+		/* ADDR() reconstruction, twice -- see apply_one_irelative()
+		 * below. */
+		obj->dynsym = unsafe_assume_valid_pointer(ADDR(obj, d_symtab->d_val));
+		obj->dynstr = unsafe_assume_valid_pointer(ADDR(obj, d_strtab->d_val));
 		/* DT_HASH's header is { nbucket; nchain; ... } -- nchain equals
 		 * the symbol table's own entry count by the SysV ELF hash
 		 * table's own specification, giving an exact count with no
-		 * GNU-hash bucket walk needed. */
-		obj->dynsym_count = ((uint32_t *)(uintptr_t)(obj->bias + d_hash->d_val))[1];
+		 * GNU-hash bucket walk needed. Same bias+vaddr reconstruction
+		 * as ADDR(), just not spelled through that macro since the
+		 * result is immediately dereferenced rather than stored as a
+		 * pointer. */
+		obj->dynsym_count = unsafe_assume_valid_pointer(
+		    (uint32_t *)(uintptr_t)(obj->bias + d_hash->d_val))[1];
 
 		/* ---- DT_NEEDED: load every dependency fresh, within this
 		 * object's own namespace -- see this file's "NAMESPACE
@@ -2014,7 +2052,12 @@ static struct dlobj *load_object(const char *file, int depth)
 		       (ph->p_flags & PF_W ? PROT_WRITE : 0) |
 		       (ph->p_flags & PF_X ? PROT_EXEC : 0);
 		if (prot & PROT_WRITE) continue; /* already mapped read-write */
-		if (raw_mprotect((void *)(obj->bias + vstart), memend, prot) != 0) {
+		/* Same bias+vaddr reconstruction as ADDR() -- see
+		 * apply_one_irelative() below -- just not spelled through that
+		 * macro since vstart is already page-aligned, not a raw
+		 * ELF-declared vaddr. */
+		if (raw_mprotect(unsafe_assume_valid_pointer((void *)(obj->bias + vstart)),
+		                 memend, prot) != 0) {
 			seterr("dlopen: %s: cannot finalize protection on segment %u: %s", file, i, strerror(errno));
 			goto fail;
 		}
@@ -2054,8 +2097,11 @@ static struct dlobj *load_object(const char *file, int depth)
 	if (pt_relro) {
 		unsigned long relro_lo = pgdown(pt_relro->p_vaddr);
 		unsigned long relro_hi = pgdown(pt_relro->p_vaddr + pt_relro->p_memsz);
+		/* Same bias+vaddr reconstruction as segbase/raw_mprotect(vstart)
+		 * above -- see apply_one_irelative() below. */
 		if (relro_hi > relro_lo &&
-		    raw_mprotect((void *)(obj->bias + relro_lo), relro_hi - relro_lo, PROT_READ) != 0) {
+		    raw_mprotect(unsafe_assume_valid_pointer((void *)(obj->bias + relro_lo)),
+		                 relro_hi - relro_lo, PROT_READ) != 0) {
 			seterr("dlopen: %s: cannot apply PT_GNU_RELRO protection: %s", file, strerror(errno));
 			goto fail;
 		}
@@ -2063,7 +2109,8 @@ static struct dlobj *load_object(const char *file, int depth)
 
 	/* DT_INIT/DT_INIT_ARRAY -- see run_ctors()'s own banner for exactly
 	 * why this runs last, after every other step above has finished. */
-	run_ctors(obj, ADDR(obj, pt_dynamic->p_vaddr));
+	/* ADDR() reconstruction -- see apply_one_irelative() below. */
+	run_ctors(obj, unsafe_assume_valid_pointer(ADDR(obj, pt_dynamic->p_vaddr)));
 
 	free(phdrs);
 	(void)close(fd);

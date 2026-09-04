@@ -257,7 +257,9 @@ int __plat_dup(__plat_handle_t h, int inheritable, __plat_handle_t *out)
 			return -1;
 		}
 	}
-	*out = (__plat_handle_t)(newfd + 1);
+	/* Boxing, not dereference -- see __plat_dup_to()'s own comment
+	 * below on the identical +1 encoding. */
+	*out = unsafe_assume_valid_pointer((__plat_handle_t)(newfd + 1));
 	return 0;
 }
 

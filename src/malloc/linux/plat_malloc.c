@@ -18,6 +18,7 @@
  * so hosted include ownership and unused-include advice do not apply. */
 // NOLINTBEGIN(misc-include-cleaner)
 #include "plat_pages.h"
+#include "unsafe_pointer.h"
 
 #if defined(__aarch64__)
 #define SYS_mmap 222
@@ -107,7 +108,9 @@ void *__plat_pages_alloc(size_t n)
 	long ret = raw_syscall(SYS_mmap, 0, (long)n, PROT_READ_LX | PROT_WRITE_LX,
 	                       MAP_PRIVATE_LX | MAP_ANONYMOUS_LX, -1L, 0L);
 	if (is_sys_error(ret)) return 0;
-	return (void *)ret; /* MAP_ANONYMOUS is always zero-filled by the kernel */
+	/* mmap(2) returns the mapped address in a signed machine-word
+	 * syscall register. */
+	return unsafe_assume_valid_pointer((void *)ret); /* MAP_ANONYMOUS is always zero-filled by the kernel */
 }
 
 void __plat_pages_free(void *p consume(platform_pages_allocated), size_t n)

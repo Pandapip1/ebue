@@ -55,6 +55,7 @@
 #include <stddef.h>
 #include "plat_thread.h"
 #include "linux/sync.h"
+#include "unsafe_pointer.h"
 #if defined(__aarch64__)
 #include "linux/tls.h"
 #endif
@@ -235,7 +236,10 @@ static int alloc_sync(struct ntlibc_linux_sync **out)
 	                       PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS,
 	                       -1, 0);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
-	*out = (struct ntlibc_linux_sync *)ret;
+	/* mmap(2) returns the mapped address in a signed machine-word
+	 * syscall register; this page's whole point is being reinterpreted
+	 * as struct ntlibc_linux_sync. */
+	*out = unsafe_assume_valid_pointer((struct ntlibc_linux_sync *)ret);
 	return 0;
 }
 
@@ -504,7 +508,9 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
 	stack_ret = raw_syscall(SYS_mmap, 0, (long)sz, PROT_READ | PROT_WRITE,
 	                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (is_sys_error(stack_ret)) { errno = (int)-stack_ret; return -1; }
-	top = (void *)(stack_ret + (long)sz);
+	/* mmap(2) returns the mapped address in a signed machine-word
+	 * syscall register; `top` is that same mapping's high end. */
+	top = unsafe_assume_valid_pointer((void *)(stack_ret + (long)sz));
 
 #if defined(__aarch64__)
 	/* Built BEFORE `gate`, not after: on failure here only the stack
@@ -535,8 +541,10 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
 
 	/* The header start_trampoline() reads sits at the LOW end of the
 	 * mmap()'d region -- the stack grows down from `top`, so this is the
-	 * address furthest from where the stack pointer starts. */
-	start = (struct linux_thread_start *)stack_ret;
+	 * address furthest from where the stack pointer starts. Same
+	 * mmap(2)-returned address as `top` above, reinterpreted as the
+	 * header struct this mapping's own low end holds. */
+	start = unsafe_assume_valid_pointer((struct linux_thread_start *)stack_ret);
 	start->entry = entry;
 	start->arg = arg;
 	start->gate = gate;
@@ -577,8 +585,10 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
 	 * mmap()'d stack (and, for a suspended create, the `gate` event, and
 	 * on aarch64, `tls`'s TCB/DTV blocks -- now genuinely owned by the
 	 * running thread, not a leak in the usual sense) is intentionally
-	 * left unreclaimed; no destroy path exists yet. */
-	*out = (__plat_handle_t)(pid + 1);
+	 * left unreclaimed; no destroy path exists yet. __plat_handle_t is
+	 * an opaque one-word carrier shared with the NT backend; the real
+	 * payload is the bare pid, never dereferenced. */
+	*out = unsafe_assume_valid_pointer((__plat_handle_t)(pid + 1));
 	return 0;
 }
 
@@ -596,7 +606,9 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
 __plat_handle_t __plat_thread_duplicate_self(void)
 {
 	long tid = raw_syscall(SYS_gettid, 0L, 0L, 0L, 0L, 0L, 0L);
-	return (__plat_handle_t)(tid + 1);
+	/* Boxing, not dereference -- see __plat_thread_spawn()'s own
+	 * comment above on the identical pid+1 encoding. */
+	return unsafe_assume_valid_pointer((__plat_handle_t)(tid + 1));
 }
 
 /* ---- src/thread/pthread_mutex.c's/pthread.c's process-wide fast lock -----
@@ -811,7 +823,10 @@ static int map_named_sem(const char *name, long flags, long mode,
 	                PROT_READ | PROT_WRITE, MAP_SHARED_LX, fd, 0);
 	raw_syscall(SYS_close, fd, 0, 0, 0, 0, 0);
 	if (is_sys_error(r)) { errno = (int)-r; return -1; }
-	*out = (struct ntlibc_linux_sync *)r;
+	/* mmap(2) returns the mapped address in a signed machine-word
+	 * syscall register; this backing store's whole point is being
+	 * reinterpreted as struct ntlibc_linux_sync. */
+	*out = unsafe_assume_valid_pointer((struct ntlibc_linux_sync *)r);
 	return 0;
 }
 
@@ -913,7 +928,9 @@ int __plat_named_mutant_acquire(const char *name, __plat_handle_t *out)
 	                PROT_READ | PROT_WRITE, MAP_SHARED_LX, fd, 0);
 	raw_syscall(SYS_close, fd, 0, 0, 0, 0, 0);
 	if (is_sys_error(r)) { errno = (int)-r; return -1; }
-	obj = (struct ntlibc_linux_sync *)r;
+	/* Boxing, not dereference -- see map_named_sem()'s own comment
+	 * above on the identical mmap(2)-return reinterpretation. */
+	obj = unsafe_assume_valid_pointer((struct ntlibc_linux_sync *)r);
 
 	expect = 0;
 	if (__atomic_compare_exchange_n(&obj->kind, &expect, NTLIBC_LX_SYNC_INITIALIZING,
