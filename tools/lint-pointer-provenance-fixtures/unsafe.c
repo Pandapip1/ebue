@@ -246,3 +246,29 @@ long unmarked_subtraction_still_flagged(int *left, int *right) {
 long redundant_marker_same_array(int *items) {
   return unsafe_assume_shared_provenance(&items[3] - &items[1]); /* pointer-provenance-expect */
 }
+
+/* A loop-carried counterpart to redundant_marker_same_array() above,
+ * exercising PointerProvenanceChecker.cpp's whole-function accumulation
+ * (recordSharedProvenanceMarkerObservation()/checkEndAnalysis()) rather
+ * than just isProvenSharedProvenance()'s single-path AST shape: p is
+ * re-derived from items on every loop iteration the analyzer explores,
+ * including any iteration reached only after the analyzer's bounded loop
+ * widening gives up tracking i as a concrete value, so every explored
+ * path that reaches the marker resolves p's region back to items's own.
+ * Unlike dn_expand.c's/parse.c's/timer.c's real, still-necessary uses of
+ * this marker (loop-carried pointers where widening genuinely loses the
+ * region on SOME but not all explored paths -- see
+ * recordSharedProvenanceMarkerObservation()'s own comment), this loop
+ * must still report "marker is redundant" once every explored path has
+ * been accounted for: proof that accumulating across paths does not, by
+ * itself, make a genuinely-provable-everywhere marker look necessary. */
+long redundant_marker_loop_same_array(int *items, int count) {
+  long total = 0;
+  int *p = items;
+  int i;
+  for (i = 0; i < count; i++) {
+    total += unsafe_assume_shared_provenance(p - items); /* pointer-provenance-expect */
+    p++;
+  }
+  return total;
+}
