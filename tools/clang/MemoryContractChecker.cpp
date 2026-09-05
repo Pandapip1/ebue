@@ -56,7 +56,14 @@ using DisjointRegionKey = std::pair<const MemRegion *, const MemRegion *>;
 REGISTER_MAP_WITH_PROGRAMSTATE(AssumedDisjointExtent, DisjointRegionKey,
                                DefinedOrUnknownSVal)
 REGISTER_SET_WITH_PROGRAMSTATE(AllocatedBaseRegion, const MemRegion *)
-REGISTER_MAP_WITH_PROGRAMSTATE(AllocatedSpanExtent, const MemRegion *,
+// Keyed by the allocation's own SYMBOL (see allocationSymbol() below), not
+// by the MemRegion object checkPostCall happened to observe -- a plain
+// MemRegion* key breaks the instant any OTHER checker's own eval::Call or
+// checkPostCall rewraps that same symbol in a differently-spaced
+// SymbolicRegion later in the same call's checker chain (see
+// allocationSymbol()'s own comment for the real, confirmed case this
+// closes).
+REGISTER_MAP_WITH_PROGRAMSTATE(AllocatedSpanExtent, SymbolRef,
                                DefinedOrUnknownSVal)
 REGISTER_MAP_WITH_PROGRAMSTATE(GrantedSpanProof, const ParmVarDecl *,
                                const ParmVarDecl *)
@@ -999,6 +1006,44 @@ class MemoryContractChecker
     return Symbol;
   }
 
+  // The stable identity behind an allocation's SymbolicRegion, for keying
+  // AllocatedSpanExtent. A plain `const MemRegion *` key looks stable but
+  // is not: SValBuilder hands out a distinct canonical SymbolicRegion per
+  // (symbol, memory space) pair (see SymbolicRegion::Profile, which folds
+  // in getSuperRegion()), so the SAME conjured symbol gets a DIFFERENT
+  // MemRegion object depending on which memory space it is wrapped in at
+  // the time of the call -- getSymbolicRegion(sym) (clang's own default
+  // conservative call-eval, UnknownSpaceRegion) versus
+  // getSymbolicHeapRegion(sym) (clang's builtin unix.Malloc checker,
+  // HeapSpaceRegion). Confirmed via a minimal reproduction of this
+  // exact struct-pline shape allocated by plain malloc() in a loop
+  // (mirroring src/util/patch.c's lb_push()): a debug dump of
+  // checkPostCall's own Region across both checkers showed IDENTICAL
+  // symbol IDs (e.g. "conj_$11") but printed as "SymRegion{...}" when
+  // this checker's own checkPostCall observed it (running before
+  // unix.Malloc's, seeing clang's un-rewrapped default) versus
+  // "HeapSymRegion{...}" by the time the field write bound the pointer
+  // (after unix.Malloc's own checkPostCall rewrapped the identical
+  // symbol into its own heap-space region and rebound the call
+  // expression to it) -- two distinct MemRegion* values for one real
+  // allocation. clang's own core DynamicExtentMap tolerates this because
+  // BOTH checkers call setDynamicExtent with the same computed size, so
+  // whichever region ends up actually referenced still has a correct
+  // entry; this checker's OWN AllocatedSpanExtent copy (kept, per
+  // checkLiveSymbols' comment, specifically because the core map's
+  // entries do NOT reliably survive to checkEndFunction) has no such
+  // second writer, so a key recorded against the stale, discarded region
+  // is never found again. Resolving through the underlying symbol
+  // instead of the region wrapper fixes this for any such rewrap, not
+  // just unix.Malloc's specific one. Returns null for a region with no
+  // single underlying symbol (e.g. a VarRegion), which callers already
+  // treat as "no fact to record/find" the same way a map miss would be.
+  static SymbolRef allocationSymbol(const MemRegion *Region) {
+    if (const auto *Symbolic = dyn_cast_or_null<SymbolicRegion>(Region))
+      return Symbolic->getSymbol();
+    return nullptr;
+  }
+
   // Decompose an SVal into (root symbol, constant offset), i.e. treat it
   // as "root + offset" for a bare symbol (offset 0) or a `root + K`
   // SymIntExpr (offset K). Clang's range-based constraint solver does not
@@ -1619,8 +1664,9 @@ public:
           const DefinedOrUnknownSVal *BaseExtent =
               State->get<AssumedSpanExtent>(Element->getSuperRegion());
           if (!BaseExtent)
-            BaseExtent = State->get<AllocatedSpanExtent>(
-                Element->getSuperRegion()->getBaseRegion());
+            if (SymbolRef Symbol = allocationSymbol(
+                    Element->getSuperRegion()->getBaseRegion()))
+              BaseExtent = State->get<AllocatedSpanExtent>(Symbol);
           if (BaseExtent) {
           SVal ElementBytes = getElementExtent(Element->getElementType(),
                                                C.getSValBuilder());
@@ -2597,7 +2643,8 @@ public:
           const MemRegion *Base = Region->getBaseRegion();
           State = setDynamicExtent(State, Base, *DefinedSize,
                                    C.getSValBuilder());
-          State = State->set<AllocatedSpanExtent>(Base, *DefinedSize);
+          if (SymbolRef Symbol = allocationSymbol(Base))
+            State = State->set<AllocatedSpanExtent>(Symbol, *DefinedSize);
         }
       }
     // See stringLengthSourceSpanProven above: record which pointer
@@ -2732,10 +2779,11 @@ public:
       markSValLive(PointerValue);
       markSValLive(LengthValue);
       if (const MemRegion *PointerRegion = PointerValue.getAsRegion())
-        if (const DefinedOrUnknownSVal *Extent =
-                State->get<AllocatedSpanExtent>(
-                    PointerRegion->getBaseRegion()))
-          markSValLive(*Extent);
+        if (SymbolRef Symbol =
+                allocationSymbol(PointerRegion->getBaseRegion()))
+          if (const DefinedOrUnknownSVal *Extent =
+                  State->get<AllocatedSpanExtent>(Symbol))
+            markSValLive(*Extent);
     }
   }
 
