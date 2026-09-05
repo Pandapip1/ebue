@@ -378,7 +378,7 @@ jobs:
           # a drop-in equivalent, or carries a *different* one whose
           # findings provably disagree with what CI runs today.
           - { stage: warn, via: apt, packages: "clang gcc-aarch64-linux-gnu gcc-mingw-w64-i686 gcc-mingw-w64-x86-64" }
-          - { stage: analyze, via: apt, packages: "clang clang-tidy-18" }
+          - { stage: analyze, via: nix, packages: "" }
           - { stage: cppcheck, via: apt, packages: cppcheck }
           - { stage: shell, via: apt, packages: shellcheck }
           - { stage: fallible, via: nix, packages: "" }
@@ -388,8 +388,8 @@ jobs:
           - { stage: variadic, via: nix, packages: "" }
           - { stage: signals, via: nix, packages: "" }
           - { stage: abizeroinit, via: nix, packages: "" }
-          - { stage: initproof, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: errno, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: initproof, via: nix, packages: "" }
+          - { stage: errno, via: nix, packages: "" }
           - { stage: purity, via: nix, packages: "" }
           - { stage: ownership, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev pkg-config" }
           - { stage: undefined, via: nix, packages: "" }
