@@ -143,6 +143,15 @@ long long __file_seek(FILE *f, long long off, int whence)
 		}
 		pos = base + off;
 		if (pos < 0) { errno = EINVAL; return -1; }
+		/* mem_pos is a size_t: on a target where size_t is narrower than
+		 * off_t (i386 is ILP32; off_t stays 64-bit there), a pos that
+		 * survived every signed-overflow check above can still be too
+		 * wide to store. Catch that here instead of truncating it on the
+		 * assignment below -- silent truncation would alias unrelated
+		 * requested offsets onto the same wrapped mem_pos. This never
+		 * fires where size_t already covers off_t's whole range (every
+		 * off_t value is trivially <= SIZE_MAX there). */
+		if ((unsigned long long)pos > SIZE_MAX) { errno = EOVERFLOW; return -1; }
 		/* A fixed fmemopen() buffer rejects a seek past its size; a
 		 * growable open_memstream() one has no such ceiling. */
 		if (!f->mem_dynamic && (unsigned long long)pos > f->mem_size) {
