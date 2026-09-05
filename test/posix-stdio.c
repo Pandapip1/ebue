@@ -297,7 +297,15 @@ static void test_memory_stream_position_overflow(void)
 		errno = 0;
 		CHECK(fseeko(f, (off_t)LLONG_MAX, SEEK_SET) == -1);
 		CHECK(errno == EOVERFLOW);
-		CHECK(ftello(f) == (off_t)PTRDIFF_MAX); /* seek failed: unmoved */
+		/* "Unmoved" means unmoved from the position the failed fflush()
+		 * above actually left behind, not from the PTRDIFF_MAX seen at
+		 * the ftello() before it: that fflush() failed inside
+		 * __file_write() before mem_pos ever moved, so __fflush_locked()
+		 * (src/stdio/buf.c) took its write-error path and discarded the
+		 * buffered 'x' via f->wpos = 0 without ever writing it out. The
+		 * byte is gone and mem_pos is still PTRDIFF_MAX - 1, so that is
+		 * the position this rejected seek must have left in place. */
+		CHECK(ftello(f) == (off_t)PTRDIFF_MAX - 1); /* seek failed: unmoved */
 #endif
 		/* Closing retries the intentionally impossible flush and may fail;
 		 * its only purpose here is releasing the FILE object. */
