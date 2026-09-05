@@ -172,7 +172,7 @@ static int term_width(void)
  * appends. */
 static void fmt_mode(mode_t m, char *out)
 {
-	static const char letters[9] = "rwxrwxrwx";
+	static const char letters[] = "rwxrwxrwx";
 	int i;
 	if (S_ISDIR(m)) out[0] = 'd';
 	else if (S_ISLNK(m)) out[0] = 'l';

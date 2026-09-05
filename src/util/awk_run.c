@@ -509,7 +509,7 @@ static void fields_reserve(struct awk_interp *ip, int n)
  * character-FS case; see this file's header/src/util/awk.c's header
  * for this being narrowed to not extend the same union into a
  * multi-character (ERE) FS in paragraph mode, a rare combination. */
-static void split_into(struct awk_interp *ip, const char *s, size_t len, const char *fs, int extra_nl_sep, char ***outv, int *outn)
+static void split_into(const char *s, size_t len, const char *fs, int extra_nl_sep, char ***outv, int *outn)
 {
 	char **out = NULL;
 	int n = 0;
@@ -592,7 +592,7 @@ static void split_record(struct awk_interp *ip)
 	int n, i;
 
 	free_fields(ip);
-	split_into(ip, ip->rec, strlen(ip->rec), fs, rs[0] == 0, &out, &n);
+	split_into(ip->rec, strlen(ip->rec), fs, rs[0] == 0, &out, &n);
 	fields_reserve(ip, n);
 	for (i = 0; i < n; i++) ip->flds[i] = out[i];
 	free(out);
@@ -1580,7 +1580,7 @@ static struct awk_value call_builtin(struct awk_interp *ip, struct awk_node *cal
 			out[n++] = dupn_local(str + start, len - start);
 			if (n == 1 && out[0][0] == 0 && len == 0) { free(out[0]); free(out); out = NULL; n = 0; }
 		} else {
-			split_into(ip, str, strlen(str), fs, 0, &out, &n);
+			split_into(str, strlen(str), fs, 0, &out, &n);
 		}
 		free(dynfs);
 		for (i = 0; i < n; i++) {

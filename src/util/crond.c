@@ -75,6 +75,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <spawn.h>
+#include "util.h"
 #include "spool.h"
 #include "crontime.h"
 #include "libc.h" /* __find_program() */
