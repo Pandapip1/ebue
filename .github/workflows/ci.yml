@@ -333,10 +333,29 @@ jobs:
   # genuine per-arch PE link, which is how `#define alloca __builtin_alloca`
   # once shipped past every host-toolchain lint -- so they need the pinned
   # tinycc, but neither needs Wine: nothing is executed.
+  #
+  # tinycc itself stays on the setup-tinycc action either way -- nixpkgs
+  # carries no tcc package at all (see flake.nix's own comment on
+  # devShells.default), so the real per-arch PE link this job exists for
+  # could never move to Nix. What DOES move is the declaration-scanner
+  # toolchain below: tools/clang/DeclScanner.cpp is the exact same clang
+  # plugin the `lint` job's `undefined`/`unreferenced` stages already
+  # build and run via flake.nix's devShell (see the `lint` job matrix
+  # further down), so this is the already-proven via: nix path, not a new
+  # one. Verified locally for both arches: with the pinned tinycc on
+  # PATH, `nix develop --command make -j"$(nproc)" linkcheck` after each
+  # arch's own `./configure` reproduces today's clean result exactly --
+  # "no findings" for both i386 (1080 checked, 0 unlinkable) and x86_64.
   linkcheck:
     needs: build-toolchain
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # id-token: write is what DeterminateSystems/magic-nix-cache-action's
+    # own README example asks every job using it to set -- see the same
+    # comment on the `lint` job below.
+    permissions:
+      id-token: "write"
+      contents: "read"
     strategy:
       fail-fast: false
       matrix:
@@ -351,18 +370,22 @@ jobs:
         with:
           repository: ${{ env.TINYCC_REPO }}
           revision: ${{ env.TINYCC_SHA }}
-      # The declared-symbol scanner (tools/clang/DeclScanner.cpp) is a real
-      # clang AST walk, built as a clang plugin the same way tools/lint.sh
-      # builds its own -- see that script's `lint` job matrix below for the
-      # identical package list.
-      - name: Install declaration-scanner tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-18 libclang-18-dev llvm-18-dev
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+      - name: Set up Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@v14
       - name: Configure
         run: ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }} --disable-kernel32
+      # The declared-symbol scanner (tools/clang/DeclScanner.cpp) is a
+      # real clang AST walk, built as a clang plugin the same way
+      # flake.nix's devShell already builds it for the `lint` job's
+      # `undefined`/`unreferenced` stages -- resolving Nix's clang-18/
+      # llvm-18 instead of an apt-installed one changes nothing about
+      # what this step actually runs, and tcc (the real per-arch linker
+      # under test) still comes from the pinned setup-tinycc action
+      # above either way.
       - name: Link every declared symbol
-        run: make -j"$(nproc)" linkcheck
+        run: nix develop --command make -j"$(nproc)" linkcheck
 
   # hdr-hygiene.sh sweeps both arches itself; the $(GENH) prerequisite just
   # needs *a* configured arch to exist.
