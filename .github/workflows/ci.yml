@@ -355,33 +355,60 @@ jobs:
     # since this file's own history, so leaving their budget at 25 keeps a
     # stage that genuinely hangs failing fast instead of masking it here.
     timeout-minutes: ${{ matrix.stage == 'ownership' && 45 || 25 }}
+    # id-token: write is what DeterminateSystems/magic-nix-cache-action's own
+    # README example asks every job using it to set (see
+    # https://github.com/DeterminateSystems/magic-nix-cache-action#usage);
+    # harmless on the `via: apt` rows below, which never touch Nix at all.
+    permissions:
+      id-token: "write"
+      contents: "read"
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { stage: warn, packages: "clang gcc-aarch64-linux-gnu gcc-mingw-w64-i686 gcc-mingw-w64-x86-64" }
-          - { stage: analyze, packages: "clang clang-tidy-18" }
-          - { stage: cppcheck, packages: cppcheck }
-          - { stage: shell, packages: shellcheck }
-          - { stage: fallible, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: locks, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: lockset, packages: clang-18 }
-          - { stage: reentrancy, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: variadic, packages: clang-18 }
-          - { stage: signals, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: abizeroinit, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: initproof, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: errno, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: purity, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: ownership, packages: "clang-18 libclang-18-dev llvm-18-dev pkg-config" }
-          - { stage: undefined, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: unreferenced, packages: "clang clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: widthmod, packages: "" }
+          # via: nix moves a stage's tool install off apt-get and onto
+          # flake.nix's own devShell -- the same toolchain contributors
+          # already use locally -- so CI can never resolve a different
+          # clang-18/llvm-18/z3/etc. version than local dev does. This is
+          # the fix for the exact class of bug that made the `ownership`
+          # row below time out: ubuntu-24.04's apt libz3-dev had drifted
+          # years behind this project's pinned Z3, undetected until a real
+          # workload hit the gap. via: apt is left alone (see its own
+          # per-row reasoning further down) wherever nixpkgs does not carry
+          # a drop-in equivalent, or carries a *different* one whose
+          # findings provably disagree with what CI runs today.
+          - { stage: warn, via: apt, packages: "clang gcc-aarch64-linux-gnu gcc-mingw-w64-i686 gcc-mingw-w64-x86-64" }
+          - { stage: analyze, via: apt, packages: "clang clang-tidy-18" }
+          - { stage: cppcheck, via: apt, packages: cppcheck }
+          - { stage: shell, via: apt, packages: shellcheck }
+          - { stage: fallible, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: locks, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: lockset, via: nix, packages: "" }
+          - { stage: reentrancy, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: variadic, via: nix, packages: "" }
+          - { stage: signals, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: abizeroinit, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: initproof, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: errno, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: purity, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: ownership, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev pkg-config" }
+          - { stage: undefined, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: unreferenced, via: apt, packages: "clang clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: widthmod, via: apt, packages: "" }
     name: lint (${{ matrix.stage }})
     steps:
       - uses: actions/checkout@v7
+      # via: nix rows get the same toolchain contributors already use
+      # locally (flake.nix's devShell), instead of apt resolving whatever
+      # ubuntu-24.04's own package snapshot happens to carry that day.
+      - name: Install Nix
+        if: matrix.via == 'nix'
+        uses: DeterminateSystems/nix-installer-action@v22
+      - name: Set up Magic Nix Cache
+        if: matrix.via == 'nix'
+        uses: DeterminateSystems/magic-nix-cache-action@v14
       - name: Install stage tools
-        if: matrix.packages != ''
+        if: matrix.via == 'apt' && matrix.packages != ''
         run: |
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.packages }}
@@ -454,10 +481,20 @@ jobs:
             echo "LD_LIBRARY_PATH=$z3_dir/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           } >> "$GITHUB_ENV"
       - name: Run lint stage
+        if: matrix.via == 'apt'
         env:
           CLANG_TIDY: clang-tidy-18
           LINT_TIDY_EXACT: "1"
         run: tools/lint.sh ${{ matrix.stage }}
+      # Same invocation apt rows use above, just inside the devShell so
+      # tools/lint.sh's `require_tool clang-18` (etc.) resolves flake.nix's
+      # versionedLlvm18 names instead of a bare PATH lookup.
+      - name: Run lint stage (Nix devShell)
+        if: matrix.via == 'nix'
+        env:
+          CLANG_TIDY: clang-tidy-18
+          LINT_TIDY_EXACT: "1"
+        run: nix develop --command bash -c 'tools/lint.sh ${{ matrix.stage }}'
       - name: Upload lint logs
         if: always()
         uses: actions/upload-artifact@v7
