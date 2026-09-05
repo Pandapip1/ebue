@@ -90,6 +90,8 @@ struct addrinfo {
 #define EAI_SYSTEM    (-11) /* a system error occurred; the error code is in errno */
 #define EAI_OVERFLOW  (-12) /* an argument buffer overflowed */
 
+/* NT backend (src/netdb/nt/plat_netdb.c) only answers the AI_NUMERICHOST
+ * case, which needs no resolver; every other node still gets EAI_FAIL. */
 int getaddrinfo(const char *__restrict, const char *__restrict,
                  const struct addrinfo *__restrict, struct addrinfo **__restrict)
     __attribute__((nonnull(4)));

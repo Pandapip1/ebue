@@ -13,25 +13,101 @@
  * this platform") rather than fabricating an answer. A real NT resolver
  * (DnsQuery_) is future work.
  *
- * getnameinfo() is the one partial exception, and only because its
- * numeric case needs no database at all (see its own comment below). */
+ * getaddrinfo() and getnameinfo() are the two partial exceptions, and
+ * only because each one's numeric-only case needs no database at all
+ * (see each one's own comment below). */
 #include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 
 int h_errno;
 
+/* parse_numeric_port(): a NULL service leaves the port unset (0);
+ * anything else must be all-digits and in range. No service-name
+ * database exists on this platform (see getservbyname()'s own stub
+ * below), so a symbolic service name can never be resolved here --
+ * matching src/netdb/linux/addrinfo.c's own parse_service(), which
+ * rejects a symbolic name the identical way independent of any
+ * platform's own database. */
+static int parse_numeric_port(const char *service, unsigned short *port)
+{
+	const char *p;
+	long v;
+
+	if (!service) { *port = 0; return 0; }
+	if (!*service) return EAI_SERVICE;
+	for (p = service; *p; p++)
+		if (!isdigit((unsigned char)*p)) return EAI_SERVICE;
+	v = strtol(service, NULL, 10);
+	if (v < 0 || v > 65535) return EAI_SERVICE;
+	*port = (unsigned short)v;
+	return 0;
+}
+
+/* getaddrinfo(): freeaddrinfo.html's own DESCRIPTION decides the
+ * AI_NUMERICHOST case without any resolver at all: "if the
+ * AI_NUMERICHOST flag is specified, then a non-null nodename string
+ * shall be a numeric host address string ... Otherwise, an
+ * [EAI_NONAME] error shall be returned" -- inet_pton() alone answers
+ * that. Every other node is a real name-to-address lookup this
+ * platform cannot do yet (see this file's own banner above), so it
+ * still gets the honest EAI_FAIL this file has always reported. */
 int getaddrinfo(const char *__restrict node, const char *__restrict service,
                  const struct addrinfo *__restrict hints,
                  struct addrinfo **__restrict res)
 {
-	(void)node; (void)service; (void)hints;
+	int family = AF_UNSPEC, socktype = 0, flags = 0;
+	struct in_addr addr;
+	unsigned short port;
+	int rc;
+	struct addrinfo *ai;
+	struct sockaddr_in *sin;
+
 	*res = NULL;
-	return EAI_FAIL;
+
+	if (hints) {
+		family = hints->ai_family;
+		socktype = hints->ai_socktype;
+		flags = hints->ai_flags;
+	}
+
+	if (!node || !(flags & AI_NUMERICHOST))
+		return EAI_FAIL;
+	if (family != AF_UNSPEC && family != AF_INET)
+		return EAI_FAMILY;
+	if (socktype != 0 && socktype != SOCK_STREAM && socktype != SOCK_DGRAM)
+		return EAI_SOCKTYPE;
+	if (inet_pton(AF_INET, node, &addr) != 1)
+		return EAI_NONAME;
+
+	rc = parse_numeric_port(service, &port);
+	if (rc) return rc;
+
+	ai = malloc(sizeof *ai);
+	if (!ai) return EAI_MEMORY;
+	sin = malloc(sizeof *sin);
+	if (!sin) { free(ai); return EAI_MEMORY; }
+
+	memset(sin, 0, sizeof *sin);
+	sin->sin_family = AF_INET;
+	sin->sin_port = htons(port);
+	sin->sin_addr = addr;
+
+	memset(ai, 0, sizeof *ai);
+	ai->ai_flags = flags;
+	ai->ai_family = AF_INET;
+	ai->ai_socktype = socktype ? socktype : SOCK_STREAM;
+	ai->ai_addrlen = (socklen_t)sizeof *sin;
+	ai->ai_addr = (struct sockaddr *)sin;
+
+	*res = ai;
+	return 0;
 }
 
 struct hostent *gethostbyname(const char *name)
@@ -74,7 +150,7 @@ struct servent *getservbyport(int port, const char *proto)
 	return NULL;
 }
 
-/* getnameinfo(): unlike every other entry point in this file, the
+/* getnameinfo(): like getaddrinfo()'s AI_NUMERICHOST case above, the
  * NI_NUMERICHOST | NI_NUMERICSERV case needs no database this platform
  * lacks -- it is pure number formatting (inet_ntop()) -- so it is
  * answered for real. With no reverse-hosts or services database to

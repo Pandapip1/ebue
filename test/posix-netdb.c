@@ -286,10 +286,18 @@ static void test_posix_netdb_gai_strerror_text(void)
 
 /* UNWRAPPED (was NTLIBC_TEST(UNIMPL, posix_netdb_getservbyname_wellknown)):
  * a real /etc/services(5) parser now backs this whole family
- * (src/netdb/linux/services.c); see that file's own banner. */
+ * (src/netdb/linux/services.c); see that file's own banner.
+ *
+ * Linux-only: src/netdb/nt/plat_netdb.c's own banner says a real NT
+ * services database (the file's own comment names
+ * %SystemRoot%\system32\drivers\etc\services as the eventual real
+ * backend) is future work -- every entry point in this family is an
+ * unconditional NULL stub there today, so this test would only be
+ * proving that stub NULL rather than the interface's real behavior. */
 #include <netdb.h>
 #include <netinet/in.h>
 
+#if defined(__linux__)
 static void test_posix_netdb_getservbyname_wellknown(void)
 {
 	struct servent *se;
@@ -347,6 +355,16 @@ static void test_posix_netdb_getservbyname_wellknown(void)
 		CHECK(se->s_name != NULL);
 	endservent();
 }
+#else
+/* See this test's own banner above: NT has no real services database
+ * backend yet, only an unconditional NULL stub. */
+static void test_posix_netdb_getservbyname_wellknown(void)
+{
+	printf("SKIP posix-netdb services database (no real services "
+	       "database backend on this platform -- see "
+	       "src/netdb/nt/plat_netdb.c)\n");
+}
+#endif /* defined(__linux__) */
 
 /* ==================================================================
  * The protocol database -- .../functions/endprotoent.html
@@ -354,10 +372,16 @@ static void test_posix_netdb_getservbyname_wellknown(void)
 
 /* UNWRAPPED (was NTLIBC_TEST(UNIMPL, posix_netdb_getprotobyname_tcp)):
  * a real /etc/protocols(5) parser now backs this whole family
- * (src/netdb/linux/protocols.c); see that file's own banner. */
+ * (src/netdb/linux/protocols.c); see that file's own banner.
+ *
+ * Linux-only: same reasoning as test_posix_netdb_getservbyname_wellknown
+ * just above -- src/netdb/nt/plat_netdb.c's protocol-database entry
+ * points are all unconditional NULL stubs, so there is no real protocols
+ * database backend on NT for this to prove anything against yet. */
 #include <netdb.h>
 #include <netinet/in.h>
 
+#if defined(__linux__)
 static void test_posix_netdb_getprotobyname_tcp(void)
 {
 	struct protoent *pe;
@@ -396,6 +420,16 @@ static void test_posix_netdb_getprotobyname_tcp(void)
 		CHECK(pe->p_name != NULL);
 	endprotoent();
 }
+#else
+/* See this test's own banner above: NT has no real protocols database
+ * backend yet, only an unconditional NULL stub. */
+static void test_posix_netdb_getprotobyname_tcp(void)
+{
+	printf("SKIP posix-netdb protocols database (no real protocols "
+	       "database backend on this platform -- see "
+	       "src/netdb/nt/plat_netdb.c)\n");
+}
+#endif /* defined(__linux__) */
 
 /* ==================================================================
  * The host and network databases --
@@ -418,10 +452,16 @@ static void test_posix_netdb_getprotobyname_tcp(void)
  * override src/internal/nss_paths.h already provides and this file's own
  * test_netdb_hosts_fixture() (further down) already uses for the
  * identical reason: a small, controlled /etc/hosts this test fully
- * controls, not whatever this host happens to have. */
+ * controls, not whatever this host happens to have.
+ *
+ * Linux-only: sethostent()/gethostent()/endhostent() are all
+ * unconditional stand-ins on NT (sethostent()/endhostent() no-op,
+ * gethostent() always returns NULL -- src/netdb/nt/plat_netdb.c), so
+ * NTLIBC_TEST_HOSTS_PATH has nothing on that platform to actually walk. */
 #include <netdb.h>
 #include <sys/socket.h>
 
+#if defined(__linux__)
 static void test_posix_netdb_hostent_sequential_access(void)
 {
 	struct hostent *he;
@@ -474,6 +514,17 @@ static void test_posix_netdb_hostent_sequential_access(void)
 
 	unsetenv("NTLIBC_TEST_HOSTS_PATH");
 }
+#else
+/* See this test's own banner above: NT's sethostent()/gethostent()/
+ * endhostent() are unconditional stand-ins with no real /etc/hosts
+ * backend for a fixture to be walked against. */
+static void test_posix_netdb_hostent_sequential_access(void)
+{
+	printf("SKIP posix-netdb hostent sequential access (no real hosts "
+	       "database backend on this platform -- see "
+	       "src/netdb/nt/plat_netdb.c)\n");
+}
+#endif /* defined(__linux__) */
 
 /* UNWRAPPED (was NTLIBC_TEST(UNIMPL, posix_netdb_netent_lookup)):
  * a real /etc/networks(5) parser now backs this whole family
@@ -483,10 +534,16 @@ static void test_posix_netdb_hostent_sequential_access(void)
  * reasoning as the hostent test just above applies here too: a
  * controlled fixture makes this deterministic instead of depending on
  * whether this particular host happens to have a networks database
- * (and, if so, how big it is) at all. */
+ * (and, if so, how big it is) at all.
+ *
+ * Linux-only: setnetent()/getnetent()/endnetent()/getnetbyname()/
+ * getnetbyaddr() are all unconditional stand-ins on NT (no-op or NULL --
+ * src/netdb/nt/plat_netdb.c), so NTLIBC_TEST_NETWORKS_PATH has nothing on
+ * that platform to actually walk. */
 #include <netdb.h>
 #include <sys/socket.h>
 
+#if defined(__linux__)
 static void test_posix_netdb_netent_lookup(void)
 {
 	struct netent *ne;
@@ -547,6 +604,17 @@ static void test_posix_netdb_netent_lookup(void)
 
 	unsetenv("NTLIBC_TEST_NETWORKS_PATH");
 }
+#else
+/* See this test's own banner above: NT's setnetent()/getnetent()/
+ * endnetent()/getnetbyname()/getnetbyaddr() are unconditional stand-ins
+ * with no real /etc/networks backend for a fixture to be walked against. */
+static void test_posix_netdb_netent_lookup(void)
+{
+	printf("SKIP posix-netdb networks database (no real networks "
+	       "database backend on this platform -- see "
+	       "src/netdb/nt/plat_netdb.c)\n");
+}
+#endif /* defined(__linux__) */
 
 /* ==================================================================
  * Not a POSIX-clause fence: real coverage of THIS PASS'S OWN backends
@@ -577,7 +645,16 @@ static void fixture_write(const char *path, const char *content)
 /* /etc/hosts (src/netdb/linux/hosts.c), positive and negative lookups,
  * plus AI_CANONNAME -- a small, fully-controlled two-line fixture
  * (plus one comment line, to prove '#' comments are actually skipped
- * rather than merely never appearing in a fixture). */
+ * rather than merely never appearing in a fixture).
+ *
+ * Linux-only: getaddrinfo() with a non-numeric node name needs the real
+ * /etc/hosts + /etc/nsswitch.conf-driven "hosts" NSS walk this test's own
+ * NTLIBC_TEST_HOSTS_PATH/NTLIBC_TEST_NSSWITCH_PATH fixtures target
+ * (src/netdb/linux/hosts.c, src/netdb/linux/nsswitch.c). NT's
+ * getaddrinfo() only answers the AI_NUMERICHOST case (see
+ * src/netdb/nt/plat_netdb.c); a non-numeric node there is EAI_FAIL
+ * regardless of any fixture. */
+#if defined(__linux__)
 static void test_netdb_hosts_fixture(void)
 {
 	struct addrinfo hints, *res;
@@ -615,13 +692,28 @@ static void test_netdb_hosts_fixture(void)
 	unsetenv("NTLIBC_TEST_HOSTS_PATH");
 	unsetenv("NTLIBC_TEST_NSSWITCH_PATH");
 }
+#else
+/* See this test's own banner above: NT's getaddrinfo() only answers
+ * AI_NUMERICHOST, so a non-numeric node has no hosts-fixture backend
+ * to actually be resolved against. */
+static void test_netdb_hosts_fixture(void)
+{
+	printf("SKIP posix-netdb hosts fixture (no real hosts database "
+	       "backend on this platform -- see src/netdb/nt/plat_netdb.c)\n");
+}
+#endif /* defined(__linux__) */
 
 /* /etc/nsswitch.conf (src/netdb/linux/nsswitch.c): an admin who
  * configures "hosts: files" (dns removed) gets an honest EAI_NONAME
  * for a name that is genuinely nowhere in the fixture hosts file --
  * deterministic, unlike leaving dns enabled and pointing it at
  * nothing, because the miss never falls through to any network step
- * at all. */
+ * at all.
+ *
+ * Linux-only: same reasoning as test_netdb_hosts_fixture above -- NT's
+ * getaddrinfo() returns EAI_FAIL for any non-numeric node regardless of
+ * any nsswitch.conf fixture, never the EAI_NONAME this test asserts. */
+#if defined(__linux__)
 static void test_netdb_nsswitch_hosts_files_only(void)
 {
 	struct addrinfo hints, *res = NULL;
@@ -638,13 +730,30 @@ static void test_netdb_nsswitch_hosts_files_only(void)
 	unsetenv("NTLIBC_TEST_HOSTS_PATH");
 	unsetenv("NTLIBC_TEST_NSSWITCH_PATH");
 }
+#else
+/* See this test's own banner above: NT's getaddrinfo() cannot produce
+ * the EAI_NONAME this test asserts for a non-numeric node -- only
+ * EAI_FAIL, regardless of any nsswitch.conf fixture. */
+static void test_netdb_nsswitch_hosts_files_only(void)
+{
+	printf("SKIP posix-netdb nsswitch.conf hosts:files (no real hosts "
+	       "database backend on this platform -- see "
+	       "src/netdb/nt/plat_netdb.c)\n");
+}
+#endif /* defined(__linux__) */
 
 /* gethostbyname(): a real, disclosed legacy extension outside this
  * edition of POSIX (see this file's top banner and include/netdb.h's
  * own banner) -- a second, thinner front door onto the identical
  * hosts-fixture walk the getaddrinfo() tests above already exercise,
  * so this checks the h_errno/struct hostent shape specifically rather
- * than re-proving the lookup itself. */
+ * than re-proving the lookup itself.
+ *
+ * Linux-only: src/netdb/nt/plat_netdb.c's gethostbyname() is an
+ * unconditional stand-in (always NULL, h_errno = NO_RECOVERY), so
+ * neither the positive lookup nor the HOST_NOT_FOUND miss this test
+ * asserts is reachable on NT. */
+#if defined(__linux__)
 static void test_netdb_gethostbyname_fixture(void)
 {
 	struct hostent *he;
@@ -674,6 +783,16 @@ static void test_netdb_gethostbyname_fixture(void)
 	unsetenv("NTLIBC_TEST_HOSTS_PATH");
 	unsetenv("NTLIBC_TEST_NSSWITCH_PATH");
 }
+#else
+/* See this test's own banner above: NT's gethostbyname() is an
+ * unconditional stand-in with no real hosts database backend. */
+static void test_netdb_gethostbyname_fixture(void)
+{
+	printf("SKIP posix-netdb gethostbyname fixture (no real hosts "
+	       "database backend on this platform -- see "
+	       "src/netdb/nt/plat_netdb.c)\n");
+}
+#endif /* defined(__linux__) */
 
 /* ==================================================================
  * A real UDP round trip against a hermetic fake DNS server -- proves
