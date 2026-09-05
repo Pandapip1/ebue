@@ -415,11 +415,26 @@ static int is_all_stars(const struct pline *pl)
 	return 1;
 }
 
-static const char *parse_uint(const char *s, long *out)
+/* Every one of these header parsers reads only up to `end` (a line's real,
+ * declared `pl->text + pl->len` bound) and never past it. patch(1p) input
+ * lines are NOT guaranteed to end in a digit-stopping character -- a
+ * malformed patch can plausibly hand this a line that is nothing but
+ * digits for its entire length -- so treating "s has reached end" as its
+ * own explicit stop condition, rather than reading one byte further and
+ * trusting struct pline's storage to hold an implicit terminator there,
+ * is the honest reading of what `text withtok(readable_span(len))`
+ * actually promises: exactly `len` bytes, no more. (lb_push() and its two
+ * siblings below happen to always over-allocate by one byte and NUL it,
+ * for unrelated reasons -- fwrite()-free construction of the fixed reject-
+ * file format elsewhere in this file wants a plain C string -- but nothing
+ * about a `struct pline` truly requires that, and these parsers have no
+ * business depending on it.)
+ */
+static const char *parse_uint(const char *s, const char *end, long *out)
 {
 	long v = 0;
-	if (!isdigit((unsigned char)*s)) return 0;
-	while (isdigit((unsigned char)*s)) {
+	if (s == end || !isdigit((unsigned char)*s)) return 0;
+	while (s != end && isdigit((unsigned char)*s)) {
 		int digit = *s - '0';
 		/* A hunk header's line number/count comes straight from
 		 * whatever patch file this process was handed -- unbounded
@@ -438,16 +453,16 @@ static const char *parse_uint(const char *s, long *out)
 
 static int is_normal_header(const struct pline *pl, long *o1, long *o2, char *cmd, long *n1, long *n2)
 {
-	const char *s = pl->text;
+	const char *s = pl->text, *end = pl->text + pl->len;
 	long a, b = -1, c, d = -1;
 
-	s = parse_uint(s, &a); if (!s) return 0;
-	if (*s == ',') { s++; s = parse_uint(s, &b); if (!s) return 0; }
-	if (*s != 'a' && *s != 'c' && *s != 'd') return 0;
+	s = parse_uint(s, end, &a); if (!s) return 0;
+	if (s != end && *s == ',') { s++; s = parse_uint(s, end, &b); if (!s) return 0; }
+	if (s == end || (*s != 'a' && *s != 'c' && *s != 'd')) return 0;
 	*cmd = *s; s++;
-	s = parse_uint(s, &c); if (!s) return 0;
-	if (*s == ',') { s++; s = parse_uint(s, &d); if (!s) return 0; }
-	if (*s != 0) return 0;
+	s = parse_uint(s, end, &c); if (!s) return 0;
+	if (s != end && *s == ',') { s++; s = parse_uint(s, end, &d); if (!s) return 0; }
+	if (s != end) return 0;
 	*o1 = a; *o2 = (b >= 0 ? b : a);
 	*n1 = c; *n2 = (d >= 0 ? d : c);
 	return 1;
@@ -461,14 +476,14 @@ static int is_normal_header_line(const struct pline *pl)
 
 static int is_ed_header(const struct pline *pl, long *a1, long *a2, char *op)
 {
-	const char *s = pl->text;
+	const char *s = pl->text, *end = pl->text + pl->len;
 	long a, b = -1;
 
-	s = parse_uint(s, &a); if (!s) return 0;
-	if (*s == ',') { s++; s = parse_uint(s, &b); if (!s) return 0; }
-	if (*s != 'a' && *s != 'c' && *s != 'd') return 0;
+	s = parse_uint(s, end, &a); if (!s) return 0;
+	if (s != end && *s == ',') { s++; s = parse_uint(s, end, &b); if (!s) return 0; }
+	if (s == end || (*s != 'a' && *s != 'c' && *s != 'd')) return 0;
 	*op = *s; s++;
-	if (*s != 0) return 0;
+	if (s != end) return 0;
 	*a1 = a; *a2 = (b >= 0 ? b : a);
 	return 1;
 }
@@ -481,30 +496,30 @@ static int is_ed_header_line(const struct pline *pl)
 
 static int parse_at_header(const struct pline *pl, long *o1, long *oc, long *n1, long *nc)
 {
-	const char *s = pl->text;
+	const char *s = pl->text, *end = pl->text + pl->len;
 	if (!starts_with(pl, "@@ -")) return 0;
 	s += 4;
-	s = parse_uint(s, o1); if (!s) return 0;
-	if (*s == ',') { s++; s = parse_uint(s, oc); if (!s) return 0; } else *oc = 1;
-	if (*s != ' ') return 0; s++;
-	if (*s != '+') return 0; s++;
-	s = parse_uint(s, n1); if (!s) return 0;
-	if (*s == ',') { s++; s = parse_uint(s, nc); if (!s) return 0; } else *nc = 1;
-	if (*s != ' ') return 0; s++;
-	if (*s != '@' || s[1] != '@') return 0;
+	s = parse_uint(s, end, o1); if (!s) return 0;
+	if (s != end && *s == ',') { s++; s = parse_uint(s, end, oc); if (!s) return 0; } else *oc = 1;
+	if (s == end || *s != ' ') return 0; s++;
+	if (s == end || *s != '+') return 0; s++;
+	s = parse_uint(s, end, n1); if (!s) return 0;
+	if (s != end && *s == ',') { s++; s = parse_uint(s, end, nc); if (!s) return 0; } else *nc = 1;
+	if (s == end || *s != ' ') return 0; s++;
+	if (end - s < 2 || s[0] != '@' || s[1] != '@') return 0;
 	return 1;
 }
 
 static int parse_ctx_range(const struct pline *pl, const char *pfx, const char *sfx, long *lo, long *hi)
 {
 	size_t plen = strlen(pfx), slen = strlen(sfx);
-	const char *s;
+	const char *s, *end = pl->text + pl->len;
 	if (pl->len < plen + slen) return 0;
 	if (!bytes_equal(pl->text, pfx, plen)) return 0;
 	if (!bytes_equal(pl->text + pl->len - slen, sfx, slen)) return 0;
 	s = pl->text + plen;
-	s = parse_uint(s, lo); if (!s) return 0;
-	if (*s == ',') { s++; s = parse_uint(s, hi); if (!s) return 0; } else *hi = *lo;
+	s = parse_uint(s, end, lo); if (!s) return 0;
+	if (s != end && *s == ',') { s++; s = parse_uint(s, end, hi); if (!s) return 0; } else *hi = *lo;
 	return (size_t)(s - pl->text) == pl->len - slen;
 }
 
