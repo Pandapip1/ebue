@@ -92,9 +92,39 @@ jobs:
   # CRT build/run coverage, plus the ELF-loader subset on x86_64.  Keep each
   # architecture visible as its own matrix leg even though the x86 legs run
   # under qemu on the arm64 host.
+  #
+  # All three legs move to flake.nix's devShell, not just aarch64: the
+  # aarch64 leg is a real native build+run on this job's own runner arch,
+  # and the x86_64/i386 legs were ALREADY cross-compiled (clang --target=
+  # ...-linux-gnu -fuse-ld=lld, -nostdlib -nostdinc, no host sysroot
+  # touched at all -- see tools/linux-build-crt-cross.sh's own banner) and
+  # run under qemu-user, not natively -- exactly the same runner/emulation
+  # split this job had under apt, so there is no arch this conversion asks
+  # Nix to do that apt was not already doing. That also means there is no
+  # 32-bit multilib gap to worry about for i386: nixpkgs' clang, like
+  # apt's, never resolves a host libc/sysroot for these builds at all.
+  # pkgs.clang/pkgs.lld/pkgs.qemu-user are already in flake.nix's devShell
+  # for exactly this job (see that file's own comment on those packages).
+  # Verified locally on this project's own aarch64 dev host -- the same
+  # runner arch `ubuntu-24.04-arm` gives CI -- via `nix develop --command
+  # ...` for each of this job's real steps: the aarch64-native
+  # `make` build plus every tools/linux-build*.sh suite (dirent, dlfcn,
+  # fs, malloc, misc, open, process, pthread-mutex, rename, socket*,
+  # statfam, thread, time, unistd2) all report PASS/ALL CHECKS PASSED; the
+  # x86_64 and i386 cross builds under qemu-x86_64/qemu-i386 (tools/linux-
+  # build-crt-cross.sh) both report PASS; and the x86_64 ELF-loader
+  # dlopen()/dlsym() suite (tools/linux-build-dlfcn-cross.sh) reports ALL
+  # DLOPEN TESTS PASS -- all identical to today's clean CI result on every
+  # arch this job covers.
   linux-builds:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
+    # id-token: write is what DeterminateSystems/magic-nix-cache-action's
+    # own README example asks every job using it to set -- see the same
+    # comment on the `lint` job below.
+    permissions:
+      id-token: "write"
+      contents: "read"
     strategy:
       fail-fast: false
       matrix:
@@ -102,35 +132,41 @@ jobs:
     name: Linux build (${{ matrix.arch }})
     steps:
       - uses: actions/checkout@v7
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang lld qemu-user
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+      - name: Set up Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@v14
       - name: Configure
         if: matrix.arch == 'aarch64'
         run: >-
-          ./configure --platform=linux CC=clang
+          nix develop --command ./configure --platform=linux CC=clang
           CFLAGS="-fno-stack-protector -mno-outline-atomics"
       - name: Build library and CRT
         if: matrix.arch == 'aarch64'
-        run: make -j"$(nproc)"
+        run: nix develop --command make -j"$(nproc)"
       - name: Run native Linux build suites
         if: matrix.arch == 'aarch64'
         env:
           NTLIBC_ARCH: aarch64
+        # $(nproc)/$script expand in this step's own (non-Nix) shell, same
+        # as every other run: block here -- only the built binary each
+        # invocation execs (the script named by $script) runs inside
+        # nix develop, so there is nothing here for a nested single-quoted
+        # shell -c string to swallow the way the `lint` job's stage
+        # invocations don't need one either.
         run: |
           for script in tools/linux-build*.sh; do
             case "$script" in
               *-cross.sh) continue ;;
             esac
-            "$script"
+            nix develop --command "$script"
           done
       - name: Build and run cross-architecture CRT
         if: matrix.arch != 'aarch64'
-        run: tools/linux-build-crt-cross.sh ${{ matrix.arch }}
+        run: nix develop --command tools/linux-build-crt-cross.sh ${{ matrix.arch }}
       - name: Build and run x86_64 ELF loader
         if: matrix.arch == 'x86_64'
-        run: tools/linux-build-dlfcn-cross.sh x86_64
+        run: nix develop --command tools/linux-build-dlfcn-cross.sh x86_64
 
   # Every row produces the exact PE files consumed by its matching native
   # Windows runner below, including arm64 rather than treating that row as a
@@ -297,10 +333,29 @@ jobs:
   # genuine per-arch PE link, which is how `#define alloca __builtin_alloca`
   # once shipped past every host-toolchain lint -- so they need the pinned
   # tinycc, but neither needs Wine: nothing is executed.
+  #
+  # tinycc itself stays on the setup-tinycc action either way -- nixpkgs
+  # carries no tcc package at all (see flake.nix's own comment on
+  # devShells.default), so the real per-arch PE link this job exists for
+  # could never move to Nix. What DOES move is the declaration-scanner
+  # toolchain below: tools/clang/DeclScanner.cpp is the exact same clang
+  # plugin the `lint` job's `undefined`/`unreferenced` stages already
+  # build and run via flake.nix's devShell (see the `lint` job matrix
+  # further down), so this is the already-proven via: nix path, not a new
+  # one. Verified locally for both arches: with the pinned tinycc on
+  # PATH, `nix develop --command make -j"$(nproc)" linkcheck` after each
+  # arch's own `./configure` reproduces today's clean result exactly --
+  # "no findings" for both i386 (1080 checked, 0 unlinkable) and x86_64.
   linkcheck:
     needs: build-toolchain
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # id-token: write is what DeterminateSystems/magic-nix-cache-action's
+    # own README example asks every job using it to set -- see the same
+    # comment on the `lint` job below.
+    permissions:
+      id-token: "write"
+      contents: "read"
     strategy:
       fail-fast: false
       matrix:
@@ -315,18 +370,22 @@ jobs:
         with:
           repository: ${{ env.TINYCC_REPO }}
           revision: ${{ env.TINYCC_SHA }}
-      # The declared-symbol scanner (tools/clang/DeclScanner.cpp) is a real
-      # clang AST walk, built as a clang plugin the same way tools/lint.sh
-      # builds its own -- see that script's `lint` job matrix below for the
-      # identical package list.
-      - name: Install declaration-scanner tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-18 libclang-18-dev llvm-18-dev
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+      - name: Set up Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@v14
       - name: Configure
         run: ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }} --disable-kernel32
+      # The declared-symbol scanner (tools/clang/DeclScanner.cpp) is a
+      # real clang AST walk, built as a clang plugin the same way
+      # flake.nix's devShell already builds it for the `lint` job's
+      # `undefined`/`unreferenced` stages -- resolving Nix's clang-18/
+      # llvm-18 instead of an apt-installed one changes nothing about
+      # what this step actually runs, and tcc (the real per-arch linker
+      # under test) still comes from the pinned setup-tinycc action
+      # above either way.
       - name: Link every declared symbol
-        run: make -j"$(nproc)" linkcheck
+        run: nix develop --command make -j"$(nproc)" linkcheck
 
   # hdr-hygiene.sh sweeps both arches itself; the $(GENH) prerequisite just
   # needs *a* configured arch to exist.
