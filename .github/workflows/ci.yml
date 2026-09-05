@@ -381,19 +381,19 @@ jobs:
           - { stage: analyze, via: apt, packages: "clang clang-tidy-18" }
           - { stage: cppcheck, via: apt, packages: cppcheck }
           - { stage: shell, via: apt, packages: shellcheck }
-          - { stage: fallible, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: locks, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: fallible, via: nix, packages: "" }
+          - { stage: locks, via: nix, packages: "" }
           - { stage: lockset, via: nix, packages: "" }
-          - { stage: reentrancy, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: reentrancy, via: nix, packages: "" }
           - { stage: variadic, via: nix, packages: "" }
-          - { stage: signals, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: abizeroinit, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: signals, via: nix, packages: "" }
+          - { stage: abizeroinit, via: nix, packages: "" }
           - { stage: initproof, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: errno, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: purity, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: purity, via: nix, packages: "" }
           - { stage: ownership, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev pkg-config" }
-          - { stage: undefined, via: apt, packages: "clang-18 libclang-18-dev llvm-18-dev" }
-          - { stage: unreferenced, via: apt, packages: "clang clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: undefined, via: nix, packages: "" }
+          - { stage: unreferenced, via: nix, packages: "" }
           - { stage: widthmod, via: apt, packages: "" }
     name: lint (${{ matrix.stage }})
     steps:
