@@ -258,16 +258,25 @@ static void test_memory_stream_position_overflow(void)
 	f = open_memstream(&out, &outsz);
 	CHECK(f != 0);
 	if (f) {
-		/* The logical endpoint still fits in off_t, but the extra byte
-		 * needed for the mandatory terminator exceeds ntlibc's object-size
-		 * range. */
-		CHECK(fseeko(f, (off_t)LLONG_MAX - 1, SEEK_SET) == 0);
+		/* The logical endpoint still fits in off_t (off_t is 64-bit on
+		 * every target here), but the extra byte needed for the mandatory
+		 * terminator exceeds ntlibc's object-size range, PTRDIFF_MAX --
+		 * see __file_write()'s own comment on that ceiling. PTRDIFF_MAX
+		 * is the portable spelling of this boundary: it equals LLONG_MAX
+		 * on a target where ptrdiff_t is 64-bit (x86_64, aarch64), so
+		 * this is the same test there it always was, and it stays
+		 * meaningful on i386, where ptrdiff_t is 32-bit. */
+		CHECK(fseeko(f, (off_t)PTRDIFF_MAX - 1, SEEK_SET) == 0);
 		CHECK(fputc('x', f) == 'x');
-		CHECK(ftello(f) == (off_t)LLONG_MAX);
+		CHECK(ftello(f) == (off_t)PTRDIFF_MAX);
 		errno = 0;
 		CHECK(fflush(f) == EOF);
 		CHECK(errno == ENOMEM);
 
+#if SIZE_MAX >= LLONG_MAX
+		/* size_t covers off_t's whole range here, so a memory stream can
+		 * actually be positioned at LLONG_MAX; what then overflows is
+		 * ftello()'s own 64-bit off_t arithmetic. */
 		CHECK(fseeko(f, (off_t)LLONG_MAX, SEEK_SET) == 0);
 		CHECK(fputc('x', f) == 'x');
 		errno = 0;
@@ -276,6 +285,20 @@ static void test_memory_stream_position_overflow(void)
 		errno = 0;
 		CHECK(fflush(f) == EOF);
 		CHECK(errno == EOVERFLOW);
+#else
+		/* size_t (32-bit here) cannot hold a position anywhere near
+		 * LLONG_MAX at all: mem_pos, which backs a memory stream's
+		 * position, is a size_t byte offset into a heap buffer, and no
+		 * heap object can span 2^63 bytes on this target regardless of
+		 * off_t's own width. __file_seek() (src/stdio/buf.c) rejects the
+		 * seek itself with EOVERFLOW rather than deferring to a later
+		 * off_t-arithmetic overflow that a stream at this position could
+		 * never actually reach. */
+		errno = 0;
+		CHECK(fseeko(f, (off_t)LLONG_MAX, SEEK_SET) == -1);
+		CHECK(errno == EOVERFLOW);
+		CHECK(ftello(f) == (off_t)PTRDIFF_MAX); /* seek failed: unmoved */
+#endif
 		/* Closing retries the intentionally impossible flush and may fail;
 		 * its only purpose here is releasing the FILE object. */
 		(void)fclose(f);
