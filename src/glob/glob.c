@@ -661,6 +661,7 @@ static int classify(const char *s, size_t len, int flags, enum comp_kind *kind)
 static int classify(const char *s, size_t len, int flags, enum comp_kind *kind)
 {
 	char *u;
+	size_t ul;
 
 	if (has_meta(s, len, flags)) {
 		*kind = CK_WILD;
@@ -668,8 +669,20 @@ static int classify(const char *s, size_t len, int flags, enum comp_kind *kind)
 	}
 	u = unescape(s, len, flags);
 	if (!u) return -1;
-	if (u[0] == '.' && u[1] == 0) *kind = CK_DOT;
-	else if (u[0] == '.' && u[1] == '.' && u[2] == 0) *kind = CK_DOTDOT;
+	/* unescape()'s own declared span is `writable_span(len)` -- exactly
+	 * len bytes -- even though its real allocation is len+1 and it
+	 * always leaves a NUL at buf[j] for some j <= len (unescaping only
+	 * ever removes bytes, never adds them). Indexing u[1]/u[2] looking
+	 * for that NUL, the way this used to, reads u[len] whenever j == len
+	 * (no backslash in this component at all -- an ordinary "." or ".."
+	 * path segment), one byte past what the callee's own contract
+	 * promises: the same shape of bug struct pline's `text` field had in
+	 * src/util/patch.c before it was fixed to stop trusting an implicit
+	 * terminator that isn't part of the type's contract. strnlen(u, len)
+	 * gets the real content length without ever dereferencing u[len]. */
+	ul = strnlen(u, len);
+	if (ul == 1 && u[0] == '.') *kind = CK_DOT;
+	else if (ul == 2 && u[0] == '.' && u[1] == '.') *kind = CK_DOTDOT;
 	else *kind = CK_LIT;
 	__free(u);
 	return 0;
